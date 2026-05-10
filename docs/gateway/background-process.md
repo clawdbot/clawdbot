@@ -46,6 +46,7 @@ Environment overrides:
 - `PI_BASH_MAX_OUTPUT_CHARS`: in-memory output cap (chars)
 - `OPENCLAW_BASH_PENDING_MAX_OUTPUT_CHARS`: pending stdout/stderr cap per stream (chars)
 - `PI_BASH_JOB_TTL_MS`: TTL for finished sessions (ms, bounded to 1m–3h)
+- `OPENCLAW_PROCESS_INPUT_WAIT_IDLE_MS`: idle-output threshold before writable background sessions are marked as likely waiting for input (default 15000 ms)
 
 Config (preferred):
 
@@ -61,7 +62,7 @@ Actions:
 
 - `list`: running + finished sessions
 - `poll`: drain new output for a session (also reports exit status)
-- `log`: read the aggregated output (supports `offset` + `limit`)
+- `log`: read the aggregated output and show input recovery hints (supports `offset` + `limit`)
 - `write`: send stdin (`data`, optional `eof`)
 - `send-keys`: send explicit key tokens or bytes to a PTY-backed session
 - `submit`: send Enter / carriage return to a PTY-backed session
@@ -78,9 +79,14 @@ Notes:
 - `process` is scoped per agent; it only sees sessions started by that agent.
 - Use `poll` / `log` for status, logs, quiet-success confirmation, or
   completion confirmation when automatic completion wake is unavailable.
+- Use `log` before recovering an interactive CLI so the current transcript,
+  stdin state, and input-wait hint are visible together.
 - Use `write` / `send-keys` / `submit` / `paste` / `kill` when you need input
   or intervention.
 - `process list` includes a derived `name` (command verb + target) for quick scans.
+- `process list`, `poll`, and `log` report `waitingForInput` only
+  when the session still has writable stdin and has been idle longer than the
+  input-wait threshold.
 - `process log` uses line-based `offset`/`limit`.
 - When both `offset` and `limit` are omitted, it returns the last 200 lines and includes a paging hint.
 - When `offset` is provided and `limit` is omitted, it returns from `offset` to the end (not capped to 200).
@@ -97,6 +103,12 @@ Run a long task and poll later:
 
 ```json
 { "tool": "process", "action": "poll", "sessionId": "<id>" }
+```
+
+Inspect an interactive session before sending input:
+
+```json
+{ "tool": "process", "action": "log", "sessionId": "<id>" }
 ```
 
 Start immediately in background:

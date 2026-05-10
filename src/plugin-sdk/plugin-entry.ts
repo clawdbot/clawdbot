@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
-import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type {
   AnyAgentTool,
   AgentHarness,

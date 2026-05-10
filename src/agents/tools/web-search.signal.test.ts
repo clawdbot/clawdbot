@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createWebSearchTool } from "./web-search.js";
 
 const mocks = vi.hoisted(() => ({
   runWebSearch: vi.fn(),
@@ -19,17 +20,13 @@ describe("web_search signal plumbing", () => {
   });
 
   it("passes the agent abort signal into web search runtime execution", async () => {
-    const { createWebSearchTool } = await import("./web-search.js");
     const controller = new AbortController();
     const tool = createWebSearchTool({ config: {} });
 
     await tool?.execute("call-search", { query: "openclaw" }, controller.signal);
 
-    expect(mocks.runWebSearch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        args: { query: "openclaw" },
-        signal: controller.signal,
-      }),
-    );
+    expect(mocks.runWebSearch).toHaveBeenCalledTimes(1);
+    expect(mocks.runWebSearch.mock.calls[0]?.[0]?.args).toEqual({ query: "openclaw" });
+    expect(mocks.runWebSearch.mock.calls[0]?.[0]?.signal).toBe(controller.signal);
   });
 });

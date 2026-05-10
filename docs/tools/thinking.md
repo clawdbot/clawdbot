@@ -48,7 +48,8 @@ title: "Thinking levels"
 ## Setting a session default
 
 - Send a message that is **only** the directive (whitespace allowed), e.g. `/think:medium` or `/t high`.
-- That sticks for the current session (per-sender by default); cleared by `/think:off` or session idle reset.
+- That sticks for the current session (per-sender by default). Use `/think default` to clear the session override and inherit the configured/provider default; aliases include `inherit`, `clear`, `reset`, and `unpin`.
+- `/think off` stores an explicit off override. It disables thinking until you change or clear the session override.
 - Confirmation reply is sent (`Thinking level set to high.` / `Thinking disabled.`). If the level is invalid (e.g. `/thinking big`), the command is rejected with a hint and the session state is left unchanged.
 - Send `/think` (or `/think:`) with no argument to see the current thinking level.
 
@@ -59,11 +60,11 @@ title: "Thinking levels"
 
 ## Fast mode (/fast)
 
-- Levels: `on|off`.
-- Directive-only message toggles a session fast-mode override and replies `Fast mode enabled.` / `Fast mode disabled.`.
+- Levels: `on|off|default`.
+- Directive-only message toggles a session fast-mode override and replies `Fast mode enabled.` / `Fast mode disabled.`. Use `/fast default` to clear the session override and inherit the configured default; aliases include `inherit`, `clear`, `reset`, and `unpin`.
 - Send `/fast` (or `/fast status`) with no mode to see the current effective fast-mode state.
 - OpenClaw resolves fast mode in this order:
-  1. Inline/directive-only `/fast on|off`
+  1. Inline/directive-only `/fast on|off` override (`/fast default` clears this layer)
   2. Session override
   3. Per-agent default (`agents.list[].fastModeDefault`)
   4. Per-model config: `agents.defaults.models["<provider>/<model>"].params.fastMode`

@@ -330,20 +330,65 @@ function mockNpmViewMetadata(params: {
   });
 }
 
+function npmInstallCall(index = 0): Record<string, unknown> | undefined {
+  const calls = installPluginFromNpmSpecMock.mock.calls as unknown as Array<
+    [Record<string, unknown>]
+  >;
+  return calls[index]?.[0];
+}
+
+function clawHubInstallCall(index = 0): Record<string, unknown> | undefined {
+  const calls = installPluginFromClawHubMock.mock.calls as unknown as Array<
+    [Record<string, unknown>]
+  >;
+  return calls[index]?.[0];
+}
+
+function marketplaceInstallCall(index = 0): Record<string, unknown> | undefined {
+  const calls = installPluginFromMarketplaceMock.mock.calls as unknown as Array<
+    [Record<string, unknown>]
+  >;
+  return calls[index]?.[0];
+}
+
+function gitInstallCall(index = 0): Record<string, unknown> | undefined {
+  const calls = installPluginFromGitSpecMock.mock.calls as unknown as Array<
+    [Record<string, unknown>]
+  >;
+  return calls[index]?.[0];
+}
+
+function npmViewCall(): [unknown, Record<string, unknown>] | undefined {
+  const calls = runCommandWithTimeoutMock.mock.calls as unknown as Array<
+    [unknown, Record<string, unknown>]
+  >;
+  return calls.find(([argv]) => Array.isArray(argv) && argv[0] === "npm" && argv[1] === "view");
+}
+
+function expectRecordFields(
+  actual: Record<string, unknown> | undefined,
+  expected: Record<string, unknown>,
+) {
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual?.[key]).toEqual(value);
+  }
+}
+
 function expectNpmUpdateCall(params: {
   spec: string;
   expectedIntegrity?: string;
   expectedPluginId?: string;
   timeoutMs?: number;
 }) {
-  expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-    expect.objectContaining({
-      spec: params.spec,
-      expectedIntegrity: params.expectedIntegrity,
-      ...(params.expectedPluginId ? { expectedPluginId: params.expectedPluginId } : {}),
-      ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
-    }),
-  );
+  const call = npmInstallCall();
+  expect(call?.spec).toBe(params.spec);
+  expect(call?.expectedIntegrity).toBe(params.expectedIntegrity);
+  if (params.expectedPluginId) {
+    expect(call?.expectedPluginId).toBe(params.expectedPluginId);
+  }
+  if (params.timeoutMs) {
+    expect(call?.timeoutMs).toBe(params.timeoutMs);
+  }
 }
 
 function createBundledSource(params?: { pluginId?: string; localPath?: string; npmSpec?: string }) {
@@ -367,12 +412,12 @@ function expectBundledPathInstall(params: {
   installPath: string;
   spec?: string;
 }) {
-  expect(params.install).toMatchObject({
-    source: "path",
-    sourcePath: params.sourcePath,
-    installPath: params.installPath,
-    ...(params.spec ? { spec: params.spec } : {}),
-  });
+  expect(params.install?.source).toBe("path");
+  expect(params.install?.sourcePath).toBe(params.sourcePath);
+  expect(params.install?.installPath).toBe(params.installPath);
+  if (params.spec) {
+    expect(params.install?.spec).toBe(params.spec);
+  }
 }
 
 function expectCodexAppServerInstallState(params: {
@@ -381,13 +426,14 @@ function expectCodexAppServerInstallState(params: {
   version: string;
   resolvedSpec?: string;
 }) {
-  expect(params.result.config.plugins?.installs?.["openclaw-codex-app-server"]).toMatchObject({
-    source: "npm",
-    spec: params.spec,
-    installPath: "/tmp/openclaw-codex-app-server",
-    version: params.version,
-    ...(params.resolvedSpec ? { resolvedSpec: params.resolvedSpec } : {}),
-  });
+  const install = params.result.config.plugins?.installs?.["openclaw-codex-app-server"];
+  expect(install?.source).toBe("npm");
+  expect(install?.spec).toBe(params.spec);
+  expect(install?.installPath).toBe("/tmp/openclaw-codex-app-server");
+  expect(install?.version).toBe(params.version);
+  if (params.resolvedSpec) {
+    expect(install?.resolvedSpec).toBe(params.resolvedSpec);
+  }
 }
 
 describe("updateNpmInstalledPlugins", () => {
@@ -510,10 +556,7 @@ describe("updateNpmInstalledPlugins", () => {
       timeoutMs: 1_800_000,
     });
 
-    const npmViewCall = runCommandWithTimeoutMock.mock.calls.find(
-      ([argv]) => Array.isArray(argv) && argv[0] === "npm" && argv[1] === "view",
-    );
-    expect(npmViewCall?.[1]).toEqual(expect.objectContaining({ timeoutMs: 1_800_000 }));
+    expect(npmViewCall()?.[1]?.timeoutMs).toBe(1_800_000);
     expectNpmUpdateCall({
       spec: "@martian-engineering/lossless-claw",
       expectedPluginId: "lossless-claw",
@@ -550,13 +593,9 @@ describe("updateNpmInstalledPlugins", () => {
       pluginIds: ["acpx"],
     });
 
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "@openclaw/acpx",
-        expectedPluginId: "acpx",
-        trustedSourceLinkedOfficialInstall: true,
-      }),
-    );
+    expect(npmInstallCall()?.spec).toBe("@openclaw/acpx");
+    expect(npmInstallCall()?.expectedPluginId).toBe("acpx");
+    expect(npmInstallCall()?.trustedSourceLinkedOfficialInstall).toBe(true);
   });
 
   it("does not skip trusted official default updates when latest resolves to the installed prerelease", async () => {
@@ -597,19 +636,13 @@ describe("updateNpmInstalledPlugins", () => {
       pluginIds: ["acpx"],
     });
 
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "@openclaw/acpx",
-        expectedPluginId: "acpx",
-        trustedSourceLinkedOfficialInstall: true,
-      }),
-    );
-    expect(result.outcomes[0]).toMatchObject({
-      pluginId: "acpx",
-      status: "updated",
-      currentVersion: "2026.5.2-beta.2",
-      nextVersion: "2026.5.2",
-    });
+    expect(npmInstallCall()?.spec).toBe("@openclaw/acpx");
+    expect(npmInstallCall()?.expectedPluginId).toBe("acpx");
+    expect(npmInstallCall()?.trustedSourceLinkedOfficialInstall).toBe(true);
+    expect(result.outcomes[0]?.pluginId).toBe("acpx");
+    expect(result.outcomes[0]?.status).toBe("updated");
+    expect(result.outcomes[0]?.currentVersion).toBe("2026.5.2-beta.2");
+    expect(result.outcomes[0]?.nextVersion).toBe("2026.5.2");
   });
 
   it("updates trusted official npm plugins when latest resolves to a stable correction release", async () => {
@@ -648,19 +681,13 @@ describe("updateNpmInstalledPlugins", () => {
       pluginIds: ["acpx"],
     });
 
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "@openclaw/acpx",
-        expectedPluginId: "acpx",
-        trustedSourceLinkedOfficialInstall: true,
-      }),
-    );
-    expect(result.outcomes[0]).toMatchObject({
-      pluginId: "acpx",
-      status: "updated",
-      currentVersion: "2026.5.3",
-      nextVersion: "2026.5.3-1",
-    });
+    expect(npmInstallCall()?.spec).toBe("@openclaw/acpx");
+    expect(npmInstallCall()?.expectedPluginId).toBe("acpx");
+    expect(npmInstallCall()?.trustedSourceLinkedOfficialInstall).toBe(true);
+    expect(result.outcomes[0]?.pluginId).toBe("acpx");
+    expect(result.outcomes[0]?.status).toBe("updated");
+    expect(result.outcomes[0]?.currentVersion).toBe("2026.5.3");
+    expect(result.outcomes[0]?.nextVersion).toBe("2026.5.3-1");
   });
 
   it("does not trust official npm updates when the install record package mismatches", async () => {
@@ -692,11 +719,7 @@ describe("updateNpmInstalledPlugins", () => {
       pluginIds: ["acpx"],
     });
 
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        trustedSourceLinkedOfficialInstall: true,
-      }),
-    );
+    expect(npmInstallCall()?.trustedSourceLinkedOfficialInstall).not.toBe(true);
   });
 
   it("skips npm reinstall and config rewrite when the installed artifact is unchanged", async () => {
@@ -733,19 +756,17 @@ describe("updateNpmInstalledPlugins", () => {
       pluginIds: ["lossless-claw"],
     });
 
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
-      [
-        "npm",
-        "view",
-        "@martian-engineering/lossless-claw",
-        "name",
-        "version",
-        "dist.integrity",
-        "dist.shasum",
-        "--json",
-      ],
-      expect.any(Object),
-    );
+    expect(npmViewCall()?.[0]).toEqual([
+      "npm",
+      "view",
+      "@martian-engineering/lossless-claw",
+      "name",
+      "version",
+      "dist.integrity",
+      "dist.shasum",
+      "--json",
+    ]);
+    expect(npmViewCall()?.[1]).toBeDefined();
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(false);
     expect(result.config).toBe(config);
@@ -806,13 +827,9 @@ describe("updateNpmInstalledPlugins", () => {
       pluginIds: ["codex"],
     });
 
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "@openclaw/codex",
-        mode: "update",
-        expectedPluginId: "codex",
-      }),
-    );
+    expect(npmInstallCall()?.spec).toBe("@openclaw/codex");
+    expect(npmInstallCall()?.mode).toBe("update");
+    expect(npmInstallCall()?.expectedPluginId).toBe("codex");
     expect(result.changed).toBe(true);
     expect(result.outcomes).toEqual([
       {
@@ -1128,13 +1145,13 @@ describe("updateNpmInstalledPlugins", () => {
 
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
     expect(result.changed).toBe(true);
-    expect(result.outcomes[0]).toMatchObject({
+    expectRecordFields(result.outcomes[0], {
       pluginId: "lossless-claw",
       status: "unchanged",
       currentVersion: "0.9.0",
       nextVersion: "0.9.0",
     });
-    expect(result.config.plugins?.installs?.["lossless-claw"]).toMatchObject({
+    expectRecordFields(result.config.plugins?.installs?.["lossless-claw"], {
       source: "npm",
       resolvedName: "@martian-engineering/lossless-claw",
       resolvedVersion: "0.9.0",
@@ -1176,13 +1193,12 @@ describe("updateNpmInstalledPlugins", () => {
 
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(false);
-    expect(result.outcomes).toEqual([
-      expect.objectContaining({
-        pluginId: "lossless-claw",
-        status: "unchanged",
-        currentVersion: "0.9.0",
-      }),
-    ]);
+    expect(result.outcomes).toHaveLength(1);
+    expectRecordFields(result.outcomes[0], {
+      pluginId: "lossless-claw",
+      status: "unchanged",
+      currentVersion: "0.9.0",
+    });
   });
 
   it("falls through to npm reinstall when the recorded integrity differs", async () => {
@@ -1229,7 +1245,7 @@ describe("updateNpmInstalledPlugins", () => {
 
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
     expect(result.changed).toBe(true);
-    expect(result.outcomes[0]).toMatchObject({
+    expectRecordFields(result.outcomes[0], {
       pluginId: "lossless-claw",
       status: "unchanged",
       currentVersion: "0.9.0",
@@ -1417,19 +1433,15 @@ describe("updateNpmInstalledPlugins", () => {
       syncOfficialPluginInstalls: true,
     });
 
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "@openclaw/codex",
-        expectedPluginId: "codex",
-        trustedSourceLinkedOfficialInstall: true,
-      }),
-    );
+    expect(npmInstallCall()?.spec).toBe("@openclaw/codex");
+    expect(npmInstallCall()?.expectedPluginId).toBe("codex");
+    expect(npmInstallCall()?.trustedSourceLinkedOfficialInstall).toBe(true);
     expect(result.changed).toBe(true);
     expect(result.config.plugins?.entries?.codex).toEqual({
       enabled: false,
       config: { preserved: true },
     });
-    expect(result.config.plugins?.installs?.codex).toMatchObject({
+    expectRecordFields(result.config.plugins?.installs?.codex, {
       source: "npm",
       spec: "@openclaw/codex",
       version: "2026.5.4",
@@ -1437,7 +1449,7 @@ describe("updateNpmInstalledPlugins", () => {
       resolvedVersion: "2026.5.4",
       resolvedSpec: "@openclaw/codex@2026.5.4",
     });
-    expect(result.outcomes[0]).toMatchObject({
+    expectRecordFields(result.outcomes[0], {
       pluginId: "codex",
       status: "updated",
       currentVersion: "2026.5.3",
@@ -1469,12 +1481,70 @@ describe("updateNpmInstalledPlugins", () => {
       syncOfficialPluginInstalls: true,
     });
 
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "@acme/demo@1.2.3",
-        expectedPluginId: "demo",
+    expect(npmInstallCall()?.spec).toBe("@acme/demo@1.2.3");
+    expect(npmInstallCall()?.expectedPluginId).toBe("demo");
+  });
+
+  it("uses exact npm spec selectors as dry-run target versions when probes omit metadata", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@acme/demo",
+      version: "1.2.3",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: installPath,
+      extensions: ["index.ts"],
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "demo",
+        spec: "@acme/demo@1.2.4",
+        installPath,
       }),
-    );
+      pluginIds: ["demo"],
+      dryRun: true,
+    });
+
+    expectRecordFields(result.outcomes[0], {
+      pluginId: "demo",
+      status: "updated",
+      currentVersion: "1.2.3",
+      nextVersion: "1.2.4",
+      message: "Would update demo: 1.2.3 -> 1.2.4.",
+    });
+  });
+
+  it("keeps exact npm dry-runs unchanged when probe metadata is absent but spec matches", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@acme/demo",
+      version: "1.2.3",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: installPath,
+      extensions: ["index.ts"],
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "demo",
+        spec: "@acme/demo@1.2.3",
+        installPath,
+      }),
+      pluginIds: ["demo"],
+      dryRun: true,
+    });
+
+    expectRecordFields(result.outcomes[0], {
+      pluginId: "demo",
+      status: "unchanged",
+      currentVersion: "1.2.3",
+      nextVersion: "1.2.3",
+      message: "demo is up to date (1.2.3).",
+    });
   });
 
   it("updates disabled trusted official ClawHub installs through the catalog spec", async () => {
@@ -1513,13 +1583,9 @@ describe("updateNpmInstalledPlugins", () => {
       syncOfficialPluginInstalls: true,
     });
 
-    expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "clawhub:@openclaw/diagnostics-otel",
-        expectedPluginId: "diagnostics-otel",
-      }),
-    );
-    expect(result.config.plugins?.installs?.["diagnostics-otel"]).toMatchObject({
+    expect(clawHubInstallCall()?.spec).toBe("clawhub:@openclaw/diagnostics-otel");
+    expect(clawHubInstallCall()?.expectedPluginId).toBe("diagnostics-otel");
+    expectRecordFields(result.config.plugins?.installs?.["diagnostics-otel"], {
       source: "clawhub",
       spec: "clawhub:@openclaw/diagnostics-otel",
       version: "2026.5.4",
@@ -1557,13 +1623,9 @@ describe("updateNpmInstalledPlugins", () => {
       syncOfficialPluginInstalls: true,
     });
 
-    expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "clawhub:@openclaw/diagnostics-prometheus",
-        expectedPluginId: "diagnostics-prometheus",
-      }),
-    );
-    expect(result.config.plugins?.installs?.["diagnostics-prometheus"]).toMatchObject({
+    expect(clawHubInstallCall()?.spec).toBe("clawhub:@openclaw/diagnostics-prometheus");
+    expect(clawHubInstallCall()?.expectedPluginId).toBe("diagnostics-prometheus");
+    expectRecordFields(result.config.plugins?.installs?.["diagnostics-prometheus"], {
       source: "clawhub",
       spec: "clawhub:@openclaw/diagnostics-prometheus",
       version: "2026.5.4",
@@ -1600,13 +1662,9 @@ describe("updateNpmInstalledPlugins", () => {
       dryRun: true,
     });
 
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "@acme/demo",
-        expectedPluginId: "demo",
-        dryRun: true,
-      }),
-    );
+    expect(npmInstallCall()?.spec).toBe("@acme/demo");
+    expect(npmInstallCall()?.expectedPluginId).toBe("demo");
+    expect(npmInstallCall()?.dryRun).toBe(true);
     expect(result.changed).toBe(false);
     expect(result.config).toBe(config);
     expect(result.outcomes).toEqual([
@@ -1649,12 +1707,8 @@ describe("updateNpmInstalledPlugins", () => {
       logger: { warn },
     });
 
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "@acme/demo",
-        expectedPluginId: "demo",
-      }),
-    );
+    expect(npmInstallCall()?.spec).toBe("@acme/demo");
+    expect(npmInstallCall()?.expectedPluginId).toBe("demo");
     const message =
       'Disabled "demo" after plugin update failure; OpenClaw will continue without it. Failed to update demo: registry timeout';
     expect(warn).toHaveBeenCalledWith(message);
@@ -1913,18 +1967,8 @@ describe("updateNpmInstalledPlugins", () => {
       logger: { warn: (msg) => warnMessages.push(msg) },
     });
 
-    expect(installPluginFromNpmSpecMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        spec: "openclaw-codex-app-server@beta",
-      }),
-    );
-    expect(installPluginFromNpmSpecMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        spec: "openclaw-codex-app-server",
-      }),
-    );
+    expect(npmInstallCall(0)?.spec).toBe("openclaw-codex-app-server@beta");
+    expect(npmInstallCall(1)?.spec).toBe("openclaw-codex-app-server");
     expect(warnMessages).toEqual([expect.stringContaining("has no beta npm release")]);
     expectCodexAppServerInstallState({
       result,
@@ -1963,18 +2007,8 @@ describe("updateNpmInstalledPlugins", () => {
       logger: { warn: (msg) => warnMessages.push(msg) },
     });
 
-    expect(installPluginFromNpmSpecMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        spec: "openclaw-codex-app-server@beta",
-      }),
-    );
-    expect(installPluginFromNpmSpecMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        spec: "openclaw-codex-app-server",
-      }),
-    );
+    expect(npmInstallCall(0)?.spec).toBe("openclaw-codex-app-server@beta");
+    expect(npmInstallCall(1)?.spec).toBe("openclaw-codex-app-server");
     expect(warnMessages).toEqual([expect.stringContaining("failed beta npm update")]);
     expectCodexAppServerInstallState({
       result,
@@ -2078,16 +2112,12 @@ describe("updateNpmInstalledPlugins", () => {
       timeoutMs: 1_800_000,
     });
 
-    expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "clawhub:demo",
-        baseUrl: "https://clawhub.ai",
-        expectedPluginId: "demo",
-        mode: "update",
-        timeoutMs: 1_800_000,
-      }),
-    );
-    expect(result.config.plugins?.installs?.demo).toMatchObject({
+    expect(clawHubInstallCall()?.spec).toBe("clawhub:demo");
+    expect(clawHubInstallCall()?.baseUrl).toBe("https://clawhub.ai");
+    expect(clawHubInstallCall()?.expectedPluginId).toBe("demo");
+    expect(clawHubInstallCall()?.mode).toBe("update");
+    expect(clawHubInstallCall()?.timeoutMs).toBe(1_800_000);
+    expectRecordFields(result.config.plugins?.installs?.demo, {
       source: "clawhub",
       spec: "clawhub:demo",
       installPath: "/tmp/demo",
@@ -2131,14 +2161,10 @@ describe("updateNpmInstalledPlugins", () => {
       updateChannel: "beta",
     });
 
-    expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "clawhub:demo@beta",
-        baseUrl: "https://clawhub.ai",
-        expectedPluginId: "demo",
-      }),
-    );
-    expect(result.config.plugins?.installs?.demo).toMatchObject({
+    expect(clawHubInstallCall()?.spec).toBe("clawhub:demo@beta");
+    expect(clawHubInstallCall()?.baseUrl).toBe("https://clawhub.ai");
+    expect(clawHubInstallCall()?.expectedPluginId).toBe("demo");
+    expectRecordFields(result.config.plugins?.installs?.demo, {
       source: "clawhub",
       spec: "clawhub:demo",
       installPath: "/tmp/demo",
@@ -2178,20 +2204,10 @@ describe("updateNpmInstalledPlugins", () => {
       logger: { warn: (msg) => warnMessages.push(msg) },
     });
 
-    expect(installPluginFromClawHubMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        spec: "clawhub:demo@beta",
-      }),
-    );
-    expect(installPluginFromClawHubMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        spec: "clawhub:demo",
-      }),
-    );
+    expect(clawHubInstallCall(0)?.spec).toBe("clawhub:demo@beta");
+    expect(clawHubInstallCall(1)?.spec).toBe("clawhub:demo");
     expect(warnMessages).toEqual([expect.stringContaining("has no beta ClawHub release")]);
-    expect(result.config.plugins?.installs?.demo).toMatchObject({
+    expectRecordFields(result.config.plugins?.installs?.demo, {
       source: "clawhub",
       spec: "clawhub:demo",
       installPath: "/tmp/demo",
@@ -2225,11 +2241,7 @@ describe("updateNpmInstalledPlugins", () => {
       dryRun: true,
     });
 
-    expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "clawhub:demo@rc",
-      }),
-    );
+    expect(clawHubInstallCall()?.spec).toBe("clawhub:demo@rc");
   });
 
   it("skips ClawHub plugin update when bundled version is newer", async () => {
@@ -2265,14 +2277,12 @@ describe("updateNpmInstalledPlugins", () => {
 
     expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(false);
-    expect(result.outcomes).toEqual([
-      expect.objectContaining({
-        pluginId: "whatsapp",
-        status: "skipped",
-        message: expect.stringContaining("bundled version 2026.4.20 is newer"),
-      }),
-    ]);
-    expect(warnMessages).toEqual([expect.stringContaining("bundled version 2026.4.20 is newer")]);
+    expect(result.outcomes).toHaveLength(1);
+    expect(result.outcomes[0]?.pluginId).toBe("whatsapp");
+    expect(result.outcomes[0]?.status).toBe("skipped");
+    expect(result.outcomes[0]?.message).toContain("bundled version 2026.4.20 is newer");
+    expect(warnMessages).toHaveLength(1);
+    expect(warnMessages[0]).toContain("bundled version 2026.4.20 is newer");
   });
 
   it("proceeds with ClawHub plugin update when bundled version is older", async () => {
@@ -2362,7 +2372,7 @@ describe("updateNpmInstalledPlugins", () => {
 
     expect(installPluginFromClawHubMock).toHaveBeenCalled();
     expect(result.changed).toBe(true);
-    expect(result.outcomes[0]).toMatchObject({
+    expectRecordFields(result.outcomes[0], {
       pluginId: "demo",
       status: "updated",
       currentVersion: undefined,
@@ -2403,12 +2413,8 @@ describe("updateNpmInstalledPlugins", () => {
       pluginIds: ["voice-call"],
     });
 
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "@openclaw/voice-call",
-        expectedPluginId: "voice-call",
-      }),
-    );
+    expect(npmInstallCall()?.spec).toBe("@openclaw/voice-call");
+    expect(npmInstallCall()?.expectedPluginId).toBe("voice-call");
     expect(result.config.plugins?.allow).toEqual(["@openclaw/voice-call"]);
     expect(result.config.plugins?.deny).toEqual(["@openclaw/voice-call"]);
     expect(result.config.plugins?.slots?.memory).toBe("@openclaw/voice-call");
@@ -2417,7 +2423,7 @@ describe("updateNpmInstalledPlugins", () => {
       hooks: { allowPromptInjection: false },
     });
     expect(result.config.plugins?.entries?.["voice-call"]).toBeUndefined();
-    expect(result.config.plugins?.installs?.["@openclaw/voice-call"]).toMatchObject({
+    expectRecordFields(result.config.plugins?.installs?.["@openclaw/voice-call"], {
       source: "npm",
       spec: "@openclaw/voice-call",
       installPath: "/tmp/openclaw-voice-call",
@@ -2452,7 +2458,7 @@ describe("updateNpmInstalledPlugins", () => {
     });
 
     expect(result.config.plugins?.slots?.contextEngine).toBe("@openclaw/context-engine");
-    expect(result.config.plugins?.installs?.["@openclaw/context-engine"]).toMatchObject({
+    expectRecordFields(result.config.plugins?.installs?.["@openclaw/context-engine"], {
       source: "npm",
       spec: "@openclaw/context-engine",
       installPath: "/tmp/openclaw-context-engine",
@@ -2484,15 +2490,11 @@ describe("updateNpmInstalledPlugins", () => {
       dryRun: true,
     });
 
-    expect(installPluginFromMarketplaceMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        marketplace: "vincentkoc/claude-marketplace",
-        plugin: "claude-bundle",
-        expectedPluginId: "claude-bundle",
-        dryRun: true,
-        timeoutMs: 1_800_000,
-      }),
-    );
+    expect(marketplaceInstallCall()?.marketplace).toBe("vincentkoc/claude-marketplace");
+    expect(marketplaceInstallCall()?.plugin).toBe("claude-bundle");
+    expect(marketplaceInstallCall()?.expectedPluginId).toBe("claude-bundle");
+    expect(marketplaceInstallCall()?.dryRun).toBe(true);
+    expect(marketplaceInstallCall()?.timeoutMs).toBe(1_800_000);
     expect(result.outcomes).toEqual([
       {
         pluginId: "claude-bundle",
@@ -2528,7 +2530,7 @@ describe("updateNpmInstalledPlugins", () => {
     });
 
     expect(result.changed).toBe(true);
-    expect(result.config.plugins?.installs?.["claude-bundle"]).toMatchObject({
+    expectRecordFields(result.config.plugins?.installs?.["claude-bundle"], {
       source: "marketplace",
       installPath: "/tmp/claude-bundle",
       version: "1.3.0",
@@ -2563,15 +2565,11 @@ describe("updateNpmInstalledPlugins", () => {
       pluginIds: ["demo"],
     });
 
-    expect(installPluginFromGitSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "git:github.com/acme/demo@main",
-        expectedPluginId: "demo",
-        mode: "update",
-      }),
-    );
+    expect(gitInstallCall()?.spec).toBe("git:github.com/acme/demo@main");
+    expect(gitInstallCall()?.expectedPluginId).toBe("demo");
+    expect(gitInstallCall()?.mode).toBe("update");
     expect(result.changed).toBe(true);
-    expect(result.config.plugins?.installs?.demo).toMatchObject({
+    expectRecordFields(result.config.plugins?.installs?.demo, {
       source: "git",
       spec: "git:github.com/acme/demo@main",
       installPath: "/tmp/demo",
@@ -2599,13 +2597,9 @@ describe("updateNpmInstalledPlugins", () => {
       dangerouslyForceUnsafeInstall: true,
     });
 
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "openclaw-codex-app-server@beta",
-        dangerouslyForceUnsafeInstall: true,
-        expectedPluginId: "openclaw-codex-app-server",
-      }),
-    );
+    expect(npmInstallCall()?.spec).toBe("openclaw-codex-app-server@beta");
+    expect(npmInstallCall()?.dangerouslyForceUnsafeInstall).toBe(true);
+    expect(npmInstallCall()?.expectedPluginId).toBe("openclaw-codex-app-server");
   });
 
   it("reuses the recorded managed extensions root when updating external plugins", async () => {
@@ -2694,18 +2688,10 @@ describe("updateNpmInstalledPlugins", () => {
       pluginIds: ["demo"],
     });
 
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({ extensionsDir }),
-    );
-    expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
-      expect.objectContaining({ extensionsDir }),
-    );
-    expect(installPluginFromMarketplaceMock).toHaveBeenCalledWith(
-      expect.objectContaining({ extensionsDir }),
-    );
-    expect(installPluginFromGitSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({ extensionsDir }),
-    );
+    expect(npmInstallCall()?.extensionsDir).toBe(extensionsDir);
+    expect(clawHubInstallCall()?.extensionsDir).toBe(extensionsDir);
+    expect(marketplaceInstallCall()?.extensionsDir).toBe(extensionsDir);
+    expect(gitInstallCall()?.extensionsDir).toBe(extensionsDir);
   });
 });
 
@@ -2872,23 +2858,15 @@ describe("syncPluginsForUpdateChannel", () => {
       },
     });
 
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "@openclaw/legacy-chat",
-        mode: "update",
-        expectedPluginId: "legacy-chat",
-      }),
-    );
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        trustedSourceLinkedOfficialInstall: true,
-      }),
-    );
+    expect(npmInstallCall()?.spec).toBe("@openclaw/legacy-chat");
+    expect(npmInstallCall()?.mode).toBe("update");
+    expect(npmInstallCall()?.expectedPluginId).toBe("legacy-chat");
+    expect(npmInstallCall()?.trustedSourceLinkedOfficialInstall).not.toBe(true);
     expect(result.changed).toBe(true);
     expect(result.summary.switchedToNpm).toEqual(["legacy-chat"]);
     expect(result.summary.errors).toStrictEqual([]);
     expect(result.config.plugins?.load?.paths).toStrictEqual([]);
-    expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
+    expectRecordFields(result.config.plugins?.installs?.["legacy-chat"], {
       source: "npm",
       spec: "@openclaw/legacy-chat",
       installPath: "/tmp/openclaw-plugins/legacy-chat",
@@ -2937,13 +2915,9 @@ describe("syncPluginsForUpdateChannel", () => {
       },
     });
 
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "@openclaw/voice-call",
-        expectedPluginId: "voice-call",
-        trustedSourceLinkedOfficialInstall: true,
-      }),
-    );
+    expect(npmInstallCall()?.spec).toBe("@openclaw/voice-call");
+    expect(npmInstallCall()?.expectedPluginId).toBe("voice-call");
+    expect(npmInstallCall()?.trustedSourceLinkedOfficialInstall).toBe(true);
   });
 
   it("installs a ClawHub-preferred externalized bundled plugin", async () => {
@@ -2988,21 +2962,17 @@ describe("syncPluginsForUpdateChannel", () => {
       },
     });
 
-    expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "clawhub:legacy-chat@2026.5.1-beta.2",
-        baseUrl: "https://clawhub.ai",
-        mode: "update",
-        expectedPluginId: "legacy-chat",
-      }),
-    );
+    expect(clawHubInstallCall()?.spec).toBe("clawhub:legacy-chat@2026.5.1-beta.2");
+    expect(clawHubInstallCall()?.baseUrl).toBe("https://clawhub.ai");
+    expect(clawHubInstallCall()?.mode).toBe("update");
+    expect(clawHubInstallCall()?.expectedPluginId).toBe("legacy-chat");
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(true);
     expect(result.summary.switchedToClawHub).toEqual(["legacy-chat"]);
     expect(result.summary.switchedToNpm).toStrictEqual([]);
     expect(result.summary.errors).toStrictEqual([]);
     expect(result.config.plugins?.load?.paths).toStrictEqual([]);
-    expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
+    expectRecordFields(result.config.plugins?.installs?.["legacy-chat"], {
       source: "clawhub",
       spec: "clawhub:legacy-chat@2026.5.1-beta.2",
       installPath: "/tmp/openclaw-plugins/legacy-chat",
@@ -3069,18 +3039,10 @@ describe("syncPluginsForUpdateChannel", () => {
       },
     });
 
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "@openclaw/legacy-chat",
-        mode: "update",
-        expectedPluginId: "legacy-chat",
-      }),
-    );
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        trustedSourceLinkedOfficialInstall: true,
-      }),
-    );
+    expect(npmInstallCall()?.spec).toBe("@openclaw/legacy-chat");
+    expect(npmInstallCall()?.mode).toBe("update");
+    expect(npmInstallCall()?.expectedPluginId).toBe("legacy-chat");
+    expect(npmInstallCall()?.trustedSourceLinkedOfficialInstall).not.toBe(true);
     expect(result.changed).toBe(true);
     expect(result.summary.switchedToClawHub).toStrictEqual([]);
     expect(result.summary.switchedToNpm).toEqual(["legacy-chat"]);
@@ -3088,7 +3050,7 @@ describe("syncPluginsForUpdateChannel", () => {
       "ClawHub clawhub:legacy-chat@2026.5.1-beta.2 unavailable for legacy-chat; falling back to npm @openclaw/legacy-chat.",
     ]);
     expect(result.summary.errors).toStrictEqual([]);
-    expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
+    expectRecordFields(result.config.plugins?.installs?.["legacy-chat"], {
       source: "npm",
       spec: "@openclaw/legacy-chat",
       installPath: "/tmp/openclaw-plugins/legacy-chat",
@@ -3141,13 +3103,9 @@ describe("syncPluginsForUpdateChannel", () => {
       },
     });
 
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "@openclaw/voice-call",
-        expectedPluginId: "voice-call",
-        trustedSourceLinkedOfficialInstall: true,
-      }),
-    );
+    expect(npmInstallCall()?.spec).toBe("@openclaw/voice-call");
+    expect(npmInstallCall()?.expectedPluginId).toBe("voice-call");
+    expect(npmInstallCall()?.trustedSourceLinkedOfficialInstall).toBe(true);
   });
 
   it("moves ClawHub-preferred externalized plugin fallbacks back to ClawHub", async () => {
@@ -3190,17 +3148,13 @@ describe("syncPluginsForUpdateChannel", () => {
       },
     });
 
-    expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "clawhub:legacy-chat@2026.5.1-beta.2",
-        mode: "update",
-        expectedPluginId: "legacy-chat",
-      }),
-    );
+    expect(clawHubInstallCall()?.spec).toBe("clawhub:legacy-chat@2026.5.1-beta.2");
+    expect(clawHubInstallCall()?.mode).toBe("update");
+    expect(clawHubInstallCall()?.expectedPluginId).toBe("legacy-chat");
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(true);
     expect(result.summary.switchedToClawHub).toEqual(["legacy-chat"]);
-    expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
+    expectRecordFields(result.config.plugins?.installs?.["legacy-chat"], {
       source: "clawhub",
       spec: "clawhub:legacy-chat@2026.5.1-beta.2",
       installPath: "/tmp/openclaw-plugins/legacy-chat",
@@ -3277,16 +3231,12 @@ describe("syncPluginsForUpdateChannel", () => {
       config: {},
     });
 
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "@openclaw/default-chat",
-        mode: "update",
-        expectedPluginId: "default-chat",
-      }),
-    );
+    expect(npmInstallCall()?.spec).toBe("@openclaw/default-chat");
+    expect(npmInstallCall()?.mode).toBe("update");
+    expect(npmInstallCall()?.expectedPluginId).toBe("default-chat");
     expect(result.changed).toBe(true);
     expect(result.summary.switchedToNpm).toEqual(["default-chat"]);
-    expect(result.config.plugins?.installs?.["default-chat"]).toMatchObject({
+    expectRecordFields(result.config.plugins?.installs?.["default-chat"], {
       source: "npm",
       spec: "@openclaw/default-chat",
       installPath: "/tmp/openclaw-plugins/default-chat",
@@ -3327,7 +3277,7 @@ describe("syncPluginsForUpdateChannel", () => {
 
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(false);
-    expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
+    expectRecordFields(result.config.plugins?.installs?.["legacy-chat"], {
       source: "path",
     });
   });
@@ -3406,7 +3356,7 @@ describe("syncPluginsForUpdateChannel", () => {
 
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(false);
-    expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
+    expectRecordFields(result.config.plugins?.installs?.["legacy-chat"], {
       source: "path",
       sourcePath: "/workspace/plugins/legacy-chat",
     });
@@ -3450,7 +3400,7 @@ describe("syncPluginsForUpdateChannel", () => {
 
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(false);
-    expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
+    expectRecordFields(result.config.plugins?.installs?.["legacy-chat"], {
       source: "path",
     });
   });
@@ -3491,7 +3441,7 @@ describe("syncPluginsForUpdateChannel", () => {
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(true);
     expect(result.config.plugins?.load?.paths).toEqual(["/workspace/plugins/other"]);
-    expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
+    expectRecordFields(result.config.plugins?.installs?.["legacy-chat"], {
       source: "npm",
       spec: "@openclaw/legacy-chat",
     });
@@ -3533,7 +3483,7 @@ describe("syncPluginsForUpdateChannel", () => {
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(true);
     expect(result.config.plugins?.load?.paths).toEqual(["/workspace/plugins/other"]);
-    expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
+    expectRecordFields(result.config.plugins?.installs?.["legacy-chat"], {
       source: "npm",
       resolvedName: "@openclaw/legacy-chat",
     });
@@ -3576,7 +3526,7 @@ describe("syncPluginsForUpdateChannel", () => {
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(true);
     expect(result.config.plugins?.load?.paths).toEqual(["/workspace/plugins/other"]);
-    expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
+    expectRecordFields(result.config.plugins?.installs?.["legacy-chat"], {
       source: "npm",
       spec: "@openclaw/legacy-chat@1.2.3",
     });
@@ -3622,7 +3572,7 @@ describe("syncPluginsForUpdateChannel", () => {
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(true);
     expect(result.config.plugins?.load?.paths).toEqual(["/workspace/plugins/other"]);
-    expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
+    expectRecordFields(result.config.plugins?.installs?.["legacy-chat"], {
       source: "clawhub",
       spec: "clawhub:legacy-chat@2026.5.1",
     });

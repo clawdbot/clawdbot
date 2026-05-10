@@ -49,6 +49,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   private readonly consultAbortControllers = new Set<AbortController>();
   private cancelRequestedForPlayback = false;
   private speechFramesDuringPlayback = 0;
+  private lastRelayError: string | undefined;
 
   constructor(
     private readonly session: RealtimeTalkGatewayRelaySessionResult,
@@ -85,6 +86,18 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   }
 
   stop(): void {
+    const wasClosed = this.closed;
+    this.stopLocal();
+    if (!wasClosed) {
+      void this.ctx.client
+        .request("talk.session.close", {
+          sessionId: this.session.relaySessionId,
+        })
+        .catch(() => undefined);
+    }
+  }
+
+  private stopLocal(): void {
     this.closed = true;
     this.unsubscribe?.();
     this.unsubscribe = null;
@@ -100,9 +113,6 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     this.inputContext = null;
     void this.outputContext?.close();
     this.outputContext = null;
-    void this.ctx.client.request("talk.session.close", {
-      sessionId: this.session.relaySessionId,
-    });
   }
 
   private startMicrophonePump(): void {
@@ -120,11 +130,21 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       if (this.detectBargeInSpeech(samples)) {
         this.cancelOutputForBargeIn();
       }
-      void this.ctx.client.request("talk.session.appendAudio", {
-        sessionId: this.session.relaySessionId,
-        audioBase64: bytesToBase64(pcm),
-        timestamp: Math.round((this.inputContext?.currentTime ?? 0) * 1000),
-      });
+      void this.ctx.client
+        .request("talk.session.appendAudio", {
+          sessionId: this.session.relaySessionId,
+          audioBase64: bytesToBase64(pcm),
+          timestamp: Math.round((this.inputContext?.currentTime ?? 0) * 1000),
+        })
+        .catch((error: unknown) => {
+          if (!this.closed) {
+            this.ctx.callbacks.onStatus?.(
+              "error",
+              error instanceof Error ? error.message : String(error),
+            );
+            this.stop();
+          }
+        });
     };
     this.inputSource.connect(this.inputProcessor);
     this.inputProcessor.connect(this.inputContext.destination);
@@ -167,15 +187,17 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
         void this.handleToolCall(event);
         return;
       case "error":
-        this.ctx.callbacks.onStatus?.("error", event.message ?? "Realtime relay failed");
+        this.lastRelayError = event.message ?? "Realtime relay failed";
+        this.ctx.callbacks.onStatus?.("error", this.lastRelayError);
         return;
       case "close":
         this.abortConsults();
         if (!this.closed) {
           this.ctx.callbacks.onStatus?.(
             event.reason === "error" ? "error" : "idle",
-            event.reason === "error" ? "Realtime relay closed" : undefined,
+            event.reason === "error" ? (this.lastRelayError ?? "Realtime relay closed") : undefined,
           );
+          this.stopLocal();
         }
         return;
       default:

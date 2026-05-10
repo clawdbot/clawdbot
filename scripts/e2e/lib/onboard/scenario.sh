@@ -178,7 +178,7 @@ send_channels_flow() {
   # a stable no-op smoke path when the config starts empty.
   wait_for_log "Where will the Gateway run?" 120
   send $'\r' 0.6
-  wait_for_log "Configure/link" 120
+  wait_for_log "Channel setup" 120
   send $'\e[B\r' 0.8
   # Keep stdin open until wizard exits.
   send "" 2.0

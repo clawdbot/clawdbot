@@ -25,6 +25,8 @@ ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 ANTHROPIC_API_TOKEN="${ANTHROPIC_API_TOKEN:-}"
 AGENT_TURN_TIMEOUT_SECONDS="${OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS:-600}"
 AGENT_TURNS_PARALLEL="${OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL:-1}"
+OPENAI_AGENT_MODEL="${OPENCLAW_INSTALL_E2E_OPENAI_MODEL:-openai/gpt-5.5}"
+OPENAI_PROVIDER_TIMEOUT_SECONDS="${OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS:-${AGENT_TURN_TIMEOUT_SECONDS}}"
 
 time_phase() {
   local name="$1"
@@ -604,8 +606,10 @@ run_profile() {
   local image_model
   if [[ "$agent_model_provider" == "openai" ]]; then
     agent_model="$(set_agent_model "$profile" \
+      "$OPENAI_AGENT_MODEL" \
       "openai/gpt-5.5" \
       "openai/gpt-5.4-mini")"
+    openclaw --profile "$profile" config set models.providers.openai "{\"baseUrl\":\"https://api.openai.com/v1\",\"models\":[],\"timeoutSeconds\":${OPENAI_PROVIDER_TIMEOUT_SECONDS},\"agentRuntime\":{\"id\":\"pi\"}}" --strict-json >/dev/null
     image_model="$(set_image_model "$profile" \
       "openai/gpt-5.4-image-2")"
   else

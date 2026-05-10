@@ -1,4 +1,5 @@
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
+import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -91,6 +92,36 @@ describe("minimax image-generation provider", () => {
       ],
       model: "image-01",
     });
+  });
+
+  it("passes request SSRF policy to the provider HTTP helper", async () => {
+    mockMinimaxApiKey();
+    const postJsonRequest = vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({
+      response: new Response(
+        JSON.stringify({
+          data: { image_base64: [Buffer.from("png-data").toString("base64")] },
+          base_resp: { status_code: 0 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+      finalUrl: "https://api.minimax.io/v1/image_generation",
+      release: async () => {},
+    });
+
+    const provider = buildMinimaxImageGenerationProvider();
+    await provider.generateImage({
+      provider: "minimax",
+      model: "image-01",
+      prompt: "draw a cat",
+      cfg: {},
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    expect(postJsonRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      }),
+    );
   });
 
   it("keeps the dedicated global image endpoint when text config uses the global API host", async () => {

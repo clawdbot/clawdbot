@@ -42,6 +42,20 @@ export function collectRegisteredToolNames(tools: Array<{ name?: string }>): Set
   return names;
 }
 
+export function collectCoreBuiltinToolNames(
+  tools: Array<{ name?: string }>,
+  options?: { isPluginTool?: (tool: { name?: string }) => boolean },
+): Set<string> {
+  const names = new Set<string>();
+  for (const tool of tools) {
+    if (options?.isPluginTool?.(tool)) {
+      continue;
+    }
+    addName(names, tool.name);
+  }
+  return names;
+}
+
 export function toSessionToolAllowlist(allowedToolNames: Iterable<string>): string[] {
   return [...new Set(allowedToolNames)].toSorted((a, b) => a.localeCompare(b));
 }

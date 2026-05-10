@@ -204,6 +204,54 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     });
   });
 
+  it("resolves canonical gemini 3 flash from older Google flash templates when the exact row is missing", () => {
+    const model = resolveGoogleGeminiForwardCompatModel({
+      providerId: "google",
+      ctx: createContext({
+        provider: "google",
+        modelId: "gemini-3-flash-preview",
+        models: [
+          createTemplateModel("google", "gemini-2.5-flash", {
+            contextWindow: 1_048_576,
+            reasoning: true,
+          }),
+        ],
+      }),
+    });
+
+    expect(model).toMatchObject({
+      provider: "google",
+      id: "gemini-3-flash-preview",
+      api: "google-generative-ai",
+      input: ["text", "image"],
+      contextWindow: 1_048_576,
+      reasoning: true,
+    });
+  });
+
+  it("resolves canonical Gemini CLI 3 flash from Google flash templates when the CLI row is missing", () => {
+    const model = resolveGoogleGeminiForwardCompatModel({
+      providerId: "google-gemini-cli",
+      ctx: createContext({
+        provider: "google-gemini-cli",
+        modelId: "gemini-3-flash-preview",
+        models: [
+          createTemplateModel("google", "gemini-2.5-flash", {
+            contextWindow: 1_048_576,
+          }),
+        ],
+      }),
+    });
+
+    expect(model).toMatchObject({
+      provider: "google-gemini-cli",
+      id: "gemini-3-flash-preview",
+      api: "google-generative-ai",
+      input: ["text", "image"],
+      contextWindow: 1_048_576,
+    });
+  });
+
   it("resolves Gemini latest aliases from current Google templates", () => {
     const models = [
       createTemplateModel("google", "gemini-3-pro-preview", { reasoning: true }),

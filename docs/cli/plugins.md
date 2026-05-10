@@ -90,6 +90,10 @@ openclaw plugins install <plugin> --marketplace <name>  # marketplace (explicit)
 openclaw plugins install <plugin> --marketplace https://github.com/<owner>/<repo>
 ```
 
+Maintainers testing setup-time installs can override automatic plugin install
+sources with guarded environment variables. See
+[Plugin install overrides](/plugins/install-overrides).
+
 <Warning>
 Bare package names install from npm by default during the launch cutover. Use `clawhub:<package>` for ClawHub. Treat plugin installs like running code. Prefer pinned versions.
 </Warning>

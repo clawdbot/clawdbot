@@ -13,11 +13,8 @@ import {
 import { log } from "./constants.js";
 import {
   areOAuthCredentialsEquivalent,
-  hasUsableOAuthCredential,
   isSafeToAdoptBootstrapOAuthIdentity,
-  isSafeToOverwriteStoredOAuthIdentity,
   shouldBootstrapFromExternalCliCredential,
-  shouldReplaceStoredOAuthCredential,
 } from "./oauth-shared.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 

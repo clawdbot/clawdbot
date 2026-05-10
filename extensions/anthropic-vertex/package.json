@@ -1,13 +1,13 @@
 {
   "name": "@openclaw/anthropic-vertex-provider",
-  "version": "2026.5.8",
+  "version": "2026.5.10-beta.1",
   "private": true,
   "description": "OpenClaw Anthropic Vertex provider plugin",
   "type": "module",
   "dependencies": {
     "@anthropic-ai/vertex-sdk": "^0.16.0",
-    "@mariozechner/pi-agent-core": "0.73.0",
-    "@mariozechner/pi-ai": "0.73.0"
+    "@mariozechner/pi-agent-core": "0.73.1",
+    "@mariozechner/pi-ai": "0.73.1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

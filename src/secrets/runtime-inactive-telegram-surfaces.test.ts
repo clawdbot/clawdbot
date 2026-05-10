@@ -4,6 +4,16 @@ import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-s
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
+function expectWarningPaths(
+  snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>,
+  expectedPaths: string[],
+): void {
+  const warningPaths = new Set(snapshot.warnings.map((warning) => warning.path));
+  for (const expectedPath of expectedPaths) {
+    expect(warningPaths.has(expectedPath)).toBe(true);
+  }
+}
+
 function requireTelegramConfig(
   snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>,
 ) {
@@ -44,11 +54,9 @@ describe("secrets runtime snapshot inactive telegram surfaces", () => {
       provider: "default",
       id: "DISABLED_TELEGRAM_BASE_TOKEN",
     });
-    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
-      expect.arrayContaining([
-        "channels.telegram.botToken",
-        "channels.telegram.accounts.disabled.botToken",
-      ]),
-    );
+    expectWarningPaths(snapshot, [
+      "channels.telegram.botToken",
+      "channels.telegram.accounts.disabled.botToken",
+    ]);
   });
 });

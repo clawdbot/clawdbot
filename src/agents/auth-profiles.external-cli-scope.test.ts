@@ -73,18 +73,16 @@ describe("external CLI auth scope", () => {
 
     const scope = resolveExternalCliAuthScopeFromConfig(cfg);
 
-    expect(scope?.providerIds).toEqual(
-      expect.arrayContaining([
-        "anthropic",
-        "openai",
-        "openai-codex",
-        "minimax-portal",
-        "codex-app-server",
-        "opencode-go",
-        "z.ai",
-        "zai",
-      ]),
-    );
+    expect(scope?.providerIds).toEqual([
+      "anthropic",
+      "codex-app-server",
+      "minimax-portal",
+      "openai",
+      "openai-codex",
+      "opencode-go",
+      "z.ai",
+      "zai",
+    ]);
     expect(scope?.providerIds).not.toContain("claude-cli");
     expect(scope?.profileIds).toContain("openai-codex:default");
   });

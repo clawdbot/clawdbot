@@ -408,12 +408,13 @@ describe("handleToolExecutionEnd media emission", () => {
       },
     });
 
-    expect(ctx.emitToolOutput).toHaveBeenCalledWith(
-      "tts",
-      undefined,
-      "remote tool output",
-      expect.any(Object),
-    );
+    expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
+    const emitToolOutput = vi.mocked(ctx.emitToolOutput);
+    const [toolName, summary, output, options] = emitToolOutput.mock.calls[0] ?? [];
+    expect(toolName).toBe("tts");
+    expect(summary).toBeUndefined();
+    expect(output).toBe("remote tool output");
+    expect(options).toBeTypeOf("object");
     expect(ctx.state.pendingToolMediaUrls).toEqual(["https://example.com/reply.opus"]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
   });
@@ -483,12 +484,13 @@ describe("handleToolExecutionEnd media emission", () => {
         shouldEmitToolOutput: true,
       });
 
-      expect(ctx.emitToolOutput).toHaveBeenCalledWith(
-        toolName,
-        undefined,
-        providerInventoryText,
-        expect.any(Object),
-      );
+      expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
+      const emitToolOutput = vi.mocked(ctx.emitToolOutput);
+      const [calledToolName, summary, output, options] = emitToolOutput.mock.calls[0] ?? [];
+      expect(calledToolName).toBe(toolName);
+      expect(summary).toBeUndefined();
+      expect(output).toBe(providerInventoryText);
+      expect(options).toBeTypeOf("object");
       expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
     },
   );

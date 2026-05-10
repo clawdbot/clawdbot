@@ -155,6 +155,7 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
         timeoutMs: req.timeoutMs,
         fetchFn: fetch,
         allowPrivateNetwork,
+        ssrfPolicy: req.ssrfPolicy,
         dispatcherPolicy,
       });
       try {

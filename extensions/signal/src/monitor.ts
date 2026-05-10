@@ -34,7 +34,7 @@ import {
 } from "openclaw/plugin-sdk/text-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveSignalAccount } from "./accounts.js";
-import { signalCheck, signalRpcRequest } from "./client.js";
+import { signalRpcRequest, signalCheck } from "./client-adapter.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
 import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
@@ -71,6 +71,24 @@ export type MonitorSignalOpts = {
 
 function resolveRuntime(opts: MonitorSignalOpts): RuntimeEnv {
   return opts.runtime ?? createNonExitingRuntime();
+}
+
+function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
+  const inFlight = new Set<Promise<void>>();
+  return {
+    runEventTask(task: () => Promise<void>): void {
+      const trackedTask = Promise.resolve()
+        .then(task)
+        .catch((err) => runtime.error?.(`event handler failed: ${String(err)}`))
+        .finally(() => inFlight.delete(trackedTask));
+      inFlight.add(trackedTask);
+    },
+    async waitForIdle(): Promise<void> {
+      while (inFlight.size > 0) {
+        await Promise.allSettled(Array.from(inFlight));
+      }
+    },
+  };
 }
 
 function mergeAbortSignals(
@@ -272,6 +290,7 @@ function deriveSignalAttachmentRpcMaxResponseBytes(maxBytes: number): number | u
 async function fetchAttachment(params: {
   baseUrl: string;
   account?: string;
+  apiMode?: "native" | "container" | "auto";
   attachment: SignalAttachment;
   sender?: string;
   groupId?: string;
@@ -303,6 +322,7 @@ async function fetchAttachment(params: {
   const result = await signalRpcRequest<{ data?: string }>("getAttachment", rpcParams, {
     baseUrl: params.baseUrl,
     maxResponseBytes: deriveSignalAttachmentRpcMaxResponseBytes(params.maxBytes),
+    apiMode: params.apiMode,
   });
   if (!result?.data) {
     return null;
@@ -422,13 +442,21 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const waitForTransportReadyFn = opts.waitForTransportReady ?? waitForTransportReady;
 
   const autoStart = opts.autoStart ?? accountInfo.config.autoStart ?? !accountInfo.config.httpUrl;
+  const configuredApiMode = cfg.channels?.signal?.apiMode ?? "auto";
   const startupTimeoutMs = Math.min(
     120_000,
     Math.max(1_000, opts.startupTimeoutMs ?? accountInfo.config.startupTimeoutMs ?? 30_000),
   );
   const readReceiptsViaDaemon = autoStart && sendReadReceipts;
   const daemonLifecycle = createSignalDaemonLifecycle({ abortSignal: opts.abortSignal });
+  const monitorTaskRunner = createSignalMonitorTaskRunner(runtime);
   let daemonHandle: SignalDaemonHandle | null = null;
+
+  if (autoStart && configuredApiMode === "container") {
+    throw new Error(
+      "channels.signal.autoStart=true is incompatible with channels.signal.apiMode=container",
+    );
+  }
 
   if (autoStart) {
     const cliPath = opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli";
@@ -491,7 +519,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       ignoreAttachments,
       sendReadReceipts,
       readReceiptsViaDaemon,
-      fetchAttachment,
+      fetchAttachment: (params) => fetchAttachment({ ...params, apiMode: configuredApiMode }),
       deliverReplies: (params) => deliverReplies({ ...params, cfg, chunkMode }),
       resolveSignalReactionTargets,
       isSignalReactionMessage,
@@ -506,11 +534,10 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       runtime,
       // signal-cli can keep the SSE event endpoint idle until the next inbound event.
       timeoutMs: 0,
+      apiMode: configuredApiMode,
       policy: opts.reconnectPolicy,
       onEvent: (event) => {
-        void handleEvent(event).catch((err) => {
-          runtime.error?.(`event handler failed: ${String(err)}`);
-        });
+        monitorTaskRunner.runEventTask(() => handleEvent(event));
       },
     });
     const daemonExitError = daemonLifecycle.getExitError();
@@ -524,6 +551,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     }
     throw err;
   } finally {
+    await monitorTaskRunner.waitForIdle();
     daemonLifecycle.dispose();
     opts.abortSignal?.removeEventListener("abort", onAbort);
     daemonLifecycle.stop();

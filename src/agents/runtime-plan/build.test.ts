@@ -44,6 +44,44 @@ const gpt54Model = {
   maxTokens: 8_192,
 } as const;
 
+function expectExtraParams(
+  extraParams: Record<string, unknown> | undefined,
+  expected: {
+    parallelToolCalls: boolean;
+    textVerbosity: string;
+  },
+): void {
+  expect(extraParams?.parallel_tool_calls).toBe(expected.parallelToolCalls);
+  expect(extraParams?.text_verbosity).toBe(expected.textVerbosity);
+}
+
+function latestFollowupRouteCall(): {
+  provider?: unknown;
+  runtimeHandle?: Record<string, unknown>;
+  context?: Record<string, unknown>;
+} {
+  const call = vi.mocked(resolveProviderFollowupFallbackRoute).mock.calls.at(-1)?.[0];
+  if (!call || typeof call !== "object") {
+    throw new Error("expected follow-up route call");
+  }
+  const record = call as {
+    provider?: unknown;
+    runtimeHandle?: unknown;
+    context?: unknown;
+  };
+  return {
+    provider: record.provider,
+    runtimeHandle:
+      record.runtimeHandle && typeof record.runtimeHandle === "object"
+        ? (record.runtimeHandle as Record<string, unknown>)
+        : undefined,
+    context:
+      record.context && typeof record.context === "object"
+        ? (record.context as Record<string, unknown>)
+        : undefined,
+  };
+}
+
 describe("AgentRuntimePlan", () => {
   afterEach(() => {
     resetConfigRuntimeState();
@@ -65,10 +103,9 @@ describe("AgentRuntimePlan", () => {
     });
 
     expect(prepareProviderExtraParamsMock).not.toHaveBeenCalled();
-    expect(plan.transport.extraParams).toMatchObject({
-      parallel_tool_calls: true,
-      text_verbosity: "low",
-      openaiWsWarmup: false,
+    expectExtraParams(plan.transport.extraParams, {
+      parallelToolCalls: true,
+      textVerbosity: "low",
     });
     expect(prepareProviderExtraParamsMock).toHaveBeenCalledTimes(1);
     void plan.transport.extraParams;
@@ -92,12 +129,10 @@ describe("AgentRuntimePlan", () => {
       },
     });
 
-    expect(plan.auth).toMatchObject({
-      providerForAuth: "openai",
-      authProfileProviderForAuth: "openai-codex",
-      harnessAuthProvider: "openai-codex",
-      forwardedAuthProfileId: "openai-codex:work",
-    });
+    expect(plan.auth.providerForAuth).toBe("openai");
+    expect(plan.auth.authProfileProviderForAuth).toBe("openai-codex");
+    expect(plan.auth.harnessAuthProvider).toBe("openai-codex");
+    expect(plan.auth.forwardedAuthProfileId).toBe("openai-codex:work");
     expect(plan.delivery.isSilentPayload({ text: '{"action":"NO_REPLY"}' })).toBe(true);
     expect(
       plan.delivery.isSilentPayload({
@@ -105,20 +140,17 @@ describe("AgentRuntimePlan", () => {
         mediaUrl: "file:///tmp/image.png",
       }),
     ).toBe(false);
-    expect(plan.transport.extraParams).toMatchObject({
-      parallel_tool_calls: true,
-      text_verbosity: "low",
-      openaiWsWarmup: false,
+    expectExtraParams(plan.transport.extraParams, {
+      parallelToolCalls: true,
+      textVerbosity: "low",
     });
-    expect(
-      plan.transport.resolveExtraParams({
-        extraParamsOverride: { parallel_tool_calls: false },
-        resolvedTransport: "websocket",
-      }),
-    ).toMatchObject({
-      parallel_tool_calls: false,
-      text_verbosity: "low",
-      openaiWsWarmup: false,
+    const resolvedExtraParams = plan.transport.resolveExtraParams({
+      extraParamsOverride: { parallel_tool_calls: false },
+      resolvedTransport: "websocket",
+    });
+    expectExtraParams(resolvedExtraParams, {
+      parallelToolCalls: false,
+      textVerbosity: "low",
     });
     expect(
       plan.prompt.resolveSystemPromptContribution({
@@ -172,11 +204,9 @@ describe("AgentRuntimePlan", () => {
       workspaceDir: "/tmp/openclaw-runtime-plan",
     });
 
-    expect(plan.auth).toMatchObject({
-      providerForAuth: "openai",
-      authProfileProviderForAuth: "openai",
-      harnessAuthProvider: "openai-codex",
-    });
+    expect(plan.auth.providerForAuth).toBe("openai");
+    expect(plan.auth.authProfileProviderForAuth).toBe("openai");
+    expect(plan.auth.harnessAuthProvider).toBe("openai-codex");
     expect(plan.auth.forwardedAuthProfileId).toBeUndefined();
   });
 
@@ -193,11 +223,9 @@ describe("AgentRuntimePlan", () => {
       workspaceDir: "/tmp/openclaw-runtime-plan",
     });
 
-    expect(plan.auth).toMatchObject({
-      providerForAuth: "openai",
-      authProfileProviderForAuth: "openai-codex",
-      forwardedAuthProfileId: "openai-codex:work",
-    });
+    expect(plan.auth.providerForAuth).toBe("openai");
+    expect(plan.auth.authProfileProviderForAuth).toBe("openai-codex");
+    expect(plan.auth.forwardedAuthProfileId).toBe("openai-codex:work");
   });
 
   it("resolves follow-up routes with the prepared provider handle", () => {
@@ -231,18 +259,13 @@ describe("AgentRuntimePlan", () => {
       route: "dispatcher",
       reason: "prepared-route",
     });
-    expect(resolveProviderFollowupFallbackRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        runtimeHandle: providerRuntimeHandle,
-        context: expect.objectContaining({
-          provider: "openai",
-          modelId: "gpt-5.4",
-          originRoutable: false,
-          dispatcherAvailable: true,
-        }),
-      }),
-    );
+    const followupCall = latestFollowupRouteCall();
+    expect(followupCall.provider).toBe("openai");
+    expect(followupCall.runtimeHandle?.provider).toBe(providerRuntimeHandle.provider);
+    expect(followupCall.context?.provider).toBe("openai");
+    expect(followupCall.context?.modelId).toBe("gpt-5.4");
+    expect(followupCall.context?.originRoutable).toBe(false);
+    expect(followupCall.context?.dispatcherAvailable).toBe(true);
   });
 
   it("resolves incomplete supplied provider handles before invoking runtime hooks", () => {
@@ -291,11 +314,8 @@ describe("AgentRuntimePlan", () => {
       bundledProviderAllowlistCompat: undefined,
       bundledProviderVitestCompat: undefined,
     });
-    expect(resolveProviderFollowupFallbackRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimeHandle: resolvedHandle,
-      }),
-    );
+    const followupCall = latestFollowupRouteCall();
+    expect(followupCall.runtimeHandle).toBe(resolvedHandle);
   });
 
   it("resolves incomplete supplied delivery handles before follow-up routing", () => {
@@ -341,11 +361,8 @@ describe("AgentRuntimePlan", () => {
       bundledProviderAllowlistCompat: undefined,
       bundledProviderVitestCompat: undefined,
     });
-    expect(resolveProviderFollowupFallbackRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimeHandle: resolvedHandle,
-      }),
-    );
+    const followupCall = latestFollowupRouteCall();
+    expect(followupCall.runtimeHandle).toBe(resolvedHandle);
   });
 
   it("plans tool metadata against the runtime source snapshot lazily", () => {

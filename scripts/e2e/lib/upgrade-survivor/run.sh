@@ -1042,7 +1042,7 @@ update_candidate() {
   else
     update_start="$(node -e "process.stdout.write(String(Date.now()))")"
   fi
-  if ! env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw "${update_args[@]}" >"$UPDATE_JSON" 2>"$UPDATE_ERR"; then
+  if ! env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD OPENCLAW_ALLOW_ROOT=1 openclaw "${update_args[@]}" >"$UPDATE_JSON" 2>"$UPDATE_ERR"; then
     echo "openclaw update failed" >&2
     cat "$UPDATE_ERR" >&2 || true
     cat "$UPDATE_JSON" >&2 || true

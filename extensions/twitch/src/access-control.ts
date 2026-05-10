@@ -1,9 +1,12 @@
+import {
+  createChannelIngressResolver,
+  defineStableChannelIngressIdentity,
+  type ChannelIngressIdentitySubjectInput,
+  type IngressReasonCode,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 
-/**
- * Result of checking access control for a Twitch message
- */
 type TwitchAccessControlResult = {
   allowed: boolean;
   reason?: string;
@@ -11,163 +14,182 @@ type TwitchAccessControlResult = {
   matchSource?: string;
 };
 
-/**
- * Check if a Twitch message should be allowed based on account configuration
- *
- * This function implements the access control logic for incoming Twitch messages,
- * checking allowlists, role-based restrictions, and mention requirements.
- *
- * Priority order:
- * 1. If `requireMention` is true, message must mention the bot
- * 2. If `allowFrom` is set, sender must be in the allowlist (by user ID)
- * 3. If `allowedRoles` is set (and `allowFrom` is not), sender must have at least one role
- *
- * Note: `allowFrom` is a hard allowlist. When set, only those user IDs are allowed.
- * Use `allowedRoles` as an alternative when you don't want to maintain an allowlist.
- *
- * Available roles:
- * - "moderator": Moderators
- * - "owner": Channel owner/broadcaster
- * - "vip": VIPs
- * - "subscriber": Subscribers
- * - "all": Anyone in the chat
- */
-export function checkTwitchAccessControl(params: {
+type TwitchPolicyKind = "open" | "allowFrom" | "role";
+
+const twitchUserIdentity = defineStableChannelIngressIdentity({
+  key: "sender-id",
+  entryIdPrefix: "twitch-user-entry",
+});
+
+const twitchRoleIdentity = defineStableChannelIngressIdentity({
+  key: "role-moderator",
+  kind: "role",
+  normalizeEntry: normalizeTwitchRole,
+  normalizeSubject: normalizeTwitchRole,
+  aliases: ["owner", "vip", "subscriber"].map((role) => ({
+    key: `role-${role}`,
+    kind: "role",
+    normalizeEntry: () => null,
+    normalizeSubject: normalizeTwitchRole,
+  })),
+  isWildcardEntry: (entry) => normalizeTwitchRole(entry) === "all",
+  resolveEntryId: ({ entryIndex }) => `twitch-role-entry-${entryIndex + 1}`,
+});
+
+export async function checkTwitchAccessControl(params: {
   message: TwitchChatMessage;
   account: TwitchAccountConfig;
   botUsername: string;
-}): TwitchAccessControlResult {
+}): Promise<TwitchAccessControlResult> {
   const { message, account, botUsername } = params;
+  const policyKind = resolveTwitchPolicyKind(account);
+  const resolved = await createChannelIngressResolver({
+    channelId: "twitch",
+    accountId: "default",
+    identity: policyKind === "role" ? twitchRoleIdentity : twitchUserIdentity,
+  }).message({
+    subject:
+      policyKind === "role"
+        ? twitchRoleSubject(message)
+        : ({ stableId: message.userId } satisfies ChannelIngressIdentitySubjectInput),
+    conversation: {
+      kind: "group",
+      id: message.channel,
+    },
+    event: { mayPair: false },
+    mentionFacts: {
+      canDetectMention: true,
+      wasMentioned: mentionsBot(message.message, botUsername),
+    },
+    dmPolicy: "open",
+    groupPolicy: policyKind === "open" ? "open" : "allowlist",
+    policy: {
+      activation: {
+        requireMention: account.requireMention ?? true,
+        allowTextCommands: false,
+        order: "before-sender",
+      },
+    },
+    groupAllowFrom:
+      policyKind === "allowFrom"
+        ? account.allowFrom
+        : policyKind === "role"
+          ? account.allowedRoles
+          : undefined,
+  });
+  const decision = resolved.ingress;
 
-  if (account.requireMention ?? true) {
-    const mentions = extractMentions(message.message);
-    if (!mentions.includes(normalizeLowercaseStringOrEmpty(botUsername))) {
-      return {
-        allowed: false,
-        reason: "message does not mention the bot (requireMention is enabled)",
-      };
-    }
+  if (decision.decisiveGateId === "activation" && decision.admission !== "dispatch") {
+    return {
+      allowed: false,
+      reason: "message does not mention the bot (requireMention is enabled)",
+    };
   }
 
-  if (account.allowFrom !== undefined) {
-    const allowFrom = account.allowFrom;
-    if (allowFrom.length === 0) {
+  if (decision.admission === "dispatch") {
+    if (policyKind === "allowFrom") {
       return {
-        allowed: false,
-        reason: "sender is not in allowFrom allowlist",
+        allowed: true,
+        matchKey: params.message.userId,
+        matchSource: "allowlist",
       };
     }
-    const senderId = message.userId;
+    if (policyKind === "role") {
+      return {
+        allowed: true,
+        matchKey: params.account.allowedRoles?.join(","),
+        matchSource: "role",
+      };
+    }
+    return {
+      allowed: true,
+    };
+  }
 
-    if (!senderId) {
+  if (policyKind === "allowFrom") {
+    if (!params.message.userId) {
       return {
         allowed: false,
         reason: "sender user ID not available for allowlist check",
       };
     }
-
-    if (allowFrom.includes(senderId)) {
-      return {
-        allowed: true,
-        matchKey: senderId,
-        matchSource: "allowlist",
-      };
-    }
-
     return {
       allowed: false,
       reason: "sender is not in allowFrom allowlist",
     };
   }
 
-  if (account.allowedRoles && account.allowedRoles.length > 0) {
-    const allowedRoles = account.allowedRoles;
-
-    // "all" grants access to everyone
-    if (allowedRoles.includes("all")) {
-      return {
-        allowed: true,
-        matchKey: "all",
-        matchSource: "role",
-      };
-    }
-
-    const hasAllowedRole = checkSenderRoles({
-      message,
-      allowedRoles,
-    });
-
-    if (!hasAllowedRole) {
-      return {
-        allowed: false,
-        reason: `sender does not have any of the required roles: ${allowedRoles.join(", ")}`,
-      };
-    }
-
+  if (policyKind === "role") {
     return {
-      allowed: true,
-      matchKey: allowedRoles.join(","),
-      matchSource: "role",
+      allowed: false,
+      reason: `sender does not have any of the required roles: ${params.account.allowedRoles?.join(", ") ?? ""}`,
     };
   }
 
   return {
-    allowed: true,
+    allowed: false,
+    reason: reasonForTwitchIngressDecision(decision),
   };
 }
 
-/**
- * Check if the sender has any of the allowed roles
- */
-function checkSenderRoles(params: { message: TwitchChatMessage; allowedRoles: string[] }): boolean {
-  const { message, allowedRoles } = params;
-  const { isMod, isOwner, isVip, isSub } = message;
+function resolveTwitchPolicyKind(account: TwitchAccountConfig): TwitchPolicyKind {
+  if (account.allowFrom !== undefined) {
+    return "allowFrom";
+  }
+  if (account.allowedRoles && account.allowedRoles.length > 0) {
+    return "role";
+  }
+  return "open";
+}
 
-  for (const role of allowedRoles) {
-    switch (role) {
-      case "moderator":
-        if (isMod) {
-          return true;
-        }
-        break;
-      case "owner":
-        if (isOwner) {
-          return true;
-        }
-        break;
-      case "vip":
-        if (isVip) {
-          return true;
-        }
-        break;
-      case "subscriber":
-        if (isSub) {
-          return true;
-        }
-        break;
+function twitchRoleSubject(message: TwitchChatMessage): ChannelIngressIdentitySubjectInput {
+  return {
+    stableId: message.isMod ? "moderator" : undefined,
+    aliases: {
+      "role-owner": message.isOwner ? "owner" : undefined,
+      "role-vip": message.isVip ? "vip" : undefined,
+      "role-subscriber": message.isSub ? "subscriber" : undefined,
+    },
+  };
+}
+
+function normalizeTwitchRole(value: string): string | null {
+  const role = normalizeLowercaseStringOrEmpty(value);
+  if (role === "*") {
+    return "all";
+  }
+  return role === "moderator" ||
+    role === "owner" ||
+    role === "vip" ||
+    role === "subscriber" ||
+    role === "all"
+    ? role
+    : null;
+}
+
+function reasonForTwitchIngressDecision(decision: { reasonCode: IngressReasonCode }): string {
+  switch (decision.reasonCode) {
+    case "activation_skipped":
+      return "message does not mention the bot (requireMention is enabled)";
+    case "group_policy_empty_allowlist":
+    case "group_policy_not_allowlisted":
+      return "sender is not in allowFrom allowlist";
+    default:
+      return decision.reasonCode;
+  }
+}
+
+function mentionsBot(message: string, botUsername: string): boolean {
+  const expected = normalizeLowercaseStringOrEmpty(botUsername);
+  const mentionRegex = /@(\w+)/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = mentionRegex.exec(message)) !== null) {
+    const username = match[1] ? normalizeLowercaseStringOrEmpty(match[1]) : "";
+    if (username === expected) {
+      return true;
     }
   }
 
   return false;
-}
-
-/**
- * Extract @mentions from a Twitch chat message
- *
- * Returns a list of lowercase usernames that were mentioned in the message.
- * Twitch mentions are in the format @username.
- */
-export function extractMentions(message: string): string[] {
-  const mentionRegex = /@(\w+)/g;
-  const mentions: string[] = [];
-  let match: RegExpExecArray | null;
-
-  while ((match = mentionRegex.exec(message)) !== null) {
-    const username = match[1];
-    if (username) {
-      mentions.push(normalizeLowercaseStringOrEmpty(username));
-    }
-  }
-
-  return mentions;
 }

@@ -97,7 +97,7 @@ describeLive("xai plugin live", () => {
       const cfg = createLiveConfig();
 
       const voices = await speechProvider.listVoices?.({});
-      expect(voices).toEqual(expect.arrayContaining([expect.objectContaining({ id: "eve" })]));
+      expect(voices?.some((voice) => voice.id === "eve")).toBe(true);
 
       const audioFile = await speechProvider.synthesize({
         text: "OpenClaw xAI text to speech integration test OK.",

@@ -58,6 +58,24 @@ vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
   readStringValue: (v: unknown) => (typeof v === "string" ? v.trim() : undefined),
 }));
 
+function requirePostJsonCall(index = 0): {
+  url?: string;
+  timeoutMs?: number;
+  body?: Record<string, unknown>;
+} {
+  const params = (postJsonRequestMock.mock.calls as unknown as Array<[unknown]>)[index]?.[0] as
+    | {
+        url?: string;
+        timeoutMs?: number;
+        body?: Record<string, unknown>;
+      }
+    | undefined;
+  if (!params) {
+    throw new Error(`Expected postJsonRequest call ${index}`);
+  }
+  return params;
+}
+
 describe("xai image generation provider", () => {
   afterEach(() => {
     resolveApiKeyForProviderMock.mockClear();
@@ -128,26 +146,27 @@ describe("xai image generation provider", () => {
       },
     } as any);
 
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "xai" }),
-    );
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "xai",
-        capability: "image",
-        baseUrl: "https://custom.x.ai/v1",
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: expect.stringContaining("/images/generations"),
-        timeoutMs: 180_000,
-        body: expect.objectContaining({
-          aspect_ratio: "2:3",
-          resolution: "2k",
-        }),
-      }),
-    );
+    const authParams = (
+      resolveApiKeyForProviderMock.mock.calls as unknown as Array<[unknown]>
+    )[0]?.[0] as { provider?: string } | undefined;
+    expect(authParams?.provider).toBe("xai");
+    const httpParams = (
+      resolveProviderHttpRequestConfigMock.mock.calls as unknown as Array<[unknown]>
+    )[0]?.[0] as
+      | {
+          provider?: string;
+          capability?: string;
+          baseUrl?: string;
+        }
+      | undefined;
+    expect(httpParams?.provider).toBe("xai");
+    expect(httpParams?.capability).toBe("image");
+    expect(httpParams?.baseUrl).toBe("https://custom.x.ai/v1");
+    const request = requirePostJsonCall();
+    expect(request.url).toContain("/images/generations");
+    expect(request.timeoutMs).toBe(180_000);
+    expect(request.body?.aspect_ratio).toBe("2:3");
+    expect(request.body?.resolution).toBe("2k");
   });
 
   it("supports edit with exact user-provided payload format including image object with type image_url", async () => {
@@ -181,20 +200,14 @@ describe("xai image generation provider", () => {
       cfg: {},
     } as any);
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: expect.stringContaining("/images/edits"),
-        body: expect.objectContaining({
-          model: "grok-imagine-image-pro",
-          prompt: "Render this as a pencil sketch with detailed shading",
-          image: {
-            url: expect.stringContaining("data:image/png;base64,"),
-            type: "image_url",
-          },
-          response_format: "b64_json",
-        }),
-      }),
-    );
+    const request = requirePostJsonCall();
+    expect(request.url).toContain("/images/edits");
+    expect(request.body?.model).toBe("grok-imagine-image-pro");
+    expect(request.body?.prompt).toBe("Render this as a pencil sketch with detailed shading");
+    const image = request.body?.image as { url?: string; type?: string } | undefined;
+    expect(image?.url).toContain("data:image/png;base64,");
+    expect(image?.type).toBe("image_url");
+    expect(request.body?.response_format).toBe("b64_json");
   });
 
   it("uses the plural xAI images payload for multiple edit inputs", async () => {
@@ -224,22 +237,13 @@ describe("xai image generation provider", () => {
       cfg: {},
     } as any);
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: expect.stringContaining("/images/edits"),
-        body: expect.objectContaining({
-          images: [
-            {
-              url: expect.stringContaining("data:image/png;base64,"),
-              type: "image_url",
-            },
-            {
-              url: expect.stringContaining("data:image/jpeg;base64,"),
-              type: "image_url",
-            },
-          ],
-        }),
-      }),
-    );
+    const request = requirePostJsonCall();
+    expect(request.url).toContain("/images/edits");
+    const images = request.body?.images as Array<{ url?: string; type?: string }> | undefined;
+    expect(images).toHaveLength(2);
+    expect(images?.[0]?.url).toContain("data:image/png;base64,");
+    expect(images?.[0]?.type).toBe("image_url");
+    expect(images?.[1]?.url).toContain("data:image/jpeg;base64,");
+    expect(images?.[1]?.type).toBe("image_url");
   });
 });

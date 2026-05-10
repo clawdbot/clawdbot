@@ -66,6 +66,8 @@ type LocalRunState = {
   registered: boolean;
 };
 
+const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
+
 const silentRuntime = {
   log: (..._args: unknown[]) => undefined,
   error: (..._args: unknown[]) => undefined,
@@ -118,6 +120,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   private previousRuntimeLog?: typeof defaultRuntime.log;
   private previousRuntimeError?: typeof defaultRuntime.error;
   private seq = 0;
+  private readonly pendingLifecycleErrors = new Map<string, ReturnType<typeof setTimeout>>();
 
   start() {
     if (this.unsubscribe) {
@@ -144,6 +147,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     for (const run of this.runs.values()) {
       run.controller.abort();
     }
+    this.clearPendingLifecycleErrors();
     this.runs.clear();
     defaultRuntime.log = this.previousRuntimeLog ?? defaultRuntime.log;
     defaultRuntime.error = this.previousRuntimeError ?? defaultRuntime.error;
@@ -358,6 +362,32 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
   }
 
+  private clearPendingLifecycleError(runId: string) {
+    const pending = this.pendingLifecycleErrors.get(runId);
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending);
+    this.pendingLifecycleErrors.delete(runId);
+  }
+
+  private clearPendingLifecycleErrors() {
+    for (const pending of this.pendingLifecycleErrors.values()) {
+      clearTimeout(pending);
+    }
+    this.pendingLifecycleErrors.clear();
+  }
+
+  private scheduleChatError(runId: string, run: LocalRunState, errorMessage?: string) {
+    this.clearPendingLifecycleError(runId);
+    const timer = setTimeout(() => {
+      this.pendingLifecycleErrors.delete(runId);
+      this.emitChatError(runId, run, errorMessage);
+    }, LIFECYCLE_ERROR_RETRY_GRACE_MS);
+    timer.unref?.();
+    this.pendingLifecycleErrors.set(runId, timer);
+  }
+
   private emitChatDelta(runId: string, run: LocalRunState) {
     const projected = projectLiveAssistantBufferedText(run.buffer.trim(), {
       suppressLeadFragments: true,
@@ -380,6 +410,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private emitChatFinal(runId: string, run: LocalRunState, stopReason?: string) {
+    this.clearPendingLifecycleError(runId);
     if (run.finalSent) {
       return;
     }
@@ -408,6 +439,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private emitChatAborted(runId: string, run: LocalRunState) {
+    this.clearPendingLifecycleError(runId);
     if (run.finalSent) {
       return;
     }
@@ -421,6 +453,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private emitChatError(runId: string, run: LocalRunState, errorMessage?: string) {
+    this.clearPendingLifecycleError(runId);
     if (run.finalSent) {
       return;
     }
@@ -457,6 +490,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
       return;
     }
 
+    const lifecyclePhase =
+      evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : "";
+    if (evt.stream !== "lifecycle" || lifecyclePhase !== "error") {
+      this.clearPendingLifecycleError(evt.runId);
+    }
+
     if (evt.stream !== "assistant") {
       this.ensureRunRegistered(evt.runId, run);
     }
@@ -490,7 +529,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       return;
     }
 
-    const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+    const phase = lifecyclePhase;
     const aborted = evt.data?.aborted === true || run.controller.signal.aborted;
     if (phase === "end") {
       if (aborted) {
@@ -511,7 +550,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
         return;
       }
       const errorMessage = typeof evt.data?.error === "string" ? evt.data.error : undefined;
-      this.emitChatError(evt.runId, run, errorMessage);
+      run.buffer = "";
+      this.scheduleChatError(evt.runId, run, errorMessage);
     }
   }
 

@@ -208,6 +208,36 @@ describe("handleModelsCommand", () => {
     expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1-mini");
   });
 
+  it("does not re-add the default provider when provider visibility is restricted", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+      { provider: "openai-codex", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
+      { provider: "openai-codex", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+      { provider: "vllm", id: "llama-local", name: "Llama Local" },
+      { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
+    ]);
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "openai-codex", "vllm"]);
+
+    const result = await handleModelsCommand(
+      buildParams("/models", {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+            models: {
+              "openai-codex/*": {},
+              "vllm/*": {},
+            },
+          },
+        },
+      }),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("- openai-codex (2)");
+    expect(result?.reply?.text).toContain("- vllm (2)");
+    expect(result?.reply?.text).not.toContain("- anthropic");
+  });
+
   it("hides legacy runtime providers from /models provider lists", async () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValueOnce([
       { provider: "codex", id: "gpt-5.5", name: "GPT-5.5" },

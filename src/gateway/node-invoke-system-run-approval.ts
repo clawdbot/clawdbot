@@ -23,6 +23,10 @@ type SystemRunParamsLike = {
   needsScreenRecording?: unknown;
   agentId?: unknown;
   sessionKey?: unknown;
+  turnSourceChannel?: unknown;
+  turnSourceTo?: unknown;
+  turnSourceAccountId?: unknown;
+  turnSourceThreadId?: unknown;
   approved?: unknown;
   approvalDecision?: unknown;
   runId?: unknown;
@@ -75,12 +79,105 @@ function canBridgeNoDeviceApprovalFromBackend(params: {
   client: ApprovalClient | null;
 }): boolean {
   const requestedByClientId = normalizeNullableString(params.snapshot.requestedByClientId);
+  const request = params.snapshot.request;
   return (
     params.snapshot.requestedByDeviceId == null &&
     params.snapshot.requestedByDeviceTokenAuth !== true &&
+    !hasChatApprovalReplayBinding(request) &&
     requestedByClientId !== null &&
     BACKEND_BRIDGEABLE_NO_DEVICE_REQUEST_CLIENT_IDS.has(requestedByClientId) &&
     isTrustedBackendApprovalClient(params.client)
+  );
+}
+
+function hasChatApprovalReplayBinding(request: ExecApprovalRecord["request"]): boolean {
+  return (
+    normalizeComparableString(request.turnSourceChannel, { lowercase: true }) !== null ||
+    normalizeComparableString(request.turnSourceTo) !== null ||
+    normalizeComparableString(request.turnSourceAccountId) !== null ||
+    normalizeComparableString(request.turnSourceThreadId) !== null
+  );
+}
+
+function normalizeComparableString(
+  value: unknown,
+  opts: { lowercase?: boolean } = {},
+): string | null {
+  const normalized =
+    typeof value === "number" && Number.isFinite(value)
+      ? String(value)
+      : normalizeNullableString(value);
+  if (!normalized) {
+    return null;
+  }
+  return opts.lowercase ? normalized.toLowerCase() : normalized;
+}
+
+function matchesRequiredString(params: {
+  expected: unknown;
+  actual: unknown;
+  lowercase?: boolean;
+}): boolean {
+  const expected = normalizeComparableString(params.expected, { lowercase: params.lowercase });
+  if (!expected) {
+    return false;
+  }
+  return expected === normalizeComparableString(params.actual, { lowercase: params.lowercase });
+}
+
+function matchesOptionalString(params: {
+  expected: unknown;
+  actual: unknown;
+  lowercase?: boolean;
+}): boolean {
+  const expected = normalizeComparableString(params.expected, { lowercase: params.lowercase });
+  if (!expected) {
+    return true;
+  }
+  return expected === normalizeComparableString(params.actual, { lowercase: params.lowercase });
+}
+
+function canBridgeNoDeviceChatApprovalFromBackend(params: {
+  snapshot: ExecApprovalRecord;
+  rawParams: SystemRunParamsLike;
+  client: ApprovalClient | null;
+}): boolean {
+  if (
+    params.snapshot.requestedByDeviceId != null ||
+    params.snapshot.requestedByDeviceTokenAuth === true ||
+    !isTrustedBackendApprovalClient(params.client)
+  ) {
+    return false;
+  }
+
+  const request = params.snapshot.request;
+  const plan = request.systemRunPlan ?? null;
+  return (
+    matchesRequiredString({
+      expected: request.turnSourceChannel,
+      actual: params.rawParams.turnSourceChannel,
+      lowercase: true,
+    }) &&
+    matchesRequiredString({
+      expected: request.turnSourceTo,
+      actual: params.rawParams.turnSourceTo,
+    }) &&
+    matchesRequiredString({
+      expected: plan?.sessionKey ?? request.sessionKey,
+      actual: params.rawParams.sessionKey,
+    }) &&
+    matchesOptionalString({
+      expected: plan?.agentId ?? request.agentId,
+      actual: params.rawParams.agentId,
+    }) &&
+    matchesOptionalString({
+      expected: request.turnSourceAccountId,
+      actual: params.rawParams.turnSourceAccountId,
+    }) &&
+    matchesOptionalString({
+      expected: request.turnSourceThreadId,
+      actual: params.rawParams.turnSourceThreadId,
+    })
   );
 }
 
@@ -224,7 +321,8 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   } else if (
     snapshot.requestedByConnId &&
     snapshot.requestedByConnId !== (opts.client?.connId ?? null) &&
-    !canBridgeNoDeviceApprovalFromBackend({ snapshot, client: opts.client })
+    !canBridgeNoDeviceApprovalFromBackend({ snapshot, client: opts.client }) &&
+    !canBridgeNoDeviceChatApprovalFromBackend({ snapshot, rawParams: p, client: opts.client })
   ) {
     return systemRunApprovalGuardError({
       code: "APPROVAL_CLIENT_MISMATCH",

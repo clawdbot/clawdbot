@@ -128,18 +128,16 @@ describe("embedded attempt context injection", () => {
       senderIsOwner: false,
     });
 
-    expect(input).toMatchObject({
-      channel: "matrix",
-      currentChannelId: "room",
-      currentThreadTs: "thread",
-      currentMessageId: 123,
-      accountId: "work",
-      sessionKey: "agent:main",
-      sessionId: "session",
-      agentId: "main",
-      requesterSenderId: "@alice:example.org",
-      senderIsOwner: false,
-    });
+    expect(input.channel).toBe("matrix");
+    expect(input.currentChannelId).toBe("room");
+    expect(input.currentThreadTs).toBe("thread");
+    expect(input.currentMessageId).toBe(123);
+    expect(input.accountId).toBe("work");
+    expect(input.sessionKey).toBe("agent:main");
+    expect(input.sessionId).toBe("session");
+    expect(input.agentId).toBe("main");
+    expect(input.requesterSenderId).toBe("@alice:example.org");
+    expect(input.senderIsOwner).toBe(false);
   });
 
   it("never skips heartbeat bootstrap filtering", async () => {
@@ -225,13 +223,14 @@ describe("embedded attempt context injection", () => {
       modelId: "gpt-test",
     });
 
-    expect(assemble).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messages: [
-          expect.objectContaining({ role: "user", content: "real question" }),
-          expect.objectContaining({ role: "assistant", content: "real answer" }),
-        ],
-      }),
-    );
+    const assembleInput = assemble.mock.calls[0]?.[0] as { messages?: AgentMessage[] } | undefined;
+    const projectedMessages = assembleInput?.messages?.map((message) => ({
+      role: message.role,
+      content: (message as { content?: unknown }).content,
+    }));
+    expect(projectedMessages).toEqual([
+      { role: "user", content: "real question" },
+      { role: "assistant", content: "real answer" },
+    ]);
   });
 });

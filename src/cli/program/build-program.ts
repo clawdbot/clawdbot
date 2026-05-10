@@ -10,7 +10,7 @@ export function buildProgram() {
   const program = new Command();
   program.enablePositionalOptions();
   // Preserve Commander-computed exit codes while still aborting parse flow.
-  // Without this, commands like `openclaw sessions list` can print an error
+  // Without this, unknown nested commands can print an error
   // but still report success when exits are intercepted.
   program.exitOverride((err) => {
     process.exitCode = typeof err.exitCode === "number" ? err.exitCode : 1;

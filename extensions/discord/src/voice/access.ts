@@ -15,6 +15,7 @@ import {
 export async function authorizeDiscordVoiceIngress(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
+  accountId?: string;
   groupPolicy?: "open" | "disabled" | "allowlist";
   useAccessGroups?: boolean;
   guild?: Guild<true> | Guild | null;
@@ -114,11 +115,12 @@ export async function authorizeDiscordVoiceIngress(params: {
       ]
     : [{ configured: hasAccessRestrictions, allowed: memberAllowed }];
 
-  return resolveCommandAuthorizedFromAuthorizers({
+  const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
     useAccessGroups,
     authorizers,
     modeWhenAccessGroupsOff: "configured",
-  })
+  });
+  return commandAuthorized
     ? { ok: true, channelConfig }
     : { ok: false, message: "You are not authorized to use this command." };
 }

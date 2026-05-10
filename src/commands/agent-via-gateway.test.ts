@@ -95,6 +95,13 @@ function requireFirstCallArg(mock: { mock: { calls: unknown[][] } }, label: stri
   return arg;
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} object`);
+  }
+  return value as Record<string, unknown>;
+}
+
 function createGatewayTimeoutError() {
   const err = new Error("gateway timeout after 90000ms");
   err.name = "GatewayTransportError";
@@ -165,6 +172,11 @@ describe("agentCliCommand", () => {
       const request = requireFirstCallArg(callGateway, "gateway") as {
         params?: Record<string, unknown>;
       };
+      expect(request).toMatchObject({
+        clientName: "cli",
+        mode: "cli",
+      });
+      expect(request).not.toHaveProperty("scopes");
       expect(request.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
       expect(agentCommand).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith("hello");
@@ -214,12 +226,14 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: "+1555", model: "ollama/qwen3.5:9b" }, runtime);
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      const request = requireFirstCallArg(callGateway, "gateway");
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
       expect(request).toMatchObject({
-        params: {
-          model: "ollama/qwen3.5:9b",
-        },
+        clientName: "gateway-client",
+        mode: "backend",
+        scopes: ["operator.admin"],
       });
+      const params = requireRecord(request.params, "gateway request params");
+      expect(params.model).toBe("ollama/qwen3.5:9b");
     });
   });
 
@@ -254,13 +268,16 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent");
-      expect(fallbackOpts).toMatchObject({
-        resultMetaOverrides: {
-          transport: "embedded",
-          fallbackFrom: "gateway",
-        },
-      });
+      const fallbackOpts = requireRecord(
+        requireFirstCallArg(agentCommand, "embedded agent"),
+        "embedded agent options",
+      );
+      const resultMetaOverrides = requireRecord(
+        fallbackOpts.resultMetaOverrides,
+        "fallback metadata",
+      );
+      expect(resultMetaOverrides.transport).toBe("embedded");
+      expect(resultMetaOverrides.fallbackFrom).toBe("gateway");
       expect(runtime.error).toHaveBeenCalledWith(
         expect.stringContaining("EMBEDDED FALLBACK: Gateway agent failed"),
       );
@@ -303,23 +320,25 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent") as {
-        sessionId?: string;
-        sessionKey?: string;
-        runId?: string;
-        resultMetaOverrides?: unknown;
-      };
-      expect(fallbackOpts.sessionId).toMatch(/^gateway-fallback-/);
-      expect(fallbackOpts.sessionId).not.toBe("locked-session");
-      expect(fallbackOpts.sessionKey).toBe(`agent:main:explicit:${fallbackOpts.sessionId}`);
-      expect(fallbackOpts.runId).toBe(fallbackOpts.sessionId);
-      expect(fallbackOpts.resultMetaOverrides).toMatchObject({
-        transport: "embedded",
-        fallbackFrom: "gateway",
-        fallbackReason: "gateway_timeout",
-        fallbackSessionId: fallbackOpts.sessionId,
-        fallbackSessionKey: fallbackOpts.sessionKey,
-      });
+      const fallbackOpts = requireRecord(
+        requireFirstCallArg(agentCommand, "embedded agent"),
+        "embedded agent options",
+      );
+      const fallbackSessionId = String(fallbackOpts.sessionId);
+      const fallbackSessionKey = String(fallbackOpts.sessionKey);
+      expect(fallbackSessionId).toMatch(/^gateway-fallback-/);
+      expect(fallbackSessionId).not.toBe("locked-session");
+      expect(fallbackSessionKey).toBe(`agent:main:explicit:${fallbackSessionId}`);
+      expect(fallbackOpts.runId).toBe(fallbackSessionId);
+      const resultMetaOverrides = requireRecord(
+        fallbackOpts.resultMetaOverrides,
+        "fallback metadata",
+      );
+      expect(resultMetaOverrides.transport).toBe("embedded");
+      expect(resultMetaOverrides.fallbackFrom).toBe("gateway");
+      expect(resultMetaOverrides.fallbackReason).toBe("gateway_timeout");
+      expect(resultMetaOverrides.fallbackSessionId).toBe(fallbackSessionId);
+      expect(resultMetaOverrides.fallbackSessionKey).toBe(fallbackSessionKey);
       expect(runtime.error).toHaveBeenCalledWith(
         expect.stringContaining(
           "Gateway agent timed out; running embedded agent with fresh session",
@@ -388,35 +407,33 @@ describe("agentCliCommand", () => {
       const result = await agentCliCommand({ message: "hi", to: "+1555", json: true }, jsonRuntime);
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent");
-      expect(fallbackOpts).toMatchObject({
-        resultMetaOverrides: {
-          transport: "embedded",
-          fallbackFrom: "gateway",
-        },
-      });
+      const fallbackOpts = requireRecord(
+        requireFirstCallArg(agentCommand, "embedded agent"),
+        "embedded agent options",
+      );
+      const resultMetaOverrides = requireRecord(
+        fallbackOpts.resultMetaOverrides,
+        "fallback metadata",
+      );
+      expect(resultMetaOverrides.transport).toBe("embedded");
+      expect(resultMetaOverrides.fallbackFrom).toBe("gateway");
       expect(jsonRuntime.error).toHaveBeenCalledWith(
         expect.stringContaining("EMBEDDED FALLBACK: Gateway agent failed"),
       );
       expect(loggingState.forceConsoleToStderr).toBe(true);
       expect(jsonRuntime.log).toHaveBeenCalledTimes(1);
       const jsonPayload = requireFirstCallArg(jsonRuntime.log, "json runtime log");
-      const payload = JSON.parse(String(jsonPayload));
-      expect(payload).toMatchObject({
-        payloads: [{ text: "local" }],
-        meta: {
-          durationMs: 1,
-          transport: "embedded",
-          fallbackFrom: "gateway",
-        },
-      });
-      expect(result).toMatchObject({
-        meta: {
-          durationMs: 1,
-          transport: "embedded",
-          fallbackFrom: "gateway",
-        },
-      });
+      const payload = requireRecord(JSON.parse(String(jsonPayload)), "json log payload");
+      expect(payload.payloads).toEqual([{ text: "local" }]);
+      const payloadMeta = requireRecord(payload.meta, "json log metadata");
+      expect(payloadMeta.durationMs).toBe(1);
+      expect(payloadMeta.transport).toBe("embedded");
+      expect(payloadMeta.fallbackFrom).toBe("gateway");
+      const resultRecord = requireRecord(result, "command result");
+      const resultMeta = requireRecord(resultRecord.meta, "command result metadata");
+      expect(resultMeta.durationMs).toBe(1);
+      expect(resultMeta.transport).toBe("embedded");
+      expect(resultMeta.fallbackFrom).toBe("gateway");
     });
   });
 
@@ -435,11 +452,12 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).not.toHaveBeenCalled();
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      const localOpts = requireFirstCallArg(agentCommand, "embedded agent");
-      expect(localOpts).toMatchObject({
-        cleanupBundleMcpOnRunEnd: true,
-        cleanupCliLiveSessionOnRunEnd: true,
-      });
+      const localOpts = requireRecord(
+        requireFirstCallArg(agentCommand, "embedded agent"),
+        "embedded agent options",
+      );
+      expect(localOpts.cleanupBundleMcpOnRunEnd).toBe(true);
+      expect(localOpts.cleanupCliLiveSessionOnRunEnd).toBe(true);
       expect(localOpts).not.toHaveProperty("resultMetaOverrides");
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
@@ -453,11 +471,12 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent");
-      expect(fallbackOpts).toMatchObject({
-        cleanupBundleMcpOnRunEnd: true,
-        cleanupCliLiveSessionOnRunEnd: true,
-      });
+      const fallbackOpts = requireRecord(
+        requireFirstCallArg(agentCommand, "embedded agent"),
+        "embedded agent options",
+      );
+      expect(fallbackOpts.cleanupBundleMcpOnRunEnd).toBe(true);
+      expect(fallbackOpts.cleanupCliLiveSessionOnRunEnd).toBe(true);
     });
   });
 });

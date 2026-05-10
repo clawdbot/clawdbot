@@ -98,10 +98,6 @@ export {
   buildChannelKeyCandidates,
   resolveChannelEntryMatch,
 } from "openclaw/plugin-sdk/channel-targets";
-export {
-  evaluateGroupRouteAccessForPolicy,
-  resolveSenderScopedGroupPolicy,
-} from "openclaw/plugin-sdk/channel-policy";
 export { buildTimeoutAbortSignal } from "./matrix/sdk/timeout-abort-signal.js";
 export { formatZonedTimestamp } from "openclaw/plugin-sdk/time-runtime";
 export type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";

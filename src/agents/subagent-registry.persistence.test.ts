@@ -188,6 +188,8 @@ describe("subagent registry persistence", () => {
   };
 
   beforeEach(() => {
+    announceSpy.mockReset();
+    announceSpy.mockResolvedValue(true);
     __testing.setDepsForTest({
       ...createSubagentRegistryTestDeps(),
       persistSubagentRunsToDisk: fastPersistSubagentRunsToDisk,
@@ -204,7 +206,6 @@ describe("subagent registry persistence", () => {
   });
 
   afterEach(async () => {
-    announceSpy.mockClear();
     __testing.setDepsForTest();
     resetSubagentRegistryForTests({ persist: false });
     await drainSessionStoreWriterQueuesForTest();
@@ -670,6 +671,15 @@ describe("subagent registry persistence", () => {
   });
 
   it("keeps stale unended restored runs with abortedLastRun for restart recovery", async () => {
+    vi.mocked(callGateway).mockImplementationOnce(async (request) => {
+      expect(request).toMatchObject({
+        method: "agent.wait",
+        params: { runId: "run-stale-aborted-restore" },
+      });
+      return {
+        status: "pending",
+      };
+    });
     const now = Date.now();
     const runId = "run-stale-aborted-restore";
     const childSessionKey = "agent:main:subagent:stale-aborted-restore";

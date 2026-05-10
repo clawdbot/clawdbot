@@ -17,9 +17,8 @@ describe("pi-model-discovery module compatibility", () => {
       };
     });
 
-    await expect(import("./pi-model-discovery.js")).resolves.toMatchObject({
-      discoverAuthStorage: expect.any(Function),
-      discoverModels: expect.any(Function),
-    });
+    const module = await import("./pi-model-discovery.js");
+    expect(typeof module.discoverAuthStorage).toBe("function");
+    expect(typeof module.discoverModels).toBe("function");
   });
 });

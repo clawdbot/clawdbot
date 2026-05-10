@@ -50,10 +50,8 @@ describe("models-config: explicit reasoning override", () => {
   it("preserves user reasoning:false when the built-in catalog has reasoning:true", () => {
     const merged = mergedMinimaxModel(createMinimaxModel({ reasoning: false }));
 
-    expect(merged).toMatchObject({
-      id: MINIMAX_MODEL_ID,
-      reasoning: false,
-    });
+    expect(merged?.id).toBe(MINIMAX_MODEL_ID);
+    expect(merged?.reasoning).toBe(false);
   });
 
   it("keeps reasoning unset when user omits the field", () => {
@@ -64,7 +62,7 @@ describe("models-config: explicit reasoning override", () => {
       },
     }).minimax?.models?.find((model) => model.id === MINIMAX_MODEL_ID);
 
-    expect(merged).toEqual(expect.objectContaining({ id: MINIMAX_MODEL_ID }));
+    expect(merged?.id).toBe(MINIMAX_MODEL_ID);
     expect(merged).not.toHaveProperty("reasoning");
   });
 });

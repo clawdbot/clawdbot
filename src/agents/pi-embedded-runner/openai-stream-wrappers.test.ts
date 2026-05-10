@@ -300,10 +300,8 @@ describe("createOpenAIAttributionHeadersWrapper", () => {
     );
 
     expect(codexCalls).toBe(1);
-    expect(capturedHeaders).toMatchObject({
-      originator: "openclaw",
-      "User-Agent": expect.stringMatching(/^openclaw\//),
-    });
+    expect(capturedHeaders?.originator).toBe("openclaw");
+    expect(capturedHeaders?.["User-Agent"]).toMatch(/^openclaw\//);
   });
 
   it("keeps existing wrapped Codex streams so runtime OAuth injection is preserved", () => {
@@ -345,12 +343,8 @@ describe("createOpenAIAttributionHeadersWrapper", () => {
 
     expect(upstreamCalls).toBe(1);
     expect(codexCalls).toBe(0);
-    expect(capturedOptions).toMatchObject({
-      apiKey: "oauth-bearer-token",
-      headers: {
-        originator: "openclaw",
-        "User-Agent": expect.stringMatching(/^openclaw\//),
-      },
-    });
+    expect(capturedOptions?.apiKey).toBe("oauth-bearer-token");
+    expect(capturedOptions?.headers?.originator).toBe("openclaw");
+    expect(capturedOptions?.headers?.["User-Agent"]).toMatch(/^openclaw\//);
   });
 });

@@ -48,6 +48,8 @@ const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
 const PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE = "Proxy notice: Status: Internal Server Error";
 const MIXED_INTERNAL_SERVER_ERROR_STATUS_SAMPLE = `${PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE}; upstream connect error`;
 const INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE = `${PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE}; code:500`;
+const OPENAI_SERVER_ERROR_PAYLOAD =
+  'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
 
 function expectMessageMatches(
   matcher: (message: string) => boolean,
@@ -656,6 +658,16 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     ).toBe("billing");
   });
 
+  it("lets OpenRouter API-key budget limit 403 responses bypass generic auth", () => {
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        403,
+        "403 API key budget limit exceeded (monthly limit). Contact your org admin.",
+        { provider: "openrouter" },
+      ),
+    ).toBe("billing");
+  });
+
   it("keeps generic HTTP 401 key-limit text on the auth path without provider context", () => {
     expect(
       classifyFailoverReasonFromHttpStatus(401, "401 Key limit exceeded (monthly limit)"),
@@ -671,6 +683,27 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
         '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
       ),
     ).toBe("overloaded");
+  });
+
+  it("does not let structured server_error markers override 4xx status handling", () => {
+    const payload = '{"type":"error","error":{"type":"server_error","code":"server_error"}}';
+
+    expect(classifyFailoverReasonFromHttpStatus(401, payload)).toBe("auth");
+    expect(classifyFailoverReasonFromHttpStatus(402, payload)).toBe("billing");
+    expect(classifyFailoverReasonFromHttpStatus(422, payload)).toBe("format");
+  });
+
+  it("preserves structured server_error markers on explicit HTTP 5xx statuses", () => {
+    expect(classifyFailoverReasonFromHttpStatus(500, OPENAI_SERVER_ERROR_PAYLOAD)).toBe(
+      "server_error",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(502, OPENAI_SERVER_ERROR_PAYLOAD)).toBe(
+      "server_error",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(504, OPENAI_SERVER_ERROR_PAYLOAD)).toBe(
+      "server_error",
+    );
+    expect(classifyFailoverReasonFromHttpStatus(500)).toBe("timeout");
   });
 
   it("treats generic HTTP 410 responses as retryable timeouts", () => {
@@ -923,6 +956,8 @@ describe("isFailoverErrorMessage", () => {
       "terminated",
       "Terminated",
       "  terminated  ",
+      "stream_read_error",
+      "  stream_read_error  ",
       "UND_ERR_SOCKET",
       "Error: UND_ERR_SOCKET other side closed",
       "UND_ERR_CONNECT_TIMEOUT",
@@ -963,10 +998,11 @@ describe("image dimension errors", () => {
     const raw =
       '400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.84.content.1.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels"}}';
     const parsed = parseImageDimensionError(raw);
-    expect(parsed).toMatchObject({
+    expect(parsed).toEqual({
       maxDimensionPx: 2000,
       messageIndex: 84,
       contentIndex: 1,
+      raw,
     });
     expect(isImageDimensionErrorMessage(raw)).toBe(true);
   });
@@ -1145,12 +1181,20 @@ describe("classifyFailoverReason provider messages", () => {
         "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
       ),
     ).toBe("timeout");
+    expect(classifyFailoverReason(OPENAI_SERVER_ERROR_PAYLOAD)).toBe("server_error");
+    expect(classifyFailoverReason(`402 Payment Required ${OPENAI_SERVER_ERROR_PAYLOAD}`)).toBe(
+      "billing",
+    );
+    expect(classifyFailoverReason("string should match pattern")).toBe("format");
     expect(
       classifyFailoverReason(
-        'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}',
+        "This model does not support assistant message prefill. The conversation must end with a user message.",
       ),
-    ).toBe("timeout");
-    expect(classifyFailoverReason("string should match pattern")).toBe("format");
+    ).toBe("format");
+    expect(
+      classifyFailoverReason("LLM request rejected: does not support assistant message prefill"),
+    ).toBe("format");
+    expect(classifyFailoverReason("conversation must end with a user message")).toBe("format");
     expect(classifyFailoverReason("bad request")).toBeNull();
     expect(
       classifyFailoverReason(

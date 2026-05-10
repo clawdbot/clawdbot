@@ -29,6 +29,7 @@ export type AgentRuntimeFailoverReason =
   | "rate_limit"
   | "overloaded"
   | "billing"
+  | "server_error"
   | "timeout"
   | "model_not_found"
   | "session_expired"

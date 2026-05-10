@@ -83,12 +83,10 @@ describe("buildInlineProviderModels", () => {
     const result = buildInlineProviderModels(providers);
 
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      provider: "custom",
-      baseUrl: "http://localhost:10000",
-      api: "anthropic-messages",
-      name: "claude-opus-4.5",
-    });
+    expect(result[0].provider).toBe("custom");
+    expect(result[0].baseUrl).toBe("http://localhost:10000");
+    expect(result[0].api).toBe("anthropic-messages");
+    expect(result[0].name).toBe("claude-opus-4.5");
   });
 
   it("normalizes bare Google API hosts for custom Google Generative AI providers", () => {
@@ -103,11 +101,9 @@ describe("buildInlineProviderModels", () => {
     const result = buildInlineProviderModels(providers);
 
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      provider: "google-paid",
-      api: "google-generative-ai",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-    });
+    expect(result[0].provider).toBe("google-paid");
+    expect(result[0].api).toBe("google-generative-ai");
+    expect(result[0].baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
   });
 
   it("merges provider-level headers into inline models", () => {
@@ -162,11 +158,9 @@ describe("buildInlineProviderModels", () => {
     } as unknown as Parameters<typeof buildInlineProviderModels>[0]);
 
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      provider: "proxy",
-      api: "openai-completions",
-      baseUrl: "https://proxy.example.com/v1",
-    });
+    expect(result[0].provider).toBe("proxy");
+    expect(result[0].api).toBe("openai-completions");
+    expect(result[0].baseUrl).toBe("https://proxy.example.com/v1");
   });
 
   it("omits headers when neither provider nor model specifies them", () => {

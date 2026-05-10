@@ -73,34 +73,21 @@ import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
 const WATCH_SUBSCRIBE_MAX_ATTEMPTS = 3;
 const WATCH_SUBSCRIBE_RETRY_DELAY_MS = 1_000;
 
-/**
- * Try to detect remote host from an SSH wrapper script like:
- *   exec ssh -T openclaw@192.168.64.3 /opt/homebrew/bin/imsg "$@"
- *   exec ssh -T mac-mini imsg "$@"
- * Returns the user@host or host portion if found, undefined otherwise.
- */
 async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | undefined> {
   try {
-    // Expand ~ to home directory
     const expanded = cliPath.startsWith("~")
       ? cliPath.replace(/^~/, process.env.HOME ?? "")
       : cliPath;
     const content = await fs.readFile(expanded, "utf8");
 
-    // Match user@host pattern first (e.g., openclaw@192.168.64.3)
     const userHostMatch = content.match(/\bssh\b[^\n]*?\s+([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+)/);
     if (userHostMatch) {
       return userHostMatch[1];
     }
 
-    // Fallback: match host-only before imsg command (e.g., ssh -T mac-mini imsg)
     const hostOnlyMatch = content.match(/\bssh\b[^\n]*?\s+([a-zA-Z][a-zA-Z0-9._-]*)\s+\S*\bimsg\b/);
     return hostOnlyMatch?.[1];
   } catch (err) {
-    // ENOENT / ENOTDIR are expected for non-script cliPaths (just an
-    // executable on disk). Anything else (EACCES, broken symlink) is
-    // worth flagging — silent failure means attachments will fail to find
-    // remote media because remoteHost stays undefined.
     const code = (err as NodeJS.ErrnoException)?.code;
     if (code !== "ENOENT" && code !== "ENOTDIR") {
       logVerbose(
@@ -111,7 +98,6 @@ async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | un
   }
 }
 
-/** One-shot warning when typing/read are gated off due to old imsg build. */
 const warnIfImsgUpgradeNeeded = (() => {
   let fired = false;
   return {
@@ -385,7 +371,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       process.env,
       accountInfo.accountId,
     ).catch(() => []);
-    const decision = resolveIMessageInboundDecision({
+    const decision = await resolveIMessageInboundDecision({
       cfg,
       accountId: accountInfo.accountId,
       message,
@@ -883,9 +869,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         // Catchup bypasses the inbound debouncer so each row is awaited
         // serially and dispatch failure can hold the cursor. Split-sends
         // from before the gateway gap therefore arrive as separate turns
-        // rather than coalesced — same behavior the retired BlueBubbles
-        // catchup had. Live notifications continue to flow through the
-        // debouncer.
+        // rather than coalesced. Live notifications continue to flow through
+        // the debouncer.
         dispatchPayload: (message) => handleMessageNow(message),
         runtime,
       });

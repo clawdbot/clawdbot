@@ -104,11 +104,10 @@ describe("provider transport stream contracts", () => {
       expect(createBoundaryAwareStreamFnForModel(model)).toBeTypeOf("function");
       expect(createTransportAwareStreamFnForModel(model)).toBeTypeOf("function");
       expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
-      expect(prepareTransportAwareSimpleModel(model)).toMatchObject({
-        api: testCase.alias,
-        provider: testCase.provider,
-        id: testCase.id,
-      });
+      const preparedModel = prepareTransportAwareSimpleModel(model);
+      expect(preparedModel.api).toBe(testCase.alias);
+      expect(preparedModel.provider).toBe(testCase.provider);
+      expect(preparedModel.id).toBe(testCase.id);
     }
   });
 

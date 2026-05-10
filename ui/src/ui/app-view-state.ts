@@ -123,6 +123,18 @@ export type AppViewState = {
   realtimeTalkStatus: RealtimeTalkStatus;
   realtimeTalkDetail: string | null;
   realtimeTalkTranscript: string | null;
+  realtimeTalkOptionsOpen: boolean;
+  realtimeTalkOptions: {
+    provider: string;
+    model: string;
+    voice: string;
+    transport: string;
+    vadThreshold: string;
+    silenceDurationMs: string;
+    prefixPaddingMs: string;
+    reasoningEffort: string;
+  };
+  updateRealtimeTalkOptions: (next: Partial<AppViewState["realtimeTalkOptions"]>) => void;
   chatManualRefreshInFlight: boolean;
   chatHeaderControlsHidden: boolean;
   chatMobileControlsOpen: boolean;

@@ -125,13 +125,9 @@ describe("channelsStatusCommand external env-only channel fallback", () => {
 
     expect(fs.existsSync(fullMarker)).toBe(false);
     const payload = JSON.parse(logs.at(-1) ?? "{}");
-    expect(payload).toEqual(
-      expect.objectContaining({
-        gatewayReachable: false,
-        configOnly: true,
-        configuredChannels: ["external-env-channel"],
-      }),
-    );
+    expect(payload.gatewayReachable).toBe(false);
+    expect(payload.configOnly).toBe(true);
+    expect(payload.configuredChannels).toEqual(["external-env-channel"]);
   });
 });
 

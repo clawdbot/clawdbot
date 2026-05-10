@@ -102,21 +102,17 @@ describe("channelsResolveCommand", () => {
       runtime,
     );
 
-    expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledWith(
-      expect.objectContaining({
-        rawChannel: "whatsapp",
-        allowInstall: false,
-      }),
-    );
+    expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledTimes(1);
+    const pluginResolutionRequest = mocks.resolveInstallableChannelPlugin.mock.calls[0]?.[0];
+    expect(pluginResolutionRequest?.rawChannel).toBe("whatsapp");
+    expect(pluginResolutionRequest?.allowInstall).toBe(false);
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     expect(mocks.refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
-    expect(resolveTargets).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: { channels: {} },
-        inputs: ["friends"],
-        kind: "group",
-      }),
-    );
+    expect(resolveTargets).toHaveBeenCalledTimes(1);
+    const resolveRequest = resolveTargets.mock.calls[0]?.[0];
+    expect(resolveRequest?.cfg).toStrictEqual({ channels: {} });
+    expect(resolveRequest?.inputs).toStrictEqual(["friends"]);
+    expect(resolveRequest?.kind).toBe("group");
     expect(runtime.log).toHaveBeenCalledWith("friends -> 120363000000@g.us (Friends)");
   });
 
@@ -185,12 +181,10 @@ describe("channelsResolveCommand", () => {
       cfg: autoEnabledConfig,
       channel: null,
     });
-    expect(resolveTargets).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: autoEnabledConfig,
-        inputs: ["friends"],
-        kind: "group",
-      }),
-    );
+    expect(resolveTargets).toHaveBeenCalledTimes(1);
+    const resolveRequest = resolveTargets.mock.calls[0]?.[0];
+    expect(resolveRequest?.cfg).toBe(autoEnabledConfig);
+    expect(resolveRequest?.inputs).toStrictEqual(["friends"]);
+    expect(resolveRequest?.kind).toBe("group");
   });
 });

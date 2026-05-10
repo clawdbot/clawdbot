@@ -174,6 +174,35 @@ describe("anthropic provider replay hooks", () => {
     ).toBe("short");
   });
 
+  it("backfills Haiku into API-key agent model allowlists", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    const next = provider.applyConfigDefaults?.({
+      provider: "anthropic",
+      env: {},
+      config: {
+        auth: {
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            models: {
+              "anthropic/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      },
+    } as never);
+
+    expect(next?.agents?.defaults?.models).toMatchObject({
+      "anthropic/claude-sonnet-4-6": { params: { cacheRetention: "short" } },
+      "anthropic/claude-haiku-4-5": { params: { cacheRetention: "short" } },
+    });
+  });
+
   it("backfills Claude CLI allowlist defaults through plugin hooks for older configs", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 

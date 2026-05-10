@@ -172,6 +172,80 @@ function createCodexOAuthAuthStore() {
   };
 }
 
+type MockWithCalls = {
+  mock: {
+    calls: readonly (readonly unknown[])[];
+  };
+};
+
+type HttpConfigCall = {
+  allowPrivateNetwork?: boolean;
+  api?: string;
+  baseUrl?: string;
+  capability?: string;
+  defaultBaseUrl?: string;
+  defaultHeaders?: Record<string, string>;
+  provider?: string;
+  request?: unknown;
+};
+
+type RequestCall = {
+  allowPrivateNetwork?: boolean;
+  body?: unknown;
+  dispatcherPolicy?: unknown;
+  fetchFn?: typeof fetch;
+  headers?: Headers;
+  ssrfPolicy?: unknown;
+  timeoutMs?: number;
+  url?: string;
+};
+
+type AuthResolutionCall = {
+  provider?: string;
+  store?: unknown;
+};
+
+function mockCallArg(mock: MockWithCalls, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  if (call.length <= argIndex) {
+    throw new Error(`Expected mock call ${callIndex} argument ${argIndex}`);
+  }
+  return call[argIndex];
+}
+
+function jsonRequestCall(callIndex = 0): RequestCall {
+  return mockCallArg(postJsonRequestMock, callIndex) as RequestCall;
+}
+
+function multipartRequestCall(callIndex = 0): RequestCall {
+  return mockCallArg(postMultipartRequestMock, callIndex) as RequestCall;
+}
+
+function httpConfigCall(callIndex = 0): HttpConfigCall {
+  return mockCallArg(resolveProviderHttpRequestConfigMock, callIndex) as HttpConfigCall;
+}
+
+function authResolutionCall(callIndex = 0): AuthResolutionCall {
+  return mockCallArg(resolveApiKeyForProviderMock, callIndex) as AuthResolutionCall;
+}
+
+function expectNoJsonRequestUrl(expectedUrl: string) {
+  expect(
+    postJsonRequestMock.mock.calls.some(([call]) => (call as RequestCall).url === expectedUrl),
+  ).toBe(false);
+}
+
+function expectNoJsonRequestUrlContaining(expectedFragment: string) {
+  expect(
+    postJsonRequestMock.mock.calls.some(
+      ([call]) => (call as RequestCall).url?.includes(expectedFragment) === true,
+    ),
+  ).toBe(false);
+}
+
 describe("openai image generation provider", () => {
   afterEach(() => {
     ensureAuthProfileStoreMock.mockReset();
@@ -201,9 +275,9 @@ describe("openai image generation provider", () => {
       "gpt-image-1",
       "gpt-image-1-mini",
     ]);
-    expect(provider.capabilities.geometry?.sizes).toEqual(
-      expect.arrayContaining(["2048x2048", "3840x2160", "2160x3840"]),
-    );
+    expect(provider.capabilities.geometry?.sizes).toContain("2048x2048");
+    expect(provider.capabilities.geometry?.sizes).toContain("3840x2160");
+    expect(provider.capabilities.geometry?.sizes).toContain("2160x3840");
     expect(provider.capabilities.output).toEqual({
       formats: ["png", "jpeg", "webp"],
       qualities: ["low", "medium", "high", "auto"],
@@ -309,17 +383,9 @@ describe("openai image generation provider", () => {
       },
     });
 
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baseUrl: "http://127.0.0.1:44080/v1",
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://127.0.0.1:44080/v1/images/generations",
-        allowPrivateNetwork: false,
-      }),
-    );
+    expect(httpConfigCall().baseUrl).toBe("http://127.0.0.1:44080/v1");
+    expect(jsonRequestCall().url).toBe("http://127.0.0.1:44080/v1/images/generations");
+    expect(jsonRequestCall().allowPrivateNetwork).toBe(false);
     expect(result.images).toHaveLength(1);
   });
 
@@ -349,19 +415,26 @@ describe("openai image generation provider", () => {
       },
     });
 
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baseUrl: "http://192.168.1.15:8082/v1",
-        allowPrivateNetwork: true,
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://192.168.1.15:8082/v1/images/generations",
-        allowPrivateNetwork: true,
-      }),
-    );
+    expect(httpConfigCall().baseUrl).toBe("http://192.168.1.15:8082/v1");
+    expect(httpConfigCall().allowPrivateNetwork).toBe(true);
+    expect(jsonRequestCall().url).toBe("http://192.168.1.15:8082/v1/images/generations");
+    expect(jsonRequestCall().allowPrivateNetwork).toBe(true);
     expect(result.images).toHaveLength(1);
+  });
+
+  it("propagates request SSRF policy to JSON image requests", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "test",
+      cfg: {},
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    expect(jsonRequestCall().ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
   });
 
   it("forwards generation count and custom size overrides", async () => {
@@ -377,17 +450,14 @@ describe("openai image generation provider", () => {
       size: "3840x2160",
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/images/generations",
-        body: {
-          model: "gpt-image-2",
-          prompt: "Create two landscape campaign variants",
-          n: 2,
-          size: "3840x2160",
-        },
-      }),
-    );
+    const request = jsonRequestCall();
+    expect(request.url).toBe("https://api.openai.com/v1/images/generations");
+    expect(request.body).toEqual({
+      model: "gpt-image-2",
+      prompt: "Create two landscape campaign variants",
+      n: 2,
+      size: "3840x2160",
+    });
     expect(result.images).toHaveLength(1);
   });
 
@@ -403,15 +473,11 @@ describe("openai image generation provider", () => {
       size: "2048x1152",
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/images/generations",
-        body: expect.objectContaining({
-          model: "gpt-image-1",
-          size: "1536x1024",
-        }),
-      }),
-    );
+    const request = jsonRequestCall();
+    const body = request.body as Record<string, unknown>;
+    expect(request.url).toBe("https://api.openai.com/v1/images/generations");
+    expect(body.model).toBe("gpt-image-1");
+    expect(body.size).toBe("1536x1024");
     expect(result.metadata).toEqual({
       requestedSize: "2048x1152",
       normalizedSize: "1536x1024",
@@ -439,15 +505,11 @@ describe("openai image generation provider", () => {
       size: "2048x1152",
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://openai-compatible.example.com/v1/images/generations",
-        body: expect.objectContaining({
-          model: "gpt-image-1",
-          size: "2048x1152",
-        }),
-      }),
-    );
+    const request = jsonRequestCall();
+    const body = request.body as Record<string, unknown>;
+    expect(request.url).toBe("https://openai-compatible.example.com/v1/images/generations");
+    expect(body.model).toBe("gpt-image-1");
+    expect(body.size).toBe("2048x1152");
     expect(result.metadata).toBeUndefined();
   });
 
@@ -472,27 +534,22 @@ describe("openai image generation provider", () => {
       },
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/images/generations",
-        body: {
-          model: "gpt-image-2",
-          prompt: "Cheap JPEG preview",
-          n: 1,
-          size: "1024x1024",
-          quality: "low",
-          output_format: "jpeg",
-          background: "opaque",
-          moderation: "low",
-          output_compression: 60,
-          user: "end-user-42",
-        },
-      }),
-    );
-    expect(result.images[0]).toMatchObject({
-      mimeType: "image/jpeg",
-      fileName: "image-1.jpg",
+    const request = jsonRequestCall();
+    expect(request.url).toBe("https://api.openai.com/v1/images/generations");
+    expect(request.body).toEqual({
+      model: "gpt-image-2",
+      prompt: "Cheap JPEG preview",
+      n: 1,
+      size: "1024x1024",
+      quality: "low",
+      output_format: "jpeg",
+      background: "opaque",
+      moderation: "low",
+      output_compression: 60,
+      user: "end-user-42",
     });
+    expect(result.images[0]?.mimeType).toBe("image/jpeg");
+    expect(result.images[0]?.fileName).toBe("image-1.jpg");
   });
 
   it("routes transparent default-model requests to the OpenAI image model that supports alpha", async () => {
@@ -508,16 +565,12 @@ describe("openai image generation provider", () => {
       background: "transparent",
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/images/generations",
-        body: expect.objectContaining({
-          model: "gpt-image-1.5",
-          output_format: "png",
-          background: "transparent",
-        }),
-      }),
-    );
+    const request = jsonRequestCall();
+    const body = request.body as Record<string, unknown>;
+    expect(request.url).toBe("https://api.openai.com/v1/images/generations");
+    expect(body.model).toBe("gpt-image-1.5");
+    expect(body.output_format).toBe("png");
+    expect(body.background).toBe("transparent");
     expect(result.model).toBe("gpt-image-1.5");
   });
 
@@ -547,16 +600,12 @@ describe("openai image generation provider", () => {
       },
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://openai-compatible.example.com/v1/images/generations",
-        body: expect.objectContaining({
-          model: "gpt-image-2",
-          output_format: "png",
-          background: "transparent",
-        }),
-      }),
-    );
+    const request = jsonRequestCall();
+    const body = request.body as Record<string, unknown>;
+    expect(request.url).toBe("https://openai-compatible.example.com/v1/images/generations");
+    expect(body.model).toBe("gpt-image-2");
+    expect(body.output_format).toBe("png");
+    expect(body.background).toBe("transparent");
   });
 
   it("allows loopback image requests for the synthetic mock-openai provider", async () => {
@@ -579,17 +628,9 @@ describe("openai image generation provider", () => {
       },
     });
 
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowPrivateNetwork: true,
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://127.0.0.1:44080/v1/images/generations",
-        allowPrivateNetwork: true,
-      }),
-    );
+    expect(httpConfigCall().allowPrivateNetwork).toBe(true);
+    expect(jsonRequestCall().url).toBe("http://127.0.0.1:44080/v1/images/generations");
+    expect(jsonRequestCall().allowPrivateNetwork).toBe(true);
     expect(result.images).toHaveLength(1);
   });
 
@@ -614,16 +655,8 @@ describe("openai image generation provider", () => {
       },
     });
 
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowPrivateNetwork: true,
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowPrivateNetwork: true,
-      }),
-    );
+    expect(httpConfigCall().allowPrivateNetwork).toBe(true);
+    expect(jsonRequestCall().allowPrivateNetwork).toBe(true);
     expect(result.images).toHaveLength(1);
   });
 
@@ -651,19 +684,15 @@ describe("openai image generation provider", () => {
       ],
     });
 
-    expect(postMultipartRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/images/edits",
-        body: expect.any(FormData),
-        allowPrivateNetwork: false,
-        dispatcherPolicy: undefined,
-        fetchFn: fetch,
-      }),
-    );
-    const editCallArgs = postMultipartRequestMock.mock.calls[0]?.[0] as {
+    const editCallArgs = multipartRequestCall() as RequestCall & {
       headers: Headers;
       body: FormData;
     };
+    expect(editCallArgs.url).toBe("https://api.openai.com/v1/images/edits");
+    expect(editCallArgs.body).toBeInstanceOf(FormData);
+    expect(editCallArgs.allowPrivateNetwork).toBe(false);
+    expect(editCallArgs.dispatcherPolicy).toBeUndefined();
+    expect(editCallArgs.fetchFn).toBe(fetch);
     expect(editCallArgs.headers.has("Content-Type")).toBe(false);
     const form = editCallArgs.body;
     expect(form.get("model")).toBe("gpt-image-2");
@@ -676,9 +705,7 @@ describe("openai image generation provider", () => {
     expect(images[0]?.type).toBe("image/png");
     expect(images[1]?.name).toBe("image-2.jpg");
     expect(images[1]?.type).toBe("image/jpeg");
-    expect(postJsonRequestMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ url: "https://api.openai.com/v1/images/edits" }),
-    );
+    expectNoJsonRequestUrl("https://api.openai.com/v1/images/edits");
     expect(result.images).toHaveLength(1);
   });
 
@@ -704,7 +731,7 @@ describe("openai image generation provider", () => {
       },
     });
 
-    const editCallArgs = postMultipartRequestMock.mock.calls[0]?.[0] as {
+    const editCallArgs = multipartRequestCall() as RequestCall & {
       body: FormData;
     };
     const form = editCallArgs.body;
@@ -714,10 +741,8 @@ describe("openai image generation provider", () => {
     expect(form.get("moderation")).toBe("auto");
     expect(form.get("output_compression")).toBe("75");
     expect(form.get("user")).toBe("end-user-99");
-    expect(result.images[0]).toMatchObject({
-      mimeType: "image/webp",
-      fileName: "image-1.webp",
-    });
+    expect(result.images[0]?.mimeType).toBe("image/webp");
+    expect(result.images[0]?.fileName).toBe("image-1.webp");
   });
 
   it("falls back to Codex OAuth image generation through Responses streaming", async () => {
@@ -744,54 +769,39 @@ describe("openai image generation provider", () => {
       },
     });
 
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        store: authStore,
-      }),
-    );
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai-codex",
-        store: authStore,
-      }),
-    );
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        defaultBaseUrl: "https://chatgpt.com/backend-api/codex",
-        defaultHeaders: expect.objectContaining({
-          Authorization: "Bearer codex-key",
-          Accept: "text/event-stream",
-        }),
-        provider: "openai-codex",
-        api: "openai-codex-responses",
-        capability: "image",
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://chatgpt.com/backend-api/codex/responses",
-        timeoutMs: 180_000,
-        body: expect.objectContaining({
-          model: "gpt-5.5",
-          instructions: "You are an image generation assistant.",
-          stream: true,
-          store: false,
-          tools: [
-            {
-              type: "image_generation",
-              model: "gpt-image-2",
-              size: "1024x1536",
-              quality: "low",
-              output_format: "jpeg",
-              background: "opaque",
-              output_compression: 55,
-            },
-          ],
-          tool_choice: { type: "image_generation" },
-        }),
-      }),
-    );
+    expect(authResolutionCall(0).provider).toBe("openai");
+    expect(authResolutionCall(0).store).toBe(authStore);
+    expect(authResolutionCall(1).provider).toBe("openai-codex");
+    expect(authResolutionCall(1).store).toBe(authStore);
+    const configCall = httpConfigCall();
+    expect(configCall.defaultBaseUrl).toBe("https://chatgpt.com/backend-api/codex");
+    expect(configCall.defaultHeaders).toEqual({
+      Authorization: "Bearer codex-key",
+      Accept: "text/event-stream",
+    });
+    expect(configCall.provider).toBe("openai-codex");
+    expect(configCall.api).toBe("openai-codex-responses");
+    expect(configCall.capability).toBe("image");
+    const request = jsonRequestCall();
+    const body = request.body as Record<string, unknown>;
+    expect(request.url).toBe("https://chatgpt.com/backend-api/codex/responses");
+    expect(request.timeoutMs).toBe(180_000);
+    expect(body.model).toBe("gpt-5.5");
+    expect(body.instructions).toBe("You are an image generation assistant.");
+    expect(body.stream).toBe(true);
+    expect(body.store).toBe(false);
+    expect(body.tools).toEqual([
+      {
+        type: "image_generation",
+        model: "gpt-image-2",
+        size: "1024x1536",
+        quality: "low",
+        output_format: "jpeg",
+        background: "opaque",
+        output_compression: 55,
+      },
+    ]);
+    expect(body.tool_choice).toEqual({ type: "image_generation" });
     expect(postMultipartRequestMock).not.toHaveBeenCalled();
     expect(logInfoMock).toHaveBeenCalledWith(
       "image auth selected: provider=openai-codex mode=oauth transport=codex-responses requestedModel=gpt-image-2 responsesModel=gpt-5.5 timeoutMs=180000",
@@ -833,21 +843,13 @@ describe("openai image generation provider", () => {
       },
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://chatgpt.com/backend-api/codex/responses",
-        body: expect.objectContaining({
-          tools: [
-            expect.objectContaining({
-              type: "image_generation",
-              model: "gpt-image-1.5",
-              output_format: "png",
-              background: "transparent",
-            }),
-          ],
-        }),
-      }),
-    );
+    const request = jsonRequestCall();
+    const body = request.body as { tools?: Array<Record<string, unknown>> };
+    expect(request.url).toBe("https://chatgpt.com/backend-api/codex/responses");
+    expect(body.tools?.[0]?.type).toBe("image_generation");
+    expect(body.tools?.[0]?.model).toBe("gpt-image-1.5");
+    expect(body.tools?.[0]?.output_format).toBe("png");
+    expect(body.tools?.[0]?.background).toBe("transparent");
     expect(result.model).toBe("gpt-image-1.5");
   });
 
@@ -874,22 +876,14 @@ describe("openai image generation provider", () => {
     });
 
     expect(resolveApiKeyForProviderMock).toHaveBeenCalledTimes(1);
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai-codex",
-        store: authStore,
-      }),
-    );
-    expect(resolveApiKeyForProviderMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://chatgpt.com/backend-api/codex/responses",
-      }),
-    );
+    expect(authResolutionCall().provider).toBe("openai-codex");
+    expect(authResolutionCall().store).toBe(authStore);
+    expect(
+      resolveApiKeyForProviderMock.mock.calls.some(
+        ([call]) => (call as AuthResolutionCall).provider === "openai",
+      ),
+    ).toBe(false);
+    expect(jsonRequestCall().url).toBe("https://chatgpt.com/backend-api/codex/responses");
     expect(logInfoMock).toHaveBeenCalledWith(
       "image auth selected: provider=openai-codex mode=oauth transport=codex-responses requestedModel=gpt-image-2 responsesModel=gpt-5.5 timeoutMs=180000",
     );
@@ -920,9 +914,7 @@ describe("openai image generation provider", () => {
     ).rejects.toThrow("OpenAI API key missing");
 
     expect(resolveApiKeyForProviderMock).toHaveBeenCalledTimes(1);
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "openai" }),
-    );
+    expect(authResolutionCall().provider).toBe("openai");
     expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
 
@@ -950,9 +942,7 @@ describe("openai image generation provider", () => {
     ).rejects.toThrow("OpenAI API key missing");
 
     expect(resolveApiKeyForProviderMock).toHaveBeenCalledTimes(1);
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "openai" }),
-    );
+    expect(authResolutionCall().provider).toBe("openai");
     expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
 
@@ -979,9 +969,7 @@ describe("openai image generation provider", () => {
     ).rejects.toThrow("Keychain unavailable");
 
     expect(resolveApiKeyForProviderMock).toHaveBeenCalledTimes(1);
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "openai" }),
-    );
+    expect(authResolutionCall().provider).toBe("openai");
     expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
 
@@ -1068,23 +1056,17 @@ describe("openai image generation provider", () => {
         },
       },
       authStore,
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
 
     expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith({
       allowPrivateNetwork: true,
     });
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baseUrl: "http://127.0.0.1:44220/backend-api/codex",
-        request: { allowPrivateNetwork: true },
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://127.0.0.1:44220/backend-api/codex/responses",
-        allowPrivateNetwork: true,
-      }),
-    );
+    expect(httpConfigCall().baseUrl).toBe("http://127.0.0.1:44220/backend-api/codex");
+    expect(httpConfigCall().request).toEqual({ allowPrivateNetwork: true });
+    expect(jsonRequestCall().url).toBe("http://127.0.0.1:44220/backend-api/codex/responses");
+    expect(jsonRequestCall().allowPrivateNetwork).toBe(true);
+    expect(jsonRequestCall().ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
     expect(result.images[0]?.buffer).toEqual(Buffer.from("codex-image"));
   });
 
@@ -1116,19 +1098,11 @@ describe("openai image generation provider", () => {
       authStore: createCodexOAuthAuthStore(),
     });
 
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-        provider: "openai-codex",
-        api: "openai-codex-responses",
-        capability: "image",
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://chatgpt.com/backend-api/codex/responses",
-      }),
-    );
+    expect(httpConfigCall().baseUrl).toBe("https://chatgpt.com/backend-api/codex");
+    expect(httpConfigCall().provider).toBe("openai-codex");
+    expect(httpConfigCall().api).toBe("openai-codex-responses");
+    expect(httpConfigCall().capability).toBe("image");
+    expect(jsonRequestCall().url).toBe("https://chatgpt.com/backend-api/codex/responses");
   });
 
   it("uses direct OpenAI auth when custom OpenAI image config is explicit", async () => {
@@ -1164,22 +1138,14 @@ describe("openai image generation provider", () => {
     });
 
     expect(resolveApiKeyForProviderMock).toHaveBeenCalledTimes(1);
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        store: authStore,
-      }),
-    );
-    expect(resolveApiKeyForProviderMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai-codex",
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/images/generations",
-      }),
-    );
+    expect(authResolutionCall().provider).toBe("openai");
+    expect(authResolutionCall().store).toBe(authStore);
+    expect(
+      resolveApiKeyForProviderMock.mock.calls.some(
+        ([call]) => (call as AuthResolutionCall).provider === "openai-codex",
+      ),
+    ).toBe(false);
+    expect(jsonRequestCall().url).toBe("https://api.openai.com/v1/images/generations");
   });
 
   it("sends Codex reference images as Responses input images", async () => {
@@ -1208,9 +1174,7 @@ describe("openai image generation provider", () => {
         detail: "auto",
       },
     ]);
-    expect(postJsonRequestMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ url: expect.stringContaining("/images/edits") }),
-    );
+    expectNoJsonRequestUrlContaining("/images/edits");
     expect(postMultipartRequestMock).not.toHaveBeenCalled();
   });
 
@@ -1302,17 +1266,11 @@ describe("openai image generation provider", () => {
       inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
     });
 
-    expect(postMultipartRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://127.0.0.1:44080/v1/images/edits",
-        allowPrivateNetwork: false,
-        dispatcherPolicy: undefined,
-        fetchFn: fetch,
-      }),
-    );
-    expect(postJsonRequestMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ url: "http://127.0.0.1:44080/v1/images/edits" }),
-    );
+    expect(multipartRequestCall().url).toBe("http://127.0.0.1:44080/v1/images/edits");
+    expect(multipartRequestCall().allowPrivateNetwork).toBe(false);
+    expect(multipartRequestCall().dispatcherPolicy).toBeUndefined();
+    expect(multipartRequestCall().fetchFn).toBe(fetch);
+    expectNoJsonRequestUrl("http://127.0.0.1:44080/v1/images/edits");
   });
 
   describe("azure openai support", () => {
@@ -1336,15 +1294,9 @@ describe("openai image generation provider", () => {
         },
       });
 
-      expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          defaultHeaders: { "api-key": "openai-key" },
-        }),
-      );
-      expect(postJsonRequestMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
-        }),
+      expect(httpConfigCall().defaultHeaders).toEqual({ "api-key": "openai-key" });
+      expect(jsonRequestCall().url).toBe(
+        "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
       );
     });
 
@@ -1368,17 +1320,15 @@ describe("openai image generation provider", () => {
         },
       });
 
-      expect(postJsonRequestMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "https://myresource.openai.azure.com/openai/deployments/gpt-image-2-1/images/generations?api-version=2024-12-01-preview",
-          body: {
-            prompt: "Azure cat",
-            n: 1,
-            size: "1024x1024",
-          },
-          timeoutMs: 600_000,
-        }),
+      expect(jsonRequestCall().url).toBe(
+        "https://myresource.openai.azure.com/openai/deployments/gpt-image-2-1/images/generations?api-version=2024-12-01-preview",
       );
+      expect(jsonRequestCall().body).toEqual({
+        prompt: "Azure cat",
+        n: 1,
+        size: "1024x1024",
+      });
+      expect(jsonRequestCall().timeoutMs).toBe(600_000);
     });
 
     it("lets explicit timeoutMs override the Azure image default", async () => {
@@ -1402,11 +1352,7 @@ describe("openai image generation provider", () => {
         timeoutMs: 123_456,
       });
 
-      expect(postJsonRequestMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          timeoutMs: 123_456,
-        }),
-      );
+      expect(jsonRequestCall().timeoutMs).toBe(123_456);
     });
 
     it("does not reroute transparent background requests for Azure deployment names", async () => {
@@ -1435,18 +1381,16 @@ describe("openai image generation provider", () => {
         },
       });
 
-      expect(postJsonRequestMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
-          body: {
-            prompt: "Transparent Azure sticker",
-            n: 1,
-            size: "1024x1024",
-            output_format: "png",
-            background: "transparent",
-          },
-        }),
+      expect(jsonRequestCall().url).toBe(
+        "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
       );
+      expect(jsonRequestCall().body).toEqual({
+        prompt: "Transparent Azure sticker",
+        n: 1,
+        size: "1024x1024",
+        output_format: "png",
+        background: "transparent",
+      });
     });
 
     it("uses api-key header and deployment-scoped URL for .cognitiveservices.azure.com hosts", async () => {
@@ -1469,15 +1413,9 @@ describe("openai image generation provider", () => {
         },
       });
 
-      expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          defaultHeaders: { "api-key": "openai-key" },
-        }),
-      );
-      expect(postJsonRequestMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "https://myresource.cognitiveservices.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
-        }),
+      expect(httpConfigCall().defaultHeaders).toEqual({ "api-key": "openai-key" });
+      expect(jsonRequestCall().url).toBe(
+        "https://myresource.cognitiveservices.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
       );
     });
 
@@ -1501,15 +1439,9 @@ describe("openai image generation provider", () => {
         },
       });
 
-      expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          defaultHeaders: { "api-key": "openai-key" },
-        }),
-      );
-      expect(postJsonRequestMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "https://my-resource.services.ai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
-        }),
+      expect(httpConfigCall().defaultHeaders).toEqual({ "api-key": "openai-key" });
+      expect(jsonRequestCall().url).toBe(
+        "https://my-resource.services.ai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
       );
     });
 
@@ -1534,10 +1466,8 @@ describe("openai image generation provider", () => {
         },
       });
 
-      expect(postJsonRequestMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2025-01-01",
-        }),
+      expect(jsonRequestCall().url).toBe(
+        "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2025-01-01",
       );
     });
 
@@ -1568,12 +1498,10 @@ describe("openai image generation provider", () => {
         ],
       });
 
-      expect(postMultipartRequestMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/edits?api-version=2024-12-01-preview",
-          body: expect.any(FormData),
-        }),
+      expect(multipartRequestCall().url).toBe(
+        "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/edits?api-version=2024-12-01-preview",
       );
+      expect(multipartRequestCall().body).toBeInstanceOf(FormData);
     });
 
     it("omits model from Azure edit form because deployment is URL-scoped", async () => {
@@ -1603,7 +1531,7 @@ describe("openai image generation provider", () => {
         ],
       });
 
-      const editCallArgs = postMultipartRequestMock.mock.calls[0]?.[0] as {
+      const editCallArgs = multipartRequestCall() as RequestCall & {
         body: FormData;
       };
       expect(editCallArgs.body.has("model")).toBe(false);
@@ -1631,10 +1559,8 @@ describe("openai image generation provider", () => {
         },
       });
 
-      expect(postJsonRequestMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
-        }),
+      expect(jsonRequestCall().url).toBe(
+        "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
       );
     });
 
@@ -1658,10 +1584,8 @@ describe("openai image generation provider", () => {
         },
       });
 
-      expect(postJsonRequestMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
-        }),
+      expect(jsonRequestCall().url).toBe(
+        "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
       );
     });
 
@@ -1676,16 +1600,8 @@ describe("openai image generation provider", () => {
         cfg: {},
       });
 
-      expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          defaultHeaders: { Authorization: "Bearer openai-key" },
-        }),
-      );
-      expect(postJsonRequestMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "https://api.openai.com/v1/images/generations",
-        }),
-      );
+      expect(httpConfigCall().defaultHeaders).toEqual({ Authorization: "Bearer openai-key" });
+      expect(jsonRequestCall().url).toBe("https://api.openai.com/v1/images/generations");
     });
   });
 });

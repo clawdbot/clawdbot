@@ -14,7 +14,10 @@ import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-captu
 
 const mockReadConfigFileSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
 const mockWriteConfigFile = vi.fn<
-  (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) => Promise<void>
+  (
+    cfg: OpenClawConfig,
+    options?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] },
+  ) => Promise<void>
 >(async () => {});
 const mockResolveSecretRefValue = vi.fn();
 const mockReadBestEffortRuntimeConfigSchema = vi.fn();
@@ -24,11 +27,13 @@ vi.mock("../config/config.js", async (importOriginal) => {
   return {
     ...actual,
     readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
-    writeConfigFile: (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) =>
-      mockWriteConfigFile(cfg, options),
+    writeConfigFile: (
+      cfg: OpenClawConfig,
+      options?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] },
+    ) => mockWriteConfigFile(cfg, options),
     replaceConfigFile: (params: {
       nextConfig: OpenClawConfig;
-      writeOptions?: { unsetPaths?: string[][] };
+      writeOptions?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] };
     }) => mockWriteConfigFile(params.nextConfig, params.writeOptions),
   };
 });
@@ -220,6 +225,66 @@ describe("config cli", () => {
       expect(written.agents).not.toHaveProperty("defaults");
     });
 
+    it("marks set paths explicit so default-equal writes persist", async () => {
+      const resolved: OpenClawConfig = {
+        channels: {
+          telegram: {
+            botToken: "tok-abc",
+          },
+        },
+      };
+      const runtimeMerged = {
+        ...resolved,
+        channels: {
+          telegram: {
+            botToken: "tok-abc",
+            dmPolicy: "pairing",
+          },
+        },
+      } as OpenClawConfig;
+      setSnapshot(resolved, runtimeMerged);
+
+      await runConfigCommand(["config", "set", "channels.telegram.dmPolicy", "pairing"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      expect(mockWriteConfigFile.mock.calls[0]?.[1]).toMatchObject({
+        explicitSetPaths: [["channels", "telegram", "dmPolicy"]],
+      });
+    });
+
+    it("marks object set paths explicit so nested default-equal writes persist", async () => {
+      const resolved: OpenClawConfig = {
+        channels: {
+          telegram: {
+            botToken: "tok-abc",
+          },
+        },
+      };
+      const runtimeMerged = {
+        ...resolved,
+        channels: {
+          telegram: {
+            botToken: "tok-abc",
+            dmPolicy: "pairing",
+          },
+        },
+      } as OpenClawConfig;
+      setSnapshot(resolved, runtimeMerged);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "channels.telegram",
+        '{"botToken":"tok-abc","dmPolicy":"pairing"}',
+        "--strict-json",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      expect(mockWriteConfigFile.mock.calls[0]?.[1]).toMatchObject({
+        explicitSetPaths: [["channels", "telegram"]],
+      });
+    });
+
     it("does not inject runtime defaults into the written config", async () => {
       const resolved: OpenClawConfig = {
         gateway: { port: 18789 },
@@ -279,6 +344,70 @@ describe("config cli", () => {
       });
       expect(written.agents?.defaults?.videoGenerationModel).toEqual({
         primary: "qwen/wan2.6-t2v",
+      });
+    });
+
+    it("normalizes retired Google Gemini model refs before writing config mutations", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: {
+              fallbacks: ["google/gemini-3-pro-preview"],
+            },
+            models: {
+              "google/gemini-3-pro-preview": { alias: "gemini" },
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "agents.defaults.model.primary",
+        "google/gemini-3-pro-preview",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.agents?.defaults?.model).toEqual({
+        primary: "google/gemini-3.1-pro-preview",
+        fallbacks: ["google/gemini-3.1-pro-preview"],
+      });
+      expect(written.agents?.defaults?.models).toEqual({
+        "google/gemini-3.1-pro-preview": { alias: "gemini" },
+      });
+    });
+
+    it("normalizes explicit model-map paths before writing config mutations", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "google/gemini-3-pro-preview": {},
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "agents.defaults.models.google/gemini-3-pro-preview.alias",
+        "gemini",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.agents?.defaults?.models).toEqual({
+        "google/gemini-3.1-pro-preview": { alias: "gemini" },
+      });
+      expect(mockWriteConfigFile.mock.calls[0]?.[1]).toMatchObject({
+        explicitSetPaths: [
+          ["agents", "defaults", "models", "google/gemini-3.1-pro-preview", "alias"],
+        ],
       });
     });
 
@@ -701,6 +830,12 @@ describe("config cli", () => {
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining('Could not parse "{bad" as JSON for --strict-json.'),
+      );
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining("For plain strings, omit --strict-json."),
+      );
     });
 
     it("keeps --json as a strict parsing alias", async () => {
@@ -1758,7 +1893,7 @@ describe("config cli", () => {
           .channels as Record<string, unknown>,
       ).toEqual({ maintainers: { enabled: true, requireMention: true } });
       expect((written.channels as Record<string, unknown>).slack).not.toHaveProperty("appToken");
-      expect(mockWriteConfigFile.mock.calls[0]?.[1]).toEqual({
+      expect(mockWriteConfigFile.mock.calls[0]?.[1]).toMatchObject({
         unsetPaths: [["channels", "slack", "appToken"]],
       });
     });

@@ -271,7 +271,8 @@ describe("resolveMessageChannelSelection", () => {
     },
     {
       params: { cfg: {} as never },
-      expectedMessage: "Channel is required (no configured channels detected).",
+      expectedMessage:
+        "Channel is required (no configured channels detected). Run openclaw channels add to configure one",
     },
     {
       setup: () => {
@@ -292,7 +293,8 @@ describe("resolveMessageChannelSelection", () => {
         ]);
       },
       params: { cfg: { channels: { whatsapp: { enabled: true } } } as never },
-      expectedMessage: "Channel is required (no configured channels detected).",
+      expectedMessage:
+        "Channel is required (no configured channels detected). Run openclaw channels add to configure one",
     },
     {
       setup: () => {
@@ -302,7 +304,8 @@ describe("resolveMessageChannelSelection", () => {
         ]);
       },
       params: { cfg: {} as never },
-      expectedMessage: "Channel is required when multiple channels are configured: beta, gamma",
+      expectedMessage:
+        "Channel is required when multiple channels are configured: beta, gamma. Pass --channel <channel> to choose one.",
     },
   ])("rejects invalid channel selection for %j", async ({ setup, params, expectedMessage }) => {
     setup?.();

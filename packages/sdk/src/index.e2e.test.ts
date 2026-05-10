@@ -20,6 +20,11 @@ type FakeGateway = {
 
 const servers: WebSocketServer[] = [];
 
+function expectJsonObject(value: unknown): JsonObject {
+  expect(value && typeof value).toBe("object");
+  return value as JsonObject;
+}
+
 function sendJson(socket: WebSocket, payload: JsonObject): void {
   socket.send(JSON.stringify(payload));
 }
@@ -405,17 +410,14 @@ describe("OpenClaw SDK websocket e2e", () => {
 
       expect(run.id).toBe("run-sdk-e2e");
       expect(seen).toEqual(["run.started", "assistant.delta", "run.completed"]);
-      expect(result).toMatchObject({
-        runId: "run-sdk-e2e",
-        sessionKey: "main",
-        status: "completed",
-        startedAt: 123,
-        endedAt: 456,
-      });
-      await expect(run.cancel()).resolves.toMatchObject({
-        abortedRunId: "run-sdk-e2e",
-        status: "aborted",
-      });
+      expect(result.runId).toBe("run-sdk-e2e");
+      expect(result.sessionKey).toBe("main");
+      expect(result.status).toBe("completed");
+      expect(result.startedAt).toBe(123);
+      expect(result.endedAt).toBe(456);
+      const cancelResult = expectJsonObject(await run.cancel());
+      expect(cancelResult.abortedRunId).toBe("run-sdk-e2e");
+      expect(cancelResult.status).toBe("aborted");
     } finally {
       await oc.close();
       await gateway.close();
@@ -432,65 +434,78 @@ describe("OpenClaw SDK websocket e2e", () => {
     const oc = new OpenClaw({ transport });
 
     try {
-      await expect(oc.agents.list()).resolves.toMatchObject({ agents: [{ id: "main" }] });
+      const agents = expectJsonObject(await oc.agents.list());
+      expect(agents.agents).toEqual([{ id: "main" }]);
       const agent = await oc.agents.get("main");
-      await expect(agent.identity({ sessionKey: "sdk-session" })).resolves.toMatchObject({
-        agentId: "main",
-        sessionKey: "sdk-session",
-      });
-      await expect(oc.agents.create({ id: "sdk-agent" })).resolves.toMatchObject({
-        method: "agents.create",
-      });
-      await expect(
-        oc.agents.update({ id: "sdk-agent", label: "SDK Agent" }),
-      ).resolves.toMatchObject({ method: "agents.update" });
-      await expect(oc.agents.delete({ id: "sdk-agent" })).resolves.toMatchObject({
-        method: "agents.delete",
-      });
+      const identity = expectJsonObject(await agent.identity({ sessionKey: "sdk-session" }));
+      expect(identity.agentId).toBe("main");
+      expect(identity.sessionKey).toBe("sdk-session");
+      const createAgent = expectJsonObject(await oc.agents.create({ id: "sdk-agent" }));
+      expect(createAgent.method).toBe("agents.create");
+      const updateAgent = expectJsonObject(
+        await oc.agents.update({ id: "sdk-agent", label: "SDK Agent" }),
+      );
+      expect(updateAgent.method).toBe("agents.update");
+      const deleteAgent = expectJsonObject(await oc.agents.delete({ id: "sdk-agent" }));
+      expect(deleteAgent.method).toBe("agents.delete");
 
-      await expect(oc.sessions.list()).resolves.toMatchObject({
-        sessions: [{ key: "sdk-session" }],
-      });
+      const sessions = expectJsonObject(await oc.sessions.list());
+      expect(sessions.sessions).toEqual([{ key: "sdk-session" }]);
       const session = await oc.sessions.create({ key: "sdk-session", agentId: "main" });
       expect(session.key).toBe("sdk-session");
-      await expect(oc.sessions.resolve({ key: "sdk-session" })).resolves.toMatchObject({
-        key: "sdk-session",
-      });
+      const resolvedSession = expectJsonObject(await oc.sessions.resolve({ key: "sdk-session" }));
+      expect(resolvedSession.key).toBe("sdk-session");
       const sessionRun = await session.send("continue");
       expect(sessionRun.id).toBe("run-session-e2e");
-      await expect(session.abort(sessionRun.id)).resolves.toMatchObject({
-        abortedRunId: "run-session-e2e",
-      });
-      await expect(session.patch({ label: "Renamed" })).resolves.toMatchObject({
-        method: "sessions.patch",
-      });
-      await expect(session.compact({ maxLines: 200 })).resolves.toMatchObject({
-        method: "sessions.compact",
-      });
+      const abortSession = expectJsonObject(await session.abort(sessionRun.id));
+      expect(abortSession.abortedRunId).toBe("run-session-e2e");
+      const patchSession = expectJsonObject(await session.patch({ label: "Renamed" }));
+      expect(patchSession.method).toBe("sessions.patch");
+      const compactSession = expectJsonObject(await session.compact({ maxLines: 200 }));
+      expect(compactSession.method).toBe("sessions.compact");
 
-      await expect(oc.tasks.list({ status: "running" })).resolves.toMatchObject({
-        tasks: [{ id: "task-sdk-e2e" }],
+      const tasks = await oc.tasks.list({ status: "running" });
+      expect(tasks.tasks).toEqual([
+        {
+          id: "task-sdk-e2e",
+          status: "running",
+          title: "SDK task",
+          runId: "run-sdk-e2e",
+          sessionKey: "sdk-session",
+        },
+      ]);
+      const task = await oc.tasks.get("task-sdk-e2e");
+      expect(task.task).toEqual({
+        id: "task-sdk-e2e",
+        status: "running",
+        title: "SDK task",
       });
-      await expect(oc.tasks.get("task-sdk-e2e")).resolves.toMatchObject({
-        task: { id: "task-sdk-e2e" },
-      });
-      await expect(oc.tasks.cancel("task-sdk-e2e")).resolves.toMatchObject({
-        cancelled: true,
-      });
+      const cancelledTask = await oc.tasks.cancel("task-sdk-e2e");
+      expect(cancelledTask.cancelled).toBe(true);
 
-      await expect(oc.models.list()).resolves.toMatchObject({ models: [{ id: "gpt-5.4" }] });
-      await expect(oc.models.status({ probe: false })).resolves.toMatchObject({ providers: [] });
-      await expect(oc.tools.list()).resolves.toMatchObject({ tools: [{ name: "shell" }] });
-      await expect(oc.tools.effective({ sessionKey: "sdk-session" })).resolves.toMatchObject({
-        tools: [{ name: "shell", enabled: true }],
+      const models = expectJsonObject(await oc.models.list());
+      expect(models.models).toEqual([{ id: "gpt-5.4" }]);
+      const modelStatus = expectJsonObject(await oc.models.status({ probe: false }));
+      expect(modelStatus.providers).toEqual([]);
+      const tools = expectJsonObject(await oc.tools.list());
+      expect(tools.tools).toEqual([{ name: "shell" }]);
+      const effectiveTools = expectJsonObject(
+        await oc.tools.effective({ sessionKey: "sdk-session" }),
+      );
+      expect(effectiveTools.tools).toEqual([{ name: "shell", enabled: true }]);
+      const toolResult = await oc.tools.invoke("shell", {
+        args: { command: "pwd" },
+        sessionKey: "sdk-session",
       });
-      await expect(
-        oc.tools.invoke("shell", { args: { command: "pwd" }, sessionKey: "sdk-session" }),
-      ).resolves.toMatchObject({ ok: true, toolName: "shell", output: { ok: true } });
-      await expect(oc.approvals.list()).resolves.toMatchObject({ approvals: [] });
-      await expect(
-        oc.approvals.respond("approval-1", { decision: "approve" }),
-      ).resolves.toMatchObject({ ok: true });
+      expect(toolResult.ok).toBe(true);
+      expect(toolResult.toolName).toBe("shell");
+      expect(toolResult.output).toEqual({ ok: true });
+      const approvals = expectJsonObject(await oc.approvals.list());
+      expect(approvals.approvals).toEqual([]);
+      const approvalResult = expectJsonObject(
+        await oc.approvals.respond("approval-1", { decision: "approve" }),
+      );
+      expect(approvalResult.ok).toBe(true);
 
       expect(gateway.requests.map((request) => request.method)).toEqual([
         "connect",
@@ -639,8 +654,9 @@ function readLiveTextDelta(data: unknown): string {
 }
 
 function expectArrayProperty(value: unknown, property: string): void {
-  expect(value).toEqual(expect.objectContaining({ [property]: expect.arrayContaining([]) }));
-  expect(Array.isArray((value as Record<string, unknown>)[property])).toBe(true);
+  expect(value && typeof value).toBe("object");
+  const record = value as Record<string, unknown>;
+  expect(Array.isArray(record[property])).toBe(true);
 }
 
 liveGatewayDescribe("OpenClaw SDK live Gateway e2e", () => {

@@ -13,6 +13,55 @@ const mocks = vi.hoisted(() => ({
   pickGatewaySelfPresence: vi.fn(),
 }));
 
+type GatewayCall = {
+  clientName?: string;
+  config?: unknown;
+  deviceIdentity?: unknown;
+  method?: string;
+  mode?: string;
+  password?: string;
+  timeoutMs?: number;
+  token?: string;
+};
+
+type GatewayProbeCall = {
+  auth?: unknown;
+  detailLevel?: string;
+  preauthHandshakeTimeoutMs?: number;
+  timeoutMs?: number;
+  url?: string;
+};
+
+type MemorySearchManagerCall = {
+  agentId?: string;
+  cfg: {
+    plugins?: {
+      slots?: unknown;
+    };
+  };
+  purpose?: string;
+};
+
+function readGatewayCall(): GatewayCall {
+  expect(mocks.callGateway).toHaveBeenCalledOnce();
+  const calls = mocks.callGateway.mock.calls as unknown as Array<[unknown]>;
+  const call = calls[0]?.[0];
+  if (!call) {
+    throw new Error("Expected gateway call");
+  }
+  return call as GatewayCall;
+}
+
+function readProbeCall(): GatewayProbeCall {
+  expect(mocks.probeGateway).toHaveBeenCalledOnce();
+  const calls = mocks.probeGateway.mock.calls as unknown as Array<[unknown]>;
+  const call = calls[0]?.[0];
+  if (!call) {
+    throw new Error("Expected gateway probe call");
+  }
+  return call as GatewayProbeCall;
+}
+
 vi.mock("../gateway/connection-details.js", () => ({
   buildGatewayConnectionDetailsWithResolvers: mocks.buildGatewayConnectionDetailsWithResolvers,
 }));
@@ -66,20 +115,18 @@ describe("resolveGatewayProbeSnapshot", () => {
 
     expect(mocks.resolveGatewayProbeAuthResolution).not.toHaveBeenCalled();
     expect(mocks.probeGateway).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      gatewayConnection: expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
-      remoteUrlMissing: true,
-      gatewayMode: "remote",
-      gatewayProbeAuth: {},
-      gatewayProbeAuthWarning: undefined,
-      gatewayProbe: null,
-      gatewayReachable: false,
-      gatewaySelf: null,
-      gatewayCallOverrides: {
-        url: "ws://127.0.0.1:18789",
-        token: undefined,
-        password: undefined,
-      },
+    expect(result.gatewayConnection.url).toBe("ws://127.0.0.1:18789");
+    expect(result.remoteUrlMissing).toBe(true);
+    expect(result.gatewayMode).toBe("remote");
+    expect(result.gatewayProbeAuth).toEqual({});
+    expect(result.gatewayProbeAuthWarning).toBeUndefined();
+    expect(result.gatewayProbe).toBeNull();
+    expect(result.gatewayReachable).toBe(false);
+    expect(result.gatewaySelf).toBeNull();
+    expect(result.gatewayCallOverrides).toEqual({
+      url: "ws://127.0.0.1:18789",
+      token: undefined,
+      password: undefined,
     });
   });
 
@@ -106,13 +153,10 @@ describe("resolveGatewayProbeSnapshot", () => {
     });
 
     expect(mocks.resolveGatewayProbeAuthResolution).toHaveBeenCalled();
-    expect(mocks.probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "ws://127.0.0.1:18789",
-        auth: { token: "tok", password: "pw" },
-        detailLevel: "full",
-      }),
-    );
+    const probeCall = readProbeCall();
+    expect(probeCall.url).toBe("ws://127.0.0.1:18789");
+    expect(probeCall.auth).toEqual({ token: "tok", password: "pw" });
+    expect(probeCall.detailLevel).toBe("full");
     expect(result.gatewayReachable).toBe(true);
     expect(result.gatewaySelf).toEqual({ host: "box" });
     expect(result.gatewayCallOverrides).toEqual({
@@ -216,25 +260,20 @@ describe("resolveGatewayProbeSnapshot", () => {
       },
     });
 
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: {},
-        method: "status",
-        token: "tok",
-        password: "pw",
-        timeoutMs: 2000,
-        mode: "backend",
-        clientName: "gateway-client",
-      }),
-    );
-    expect(mocks.callGateway.mock.calls[0]?.[0]).not.toHaveProperty("deviceIdentity");
+    const gatewayCall = readGatewayCall();
+    expect(gatewayCall.config).toEqual({});
+    expect(gatewayCall.method).toBe("status");
+    expect(gatewayCall.token).toBe("tok");
+    expect(gatewayCall.password).toBe("pw");
+    expect(gatewayCall.timeoutMs).toBe(2000);
+    expect(gatewayCall.mode).toBe("backend");
+    expect(gatewayCall.clientName).toBe("gateway-client");
+    expect(gatewayCall).not.toHaveProperty("deviceIdentity");
     expect(result.gatewayReachable).toBe(true);
-    expect(result.gatewayProbe).toMatchObject({
-      ok: true,
-      error: "timeout",
-      status: { sessions: 1 },
-      auth: { capability: "read_only" },
-    });
+    expect(result.gatewayProbe?.ok).toBe(true);
+    expect(result.gatewayProbe?.error).toBe("timeout");
+    expect(result.gatewayProbe?.status).toEqual({ sessions: 1 });
+    expect(result.gatewayProbe?.auth?.capability).toBe("read_only");
     expect(result.gatewayProbeAuthWarning).toBe("warn");
   });
 
@@ -267,18 +306,12 @@ describe("resolveGatewayProbeSnapshot", () => {
       opts: {},
     });
 
-    expect(mocks.probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        preauthHandshakeTimeoutMs: 30_000,
-        timeoutMs: 30_000,
-      }),
-    );
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: { gateway: { handshakeTimeoutMs: 30_000 } },
-        timeoutMs: 30_000,
-      }),
-    );
+    const probeCall = readProbeCall();
+    expect(probeCall.preauthHandshakeTimeoutMs).toBe(30_000);
+    expect(probeCall.timeoutMs).toBe(30_000);
+    const gatewayCall = readGatewayCall();
+    expect(gatewayCall.config).toEqual({ gateway: { handshakeTimeoutMs: 30_000 } });
+    expect(gatewayCall.timeoutMs).toBe(30_000);
   });
 
   it("does not raise an explicit local status RPC fallback timeout", async () => {
@@ -310,17 +343,10 @@ describe("resolveGatewayProbeSnapshot", () => {
       opts: { timeoutMs: 1000 },
     });
 
-    expect(mocks.probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        preauthHandshakeTimeoutMs: 30_000,
-        timeoutMs: 1000,
-      }),
-    );
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeoutMs: 1000,
-      }),
-    );
+    const probeCall = readProbeCall();
+    expect(probeCall.preauthHandshakeTimeoutMs).toBe(30_000);
+    expect(probeCall.timeoutMs).toBe(1000);
+    expect(readGatewayCall().timeoutMs).toBe(1000);
   });
 
   it("lets callGateway reuse paired-device auth for local status RPC fallback", async () => {
@@ -356,17 +382,14 @@ describe("resolveGatewayProbeSnapshot", () => {
       opts: {},
     });
 
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: {},
-        method: "status",
-        token: undefined,
-        password: undefined,
-        mode: "backend",
-        clientName: "gateway-client",
-      }),
-    );
-    expect(mocks.callGateway.mock.calls[0]?.[0]).not.toHaveProperty("deviceIdentity");
+    const gatewayCall = readGatewayCall();
+    expect(gatewayCall.config).toEqual({});
+    expect(gatewayCall.method).toBe("status");
+    expect(gatewayCall.token).toBeUndefined();
+    expect(gatewayCall.password).toBeUndefined();
+    expect(gatewayCall.mode).toBe("backend");
+    expect(gatewayCall.clientName).toBe("gateway-client");
+    expect(gatewayCall).not.toHaveProperty("deviceIdentity");
     expect(result.gatewayReachable).toBe(true);
   });
 
@@ -442,15 +465,14 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
 
     expect(resolveMemoryConfig).not.toHaveBeenCalled();
     expect(requireDefaultStore).not.toHaveBeenCalled();
-    expect(getMemorySearchManager).toHaveBeenCalledWith({
-      cfg: expect.objectContaining({
-        plugins: expect.objectContaining({
-          slots: { memory: "memory-lancedb-pro" },
-        }),
-      }),
-      agentId: "main",
-      purpose: "status",
-    });
+    expect(getMemorySearchManager).toHaveBeenCalledOnce();
+    const managerCalls = getMemorySearchManager.mock.calls as unknown as Array<
+      [MemorySearchManagerCall]
+    >;
+    const managerCall = managerCalls[0]?.[0];
+    expect(managerCall?.cfg.plugins?.slots).toEqual({ memory: "memory-lancedb-pro" });
+    expect(managerCall?.agentId).toBe("main");
+    expect(managerCall?.purpose).toBe("status");
     expect(manager.probeVectorStoreAvailability).toHaveBeenCalled();
     expect(manager.probeVectorAvailability).not.toHaveBeenCalled();
     expect(manager.status).toHaveBeenCalled();

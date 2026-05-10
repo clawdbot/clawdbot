@@ -316,6 +316,8 @@ for tool work, current information, memory lookups, or workspace state.
                 instructions: "Speak briefly. Call openclaw_agent_consult before using deeper tools.",
                 toolPolicy: "safe-read-only",
                 consultPolicy: "substantive",
+                consultThinkingLevel: "low",
+                consultFastMode: true,
                 agentContext: { enabled: true },
                 providers: {
                   google: {

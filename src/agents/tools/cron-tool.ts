@@ -369,12 +369,11 @@ function assertCronSelfRemoveScope(
   if (!selfRemoveOnlyJobId || isCronSelfIntrospectionAction(action)) {
     return;
   }
-  if (action !== "remove") {
-    throw new Error(CRON_SELF_REMOVE_SCOPE_ERROR);
-  }
-  const id = readCronJobIdParam(params);
-  if (id && id === selfRemoveOnlyJobId) {
-    return;
+  if (action === "remove" || action === "runs") {
+    const id = readCronJobIdParam(params);
+    if (id && id === selfRemoveOnlyJobId) {
+      return;
+    }
   }
   throw new Error(CRON_SELF_REMOVE_SCOPE_ERROR);
 }
@@ -693,7 +692,7 @@ CRITICAL CONSTRAINTS:
 Default: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.
 
 RESTRICTED CRON RUNS:
-- Some isolated cron runs receive a narrow cron grant for self-cleanup. In that mode, read-only status and list are for self-introspection only, and mutation actions remain limited to removing the current cron job.
+- Some isolated cron runs receive a narrow cron grant for self-cleanup. In that mode, read-only status and list are for self-introspection only, runs (job run history) is allowed for the current job only, and mutation actions remain limited to removing the current cron job.
 
 WAKE MODES (for wake action):
 - "next-heartbeat" (default): Wake on next heartbeat

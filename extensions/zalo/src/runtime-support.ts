@@ -10,7 +10,6 @@ export type {
   ChannelStatusIssue,
 } from "openclaw/plugin-sdk/channel-contract";
 export type { SecretInput } from "openclaw/plugin-sdk/secret-input";
-export type { SenderGroupAccessDecision } from "openclaw/plugin-sdk/group-access";
 export type { ChannelPlugin, PluginRuntime, WizardPrompter } from "openclaw/plugin-sdk/core";
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 export type { OutboundReplyPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -51,7 +50,6 @@ export {
   isNormalizedSenderAllowed,
 } from "openclaw/plugin-sdk/allow-from";
 export { addWildcardAllowFrom } from "openclaw/plugin-sdk/setup";
-export { evaluateSenderGroupAccess } from "openclaw/plugin-sdk/group-access";
 export { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 export {
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -65,10 +63,6 @@ export {
   isNumericTargetId,
   sendPayloadWithChunkedTextAndMedia,
 } from "openclaw/plugin-sdk/reply-payload";
-export {
-  resolveDirectDmAuthorizationOutcome,
-  resolveSenderCommandAuthorizationWithRuntime,
-} from "openclaw/plugin-sdk/command-auth";
 export { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
 export { waitForAbortSignal } from "openclaw/plugin-sdk/runtime";
 export {

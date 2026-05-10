@@ -286,7 +286,7 @@ describe("deprecated commands compatibility", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.config.commands).toMatchObject({ text: true });
+      expect(result.config.commands?.text).toBe(true);
       expect(Object.hasOwn(result.config.commands ?? {}, "modelsWrite")).toBe(false);
     }
   });

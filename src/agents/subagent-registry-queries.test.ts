@@ -526,12 +526,12 @@ describe("subagent registry query regressions", () => {
       }),
     ]);
 
-    expect(resolveRequesterForChildSessionFromRuns(runs, childOneSessionKey)).toMatchObject({
-      requesterSessionKey: parentSessionKey,
-    });
-    expect(resolveRequesterForChildSessionFromRuns(runs, childTwoSessionKey)).toMatchObject({
-      requesterSessionKey: parentSessionKey,
-    });
+    expect(
+      resolveRequesterForChildSessionFromRuns(runs, childOneSessionKey)?.requesterSessionKey,
+    ).toBe(parentSessionKey);
+    expect(
+      resolveRequesterForChildSessionFromRuns(runs, childTwoSessionKey)?.requesterSessionKey,
+    ).toBe(parentSessionKey);
     expect(shouldIgnorePostCompletionAnnounceForSessionFromRuns(runs, parentSessionKey)).toBe(
       false,
     );
@@ -570,9 +570,9 @@ describe("subagent registry query regressions", () => {
       }),
     );
 
-    expect(resolveRequesterForChildSessionFromRuns(runs, childThreeSessionKey)).toMatchObject({
-      requesterSessionKey: parentSessionKey,
-    });
+    expect(
+      resolveRequesterForChildSessionFromRuns(runs, childThreeSessionKey)?.requesterSessionKey,
+    ).toBe(parentSessionKey);
     expect(shouldIgnorePostCompletionAnnounceForSessionFromRuns(runs, parentSessionKey)).toBe(
       false,
     );

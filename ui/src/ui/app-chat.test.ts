@@ -191,6 +191,14 @@ describe("refreshChat", () => {
       maxChars: 4000,
     });
     expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.list",
+      expect.objectContaining({
+        agentId: "main",
+        includeGlobal: true,
+        includeUnknown: true,
+      }),
+    );
     expect(request).toHaveBeenCalledWith("commands.list", {
       agentId: "main",
       includeArgs: true,
@@ -557,6 +565,7 @@ describe("refreshChat", () => {
       expect(request).toHaveBeenCalledWith(
         "sessions.list",
         expect.objectContaining({
+          agentId: "main",
           includeGlobal: true,
           includeUnknown: true,
         }),

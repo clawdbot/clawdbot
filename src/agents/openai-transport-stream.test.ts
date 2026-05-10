@@ -21,6 +21,60 @@ import {
 } from "./provider-transport-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
+type OpenAICompletionsOutput = Parameters<typeof __testing.processOpenAICompletionsStream>[1];
+
+type CapturedStreamEvent = { type?: string; delta?: string };
+
+function createDeepSeekCompletionsModel(): Model<"openai-completions"> {
+  return {
+    id: "deepseek-v4-pro",
+    name: "DeepSeek V4 Pro",
+    api: "openai-completions",
+    provider: "deepseek",
+    baseUrl: "https://api.deepseek.com",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1_000_000,
+    maxTokens: 384_000,
+  };
+}
+
+function createAssistantOutput(model: Model<"openai-completions">): OpenAICompletionsOutput {
+  return {
+    role: "assistant" as const,
+    content: [],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  };
+}
+
+async function* streamChunks(chunks: readonly unknown[]): AsyncGenerator<never> {
+  for (const chunk of chunks) {
+    yield chunk as never;
+  }
+}
+
+function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+  expect(record).toBeDefined();
+  const actual = record as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+  return actual;
+}
+
 describe("openai transport stream", () => {
   it("adds OpenClaw attribution to native OpenAI transport headers and protects it from pi", () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
@@ -50,7 +104,7 @@ describe("openai transport stream", () => {
       },
     );
 
-    expect(headers).toMatchObject({
+    expectRecordFields(headers, {
       originator: "openclaw",
       version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",
@@ -81,7 +135,7 @@ describe("openai transport stream", () => {
       { systemPrompt: "", messages: [] } as never,
     );
 
-    expect(headers).toMatchObject({
+    expectRecordFields(headers, {
       originator: "openclaw",
       version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",
@@ -249,7 +303,7 @@ describe("openai transport stream", () => {
     const prepared = prepareTransportAwareSimpleModel(model);
 
     expect(resolveTransportAwareSimpleApi(model.api)).toBe("openclaw-openai-responses-transport");
-    expect(prepared).toMatchObject({
+    expectRecordFields(prepared, {
       api: "openclaw-openai-responses-transport",
       provider: "openai",
       id: "gpt-5.4",
@@ -282,7 +336,7 @@ describe("openai transport stream", () => {
     const prepared = prepareTransportAwareSimpleModel(model);
 
     expect(resolveTransportAwareSimpleApi(model.api)).toBe("openclaw-openai-responses-transport");
-    expect(prepared).toMatchObject({
+    expectRecordFields(prepared, {
       api: "openclaw-openai-responses-transport",
       provider: "openai-codex",
       id: "codex-mini-latest",
@@ -315,7 +369,7 @@ describe("openai transport stream", () => {
     const prepared = prepareTransportAwareSimpleModel(model);
 
     expect(resolveTransportAwareSimpleApi(model.api)).toBe("openclaw-anthropic-messages-transport");
-    expect(prepared).toMatchObject({
+    expectRecordFields(prepared, {
       api: "openclaw-anthropic-messages-transport",
       provider: "anthropic",
       id: "claude-sonnet-4-6",
@@ -373,7 +427,7 @@ describe("openai transport stream", () => {
     );
 
     expect(resolveTransportAwareSimpleApi(model.api)).toBe("openclaw-openai-responses-transport");
-    expect(prepareTransportAwareSimpleModel(model)).toMatchObject({
+    expectRecordFields(prepareTransportAwareSimpleModel(model), {
       api: "openclaw-openai-responses-transport",
       provider: "github-copilot",
       id: "gpt-5.4",
@@ -404,7 +458,7 @@ describe("openai transport stream", () => {
     );
 
     expect(resolveTransportAwareSimpleApi(model.api)).toBe("openclaw-anthropic-messages-transport");
-    expect(prepareTransportAwareSimpleModel(model)).toMatchObject({
+    expectRecordFields(prepareTransportAwareSimpleModel(model), {
       api: "openclaw-anthropic-messages-transport",
       provider: "github-copilot",
       id: "claude-sonnet-4.6",
@@ -603,6 +657,99 @@ describe("openai transport stream", () => {
     }
   });
 
+  it("parses JSON chat completions returned to streaming requests", async () => {
+    let capturedStreamFlag: unknown;
+    const server = createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        capturedStreamFlag = (JSON.parse(body) as { stream?: unknown }).stream;
+        res.writeHead(200, {
+          "content-type": "application/json; charset=utf-8",
+        });
+        res.end(
+          JSON.stringify({
+            id: "chatcmpl-json-fallback",
+            object: "chat.completion",
+            model: "moonshotai/kimi-k2.6",
+            choices: [
+              {
+                index: 0,
+                message: {
+                  role: "assistant",
+                  reasoning_content: "Need a direct answer.",
+                  content: "live-ok",
+                },
+                finish_reason: "stop",
+              },
+            ],
+            usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
+          }),
+        );
+      });
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = {
+        id: "moonshotai/kimi-k2.6",
+        name: "Kimi K2.6",
+        api: "openai-completions",
+        provider: "openrouter",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 256_000,
+        maxTokens: 16_384,
+      } satisfies Model<"openai-completions">;
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        model,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Reply live-ok", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let doneReason: string | undefined;
+      let thinking = "";
+      let text = "";
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        delta?: string;
+        reason?: string;
+      }>) {
+        if (event.type === "thinking_delta") {
+          thinking += event.delta ?? "";
+        }
+        if (event.type === "text_delta") {
+          text += event.delta ?? "";
+        }
+        if (event.type === "done") {
+          doneReason = event.reason;
+        }
+      }
+
+      expect(capturedStreamFlag).toBe(true);
+      expect(thinking).toBe("Need a direct answer.");
+      expect(text).toBe("live-ok");
+      expect(doneReason).toBe("stop");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("does not double-count reasoning tokens and clamps uncached prompt usage at zero", () => {
     const model = {
       id: "gpt-5",
@@ -617,7 +764,7 @@ describe("openai transport stream", () => {
       maxTokens: 8192,
     } satisfies Model<"openai-completions">;
 
-    expect(
+    expectRecordFields(
       parseTransportChunkUsage(
         {
           prompt_tokens: 10,
@@ -628,14 +775,15 @@ describe("openai transport stream", () => {
         },
         model,
       ),
-    ).toMatchObject({
-      input: 7,
-      output: 20,
-      cacheRead: 3,
-      totalTokens: 30,
-    });
+      {
+        input: 7,
+        output: 20,
+        cacheRead: 3,
+        totalTokens: 30,
+      },
+    );
 
-    expect(
+    expectRecordFields(
       parseTransportChunkUsage(
         {
           prompt_tokens: 2,
@@ -645,12 +793,13 @@ describe("openai transport stream", () => {
         },
         model,
       ),
-    ).toMatchObject({
-      input: 0,
-      output: 5,
-      cacheRead: 4,
-      totalTokens: 9,
-    });
+      {
+        input: 0,
+        output: 5,
+        cacheRead: 4,
+        totalTokens: 9,
+      },
+    );
   });
 
   it("records usage from OpenAI-compatible streaming usage chunks", async () => {
@@ -716,7 +865,7 @@ describe("openai transport stream", () => {
 
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
-    expect(output.usage).toMatchObject({
+    expectRecordFields(output.usage, {
       input: 8,
       output: 10,
       cacheRead: 0,
@@ -781,6 +930,252 @@ describe("openai transport stream", () => {
     expect(output.stopReason).toBe("stop");
   });
 
+  it("filters DeepSeek DSML content without disturbing native tool calls", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await __testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "before <｜DSML｜tool_use_error>body</｜DSML｜tool_use_error> after",
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-dsml",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "<|DSML|tool_calls>shadow</|DSML|tool_calls>",
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_native_1",
+                    type: "function",
+                    function: { name: "read", arguments: '{"path":"/tmp/native.md"}' },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: "tool_calls",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(output.content).toEqual([
+      { type: "text", text: "before  after" },
+      {
+        type: "toolCall",
+        id: "call_native_1",
+        name: "read",
+        arguments: { path: "/tmp/native.md" },
+        partialArgs: '{"path":"/tmp/native.md"}',
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("DSML");
+  });
+
+  it("preserves DeepSeek visible content before same-chunk native tool calls", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await __testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-native-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "I'll check",
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_native_1",
+                    type: "function",
+                    function: { name: "read", arguments: '{"path":"/tmp/native.md"}' },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: "tool_calls",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toEqual([
+      { type: "text", text: "I'll check" },
+      {
+        type: "toolCall",
+        id: "call_native_1",
+        name: "read",
+        arguments: { path: "/tmp/native.md" },
+        partialArgs: '{"path":"/tmp/native.md"}',
+      },
+    ]);
+  });
+
+  it("filters DeepSeek DSML text queued after native tool calls", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await __testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-post-tool-dsml",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_native_1",
+                    type: "function",
+                    function: { name: "read", arguments: '{"path":"/tmp/native.md"}' },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: "tool_calls",
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-post-tool-dsml",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "<|DSML|tool_calls>shadow</|DSML|tool_calls> visible",
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_native_1",
+        name: "read",
+        arguments: { path: "/tmp/native.md" },
+        partialArgs: '{"path":"/tmp/native.md"}',
+      },
+      { type: "text", text: " visible" },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("DSML");
+  });
+
+  it("keeps DeepSeek DSML state across native tool-call chunks", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await __testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-split-dsml",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "before <|DSML|tool",
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_native_1",
+                    type: "function",
+                    function: { name: "read", arguments: '{"path":"/tmp/native.md"}' },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: "tool_calls",
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-split-dsml",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "_calls>shadow</|DSML|tool_calls> after",
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(output.content).toEqual([
+      { type: "text", text: "before " },
+      {
+        type: "toolCall",
+        id: "call_native_1",
+        name: "read",
+        arguments: { path: "/tmp/native.md" },
+        partialArgs: '{"path":"/tmp/native.md"}',
+      },
+      { type: "text", text: " after" },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("DSML");
+  });
+
   it("keeps OpenRouter thinking format for declared OpenRouter providers on custom proxy URLs", () => {
     const params = buildOpenAICompletionsParams(
       attachModelProviderRequestTransport(
@@ -813,11 +1208,7 @@ describe("openai transport stream", () => {
       } as never,
     );
 
-    expect(params).toMatchObject({
-      reasoning: {
-        effort: "high",
-      },
-    });
+    expect(params.reasoning).toEqual({ effort: "high" });
   });
 
   it("keeps OpenRouter thinking format for native OpenRouter hosts behind custom provider ids", () => {
@@ -852,11 +1243,7 @@ describe("openai transport stream", () => {
       } as never,
     );
 
-    expect(params).toMatchObject({
-      reasoning: {
-        effort: "high",
-      },
-    });
+    expect(params.reasoning).toEqual({ effort: "high" });
   });
 
   it("does not build OpenRouter reasoning params for Hunter Alpha when reasoning is disabled", () => {
@@ -909,7 +1296,7 @@ describe("openai transport stream", () => {
       undefined,
     ) as { input?: Array<{ role?: string }> };
 
-    expect(params.input?.[0]).toMatchObject({ role: "system" });
+    expect(params.input?.[0]?.role).toBe("system");
   });
 
   it("keeps developer role for native OpenAI reasoning responses models", () => {
@@ -934,7 +1321,7 @@ describe("openai transport stream", () => {
       undefined,
     ) as { input?: Array<{ role?: string }> };
 
-    expect(params.input?.[0]).toMatchObject({ role: "developer" });
+    expect(params.input?.[0]?.role).toBe("developer");
   });
 
   it("uses model maxTokens for Responses params when runtime maxTokens is omitted", () => {
@@ -1206,7 +1593,7 @@ describe("openai transport stream", () => {
     };
 
     const reasoningItem = params.input?.find((item) => item.type === "reasoning");
-    expect(reasoningItem).toMatchObject({
+    expectRecordFields(reasoningItem, {
       type: "reasoning",
       encrypted_content: "ciphertext",
     });
@@ -1214,14 +1601,14 @@ describe("openai transport stream", () => {
     const assistantMessage = params.input?.find(
       (item) => item.type === "message" && item.role === "assistant",
     );
-    expect(assistantMessage).toMatchObject({
+    expectRecordFields(assistantMessage, {
       type: "message",
       role: "assistant",
       phase: "commentary",
     });
     expect(assistantMessage?.id).toBeUndefined();
     const functionCall = params.input?.find((item) => item.type === "function_call");
-    expect(functionCall).toMatchObject({
+    expectRecordFields(functionCall, {
       type: "function_call",
       call_id: "call_abc",
     });
@@ -1307,14 +1694,14 @@ describe("openai transport stream", () => {
     const assistantMessage = params.input?.find(
       (item) => item.type === "message" && item.role === "assistant",
     );
-    expect(assistantMessage).toMatchObject({
+    expectRecordFields(assistantMessage, {
       type: "message",
       role: "assistant",
       id: "msg_prior",
       phase: "commentary",
     });
     const functionCall = params.input?.find((item) => item.type === "function_call");
-    expect(functionCall).toMatchObject({
+    expectRecordFields(functionCall, {
       type: "function_call",
       id: "fc_prior",
       call_id: "call_abc",
@@ -1689,7 +2076,7 @@ describe("openai transport stream", () => {
     };
 
     const assistantItem = params.input?.find((item) => item.role === "assistant");
-    expect(assistantItem).toMatchObject({
+    expectRecordFields(assistantItem, {
       role: "assistant",
       phase: "commentary",
     });
@@ -1754,7 +2141,7 @@ describe("openai transport stream", () => {
     ) as { tools?: Array<{ strict?: boolean }> };
 
     expect(params.tools?.[0]?.strict).toBe(true);
-    expect(params.tools?.[0]).toMatchObject({
+    expectRecordFields(params.tools?.[0], {
       parameters: {
         type: "object",
         properties: {},
@@ -1860,7 +2247,7 @@ describe("openai transport stream", () => {
     ) as { tools?: Array<{ strict?: boolean; parameters?: Record<string, unknown> }> };
 
     expect(params.tools?.[0]).not.toHaveProperty("strict");
-    expect(params.tools?.[0]?.parameters).toMatchObject({
+    expectRecordFields(params.tools?.[0]?.parameters, {
       type: "object",
       properties: {},
     });
@@ -1898,7 +2285,7 @@ describe("openai transport stream", () => {
     ) as { tools?: Array<{ strict?: boolean; parameters?: Record<string, unknown> }> };
 
     expect(params.tools?.[0]?.strict).toBe(false);
-    expect(params.tools?.[0]?.parameters).toMatchObject({
+    expectRecordFields(params.tools?.[0]?.parameters, {
       type: "object",
       properties: { path: { type: "string" } },
       required: [],
@@ -1933,7 +2320,7 @@ describe("openai transport stream", () => {
       },
     ) as { metadata?: Record<string, string> };
 
-    expect(params.metadata).toMatchObject({
+    expectRecordFields(params.metadata, {
       openclaw_session_id: "session-123",
       openclaw_turn_id: "turn-123",
       openclaw_turn_attempt: "1",
@@ -2065,7 +2452,7 @@ describe("openai transport stream", () => {
       undefined,
     ) as { input?: Array<{ role?: string }> };
 
-    expect(params.input?.[0]).toMatchObject({ role: "system" });
+    expect(params.input?.[0]?.role).toBe("system");
   });
 
   it("uses system role for Moonshot default-route completions providers", () => {
@@ -2090,7 +2477,7 @@ describe("openai transport stream", () => {
       undefined,
     ) as { messages?: Array<{ role?: string }> };
 
-    expect(params.messages?.[0]).toMatchObject({ role: "system" });
+    expect(params.messages?.[0]?.role).toBe("system");
   });
 
   it("strips the internal cache boundary from OpenAI completions system prompts", () => {
@@ -2227,14 +2614,10 @@ describe("openai transport stream", () => {
       } as never,
     ) as { reasoning_effort?: unknown; tools?: unknown };
 
-    expect(params.tools).toEqual([
-      expect.objectContaining({
-        type: "function",
-        function: expect.objectContaining({
-          name: "lookup_weather",
-        }),
-      }),
-    ]);
+    expect(params.tools).toHaveLength(1);
+    const tool = (params.tools as Array<Record<string, unknown>>)[0];
+    expectRecordFields(tool, { type: "function" });
+    expectRecordFields(tool.function, { name: "lookup_weather" });
     expect(params).not.toHaveProperty("reasoning_effort");
   });
 
@@ -2306,6 +2689,72 @@ describe("openai transport stream", () => {
     expect(disabled.reasoning_effort).toBe("none");
   });
 
+  it("maps qwen thinking format to top-level enable_thinking", () => {
+    const baseModel = {
+      id: "qwen3.5-32b",
+      name: "Qwen 3.5 32B",
+      api: "openai-completions",
+      provider: "llama-cpp",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+      compat: {
+        thinkingFormat: "qwen",
+      },
+    } as unknown as Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+
+    const enabled = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "medium",
+    } as never) as { enable_thinking?: unknown; reasoning_effort?: unknown };
+    const disabled = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "off",
+    } as never) as { enable_thinking?: unknown; reasoning_effort?: unknown };
+
+    expect(enabled.enable_thinking).toBe(true);
+    expect(disabled.enable_thinking).toBe(false);
+    expect(enabled).not.toHaveProperty("reasoning_effort");
+    expect(disabled).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("maps qwen-chat-template thinking format to chat_template_kwargs", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "qwen3.5-32b",
+        name: "Qwen 3.5 32B",
+        api: "openai-completions",
+        provider: "llama-cpp",
+        baseUrl: "http://127.0.0.1:8080/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+        compat: {
+          thinkingFormat: "qwen-chat-template",
+        },
+      } as unknown as Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "off",
+      } as never,
+    ) as { chat_template_kwargs?: Record<string, unknown>; reasoning_effort?: unknown };
+
+    expect(params.chat_template_kwargs).toEqual({ enable_thinking: false });
+    expect(params).not.toHaveProperty("reasoning_effort");
+  });
+
   it("omits unsupported disabled reasoning for completions providers", () => {
     const params = buildOpenAICompletionsParams(
       {
@@ -2362,8 +2811,8 @@ describe("openai transport stream", () => {
       stream_options?: { include_usage?: boolean };
     };
 
-    expect(params.messages?.[0]).toMatchObject({ role: "system" });
-    expect(params.stream_options).toMatchObject({ include_usage: true });
+    expect(params.messages?.[0]?.role).toBe("system");
+    expect(params.stream_options?.include_usage).toBe(true);
   });
 
   it("enables streaming usage compat for generic providers on native DashScope endpoints", () => {
@@ -2390,7 +2839,7 @@ describe("openai transport stream", () => {
       stream_options?: { include_usage?: boolean };
     };
 
-    expect(params.stream_options).toMatchObject({ include_usage: true });
+    expect(params.stream_options?.include_usage).toBe(true);
   });
 
   it("honors explicit streaming usage compat for configured custom providers", () => {
@@ -2418,7 +2867,7 @@ describe("openai transport stream", () => {
       stream_options?: { include_usage?: boolean };
     };
 
-    expect(params.stream_options).toMatchObject({ include_usage: true });
+    expect(params.stream_options?.include_usage).toBe(true);
   });
 
   it("always includes stream_options.include_usage for known local backends like llama-cpp", () => {
@@ -2545,9 +2994,9 @@ describe("openai transport stream", () => {
       tools?: Array<{ function?: { strict?: boolean } }>;
     };
 
-    expect(params.messages?.[0]).toMatchObject({ role: "system" });
+    expect(params.messages?.[0]?.role).toBe("system");
     expect(params).not.toHaveProperty("reasoning_effort");
-    expect(params.stream_options).toMatchObject({ include_usage: true });
+    expect(params.stream_options).toEqual({ include_usage: true });
     expect(params).not.toHaveProperty("store");
     expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
   });
@@ -2583,8 +3032,8 @@ describe("openai transport stream", () => {
       undefined,
     ) as { messages?: Array<{ role?: string; content?: unknown }> };
 
-    expect(params.messages?.[0]).toMatchObject({ role: "system", content: "system" });
-    expect(params.messages?.[1]).toMatchObject({ role: "user", content: "What is 2 + 2?" });
+    expect(params.messages?.[0]).toEqual({ role: "system", content: "system" });
+    expect(params.messages?.[1]).toEqual({ role: "user", content: "What is 2 + 2?" });
   });
 
   it("uses max_tokens for Chutes default-route completions providers without relying on baseUrl host sniffing", () => {
@@ -2892,7 +3341,7 @@ describe("openai transport stream", () => {
         push() {},
       });
 
-      expect(output.content[0]).toMatchObject({
+      expectRecordFields(output.content[0], {
         type: "toolCall",
         id: "call_abc",
         name: "echo_value",
@@ -3105,9 +3554,7 @@ describe("openai transport stream", () => {
       } as never,
     );
 
-    expect(params).toMatchObject({
-      max_tokens: 2048,
-    });
+    expect(params.max_tokens).toBe(2048);
     expect(params).not.toHaveProperty("max_completion_tokens");
     expect(params).not.toHaveProperty("store");
     expect(params).not.toHaveProperty("reasoning_effort");
@@ -3138,9 +3585,7 @@ describe("openai transport stream", () => {
       } as never,
     );
 
-    expect(params).toMatchObject({
-      max_tokens: 2048,
-    });
+    expect(params.max_tokens).toBe(2048);
     expect(params).not.toHaveProperty("max_completion_tokens");
     expect(params).not.toHaveProperty("store");
     expect(params).not.toHaveProperty("reasoning_effort");
@@ -3196,7 +3641,7 @@ describe("openai transport stream", () => {
     };
 
     const functionCall = params.input?.find((item) => item.type === "function_call");
-    expect(functionCall).toMatchObject({
+    expectRecordFields(functionCall, {
       type: "function_call",
       arguments: "not valid json",
     });
@@ -3651,10 +4096,18 @@ describe("openai transport stream", () => {
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("toolUse");
-    expect(output.content).toMatchObject([
-      { type: "thinking", thinking: "Need a tool.", thinkingSignature: "reasoning_details" },
-      { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "qwen3" } },
-    ]);
+    expect(output.content).toHaveLength(2);
+    expectRecordFields(output.content[0], {
+      type: "thinking",
+      thinking: "Need a tool.",
+      thinkingSignature: "reasoning_details",
+    });
+    expectRecordFields(output.content[1], {
+      type: "toolCall",
+      id: "call_1",
+      name: "lookup",
+      arguments: { query: "qwen3" },
+    });
   });
 
   it("treats singular tool_call finish_reason as tool use", async () => {
@@ -3739,9 +4192,10 @@ describe("openai transport stream", () => {
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("toolUse");
-    expect(output.content).toContainEqual(
-      expect.objectContaining({ type: "toolCall", id: "call_1", name: "lookup" }),
+    const toolCall = (output.content as Array<{ type?: string }>).find(
+      (item) => item.type === "toolCall",
     );
+    expectRecordFields(toolCall, { type: "toolCall", id: "call_1", name: "lookup" });
   });
 
   it("keeps streamed tool call arguments intact when reasoning_details repeats", async () => {
@@ -3844,11 +4298,19 @@ describe("openai transport stream", () => {
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("toolUse");
-    expect(output.content).toMatchObject([
-      { type: "thinking", thinking: "Need a tool." },
-      { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "qwen3" } },
-      { type: "thinking", thinking: " Still thinking.", thinkingSignature: "reasoning_details" },
-    ]);
+    expect(output.content).toHaveLength(3);
+    expectRecordFields(output.content[0], { type: "thinking", thinking: "Need a tool." });
+    expectRecordFields(output.content[1], {
+      type: "toolCall",
+      id: "call_1",
+      name: "lookup",
+      arguments: { query: "qwen3" },
+    });
+    expectRecordFields(output.content[2], {
+      type: "thinking",
+      thinking: " Still thinking.",
+      thinkingSignature: "reasoning_details",
+    });
   });
 
   it("surfaces visible OpenRouter response text from reasoning_details without dropping tools", async () => {
@@ -3933,15 +4395,19 @@ describe("openai transport stream", () => {
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("toolUse");
-    expect(output.content).toMatchObject([
-      {
-        type: "thinking",
-        thinking: "Need to look something up.",
-        thinkingSignature: "reasoning_details",
-      },
-      { type: "text", text: "Working on it." },
-      { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "weather" } },
-    ]);
+    expect(output.content).toHaveLength(3);
+    expectRecordFields(output.content[0], {
+      type: "thinking",
+      thinking: "Need to look something up.",
+      thinkingSignature: "reasoning_details",
+    });
+    expectRecordFields(output.content[1], { type: "text", text: "Working on it." });
+    expectRecordFields(output.content[2], {
+      type: "toolCall",
+      id: "call_1",
+      name: "lookup",
+      arguments: { query: "weather" },
+    });
   });
 
   it("does not surface ambiguous reasoning_details text without explicit compat opt-in", async () => {
@@ -4018,13 +4484,12 @@ describe("openai transport stream", () => {
 
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
-    expect(output.content).toMatchObject([
-      {
-        type: "thinking",
-        thinking: "Internal thought.",
-        thinkingSignature: "reasoning_details",
-      },
-    ]);
+    expect(output.content).toHaveLength(1);
+    expectRecordFields(output.content[0], {
+      type: "thinking",
+      thinking: "Internal thought.",
+      thinkingSignature: "reasoning_details",
+    });
   });
 
   it("preserves reasoning_details item order when visible text and thinking are interleaved", async () => {
@@ -4090,15 +4555,14 @@ describe("openai transport stream", () => {
 
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
-    expect(output.content).toMatchObject([
-      { type: "text", text: "Visible first." },
-      {
-        type: "thinking",
-        thinking: " Hidden second.",
-        thinkingSignature: "reasoning_details",
-      },
-      { type: "text", text: " Visible third." },
-    ]);
+    expect(output.content).toHaveLength(3);
+    expectRecordFields(output.content[0], { type: "text", text: "Visible first." });
+    expectRecordFields(output.content[1], {
+      type: "thinking",
+      thinking: " Hidden second.",
+      thinkingSignature: "reasoning_details",
+    });
+    expectRecordFields(output.content[2], { type: "text", text: " Visible third." });
   });
 
   it("does not duplicate fallback reasoning fields when reasoning_details already provided thinking", async () => {
@@ -4161,13 +4625,12 @@ describe("openai transport stream", () => {
 
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
-    expect(output.content).toMatchObject([
-      {
-        type: "thinking",
-        thinking: "Primary reasoning.",
-        thinkingSignature: "reasoning_details",
-      },
-    ]);
+    expect(output.content).toHaveLength(1);
+    expectRecordFields(output.content[0], {
+      type: "thinking",
+      thinking: "Primary reasoning.",
+      thinkingSignature: "reasoning_details",
+    });
   });
 
   it("keeps fallback thinking when reasoning_details only carries visible text", async () => {
@@ -4230,14 +4693,13 @@ describe("openai transport stream", () => {
 
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
-    expect(output.content).toMatchObject([
-      { type: "text", text: "Visible answer." },
-      {
-        type: "thinking",
-        thinking: "Hidden fallback reasoning.",
-        thinkingSignature: "reasoning",
-      },
-    ]);
+    expect(output.content).toHaveLength(2);
+    expectRecordFields(output.content[0], { type: "text", text: "Visible answer." });
+    expectRecordFields(output.content[1], {
+      type: "thinking",
+      thinking: "Hidden fallback reasoning.",
+      thinkingSignature: "reasoning",
+    });
   });
 
   it("keeps a streaming tool call intact when visible reasoning text arrives mid-call", async () => {
@@ -4339,10 +4801,14 @@ describe("openai transport stream", () => {
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("toolUse");
-    expect(output.content).toMatchObject([
-      { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "weather" } },
-      { type: "text", text: "Working on it." },
-    ]);
+    expect(output.content).toHaveLength(2);
+    expectRecordFields(output.content[0], {
+      type: "toolCall",
+      id: "call_1",
+      name: "lookup",
+      arguments: { query: "weather" },
+    });
+    expectRecordFields(output.content[1], { type: "text", text: "Working on it." });
   });
 
   it("keeps a streaming tool call intact when visible reasoning text arrives between chunks", async () => {
@@ -4457,10 +4923,14 @@ describe("openai transport stream", () => {
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("toolUse");
-    expect(output.content).toMatchObject([
-      { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "weather" } },
-      { type: "text", text: "Working on it." },
-    ]);
+    expect(output.content).toHaveLength(2);
+    expectRecordFields(output.content[0], {
+      type: "toolCall",
+      id: "call_1",
+      name: "lookup",
+      arguments: { query: "weather" },
+    });
+    expectRecordFields(output.content[1], { type: "text", text: "Working on it." });
   });
 
   it("fails fast when post-tool-call buffering grows beyond the safety cap", async () => {

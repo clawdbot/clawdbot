@@ -25,7 +25,11 @@ import { setBridgeLogger } from "./logger.js";
 import { toGatewayAccount } from "./narrowing.js";
 import { resolveQQBotPluginVersion } from "./plugin-version.js";
 import { getQQBotRuntime, getQQBotRuntimeForEngine } from "./runtime.js";
-import { createSdkHistoryAdapter, createSdkMentionGateAdapter } from "./sdk-adapter.js";
+import {
+  createSdkAccessAdapter,
+  createSdkHistoryAdapter,
+  createSdkMentionGateAdapter,
+} from "./sdk-adapter.js";
 
 // ---- One-time startup initialization (module-level) ----
 
@@ -75,6 +79,7 @@ function createEngineAdapters(_runtime: GatewayPluginRuntime): EngineAdapters {
   return {
     history: createSdkHistoryAdapter(),
     mentionGate: createSdkMentionGateAdapter(),
+    access: createSdkAccessAdapter(),
     audioConvert: {
       convertSilkToWav: _audioModule.convertSilkToWav,
       isVoiceAttachment: _audioModule.isVoiceAttachment,

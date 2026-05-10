@@ -10,6 +10,7 @@ import { loadSessionStore } from "./store-load.js";
 import {
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreTargetsSync,
+  resolveSessionStoreTargets,
 } from "./targets.js";
 import type { SessionEntry } from "./types.js";
 
@@ -59,7 +60,7 @@ function mergeSessionEntryIntoCombined(params: {
 
 export function loadCombinedSessionStoreForGateway(
   cfg: OpenClawConfig,
-  opts: { agentId?: string } = {},
+  opts: { agentId?: string; configuredAgentsOnly?: boolean } = {},
 ): {
   storePath: string;
   store: Record<string, SessionEntry>;
@@ -93,7 +94,9 @@ export function loadCombinedSessionStoreForGateway(
       : undefined;
   const targets = requestedAgentId
     ? resolveAgentSessionStoreTargetsSync(cfg, requestedAgentId)
-    : resolveAllAgentSessionStoreTargetsSync(cfg);
+    : opts.configuredAgentsOnly === true
+      ? resolveSessionStoreTargets(cfg, { allAgents: true })
+      : resolveAllAgentSessionStoreTargetsSync(cfg);
   const combined: Record<string, SessionEntry> = {};
   for (const target of targets) {
     const agentId = target.agentId;

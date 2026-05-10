@@ -106,6 +106,7 @@ Set plugin-wide defaults in `~/.openclaw/openclaw.json`:
             fileScale: 2,
             fileMaxWidth: 960,
             mode: "both",
+            ttlSeconds: 21600,
           },
         },
       },
@@ -120,6 +121,7 @@ Security options:
 
 - `security.allowRemoteViewer` (default `false`): allows non-loopback access to `/plugins/diffs/view/...` token URLs
 - `viewerBaseUrl` (optional): persistent viewer-link origin/path fallback for shareable URLs
+- `defaults.ttlSeconds` (default `1800`, max `21600`): default artifact lifetime for viewer and standalone file outputs
 
 Example:
 

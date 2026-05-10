@@ -85,6 +85,8 @@ export async function transcodeAudioBufferToOpus(params: {
               String(params.sampleRateHz ?? DEFAULT_OPUS_SAMPLE_RATE_HZ),
               "-ac",
               String(params.channels ?? DEFAULT_OPUS_CHANNELS),
+              "-f",
+              "opus",
               outputPath,
             ],
             { timeoutMs: params.timeoutMs },

@@ -118,17 +118,15 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     const result = await runCliAgent({ ...baseRunParams, trigger: "cron", jobId: "cron-job-123" });
 
     expect(runBeforeAgentReplyMock).toHaveBeenCalledTimes(1);
-    expect(runBeforeAgentReplyMock).toHaveBeenCalledWith(
-      { cleanedBody: baseRunParams.prompt },
-      expect.objectContaining({
-        jobId: "cron-job-123",
-        agentId: baseRunParams.agentId,
-        sessionId: baseRunParams.sessionId,
-        sessionKey: baseRunParams.sessionKey,
-        workspaceDir: baseRunParams.workspaceDir,
-        trigger: "cron",
-      }),
-    );
+    const [event, context] = runBeforeAgentReplyMock.mock.calls[0] ?? [];
+    expect(event).toEqual({ cleanedBody: baseRunParams.prompt });
+    const hookContext = context as Record<string, unknown> | undefined;
+    expect(hookContext?.jobId).toBe("cron-job-123");
+    expect(hookContext?.agentId).toBe(baseRunParams.agentId);
+    expect(hookContext?.sessionId).toBe(baseRunParams.sessionId);
+    expect(hookContext?.sessionKey).toBe(baseRunParams.sessionKey);
+    expect(hookContext?.workspaceDir).toBe(baseRunParams.workspaceDir);
+    expect(hookContext?.trigger).toBe("cron");
     expect(executePreparedCliRunMock).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.text).toBe("dreaming claimed via cli runner");
   });

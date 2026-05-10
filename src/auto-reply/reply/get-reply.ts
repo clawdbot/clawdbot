@@ -43,7 +43,10 @@ import { hasInboundMedia } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState } from "./model-selection.js";
 import { initSessionState } from "./session.js";
-import { resolveStoredModelOverride } from "./stored-model-override.js";
+import {
+  isStaleHeartbeatAutoFallbackOverride,
+  resolveStoredModelOverride,
+} from "./stored-model-override.js";
 import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
@@ -432,6 +435,16 @@ export async function getReplyFromConfig(
         parentSessionKey: sessionCtx.ModelParentSessionKey ?? sessionCtx.ParentSessionKey,
       })
     : null;
+  const resolvedChannelModelOverride =
+    channelModelOverride && !hasResolvedHeartbeatModelOverride
+      ? resolveModelRefFromString({
+          raw: channelModelOverride.model,
+          defaultProvider,
+          aliasIndex,
+        })
+      : null;
+  const primaryProvider = resolvedChannelModelOverride?.ref.provider ?? defaultProvider;
+  const primaryModel = resolvedChannelModelOverride?.ref.model ?? defaultModel;
   const hasSessionModelOverride = Boolean(
     normalizeOptionalString(sessionEntry.modelOverride) ||
     normalizeOptionalString(sessionEntry.providerOverride),
@@ -446,20 +459,33 @@ export async function getReplyFromConfig(
       sessionCtx.ParentSessionKey,
     defaultProvider,
   });
-  if (storedModelOverride?.model && !hasResolvedHeartbeatModelOverride) {
+  const staleHeartbeatAutoFallbackOverride = isStaleHeartbeatAutoFallbackOverride({
+    isHeartbeat: opts?.isHeartbeat === true,
+    hasResolvedHeartbeatModelOverride,
+    sessionEntry,
+    storedOverride: storedModelOverride,
+    defaultProvider,
+    defaultModel,
+    primaryProvider,
+    primaryModel,
+  });
+  if (
+    storedModelOverride?.model &&
+    !hasResolvedHeartbeatModelOverride &&
+    !staleHeartbeatAutoFallbackOverride
+  ) {
     provider = storedModelOverride.provider ?? defaultProvider;
     model = storedModelOverride.model;
   }
-  if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && channelModelOverride) {
-    const resolved = resolveModelRefFromString({
-      raw: channelModelOverride.model,
-      defaultProvider,
-      aliasIndex,
-    });
-    if (resolved) {
-      provider = resolved.ref.provider;
-      model = resolved.ref.model;
-    }
+  const hasEffectiveSessionModelOverride =
+    hasSessionModelOverride && !staleHeartbeatAutoFallbackOverride;
+  if (
+    !hasResolvedHeartbeatModelOverride &&
+    !hasEffectiveSessionModelOverride &&
+    resolvedChannelModelOverride
+  ) {
+    provider = resolvedChannelModelOverride.ref.provider;
+    model = resolvedChannelModelOverride.ref.model;
   }
 
   if (
@@ -560,6 +586,8 @@ export async function getReplyFromConfig(
       commandAuthorized,
       defaultProvider,
       defaultModel,
+      primaryProvider,
+      primaryModel,
       aliasIndex,
       provider,
       model,

@@ -4,7 +4,13 @@ import { describe, expect, it } from "vitest";
 import { createTempHomeEnv } from "./temp-home.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected ${targetPath} to be removed`);
 }
 
 describe("createTempHomeEnv", () => {

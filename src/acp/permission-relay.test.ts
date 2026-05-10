@@ -123,7 +123,11 @@ describe("ACP permission relay helpers", () => {
         id: "approval-raw",
         request: { command: "" },
       }),
-    ).toMatchObject({ approvalId: "approval-raw" });
+    ).toEqual({
+      approvalId: "approval-raw",
+      command: undefined,
+      host: undefined,
+    });
   });
 
   it("maps selected ACP outcomes back to Gateway decisions", () => {

@@ -145,12 +145,10 @@ describe("promptCustomApiConfig", () => {
 
     await runPromptCustomApi(prompter);
 
-    expect(prompter.text).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "API Base URL",
-        initialValue: undefined,
-      }),
+    const apiBaseUrlCall = prompter.text.mock.calls.find(
+      ([options]) => options.message === "API Base URL",
     );
+    expect(apiBaseUrlCall?.[0].initialValue).toBeUndefined();
   });
 
   it("retries when verification fails", async () => {

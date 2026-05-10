@@ -11,6 +11,7 @@ import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomeInString } from "../utils.js";
+import { formatMissingPluginMessage } from "./error-format.js";
 import type { PluginInspectOptions } from "./plugins-inspect-command.js";
 import type { PluginsListOptions } from "./plugins-list-command.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
@@ -58,9 +59,7 @@ function formatRegistryState(state: "missing" | "fresh" | "stale"): string {
 }
 
 function reportMissingPlugin(id: string) {
-  defaultRuntime.error(
-    `Plugin not found: ${id}. Run \`openclaw plugins list\` to see installed plugins.`,
-  );
+  defaultRuntime.error(formatMissingPluginMessage({ id, includeSearch: true }));
   return defaultRuntime.exit(1);
 }
 

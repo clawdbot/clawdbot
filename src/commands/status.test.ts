@@ -788,6 +788,10 @@ vi.mock("./status-runtime-shared.ts", () => ({
   ),
 }));
 
+import {
+  resolveStatusRuntimeSnapshot,
+  resolveStatusUsageSummary,
+} from "./status-runtime-shared.ts";
 import { resolvePairingRecoveryContext, statusCommand } from "./status.command.js";
 
 const runtime = {
@@ -1018,6 +1022,37 @@ describe("statusCommand", () => {
         includeChannelSecurity: true,
       }),
     );
+  });
+
+  it("scopes usage resolution to the scanned config", async () => {
+    const snapshotMock = resolveStatusRuntimeSnapshot as Mock;
+    const usageMock = resolveStatusUsageSummary as Mock;
+    snapshotMock.mockClear();
+    usageMock.mockClear();
+
+    await statusCommand({ usage: true, timeoutMs: 1234 }, runtime as never);
+
+    const params = snapshotMock.mock.calls.at(-1)?.[0] as
+      | {
+          config: unknown;
+          timeoutMs?: number;
+          usage?: boolean;
+          resolveUsage?: (input: { config: unknown; timeoutMs?: number }) => Promise<unknown>;
+        }
+      | undefined;
+    expect(params).toBeDefined();
+    expect(params).toMatchObject({ usage: true, timeoutMs: 1234 });
+    if (!params?.resolveUsage) {
+      throw new Error("missing status usage resolver");
+    }
+    await params.resolveUsage({
+      timeoutMs: 1234,
+      config: params.config,
+    });
+    expect(usageMock).toHaveBeenCalledWith({
+      timeoutMs: 1234,
+      config: params?.config,
+    });
   });
 
   it("keeps default text status off the security audit path", async () => {

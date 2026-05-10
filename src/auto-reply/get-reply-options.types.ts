@@ -31,6 +31,11 @@ export type ReplyThreadingPolicy = {
 
 export type SourceReplyDeliveryMode = "automatic" | "message_tool_only";
 
+export type PartialReplyPayload = Pick<ReplyPayload, "text" | "mediaUrls"> & {
+  delta?: string;
+  replace?: true;
+};
+
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
@@ -53,6 +58,10 @@ export type GetReplyOptions = {
   suppressTyping?: boolean;
   /** Resolved heartbeat model override (provider/model string from merged per-agent config). */
   heartbeatModelOverride?: string;
+  /** One-shot thinking level override for this run; does not persist to the session. */
+  thinkingLevelOverride?: string;
+  /** One-shot fast-mode override for this run; does not persist to the session. */
+  fastModeOverride?: boolean;
   /** Controls bootstrap workspace context injection (default: full). */
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, suppress tool error warning payloads for this run. */
@@ -68,7 +77,7 @@ export type GetReplyOptions = {
    * channel to surface progress via its own streaming/edit UX.
    */
   suppressDefaultToolProgressMessages?: boolean;
-  onPartialReply?: (payload: ReplyPayload) => Promise<void> | void;
+  onPartialReply?: (payload: PartialReplyPayload) => Promise<void> | void;
   onReasoningStream?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a thinking/reasoning block ends. */
   onReasoningEnd?: () => Promise<void> | void;

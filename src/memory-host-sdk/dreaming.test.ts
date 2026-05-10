@@ -47,15 +47,13 @@ describe("memory dreaming host helpers", () => {
       mode: "both",
       separateReports: true,
     });
-    expect(resolved.phases.deep).toMatchObject({
-      cron: "0 */4 * * *",
-      limit: 5,
-      minScore: 0.9,
-      minRecallCount: 4,
-      minUniqueQueries: 2,
-      recencyHalfLifeDays: 21,
-      maxAgeDays: 30,
-    });
+    expect(resolved.phases.deep.cron).toBe("0 */4 * * *");
+    expect(resolved.phases.deep.limit).toBe(5);
+    expect(resolved.phases.deep.minScore).toBe(0.9);
+    expect(resolved.phases.deep.minRecallCount).toBe(4);
+    expect(resolved.phases.deep.minUniqueQueries).toBe(2);
+    expect(resolved.phases.deep.recencyHalfLifeDays).toBe(21);
+    expect(resolved.phases.deep.maxAgeDays).toBe(30);
   });
 
   it("lets execution defaults and phase execution override the top-level dreaming model", () => {
@@ -102,13 +100,11 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.enabled).toBe(false);
     expect(resolved.frequency).toBe("0 3 * * *");
     expect(resolved.timezone).toBe("America/Los_Angeles");
-    expect(resolved.phases.deep).toMatchObject({
-      cron: "0 3 * * *",
-      limit: 10,
-      minScore: 0.8,
-      recencyHalfLifeDays: 14,
-      maxAgeDays: 30,
-    });
+    expect(resolved.phases.deep.cron).toBe("0 3 * * *");
+    expect(resolved.phases.deep.limit).toBe(10);
+    expect(resolved.phases.deep.minScore).toBe(0.8);
+    expect(resolved.phases.deep.recencyHalfLifeDays).toBe(14);
+    expect(resolved.phases.deep.maxAgeDays).toBe(30);
   });
 
   it("defaults storage mode to separate so phase blocks do not pollute daily memory files", () => {

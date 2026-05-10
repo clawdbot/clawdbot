@@ -34,6 +34,19 @@ beforeEach(() => {
   callGatewayMock.mockReset();
 });
 
+function expectResolvedSessionReference(
+  result: Awaited<ReturnType<typeof resolveSessionReference>>,
+  expected: { key: string; displayKey: string; resolvedViaSessionId: boolean },
+) {
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    throw new Error("Expected resolved session reference");
+  }
+  expect(result.key).toBe(expected.key);
+  expect(result.displayKey).toBe(expected.displayKey);
+  expect(result.resolvedViaSessionId).toBe(expected.resolvedViaSessionId);
+}
+
 describe("resolveMainSessionAlias", () => {
   it("uses normalized main key and global alias for global scope", () => {
     const cfg = {
@@ -236,16 +249,14 @@ describe("resolveSessionReference", () => {
   it("prefers a literal current session key before alias fallback", async () => {
     callGatewayMock.mockResolvedValueOnce({ key: "current" });
 
-    await expect(
-      resolveSessionReference({
-        sessionKey: "current",
-        alias: "main",
-        mainKey: "main",
-        requesterInternalKey: "agent:main:subagent:child",
-        restrictToSpawned: false,
-      }),
-    ).resolves.toMatchObject({
-      ok: true,
+    const result = await resolveSessionReference({
+      sessionKey: "current",
+      alias: "main",
+      mainKey: "main",
+      requesterInternalKey: "agent:main:subagent:child",
+      restrictToSpawned: false,
+    });
+    expectResolvedSessionReference(result, {
       key: "current",
       displayKey: "current",
       resolvedViaSessionId: false,
@@ -263,16 +274,14 @@ describe("resolveSessionReference", () => {
     callGatewayMock.mockResolvedValueOnce({});
     callGatewayMock.mockResolvedValueOnce({ key: "agent:ops:main" });
 
-    await expect(
-      resolveSessionReference({
-        sessionKey: "current",
-        alias: "main",
-        mainKey: "main",
-        requesterInternalKey: "agent:main:subagent:child",
-        restrictToSpawned: false,
-      }),
-    ).resolves.toMatchObject({
-      ok: true,
+    const result = await resolveSessionReference({
+      sessionKey: "current",
+      alias: "main",
+      mainKey: "main",
+      requesterInternalKey: "agent:main:subagent:child",
+      restrictToSpawned: false,
+    });
+    expectResolvedSessionReference(result, {
       key: "agent:ops:main",
       displayKey: "agent:ops:main",
       resolvedViaSessionId: true,
@@ -296,16 +305,14 @@ describe("resolveSessionReference", () => {
   });
 
   it("skips literal current key lookup when spawned visibility is restricted", async () => {
-    await expect(
-      resolveSessionReference({
-        sessionKey: "current",
-        alias: "main",
-        mainKey: "main",
-        requesterInternalKey: "agent:main:subagent:child",
-        restrictToSpawned: true,
-      }),
-    ).resolves.toMatchObject({
-      ok: true,
+    const result = await resolveSessionReference({
+      sessionKey: "current",
+      alias: "main",
+      mainKey: "main",
+      requesterInternalKey: "agent:main:subagent:child",
+      restrictToSpawned: true,
+    });
+    expectResolvedSessionReference(result, {
       key: "agent:main:subagent:child",
       displayKey: "agent:main:subagent:child",
       resolvedViaSessionId: false,
@@ -323,16 +330,14 @@ describe("resolveSessionReference", () => {
   });
 
   it("treats the TUI client label as the requester session", async () => {
-    await expect(
-      resolveSessionReference({
-        sessionKey: "openclaw-tui",
-        alias: "main",
-        mainKey: "main",
-        requesterInternalKey: "agent:main:main",
-        restrictToSpawned: false,
-      }),
-    ).resolves.toMatchObject({
-      ok: true,
+    const result = await resolveSessionReference({
+      sessionKey: "openclaw-tui",
+      alias: "main",
+      mainKey: "main",
+      requesterInternalKey: "agent:main:main",
+      restrictToSpawned: false,
+    });
+    expectResolvedSessionReference(result, {
       key: "agent:main:main",
       displayKey: "agent:main:main",
       resolvedViaSessionId: false,

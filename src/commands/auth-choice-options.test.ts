@@ -263,25 +263,26 @@ describe("buildAuthChoiceOptions", () => {
     ]);
     const options = getOptions();
 
-    expect(options.map((option) => option.value)).toEqual(
-      expect.arrayContaining([
-        "github-copilot",
-        "zai-api-key",
-        "xiaomi-api-key",
-        "minimax-global-api",
-        "moonshot-api-key",
-        "together-api-key",
-        "chutes",
-        "xai-api-key",
-        "mistral-api-key",
-        "volcengine-api-key",
-        "byteplus-api-key",
-        "vllm",
-        "opencode-go",
-        "ollama",
-        "sglang",
-      ]),
-    );
+    const optionValues = options.map((option) => option.value);
+    for (const expectedValue of [
+      "github-copilot",
+      "zai-api-key",
+      "xiaomi-api-key",
+      "minimax-global-api",
+      "moonshot-api-key",
+      "together-api-key",
+      "chutes",
+      "xai-api-key",
+      "mistral-api-key",
+      "volcengine-api-key",
+      "byteplus-api-key",
+      "vllm",
+      "opencode-go",
+      "ollama",
+      "sglang",
+    ]) {
+      expect(optionValues).toContain(expectedValue);
+    }
   });
 
   it("builds cli help choices from the same runtime catalog", () => {
@@ -519,9 +520,9 @@ describe("buildAuthChoiceOptions", () => {
     });
     const openCodeGroup = requireChoiceGroup(groups, "opencode");
 
-    expect(openCodeGroup.options.map((option) => option.value)).toEqual(
-      expect.arrayContaining(["opencode-zen", "opencode-go"]),
-    );
+    const openCodeValues = openCodeGroup.options.map((option) => option.value);
+    expect(openCodeValues).toContain("opencode-zen");
+    expect(openCodeValues).toContain("opencode-go");
   });
 
   it("hides image-generation-only providers from the interactive auth picker", () => {
@@ -565,7 +566,8 @@ describe("buildAuthChoiceOptions", () => {
     const options = getOptions();
     const optionValues = options.map((option) => option.value);
 
-    expect(optionValues).toEqual(expect.arrayContaining(["openai-api-key", "ollama"]));
+    expect(optionValues).toContain("openai-api-key");
+    expect(optionValues).toContain("ollama");
     expect(optionValues).not.toContain("fal-api-key");
     expect(optionValues).not.toContain("local-image-runtime");
   });

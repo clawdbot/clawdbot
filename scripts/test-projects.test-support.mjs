@@ -331,6 +331,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/lib/live-docker-stage.sh", ["test/scripts/live-docker-stage.test.ts"]],
   ["scripts/lib/openclaw-test-state.mjs", ["test/scripts/openclaw-test-state.test.ts"]],
   ["scripts/lib/vitest-local-scheduling.mjs", ["test/scripts/vitest-local-scheduling.test.ts"]],
+  [
+    "scripts/mantis/build-telegram-evidence.mjs",
+    ["test/scripts/mantis-build-telegram-evidence.test.ts"],
+  ],
   ["scripts/mantis/publish-pr-evidence.mjs", ["test/scripts/mantis-publish-pr-evidence.test.ts"]],
   [
     "scripts/run-vitest.mjs",
@@ -387,6 +391,10 @@ const TOOLING_TEST_TARGETS = new Map([
   [
     "test/scripts/mantis-publish-pr-evidence.test.ts",
     ["test/scripts/mantis-publish-pr-evidence.test.ts"],
+  ],
+  [
+    "test/scripts/mantis-build-telegram-evidence.test.ts",
+    ["test/scripts/mantis-build-telegram-evidence.test.ts"],
   ],
   [
     "test/scripts/plugin-prerelease-test-plan.test.ts",

@@ -60,7 +60,7 @@ describe("SearchableSelectList", () => {
   function expectNoMatchesForQuery(list: SearchableSelectList, query: string) {
     typeInput(list, query);
     const output = list.render(80);
-    expect(output).toEqual(expect.arrayContaining([expect.stringContaining("No matches")]));
+    expect(output.some((line) => line.includes("No matches"))).toBe(true);
   }
 
   function expectDescriptionVisibilityAtWidth(width: number, shouldContainDescription: boolean) {

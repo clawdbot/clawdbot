@@ -10,11 +10,16 @@ import { hasExplicitOptions } from "../command-options.js";
 export function registerSetupCommand(program: Command) {
   program
     .command("setup")
-    .description("Initialize the active OpenClaw config and agent workspace")
+    .description("Create baseline config/workspace files; use --wizard for full onboarding")
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/setup", "docs.openclaw.ai/cli/setup")}\n`,
+        `\n${theme.heading("Examples:")}\n` +
+        `  ${theme.command("openclaw setup")}\n` +
+        `    ${theme.muted("Create config, workspace, and session folders.")}\n` +
+        `  ${theme.command("openclaw setup --wizard")}\n` +
+        `    ${theme.muted("Run full onboarding for auth, models, Gateway, and channels.")}\n\n` +
+        `${theme.muted("Docs:")} ${formatDocsLink("/cli/setup", "docs.openclaw.ai/cli/setup")}\n`,
     )
     .option(
       "--workspace <dir>",

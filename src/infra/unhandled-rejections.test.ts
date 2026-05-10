@@ -62,6 +62,7 @@ describe("isTransientNetworkError", () => {
       "EPIPE",
       "EHOSTUNREACH",
       "ENETUNREACH",
+      "EADDRNOTAVAIL",
       "EAI_AGAIN",
       "EPROTO",
       "UND_ERR_CONNECT_TIMEOUT",
@@ -368,6 +369,12 @@ describe("isTransientUnhandledRejectionError", () => {
     const rawHostUnreachable = new Error(
       "connect EHOSTUNREACH 149.154.167.220:443 - Local (10.0.10.40:50017)",
     );
+    const addressUnavailable = Object.assign(new Error("connect EADDRNOTAVAIL"), {
+      code: "EADDRNOTAVAIL",
+    });
+    const rawAddressUnavailable = new Error(
+      "connect EADDRNOTAVAIL 2607:6bc0::10:443 - Local (:::0)",
+    );
     const generic = new Error("boom");
 
     expect(isBenignUncaughtExceptionError(epipe)).toBe(true);
@@ -375,6 +382,8 @@ describe("isTransientUnhandledRejectionError", () => {
     expect(isBenignUncaughtExceptionError(network)).toBe(false);
     expect(isBenignUncaughtExceptionError(hostUnreachable)).toBe(true);
     expect(isBenignUncaughtExceptionError(rawHostUnreachable)).toBe(true);
+    expect(isBenignUncaughtExceptionError(addressUnavailable)).toBe(true);
+    expect(isBenignUncaughtExceptionError(rawAddressUnavailable)).toBe(true);
     expect(isBenignUncaughtExceptionError(generic)).toBe(false);
   });
   it("returns true for transient SQLite errors", () => {

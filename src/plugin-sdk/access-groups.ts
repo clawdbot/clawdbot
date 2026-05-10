@@ -1,8 +1,12 @@
+import {
+  ACCESS_GROUP_ALLOW_FROM_PREFIX,
+  parseAccessGroupAllowFromEntry,
+} from "../channels/allow-from.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { AccessGroupConfig } from "../config/types.access-groups.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-export const ACCESS_GROUP_ALLOW_FROM_PREFIX = "accessGroup:";
+export { ACCESS_GROUP_ALLOW_FROM_PREFIX, parseAccessGroupAllowFromEntry };
 
 export type AccessGroupMembershipResolver = (params: {
   cfg: OpenClawConfig;
@@ -13,14 +17,24 @@ export type AccessGroupMembershipResolver = (params: {
   senderId: string;
 }) => boolean | Promise<boolean>;
 
-export function parseAccessGroupAllowFromEntry(entry: string): string | null {
-  const trimmed = entry.trim();
-  if (!trimmed.startsWith(ACCESS_GROUP_ALLOW_FROM_PREFIX)) {
-    return null;
-  }
-  const name = trimmed.slice(ACCESS_GROUP_ALLOW_FROM_PREFIX.length).trim();
-  return name.length > 0 ? name : null;
-}
+export type AccessGroupMembershipLookup = (params: {
+  name: string;
+  group: AccessGroupConfig;
+  channel: ChannelId;
+  accountId: string;
+  senderId: string;
+}) => boolean | Promise<boolean>;
+
+export type ResolvedAccessGroupAllowFromState = {
+  referenced: string[];
+  matched: string[];
+  missing: string[];
+  unsupported: string[];
+  failed: string[];
+  matchedAllowFromEntries: string[];
+  hasReferences: boolean;
+  hasMatch: boolean;
+};
 
 function resolveMessageSenderGroupEntries(params: {
   group: AccessGroupConfig;
@@ -30,6 +44,83 @@ function resolveMessageSenderGroupEntries(params: {
     return [];
   }
   return [...(params.group.members["*"] ?? []), ...(params.group.members[params.channel] ?? [])];
+}
+
+export async function resolveAccessGroupAllowFromState(params: {
+  accessGroups?: Record<string, AccessGroupConfig>;
+  allowFrom: Array<string | number> | null | undefined;
+  channel: ChannelId;
+  accountId: string;
+  senderId: string;
+  isSenderAllowed?: (senderId: string, allowFrom: string[]) => boolean;
+  resolveMembership?: AccessGroupMembershipLookup;
+}): Promise<ResolvedAccessGroupAllowFromState> {
+  const names = Array.from(
+    new Set(
+      (params.allowFrom ?? [])
+        .map((entry) => parseAccessGroupAllowFromEntry(String(entry)))
+        .filter((entry): entry is string => entry != null),
+    ),
+  );
+  const state: ResolvedAccessGroupAllowFromState = {
+    referenced: names,
+    matched: [],
+    missing: [],
+    unsupported: [],
+    failed: [],
+    matchedAllowFromEntries: [],
+    hasReferences: names.length > 0,
+    hasMatch: false,
+  };
+  const groups = params.accessGroups;
+  for (const name of names) {
+    const group = groups?.[name];
+    if (!group) {
+      state.missing.push(name);
+      continue;
+    }
+
+    const senderEntries = resolveMessageSenderGroupEntries({
+      group,
+      channel: params.channel,
+    });
+    if (
+      senderEntries.length > 0 &&
+      params.isSenderAllowed?.(params.senderId, senderEntries) === true
+    ) {
+      state.matched.push(name);
+      continue;
+    }
+
+    if (!params.resolveMembership) {
+      if (group.type !== "message.senders") {
+        state.unsupported.push(name);
+      }
+      continue;
+    }
+
+    let allowed = false;
+    try {
+      allowed = await params.resolveMembership({
+        name,
+        group,
+        channel: params.channel,
+        accountId: params.accountId,
+        senderId: params.senderId,
+      });
+    } catch {
+      state.failed.push(name);
+      continue;
+    }
+    if (allowed) {
+      state.matched.push(name);
+    }
+  }
+  state.matchedAllowFromEntries = state.matched.map(
+    (name) => `${ACCESS_GROUP_ALLOW_FROM_PREFIX}${name}`,
+  );
+  state.hasMatch = state.matchedAllowFromEntries.length > 0;
+  return state;
 }
 
 export async function resolveAccessGroupAllowFromMatches(params: {
@@ -42,60 +133,24 @@ export async function resolveAccessGroupAllowFromMatches(params: {
   resolveMembership?: AccessGroupMembershipResolver;
 }): Promise<string[]> {
   const cfg = params.cfg;
-  const groups = cfg?.accessGroups;
-  if (!groups) {
-    return [];
-  }
-
-  const names = Array.from(
-    new Set(
-      (params.allowFrom ?? [])
-        .map((entry) => parseAccessGroupAllowFromEntry(String(entry)))
-        .filter((entry): entry is string => entry != null),
-    ),
-  );
-  if (names.length === 0) {
-    return [];
-  }
-
-  const matched: string[] = [];
-  for (const name of names) {
-    const group = groups[name];
-    if (!group) {
-      continue;
-    }
-
-    const senderEntries = resolveMessageSenderGroupEntries({
-      group,
-      channel: params.channel,
-    });
-    if (
-      senderEntries.length > 0 &&
-      params.isSenderAllowed?.(params.senderId, senderEntries) === true
-    ) {
-      matched.push(`${ACCESS_GROUP_ALLOW_FROM_PREFIX}${name}`);
-      continue;
-    }
-
-    let allowed = false;
-    try {
-      allowed =
-        (await params.resolveMembership?.({
-          cfg,
-          name,
-          group,
-          channel: params.channel,
-          accountId: params.accountId,
-          senderId: params.senderId,
-        })) === true;
-    } catch {
-      allowed = false;
-    }
-    if (allowed) {
-      matched.push(`${ACCESS_GROUP_ALLOW_FROM_PREFIX}${name}`);
-    }
-  }
-  return matched;
+  const resolveMembership = params.resolveMembership;
+  const state = await resolveAccessGroupAllowFromState({
+    accessGroups: cfg?.accessGroups,
+    allowFrom: params.allowFrom,
+    channel: params.channel,
+    accountId: params.accountId,
+    senderId: params.senderId,
+    isSenderAllowed: params.isSenderAllowed,
+    resolveMembership:
+      resolveMembership && cfg
+        ? async (lookupParams) =>
+            await resolveMembership({
+              cfg,
+              ...lookupParams,
+            })
+        : undefined,
+  });
+  return state.matchedAllowFromEntries;
 }
 
 export async function expandAllowFromWithAccessGroups(params: {

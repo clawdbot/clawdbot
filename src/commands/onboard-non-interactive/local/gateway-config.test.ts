@@ -186,7 +186,10 @@ describe("applyNonInteractiveGatewayConfig token resolution chain", () => {
       });
 
       const newToken = result?.nextConfig.gateway?.auth?.token;
-      expect(newToken).toMatchObject({ source: "env", id: newRefId });
+      expect(typeof newToken).toBe("object");
+      const newTokenRef = typeof newToken === "object" && newToken !== null ? newToken : undefined;
+      expect(newTokenRef?.source).toBe("env");
+      expect(newTokenRef?.id).toBe(newRefId);
       expect(newToken).not.toEqual(SAMPLE_SECRET_REF);
       expect(randomToken).not.toHaveBeenCalled();
     } finally {

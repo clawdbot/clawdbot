@@ -6,7 +6,13 @@ import { captureEnv } from "../../test-utils/env.js";
 import { resolveOAuthRefreshLockPath } from "./paths.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`Expected missing path: ${targetPath}`);
 }
 
 describe("resolveOAuthRefreshLockPath", () => {

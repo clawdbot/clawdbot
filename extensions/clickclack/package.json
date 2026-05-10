@@ -1,0 +1,49 @@
+{
+  "name": "@openclaw/clickclack",
+  "version": "2026.5.10-beta.1",
+  "private": true,
+  "description": "OpenClaw ClickClack channel plugin",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./api.js": "./api.ts",
+    "./runtime-api.js": "./runtime-api.ts"
+  },
+  "dependencies": {
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.5.10-beta.1"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "clickclack",
+      "label": "ClickClack",
+      "selectionLabel": "ClickClack",
+      "detailLabel": "ClickClack Bot",
+      "docsPath": "/channels/clickclack",
+      "docsLabel": "clickclack",
+      "blurb": "self-hosted chat via first-class ClickClack bot tokens.",
+      "systemImage": "bubble.left.and.bubble.right",
+      "markdownCapable": true,
+      "preferSessionLookupForAnnounceTarget": true,
+      "order": 85,
+      "commands": {
+        "nativeCommandsAutoEnabled": false,
+        "nativeSkillsAutoEnabled": false
+      }
+    }
+  }
+}

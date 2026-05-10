@@ -219,12 +219,12 @@ describe("resolveModel forward-compat errors and overrides", () => {
 
     const result = resolveModelForTest("openai-codex", "gpt-5.4", "/tmp/agent", cfg);
     expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      api: "openai-codex-responses",
-      baseUrl: "https://custom.example.com",
-      headers: { "X-Custom-Auth": "token-123" },
-      id: "gpt-5.4",
-      provider: "openai-codex",
+    expect(result.model?.api).toBe("openai-codex-responses");
+    expect(result.model?.baseUrl).toBe("https://custom.example.com");
+    expect(result.model?.id).toBe("gpt-5.4");
+    expect(result.model?.provider).toBe("openai-codex");
+    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+      "X-Custom-Auth": "token-123",
     });
   });
 

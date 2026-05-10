@@ -402,23 +402,24 @@ describe("heartbeat-wake", () => {
     await vi.advanceTimersByTimeAsync(100);
 
     expect(handler).toHaveBeenCalledTimes(2);
-    expect(handler.mock.calls.map((call) => call[0])).toEqual(
-      expect.arrayContaining([
-        {
-          source: "cron",
-          intent: "event",
-          reason: "cron:job-a",
-          agentId: "ops",
-          sessionKey: "agent:ops:guildchat:channel:alerts",
-        },
-        {
-          source: "cron",
-          intent: "event",
-          reason: "cron:job-b",
-          agentId: "main",
-          sessionKey: "agent:main:forum:group:-1001",
-        },
-      ]),
-    );
+    const handledRequests = handler.mock.calls
+      .map((call) => call[0])
+      .toSorted((left, right) => left.reason.localeCompare(right.reason));
+    expect(handledRequests).toEqual([
+      {
+        source: "cron",
+        intent: "event",
+        reason: "cron:job-a",
+        agentId: "ops",
+        sessionKey: "agent:ops:guildchat:channel:alerts",
+      },
+      {
+        source: "cron",
+        intent: "event",
+        reason: "cron:job-b",
+        agentId: "main",
+        sessionKey: "agent:main:forum:group:-1001",
+      },
+    ]);
   });
 });

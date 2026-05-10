@@ -152,6 +152,28 @@ function createTtsConfig(prefsName: string): OpenClawConfig {
   };
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireFirstCallParam(calls: ReadonlyArray<readonly unknown[]>, label: string) {
+  const call = calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call[0];
+}
+
+function requireAttempt(attempts: unknown[] | undefined, index: number) {
+  if (!attempts) {
+    throw new Error("expected synthesis attempts");
+  }
+  return requireRecord(attempts[index], `synthesis attempt ${index}`);
+}
+
 async function expectTtsPayloadResult(params: {
   channel: string;
   prefsName: string;
@@ -174,7 +196,12 @@ async function expectTtsPayloadResult(params: {
       kind: "final",
     });
 
-    expect(synthesizeMock).toHaveBeenCalledWith(expect.objectContaining({ target: params.target }));
+    expect(synthesizeMock).toHaveBeenCalled();
+    const request = requireRecord(
+      synthesizeMock.mock.calls.at(-1)?.[0],
+      "latest synthesis request",
+    );
+    expect(request.target).toBe(params.target);
     expect(result.audioAsVoice).toBe(params.audioAsVoice);
     expect(result.mediaUrl).toMatch(new RegExp(`voice-\\d+\\.${params.mediaExtension ?? "ogg"}$`));
     expect(result.spokenText).toBe(params.text);
@@ -261,9 +288,13 @@ describe("speech-core native voice-note routing", () => {
         voiceCompatible: false,
       },
     });
-    expect(transcodeAudioBufferMock).toHaveBeenCalledWith(
-      expect.objectContaining({ sourceExtension: "mp3", targetExtension: "caf" }),
+    expect(transcodeAudioBufferMock).toHaveBeenCalledOnce();
+    const transcodeRequest = requireRecord(
+      requireFirstCallParam(transcodeAudioBufferMock.mock.calls as unknown[][], "transcode"),
+      "transcode request",
     );
+    expect(transcodeRequest.sourceExtension).toBe("mp3");
+    expect(transcodeRequest.targetExtension).toBe("caf");
   });
 
   it("falls back to the original mp3 buffer when the host transcoder fails", async () => {
@@ -339,14 +370,14 @@ describe("speech-core native voice-note routing", () => {
     });
 
     expect(result.success).toBe(true);
-    expect(synthesizeMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: runtimeConfig,
-        providerConfig: expect.objectContaining({
-          apiKey: "resolved-minimax-key",
-        }),
-      }),
+    expect(synthesizeMock).toHaveBeenCalled();
+    const request = requireRecord(
+      synthesizeMock.mock.calls[0]?.[0],
+      "runtime snapshot synthesis request",
     );
+    expect(request.cfg).toBe(runtimeConfig);
+    const providerConfig = requireRecord(request.providerConfig, "provider config");
+    expect(providerConfig.apiKey).toBe("resolved-minimax-key");
   });
 
   it.each(["feishu", "whatsapp"] as const)(
@@ -394,7 +425,9 @@ describe("speech-core native voice-note routing", () => {
         kind: "final",
       });
 
-      expect(synthesizeMock).toHaveBeenCalledWith(expect.objectContaining({ text: "hello" }));
+      expect(synthesizeMock).toHaveBeenCalled();
+      const request = requireRecord(synthesizeMock.mock.calls[0]?.[0], "hidden TTS request");
+      expect(request.text).toBe("hello");
       expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
       expect(result.audioAsVoice).toBe(true);
       expect(result.text).toBeUndefined();
@@ -513,15 +546,12 @@ describe("speech-core native voice-note routing", () => {
         kind: "final",
       });
 
-      expect(synthesizeMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          providerConfig: expect.objectContaining({
-            model: "base-model",
-            voice: "persona-voice",
-            style: "dry",
-          }),
-        }),
-      );
+      expect(synthesizeMock).toHaveBeenCalled();
+      const request = requireRecord(synthesizeMock.mock.calls[0]?.[0], "persona synthesis request");
+      const providerConfig = requireRecord(request.providerConfig, "persona provider config");
+      expect(providerConfig.model).toBe("base-model");
+      expect(providerConfig.voice).toBe("persona-voice");
+      expect(providerConfig.style).toBe("dry");
       expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
 
       mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
@@ -556,13 +586,12 @@ describe("speech-core native voice-note routing", () => {
     });
 
     expect(result.success).toBe(true);
-    expect(result.attempts?.[0]).toMatchObject({
-      provider: "missing",
-      outcome: "skipped",
-      reasonCode: "no_provider_registered",
-      persona: "alfred",
-    });
-    expect(result.attempts?.[0]).not.toHaveProperty("personaBinding");
+    const attempt = requireAttempt(result.attempts, 0);
+    expect(attempt.provider).toBe("missing");
+    expect(attempt.outcome).toBe("skipped");
+    expect(attempt.reasonCode).toBe("no_provider_registered");
+    expect(attempt.persona).toBe("alfred");
+    expect(attempt).not.toHaveProperty("personaBinding");
   });
 
   it("does not mark skipped telephony providers as missing persona bindings", async () => {
@@ -589,13 +618,12 @@ describe("speech-core native voice-note routing", () => {
     });
 
     expect(result.success).toBe(false);
-    expect(result.attempts?.[0]).toMatchObject({
-      provider: "mock",
-      outcome: "skipped",
-      reasonCode: "unsupported_for_telephony",
-      persona: "alfred",
-    });
-    expect(result.attempts?.[0]).not.toHaveProperty("personaBinding");
+    const attempt = requireAttempt(result.attempts, 0);
+    expect(attempt.provider).toBe("mock");
+    expect(attempt.outcome).toBe("skipped");
+    expect(attempt.reasonCode).toBe("unsupported_for_telephony");
+    expect(attempt.persona).toBe("alfred");
+    expect(attempt).not.toHaveProperty("personaBinding");
   });
 
   it("passes directive overrides to telephony synthesis providers", async () => {
@@ -638,13 +666,12 @@ describe("speech-core native voice-note routing", () => {
     expect(result.success).toBe(true);
     expect(result.providerModel).toBe("telephony-model");
     expect(result.providerVoice).toBe("directed-voice");
-    expect(synthesizeTelephony).toHaveBeenCalledWith(
-      expect.objectContaining({
-        providerOverrides: {
-          voice: "directed-voice",
-        },
-      }),
+    expect(synthesizeTelephony).toHaveBeenCalledOnce();
+    const telephonyRequest = requireRecord(
+      requireFirstCallParam(synthesizeTelephony.mock.calls, "telephony synthesis"),
+      "telephony synthesis request",
     );
+    expect(telephonyRequest.providerOverrides).toEqual({ voice: "directed-voice" });
   });
 
   it("uses provider defaults when fallback policy allows missing persona bindings", async () => {
@@ -669,12 +696,13 @@ describe("speech-core native voice-note routing", () => {
       },
     });
 
-    expect(prepareSynthesisMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        persona: undefined,
-        personaProviderConfig: undefined,
-      }),
+    expect(prepareSynthesisMock).toHaveBeenCalledOnce();
+    const prepareContext = requireRecord(
+      requireFirstCallParam(prepareSynthesisMock.mock.calls, "prepare synthesis"),
+      "prepare synthesis context",
     );
+    expect(prepareContext.persona).toBeUndefined();
+    expect(prepareContext.personaProviderConfig).toBeUndefined();
   });
 
   it("preserves persona prompts by default when provider bindings are missing", async () => {
@@ -698,12 +726,14 @@ describe("speech-core native voice-note routing", () => {
       },
     });
 
-    expect(prepareSynthesisMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        persona: expect.objectContaining({ id: "alfred" }),
-        personaProviderConfig: undefined,
-      }),
+    expect(prepareSynthesisMock).toHaveBeenCalledOnce();
+    const prepareContext = requireRecord(
+      requireFirstCallParam(prepareSynthesisMock.mock.calls, "prepare synthesis"),
+      "prepare synthesis context",
     );
+    const persona = requireRecord(prepareContext.persona, "prepare synthesis persona");
+    expect(persona.id).toBe("alfred");
+    expect(prepareContext.personaProviderConfig).toBeUndefined();
   });
 
   it("skips unbound providers under fail policy while allowing bound fallbacks", async () => {
@@ -738,20 +768,18 @@ describe("speech-core native voice-note routing", () => {
     expect(result.success).toBe(true);
     expect(result.provider).toBe("fallback");
     expect(result.fallbackFrom).toBe("mock");
-    expect(result.attempts?.[0]).toMatchObject({
-      provider: "mock",
-      outcome: "skipped",
-      reasonCode: "not_configured",
-      persona: "alfred",
-      personaBinding: "missing",
-      error: "mock: persona alfred has no provider binding",
-    });
-    expect(result.attempts?.[1]).toMatchObject({
-      provider: "fallback",
-      outcome: "success",
-      persona: "alfred",
-      personaBinding: "applied",
-    });
+    const skippedAttempt = requireAttempt(result.attempts, 0);
+    expect(skippedAttempt.provider).toBe("mock");
+    expect(skippedAttempt.outcome).toBe("skipped");
+    expect(skippedAttempt.reasonCode).toBe("not_configured");
+    expect(skippedAttempt.persona).toBe("alfred");
+    expect(skippedAttempt.personaBinding).toBe("missing");
+    expect(skippedAttempt.error).toBe("mock: persona alfred has no provider binding");
+    const successAttempt = requireAttempt(result.attempts, 1);
+    expect(successAttempt.provider).toBe("fallback");
+    expect(successAttempt.outcome).toBe("success");
+    expect(successAttempt.persona).toBe("alfred");
+    expect(successAttempt.personaBinding).toBe("applied");
   });
 });
 
@@ -790,17 +818,14 @@ describe("speech-core per-agent TTS config", () => {
 
     const resolved = resolveTtsConfig(cfg, "reader");
 
-    expect(resolved.rawConfig).toMatchObject({
-      enabled: true,
-      provider: "openai",
-      providers: {
-        openai: {
-          apiKey: "${OPENAI_API_KEY}",
-          voice: "nova",
-          speed: 1,
-        },
-      },
-    });
+    const rawConfig = requireRecord(resolved.rawConfig, "resolved raw TTS config");
+    expect(rawConfig.enabled).toBe(true);
+    expect(rawConfig.provider).toBe("openai");
+    const providers = requireRecord(rawConfig.providers, "resolved raw TTS providers");
+    const openai = requireRecord(providers.openai, "resolved OpenAI TTS provider config");
+    expect(openai.apiKey).toBe("${OPENAI_API_KEY}");
+    expect(openai.voice).toBe("nova");
+    expect(openai.speed).toBe(1);
   });
 
   it("composes per-agent TTS overrides with active persona bindings", async () => {
@@ -863,15 +888,15 @@ describe("speech-core per-agent TTS config", () => {
         agentId: "reader",
       });
 
-      expect(synthesizeMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          providerConfig: expect.objectContaining({
-            model: "base-model",
-            voice: "agent-voice",
-            style: "jarvis-style",
-          }),
-        }),
+      expect(synthesizeMock).toHaveBeenCalled();
+      const request = requireRecord(
+        synthesizeMock.mock.calls[0]?.[0],
+        "agent persona synthesis request",
       );
+      const providerConfig = requireRecord(request.providerConfig, "agent persona provider config");
+      expect(providerConfig.model).toBe("base-model");
+      expect(providerConfig.voice).toBe("agent-voice");
+      expect(providerConfig.style).toBe("jarvis-style");
       expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
       mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
     } finally {

@@ -197,9 +197,7 @@ describe("TOOL_POLICY_CONFORMANCE", () => {
 
   it("is JSON-serializable", () => {
     const serialized = JSON.stringify(TOOL_POLICY_CONFORMANCE);
-    expect(JSON.parse(serialized)).toMatchObject({
-      toolGroups: TOOL_GROUPS,
-    });
+    expect(JSON.parse(serialized)).toEqual({ toolGroups: TOOL_GROUPS });
   });
 });
 

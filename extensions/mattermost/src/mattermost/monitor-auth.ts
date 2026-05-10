@@ -1,14 +1,35 @@
+import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/access-groups";
+import {
+  type ChannelIngressDecision,
+  type ChannelIngressEventInput,
+  type ChannelIngressIdentifierKind,
+  resolveStableChannelMessageIngress,
+  type StableChannelIngressIdentityParams,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import type { MattermostChannel } from "./client.js";
 import type { OpenClawConfig } from "./runtime-api.js";
-import {
-  evaluateSenderGroupAccessForPolicy,
-  isDangerousNameMatchingEnabled,
-  resolveAllowlistMatchSimple,
-  resolveControlCommandGate,
-  resolveEffectiveAllowFromLists,
-} from "./runtime-api.js";
+import { isDangerousNameMatchingEnabled, resolveAllowlistMatchSimple } from "./runtime-api.js";
+
+const MATTERMOST_USER_NAME_KIND =
+  "plugin:mattermost-user-name" as const satisfies ChannelIngressIdentifierKind;
+const mattermostIngressIdentity = {
+  key: "sender-id",
+  normalize: normalizeMattermostAllowEntry,
+  aliases: [
+    {
+      key: "sender-name",
+      kind: MATTERMOST_USER_NAME_KIND,
+      normalizeEntry: normalizeMattermostAllowEntry,
+      normalizeSubject: normalizeMattermostAllowEntry,
+      dangerous: true,
+    },
+  ],
+  isWildcardEntry: (entry) => normalizeMattermostAllowEntry(entry) === "*",
+  resolveEntryId: ({ entryIndex, fieldKey }) =>
+    `mattermost-entry-${entryIndex + 1}:${fieldKey === "sender-name" ? "name" : "user"}`,
+} satisfies StableChannelIngressIdentityParams;
 
 export function normalizeMattermostAllowEntry(entry: string): string {
   const trimmed = entry.trim();
@@ -18,12 +39,15 @@ export function normalizeMattermostAllowEntry(entry: string): string {
   if (trimmed === "*") {
     return "*";
   }
-  return trimmed
+  const accessGroupName = parseAccessGroupAllowFromEntry(trimmed);
+  if (accessGroupName) {
+    return `accessGroup:${accessGroupName}`;
+  }
+  const normalized = trimmed
     .replace(/^(mattermost|user):/i, "")
     .replace(/^@/, "")
-    .trim()
-    ? normalizeLowercaseStringOrEmpty(trimmed.replace(/^(mattermost|user):/i, "").replace(/^@/, ""))
-    : "";
+    .trim();
+  return normalized ? normalizeLowercaseStringOrEmpty(normalized) : "";
 }
 
 export function normalizeMattermostAllowList(entries: Array<string | number>): string[] {
@@ -31,23 +55,6 @@ export function normalizeMattermostAllowList(entries: Array<string | number>): s
     .map((entry) => normalizeMattermostAllowEntry(String(entry)))
     .filter(Boolean);
   return Array.from(new Set(normalized));
-}
-
-export function resolveMattermostEffectiveAllowFromLists(params: {
-  allowFrom?: Array<string | number> | null;
-  groupAllowFrom?: Array<string | number> | null;
-  storeAllowFrom?: Array<string | number> | null;
-  dmPolicy?: string | null;
-}): {
-  effectiveAllowFrom: string[];
-  effectiveGroupAllowFrom: string[];
-} {
-  return resolveEffectiveAllowFromLists({
-    allowFrom: normalizeMattermostAllowList(params.allowFrom ?? []),
-    groupAllowFrom: normalizeMattermostAllowList(params.groupAllowFrom ?? []),
-    storeAllowFrom: normalizeMattermostAllowList(params.storeAllowFrom ?? []),
-    dmPolicy: params.dmPolicy,
-  });
 }
 
 export function isMattermostSenderAllowed(params: {
@@ -109,7 +116,113 @@ export type MattermostCommandAuthDecision =
       roomLabel: string;
     };
 
-export function authorizeMattermostCommandInvocation(params: {
+type MattermostCommandDenyReason = Extract<
+  MattermostCommandAuthDecision,
+  { ok: false }
+>["denyReason"];
+
+export async function resolveMattermostMonitorInboundAccess(params: {
+  account: ResolvedMattermostAccount;
+  cfg: OpenClawConfig;
+  senderId: string;
+  senderName: string;
+  channelId: string;
+  kind: "direct" | "group" | "channel";
+  groupPolicy: "allowlist" | "open" | "disabled";
+  storeAllowFrom?: Array<string | number> | null;
+  readStoreAllowFrom?: () => Promise<Array<string | number>>;
+  allowTextCommands: boolean;
+  hasControlCommand: boolean;
+  eventKind?: ChannelIngressEventInput["kind"];
+  mayPair?: boolean;
+}) {
+  const {
+    account,
+    cfg,
+    senderId,
+    senderName,
+    channelId,
+    kind,
+    groupPolicy,
+    storeAllowFrom,
+    allowTextCommands,
+    hasControlCommand,
+  } = params;
+  const dmPolicy = account.config.dmPolicy ?? "pairing";
+  const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
+  const configAllowFrom = account.config.allowFrom ?? [];
+  const configGroupAllowFrom = account.config.groupAllowFrom ?? [];
+  const readStoreAllowFrom =
+    params.readStoreAllowFrom ??
+    (storeAllowFrom != null ? async () => [...storeAllowFrom] : undefined);
+  const ingress = await resolveStableChannelMessageIngress({
+    channelId: "mattermost",
+    accountId: account.accountId,
+    identity: mattermostIngressIdentity,
+    cfg,
+    ...(readStoreAllowFrom ? { readStoreAllowFrom } : {}),
+    useDefaultPairingStore: params.readStoreAllowFrom === undefined && storeAllowFrom == null,
+    subject: {
+      stableId: senderId,
+      aliases: { "sender-name": senderName },
+    },
+    conversation: {
+      kind,
+      id: channelId,
+    },
+    event: {
+      kind: params.eventKind ?? "message",
+      authMode: "inbound",
+      mayPair: params.mayPair ?? true,
+    },
+    dmPolicy,
+    groupPolicy,
+    policy: {
+      groupAllowFromFallbackToAllowFrom: true,
+      mutableIdentifierMatching: allowNameMatching ? "enabled" : "disabled",
+    },
+    allowFrom: configAllowFrom,
+    groupAllowFrom: configGroupAllowFrom,
+    command: {
+      allowTextCommands,
+      hasControlCommand: allowTextCommands && hasControlCommand,
+      directGroupAllowFrom: kind === "direct" ? "effective" : "none",
+    },
+  });
+  return ingress;
+}
+
+function resolveMattermostCommandDenyReason(params: {
+  decision: ChannelIngressDecision;
+  kind: "direct" | "group" | "channel";
+  dmPolicy: string;
+}): MattermostCommandDenyReason | null {
+  if (params.decision.decision === "allow") {
+    return null;
+  }
+  if (params.kind === "direct") {
+    if (params.decision.reasonCode === "dm_policy_disabled") {
+      return "dm-disabled";
+    }
+    if (
+      params.dmPolicy === "pairing" &&
+      (params.decision.admission === "pairing-required" ||
+        params.decision.reasonCode === "dm_policy_pairing_required")
+    ) {
+      return "dm-pairing";
+    }
+    return "unauthorized";
+  }
+  if (params.decision.reasonCode === "group_policy_disabled") {
+    return "channels-disabled";
+  }
+  if (params.decision.reasonCode === "group_policy_empty_allowlist") {
+    return "channel-no-allowlist";
+  }
+  return "unauthorized";
+}
+
+export async function authorizeMattermostCommandInvocation(params: {
   account: ResolvedMattermostAccount;
   cfg: OpenClawConfig;
   senderId: string;
@@ -117,9 +230,10 @@ export function authorizeMattermostCommandInvocation(params: {
   channelId: string;
   channelInfo: MattermostChannel | null;
   storeAllowFrom?: Array<string | number> | null;
+  readStoreAllowFrom?: () => Promise<Array<string | number>>;
   allowTextCommands: boolean;
   hasControlCommand: boolean;
-}): MattermostCommandAuthDecision {
+}): Promise<MattermostCommandAuthDecision> {
   const {
     account,
     cfg,
@@ -128,6 +242,7 @@ export function authorizeMattermostCommandInvocation(params: {
     channelId,
     channelInfo,
     storeAllowFrom,
+    readStoreAllowFrom,
     allowTextCommands,
     hasControlCommand,
   } = params;
@@ -152,160 +267,47 @@ export function authorizeMattermostCommandInvocation(params: {
   const channelDisplay = channelInfo.display_name ?? channelName;
   const roomLabel = channelName ? `#${channelName}` : channelDisplay || `#${channelId}`;
 
-  const dmPolicy = account.config.dmPolicy ?? "pairing";
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
   const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
-  const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
-  const configAllowFrom = normalizeMattermostAllowList(account.config.allowFrom ?? []);
-  const configGroupAllowFrom = normalizeMattermostAllowList(account.config.groupAllowFrom ?? []);
-  const normalizedStoreAllowFrom = normalizeMattermostAllowList(storeAllowFrom ?? []);
-  const { effectiveAllowFrom, effectiveGroupAllowFrom } = resolveMattermostEffectiveAllowFromLists({
-    allowFrom: configAllowFrom,
-    groupAllowFrom: configGroupAllowFrom,
-    storeAllowFrom: normalizedStoreAllowFrom,
-    dmPolicy,
-  });
 
-  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-  const commandDmAllowFrom = kind === "direct" ? effectiveAllowFrom : configAllowFrom;
-  const commandGroupAllowFrom =
-    kind === "direct"
-      ? effectiveGroupAllowFrom
-      : configGroupAllowFrom.length > 0
-        ? configGroupAllowFrom
-        : configAllowFrom;
-
-  const senderAllowedForCommands = isMattermostSenderAllowed({
+  const ingress = await resolveMattermostMonitorInboundAccess({
+    account,
+    cfg,
     senderId,
     senderName,
-    allowFrom: commandDmAllowFrom,
-    allowNameMatching,
-  });
-  const groupAllowedForCommands = isMattermostSenderAllowed({
-    senderId,
-    senderName,
-    allowFrom: commandGroupAllowFrom,
-    allowNameMatching,
-  });
-
-  const commandGate = resolveControlCommandGate({
-    useAccessGroups,
-    authorizers: [
-      { configured: commandDmAllowFrom.length > 0, allowed: senderAllowedForCommands },
-      {
-        configured: commandGroupAllowFrom.length > 0,
-        allowed: groupAllowedForCommands,
-      },
-    ],
+    channelId,
+    kind,
+    groupPolicy,
+    storeAllowFrom,
+    readStoreAllowFrom,
     allowTextCommands,
-    hasControlCommand: allowTextCommands && hasControlCommand,
+    hasControlCommand,
+    eventKind: "native-command",
+    mayPair: true,
+  });
+  const denyReason = resolveMattermostCommandDenyReason({
+    decision: ingress.ingress,
+    kind,
+    dmPolicy: account.config.dmPolicy ?? "pairing",
   });
 
-  const commandAuthorized =
-    kind === "direct" ? senderAllowedForCommands : commandGate.commandAuthorized;
-
-  if (kind === "direct") {
-    if (dmPolicy === "disabled") {
-      return {
-        ok: false,
-        denyReason: "dm-disabled",
-        commandAuthorized: false,
-        channelInfo,
-        kind,
-        chatType,
-        channelName,
-        channelDisplay,
-        roomLabel,
-      };
-    }
-
-    if (!senderAllowedForCommands) {
-      return {
-        ok: false,
-        denyReason: dmPolicy === "pairing" ? "dm-pairing" : "unauthorized",
-        commandAuthorized: false,
-        channelInfo,
-        kind,
-        chatType,
-        channelName,
-        channelDisplay,
-        roomLabel,
-      };
-    }
-  } else {
-    const senderGroupAccess = evaluateSenderGroupAccessForPolicy({
-      groupPolicy,
-      groupAllowFrom: effectiveGroupAllowFrom,
-      senderId,
-      isSenderAllowed: (_senderId, allowFrom) =>
-        isMattermostSenderAllowed({
-          senderId,
-          senderName,
-          allowFrom,
-          allowNameMatching,
-        }),
-    });
-
-    if (!senderGroupAccess.allowed && senderGroupAccess.reason === "disabled") {
-      return {
-        ok: false,
-        denyReason: "channels-disabled",
-        commandAuthorized: false,
-        channelInfo,
-        kind,
-        chatType,
-        channelName,
-        channelDisplay,
-        roomLabel,
-      };
-    }
-
-    if (!senderGroupAccess.allowed && senderGroupAccess.reason === "empty_allowlist") {
-      return {
-        ok: false,
-        denyReason: "channel-no-allowlist",
-        commandAuthorized: false,
-        channelInfo,
-        kind,
-        chatType,
-        channelName,
-        channelDisplay,
-        roomLabel,
-      };
-    }
-
-    if (!senderGroupAccess.allowed && senderGroupAccess.reason === "sender_not_allowlisted") {
-      return {
-        ok: false,
-        denyReason: "unauthorized",
-        commandAuthorized: false,
-        channelInfo,
-        kind,
-        chatType,
-        channelName,
-        channelDisplay,
-        roomLabel,
-      };
-    }
-
-    if (commandGate.shouldBlock) {
-      return {
-        ok: false,
-        denyReason: "unauthorized",
-        commandAuthorized: false,
-        channelInfo,
-        kind,
-        chatType,
-        channelName,
-        channelDisplay,
-        roomLabel,
-      };
-    }
+  if (denyReason) {
+    return {
+      ok: false,
+      denyReason,
+      commandAuthorized: false,
+      channelInfo,
+      kind,
+      chatType,
+      channelName,
+      channelDisplay,
+      roomLabel,
+    };
   }
 
   return {
     ok: true,
-    commandAuthorized,
+    commandAuthorized: ingress.commandAccess.authorized,
     channelInfo,
     kind,
     chatType,

@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { OpenClawConfig, RuntimeEnv } from "../../runtime-api.js";
+import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
 import { installMSTeamsTestRuntime } from "../monitor-handler.test-helpers.js";
 
@@ -11,6 +11,7 @@ type MessageHandlerDepsOptions = {
   upsertPairingRequest?: ReturnType<typeof vi.fn>;
   recordInboundSession?: ReturnType<typeof vi.fn>;
   resolveAgentRoute?: (params: { peer: { kind: string; id: string } }) => unknown;
+  hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
 };
 
 export function createMessageHandlerDeps(
@@ -39,6 +40,7 @@ export function createMessageHandlerDeps(
     upsertPairingRequest,
     recordInboundSession,
     resolveAgentRoute,
+    hasControlCommand: options.hasControlCommand,
     resolveTextChunkLimit: () => 4000,
     resolveStorePath: () => "/tmp/test-store",
   });

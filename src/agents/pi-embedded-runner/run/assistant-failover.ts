@@ -99,17 +99,19 @@ export async function handleAssistantFailover(params: {
   if (decision.action === "rotate_profile") {
     const failedProfileId = params.lastProfileId;
     const failureReason = params.timedOut ? "timeout" : params.assistantProfileFailureReason;
-    const markFailedProfile = () => {
+    const markFailedProfile = async () => {
       if (!failedProfileId || !failureReason || failureReason === "timeout") {
         return;
       }
-      params
-        .maybeMarkAuthProfileFailure({
+      try {
+        await params.maybeMarkAuthProfileFailure({
           profileId: failedProfileId,
           reason: failureReason,
           modelId: params.modelId,
-        })
-        .catch((err) => params.warn(`deferred profile failure mark failed: ${String(err)}`));
+        });
+      } catch (err) {
+        params.warn(`profile failure mark failed: ${String(err)}`);
+      }
     };
 
     if (params.failoverReason === "overloaded") {
@@ -122,7 +124,7 @@ export async function handleAssistantFailover(params: {
         params.warn(
           `overload profile rotation cap reached for ${sanitizeForLog(params.provider)}/${sanitizeForLog(params.modelId)} after ${overloadProfileRotations} rotations; escalating to model fallback`,
         );
-        markFailedProfile();
+        await markFailedProfile();
         params.logAssistantFailoverDecision("fallback_model", { status });
         return {
           action: "throw",
@@ -151,7 +153,7 @@ export async function handleAssistantFailover(params: {
     }
 
     const rotated = await params.advanceAuthProfile();
-    markFailedProfile();
+    const markFailedProfilePromise = markFailedProfile();
     if (params.timedOut && !params.isProbeSession && failedProfileId) {
       params.warn(`Profile ${failedProfileId} timed out. Trying next account...`);
     }
@@ -161,6 +163,7 @@ export async function handleAssistantFailover(params: {
       );
     }
     if (rotated) {
+      void markFailedProfilePromise;
       params.logAssistantFailoverDecision("rotate_profile");
       await params.maybeBackoffBeforeOverloadFailover(params.failoverReason);
       return {
@@ -173,12 +176,14 @@ export async function handleAssistantFailover(params: {
         }),
       };
     }
+    await markFailedProfilePromise;
     if (params.idleTimedOut && params.allowSameModelIdleTimeoutRetry) {
       return sameModelIdleTimeoutRetry();
     }
 
     decision = resolveRunFailoverDecision({
       stage: "assistant",
+      allowFormatRetry: params.cloudCodeAssistFormatError,
       aborted: params.aborted,
       externalAbort: params.externalAbort,
       fallbackConfigured: params.fallbackConfigured,

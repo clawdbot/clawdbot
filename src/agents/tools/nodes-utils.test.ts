@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(),
@@ -8,9 +8,7 @@ vi.mock("./gateway.js", () => ({
 }));
 
 import type { NodeListNode } from "./nodes-utils.js";
-
-let listNodes: typeof import("./nodes-utils.js").listNodes;
-let resolveNodeIdFromList: typeof import("./nodes-utils.js").resolveNodeIdFromList;
+import { listNodes, resolveNodeIdFromList } from "./nodes-utils.js";
 
 function node({ nodeId, ...overrides }: Partial<NodeListNode> & { nodeId: string }): NodeListNode {
   return {
@@ -20,10 +18,6 @@ function node({ nodeId, ...overrides }: Partial<NodeListNode> & { nodeId: string
     ...overrides,
   };
 }
-
-beforeAll(async () => {
-  ({ listNodes, resolveNodeIdFromList } = await import("./nodes-utils.js"));
-});
 
 beforeEach(() => {
   gatewayMocks.callGatewayTool.mockReset();

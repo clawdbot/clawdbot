@@ -266,14 +266,12 @@ describe("resolveChannelSetupSelectionContributions", () => {
       ] as NoteChannelPrimerChannels,
     );
 
-    expect(formatChannelPrimerLine).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "bad\\nid",
-        label: "bad\\nid",
-        selectionLabel: "bad\\nid",
-        blurb: "Blurb\\nline",
-      }),
-    );
+    expect(formatChannelPrimerLine).toHaveBeenCalledOnce();
+    const [primerMeta] = formatChannelPrimerLine.mock.calls[0] ?? [];
+    expect(primerMeta?.id).toBe("bad\\nid");
+    expect(primerMeta?.label).toBe("bad\\nid");
+    expect(primerMeta?.selectionLabel).toBe("bad\\nid");
+    expect(primerMeta?.blurb).toBe("Blurb\\nline");
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining("bad\\nid: Blurb\\nline"),
       "How channels work",
@@ -309,13 +307,11 @@ describe("resolveChannelSetupSelectionContributions", () => {
 
     expect(formatChannelSelectionLine).toHaveBeenCalledOnce();
     const [selectionMeta, docsLink] = formatChannelSelectionLine.mock.calls[0] ?? [];
-    expect(selectionMeta).toMatchObject({
-      label: "Zalo\\nBot",
-      blurb: "Setup\\nhelp",
-      docsLabel: "Docs\\nLabel",
-      selectionDocsPrefix: "Docs\\nPrefix",
-      selectionExtras: ["Extra\\nOne"],
-    });
+    expect(selectionMeta?.label).toBe("Zalo\\nBot");
+    expect(selectionMeta?.blurb).toBe("Setup\\nhelp");
+    expect(selectionMeta?.docsLabel).toBe("Docs\\nLabel");
+    expect(selectionMeta?.selectionDocsPrefix).toBe("Docs\\nPrefix");
+    expect(selectionMeta?.selectionExtras).toEqual(["Extra\\nOne"]);
     if (typeof docsLink !== "function") {
       throw new Error("Expected docs link formatter");
     }

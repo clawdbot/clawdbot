@@ -77,6 +77,9 @@ export default definePluginEntry({
           (capabilities?.reasoning ?? false) &&
           !isOpenRouterProxyReasoningUnsupportedModel(ctx.modelId),
         input: capabilities?.input ?? ["text"],
+        ...(capabilities?.supportsTools !== undefined
+          ? { compat: { supportsTools: capabilities.supportsTools } }
+          : {}),
         cost: capabilities?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: capabilities?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
         maxTokens: capabilities?.maxTokens ?? OPENROUTER_DEFAULT_MAX_TOKENS,

@@ -99,15 +99,17 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "utf8",
     );
 
-    expect(lane).toEqual(
-      expect.objectContaining({
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:kitchen-sink-plugin",
-        e2eImageKind: "functional",
-        name: "kitchen-sink-plugin",
-        resources: expect.arrayContaining(["npm"]),
-        stateScenario: "empty",
-      }),
-    );
+    expect(lane).toEqual({
+      command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:kitchen-sink-plugin",
+      e2eImageKind: "functional",
+      live: false,
+      name: "kitchen-sink-plugin",
+      resources: ["npm"],
+      retryPatterns: [],
+      retries: 0,
+      stateScenario: "empty",
+      weight: 3,
+    });
     expect(script).toContain("npm:@openclaw/kitchen-sink@latest");
     expect(script).toContain("npm-latest-conformance");
     expect(script).toContain("npm-latest-adversarial");
@@ -168,14 +170,17 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     const fixtureServer = readFileSync("scripts/e2e/lib/clawhub-fixture-server.cjs", "utf8");
     const prereleasePlan = createPluginPrereleaseTestPlan();
 
-    expect(lane).toEqual(
-      expect.objectContaining({
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins",
-        name: "plugins",
-        resources: expect.arrayContaining(["npm"]),
-        stateScenario: "empty",
-      }),
-    );
+    expect(lane).toEqual({
+      command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins",
+      e2eImageKind: "functional",
+      live: false,
+      name: "plugins",
+      resources: ["npm", "service"],
+      retryPatterns: [],
+      retries: 0,
+      stateScenario: "empty",
+      weight: 6,
+    });
     expect(prereleasePlan.surfaces).toContain("external-install-boundary");
     expect(sweepScript).toContain("run_plugins_clawhub_scenario");
     expect(clawhubScript).toContain('plugins install "$CLAWHUB_PLUGIN_SPEC"');
@@ -211,6 +216,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     const pluginPrereleaseScript = releaseWorkflow.jobs.plugin_prerelease.steps.find(
       (step) => step.name === "Dispatch and monitor plugin prerelease",
     ).run;
+    const buildDistStep = workflow.jobs["build-artifacts"].steps.find(
+      (step) => step.name === "Build dist",
+    );
 
     expect(workflow.jobs["plugin-prerelease-static-shard"]).toBeUndefined();
     expect(workflow.jobs["plugin-prerelease-docker-suite"]).toBeUndefined();
@@ -218,18 +226,87 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(workflow.jobs["checks-node-extensions-shard"]).toBeUndefined();
     expect(preflight.outputs).not.toHaveProperty("run_plugin_prerelease_suite");
     expect(preflight.outputs).not.toHaveProperty("run_checks_node_extensions");
-    expect(staticShard).toMatchObject({
+    expect(buildDistStep.env).toEqual({ NODE_OPTIONS: "--max-old-space-size=8192" });
+    expect(staticShard).toEqual({
+      if: "needs.preflight.outputs.run_plugin_prerelease_static == 'true'",
       name: "${{ matrix.check_name }}",
+      needs: ["preflight"],
+      permissions: {
+        contents: "read",
+      },
       "runs-on": "blacksmith-8vcpu-ubuntu-2404",
+      steps: [
+        {
+          name: "Checkout",
+          uses: "actions/checkout@v6",
+          with: {
+            "fetch-depth": 1,
+            "fetch-tags": false,
+            "persist-credentials": false,
+            ref: "${{ needs.preflight.outputs.checkout_revision }}",
+            submodules: false,
+          },
+        },
+        {
+          name: "Setup Node environment",
+          uses: "./.github/actions/setup-node-env",
+          with: {
+            "install-bun": "false",
+          },
+        },
+        {
+          env: {
+            PLUGIN_PRERELEASE_COMMAND: "${{ matrix.command }}",
+            PLUGIN_PRERELEASE_TASK: "${{ matrix.task }}",
+          },
+          name: "Run plugin prerelease static shard",
+          run: [
+            "set -euo pipefail",
+            'echo "Running ${PLUGIN_PRERELEASE_TASK}: ${PLUGIN_PRERELEASE_COMMAND}"',
+            'bash -c "$PLUGIN_PRERELEASE_COMMAND"',
+            "",
+          ].join("\n"),
+          shell: "bash",
+        },
+      ],
+      strategy: {
+        "fail-fast": false,
+        matrix: "${{ fromJson(needs.preflight.outputs.plugin_prerelease_static_matrix) }}",
+      },
+      "timeout-minutes": 45,
     });
     expect(workflow.on.workflow_dispatch.inputs.full_release_validation).toBeUndefined();
-    expect(workflow.on.workflow_dispatch.inputs.include_android).toMatchObject({
+    expect(workflow.on.workflow_dispatch.inputs.include_android).toEqual({
       default: false,
+      description: "Run Android lanes for this manual CI dispatch.",
+      required: false,
       type: "boolean",
     });
-    expect(manifestEnv).toMatchObject({
+    expect(manifestEnv).toEqual({
+      OPENCLAW_CI_CHECKOUT_REVISION: "${{ steps.checkout_ref.outputs.sha }}",
+      OPENCLAW_CI_DOCS_CHANGED:
+        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.docs_scope.outputs.docs_changed }}",
+      OPENCLAW_CI_DOCS_ONLY:
+        "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.docs_scope.outputs.docs_only }}",
+      OPENCLAW_CI_REPOSITORY: "${{ github.repository }}",
       OPENCLAW_CI_RUN_ANDROID:
         "${{ github.event_name == 'workflow_dispatch' && inputs.include_android && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
+      OPENCLAW_CI_RUN_CONTROL_UI_I18N:
+        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}",
+      OPENCLAW_CI_RUN_MACOS:
+        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}",
+      OPENCLAW_CI_RUN_NODE:
+        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_node || 'false' }}",
+      OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING:
+        "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_ci_routing || 'false' }}",
+      OPENCLAW_CI_RUN_NODE_FAST_ONLY:
+        "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_only || 'false' }}",
+      OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS:
+        "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}",
+      OPENCLAW_CI_RUN_SKILLS_PYTHON:
+        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_skills_python || 'false' }}",
+      OPENCLAW_CI_RUN_WINDOWS:
+        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}",
     });
     expect(manifestEnv).not.toHaveProperty("OPENCLAW_CI_FULL_RELEASE_VALIDATION");
     expect(manifestScript).toContain("includeReleaseOnlyPluginShards: false");
@@ -257,15 +334,20 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(pluginManifestScript).toContain(
       "Plugin prerelease plan unavailable in target ref; skipping static and Docker plugin prerelease lanes.",
     );
-    expect(pluginWorkflow.on.workflow_dispatch.inputs.target_ref).toMatchObject({
+    expect(pluginWorkflow.on.workflow_dispatch.inputs.target_ref).toEqual({
       default: "main",
+      description: "Branch, tag, or full commit SHA to validate",
+      required: false,
       type: "string",
     });
-    expect(pluginWorkflow.on.workflow_dispatch.inputs.full_release_validation).toMatchObject({
+    expect(pluginWorkflow.on.workflow_dispatch.inputs.full_release_validation).toEqual({
       default: false,
+      description: "Enable release-only Docker prerelease lanes from Full Release Validation",
+      required: false,
       type: "boolean",
     });
-    expect(pluginManifestEnv).toMatchObject({
+    expect(pluginManifestEnv).toEqual({
+      EXPECTED_SHA: "${{ inputs.expected_sha }}",
       FULL_RELEASE_VALIDATION: "${{ inputs.full_release_validation && 'true' || 'false' }}",
     });
     expect(pluginManifestScript).toContain(
@@ -274,7 +356,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(pluginManifestScript).toContain(
       "const runDocker = fullReleaseValidation && dockerLanes.length > 0;",
     );
-    expect(pluginPreflight.outputs).toMatchObject({
+    expect(pluginPreflight.outputs).toEqual({
       checkout_revision: "${{ steps.manifest.outputs.checkout_revision }}",
       plugin_prerelease_docker_lanes:
         "${{ steps.manifest.outputs.plugin_prerelease_docker_lanes }}",
@@ -305,9 +387,16 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(
       staticShard.steps.find((step) => step.name === "Run plugin prerelease static shard").run,
     ).toContain('bash -c "$PLUGIN_PRERELEASE_COMMAND"');
-    expect(dockerSuite).toMatchObject({
+    expect(dockerSuite).toEqual({
       if: "${{ inputs.full_release_validation && needs.preflight.outputs.run_plugin_prerelease_docker == 'true' }}",
+      name: "plugin-prerelease-docker-suite",
       needs: ["preflight"],
+      permissions: {
+        actions: "read",
+        contents: "read",
+        packages: "write",
+        "pull-requests": "read",
+      },
       uses: "./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
       with: {
         docker_lanes: "${{ needs.preflight.outputs.plugin_prerelease_docker_lanes }}",

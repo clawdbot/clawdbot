@@ -1,5 +1,5 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -25,6 +25,10 @@ vi.mock("./builtin-pi.js", () => ({
 }));
 
 const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
+
+beforeEach(() => {
+  clearAgentHarnesses();
+});
 
 afterEach(() => {
   clearAgentHarnesses();
@@ -197,33 +201,27 @@ describe("runAgentHarnessAttempt", () => {
   it("uses the Codex harness by default for OpenAI agent model runs", async () => {
     registerSuccessfulCodexHarness();
 
-    await expect(
-      runAgentHarnessAttempt({
-        ...createAttemptParams(),
-        provider: "openai",
-        modelId: "gpt-5.4",
-      }),
-    ).resolves.toMatchObject({
-      sessionIdUsed: "codex",
+    const result = await runAgentHarnessAttempt({
+      ...createAttemptParams(),
+      provider: "openai",
+      modelId: "gpt-5.4",
     });
+    expect(result.sessionIdUsed).toBe("codex");
     expect(piRunAttempt).not.toHaveBeenCalled();
   });
 
   it("honors explicit PI runtime for OpenAI agent model runs", async () => {
-    await expect(
-      runAgentHarnessAttempt({
-        ...createAttemptParams(providerRuntimeConfig("openai", "pi")),
-        provider: "openai",
-        modelId: "gpt-5.4",
-      }),
-    ).resolves.toMatchObject({
-      sessionIdUsed: "pi",
+    const result = await runAgentHarnessAttempt({
+      ...createAttemptParams(providerRuntimeConfig("openai", "pi")),
+      provider: "openai",
+      modelId: "gpt-5.4",
     });
+    expect(result.sessionIdUsed).toBe("pi");
     expect(piRunAttempt).toHaveBeenCalledTimes(1);
   });
 
   it("annotates non-ok harness result classifications for outer model fallback", async () => {
-    const classify = vi.fn(() => "empty" as const);
+    const classify = vi.fn<NonNullable<AgentHarness["classify"]>>(() => "empty" as const);
     registerAgentHarness(
       {
         id: "codex",
@@ -239,14 +237,11 @@ describe("runAgentHarnessAttempt", () => {
     const params = createAttemptParams();
     const result = await runAgentHarnessAttempt(params);
 
-    expect(classify).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionIdUsed: "codex" }),
-      params,
-    );
-    expect(result).toMatchObject({
-      agentHarnessId: "codex",
-      agentHarnessResultClassification: "empty",
-    });
+    const classifyCall = classify.mock.calls[0];
+    expect(classifyCall?.[0].sessionIdUsed).toBe("codex");
+    expect(classifyCall?.[1]).toBe(params);
+    expect(result.agentHarnessId).toBe("codex");
+    expect(result.agentHarnessResultClassification).toBe("empty");
   });
 
   it("fails for config-forced plugin harnesses when fallback is omitted", async () => {
@@ -405,15 +400,12 @@ describe("selectAgentHarness", () => {
 
     expect(selectAgentHarness({ provider: "openai", modelId: "gpt-5.4", config }).id).toBe("codex");
 
-    await expect(
-      runAgentHarnessAttempt({
-        ...createAttemptParams(config),
-        provider: "openai",
-        modelId: "gpt-5.4",
-      }),
-    ).resolves.toMatchObject({
-      sessionIdUsed: "codex",
+    const result = await runAgentHarnessAttempt({
+      ...createAttemptParams(config),
+      provider: "openai",
+      modelId: "gpt-5.4",
     });
+    expect(result.sessionIdUsed).toBe("codex");
     expect(piRunAttempt).not.toHaveBeenCalled();
   });
 

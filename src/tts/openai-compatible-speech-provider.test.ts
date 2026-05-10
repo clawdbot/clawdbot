@@ -19,6 +19,14 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
 
+function requireFirstMockArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const arg = mock.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+  if (!arg) {
+    throw new Error("missing first mock argument");
+  }
+  return arg;
+}
+
 describe("createOpenAiCompatibleSpeechProvider", () => {
   afterEach(() => {
     assertOkOrThrowHttpErrorMock.mockClear();
@@ -122,34 +130,29 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
       timeoutMs: 1234,
     });
 
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baseUrl: "https://example.test/v1",
-        defaultBaseUrl: "https://example.test/v1",
-        provider: "demo",
-        capability: "audio",
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://example.test/v1/audio/speech",
-        timeoutMs: 1234,
-        body: {
-          model: "override-tts",
-          input: "hello",
-          voice: "verse",
-          response_format: "opus",
-          speed: 1.1,
-          provider: { order: ["openai"] },
-        },
-      }),
-    );
-    expect(result).toMatchObject({
-      audioBuffer: Buffer.from([4, 5, 6]),
-      outputFormat: "opus",
-      fileExtension: ".opus",
-      voiceCompatible: true,
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledOnce();
+    const httpConfigRequest = requireFirstMockArg(resolveProviderHttpRequestConfigMock);
+    expect(httpConfigRequest.baseUrl).toBe("https://example.test/v1");
+    expect(httpConfigRequest.defaultBaseUrl).toBe("https://example.test/v1");
+    expect(httpConfigRequest.provider).toBe("demo");
+    expect(httpConfigRequest.capability).toBe("audio");
+
+    expect(postJsonRequestMock).toHaveBeenCalledOnce();
+    const postRequest = requireFirstMockArg(postJsonRequestMock);
+    expect(postRequest.url).toBe("https://example.test/v1/audio/speech");
+    expect(postRequest.timeoutMs).toBe(1234);
+    expect(postRequest.body).toStrictEqual({
+      model: "override-tts",
+      input: "hello",
+      voice: "verse",
+      response_format: "opus",
+      speed: 1.1,
+      provider: { order: ["openai"] },
     });
+    expect(result.audioBuffer).toStrictEqual(Buffer.from([4, 5, 6]));
+    expect(result.outputFormat).toBe("opus");
+    expect(result.fileExtension).toBe(".opus");
+    expect(result.voiceCompatible).toBe(true);
     expect(release).toHaveBeenCalledOnce();
   });
 });

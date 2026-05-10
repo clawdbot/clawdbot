@@ -1,0 +1,202 @@
+name: Website Installer Sync
+
+on:
+  pull_request:
+    paths:
+      - scripts/install.sh
+      - scripts/install-cli.sh
+      - scripts/install.ps1
+      - .github/workflows/website-installer-sync.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/install.sh
+      - scripts/install-cli.sh
+      - scripts/install.ps1
+      - .github/workflows/website-installer-sync.yml
+  workflow_dispatch:
+    inputs:
+      sync_website:
+        description: Sync openclaw.ai after verification
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-installer-sync-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  static:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install ShellCheck
+        run: sudo apt-get update -y && sudo apt-get install -y shellcheck
+
+      - name: Shell syntax
+        run: bash -n scripts/install.sh scripts/install-cli.sh
+
+      - name: ShellCheck
+        run: shellcheck -e SC1091 scripts/install.sh scripts/install-cli.sh
+
+      - name: Installer help and dry-runs
+        run: |
+          bash scripts/install.sh --help >/tmp/install-help.txt
+          bash scripts/install.sh --dry-run --no-onboard --no-prompt
+          bash scripts/install-cli.sh --help >/tmp/install-cli-help.txt
+
+      - name: PowerShell syntax
+        shell: pwsh
+        run: |
+          $errors = $null
+          $null = [System.Management.Automation.PSParser]::Tokenize(
+            (Get-Content -Raw scripts/install.ps1),
+            [ref]$errors
+          )
+          if ($errors -and $errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+
+  linux-docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: install.sh in Docker
+        run: |
+          docker run --rm \
+            -e OPENCLAW_NO_ONBOARD=1 \
+            -e OPENCLAW_NO_PROMPT=1 \
+            -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
+            node:24-bookworm-slim \
+            bash -lc 'bash /tmp/install.sh --no-prompt --no-onboard --version latest && openclaw --version'
+
+      - name: install-cli.sh in Docker
+        run: |
+          docker run --rm \
+            -e OPENCLAW_NO_ONBOARD=1 \
+            -e OPENCLAW_NO_PROMPT=1 \
+            -v "$PWD/scripts/install-cli.sh:/tmp/install-cli.sh:ro" \
+            node:24-bookworm-slim \
+            bash -lc 'apt-get update -y && apt-get install -y curl && bash /tmp/install-cli.sh --prefix /tmp/openclaw --no-onboard --version latest && /tmp/openclaw/bin/openclaw --version'
+
+  macos-installer:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: install.sh dry run
+        run: bash scripts/install.sh --dry-run --no-onboard --no-prompt
+
+      - name: install.sh on macOS
+        env:
+          OPENCLAW_NO_ONBOARD: "1"
+          OPENCLAW_NO_PROMPT: "1"
+        run: |
+          bash scripts/install.sh --no-onboard --no-prompt --version latest
+          openclaw --version
+
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: install.ps1 dry run
+        shell: pwsh
+        run: .\scripts\install.ps1 -DryRun -NoOnboard -InstallMethod npm
+
+  sync-website:
+    needs: [static, linux-docker, macos-installer, windows-installer]
+    if: >
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.sync_website)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout OpenClaw
+        uses: actions/checkout@v6
+        with:
+          path: openclaw
+
+      - name: Checkout openclaw.ai
+        uses: actions/checkout@v6
+        with:
+          repository: openclaw/openclaw.ai
+          token: ${{ secrets.OPENCLAW_GH_TOKEN }}
+          path: openclaw.ai
+
+      - name: Sync installer scripts
+        run: |
+          cp openclaw/scripts/install.sh openclaw.ai/public/install.sh
+          cp openclaw/scripts/install-cli.sh openclaw.ai/public/install-cli.sh
+          cp openclaw/scripts/install.ps1 openclaw.ai/public/install.ps1
+          rm -f openclaw.ai/public/install.cmd
+          chmod +x openclaw.ai/public/install.sh openclaw.ai/public/install-cli.sh
+
+      - name: Check for changes
+        id: changes
+        working-directory: openclaw.ai
+        run: |
+          if git diff --quiet -- public/install.sh public/install-cli.sh public/install.ps1 public/install.cmd; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Bun
+        if: steps.changes.outputs.changed == 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node.js
+        if: steps.changes.outputs.changed == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install ShellCheck
+        if: steps.changes.outputs.changed == 'true'
+        run: sudo apt-get update -y && sudo apt-get install -y shellcheck
+
+      - name: Verify website with synced installers
+        if: steps.changes.outputs.changed == 'true'
+        working-directory: openclaw.ai
+        run: |
+          bash -n public/install.sh public/install-cli.sh
+          shellcheck -e SC1091 public/install.sh public/install-cli.sh
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Commit and push website sync
+        if: steps.changes.outputs.changed == 'true'
+        working-directory: openclaw.ai
+        run: |
+          git config user.name "openclaw-installer-sync[bot]"
+          git config user.email "openclaw-installer-sync[bot]@users.noreply.github.com"
+          git add public/install.sh public/install-cli.sh public/install.ps1 public/install.cmd
+          git commit -m "chore: sync installers from openclaw ${GITHUB_SHA::12}"
+          git pull --rebase origin main
+          git push origin HEAD:main

@@ -38,15 +38,10 @@ describe("security audit config symlink findings", () => {
       configPath,
     });
 
-    expect(findings).toEqual(
-      expect.arrayContaining([expect.objectContaining({ checkId: "fs.config.symlink" })]),
-    );
-    expect(findings.map((finding) => finding.checkId)).not.toEqual(
-      expect.arrayContaining([
-        "fs.config.perms_writable",
-        "fs.config.perms_world_readable",
-        "fs.config.perms_group_readable",
-      ]),
-    );
+    const checkIds = findings.map((finding) => finding.checkId);
+    expect(checkIds).toContain("fs.config.symlink");
+    expect(checkIds).not.toContain("fs.config.perms_writable");
+    expect(checkIds).not.toContain("fs.config.perms_world_readable");
+    expect(checkIds).not.toContain("fs.config.perms_group_readable");
   });
 });

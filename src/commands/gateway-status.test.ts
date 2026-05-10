@@ -236,6 +236,29 @@ function asRuntimeEnv(runtime: ReturnType<typeof createRuntimeCapture>["runtime"
   return runtime as unknown as RuntimeEnv;
 }
 
+type ProbeGatewayCall = {
+  auth?: {
+    password?: string;
+    token?: string;
+  };
+  preauthHandshakeTimeoutMs?: number;
+  timeoutMs?: number;
+  tlsFingerprint?: string;
+  url?: string;
+};
+
+function readProbeCalls(): ProbeGatewayCall[] {
+  return probeGateway.mock.calls.map(([call]) => call as ProbeGatewayCall);
+}
+
+function requireProbeCall(url: string): ProbeGatewayCall {
+  const call = readProbeCalls().find((candidate) => candidate.url === url);
+  if (!call) {
+    throw new Error(`Expected gateway probe call for ${url}`);
+  }
+  return call;
+}
+
 function makeRemoteGatewayConfig(url: string, token = "rtok", localToken = "ltok") {
   return {
     gateway: {
@@ -410,10 +433,8 @@ describe("gateway-status command", () => {
     const parsed = JSON.parse(runtimeLogs.join("\n")) as {
       network?: { tailnetIPv4?: string | null; localTailnetUrl?: string | null };
     };
-    expect(parsed.network).toMatchObject({
-      tailnetIPv4: null,
-      localTailnetUrl: null,
-    });
+    expect(parsed.network?.tailnetIPv4).toBeNull();
+    expect(parsed.network?.localTailnetUrl).toBeNull();
   });
 
   it("treats missing-scope RPC probe failures as degraded but reachable", async () => {
@@ -463,11 +484,9 @@ describe("gateway-status command", () => {
     expect(parsed.ok).toBe(true);
     expect(parsed.degraded).toBe(true);
     expect(parsed.capability).toBe("write_capable");
-    expect(parsed.targets?.[0]?.connect).toMatchObject({
-      ok: true,
-      rpcOk: false,
-      scopeLimited: true,
-    });
+    expect(parsed.targets?.[0]?.connect?.ok).toBe(true);
+    expect(parsed.targets?.[0]?.connect?.rpcOk).toBe(false);
+    expect(parsed.targets?.[0]?.connect?.scopeLimited).toBe(true);
     expect(parsed.targets?.[0]?.auth?.capability).toBe("write_capable");
     const scopeLimitedWarning = parsed.warnings?.find(
       (warning) => warning.code === "probe_scope_limited",
@@ -559,13 +578,8 @@ describe("gateway-status command", () => {
     );
 
     expect(runtimeErrors).toHaveLength(0);
-    expect(probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        auth: expect.objectContaining({
-          token: "env-token",
-        }),
-      }),
-    );
+    const localProbeCall = requireProbeCall("ws://127.0.0.1:18789");
+    expect(localProbeCall.auth?.token).toBe("env-token");
     const parsed = JSON.parse(runtimeLogs.join("\n")) as {
       warnings?: Array<{ code?: string; message?: string }>;
     };
@@ -645,13 +659,8 @@ describe("gateway-status command", () => {
     );
 
     expect(runtimeErrors).toHaveLength(0);
-    expect(probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        auth: expect.objectContaining({
-          token: "resolved-gateway-token",
-        }),
-      }),
-    );
+    const localProbeCall = requireProbeCall("ws://127.0.0.1:18789");
+    expect(localProbeCall.auth?.token).toBe("resolved-gateway-token");
     const parsed = JSON.parse(runtimeLogs.join("\n")) as {
       warnings?: Array<{ code?: string }>;
     };
@@ -791,13 +800,9 @@ describe("gateway-status command", () => {
     await runGatewayStatus(runtime, { timeout: "15000", json: true });
 
     expect(loadGatewayTlsRuntime).toHaveBeenCalledTimes(1);
-    expect(probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "wss://127.0.0.1:18789",
-        tlsFingerprint: "sha256:local-fingerprint",
-        timeoutMs: 15_000,
-      }),
-    );
+    const localProbeCall = requireProbeCall("wss://127.0.0.1:18789");
+    expect(localProbeCall.tlsFingerprint).toBe("sha256:local-fingerprint");
+    expect(localProbeCall.timeoutMs).toBe(15_000);
   });
 
   it("warns when local TLS is enabled but the certificate fingerprint cannot be loaded", async () => {
@@ -818,25 +823,17 @@ describe("gateway-status command", () => {
 
     await runGatewayStatus(runtime, { timeout: "15000", json: true });
 
-    expect(probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "wss://127.0.0.1:18789",
-        tlsFingerprint: undefined,
-      }),
-    );
+    const localProbeCall = requireProbeCall("wss://127.0.0.1:18789");
+    expect(localProbeCall.tlsFingerprint).toBeUndefined();
 
     const parsed = JSON.parse(runtimeLogs.join("\n")) as {
       warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
     };
-    expect(parsed.warnings).toContainEqual(
-      expect.objectContaining({
-        code: "local_tls_runtime_unavailable",
-        targetIds: ["localLoopback"],
-      }),
+    const tlsWarning = parsed.warnings?.find(
+      (warning) => warning.code === "local_tls_runtime_unavailable",
     );
-    expect(
-      parsed.warnings?.find((warning) => warning.code === "local_tls_runtime_unavailable")?.message,
-    ).toContain("gateway tls: cert/key missing");
+    expect(tlsWarning?.targetIds).toEqual(["localLoopback"]);
+    expect(tlsWarning?.message).toContain("gateway tls: cert/key missing");
   });
 
   it("passes the full caller timeout through to local loopback probes", async () => {
@@ -851,12 +848,7 @@ describe("gateway-status command", () => {
 
     await runGatewayStatus(runtime, { timeout: "15000", json: true });
 
-    expect(probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "ws://127.0.0.1:18789",
-        timeoutMs: 15_000,
-      }),
-    );
+    expect(requireProbeCall("ws://127.0.0.1:18789").timeoutMs).toBe(15_000);
   });
 
   it("uses configured handshake timeout as the default local probe budget", async () => {
@@ -872,13 +864,9 @@ describe("gateway-status command", () => {
 
     await gatewayStatusCommand({ json: true }, asRuntimeEnv(runtime));
 
-    expect(probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "ws://127.0.0.1:18789",
-        preauthHandshakeTimeoutMs: 30_000,
-        timeoutMs: 30_000,
-      }),
-    );
+    const localProbeCall = requireProbeCall("ws://127.0.0.1:18789");
+    expect(localProbeCall.preauthHandshakeTimeoutMs).toBe(30_000);
+    expect(localProbeCall.timeoutMs).toBe(30_000);
   });
 
   it("keeps inactive local loopback probes on the short timeout in remote mode", async () => {
@@ -894,12 +882,7 @@ describe("gateway-status command", () => {
 
     await runGatewayStatus(runtime, { timeout: "15000", json: true });
 
-    expect(probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "ws://127.0.0.1:18789",
-        timeoutMs: 800,
-      }),
-    );
+    expect(requireProbeCall("ws://127.0.0.1:18789").timeoutMs).toBe(800);
   });
 
   it("does not infer ssh-auto targets from TXT-only discovery metadata", async () => {

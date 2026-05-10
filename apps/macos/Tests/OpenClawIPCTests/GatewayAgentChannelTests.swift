@@ -12,7 +12,7 @@ struct GatewayAgentChannelTests {
         #expect(GatewayAgentChannel.whatsapp.shouldDeliver(true) == true)
         #expect(GatewayAgentChannel.telegram.shouldDeliver(true) == true)
         #expect(GatewayAgentChannel.googlechat.shouldDeliver(true) == true)
-        #expect(GatewayAgentChannel.bluebubbles.shouldDeliver(true) == true)
+        #expect(GatewayAgentChannel.imessage.shouldDeliver(true) == true)
         #expect(GatewayAgentChannel.last.shouldDeliver(false) == false)
     }
 
@@ -21,7 +21,7 @@ struct GatewayAgentChannelTests {
         #expect(GatewayAgentChannel(raw: "  ") == .last)
         #expect(GatewayAgentChannel(raw: "WEBCHAT") == .webchat)
         #expect(GatewayAgentChannel(raw: "googlechat") == .googlechat)
-        #expect(GatewayAgentChannel(raw: "BLUEBUBBLES") == .bluebubbles)
+        #expect(GatewayAgentChannel(raw: "IMESSAGE") == .imessage)
         #expect(GatewayAgentChannel(raw: "unknown") == .last)
     }
 }

@@ -101,7 +101,7 @@ RUN pnpm canvas:a2ui:bundle || \
      echo "/* A2UI bundle unavailable in this build */" > extensions/canvas/src/host/a2ui/a2ui.bundle.js && \
      echo "stub" > extensions/canvas/src/host/a2ui/.bundle.hash && \
      rm -rf vendor/a2ui apps/shared/OpenClawKit/Tools/CanvasA2UI)
-RUN pnpm build:docker
+RUN NODE_OPTIONS=--max-old-space-size=8192 pnpm build:docker
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
@@ -207,15 +207,15 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 # Adds ~300MB but eliminates the 60-90s Playwright install on every container start.
 # Must run after node_modules COPY so playwright-core is available.
 ARG OPENCLAW_INSTALL_BROWSER=""
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
-      mkdir -p /home/node/.cache/ms-playwright && \
-      PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright \
+      mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" && \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
-      chown -R node:node /home/node/.cache/ms-playwright; \
+      chown -R node:node "$PLAYWRIGHT_BROWSERS_PATH"; \
     fi
 
 # Optionally install Docker CLI for sandbox container management.

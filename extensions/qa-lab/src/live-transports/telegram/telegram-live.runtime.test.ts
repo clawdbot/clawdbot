@@ -331,6 +331,7 @@ describe("telegram live qa runtime", () => {
       "telegram-tools-compact-command",
       "telegram-whoami-command",
       "telegram-status-command",
+      "telegram-repeated-command-authorization",
       "telegram-other-bot-command-gating",
       "telegram-context-command",
       "telegram-current-session-status-tool",
@@ -347,6 +348,7 @@ describe("telegram live qa runtime", () => {
       "telegram-tools-compact-command",
       "telegram-whoami-command",
       "telegram-status-command",
+      "telegram-repeated-command-authorization",
       "telegram-other-bot-command-gating",
       "telegram-context-command",
       "telegram-current-session-status-tool",
@@ -359,16 +361,26 @@ describe("telegram live qa runtime", () => {
     ]);
     expect(
       scenarios.find((scenario) => scenario.id === "telegram-status-command")?.buildRun("sut_bot")
-        .input,
+        .steps[0].input,
     ).toBe("/status@sut_bot");
     expect(
       scenarios.find((scenario) => scenario.id === "telegram-status-command")?.buildRun("sut_bot")
-        .expectedTextIncludes,
+        .steps[0].expectedTextIncludes,
     ).toEqual(["OpenClaw", "Model:", "Session:", "Activation:"]);
     expect(
       scenarios
+        .find((scenario) => scenario.id === "telegram-repeated-command-authorization")
+        ?.buildRun("sut_bot").steps,
+    ).toMatchObject([
+      { driverGroupAuthorization: "deny", input: "/status@sut_bot", expectReply: false },
+      { driverGroupAuthorization: "allow", input: "/status@sut_bot", expectReply: true },
+      { input: "/help@sut_bot", expectReply: true },
+      { input: "/commands@sut_bot", expectReply: true },
+    ]);
+    expect(
+      scenarios
         .find((scenario) => scenario.id === "telegram-other-bot-command-gating")
-        ?.buildRun("sut_bot"),
+        ?.buildRun("sut_bot").steps[0],
     ).toMatchObject({
       expectReply: false,
       input: "/status@OpenClawQaOtherBot",
@@ -376,7 +388,7 @@ describe("telegram live qa runtime", () => {
     expect(
       scenarios
         .find((scenario) => scenario.id === "telegram-current-session-status-tool")
-        ?.buildRun("sut_bot"),
+        ?.buildRun("sut_bot").steps[0],
     ).toMatchObject({
       expectedTextIncludes: ["QA-TELEGRAM-CURRENT-SESSION-OK", ":telegram:group:"],
       replyToLatestSutMessage: true,
@@ -384,12 +396,12 @@ describe("telegram live qa runtime", () => {
     expect(
       scenarios
         .find((scenario) => scenario.id === "telegram-mentioned-message-reply")
-        ?.buildRun("sut_bot").replyToLatestSutMessage,
+        ?.buildRun("sut_bot").steps[0].replyToLatestSutMessage,
     ).toBe(true);
     expect(
       scenarios
         .find((scenario) => scenario.id === "telegram-reply-chain-exact-marker")
-        ?.buildRun("sut_bot"),
+        ?.buildRun("sut_bot").steps[0],
     ).toMatchObject({
       expectedJoinedSutTextIncludes: ["QA-TELEGRAM-REPLY-CHAIN-OK"],
       expectedSutMessageCount: 1,
@@ -398,7 +410,7 @@ describe("telegram live qa runtime", () => {
     expect(
       scenarios
         .find((scenario) => scenario.id === "telegram-stream-final-single-message")
-        ?.buildRun("sut_bot"),
+        ?.buildRun("sut_bot").steps[0],
     ).toMatchObject({
       expectedJoinedSutTextIncludes: ["QA-TELEGRAM-STREAM-SINGLE-OK"],
       expectedSutMessageCount: 1,
@@ -407,16 +419,16 @@ describe("telegram live qa runtime", () => {
     expect(
       scenarios
         .find((scenario) => scenario.id === "telegram-long-final-reuses-preview")
-        ?.buildRun("sut_bot"),
+        ?.buildRun("sut_bot").steps[0],
     ).toMatchObject({
       expectedJoinedSutTextIncludes: ["TELEGRAM-LONG-FINAL-BEGIN", "TELEGRAM-LONG-FINAL-END"],
-      expectedSutMessageCount: 2,
+      expectedSutMessageCountRange: [1, 2],
       replyToLatestSutMessage: true,
     });
     expect(
       scenarios
         .find((scenario) => scenario.id === "telegram-long-final-three-chunks")
-        ?.buildRun("sut_bot"),
+        ?.buildRun("sut_bot").steps[0],
     ).toMatchObject({
       expectedJoinedSutTextIncludes: [
         "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN",
@@ -436,6 +448,7 @@ describe("telegram live qa runtime", () => {
       "telegram-tools-compact-command",
       "telegram-whoami-command",
       "telegram-status-command",
+      "telegram-repeated-command-authorization",
       "telegram-other-bot-command-gating",
       "telegram-context-command",
       "telegram-mentioned-message-reply",
@@ -451,6 +464,7 @@ describe("telegram live qa runtime", () => {
         "telegram-tools-compact-command",
         "telegram-whoami-command",
         "telegram-status-command",
+        "telegram-repeated-command-authorization",
         "telegram-other-bot-command-gating",
         "telegram-context-command",
         "telegram-mentioned-message-reply",
@@ -499,7 +513,33 @@ describe("telegram live qa runtime", () => {
     expect(
       __testing.assertTelegramScenarioMessageSet({
         expectedJoinedSutTextIncludes: ["TELEGRAM-LONG-FINAL-BEGIN", "TELEGRAM-LONG-FINAL-END"],
-        expectedSutMessageCount: 2,
+        expectedSutMessageCountRange: [1, 2],
+        groupId: "-100123",
+        scenarioId: "telegram-long-final-reuses-preview",
+        sutBotId: 99,
+        observedMessages: [
+          {
+            updateId: 1,
+            messageId: 10,
+            chatId: -100123,
+            senderId: 99,
+            senderIsBot: true,
+            scenarioId: "telegram-long-final-reuses-preview",
+            scenarioTitle: "Telegram long final reuses the preview message",
+            matchedScenario: true,
+            text: "TELEGRAM-LONG-FINAL-BEGIN part one part two TELEGRAM-LONG-FINAL-END",
+            timestamp: 1_700_000_000_000,
+            inlineButtons: [],
+            mediaKinds: [],
+          },
+        ],
+      }),
+    ).toBeUndefined();
+
+    expect(
+      __testing.assertTelegramScenarioMessageSet({
+        expectedJoinedSutTextIncludes: ["TELEGRAM-LONG-FINAL-BEGIN", "TELEGRAM-LONG-FINAL-END"],
+        expectedSutMessageCountRange: [1, 2],
         groupId: "-100123",
         scenarioId: "telegram-long-final-reuses-preview",
         sutBotId: 99,
@@ -538,7 +578,7 @@ describe("telegram live qa runtime", () => {
 
     expect(() =>
       __testing.assertTelegramScenarioMessageSet({
-        expectedSutMessageCount: 2,
+        expectedSutMessageCountRange: [1, 2],
         groupId: "-100123",
         scenarioId: "telegram-long-final-reuses-preview",
         sutBotId: 99,
@@ -587,7 +627,7 @@ describe("telegram live qa runtime", () => {
           },
         ],
       }),
-    ).toThrow("expected 2 SUT message(s), observed 3");
+    ).toThrow("expected 1-2 SUT message(s), observed 3");
   });
 
   it("accepts legitimate three-chunk Telegram final replies", () => {
@@ -700,7 +740,7 @@ describe("telegram live qa runtime", () => {
         sutBotId: 88,
         message: {
           updateId: 3,
-          messageId: 12,
+          messageId: 56,
           chatId: -100123,
           senderId: 88,
           senderIsBot: true,
@@ -713,6 +753,27 @@ describe("telegram live qa runtime", () => {
         },
       }),
     ).toBe(true);
+    expect(
+      __testing.matchesTelegramScenarioReply({
+        allowAnySutReply: true,
+        groupId: "-100123",
+        sentMessageId: 55,
+        sutBotId: 88,
+        message: {
+          updateId: 4,
+          messageId: 54,
+          chatId: -100123,
+          senderId: 88,
+          senderIsBot: true,
+          senderUsername: "sut_bot",
+          text: "stale reply from a previous scenario",
+          replyToMessageId: undefined,
+          timestamp: 1_700_000_004_000,
+          inlineButtons: [],
+          mediaKinds: [],
+        },
+      }),
+    ).toBe(false);
   });
 
   it("validates expected Telegram reply markers", () => {

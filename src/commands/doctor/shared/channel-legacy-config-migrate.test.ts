@@ -82,10 +82,8 @@ describe("bundled channel legacy config migrations", () => {
     const nextChannels = (result.next.channels ?? {}) as {
       slack?: Record<string, unknown>;
     };
-    expect(nextChannels.slack).toMatchObject({
-      streaming: true,
-      normalizedByBundledContract: true,
-    });
+    expect(nextChannels.slack?.streaming).toBe(true);
+    expect(nextChannels.slack?.normalizedByBundledContract).toBe(true);
     expect(result.changes).toEqual(["Normalized channels.slack via bundled doctor contract."]);
   });
 
@@ -129,10 +127,22 @@ describe("bundled channel legacy config migrations", () => {
       },
     });
 
-    expect(applyPluginDoctorCompatibilityMigrations).toHaveBeenCalledWith(expect.any(Object), {
-      config: expect.any(Object),
-      pluginIds: ["mattermost"],
+    expect(applyPluginDoctorCompatibilityMigrations).toHaveBeenCalledOnce();
+    const migrationCall = applyPluginDoctorCompatibilityMigrations.mock.calls[0];
+    expect(typeof migrationCall?.[0]).toBe("object");
+    expect(migrationCall?.[1]?.config).toStrictEqual({
+      channels: {
+        mattermost: {
+          allowPrivateNetwork: true,
+          accounts: {
+            work: {
+              allowPrivateNetwork: false,
+            },
+          },
+        },
+      },
     });
+    expect(migrationCall?.[1]?.pluginIds).toStrictEqual(["mattermost"]);
 
     const nextChannels = (result.next.channels ?? {}) as {
       mattermost?: Record<string, unknown>;
@@ -150,11 +160,12 @@ describe("bundled channel legacy config migrations", () => {
         },
       },
     });
-    expect(result.changes).toEqual(
-      expect.arrayContaining([
-        "Moved channels.mattermost.allowPrivateNetwork → channels.mattermost.network.dangerouslyAllowPrivateNetwork (true).",
-        "Moved channels.mattermost.accounts.work.allowPrivateNetwork → channels.mattermost.accounts.work.network.dangerouslyAllowPrivateNetwork (false).",
-      ]),
+    expect(result.changes).toHaveLength(2);
+    expect(result.changes).toContain(
+      "Moved channels.mattermost.allowPrivateNetwork → channels.mattermost.network.dangerouslyAllowPrivateNetwork (true).",
+    );
+    expect(result.changes).toContain(
+      "Moved channels.mattermost.accounts.work.allowPrivateNetwork → channels.mattermost.accounts.work.network.dangerouslyAllowPrivateNetwork (false).",
     );
   });
 
@@ -189,7 +200,10 @@ describe("bundled channel legacy config migrations", () => {
     };
     const result = applyChannelDoctorCompatibilityMigrations(config);
 
-    expect(applyPluginDoctorCompatibilityMigrations).toHaveBeenCalledWith(expect.any(Object), {
+    expect(applyPluginDoctorCompatibilityMigrations).toHaveBeenCalledOnce();
+    const migrationCall = applyPluginDoctorCompatibilityMigrations.mock.calls[0];
+    expect(typeof migrationCall?.[0]).toBe("object");
+    expect(migrationCall?.[1]).toStrictEqual({
       config,
       pluginIds: ["lossless-claw"],
     });

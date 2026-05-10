@@ -72,9 +72,8 @@ describe("models scan command", () => {
 
     expect(mocks.loadModelsConfig).not.toHaveBeenCalled();
     expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
-    expect(mocks.scanOpenRouterModels).toHaveBeenCalledWith(
-      expect.objectContaining({ probe: false }),
-    );
+    expect(mocks.scanOpenRouterModels).toHaveBeenCalledTimes(1);
+    expect(mocks.scanOpenRouterModels.mock.calls[0]?.[0]?.probe).toBe(false);
     expect(runtime.lines.join("\n")).toContain("metadata only");
     expect(runtime.lines.join("\n")).toContain("Tool");
     expect(runtime.lines.join("\n")).toContain("skip");
@@ -94,9 +93,8 @@ describe("models scan command", () => {
       provider: "openrouter",
       cfg: {},
     });
-    expect(mocks.scanOpenRouterModels).toHaveBeenCalledWith(
-      expect.objectContaining({ probe: false }),
-    );
+    expect(mocks.scanOpenRouterModels).toHaveBeenCalledTimes(1);
+    expect(mocks.scanOpenRouterModels.mock.calls[0]?.[0]?.probe).toBe(false);
     expect(runtime.lines.join("\n")).toContain("still require OPENROUTER_API_KEY");
   });
 
@@ -113,12 +111,10 @@ describe("models scan command", () => {
 
     expect(mocks.loadModelsConfig).not.toHaveBeenCalled();
     expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
-    expect(mocks.scanOpenRouterModels).toHaveBeenCalledWith(
-      expect.objectContaining({
-        apiKey: "sk-or-test",
-        probe: true,
-      }),
-    );
+    expect(mocks.scanOpenRouterModels).toHaveBeenCalledTimes(1);
+    const scanRequest = mocks.scanOpenRouterModels.mock.calls[0]?.[0];
+    expect(scanRequest?.apiKey).toBe("sk-or-test");
+    expect(scanRequest?.probe).toBe(true);
   });
 
   it("rejects applying metadata-only scan results", async () => {

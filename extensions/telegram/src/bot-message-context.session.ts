@@ -26,6 +26,7 @@ import type {
   TelegramMediaRef,
   TelegramMessageContextOptions,
   TelegramMessageContextSessionRuntimeOverrides,
+  TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
 import {
   buildGroupLabel,
@@ -155,6 +156,7 @@ export async function buildTelegramInboundContextPayload(params: {
   allMedia: TelegramMediaRef[];
   replyMedia: TelegramMediaRef[];
   replyChain: TelegramReplyChainEntry[];
+  promptContext: TelegramPromptContextEntry[];
   isGroup: boolean;
   isForum: boolean;
   chatId: number | string;
@@ -202,6 +204,7 @@ export async function buildTelegramInboundContextPayload(params: {
     allMedia,
     replyMedia,
     replyChain,
+    promptContext,
     isGroup,
     isForum,
     chatId,
@@ -453,6 +456,7 @@ export async function buildTelegramInboundContextPayload(params: {
     ForwardedDate: visibleForwardOrigin?.date ? visibleForwardOrigin.date * 1000 : undefined,
     Timestamp: msg.date ? msg.date * 1000 : undefined,
     WasMentioned: isGroup ? effectiveWasMentioned : undefined,
+    UntrustedStructuredContext: promptContext.length > 0 ? promptContext : undefined,
     MediaPath: contextMedia.length > 0 ? contextMedia[0]?.path : undefined,
     MediaType: contextMedia.length > 0 ? contextMedia[0]?.contentType : undefined,
     MediaUrl: contextMedia.length > 0 ? contextMedia[0]?.path : undefined,

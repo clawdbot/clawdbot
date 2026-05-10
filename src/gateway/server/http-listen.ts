@@ -2,7 +2,7 @@ import type { Server as HttpServer } from "node:http";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { sleep } from "../../utils.js";
 
-const EADDRINUSE_MAX_RETRIES = 4;
+const EADDRINUSE_MAX_RETRIES = 20;
 const EADDRINUSE_RETRY_INTERVAL_MS = 500;
 
 async function closeServerQuietly(httpServer: HttpServer): Promise<void> {

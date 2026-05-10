@@ -42,13 +42,10 @@ describe("OAuth refresh lock timeout classification", () => {
 
     const error = buildRefreshContentionError({ provider, profileId, cause });
 
-    expect(error).toMatchObject({
-      code: "refresh_contention",
-      cause: {
-        code: FILE_LOCK_TIMEOUT_ERROR_CODE,
-        lockPath: `${refreshLockPath}.lock`,
-      },
-    });
+    expect(error.code).toBe("refresh_contention");
+    expect(error.cause).toBe(cause);
+    expect(cause.code).toBe(FILE_LOCK_TIMEOUT_ERROR_CODE);
+    expect(cause.lockPath).toBe(`${refreshLockPath}.lock`);
     expect(error.message).toContain("another process is already refreshing");
     expect(error.message).toContain("Please wait for the in-flight refresh to finish and retry.");
   });

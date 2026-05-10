@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearAgentHarnesses,
@@ -15,6 +15,10 @@ import { selectAgentHarness } from "./selection.js";
 import type { AgentHarness } from "./types.js";
 
 const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
+
+beforeEach(() => {
+  clearAgentHarnesses();
+});
 
 afterEach(() => {
   clearAgentHarnesses();
@@ -65,7 +69,9 @@ describe("agent harness registry", () => {
     const harness = makeHarness("custom");
     registerAgentHarness(harness, { ownerPluginId: "plugin-a" });
 
-    expect(getAgentHarness("custom")).toMatchObject({ id: "custom", pluginId: "plugin-a" });
+    const registeredHarness = getAgentHarness("custom");
+    expect(registeredHarness?.id).toBe("custom");
+    expect(registeredHarness?.pluginId).toBe("plugin-a");
     expect(getRegisteredAgentHarness("custom")?.ownerPluginId).toBe("plugin-a");
     expect(listAgentHarnessIds()).toEqual(["custom"]);
   });

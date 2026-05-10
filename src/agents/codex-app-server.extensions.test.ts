@@ -19,6 +19,16 @@ const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const originalDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 const tempDirs: string[] = [];
 
+function findDiagnostic(
+  diagnostics: readonly { level?: string; pluginId?: string; message?: string }[],
+  pluginId: string,
+  message: string,
+): { level?: string; pluginId?: string; message?: string } | undefined {
+  return diagnostics.find(
+    (diagnostic) => diagnostic.pluginId === pluginId && diagnostic.message === message,
+  );
+}
+
 function createTempDir(): string {
   return createTempPluginDir(tempDirs, "openclaw-codex-ext-");
 }
@@ -125,13 +135,12 @@ describe("agent tool result middleware", () => {
       },
     });
 
-    expect(registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        pluginId: "tool-result-middleware",
-        message: "plugin must declare contracts.agentToolResultMiddleware for: codex",
-      }),
+    const diagnostic = findDiagnostic(
+      registry.diagnostics,
+      "tool-result-middleware",
+      "plugin must declare contracts.agentToolResultMiddleware for: codex",
     );
+    expect(diagnostic?.level).toBe("error");
     expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
   });
 
@@ -163,13 +172,12 @@ describe("agent tool result middleware", () => {
       },
     });
 
-    expect(registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        pluginId: "tool-result-middleware",
-        message: "only bundled plugins can register agent tool result middleware",
-      }),
+    const diagnostic = findDiagnostic(
+      registry.diagnostics,
+      "tool-result-middleware",
+      "only bundled plugins can register agent tool result middleware",
     );
+    expect(diagnostic?.level).toBe("error");
     expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
   });
 
@@ -345,13 +353,12 @@ describe("Codex app-server extension factories", () => {
       },
     });
 
-    expect(registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        pluginId: "codex-ext",
-        message: "only bundled plugins can register Codex app-server extension factories",
-      }),
+    const diagnostic = findDiagnostic(
+      registry.diagnostics,
+      "codex-ext",
+      "only bundled plugins can register Codex app-server extension factories",
     );
+    expect(diagnostic?.level).toBe("error");
     expect(listCodexAppServerExtensionFactories()).toHaveLength(0);
   });
 
@@ -381,14 +388,12 @@ describe("Codex app-server extension factories", () => {
       },
     });
 
-    expect(registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        pluginId: "codex-ext",
-        message:
-          'plugin must declare contracts.embeddedExtensionFactories: ["codex-app-server"] to register Codex app-server extension factories',
-      }),
+    const diagnostic = findDiagnostic(
+      registry.diagnostics,
+      "codex-ext",
+      'plugin must declare contracts.embeddedExtensionFactories: ["codex-app-server"] to register Codex app-server extension factories',
     );
+    expect(diagnostic?.level).toBe("error");
     expect(listCodexAppServerExtensionFactories()).toHaveLength(0);
   });
 
@@ -423,13 +428,12 @@ describe("Codex app-server extension factories", () => {
       },
     });
 
-    expect(registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        pluginId: "codex-ext",
-        message: "codex app-server extension factory must be a function",
-      }),
+    const diagnostic = findDiagnostic(
+      registry.diagnostics,
+      "codex-ext",
+      "codex app-server extension factory must be a function",
     );
+    expect(diagnostic?.level).toBe("error");
     expect(listCodexAppServerExtensionFactories()).toHaveLength(0);
   });
 

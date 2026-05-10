@@ -63,6 +63,23 @@ async function waitForAssertion(
   }
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(record: Record<string, unknown>, expected: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(expected)) {
+    expect(record[key]).toBe(value);
+  }
+}
+
+function expectSystemEventContaining(sessionKey: string, text: string) {
+  expect(peekSystemEvents(sessionKey).some((event) => event.includes(text))).toBe(true);
+}
+
 vi.mock("./context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: () => ({ llm: undefined }),
 }));
@@ -307,21 +324,16 @@ describe("runContextEngineMaintenance", () => {
       bytesFreed: 0,
       rewrittenEntries: 0,
     });
-    expect(maintain).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        sessionFile: "/tmp/session.jsonl",
-        runtimeContext: expect.objectContaining({
-          workspaceDir: "/tmp/workspace",
-        }),
-      }),
-    );
-    const runtimeContext = (
-      maintain.mock.calls[0]?.[0] as
-        | { runtimeContext?: { rewriteTranscriptEntries?: (request: unknown) => Promise<unknown> } }
-        | undefined
-    )?.runtimeContext as
+    const maintainParams = requireRecord(maintain.mock.calls[0]?.[0], "maintain params");
+    expectRecordFields(maintainParams, {
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+    });
+    expect(
+      requireRecord(maintainParams.runtimeContext, "maintain runtime context").workspaceDir,
+    ).toBe("/tmp/workspace");
+    const runtimeContext = maintainParams.runtimeContext as
       | { rewriteTranscriptEntries?: (request: unknown) => Promise<unknown> }
       | undefined;
     if (!runtimeContext?.rewriteTranscriptEntries) {
@@ -479,7 +491,8 @@ describe("runContextEngineMaintenance", () => {
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         expect(queuedTasks).toHaveLength(1);
-        expect(queuedTasks[0]).toMatchObject({
+        const queuedTask = requireRecord(queuedTasks[0], "queued task");
+        expectRecordFields(queuedTask, {
           runtime: "acp",
           scopeKind: "session",
           ownerKey: sessionKey,
@@ -494,16 +507,17 @@ describe("runContextEngineMaintenance", () => {
         }
         releaseForeground();
         await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
-        expect(maintain.mock.calls[0]?.[0]).toMatchObject({
+        const maintainParams = requireRecord(maintain.mock.calls[0]?.[0], "maintain params");
+        expectRecordFields(maintainParams, {
           sessionId: "session-1",
           sessionKey,
           sessionFile: "/tmp/session.jsonl",
-          runtimeContext: expect.objectContaining({
-            workspaceDir: "/tmp/workspace",
-            allowDeferredCompactionExecution: true,
-            tokenBudget: 2048,
-            currentTokenCount: 1536,
-          }),
+        });
+        expectRecordFields(requireRecord(maintainParams.runtimeContext, "runtime context"), {
+          workspaceDir: "/tmp/workspace",
+          allowDeferredCompactionExecution: true,
+          tokenBudget: 2048,
+          currentTokenCount: 1536,
         });
         expect(rewriteTranscriptEntriesInSessionFileMock).toHaveBeenCalledWith({
           sessionFile: "/tmp/session.jsonl",
@@ -525,10 +539,11 @@ describe("runContextEngineMaintenance", () => {
         });
 
         const completedTask = getTaskById(queuedTasks[0].taskId);
-        expect(completedTask).toMatchObject({
-          status: "succeeded",
-          progressSummary: expect.stringContaining("Deferred maintenance completed"),
-        });
+        const completedTaskRecord = requireRecord(completedTask, "completed task");
+        expect(completedTaskRecord.status).toBe("succeeded");
+        expect(String(completedTaskRecord.progressSummary)).toContain(
+          "Deferred maintenance completed",
+        );
 
         await foregroundTurn;
       } finally {
@@ -748,7 +763,8 @@ describe("runContextEngineMaintenance", () => {
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         expect(tasks).toHaveLength(2);
-        expect(getTaskById(legacyTask.taskId)).toMatchObject({
+        const cancelledLegacyTask = requireRecord(getTaskById(legacyTask.taskId), "legacy task");
+        expectRecordFields(cancelledLegacyTask, {
           status: "cancelled",
           notifyPolicy: "silent",
         });
@@ -807,10 +823,9 @@ describe("runContextEngineMaintenance", () => {
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         expect(tasks).toHaveLength(1);
-        expect(tasks[0]).toMatchObject({
-          status: "cancelled",
-          terminalSummary: expect.stringContaining("gateway draining"),
-        });
+        const task = requireRecord(tasks[0], "cancelled task");
+        expect(task.status).toBe("cancelled");
+        expect(String(task.terminalSummary)).toContain("gateway draining");
         expect(maintain).not.toHaveBeenCalled();
       } finally {
         enqueueSpy.mockRestore();
@@ -1103,10 +1118,9 @@ describe("runContextEngineMaintenance", () => {
 
         await vi.advanceTimersByTimeAsync(11_000);
         await waitForAssertion(() =>
-          expect(peekSystemEvents(sessionKey)).toEqual(
-            expect.arrayContaining([
-              expect.stringContaining("Background task update: Context engine turn maintenance."),
-            ]),
+          expectSystemEventContaining(
+            sessionKey,
+            "Background task update: Context engine turn maintenance.",
           ),
         );
 
@@ -1115,10 +1129,9 @@ describe("runContextEngineMaintenance", () => {
         }
         releaseForeground();
         await waitForAssertion(() =>
-          expect(peekSystemEvents(sessionKey)).toEqual(
-            expect.arrayContaining([
-              expect.stringContaining("Background task done: Context engine turn maintenance"),
-            ]),
+          expectSystemEventContaining(
+            sessionKey,
+            "Background task done: Context engine turn maintenance",
           ),
         );
 
@@ -1244,10 +1257,9 @@ describe("runContextEngineMaintenance", () => {
           reason: "turn",
         });
         await waitForAssertion(() =>
-          expect(peekSystemEvents(sessionKey)).toEqual(
-            expect.arrayContaining([
-              expect.stringContaining("Background task failed: Context engine turn maintenance"),
-            ]),
+          expectSystemEventContaining(
+            sessionKey,
+            "Background task failed: Context engine turn maintenance",
           ),
         );
       } finally {

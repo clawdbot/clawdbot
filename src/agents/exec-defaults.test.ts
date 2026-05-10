@@ -28,41 +28,37 @@ describe("resolveExecDefaults", () => {
   });
 
   it("does not advertise node routing when exec host is auto and sandbox is available", () => {
-    expect(
-      resolveExecDefaults({
-        cfg: {
-          tools: {
-            exec: {
-              host: "auto",
-            },
+    const defaults = resolveExecDefaults({
+      cfg: {
+        tools: {
+          exec: {
+            host: "auto",
           },
         },
-        sandboxAvailable: true,
-      }),
-    ).toMatchObject({
-      host: "auto",
-      effectiveHost: "sandbox",
-      canRequestNode: false,
+      },
+      sandboxAvailable: true,
     });
+
+    expect(defaults.host).toBe("auto");
+    expect(defaults.effectiveHost).toBe("sandbox");
+    expect(defaults.canRequestNode).toBe(false);
   });
 
   it("keeps node routing available when exec host is auto without sandbox", () => {
-    expect(
-      resolveExecDefaults({
-        cfg: {
-          tools: {
-            exec: {
-              host: "auto",
-            },
+    const defaults = resolveExecDefaults({
+      cfg: {
+        tools: {
+          exec: {
+            host: "auto",
           },
         },
-        sandboxAvailable: false,
-      }),
-    ).toMatchObject({
-      host: "auto",
-      effectiveHost: "gateway",
-      canRequestNode: true,
+      },
+      sandboxAvailable: false,
     });
+
+    expect(defaults.host).toBe("auto");
+    expect(defaults.effectiveHost).toBe("gateway");
+    expect(defaults.canRequestNode).toBe(true);
   });
 
   it("honors session-level exec host overrides", () => {
@@ -85,43 +81,39 @@ describe("resolveExecDefaults", () => {
   });
 
   it("uses host approval defaults for gateway when exec policy is unset", () => {
-    expect(
-      resolveExecDefaults({
-        cfg: {
-          tools: {
-            exec: {
-              host: "auto",
-            },
+    const defaults = resolveExecDefaults({
+      cfg: {
+        tools: {
+          exec: {
+            host: "auto",
           },
         },
-        sandboxAvailable: false,
-      }),
-    ).toMatchObject({
-      host: "auto",
-      effectiveHost: "gateway",
-      security: "full",
-      ask: "off",
+      },
+      sandboxAvailable: false,
     });
+
+    expect(defaults.host).toBe("auto");
+    expect(defaults.effectiveHost).toBe("gateway");
+    expect(defaults.security).toBe("full");
+    expect(defaults.ask).toBe("off");
   });
 
   it("keeps sandbox deny by default when auto resolves to sandbox", () => {
-    expect(
-      resolveExecDefaults({
-        cfg: {
-          tools: {
-            exec: {
-              host: "auto",
-            },
+    const defaults = resolveExecDefaults({
+      cfg: {
+        tools: {
+          exec: {
+            host: "auto",
           },
         },
-        sandboxAvailable: true,
-      }),
-    ).toMatchObject({
-      host: "auto",
-      effectiveHost: "sandbox",
-      security: "deny",
-      ask: "off",
+      },
+      sandboxAvailable: true,
     });
+
+    expect(defaults.host).toBe("auto");
+    expect(defaults.effectiveHost).toBe("sandbox");
+    expect(defaults.security).toBe("deny");
+    expect(defaults.ask).toBe("off");
   });
 
   it("blocks node advertising in helper calls when sandbox is available", () => {

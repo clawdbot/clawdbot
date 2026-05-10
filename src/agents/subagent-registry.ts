@@ -37,7 +37,6 @@ import {
   reconcileOrphanedRun,
   resolveAnnounceRetryDelayMs,
   resolveSubagentRunOrphanReason,
-  resolveSubagentSessionStatus,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";

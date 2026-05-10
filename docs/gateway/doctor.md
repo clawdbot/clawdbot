@@ -223,6 +223,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - `browser.profiles.*.driver: "extension"` → `"existing-session"`
     - remove `browser.relayBindHost` (legacy extension relay setting)
     - legacy `models.providers.*.api: "openai"` → `"openai-completions"` (gateway startup also skips providers whose `api` is set to a future or unknown enum value rather than failing closed)
+    - remove `plugins.entries.codex.config.codexDynamicToolsProfile`; Codex app-server always keeps Codex-native workspace tools native
 
     Doctor warnings also include account-default guidance for multi-account channels:
 
@@ -318,7 +319,7 @@ That stages grounded durable candidates into the short-term dreaming store while
 
   </Accordion>
   <Accordion title="3c. Session lock cleanup">
-    Doctor scans every agent session directory for stale write-lock files — files left behind when a session exited abnormally. For each lock file found it reports: the path, PID, whether the PID is still alive, lock age, and whether it is considered stale (dead PID or older than 30 minutes). In `--fix` / `--repair` mode it removes stale lock files automatically; otherwise it prints a note and instructs you to rerun with `--fix`.
+    Doctor scans every agent session directory for stale write-lock files — files left behind when a session exited abnormally. For each lock file found it reports: the path, PID, whether the PID is still alive, lock age, and whether it is considered stale (dead PID, older than 30 minutes, or a live PID that can be proven to belong to a non-OpenClaw process). In `--fix` / `--repair` mode it removes stale lock files automatically; otherwise it prints a note and instructs you to rerun with `--fix`.
   </Accordion>
   <Accordion title="3d. Session transcript branch repair">
     Doctor scans agent session JSONL files for the duplicated branch shape created by the 2026.4.24 prompt transcript rewrite bug: an abandoned user turn with OpenClaw internal runtime context plus an active sibling containing the same visible user prompt. In `--fix` / `--repair` mode, doctor backs up each affected file next to the original and rewrites the transcript to the active branch so gateway history and memory readers no longer see duplicate turns.

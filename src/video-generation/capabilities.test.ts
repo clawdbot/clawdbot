@@ -144,16 +144,13 @@ describe("video-generation capabilities", () => {
         inputImageCount: 2,
       }).capabilities?.maxInputImages,
     ).toBe(9);
-    expect(
-      resolveVideoGenerationModeCapabilities({
-        provider,
-        model: "vendor/reference-to-video",
-        inputImageCount: 1,
-        inputVideoCount: 1,
-      }).capabilities,
-    ).toMatchObject({
-      maxInputImages: 9,
-      maxInputVideos: 3,
-    });
+    const referenceCapabilities = resolveVideoGenerationModeCapabilities({
+      provider,
+      model: "vendor/reference-to-video",
+      inputImageCount: 1,
+      inputVideoCount: 1,
+    }).capabilities;
+    expect(referenceCapabilities?.maxInputImages).toBe(9);
+    expect(referenceCapabilities?.maxInputVideos).toBe(3);
   });
 });

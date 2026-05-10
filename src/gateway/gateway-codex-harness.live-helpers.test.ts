@@ -116,6 +116,55 @@ describe("gateway codex harness live helpers", () => {
     ).toBe(true);
   });
 
+  it("accepts the completed-session status emitted by current codex", () => {
+    const text = "No active task is running.";
+
+    expect(
+      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+  });
+
+  it("accepts the online idle status emitted by current codex", () => {
+    const text =
+      "I'm online in `/tmp/openclaw-live-codex-harness-KiaUQ4/workspace/dev`, with workspace-write access. No active task is running right now.";
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts the completed-work status emitted by current codex", () => {
+    const text = "No active work is running. Ready for the next task.";
+
+    expect(
+      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+  });
+
+  it("accepts the normal-work status emitted by current codex", () => {
+    const text =
+      "Working normally. Current cwd is `/tmp/openclaw-live-codex-harness/workspace/dev`, sandbox is workspace-write, network is restricted, and the current date is 2026-05-09 UTC.";
+
+    expect(
+      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+  });
+
+  it("accepts the ready status emitted by current codex", () => {
+    const text = "Ready.";
+
+    expect(
+      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+  });
+
+  it("accepts the idle-ready status emitted by current codex", () => {
+    const text = "I'm idle and ready.";
+
+    expect(
+      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)) ||
+        isExpectedCodexStatusCommandText(text),
+    ).toBe(true);
+  });
+
   it("rejects status prose for a different codex session", () => {
     const text =
       "OpenClaw is running on `openai/gpt-5.5` with low reasoning/text settings. Context is at `22k/272k` tokens, no compactions, and the current session is `agent:dev:other`.";

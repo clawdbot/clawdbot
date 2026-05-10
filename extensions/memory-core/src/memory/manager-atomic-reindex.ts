@@ -8,11 +8,15 @@ type MemoryIndexFileOps = {
   wait: (ms: number) => Promise<void>;
 };
 
-type MoveMemoryIndexFilesOptions = {
+type MemoryIndexFileOptions = {
   fileOps?: MemoryIndexFileOps;
   maxRenameAttempts?: number;
   renameRetryDelayMs?: number;
+  maxRemoveAttempts?: number;
+  removeRetryDelayMs?: number;
 };
+
+type ResolvedMemoryIndexFileOptions = Required<MemoryIndexFileOptions>;
 
 const defaultFileOps: MemoryIndexFileOps = {
   rename: fs.rename,
@@ -20,18 +24,32 @@ const defaultFileOps: MemoryIndexFileOps = {
   wait: sleep,
 };
 
-const transientRenameErrorCodes = new Set(["EBUSY", "EPERM", "EACCES"]);
+const transientFileErrorCodes = new Set(["EBUSY", "EPERM", "EACCES"]);
 const defaultMaxRenameAttempts = 6;
 const defaultRenameRetryDelayMs = 25;
+const defaultMaxRemoveAttempts = 10;
+const defaultRemoveRetryDelayMs = 50;
 
-function isTransientRenameError(err: unknown): boolean {
-  return transientRenameErrorCodes.has((err as NodeJS.ErrnoException).code ?? "");
+function isTransientFileError(err: unknown): boolean {
+  return transientFileErrorCodes.has((err as NodeJS.ErrnoException).code ?? "");
+}
+
+function resolveMemoryIndexFileOptions(
+  options: MemoryIndexFileOptions = {},
+): ResolvedMemoryIndexFileOptions {
+  return {
+    fileOps: options.fileOps ?? defaultFileOps,
+    maxRenameAttempts: Math.max(1, options.maxRenameAttempts ?? defaultMaxRenameAttempts),
+    renameRetryDelayMs: options.renameRetryDelayMs ?? defaultRenameRetryDelayMs,
+    maxRemoveAttempts: Math.max(1, options.maxRemoveAttempts ?? defaultMaxRemoveAttempts),
+    removeRetryDelayMs: options.removeRetryDelayMs ?? defaultRemoveRetryDelayMs,
+  };
 }
 
 async function renameWithRetry(
   source: string,
   target: string,
-  options: Required<MoveMemoryIndexFilesOptions>,
+  options: ResolvedMemoryIndexFileOptions,
 ): Promise<void> {
   for (let attempt = 1; attempt <= options.maxRenameAttempts; attempt++) {
     try {
@@ -41,7 +59,7 @@ async function renameWithRetry(
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
         return;
       }
-      if (!isTransientRenameError(err) || attempt === options.maxRenameAttempts) {
+      if (!isTransientFileError(err) || attempt === options.maxRenameAttempts) {
         throw err;
       }
       await options.fileOps.wait(options.renameRetryDelayMs * attempt);
@@ -53,13 +71,9 @@ async function renameWithRetry(
 export async function moveMemoryIndexFiles(
   sourceBase: string,
   targetBase: string,
-  options: MoveMemoryIndexFilesOptions = {},
+  options: MemoryIndexFileOptions = {},
 ): Promise<void> {
-  const resolvedOptions: Required<MoveMemoryIndexFilesOptions> = {
-    fileOps: options.fileOps ?? defaultFileOps,
-    maxRenameAttempts: Math.max(1, options.maxRenameAttempts ?? defaultMaxRenameAttempts),
-    renameRetryDelayMs: options.renameRetryDelayMs ?? defaultRenameRetryDelayMs,
-  };
+  const resolvedOptions = resolveMemoryIndexFileOptions(options);
   const suffixes = ["", "-wal", "-shm"];
   for (const suffix of suffixes) {
     const source = `${sourceBase}${suffix}`;
@@ -68,12 +82,33 @@ export async function moveMemoryIndexFiles(
   }
 }
 
-async function removeMemoryIndexFiles(
+async function rmWithRetry(path: string, options: ResolvedMemoryIndexFileOptions): Promise<void> {
+  for (let attempt = 1; attempt <= options.maxRemoveAttempts; attempt++) {
+    try {
+      await options.fileOps.rm(path, { force: true });
+      return;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return;
+      }
+      if (!isTransientFileError(err) || attempt === options.maxRemoveAttempts) {
+        throw err;
+      }
+      await options.fileOps.wait(options.removeRetryDelayMs * attempt);
+    }
+  }
+  throw new Error("rm retry loop exited unexpectedly");
+}
+
+export async function removeMemoryIndexFiles(
   basePath: string,
-  fileOps: MemoryIndexFileOps = defaultFileOps,
+  options: MemoryIndexFileOptions = {},
 ): Promise<void> {
+  const resolvedOptions = resolveMemoryIndexFileOptions(options);
   const suffixes = ["", "-wal", "-shm"];
-  await Promise.all(suffixes.map((suffix) => fileOps.rm(`${basePath}${suffix}`, { force: true })));
+  for (const suffix of suffixes) {
+    await rmWithRetry(`${basePath}${suffix}`, resolvedOptions);
+  }
 }
 
 async function swapMemoryIndexFiles(targetPath: string, tempPath: string): Promise<void> {
@@ -92,13 +127,25 @@ export async function runMemoryAtomicReindex<T>(params: {
   targetPath: string;
   tempPath: string;
   build: () => Promise<T>;
+  beforeTempCleanup?: () => Promise<void> | void;
+  fileOptions?: MemoryIndexFileOptions;
 }): Promise<T> {
   try {
     const result = await params.build();
     await swapMemoryIndexFiles(params.targetPath, params.tempPath);
     return result;
   } catch (err) {
-    await removeMemoryIndexFiles(params.tempPath);
+    try {
+      await params.beforeTempCleanup?.();
+      await removeMemoryIndexFiles(params.tempPath, params.fileOptions);
+    } catch (cleanupErr) {
+      const aggregateErr = new AggregateError(
+        [err, cleanupErr],
+        "memory atomic reindex failed and temp cleanup failed",
+        { cause: cleanupErr },
+      );
+      throw aggregateErr;
+    }
     throw err;
   }
 }

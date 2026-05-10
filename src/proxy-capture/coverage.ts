@@ -31,15 +31,6 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
       "Central provider fetch seam routes through explicit proxy overrides and records request/response payloads.",
   },
   {
-    id: "openai-ws-manager",
-    label: "OpenAI websocket manager",
-    modulePath: "src/agents/openai-ws-connection.ts",
-    protocols: ["ws", "wss"],
-    status: "captured",
-    notes:
-      "Central OpenAI websocket path records open/frame/close/error events with proxy agent support.",
-  },
-  {
     id: "discord-rest",
     label: "Discord REST monitor fetch",
     modulePath: "extensions/discord/monitor/rest-fetch.ts",

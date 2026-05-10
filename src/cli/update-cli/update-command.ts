@@ -112,6 +112,8 @@ import { suppressDeprecations } from "./suppress-deprecations.js";
 
 const CLI_NAME = resolveCliName();
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
+const POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS = 10;
+const POST_REFRESH_ALREADY_HEALTHY_DELAY_MS = 500;
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 const POST_CORE_UPDATE_ENV = "OPENCLAW_UPDATE_POST_CORE";
 const POST_CORE_UPDATE_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_CHANNEL";
@@ -1516,6 +1518,7 @@ async function maybeRestartService(params: {
       const isPackageUpdate = isPackageManagerUpdateMode(params.result.mode);
       let restarted = false;
       let restartInitiated = false;
+      let refreshedGatewayAlreadyHealthy = false;
       if (params.refreshServiceEnv) {
         try {
           await refreshGatewayServiceEnv({
@@ -1538,25 +1541,51 @@ async function maybeRestartService(params: {
             return false;
           }
         }
+        if (isPackageUpdate && expectedGatewayVersion) {
+          const health = await waitForGatewayHealthyRestart({
+            service: resolveGatewayService(),
+            port: params.gatewayPort,
+            expectedVersion: expectedGatewayVersion,
+            env: params.serviceEnv,
+            attempts: POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS,
+            delayMs: POST_REFRESH_ALREADY_HEALTHY_DELAY_MS,
+          });
+          refreshedGatewayAlreadyHealthy = health.healthy;
+          if (refreshedGatewayAlreadyHealthy && !params.opts.json) {
+            defaultRuntime.log(
+              theme.muted(
+                "Gateway already reports the updated version after service refresh; skipped redundant restart.",
+              ),
+            );
+          }
+        }
       }
-      if (params.restartScriptPath) {
+      // Service refresh can bootstrap a RunAtLoad LaunchAgent directly. When
+      // that already produced the expected gateway version, a second kickstart
+      // would only race the healthy supervisor-owned process.
+      if (!refreshedGatewayAlreadyHealthy && params.restartScriptPath) {
         await runRestartScript(params.restartScriptPath);
         restartInitiated = true;
-      } else if (params.refreshServiceEnv && isPackageUpdate) {
+      } else if (!refreshedGatewayAlreadyHealthy && params.refreshServiceEnv && isPackageUpdate) {
         restarted = await runUpdatedInstallGatewayRestart({
           result: params.result,
           jsonMode: Boolean(params.opts.json),
           invocationCwd: params.invocationCwd,
           env: params.serviceEnv,
         });
-      } else if (shouldUseLegacyProcessRestartAfterUpdate({ updateMode: params.result.mode })) {
+      } else if (
+        !refreshedGatewayAlreadyHealthy &&
+        shouldUseLegacyProcessRestartAfterUpdate({ updateMode: params.result.mode })
+      ) {
         restarted = await runDaemonRestart();
-      } else if (!params.opts.json) {
+      } else if (!refreshedGatewayAlreadyHealthy && !params.opts.json) {
         defaultRuntime.log(theme.muted("No installed gateway service found; skipped restart."));
       }
 
       const shouldVerifyRestart =
-        restartInitiated || (restarted && expectedGatewayVersion !== undefined);
+        refreshedGatewayAlreadyHealthy ||
+        restartInitiated ||
+        (restarted && expectedGatewayVersion !== undefined);
       if (shouldVerifyRestart) {
         const restartHealthy = await verifyRestartedGateway(expectedGatewayVersion);
         if (!restartHealthy) {

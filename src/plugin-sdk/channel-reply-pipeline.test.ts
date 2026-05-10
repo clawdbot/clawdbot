@@ -1,7 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 
 describe("createChannelReplyPipeline", () => {
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+  });
+
   it.each([
     {
       name: "builds prefix options without forcing typing support",
@@ -98,5 +105,43 @@ describe("createChannelReplyPipeline", () => {
     });
 
     expect(pipeline.transformReplyPayload).toBe(transformReplyPayload);
+  });
+
+  it("resolves reply transforms from the loaded channel registry", () => {
+    const transformReplyPayload = vi.fn(({ payload }: { payload: { text?: string } }) =>
+      payload.text ? { ...payload, text: `${payload.text} transformed` } : payload,
+    );
+    const channelPlugin = {
+      id: "demo-channel",
+      meta: {},
+      messaging: { transformReplyPayload },
+    } as unknown as ChannelPlugin;
+    setActivePluginRegistry({
+      ...createEmptyPluginRegistry(),
+      channels: [
+        {
+          pluginId: "demo",
+          pluginName: "Demo",
+          plugin: channelPlugin,
+          source: "test",
+        },
+      ],
+    });
+
+    const pipeline = createChannelReplyPipeline({
+      cfg: {},
+      agentId: "main",
+      channel: "demo-channel",
+      accountId: "acct",
+    });
+
+    expect(pipeline.transformReplyPayload?.({ text: "reply" })).toEqual({
+      text: "reply transformed",
+    });
+    expect(transformReplyPayload).toHaveBeenCalledWith({
+      payload: { text: "reply" },
+      cfg: {},
+      accountId: "acct",
+    });
   });
 });

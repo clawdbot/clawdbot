@@ -298,7 +298,7 @@ beforeEach(() => {
           "--sandbox",
           "workspace-write",
           "-c",
-          'service_tier="priority"',
+          'service_tier="fast"',
           "--skip-git-repo-check",
         ],
         resumeArgs: [
@@ -308,7 +308,7 @@ beforeEach(() => {
           "-c",
           'sandbox_mode="workspace-write"',
           "-c",
-          'service_tier="priority"',
+          'service_tier="fast"',
           "--skip-git-repo-check",
         ],
         systemPromptFileConfigArg: "-c",
@@ -395,7 +395,7 @@ describe("resolveCliBackendConfig reliability merge", () => {
       "--sandbox",
       "workspace-write",
       "-c",
-      'service_tier="priority"',
+      'service_tier="fast"',
       "--skip-git-repo-check",
     ]);
     expect(resolved.config.resumeArgs).toEqual([
@@ -405,7 +405,7 @@ describe("resolveCliBackendConfig reliability merge", () => {
       "-c",
       'sandbox_mode="workspace-write"',
       "-c",
-      'service_tier="priority"',
+      'service_tier="fast"',
       "--skip-git-repo-check",
     ]);
   });

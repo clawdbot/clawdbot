@@ -8,6 +8,7 @@ import {
 import type { ThinkLevel, ThinkingCatalogEntry } from "./thinking.shared.js";
 export {
   formatXHighModelHint,
+  isSessionDefaultDirectiveValue,
   normalizeElevatedLevel,
   normalizeFastMode,
   normalizeNoticeLevel,

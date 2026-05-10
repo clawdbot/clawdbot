@@ -13,6 +13,8 @@ const GEMINI_2_5_FLASH_PREFIX = "gemini-2.5-flash";
 const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
 const GEMINI_3_1_FLASH_LITE_PREFIX = "gemini-3.1-flash-lite";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
+const GEMINI_3_FLASH_LITE_PREFIX = "gemini-3-flash-lite";
+const GEMINI_3_FLASH_PREFIX = "gemini-3-flash";
 const GEMINI_PRO_LATEST_ID = "gemini-pro-latest";
 const GEMINI_FLASH_LATEST_ID = "gemini-flash-latest";
 const GEMINI_FLASH_LITE_LATEST_ID = "gemini-flash-lite-latest";
@@ -22,7 +24,7 @@ const GEMINI_2_5_FLASH_LITE_TEMPLATE_IDS = ["gemini-2.5-flash-lite"] as const;
 const GEMINI_2_5_FLASH_TEMPLATE_IDS = ["gemini-2.5-flash"] as const;
 const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3.1-pro-preview", "gemini-3-pro-preview"] as const;
 const GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS = ["gemini-3.1-flash-lite-preview"] as const;
-const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
+const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview", "gemini-2.5-flash"] as const;
 const GEMINI_3_PRO_ANTIGRAVITY_TEMPLATE_IDS = ["gemini-3-pro-low", "gemini-3-pro-high"] as const;
 const GEMINI_3_FLASH_ANTIGRAVITY_TEMPLATE_IDS = ["gemini-3-flash"] as const;
 // Gemma uses the Gemini flash template as a forward-compat approximation
@@ -161,6 +163,7 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
     }
   } else if (
     lower.startsWith(GEMINI_3_1_FLASH_LITE_PREFIX) ||
+    lower.startsWith(GEMINI_3_FLASH_LITE_PREFIX) ||
     lower === GEMINI_FLASH_LITE_LATEST_ID
   ) {
     family = {
@@ -168,7 +171,11 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
       cliTemplateIds: GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS,
       antigravityTemplateIds: GEMINI_3_FLASH_ANTIGRAVITY_TEMPLATE_IDS,
     };
-  } else if (lower.startsWith(GEMINI_3_1_FLASH_PREFIX) || lower === GEMINI_FLASH_LATEST_ID) {
+  } else if (
+    lower.startsWith(GEMINI_3_1_FLASH_PREFIX) ||
+    lower.startsWith(GEMINI_3_FLASH_PREFIX) ||
+    lower === GEMINI_FLASH_LATEST_ID
+  ) {
     family = {
       googleTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,
       cliTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,

@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { saveExecApprovals } from "../infra/exec-approvals.js";
 import { collectExecRuntimeFindings } from "./audit.js";
@@ -27,11 +30,61 @@ function requireFinding(
   return finding;
 }
 
-afterEach(() => {
-  saveExecApprovals({ version: 1, agents: {} });
-});
-
 describe("security audit exec surface findings", () => {
+  // Redirect the OpenClaw home (OPENCLAW_HOME wins over HOME/USERPROFILE in
+  // `resolveRawHomeDir`) to a per-test tempdir so `saveExecApprovals` never
+  // touches the real `~/.openclaw/exec-approvals.json` on the host running
+  // the suite.
+  let previousOpenClawHome: string | undefined;
+  let previousHome: string | undefined;
+  let previousUserProfile: string | undefined;
+  let tempRoot = "";
+  let tempCaseIndex = 0;
+
+  beforeAll(async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-exec-approvals-"));
+  });
+
+  beforeEach(async () => {
+    previousOpenClawHome = process.env.OPENCLAW_HOME;
+    previousHome = process.env.HOME;
+    previousUserProfile = process.env.USERPROFILE;
+    const tempDir = path.join(tempRoot, `case-${++tempCaseIndex}`);
+    await fs.mkdir(path.join(tempDir, ".openclaw"), { recursive: true });
+    // OPENCLAW_HOME takes precedence over HOME/USERPROFILE in resolveRawHomeDir,
+    // so all three must point at the tempdir to neutralize whichever the host
+    // happens to have set.
+    process.env.OPENCLAW_HOME = tempDir;
+    process.env.HOME = tempDir;
+    // Windows uses USERPROFILE for os.homedir()
+    process.env.USERPROFILE = tempDir;
+  });
+
+  afterEach(() => {
+    saveExecApprovals({ version: 1, agents: {} });
+    if (previousOpenClawHome === undefined) {
+      delete process.env.OPENCLAW_HOME;
+    } else {
+      process.env.OPENCLAW_HOME = previousOpenClawHome;
+    }
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+    if (previousUserProfile === undefined) {
+      delete process.env.USERPROFILE;
+    } else {
+      process.env.USERPROFILE = previousUserProfile;
+    }
+  });
+
+  afterAll(async () => {
+    if (tempRoot) {
+      await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    }
+  });
+
   it("warns when exec approvals enable autoAllowSkills", () => {
     saveExecApprovals({
       version: 1,

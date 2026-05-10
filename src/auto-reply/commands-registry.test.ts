@@ -377,7 +377,7 @@ describe("commands registry", () => {
       category: "options",
     });
     const modeArg = requireCommandArg(fast, "mode");
-    expect(modeArg.choices).toEqual(["status", "on", "off"]);
+    expect(modeArg.choices).toEqual(["status", "on", "off", "default"]);
   });
 
   it("detects known text commands", () => {
@@ -633,6 +633,7 @@ describe("commands registry args", () => {
 
     expect(menu.arg.name).toBe("level");
     expect(menu.choices.map((choice) => choice.value)).toEqual([
+      "default",
       "off",
       "low",
       "medium",
@@ -640,7 +641,7 @@ describe("commands registry args", () => {
       "max",
     ]);
     expect(formatCommandArgMenuTitle({ command, menu })).toBe(
-      "Choose level for /think.\nOptions: off, low, medium, high, max.",
+      "Choose level for /think.\nOptions: default, off, low, medium, high, max.",
     );
   });
 

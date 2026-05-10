@@ -388,14 +388,34 @@ export function createCliJsonlStreamingParser(params: {
   let assistantText = "";
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
+  let output: CliOutput | null = null;
+  const texts: string[] = [];
 
   const handleParsedRecord = (parsed: Record<string, unknown>) => {
     sessionId = pickCliSessionId(parsed, params.backend) ?? sessionId;
     if (!sessionId && typeof parsed.thread_id === "string") {
       sessionId = parsed.thread_id.trim();
     }
-    if (isRecord(parsed.usage)) {
-      usage = toCliUsage(parsed.usage) ?? usage;
+    usage = readCliUsage(parsed) ?? usage;
+
+    const result = parseClaudeCliJsonlResult({
+      backend: params.backend,
+      providerId: params.providerId,
+      parsed,
+      sessionId,
+      usage,
+    });
+    if (result) {
+      output = result;
+      return;
+    }
+
+    const item = isRecord(parsed.item) ? parsed.item : null;
+    if (item && typeof item.text === "string") {
+      const type = normalizeLowercaseStringOrEmpty(item.type);
+      if (!type || type.includes("message")) {
+        texts.push(item.text);
+      }
     }
 
     const delta = parseClaudeCliStreamingDelta({
@@ -451,6 +471,13 @@ export function createCliJsonlStreamingParser(params: {
     },
     finish() {
       flushLines(true);
+    },
+    getOutput() {
+      if (output) {
+        return output;
+      }
+      const text = texts.join("\n").trim();
+      return text ? { text, sessionId, usage } : null;
     },
   };
 }

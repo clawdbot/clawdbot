@@ -10,9 +10,14 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { withExtractedArchiveRoot } from "../infra/install-flow.js";
-import { installPackageDir } from "../infra/install-package-dir.js";
-import { resolveSafeInstallDir } from "../infra/install-safe-path.js";
 import { tryReadJson, writeJson } from "../infra/json-files.js";
+import {
+  CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
+  installExtractedSkillRoot,
+  normalizeTrackedSkillSlug,
+  resolveWorkspaceSkillInstallDir,
+  validateRequestedSkillSlug,
+} from "./skills-archive-install.js";
 
 const DOT_DIR = ".clawhub";
 const LEGACY_DOT_DIR = ".clawdhub";
@@ -62,38 +67,18 @@ type Logger = {
   info?: (message: string) => void;
 };
 
-const VALID_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
-// eslint-disable-next-line no-control-regex -- detects any character outside printable ASCII
-const NON_ASCII_PATTERN = /[^\x00-\x7F]/;
-
-function normalizeTrackedSlug(raw: string): string {
-  const slug = raw.trim();
-  if (!slug || slug.includes("/") || slug.includes("\\") || slug.includes("..")) {
-    throw new Error(`Invalid skill slug: ${raw}`);
-  }
-  return slug;
-}
-
-function validateRequestedSlug(raw: string): string {
-  const slug = normalizeTrackedSlug(raw);
-  if (NON_ASCII_PATTERN.test(slug) || !VALID_SLUG_PATTERN.test(slug)) {
-    throw new Error(`Invalid skill slug: ${raw}`);
-  }
-  return slug;
-}
-
 async function resolveRequestedUpdateSlug(params: {
   workspaceDir: string;
   requestedSlug: string;
   lock: ClawHubSkillsLockfile;
 }): Promise<string> {
-  const trackedSlug = normalizeTrackedSlug(params.requestedSlug);
-  const trackedTargetDir = resolveSkillInstallDir(params.workspaceDir, trackedSlug);
+  const trackedSlug = normalizeTrackedSkillSlug(params.requestedSlug);
+  const trackedTargetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, trackedSlug);
   const trackedOrigin = await readClawHubSkillOrigin(trackedTargetDir);
   if (trackedOrigin || params.lock.skills[trackedSlug]) {
     return trackedSlug;
   }
-  return validateRequestedSlug(params.requestedSlug);
+  return validateRequestedSkillSlug(params.requestedSlug);
 }
 
 type ClawHubInstallParams = {
@@ -118,29 +103,9 @@ type TrackedUpdateTarget =
       error: string;
     };
 
-function resolveSkillInstallDir(workspaceDir: string, slug: string): string {
-  const skillsDir = path.join(path.resolve(workspaceDir), "skills");
-  const target = resolveSafeInstallDir({
-    baseDir: skillsDir,
-    id: slug,
-    invalidNameMessage: "invalid skill target path",
-  });
-  if (!target.ok) {
-    throw new Error(target.error);
-  }
-  return target.path;
-}
-
-async function ensureSkillRoot(rootDir: string): Promise<void> {
-  for (const candidate of ["SKILL.md", "skill.md", "skills.md", "SKILL.MD"]) {
-    if (await pathExists(path.join(rootDir, candidate))) {
-      return;
-    }
-  }
-  throw new Error("downloaded archive is missing SKILL.md");
-}
-
-async function readClawHubSkillsLockfile(workspaceDir: string): Promise<ClawHubSkillsLockfile> {
+export async function readClawHubSkillsLockfile(
+  workspaceDir: string,
+): Promise<ClawHubSkillsLockfile> {
   const candidates = [
     path.join(workspaceDir, DOT_DIR, "lock.json"),
     path.join(workspaceDir, LEGACY_DOT_DIR, "lock.json"),
@@ -235,31 +200,6 @@ async function resolveInstallVersion(params: {
   };
 }
 
-async function installExtractedSkill(params: {
-  workspaceDir: string;
-  slug: string;
-  extractedRoot: string;
-  mode: "install" | "update";
-  logger?: Logger;
-}): Promise<{ ok: true; targetDir: string } | { ok: false; error: string }> {
-  await ensureSkillRoot(params.extractedRoot);
-  const targetDir = resolveSkillInstallDir(params.workspaceDir, params.slug);
-  const install = await installPackageDir({
-    sourceDir: params.extractedRoot,
-    targetDir,
-    mode: params.mode,
-    timeoutMs: 120_000,
-    logger: params.logger,
-    copyErrorPrefix: "failed to install skill",
-    hasDeps: false,
-    depsLogMessage: "",
-  });
-  if (!install.ok) {
-    return install;
-  }
-  return { ok: true, targetDir };
-}
-
 async function performClawHubSkillInstall(
   params: ClawHubInstallParams,
 ): Promise<InstallClawHubSkillResult> {
@@ -269,7 +209,7 @@ async function performClawHubSkillInstall(
       version: params.version,
       baseUrl: params.baseUrl,
     });
-    const targetDir = resolveSkillInstallDir(params.workspaceDir, params.slug);
+    const targetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, params.slug);
     if (!params.force && (await pathExists(targetDir))) {
       return {
         ok: false,
@@ -288,18 +228,20 @@ async function performClawHubSkillInstall(
         archivePath: archive.archivePath,
         tempDirPrefix: "openclaw-skill-clawhub-",
         timeoutMs: 120_000,
-        rootMarkers: ["SKILL.md"],
+        rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
         onExtracted: async (rootDir) =>
-          await installExtractedSkill({
+          await installExtractedSkillRoot({
             workspaceDir: params.workspaceDir,
             slug: params.slug,
             extractedRoot: rootDir,
             mode: params.force ? "update" : "install",
             logger: params.logger,
+            scan: false,
+            rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
           }),
       });
       if (!install.ok) {
-        return install;
+        return { ok: false, error: install.error };
       }
 
       const installedAt = Date.now();
@@ -341,7 +283,7 @@ async function installRequestedSkillFromClawHub(
   try {
     return await performClawHubSkillInstall({
       ...params,
-      slug: validateRequestedSlug(params.slug),
+      slug: validateRequestedSkillSlug(params.slug),
     });
   } catch (err) {
     return {
@@ -357,7 +299,7 @@ async function installTrackedSkillFromClawHub(
   try {
     return await performClawHubSkillInstall({
       ...params,
-      slug: normalizeTrackedSlug(params.slug),
+      slug: normalizeTrackedSkillSlug(params.slug),
     });
   } catch (err) {
     return {
@@ -373,7 +315,7 @@ async function resolveTrackedUpdateTarget(params: {
   lock: ClawHubSkillsLockfile;
   baseUrl?: string;
 }): Promise<TrackedUpdateTarget> {
-  const targetDir = resolveSkillInstallDir(params.workspaceDir, params.slug);
+  const targetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, params.slug);
   const origin = (await readClawHubSkillOrigin(targetDir)) ?? null;
   if (!origin && !params.lock.skills[params.slug]) {
     return {
@@ -416,7 +358,7 @@ export async function updateSkillsFromClawHub(params: {
           lock,
         }),
       ]
-    : Object.keys(lock.skills).map((slug) => normalizeTrackedSlug(slug));
+    : Object.keys(lock.skills).map((slug) => normalizeTrackedSkillSlug(slug));
   const results: UpdateClawHubSkillResult[] = [];
   for (const slug of slugs) {
     const tracked = await resolveTrackedUpdateTarget({

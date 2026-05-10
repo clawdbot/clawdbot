@@ -213,11 +213,9 @@ describe("config schema", () => {
     const serialized = JSON.stringify(res);
     expect(serialized).not.toContain("oversized-marker");
     const lookup = lookupConfigSchema(res, "plugins.entries.huge.config");
-    expect(lookup?.schema).toMatchObject({
-      type: "object",
-      additionalProperties: true,
-      description: expect.stringContaining("omitted"),
-    });
+    expect(lookup?.schema?.type).toBe("object");
+    expect(lookup?.schema?.additionalProperties).toBe(true);
+    expect(lookup?.schema?.description).toContain("omitted");
   });
 
   it("omits later plugin schemas after the aggregate extension schema budget is exhausted", () => {
@@ -239,12 +237,10 @@ describe("config schema", () => {
 
     const first = lookupConfigSchema(res, "plugins.entries.plugin-0.config.value");
     const last = lookupConfigSchema(res, "plugins.entries.plugin-39.config");
-    expect(first?.schema).toMatchObject({ type: "string" });
-    expect(last?.schema).toMatchObject({
-      type: "object",
-      additionalProperties: true,
-      description: expect.stringContaining("omitted"),
-    });
+    expect(first?.schema?.type).toBe("string");
+    expect(last?.schema?.type).toBe("object");
+    expect(last?.schema?.additionalProperties).toBe(true);
+    expect(last?.schema?.description).toContain("omitted");
   });
 
   it("looks up plugin config paths for slash-delimited plugin ids", () => {
@@ -266,11 +262,10 @@ describe("config schema", () => {
     const lookup = lookupConfigSchema(res, "plugins.entries.pack/one.config");
     expect(lookup?.path).toBe("plugins.entries.pack/one.config");
     expect(lookup?.hintPath).toBe("plugins.entries.pack/one.config");
-    expect(lookup?.children.find((child) => child.key === "provider")).toMatchObject({
-      key: "provider",
-      path: "plugins.entries.pack/one.config.provider",
-      type: "string",
-    });
+    const providerChild = lookup?.children.find((child) => child.key === "provider");
+    expect(providerChild?.key).toBe("provider");
+    expect(providerChild?.path).toBe("plugins.entries.pack/one.config.provider");
+    expect(providerChild?.type).toBe("string");
   });
 
   it("adds heartbeat target hints with dynamic channels", () => {
@@ -322,15 +317,13 @@ describe("config schema", () => {
     });
 
     expect(parsed?.web?.fetch?.readability).toBe(true);
-    expect(parsed?.web?.fetch).toMatchObject({
-      firecrawl: {
-        enabled: true,
-        apiKey: "firecrawl-test-key",
-        baseUrl: "https://api.firecrawl.dev",
-        onlyMainContent: true,
-        maxAgeMs: 60_000,
-        timeoutSeconds: 15,
-      },
+    expect(parsed?.web?.fetch?.firecrawl).toEqual({
+      enabled: true,
+      apiKey: "firecrawl-test-key",
+      baseUrl: "https://api.firecrawl.dev",
+      onlyMainContent: true,
+      maxAgeMs: 60_000,
+      timeoutSeconds: 15,
     });
   });
 
@@ -345,6 +338,35 @@ describe("config schema", () => {
     }
 
     expect(parsed?.experimental?.planTool).toBe(true);
+  });
+
+  it("accepts simplified Tool Search config in the runtime zod schema", () => {
+    expect(ToolsSchema.parse({ toolSearch: true })?.toolSearch).toBe(true);
+    expect(
+      ToolsSchema.parse({
+        toolSearch: {
+          enabled: true,
+          mode: "tools",
+          codeTimeoutMs: 5000,
+          searchDefaultLimit: 4,
+          maxSearchLimit: 12,
+        },
+      })?.toolSearch,
+    ).toEqual({
+      enabled: true,
+      mode: "tools",
+      codeTimeoutMs: 5000,
+      searchDefaultLimit: 4,
+      maxSearchLimit: 12,
+    });
+    expect(
+      ToolsSchema.safeParse({
+        toolSearch: {
+          enabled: true,
+          mode: "both",
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("accepts web fetch maxResponseBytes in the runtime zod schema", () => {
@@ -424,14 +446,15 @@ describe("config schema", () => {
       },
     });
 
-    expect(result).toMatchObject({ success: false });
+    expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.issues).toContainEqual(
-        expect.objectContaining({
-          keys: ["allowPrivateNetwork"],
-          path: ["media", "image", "models", 0, "request"],
-        }),
+      const requestIssue = result.error.issues.find(
+        (issue) =>
+          JSON.stringify(issue.path) === JSON.stringify(["media", "image", "models", 0, "request"]),
       );
+      expect(requestIssue?.path).toEqual(["media", "image", "models", 0, "request"]);
+      const requestKeys = (requestIssue as { keys?: unknown } | undefined)?.keys;
+      expect(requestKeys).toEqual(["allowPrivateNetwork"]);
     }
   });
 
@@ -447,14 +470,14 @@ describe("config schema", () => {
       },
     });
 
-    expect(result).toMatchObject({ success: false });
+    expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.issues).toContainEqual(
-        expect.objectContaining({
-          keys: ["nope"],
-          path: ["web", "fetch", "firecrawl"],
-        }),
+      const firecrawlIssue = result.error.issues.find(
+        (issue) => JSON.stringify(issue.path) === JSON.stringify(["web", "fetch", "firecrawl"]),
       );
+      expect(firecrawlIssue?.path).toEqual(["web", "fetch", "firecrawl"]);
+      const firecrawlKeys = (firecrawlIssue as { keys?: unknown } | undefined)?.keys;
+      expect(firecrawlKeys).toEqual(["nope"]);
     }
   });
 
@@ -518,10 +541,8 @@ describe("config schema", () => {
     expect(lookup?.path).toBe("agents.list.0.identity.avatar");
     expect(lookup?.hintPath).toBe("agents.list.*.identity.avatar");
     expect(lookup?.hint?.help).toContain("workspace-relative path");
-    expect(lookup?.schema).toMatchObject({
-      title: "Identity Avatar",
-      description: expect.stringContaining("Agent avatar"),
-    });
+    expect(lookup?.schema?.title).toBe("Identity Avatar");
+    expect(lookup?.schema?.description).toContain("Agent avatar");
   });
 
   it("normalizes bracketed lookup paths", () => {
@@ -555,7 +576,7 @@ describe("config schema", () => {
 
     const lookup = lookupConfigSchema(tupleSchema, "pair.1");
     expect(lookup?.path).toBe("pair.1");
-    expect(lookup?.schema).toMatchObject({ type: "number" });
+    expect(lookup?.schema?.type).toBe("number");
     expect((lookup?.schema as { items?: unknown } | undefined)?.items).toBeUndefined();
   });
 

@@ -258,11 +258,10 @@ describe("ACP event ledger", () => {
     await expect(
       ledger.readReplay({ sessionId: "session-1", sessionKey: "acp:old-session" }),
     ).resolves.toEqual({ complete: false, events: [] });
-    await expect(ledger.readReplayBySessionId({ sessionId: "session-1" })).resolves.toMatchObject({
-      complete: true,
-      sessionKey: "acp:new-session",
-      events: [],
-    });
+    const replay = await ledger.readReplayBySessionId({ sessionId: "session-1" });
+    expect(replay.complete).toBe(true);
+    expect(replay.sessionKey).toBe("acp:new-session");
+    expect(replay.events).toEqual([]);
   });
 
   it("marks replay incomplete when serialized byte retention trims payloads", async () => {

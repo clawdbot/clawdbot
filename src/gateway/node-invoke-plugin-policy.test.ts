@@ -71,10 +71,15 @@ describe("applyPluginNodeInvokePolicy", () => {
       params: { path: "/tmp/x" },
     });
 
-    expect(result).toMatchObject({
-      ok: false,
-      code: "PLUGIN_POLICY_MISSING",
-    });
+    expect(result).not.toBeNull();
+    if (result === null) {
+      throw new Error("expected plugin policy failure");
+    }
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected plugin policy failure");
+    }
+    expect(result.code).toBe("PLUGIN_POLICY_MISSING");
     expect(invoke).not.toHaveBeenCalled();
   });
 
@@ -113,7 +118,7 @@ describe("applyPluginNodeInvokePolicy", () => {
       params: { path: "/tmp/x" },
     });
 
-    expect(result).toMatchObject({ ok: true, payload: { ok: true, value: 1 } });
+    expect(result).toStrictEqual({ ok: true, payload: { ok: true, value: 1 }, payloadJSON: null });
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "node-1",
       command: "demo.read",

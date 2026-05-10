@@ -14,7 +14,7 @@ const packageJson = JSON.parse(readText("package.json"));
 const packageScripts = new Set(Object.keys(packageJson.scripts ?? {}));
 // These lanes prove package-installed surfaces against live auth, so they
 // intentionally need both live credentials and a package-backed image.
-const livePackageBackedLanes = new Set(["live-codex-npm-plugin", "openwebui"]);
+const livePackageBackedLanes = new Set(["live-codex-npm-plugin", "live-plugin-tool", "openwebui"]);
 
 function readText(relativePath) {
   return fs.readFileSync(path.join(ROOT_DIR, relativePath), "utf8");

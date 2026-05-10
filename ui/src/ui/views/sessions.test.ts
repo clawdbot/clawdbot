@@ -130,7 +130,10 @@ describe("sessions view", () => {
       ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=showArchived]")
       ?.closest("label");
 
-    expect(activeField?.getAttribute("data-tooltip")).toBe("Updated in the last 120 minutes.");
+    expect(activeField?.textContent).toContain("Updated within");
+    expect(activeField?.getAttribute("data-tooltip")).toBe(
+      "Loads sessions updated in the last 120 minutes.",
+    );
     expect(limitField?.getAttribute("data-tooltip")).toBe("Max sessions to load.");
     expect(globalToggle?.getAttribute("data-tooltip")).toBe("Include global sessions.");
     expect(unknownToggle?.getAttribute("data-tooltip")).toBe("Include unknown sessions.");
@@ -409,6 +412,48 @@ describe("sessions view", () => {
 
     const badge = container.querySelector(".data-table-badge--cron");
     expect(badge?.textContent?.trim()).toBe("cron");
+  });
+
+  it("renders live and terminal run status badges", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:live",
+              kind: "direct",
+              updatedAt: 30,
+              hasActiveRun: true,
+              status: "running",
+            },
+            {
+              key: "agent:main:idle",
+              kind: "direct",
+              updatedAt: 20,
+              hasActiveRun: false,
+            },
+            {
+              key: "agent:main:failed",
+              kind: "direct",
+              updatedAt: 10,
+              status: "failed",
+            },
+          ]),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(
+      Array.from(container.querySelectorAll("thead th")).map((cell) => cell.textContent?.trim()),
+    ).toContain("Status");
+    const badges = Array.from(container.querySelectorAll(".session-status-badge"));
+    expect(badges.map((badge) => badge.textContent?.trim())).toEqual(["Live", "Idle", "Failed"]);
+    expect(badges[0]?.classList.contains("session-status-badge--live")).toBe(true);
+    expect(badges[0]?.getAttribute("aria-label")).toBe("Status: Live");
+    expect(badges[2]?.classList.contains("session-status-badge--failed")).toBe(true);
   });
 
   it("renders and filters the session runtime", async () => {

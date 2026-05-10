@@ -22,6 +22,18 @@ function createChildProcess(): ChildProcess {
   return new EventEmitter() as ChildProcess;
 }
 
+function expectSpawned(expectedArgs: string[]): SpawnOptions {
+  expect(spawnMock).toHaveBeenCalledOnce();
+  const call = spawnMock.mock.calls[0] as [string, string[], SpawnOptions] | undefined;
+  if (!call) {
+    throw new Error("missing spawn call");
+  }
+  const [command, args, options] = call;
+  expect(command).toBe(process.execPath);
+  expect(args).toEqual(expectedArgs);
+  return options;
+}
+
 describe("launchTuiCli", () => {
   beforeEach(() => {
     process.argv = [...originalArgv];
@@ -67,23 +79,20 @@ describe("launchTuiCli", () => {
       deliver: false,
     });
 
-    expect(spawnMock).toHaveBeenCalledWith(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        "--no-warnings",
-        "/repo/openclaw.mjs",
-        "tui",
-        "--url",
-        "ws://127.0.0.1:18789",
-        "--token",
-        "test-token",
-        "--password",
-        "test-password",
-      ],
-      expect.objectContaining({ stdio: "inherit" }),
-    );
+    const options = expectSpawned([
+      "--import",
+      "tsx",
+      "--no-warnings",
+      "/repo/openclaw.mjs",
+      "tui",
+      "--url",
+      "ws://127.0.0.1:18789",
+      "--token",
+      "test-token",
+      "--password",
+      "test-password",
+    ]);
+    expect(options.stdio).toBe("inherit");
   });
 
   it("passes local mode through to the relaunched TUI", async () => {
@@ -95,11 +104,8 @@ describe("launchTuiCli", () => {
 
     await launchTuiCli({ local: true, deliver: false });
 
-    expect(spawnMock).toHaveBeenCalledWith(
-      process.execPath,
-      ["/repo/openclaw.mjs", "tui", "--local"],
-      expect.objectContaining({ stdio: "inherit" }),
-    );
+    const options = expectSpawned(["/repo/openclaw.mjs", "tui", "--local"]);
+    expect(options.stdio).toBe("inherit");
   });
 
   it("passes initial message and timeout through to the relaunched TUI", async () => {
@@ -116,19 +122,16 @@ describe("launchTuiCli", () => {
       timeoutMs: 300_000,
     });
 
-    expect(spawnMock).toHaveBeenCalledWith(
-      process.execPath,
-      [
-        "/repo/openclaw.mjs",
-        "tui",
-        "--local",
-        "--message",
-        "Wake up, my friend!",
-        "--timeout-ms",
-        "300000",
-      ],
-      expect.objectContaining({ stdio: "inherit" }),
-    );
+    const options = expectSpawned([
+      "/repo/openclaw.mjs",
+      "tui",
+      "--local",
+      "--message",
+      "Wake up, my friend!",
+      "--timeout-ms",
+      "300000",
+    ]);
+    expect(options.stdio).toBe("inherit");
   });
 
   it("launches compiled CLI shapes without repeating the current command", async () => {
@@ -141,11 +144,8 @@ describe("launchTuiCli", () => {
 
     await launchTuiCli({ deliver: false });
 
-    expect(spawnMock).toHaveBeenCalledWith(
-      process.execPath,
-      ["tui"],
-      expect.objectContaining({ stdio: "inherit" }),
-    );
+    const options = expectSpawned(["tui"]);
+    expect(options.stdio).toBe("inherit");
   });
 
   it("pins the child gateway URL and config auth source through env without adding url argv", async () => {
@@ -160,15 +160,8 @@ describe("launchTuiCli", () => {
       { authSource: "config", gatewayUrl: "ws://127.0.0.1:18789" },
     );
 
-    expect(spawnMock).toHaveBeenCalledWith(
-      process.execPath,
-      ["/repo/openclaw.mjs", "tui"],
-      expect.objectContaining({
-        env: expect.objectContaining({
-          OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:18789",
-          OPENCLAW_TUI_SETUP_AUTH_SOURCE: "config",
-        }),
-      }),
-    );
+    const options = expectSpawned(["/repo/openclaw.mjs", "tui"]);
+    expect(options.env?.OPENCLAW_GATEWAY_URL).toBe("ws://127.0.0.1:18789");
+    expect(options.env?.OPENCLAW_TUI_SETUP_AUTH_SOURCE).toBe("config");
   });
 });

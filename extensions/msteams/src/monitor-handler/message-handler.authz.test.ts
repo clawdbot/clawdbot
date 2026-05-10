@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../runtime-api.js";
+import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
 import { _resetThreadParentContextCachesForTest } from "../thread-parent-context.js";
 import "./message-handler-mock-support.test-support.js";
@@ -80,7 +80,12 @@ vi.mock("../graph-thread.js", () => {
 });
 
 describe("msteams monitor handler authz", () => {
-  function createDeps(cfg: OpenClawConfig) {
+  function createDeps(
+    cfg: OpenClawConfig,
+    options: {
+      hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
+    } = {},
+  ) {
     const readAllowFromStore = vi.fn(async () => ["attacker-aad"]);
     const upsertPairingRequest = vi.fn(async () => null);
     const recordInboundSession = vi.fn(async () => undefined);
@@ -94,6 +99,7 @@ describe("msteams monitor handler authz", () => {
         agentId: "default",
         accountId: "default",
       })),
+      hasControlCommand: options.hasControlCommand,
     });
   }
 
@@ -281,10 +287,7 @@ describe("msteams monitor handler authz", () => {
     const handler = createMSTeamsMessageHandler(deps);
     await handler(createAttackerGroupActivity({ text: "" }));
 
-    expect(readAllowFromStore).toHaveBeenCalledWith({
-      channel: "msteams",
-      accountId: "default",
-    });
+    expect(readAllowFromStore).not.toHaveBeenCalled();
     expect(conversationStore.upsert).not.toHaveBeenCalled();
   });
 
@@ -558,6 +561,62 @@ describe("msteams monitor handler authz", () => {
         conversationId: "19:group@thread.tacv2",
       }),
     );
+  });
+
+  it("blocks unauthorized text control commands through shared ingress", async () => {
+    resetThreadMocks();
+    const hasControlCommand = vi.fn(() => true);
+    const { conversationStore, deps } = createDeps(
+      {
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            requireMention: false,
+          },
+        },
+      } as OpenClawConfig,
+      { hasControlCommand },
+    );
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(createAttackerGroupActivity({ text: "/config set foo bar" }));
+
+    expect(hasControlCommand).toHaveBeenCalledWith("/config set foo bar", deps.cfg);
+    expect(conversationStore.upsert).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("authorizes text control commands from static access groups", async () => {
+    resetThreadMocks();
+    const hasControlCommand = vi.fn(() => true);
+    const { conversationStore, deps } = createDeps(
+      {
+        accessGroups: {
+          operators: {
+            type: "message.senders",
+            members: { msteams: ["attacker-aad"] },
+          },
+        },
+        channels: {
+          msteams: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["accessGroup:operators"],
+            requireMention: false,
+          },
+        },
+      } as OpenClawConfig,
+      { hasControlCommand },
+    );
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(createAttackerGroupActivity({ text: "/config set foo bar" }));
+
+    expect(conversationStore.upsert).toHaveBeenCalled();
+    const dispatched =
+      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0];
+    expect(dispatched?.ctxPayload).toMatchObject({
+      CommandAuthorized: true,
+    });
   });
 
   it("filters non-allowlisted thread messages out of BodyForAgent", async () => {

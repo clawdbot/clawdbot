@@ -5,11 +5,16 @@ vi.mock("../context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: async () => ({ llm: undefined }),
 }));
 import type { OpenClawConfig } from "../../../config/config.js";
+import { addSession, resetProcessRegistryForTests } from "../../bash-process-registry.js";
+import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import { resolveBootstrapContextTargets } from "./attempt-bootstrap-routing.js";
 import {
   buildContextEnginePromptCacheInfo,
+  buildAutoAddedToolSearchControlNamesForAllowlistCheck,
+  buildCallableToolNamesForEmptyAllowlistCheck,
+  buildToolSearchRunPlan,
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
   composeSystemPromptWithHookContext,
@@ -83,6 +88,137 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
       memoryFlushWritePath: "memory/log.md",
       runtimeToolAllowlist: ["memory_search", "memory_get"],
     });
+  });
+});
+
+describe("buildCallableToolNamesForEmptyAllowlistCheck", () => {
+  it("ignores auto-added Tool Search controls so bad allowlists still fail", () => {
+    expect(
+      buildCallableToolNamesForEmptyAllowlistCheck({
+        effectiveToolNames: ["tool_search_code"],
+        autoAddedToolSearchControlNames: new Set(["tool_search_code"]),
+        toolSearchCatalogToolCount: 0,
+      }),
+    ).toEqual([]);
+  });
+
+  it("counts cataloged tools hidden behind auto-added Tool Search controls", () => {
+    expect(
+      buildCallableToolNamesForEmptyAllowlistCheck({
+        effectiveToolNames: ["tool_search_code"],
+        autoAddedToolSearchControlNames: new Set(["tool_search_code"]),
+        toolSearchCatalogToolCount: 1,
+      }),
+    ).toEqual(["tool-search:0"]);
+  });
+
+  it("keeps explicitly requested Tool Search controls callable", () => {
+    expect(
+      buildCallableToolNamesForEmptyAllowlistCheck({
+        effectiveToolNames: ["tool_search_code"],
+        autoAddedToolSearchControlNames: new Set(),
+        toolSearchCatalogToolCount: 0,
+      }),
+    ).toEqual(["tool_search_code"]);
+  });
+});
+
+describe("buildAutoAddedToolSearchControlNamesForAllowlistCheck", () => {
+  it("treats controls as auto-added unless any explicit allowlist requested them", () => {
+    expect(
+      buildAutoAddedToolSearchControlNamesForAllowlistCheck({
+        toolSearchControlsEnabled: true,
+        explicitAllowlistSources: [{ entries: ["missing_tool"] }],
+        controlNames: ["tool_search_code", "tool_search"],
+      }),
+    ).toEqual(new Set(["tool_search_code", "tool_search"]));
+
+    expect(
+      buildAutoAddedToolSearchControlNamesForAllowlistCheck({
+        toolSearchControlsEnabled: true,
+        explicitAllowlistSources: [{ entries: ["tool_search_code"] }],
+        controlNames: ["tool_search_code", "tool_search"],
+      }),
+    ).toEqual(new Set(["tool_search"]));
+  });
+});
+
+describe("buildToolSearchRunPlan", () => {
+  it("keeps compact visible names separate from replay-safe names", () => {
+    const plan = buildToolSearchRunPlan({
+      visibleTools: [{ name: "tool_search_code" }] as never,
+      uncompactedTools: [
+        { name: "tool_search_code" },
+        { name: "exec" },
+        { name: "fake_plugin_tool" },
+      ] as never,
+      clientTools: [
+        {
+          type: "function",
+          function: {
+            name: "client_pick_file",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ],
+      catalogRegistered: true,
+      catalogToolCount: 2,
+      controlsEnabled: true,
+      explicitAllowlistSources: [{ entries: ["missing_tool"] }],
+    });
+
+    expect([...plan.visibleAllowedToolNames]).toEqual(["tool_search_code"]);
+    expect([...plan.replayAllowedToolNames]).toEqual([
+      "tool_search_code",
+      "exec",
+      "fake_plugin_tool",
+      "client_pick_file",
+    ]);
+    expect(plan.emptyAllowlistCallableNames).toEqual(["tool-search:0", "tool-search:1"]);
+  });
+
+  it("counts explicitly allowlisted client tools before they are cataloged later", () => {
+    const plan = buildToolSearchRunPlan({
+      visibleTools: [{ name: "tool_search_code" }] as never,
+      uncompactedTools: [{ name: "tool_search_code" }] as never,
+      clientTools: [
+        {
+          type: "function",
+          function: {
+            name: "client_pick_file",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ],
+      catalogRegistered: true,
+      catalogToolCount: 0,
+      controlsEnabled: true,
+      explicitAllowlistSources: [{ entries: ["client_pick_file"] }],
+    });
+
+    expect(plan.emptyAllowlistCallableNames).toEqual(["tool-search-client:client_pick_file"]);
+  });
+
+  it("does not let unrelated client tools mask a bad explicit allowlist", () => {
+    const plan = buildToolSearchRunPlan({
+      visibleTools: [{ name: "tool_search_code" }] as never,
+      uncompactedTools: [{ name: "tool_search_code" }] as never,
+      clientTools: [
+        {
+          type: "function",
+          function: {
+            name: "client_pick_file",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ],
+      catalogRegistered: true,
+      catalogToolCount: 0,
+      controlsEnabled: true,
+      explicitAllowlistSources: [{ entries: ["missing_tool"] }],
+    });
+
+    expect(plan.emptyAllowlistCallableNames).toEqual([]);
   });
 });
 
@@ -177,7 +313,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
 
     const output = normalizeMessagesForLlmBoundary(
       input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
-    ) as Array<Record<string, unknown>>;
+    ) as unknown as Array<Record<string, unknown>>;
 
     expect(output[0]?.content).toEqual([
       {
@@ -679,7 +815,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
       providerStreamFn,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-completions",
@@ -704,7 +839,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
       providerStreamFn,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-completions",
@@ -729,7 +863,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
   it("routes supported default streamSimple fallbacks through boundary-aware transports", () => {
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-responses",
@@ -745,7 +878,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     const currentStreamFn = vi.fn();
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: currentStreamFn as never,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-responses",
@@ -761,7 +893,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     const currentStreamFn = vi.fn();
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: currentStreamFn as never,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "anthropic-messages",
@@ -1480,7 +1611,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCall.name).toBe("write");
   });
 
-  it("keeps blank names blank and assigns fallback ids when both name and id are blank", async () => {
+  it("stops final blank tool names before dispatch and still assigns fallback ids", async () => {
     const finalToolCall = { type: "toolCall", id: "", name: "" };
     const finalMessage = { role: "assistant", content: [finalToolCall] };
     const baseFn = vi.fn(() =>
@@ -1491,8 +1622,16 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
-    await stream.result();
+    const result = (await stream.result()) as {
+      content: Array<{ type: string; text?: string }>;
+    };
 
+    expect(result.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining('"blank tool name"'),
+      }),
+    ]);
     expect(finalToolCall.name).toBe("");
     expect(finalToolCall.id).toBe("call_auto_1");
   });
@@ -1621,11 +1760,19 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn, new Set(["exec", "exec2"]));
-    await stream.result();
+    const result = (await stream.result()) as {
+      content: Array<{ type: string; text?: string }>;
+    };
 
+    expect(result.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining('"blank tool name"'),
+      }),
+    ]);
     expect(finalToolCall.name).toBe("");
   });
-  it("does not collapse whitespace-only tool names to empty strings", async () => {
+  it("leaves provisional blank streamed names recoverable while stopping final blank dispatch", async () => {
     const partialToolCall = { type: "toolCall", name: "   " };
     const finalToolCall = { type: "toolCall", name: "\t  " };
     const event = {
@@ -1639,11 +1786,43 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     for await (const _item of stream) {
       // drain
     }
-    await stream.result();
+    const result = (await stream.result()) as {
+      content: Array<{ type: string; text?: string }>;
+    };
 
+    expect(result.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining('"blank tool name"'),
+      }),
+    ]);
     expect(partialToolCall.name).toBe("   ");
     expect(finalToolCall.name).toBe("\t  ");
     expect(baseFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not turn blank model output into a callable _blank tool", async () => {
+    const finalToolCall = { type: "toolCall", id: "call_1", name: "", arguments: {} };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["_blank"]));
+    const result = (await stream.result()) as {
+      content: Array<{ type: string; text?: string }>;
+    };
+
+    expect(result.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining('"blank tool name"'),
+      }),
+    ]);
+    expect(finalToolCall.name).toBe("");
   });
 
   it("assigns fallback ids to missing/blank tool call ids in streamed and final messages", async () => {
@@ -2324,6 +2503,35 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       messages: Array<{ content?: Array<{ name?: string }> }>;
     };
     expect(seenContext.messages[0]?.content?.[0]?.name).toBe("write");
+  });
+
+  it("drops replayed blank tool names that cannot be recovered from ids", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "   ", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "",
+        content: [{ type: "text", text: "stale result" }],
+        isError: true,
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never);
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toStrictEqual([]);
   });
 
   it("recovers mangled replayed tool names before dropping the call", async () => {
@@ -3237,6 +3445,58 @@ describe("prependSystemPromptAddition", () => {
 });
 
 describe("buildAfterTurnRuntimeContext", () => {
+  it("preserves sessionId-scoped active process sessions for after-turn context", () => {
+    resetProcessRegistryForTests();
+    try {
+      const active = createProcessSessionFixture({
+        id: "sess-session-id",
+        command: "sleep 600",
+        backgrounded: true,
+        pid: 1234,
+      });
+      active.scopeKey = "session-123";
+      addSession(active);
+      const other = createProcessSessionFixture({
+        id: "sess-other",
+        command: "sleep 600",
+        backgrounded: true,
+      });
+      other.scopeKey = "agent:main";
+      addSession(other);
+
+      const legacy = buildAfterTurnRuntimeContext({
+        attempt: {
+          sessionId: "session-123",
+          config: {} as OpenClawConfig,
+          skillsSnapshot: undefined,
+          senderIsOwner: true,
+          provider: "openai-codex",
+          modelId: "gpt-5.4",
+          thinkLevel: "off",
+          reasoningLevel: "on",
+          extraSystemPrompt: "extra",
+          ownerNumbers: ["+15555550123"],
+        },
+        workspaceDir: "/tmp/workspace",
+        agentDir: "/tmp/agent",
+        activeAgentId: "main",
+      });
+
+      expect(legacy.activeProcessSessions).toEqual([
+        expect.objectContaining({
+          sessionId: "sess-session-id",
+          command: "sleep 600",
+          pid: 1234,
+        }),
+      ]);
+      expect(legacy.activeProcessSessions).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ sessionId: "sess-other" })]),
+      );
+    } finally {
+      resetProcessRegistryForTests();
+    }
+  });
+
   it("uses primary model when compaction.model is not set", () => {
     const legacy = buildAfterTurnRuntimeContext({
       attempt: {

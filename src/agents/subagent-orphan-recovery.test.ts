@@ -99,6 +99,21 @@ function getResumeMessage() {
   return params.message as string;
 }
 
+function firstCallParam(calls: ReadonlyArray<readonly unknown[]>, label: string) {
+  const call = calls[0];
+  if (call === undefined) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call[0];
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
+}
+
 describe("subagent-orphan-recovery", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -142,13 +157,17 @@ describe("subagent-orphan-recovery", () => {
     expect(params.sessionKey).toBe("agent:main:subagent:test-session-1");
     expect(params.message).toContain("gateway reload");
     expect(params.message).toContain("Test task: implement feature X");
-    expect(subagentRegistrySteerRuntime.replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
-      expect.objectContaining({
-        previousRunId: "run-1",
-        nextRunId: "test-run-id",
-        fallback: run,
-      }),
+    expect(subagentRegistrySteerRuntime.replaceSubagentRunAfterSteer).toHaveBeenCalledOnce();
+    const replaceParams = requireRecord(
+      firstCallParam(
+        vi.mocked(subagentRegistrySteerRuntime.replaceSubagentRunAfterSteer).mock.calls,
+        "run replacement",
+      ),
+      "run replacement params",
     );
+    expect(replaceParams.previousRunId).toBe("run-1");
+    expect(replaceParams.nextRunId).toBe("test-run-id");
+    expect(replaceParams.fallback).toBe(run);
   });
 
   it("skips sessions that are not aborted", async () => {
@@ -281,13 +300,11 @@ describe("subagent-orphan-recovery", () => {
 
     expect(result.recovered).toBe(0);
     expect(result.failed).toBe(1);
-    expect(result.failedRuns).toEqual([
-      expect.objectContaining({
-        runId: "run-1",
-        childSessionKey: "agent:main:subagent:test-session-1",
-        error: "gateway unavailable",
-      }),
-    ]);
+    expect(result.failedRuns).toHaveLength(1);
+    const failedRun = requireRecord(result.failedRuns[0], "failed run");
+    expect(failedRun.runId).toBe("run-1");
+    expect(failedRun.childSessionKey).toBe("agent:main:subagent:test-session-1");
+    expect(failedRun.error).toBe("gateway unavailable");
 
     // abortedLastRun flag should NOT be cleared on failure,
     // so the next restart can retry the recovery
@@ -361,14 +378,15 @@ describe("subagent-orphan-recovery", () => {
       },
     };
     await updater(mockStore);
-    expect(mockStore["agent:main:subagent:test-session-1"]).toMatchObject({
-      abortedLastRun: false,
-      subagentRecovery: {
-        automaticAttempts: 1,
-        lastRunId: "run-1",
-        lastAttemptAt: expect.any(Number),
-      },
-    });
+    const sessionEntry = requireRecord(
+      mockStore["agent:main:subagent:test-session-1"],
+      "updated session entry",
+    );
+    expect(sessionEntry.abortedLastRun).toBe(false);
+    const recovery = requireRecord(sessionEntry.subagentRecovery, "subagent recovery");
+    expect(recovery.automaticAttempts).toBe(1);
+    expect(recovery.lastRunId).toBe("run-1");
+    expect(recovery.lastAttemptAt).toBeTypeOf("number");
   });
 
   it("tombstones rapid repeated accepted recovery before resuming again", async () => {
@@ -385,18 +403,14 @@ describe("subagent-orphan-recovery", () => {
       getActiveRuns: () => createActiveRuns(createTestRunRecord()),
     });
 
-    expect(result).toMatchObject({
-      recovered: 0,
-      failed: 0,
-      skipped: 1,
-      failedRuns: [
-        expect.objectContaining({
-          runId: "run-1",
-          childSessionKey: "agent:main:subagent:test-session-1",
-          error: expect.stringContaining("recovery blocked after 2 rapid accepted resume attempts"),
-        }),
-      ],
-    });
+    expect(result.recovered).toBe(0);
+    expect(result.failed).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(result.failedRuns).toHaveLength(1);
+    const blockedRun = requireRecord(result.failedRuns[0], "blocked run");
+    expect(blockedRun.runId).toBe("run-1");
+    expect(blockedRun.childSessionKey).toBe("agent:main:subagent:test-session-1");
+    expect(blockedRun.error).toContain("recovery blocked after 2 rapid accepted resume attempts");
     expect(gateway.callGateway).not.toHaveBeenCalled();
     expect(sessions.updateSessionStore).toHaveBeenCalledOnce();
 
@@ -414,15 +428,16 @@ describe("subagent-orphan-recovery", () => {
       },
     };
     await updater(mockStore);
-    expect(mockStore["agent:main:subagent:test-session-1"]).toMatchObject({
-      abortedLastRun: false,
-      subagentRecovery: {
-        automaticAttempts: 2,
-        lastRunId: "run-1",
-        wedgedAt: expect.any(Number),
-        wedgedReason: expect.stringContaining("recovery blocked"),
-      },
-    });
+    const sessionEntry = requireRecord(
+      mockStore["agent:main:subagent:test-session-1"],
+      "wedged session entry",
+    );
+    expect(sessionEntry.abortedLastRun).toBe(false);
+    const recovery = requireRecord(sessionEntry.subagentRecovery, "wedged recovery");
+    expect(recovery.automaticAttempts).toBe(2);
+    expect(recovery.lastRunId).toBe("run-1");
+    expect(recovery.wedgedAt).toBeTypeOf("number");
+    expect(recovery.wedgedReason).toContain("recovery blocked");
   });
 
   it("skips already tombstoned wedged sessions without rewriting them", async () => {
@@ -513,12 +528,15 @@ describe("subagent-orphan-recovery", () => {
     });
 
     expect(announceDelivery.deliverSubagentAnnouncement).toHaveBeenCalledOnce();
-    expect(announceDelivery.deliverSubagentAnnouncement).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requesterSessionKey: "agent:main:quietchat:direct:+1234567890",
-        triggerMessage: expect.stringContaining("Automatic recovery is already in progress"),
-      }),
+    const announcement = requireRecord(
+      firstCallParam(
+        vi.mocked(announceDelivery.deliverSubagentAnnouncement).mock.calls,
+        "recovery announcement",
+      ),
+      "recovery announcement params",
     );
+    expect(announcement.requesterSessionKey).toBe("agent:main:quietchat:direct:+1234567890");
+    expect(announcement.triggerMessage).toContain("Automatic recovery is already in progress");
     expect(notifiedRecoverySessionKeys).toEqual(new Set(["agent:main:subagent:test-session-1"]));
 
     await recoverOrphanedSubagentSessions({
@@ -615,17 +633,17 @@ describe("subagent-orphan-recovery", () => {
     await vi.advanceTimersByTimeAsync(2);
     await Promise.resolve();
 
-    expect(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-1",
-        childSessionKey: "agent:main:subagent:test-session-1",
-        error: expect.stringContaining("Automatic recovery failed after 2 attempts"),
-      }),
+    expect(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).toHaveBeenCalledOnce();
+    const finalizeParams = requireRecord(
+      firstCallParam(
+        vi.mocked(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).mock.calls,
+        "interrupted run finalization",
+      ),
+      "interrupted run finalization params",
     );
-    expect(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error: expect.stringContaining("service restart"),
-      }),
-    );
+    expect(finalizeParams.runId).toBe("run-1");
+    expect(finalizeParams.childSessionKey).toBe("agent:main:subagent:test-session-1");
+    expect(finalizeParams.error).toContain("Automatic recovery failed after 2 attempts");
+    expect(finalizeParams.error).toContain("service restart");
   });
 });

@@ -50,7 +50,7 @@ export type VoiceRealtimeSession = {
   ) => VoiceRealtimeSpeakerTurn;
   close: () => void;
   connect: () => Promise<void>;
-  handleBargeIn: () => void;
+  handleBargeIn: (reason?: string) => void;
   isBargeInEnabled: () => boolean;
 };
 

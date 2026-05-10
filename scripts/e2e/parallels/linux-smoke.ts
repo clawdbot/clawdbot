@@ -599,7 +599,7 @@ PY`);
 rm -f /tmp/openclaw-parallels-linux-gateway.log
 setsid sh -lc ` +
         shellQuote(
-          `exec env OPENCLAW_HOME=/root OPENCLAW_STATE_DIR=/root/.openclaw OPENCLAW_CONFIG_PATH=/root/.openclaw/openclaw.json${bonjourEnv} ${this.auth.apiKeyEnv}=${shellQuote(
+          `exec env OPENCLAW_HOME=/root OPENCLAW_STATE_DIR=/root/.openclaw OPENCLAW_CONFIG_PATH=/root/.openclaw/openclaw.json OPENCLAW_ALLOW_ROOT=1${bonjourEnv} ${this.auth.apiKeyEnv}=${shellQuote(
             this.auth.apiKeyValue,
           )} openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-linux-gateway.log 2>&1`,
         ) +
@@ -622,7 +622,7 @@ setsid sh -lc ` +
       : ["openclaw", "gateway", "status", "--deep"];
     const result = run(
       "prlctl",
-      ["exec", this.options.vmName, "/usr/bin/env", "HOME=/root", ...args],
+      ["exec", this.options.vmName, "/usr/bin/env", "HOME=/root", "OPENCLAW_ALLOW_ROOT=1", ...args],
       {
         check: false,
         quiet: true,
@@ -646,6 +646,7 @@ setsid sh -lc ` +
           this.options.vmName,
           "/usr/bin/env",
           "HOME=/root",
+          "OPENCLAW_ALLOW_ROOT=1",
           "openclaw",
           "gateway",
           "status",
@@ -728,7 +729,7 @@ for attempt in 1 2; do
   rm -f "$HOME/.openclaw/agents/main/sessions/$session_id.jsonl"
   output_file="$(mktemp)"
   set +e
-  /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} openclaw agent --local --agent main --session-id "$session_id" --message ${shellQuote(
+  /usr/bin/env OPENCLAW_ALLOW_ROOT=1 ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} openclaw agent --local --agent main --session-id "$session_id" --message ${shellQuote(
     "Reply with exact ASCII text OK only.",
   )} --thinking minimal --timeout ${resolveParallelsModelTimeoutSeconds("linux")} --json >"$output_file" 2>&1
   rc=$?

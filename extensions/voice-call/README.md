@@ -106,6 +106,8 @@ Notes:
 - advanced webhook, streaming, and tunnel notes: `https://docs.openclaw.ai/plugins/voice-call`
 - `responseModel` is optional. When unset, voice responses use the runtime default model.
 - `sessionScope` defaults to `per-phone`, preserving caller memory across calls. Use `per-call` for reception, booking, IVR, and bridge flows where each carrier call should start fresh.
+- `realtime.consultThinkingLevel` is optional. When set, it overrides the thinking level used by the model behind realtime `openclaw_agent_consult` calls.
+- `realtime.consultFastMode` is optional. When set, it toggles fast mode for realtime `openclaw_agent_consult` calls.
 
 ## Stale call reaper
 

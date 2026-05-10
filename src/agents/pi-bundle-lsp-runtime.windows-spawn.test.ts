@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { spawnLspServerProcess } from "./pi-bundle-lsp-runtime.js";
 
 const resolveWindowsSpawnProgramMock = vi.hoisted(() => vi.fn());
 const materializeWindowsSpawnProgramMock = vi.hoisted(() => vi.fn());
@@ -58,13 +59,18 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
       windowsHide: true,
     });
 
-    const { spawnLspServerProcess } = await import("./pi-bundle-lsp-runtime.js");
-    spawnLspServerProcess({ command: "typescript-language-server", args: ["--stdio"], env: configEnv });
+    spawnLspServerProcess({
+      command: "typescript-language-server",
+      args: ["--stdio"],
+      env: configEnv,
+    });
 
     // Must use structured params so config.env entries are not dropped
-    expect(sanitizeHostExecEnvMock).toHaveBeenCalledWith(
-      expect.objectContaining({ baseEnv: process.env, overrides: configEnv }),
-    );
+    const sanitizeParams = sanitizeHostExecEnvMock.mock.calls[0]?.[0] as
+      | { baseEnv?: NodeJS.ProcessEnv; overrides?: Record<string, string> }
+      | undefined;
+    expect(sanitizeParams?.baseEnv).toBe(process.env);
+    expect(sanitizeParams?.overrides).toBe(configEnv);
   });
 
   it("passes sanitized env to resolveWindowsSpawnProgram", async () => {
@@ -79,12 +85,13 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
       windowsHide: true,
     });
 
-    const { spawnLspServerProcess } = await import("./pi-bundle-lsp-runtime.js");
     spawnLspServerProcess({ command: "typescript-language-server", args: ["--stdio"] });
 
-    expect(resolveWindowsSpawnProgramMock).toHaveBeenCalledWith(
-      expect.objectContaining({ env: sanitizedEnv, allowShellFallback: true }),
-    );
+    const resolveParams = resolveWindowsSpawnProgramMock.mock.calls[0]?.[0] as
+      | { env?: Record<string, string>; allowShellFallback?: boolean }
+      | undefined;
+    expect(resolveParams?.env).toBe(sanitizedEnv);
+    expect(resolveParams?.allowShellFallback).toBe(true);
   });
 
   it("passes materialized invocation to spawn with the sanitized env", async () => {
@@ -99,13 +106,16 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
       windowsHide: true,
     });
 
-    const { spawnLspServerProcess } = await import("./pi-bundle-lsp-runtime.js");
     spawnLspServerProcess({ command: "typescript-language-server", args: ["--stdio"] });
 
-    expect(spawnMock).toHaveBeenCalledWith(
-      "cmd.exe",
-      ["/c", "typescript-language-server.cmd", "--stdio"],
-      expect.objectContaining({ env: sanitizedEnv, shell: true, windowsHide: true }),
-    );
+    const spawnCall = spawnMock.mock.calls[0];
+    expect(spawnCall?.[0]).toBe("cmd.exe");
+    expect(spawnCall?.[1]).toEqual(["/c", "typescript-language-server.cmd", "--stdio"]);
+    const spawnOptions = spawnCall?.[2] as
+      | { env?: Record<string, string>; shell?: boolean; windowsHide?: boolean }
+      | undefined;
+    expect(spawnOptions?.env).toBe(sanitizedEnv);
+    expect(spawnOptions?.shell).toBe(true);
+    expect(spawnOptions?.windowsHide).toBe(true);
   });
 });

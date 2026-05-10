@@ -42,23 +42,21 @@ describe("process supervisor run registry", () => {
       exitSignal: null,
     });
 
-    expect(first).toEqual({
-      firstFinalize: true,
-      record: expect.objectContaining({
-        terminationReason: "overall-timeout",
-        exitCode: null,
-        exitSignal: "SIGKILL",
-      }),
-    });
+    if (!first) {
+      throw new Error("missing first finalize result");
+    }
+    expect(first.firstFinalize).toBe(true);
+    expect(first.record.terminationReason).toBe("overall-timeout");
+    expect(first.record.exitCode).toBeNull();
+    expect(first.record.exitSignal).toBe("SIGKILL");
 
-    expect(second).toEqual({
-      firstFinalize: false,
-      record: expect.objectContaining({
-        terminationReason: "overall-timeout",
-        exitCode: null,
-        exitSignal: "SIGKILL",
-      }),
-    });
+    if (!second) {
+      throw new Error("missing second finalize result");
+    }
+    expect(second.firstFinalize).toBe(false);
+    expect(second.record.terminationReason).toBe("overall-timeout");
+    expect(second.record.exitCode).toBeNull();
+    expect(second.record.exitSignal).toBe("SIGKILL");
   });
 
   it("prunes oldest exited records once retention cap is exceeded", () => {

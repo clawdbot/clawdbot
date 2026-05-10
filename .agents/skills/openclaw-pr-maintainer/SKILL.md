@@ -108,8 +108,8 @@ Issue triage is review/prove/patch-local by default:
 1. Review the issue body, comments, related threads, current code, and adjacent tests.
 2. Fix only issues that are easy, high-confidence, and narrowly owned by the implicated path.
 3. Add focused regression proof when practical.
-4. Stop with the dirty diff, touched files, and test/gate output for Peter's manual review.
-5. After Peter approves shipping, make one commit per accepted fix, with its own changelog entry when user-facing.
+4. Stop with the dirty diff, touched files, and test/gate output for maintainer review.
+5. After maintainer approval to ship, make one commit per accepted fix, with its own changelog entry when user-facing.
 6. Pull/rebase, push, then comment and close only the issues that were fixed or explicitly triaged closed.
 
 Do not batch unrelated issue fixes into one commit. Do not publish, comment, close, or label during the review/prove phase.
@@ -133,6 +133,22 @@ Loop:
 5. Continue until `X` qualified candidates or the bounded search is exhausted.
 
 Output only qualifying candidates, with: ref, surface, proof, cause, fix sketch, why small, expected test/gate. If none qualify, say so; do not pad.
+
+## Structure PR review output
+
+- Start every PR review with 1-3 plain sentences explaining what the change does and why it matters. Put this before `Findings`.
+- Then list findings first. If none, say `No blocking findings` or `No findings`.
+- Always answer: bug/behavior being fixed, PR/issue URL and affected surface, and best-fix verdict.
+- Keep summaries compact, but include enough proof that the verdict is auditable without rereading the PR.
+
+## Read beyond the diff
+
+- Review the surrounding code path, not just changed lines. Open the caller, callee, data contracts, adjacent tests, and owner module.
+- For large-codebase PRs, sample enough related files to understand the runtime boundary before deciding. Default to more code reading when the change touches agents, gateway, plugins, auth, sessions, process, config, or provider/runtime seams.
+- Compare the PR against current `origin/main` behavior. Check whether recent main already changed the same surface.
+- Dependency-backed behavior: MUST read upstream docs/source/types before judging API use, defaults, output shapes, errors, timeouts, memory behavior, or compatibility. Do not assume dependency contracts from memory or PR text.
+- Judge solution quality, not only correctness. Ask whether the PR is the clean owner-boundary fix or a wart/workaround that should be replaced by a small refactor, moved seam, contract change, or deletion of duplicate logic.
+- Mention the main files read when the verdict depends on code-path evidence.
 
 ## Enforce the bug-fix evidence bar
 
@@ -193,6 +209,9 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
 
 ## Follow PR review and landing hygiene
 
+- Never mention merge conflicts that are relatively easy to resolve, such as
+  `CHANGELOG.md` entries, in review-only output. These are landing mechanics,
+  not correctness findings.
 - If bot review conversations exist on your PR, address them and resolve them yourself once fixed.
 - Leave a review conversation unresolved only when reviewer or maintainer judgment is still needed.
 - When landing or merging any PR, follow the global `/landpr` process.

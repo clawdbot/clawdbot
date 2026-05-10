@@ -174,4 +174,41 @@ describe("RealtimeTalkSession", () => {
     expect(googleCtor).not.toHaveBeenCalled();
     expect(relayCtor).not.toHaveBeenCalled();
   });
+
+  it("passes launch options to client-owned realtime session creation", async () => {
+    const request = vi.fn(async () => ({
+      provider: "openai",
+      transport: "webrtc",
+      clientSecret: "secret",
+    }));
+    const session = new RealtimeTalkSession(
+      { request } as never,
+      "main",
+      {},
+      {
+        provider: "openai",
+        model: "gpt-realtime-2",
+        voice: "marin",
+        transport: "webrtc",
+        vadThreshold: 0.45,
+        silenceDurationMs: 650,
+        prefixPaddingMs: 250,
+        reasoningEffort: "low",
+      },
+    );
+
+    await session.start();
+
+    expect(request).toHaveBeenCalledWith("talk.client.create", {
+      sessionKey: "main",
+      provider: "openai",
+      model: "gpt-realtime-2",
+      voice: "marin",
+      transport: "webrtc",
+      vadThreshold: 0.45,
+      silenceDurationMs: 650,
+      prefixPaddingMs: 250,
+      reasoningEffort: "low",
+    });
+  });
 });

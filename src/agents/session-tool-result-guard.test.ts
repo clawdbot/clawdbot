@@ -523,7 +523,7 @@ describe("installSessionToolResultGuard", () => {
 
     const persisted = getPersistedMessages(sm);
     expect(persisted.map((message) => message.role)).toEqual(["user"]);
-    expect(persisted[0]).toMatchObject({ content: "second" });
+    expect((persisted[0] as { content?: unknown } | undefined)?.content).toBe("second");
   });
 
   // When an assistant message with toolCalls is aborted, no synthetic toolResult

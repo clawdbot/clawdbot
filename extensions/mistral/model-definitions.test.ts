@@ -42,6 +42,13 @@ describe("mistral model definitions", () => {
           maxTokens: 40000,
         }),
         expect.objectContaining({
+          id: "mistral-medium-3-5",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 262144,
+          maxTokens: 8192,
+        }),
+        expect.objectContaining({
           id: "mistral-small-latest",
           reasoning: true,
           input: ["text", "image"],

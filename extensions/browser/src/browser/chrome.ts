@@ -6,6 +6,7 @@ import { prepareOomScoreAdjustedSpawn } from "openclaw/plugin-sdk/process-runtim
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ensurePortAvailable } from "../infra/ports.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
 import { hasChromeProxyControlArg, omitChromeProxyEnv } from "./browser-proxy-mode.js";
@@ -441,16 +442,22 @@ export async function launchOpenClawChrome(
       userDataDir,
       ...launchOptions,
     });
+    const env: NodeJS.ProcessEnv = {
+      ...omitChromeProxyEnv(process.env),
+      // Reduce accidental sharing with the user's env.
+      HOME: os.homedir(),
+    };
+    if (process.platform === "linux") {
+      const chromiumStateDir = path.join(resolvePreferredOpenClawTmpDir(), ".chromium");
+      env.XDG_CONFIG_HOME ??= chromiumStateDir;
+      env.XDG_CACHE_HOME ??= chromiumStateDir;
+    }
     // stdio tuple: discard stdout to prevent buffer saturation in constrained
     // environments (e.g. Docker), while keeping stderr piped for diagnostics.
     // Cast to ChildProcessWithoutNullStreams so callers can use .stderr safely;
     // the tuple overload resolution varies across @types/node versions.
     const preparedSpawn = prepareOomScoreAdjustedSpawn(exe.path, args, {
-      env: {
-        ...omitChromeProxyEnv(process.env),
-        // Reduce accidental sharing with the user's env.
-        HOME: os.homedir(),
-      },
+      env,
     });
     return spawn(preparedSpawn.command, preparedSpawn.args, {
       stdio: ["ignore", "ignore", "pipe"],

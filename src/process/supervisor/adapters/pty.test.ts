@@ -153,6 +153,29 @@ describe("createPtyAdapter", () => {
     expect(stub.onExit).toHaveBeenCalledTimes(1);
     stub.emitExit({ exitCode: 3, signal: 0 });
     await expect(adapter.wait()).resolves.toEqual({ code: 3, signal: null });
+    expect(adapter.stdin?.destroyed).toBe(true);
+    expect(adapter.stdin?.writable).toBe(false);
+  });
+
+  it("reports stdin as non-writable after EOF or dispose", async () => {
+    const stub = createStubPty();
+    spawnMock.mockReturnValue(stub);
+
+    const adapter = await createPtyAdapter({
+      shell: "bash",
+      args: ["-lc", "cat"],
+    });
+
+    expect(adapter.stdin?.writable).toBe(true);
+    expect(adapter.stdin?.writableEnded).toBe(false);
+
+    adapter.stdin?.end();
+    expect(stub.write).toHaveBeenCalledWith(process.platform === "win32" ? "\x1a" : "\x04");
+    expect(adapter.stdin?.writable).toBe(false);
+    expect(adapter.stdin?.writableEnded).toBe(true);
+
+    adapter.dispose();
+    expect(adapter.stdin?.destroyed).toBe(true);
   });
 
   it("disposes PTY listeners", async () => {

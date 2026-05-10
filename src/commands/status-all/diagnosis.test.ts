@@ -89,6 +89,19 @@ describe("status-all diagnosis port checks", () => {
     expect(output).not.toContain("Port 18789 is already in use.");
   });
 
+  it("treats a single wildcard Gateway listener as healthy", async () => {
+    const params = createBaseParams([
+      { pid: 5001, commandLine: "openclaw-gateway", address: "0.0.0.0:18789" },
+    ]);
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("✓ Port 18789");
+    expect(output).toContain("Detected OpenClaw Gateway listener on the configured port.");
+    expect(output).not.toContain("Port 18789 is already in use.");
+  });
+
   it("keeps warning for multi-process listener conflicts", async () => {
     const params = createBaseParams([
       { pid: 5001, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },

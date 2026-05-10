@@ -34,6 +34,15 @@ const authIndex = {
   allowsProviderAuthAvailabilityFallback: () => false,
 };
 
+function requireOnlyRow(rows: ModelRow[]): ModelRow {
+  expect(rows).toHaveLength(1);
+  const row = rows[0];
+  if (!row) {
+    throw new Error("expected one model row");
+  }
+  return row;
+}
+
 describe("appendProviderCatalogRows", () => {
   it("can skip runtime model-suppression hooks for provider-catalog fast paths", async () => {
     const rows: ModelRow[] = [];
@@ -64,13 +73,10 @@ describe("appendProviderCatalogRows", () => {
         models: { providers: {} },
       },
     });
-    expect(rows).toMatchObject([
-      {
-        key: "codex/gpt-5.5",
-        available: true,
-        missing: false,
-      },
-    ]);
+    const row = requireOnlyRow(rows);
+    expect(row.key).toBe("codex/gpt-5.5");
+    expect(row.available).toBe(true);
+    expect(row.missing).toBe(false);
   });
 
   it("applies manifest suppression when runtime model-suppression hooks are skipped", async () => {
@@ -163,12 +169,9 @@ describe("appendProviderCatalogRows", () => {
       },
     });
 
-    expect(rows).toMatchObject([
-      {
-        key: "openai/gpt-5.5",
-        available: true,
-        tags: ["configured"],
-      },
-    ]);
+    const row = requireOnlyRow(rows);
+    expect(row.key).toBe("openai/gpt-5.5");
+    expect(row.available).toBe(true);
+    expect(row.tags).toEqual(["configured"]);
   });
 });

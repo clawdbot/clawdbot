@@ -44,6 +44,9 @@ const GROQ_TOO_MANY_REQUESTS_MESSAGE =
   "429 Too Many Requests: Too many requests were sent in a given timeframe.";
 const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
   "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance.";
+// Structured OpenAI-compatible server_error payload shape seen in Codex/OpenAI runs.
+const OPENAI_SERVER_ERROR_PAYLOAD =
+  'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
 
 describe("failover-error", () => {
   it("infers failover reason from HTTP status", () => {
@@ -843,13 +846,13 @@ describe("failover-error", () => {
         "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.",
     });
 
-    expect(describeFailoverError(err)).toMatchObject({
-      message: "LLM request failed: provider rejected the request schema.",
-      rawError:
-        "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.",
-      reason: "format",
-      status: 400,
-    });
+    const description = describeFailoverError(err);
+    expect(description.message).toBe("LLM request failed: provider rejected the request schema.");
+    expect(description.rawError).toBe(
+      "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.",
+    );
+    expect(description.reason).toBe("format");
+    expect(description.status).toBe(400);
   });
 
   it("coerces JSON-wrapped OpenRouter stealth-model 404s into FailoverError", () => {
@@ -864,6 +867,10 @@ describe("failover-error", () => {
 
   it("maps overloaded to a 503 fallback status", () => {
     expect(resolveFailoverStatus("overloaded")).toBe(503);
+  });
+
+  it("maps server_error to a 500 fallback status", () => {
+    expect(resolveFailoverStatus("server_error")).toBe(500);
   });
 
   it("coerces format errors with a 400 status", () => {
@@ -910,6 +917,28 @@ describe("failover-error", () => {
         message: "403 Key limit exceeded (monthly limit)",
       }),
     ).toBe("billing");
+  });
+
+  it("403 OpenRouter API-key budget limit errors return billing", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        status: 403,
+        message: "403 API key budget limit exceeded (monthly limit). Contact your org admin.",
+      }),
+    ).toBe("billing");
+  });
+
+  it("uses model-fallback provider context for OpenRouter API-key budget limit errors", () => {
+    const err = coerceToFailoverError(
+      Object.assign(
+        new Error("403 API key budget limit exceeded (monthly limit). Contact your org admin."),
+        { status: 403 },
+      ),
+      { provider: "openrouter", model: "xiaomi/mimo-v2-pro" },
+    );
+
+    expect(err?.reason).toBe("billing");
   });
 
   it("401 billing-style message returns billing instead of generic auth", () => {
@@ -973,6 +1002,39 @@ describe("failover-error", () => {
     expect(described.reason).toBeUndefined();
   });
 
+  it("classifies OpenAI-compatible server_error payloads at the error boundary", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: OPENAI_SERVER_ERROR_PAYLOAD,
+      }),
+    ).toBe("server_error");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 500,
+        message: OPENAI_SERVER_ERROR_PAYLOAD,
+      }),
+    ).toBe("server_error");
+
+    const err = coerceToFailoverError(
+      {
+        status: 500,
+        message: OPENAI_SERVER_ERROR_PAYLOAD,
+      },
+      { provider: "openai-codex", model: "gpt-5.4" },
+    );
+    expect(err?.reason).toBe("server_error");
+    expect(err?.status).toBe(500);
+  });
+
+  it("keeps explicit 4xx classification ahead of server_error markers", () => {
+    const payload = '{"type":"error","error":{"type":"server_error","code":"server_error"}}';
+
+    expect(resolveFailoverReasonFromError({ status: 401, message: payload })).toBe("auth");
+    expect(resolveFailoverReasonFromError({ status: 402, message: payload })).toBe("billing");
+    expect(resolveFailoverReasonFromError({ status: 422, message: payload })).toBe("format");
+    expect(resolveFailoverReasonFromError(`402 Payment Required ${payload}`)).toBe("billing");
+  });
+
   it("propagates sessionId/lane/provider attribution through FailoverError (#42713)", () => {
     const err = new FailoverError("all fallbacks exhausted", {
       reason: "rate_limit",
@@ -985,15 +1047,14 @@ describe("failover-error", () => {
     });
     expect(err.sessionId).toBe("session:browser-abcd");
     expect(err.lane).toBe("answer");
-    expect(describeFailoverError(err)).toMatchObject({
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      profileId: "profile-2",
-      sessionId: "session:browser-abcd",
-      lane: "answer",
-      reason: "rate_limit",
-      status: 429,
-    });
+    const description = describeFailoverError(err);
+    expect(description.provider).toBe("anthropic");
+    expect(description.model).toBe("claude-opus-4-6");
+    expect(description.profileId).toBe("profile-2");
+    expect(description.sessionId).toBe("session:browser-abcd");
+    expect(description.lane).toBe("answer");
+    expect(description.reason).toBe("rate_limit");
+    expect(description.status).toBe(429);
   });
 
   it("coerceToFailoverError carries sessionId/lane from context (#42713)", () => {

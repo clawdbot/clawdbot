@@ -12,10 +12,6 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/system-event-runtime.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => reactionQueueMock(...args),
 }));
-vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
-  readStoreAllowFromForDmPolicy: async () => [],
-}));
-
 type ReactionHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 
 type ReactionRunInput = {

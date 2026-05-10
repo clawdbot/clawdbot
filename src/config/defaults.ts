@@ -2,7 +2,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
-import { normalizeAgentModelMapForConfig } from "./model-input.js";
+import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
 import {
   applyProviderConfigDefaultsForConfig,
   normalizeProviderConfigForConfigDefaults,
@@ -256,13 +256,29 @@ export function applyModelDefaults(
   if (!existingAgent) {
     return mutated ? nextCfg : cfg;
   }
+
+  let nextAgent = existingAgent;
+  const normalizedModel = normalizeAgentModelConfigForDefaults(existingAgent.model);
+  if (normalizedModel !== existingAgent.model) {
+    nextAgent = { ...nextAgent, model: normalizedModel as typeof existingAgent.model };
+    mutated = true;
+  }
+
   const rawExistingModels = existingAgent.models ?? {};
   const existingModels = normalizeAgentModelMapForConfig(rawExistingModels);
   if (existingModels !== rawExistingModels) {
     mutated = true;
   }
   if (Object.keys(existingModels).length === 0) {
-    return mutated ? nextCfg : cfg;
+    return mutated
+      ? {
+          ...nextCfg,
+          agents: {
+            ...nextCfg.agents,
+            defaults: nextAgent,
+          },
+        }
+      : cfg;
   }
 
   const nextModels: Record<string, { alias?: string }> = {
@@ -289,9 +305,41 @@ export function applyModelDefaults(
     ...nextCfg,
     agents: {
       ...nextCfg.agents,
-      defaults: { ...existingAgent, models: nextModels },
+      defaults: { ...nextAgent, models: nextModels },
     },
   };
+}
+
+function normalizeAgentModelConfigForDefaults(value: unknown): unknown {
+  if (typeof value === "string") {
+    const normalized = normalizeAgentModelRefForConfig(value);
+    return normalized === value ? value : normalized;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+
+  const raw = value as Record<string, unknown>;
+  let mutated = false;
+  const next: Record<string, unknown> = { ...raw };
+  if (typeof raw.primary === "string") {
+    const primary = normalizeAgentModelRefForConfig(raw.primary);
+    if (primary !== raw.primary) {
+      next.primary = primary;
+      mutated = true;
+    }
+  }
+  if (Array.isArray(raw.fallbacks)) {
+    const rawFallbacks = raw.fallbacks;
+    const fallbacks = rawFallbacks.map((fallback) =>
+      typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
+    );
+    if (fallbacks.some((fallback, index) => fallback !== rawFallbacks[index])) {
+      next.fallbacks = fallbacks;
+      mutated = true;
+    }
+  }
+  return mutated ? next : value;
 }
 
 export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {

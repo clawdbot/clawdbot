@@ -16,6 +16,8 @@ type ResolveManifestProviderAuthChoice =
   typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoice;
 type ResolvePluginSetupProvider =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginSetupProvider;
+type RunProviderModelSelectedHook =
+  typeof import("../plugins/provider-auth-choice.runtime.js").runProviderModelSelectedHook;
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 const resolvePluginSetupProvider = vi.hoisted(() =>
@@ -356,13 +358,14 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       },
       agentDir: "/tmp/agent",
     });
-    expect(runProviderModelSelectedHook).toHaveBeenCalledWith({
-      config: result?.config,
-      model: LOCAL_DEFAULT_MODEL,
-      prompter: expect.objectContaining({ note: expect.any(Function) }),
-      agentDir: undefined,
-      workspaceDir: "/tmp/workspace",
-    });
+    expect(runProviderModelSelectedHook).toHaveBeenCalledOnce();
+    const [hookParams] = runProviderModelSelectedHook.mock
+      .calls[0] as unknown as Parameters<RunProviderModelSelectedHook>;
+    expect(hookParams.config).toBe(result?.config);
+    expect(hookParams.model).toBe(LOCAL_DEFAULT_MODEL);
+    expect(typeof hookParams.prompter.note).toBe("function");
+    expect(hookParams.agentDir).toBeUndefined();
+    expect(hookParams.workspaceDir).toBe("/tmp/workspace");
   });
 
   it("keeps an existing default when provider auth patches its own primary model", async () => {
@@ -457,15 +460,11 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
 
     const result = await applyAuthChoiceLoadedPluginProvider(buildParams());
 
-    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: expect.objectContaining({
-          pluginId: "local-provider-plugin",
-          label: LOCAL_PROVIDER_LABEL,
-        }),
-        workspaceDir: "/tmp/workspace",
-      }),
-    );
+    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
+    const [installParams] = ensureOnboardingPluginInstalled.mock.calls[0];
+    expect(installParams.entry?.pluginId).toBe("local-provider-plugin");
+    expect(installParams.entry?.label).toBe(LOCAL_PROVIDER_LABEL);
+    expect(installParams.workspaceDir).toBe("/tmp/workspace");
     expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
     expect(result?.config.agents?.defaults?.model).toEqual({
       primary: LOCAL_DEFAULT_MODEL,
@@ -585,6 +584,29 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       "Detected local provider runtime.\nPulled model metadata.",
       "Provider notes",
     );
+  });
+
+  it("normalizes retired Google Gemini default models returned by auth methods", async () => {
+    const method: ProviderAuthMethod = {
+      id: "google",
+      label: "Google",
+      kind: "custom",
+      run: async () => ({
+        profiles: [],
+        defaultModel: "google/gemini-3-pro-preview",
+      }),
+    };
+
+    const result = await runProviderPluginAuthMethod({
+      config: {},
+      runtime: {} as ApplyAuthChoiceParams["runtime"],
+      prompter: {
+        note: vi.fn(async () => {}),
+      } as unknown as ApplyAuthChoiceParams["prompter"],
+      method,
+    });
+
+    expect(result.defaultModel).toBe("google/gemini-3.1-pro-preview");
   });
 
   it("replaces provider-owned default model maps during auth migrations", async () => {

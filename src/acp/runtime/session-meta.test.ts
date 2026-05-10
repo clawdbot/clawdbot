@@ -41,16 +41,17 @@ describe("listAcpSessionEntries", () => {
         storePath: "/custom/sessions/ops.json",
       },
     ]);
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:ops:acp:s1": {
-        updatedAt: 123,
-        acp: {
-          backend: "acpx",
-          agent: "ops",
-          mode: "persistent",
-          state: "idle",
-        },
+    const storedEntry = {
+      updatedAt: 123,
+      acp: {
+        backend: "acpx",
+        agent: "ops",
+        mode: "persistent",
+        state: "idle",
       },
+    };
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:ops:acp:s1": storedEntry,
     });
 
     const entries = await listAcpSessionEntries({ cfg });
@@ -58,12 +59,14 @@ describe("listAcpSessionEntries", () => {
     expect(hoisted.resolveAllAgentSessionStoreTargetsMock).toHaveBeenCalledWith(cfg, undefined);
     expect(hoisted.loadSessionStoreMock).toHaveBeenCalledWith("/custom/sessions/ops.json");
     expect(entries).toEqual([
-      expect.objectContaining({
+      {
+        acp: storedEntry.acp,
         cfg,
+        entry: storedEntry,
         storePath: "/custom/sessions/ops.json",
         sessionKey: "agent:ops:acp:s1",
         storeSessionKey: "agent:ops:acp:s1",
-      }),
+      },
     ]);
   });
 });

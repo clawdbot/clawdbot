@@ -506,13 +506,9 @@ export function createCodexNativeWebSearchWrapper(
 export function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const typedOptions = options as
-      | (SimpleStreamOptions & { openaiWsWarmup?: boolean })
-      | undefined;
     const mergedOptions = {
       ...options,
       transport: options?.transport ?? "auto",
-      openaiWsWarmup: typedOptions?.openaiWsWarmup ?? true,
     } as SimpleStreamOptions;
     return underlying(model, context, mergedOptions);
   };

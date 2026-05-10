@@ -34,6 +34,8 @@ vi.mock("../plugins/commands.js", () => ({
 
 afterEach(() => {
   vi.restoreAllMocks();
+  listPluginCommands.mockReset();
+  listPluginCommands.mockImplementation(() => []);
   MODEL_CONTEXT_TOKEN_CACHE.clear();
 });
 
@@ -770,6 +772,43 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
     expect(normalized).toContain("Context: 49k/200k");
     expect(normalized).not.toContain("Context: 49k/1.0m");
+  });
+
+  it("renders CLI runtime aliases as the selected model route", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-7",
+      },
+      sessionEntry: {
+        sessionId: "claude-cli-runtime-alias",
+        updatedAt: 0,
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-7",
+        modelProvider: "claude-cli",
+        model: "claude-opus-4-7",
+        fallbackNoticeSelectedModel: "anthropic/claude-opus-4-7",
+        fallbackNoticeActiveModel: "claude-cli/claude-opus-4-7",
+        fallbackNoticeReason: "selected model unavailable",
+        inputTokens: 29,
+        outputTokens: 19_000,
+        cacheRead: 3_000_000,
+        totalTokens: 36_000,
+        totalTokensFresh: true,
+        contextTokens: 1_000_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "unknown",
+      activeModelAuth: "oauth (anthropic:claude-cli)",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: anthropic/claude-opus-4-7");
+    expect(normalized).toContain("oauth (anthropic:claude-cli)");
+    expect(normalized).not.toContain("Fallback: claude-cli/claude-opus-4-7");
+    expect(normalized).not.toContain("unknown");
+    expect(normalized).toContain("Context: 36k/1.0m (4%)");
   });
 
   it("keeps an explicit runtime context limit when fallback status already computed one", () => {
@@ -2103,7 +2142,7 @@ describe("buildHelpMessage", () => {
   });
 
   it("includes /fast in help output", () => {
-    expect(buildHelpMessage()).toContain("/fast status|on|off");
+    expect(buildHelpMessage()).toContain("/fast status|on|off|default");
   });
 
   it("includes raw trace mode in help output", () => {
@@ -2131,9 +2170,7 @@ describe("buildCommandsMessagePaginated", () => {
     ];
     listPluginCommands.mockImplementation(() => pluginCommands);
     expect(listPluginCommands()).toEqual(pluginCommands);
-    vi.resetModules();
-    const { buildCommandsMessagePaginated: buildPaginatedCommands } = await import("./status.js");
-    const firstPage = buildPaginatedCommands(
+    const firstPage = buildCommandsMessagePaginated(
       {
         commands: { config: false, debug: false },
       } as unknown as OpenClawConfig,
@@ -2141,7 +2178,7 @@ describe("buildCommandsMessagePaginated", () => {
       { surface: "telegram", page: 1, forcePaginatedList: true },
     );
     const pages = Array.from({ length: firstPage.totalPages }, (_, index) =>
-      buildPaginatedCommands(
+      buildCommandsMessagePaginated(
         {
           commands: { config: false, debug: false },
         } as unknown as OpenClawConfig,

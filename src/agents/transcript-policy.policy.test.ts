@@ -1,5 +1,6 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveTranscriptPolicy } from "./transcript-policy.js";
 
 vi.mock("../plugins/provider-hook-runtime.js", () => ({
   resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
@@ -14,7 +15,6 @@ vi.mock("../plugins/provider-hook-runtime.js", () => ({
   ),
 }));
 
-let resolveTranscriptPolicy: typeof import("./transcript-policy.js").resolveTranscriptPolicy;
 const MISTRAL_PLUGIN_CONFIG = {
   plugins: {
     entries: {
@@ -40,10 +40,6 @@ function createProviderRuntimeSmokeContext(): {
     workspaceDir: process.cwd(),
   };
 }
-
-beforeAll(async () => {
-  ({ resolveTranscriptPolicy } = await import("./transcript-policy.js"));
-});
 
 describe("resolveTranscriptPolicy provider replay policy", () => {
   it("uses images-only sanitization without tool-call id rewriting for OpenAI models", () => {

@@ -435,14 +435,13 @@ async function dispatchDiscordCommandInteraction(params: {
         tag: sender.tag,
       },
       allowNameMatching,
-      useAccessGroups,
       cfg,
       rest: interaction.client.rest,
     });
-    commandAuthorized = dmAccess.commandAuthorized;
-    if (dmAccess.decision !== "allow") {
+    commandAuthorized = dmAccess.senderAccess.allowed ? dmAccess.commandAccess.authorized : false;
+    if (dmAccess.senderAccess.decision !== "allow") {
       await handleDiscordDmCommandDecision({
-        dmAccess,
+        senderAccess: dmAccess.senderAccess,
         accountId,
         sender: {
           id: user.id,
@@ -483,8 +482,9 @@ async function dispatchDiscordCommandInteraction(params: {
     return { accepted: false };
   }
   if (!isDirectMessage) {
-    commandAuthorized = resolveDiscordGuildNativeCommandAuthorized({
+    commandAuthorized = await resolveDiscordGuildNativeCommandAuthorized({
       cfg,
+      accountId,
       discordConfig,
       useAccessGroups,
       commandsAllowFromAccess,

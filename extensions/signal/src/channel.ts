@@ -347,7 +347,9 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
         probeAccount: async ({ account, timeoutMs }) => {
           const baseUrl = account.baseUrl;
           const { probeSignal } = await loadSignalProbeModule();
-          return await probeSignal(baseUrl, timeoutMs);
+          return await probeSignal(baseUrl, timeoutMs, {
+            apiMode: account.config?.apiMode ?? "auto",
+          });
         },
         formatCapabilitiesProbe: ({ probe }) =>
           probe?.version ? [{ text: `Signal daemon: ${probe.version}` }] : [],

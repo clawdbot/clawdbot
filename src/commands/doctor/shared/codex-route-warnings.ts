@@ -18,6 +18,11 @@ type SessionRouteRepairResult = {
   changed: boolean;
   sessionKeys: string[];
 };
+type ConfigRouteRepairResult = {
+  cfg: OpenClawConfig;
+  changes: CodexRouteHit[];
+  runtimePinChanges: string[];
+};
 type CodexSessionRouteRepairSummary = {
   scannedStores: number;
   repairedStores: number;
@@ -442,10 +447,38 @@ function rewriteAgentModelRefs(params: {
   }
 }
 
-function rewriteConfigModelRefs(params: { cfg: OpenClawConfig; env?: NodeJS.ProcessEnv }): {
+function clearLegacyAgentRuntimePolicy(
+  container: MutableRecord | undefined,
+  pathLabel: string,
+  changes: string[],
+): void {
+  if (!container) {
+    return;
+  }
+  if (asMutableRecord(container.embeddedHarness)) {
+    delete container.embeddedHarness;
+    changes.push(`Removed ${pathLabel}.embeddedHarness; runtime is now provider/model scoped.`);
+  }
+  if (asMutableRecord(container.agentRuntime)) {
+    delete container.agentRuntime;
+    changes.push(`Removed ${pathLabel}.agentRuntime; runtime is now provider/model scoped.`);
+  }
+}
+
+function clearConfigLegacyAgentRuntimePolicies(cfg: OpenClawConfig): string[] {
+  const changes: string[] = [];
+  clearLegacyAgentRuntimePolicy(asMutableRecord(cfg.agents?.defaults), "agents.defaults", changes);
+  for (const [index, agent] of (cfg.agents?.list ?? []).entries()) {
+    const id = typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : String(index);
+    clearLegacyAgentRuntimePolicy(agent as MutableRecord, `agents.list.${id}`, changes);
+  }
+  return changes;
+}
+
+function rewriteConfigModelRefs(params: {
   cfg: OpenClawConfig;
-  changes: CodexRouteHit[];
-} {
+  env?: NodeJS.ProcessEnv;
+}): ConfigRouteRepairResult {
   const nextConfig = structuredClone(params.cfg);
   const hits: CodexRouteHit[] = [];
   const defaultsRuntime = nextConfig.agents?.defaults?.agentRuntime;
@@ -518,9 +551,12 @@ function rewriteConfigModelRefs(params: { cfg: OpenClawConfig; env?: NodeJS.Proc
     key: "model",
     path: "channels.discord.voice.model",
   });
+  const runtimePinChanges =
+    hits.length > 0 ? clearConfigLegacyAgentRuntimePolicies(nextConfig) : [];
   return {
-    cfg: hits.length > 0 ? nextConfig : params.cfg,
+    cfg: hits.length > 0 || runtimePinChanges.length > 0 ? nextConfig : params.cfg,
     changes: hits,
+    runtimePinChanges,
   };
 }
 
@@ -545,7 +581,7 @@ export function collectCodexRouteWarnings(params: {
             hit.runtime ? `; current runtime is "${hit.runtime}"` : ""
           }.`,
       ),
-      "- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions to `openai/*` without changing explicit runtime policy.",
+      "- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions to `openai/*`, clears old whole-agent runtime pins, and keeps provider/model runtime policy.",
     ].join("\n"),
   ];
 }
@@ -578,6 +614,7 @@ export function maybeRepairCodexRoutes(params: {
       `Repaired Codex model routes:\n${repaired.changes
         .map((hit) => `- ${formatCodexRouteChange(hit)}`)
         .join("\n")}`,
+      ...repaired.runtimePinChanges,
     ],
   };
 }

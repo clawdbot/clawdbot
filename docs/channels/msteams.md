@@ -146,14 +146,14 @@ Disable with:
 **DM access**
 
 - Default: `channels.msteams.dmPolicy = "pairing"`. Unknown senders are ignored until approved.
-- `channels.msteams.allowFrom` should use stable AAD object IDs.
+- `channels.msteams.allowFrom` should use stable AAD object IDs or static sender access groups such as `accessGroup:core-team`.
 - Do not rely on UPN/display-name matching for allowlists - they can change. OpenClaw disables direct name matching by default; opt in explicitly with `channels.msteams.dangerouslyAllowNameMatching: true`.
 - The wizard can resolve names to IDs via Microsoft Graph when credentials allow.
 
 **Group access**
 
 - Default: `channels.msteams.groupPolicy = "allowlist"` (blocked unless you add `groupAllowFrom`). Use `channels.defaults.groupPolicy` to override the default when unset.
-- `channels.msteams.groupAllowFrom` controls which senders can trigger in group chats/channels (falls back to `channels.msteams.allowFrom`).
+- `channels.msteams.groupAllowFrom` controls which senders or static sender access groups can trigger in group chats/channels (falls back to `channels.msteams.allowFrom`).
 - Set `groupPolicy: "open"` to allow any member (still mention-gated by default).
 - To allow **no channels**, set `channels.msteams.groupPolicy: "disabled"`.
 
@@ -164,7 +164,7 @@ Example:
   channels: {
     msteams: {
       groupPolicy: "allowlist",
-      groupAllowFrom: ["user@org.com"],
+      groupAllowFrom: ["00000000-0000-0000-0000-000000000000", "accessGroup:core-team"],
     },
   },
 }

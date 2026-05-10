@@ -196,7 +196,7 @@ async function expectBackgroundSessionTimesOut(params: {
 
   const finished = await waitForFinishedSession(sessionId);
   try {
-    expect(finished).toMatchObject({ status: "failed" });
+    expect(finished?.status).toBe("failed");
   } finally {
     cleanupRunningSession(sessionId);
   }

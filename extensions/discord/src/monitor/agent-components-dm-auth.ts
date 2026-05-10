@@ -1,13 +1,12 @@
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveDiscordDmAccessGroupEntries } from "./access-groups.js";
 import {
   resolveComponentInteractionContext,
   resolveDiscordChannelContext,
 } from "./agent-components-context.js";
 import {
-  readStoreAllowFromForDmPolicy,
+  readChannelIngressStoreAllowFromForDmPolicy,
   upsertChannelPairingRequest,
 } from "./agent-components-helpers.runtime.js";
 import { replySilently } from "./agent-components-reply.js";
@@ -16,11 +15,8 @@ import type {
   AgentComponentInteraction,
   DiscordUser,
 } from "./agent-components.types.js";
-import {
-  normalizeDiscordAllowList,
-  resolveDiscordAllowListMatch,
-  resolveGroupDmAllow,
-} from "./allow-list.js";
+import { resolveGroupDmAllow } from "./allow-list.js";
+import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { formatDiscordUserTag } from "./format.js";
 
 async function ensureDmComponentAuthorized(params: {
@@ -31,50 +27,36 @@ async function ensureDmComponentAuthorized(params: {
   replyOpts: { ephemeral?: boolean };
 }) {
   const { ctx, interaction, user, componentLabel, replyOpts } = params;
-  const allowFromPrefixes = ["discord:", "user:", "pk:"];
-  const resolveAllowMatch = (entries: string[]) => {
-    const allowList = normalizeDiscordAllowList(entries, allowFromPrefixes);
-    return allowList
-      ? resolveDiscordAllowListMatch({
-          allowList,
-          candidate: {
-            id: user.id,
-            name: user.username,
-            tag: formatDiscordUserTag(user),
-          },
-          allowNameMatching: isDangerousNameMatchingEnabled(ctx.discordConfig),
-        })
-      : { allowed: false };
-  };
-  const resolveAllowMatchWithAccessGroups = async (entries: string[]) => {
-    const staticMatch = resolveAllowMatch(entries);
-    if (staticMatch.allowed) {
-      return staticMatch;
-    }
-    const matchedGroups = await resolveDiscordDmAccessGroupEntries({
-      cfg: ctx.cfg,
-      allowFrom: entries,
-      sender: { id: user.id },
-      accountId: ctx.accountId,
-      token: ctx.token,
-      isSenderAllowed: (senderId, allowFrom) =>
-        resolveAllowMatch(allowFrom).allowed || allowFrom.includes(senderId),
-    });
-    return matchedGroups.length > 0
-      ? resolveAllowMatch([...entries, `discord:${user.id}`])
-      : staticMatch;
-  };
   const dmPolicy = ctx.dmPolicy ?? "pairing";
   if (dmPolicy === "disabled") {
     logVerbose(`agent ${componentLabel}: blocked (DM policy disabled)`);
     await replySilently(interaction, { content: "DM interactions are disabled.", ...replyOpts });
     return false;
   }
-  if (dmPolicy === "allowlist") {
-    const allowMatch = await resolveAllowMatchWithAccessGroups(ctx.allowFrom ?? []);
-    if (allowMatch.allowed) {
-      return true;
-    }
+  const access = await resolveDiscordDmCommandAccess({
+    accountId: ctx.accountId,
+    dmPolicy,
+    configuredAllowFrom: ctx.allowFrom ?? [],
+    sender: {
+      id: user.id,
+      name: user.username,
+      tag: formatDiscordUserTag(user),
+    },
+    allowNameMatching: isDangerousNameMatchingEnabled(ctx.discordConfig),
+    cfg: ctx.cfg,
+    token: ctx.token,
+    readStoreAllowFrom: async ({ accountId, dmPolicy }) =>
+      await readChannelIngressStoreAllowFromForDmPolicy({
+        provider: "discord",
+        accountId,
+        dmPolicy,
+      }),
+    eventKind: "button",
+  });
+  if (access.senderAccess.decision === "allow") {
+    return true;
+  }
+  if (access.senderAccess.decision !== "pairing") {
     logVerbose(`agent ${componentLabel}: blocked DM user ${user.id} (not in allowFrom)`);
     await replySilently(interaction, {
       content: `You are not authorized to use this ${componentLabel}.`,
@@ -82,62 +64,36 @@ async function ensureDmComponentAuthorized(params: {
     });
     return false;
   }
-
-  const storeAllowFrom =
-    dmPolicy === "open"
-      ? []
-      : await readStoreAllowFromForDmPolicy({
-          provider: "discord",
-          accountId: ctx.accountId,
-          dmPolicy,
-        });
-  const allowMatch = resolveAllowMatch([...(ctx.allowFrom ?? []), ...storeAllowFrom]);
-  const dynamicAllowMatch = allowMatch.allowed
-    ? allowMatch
-    : await resolveAllowMatchWithAccessGroups([...(ctx.allowFrom ?? []), ...storeAllowFrom]);
-  if (dynamicAllowMatch.allowed) {
-    return true;
-  }
-
-  if (dmPolicy === "pairing") {
-    const pairingResult = await createChannelPairingChallengeIssuer({
-      channel: "discord",
-      upsertPairingRequest: async ({ id, meta }) => {
-        return await upsertChannelPairingRequest({
-          channel: "discord",
-          id,
-          accountId: ctx.accountId,
-          meta,
-        });
-      },
-    })({
-      senderId: user.id,
-      senderIdLine: `Your Discord user id: ${user.id}`,
-      meta: {
-        tag: formatDiscordUserTag(user),
-        name: user.username,
-      },
-      sendPairingReply: async (text) => {
-        await interaction.reply({
-          content: text,
-          ...replyOpts,
-        });
-      },
-    });
-    if (!pairingResult.created) {
-      await replySilently(interaction, {
-        content: "Pairing already requested. Ask the bot owner to approve your code.",
+  const pairingResult = await createChannelPairingChallengeIssuer({
+    channel: "discord",
+    upsertPairingRequest: async ({ id, meta }) => {
+      return await upsertChannelPairingRequest({
+        channel: "discord",
+        id,
+        accountId: ctx.accountId,
+        meta,
+      });
+    },
+  })({
+    senderId: user.id,
+    senderIdLine: `Your Discord user id: ${user.id}`,
+    meta: {
+      tag: formatDiscordUserTag(user),
+      name: user.username,
+    },
+    sendPairingReply: async (text) => {
+      await interaction.reply({
+        content: text,
         ...replyOpts,
       });
-    }
-    return false;
-  }
-
-  logVerbose(`agent ${componentLabel}: blocked DM user ${user.id} (not in allowFrom)`);
-  await replySilently(interaction, {
-    content: `You are not authorized to use this ${componentLabel}.`,
-    ...replyOpts,
+    },
   });
+  if (!pairingResult.created) {
+    await replySilently(interaction, {
+      content: "Pairing already requested. Ask the bot owner to approve your code.",
+      ...replyOpts,
+    });
+  }
   return false;
 }
 

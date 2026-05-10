@@ -132,7 +132,6 @@ vi.mock("./runtime-api.js", async () => {
       onModelSelected: vi.fn(),
       typingCallbacks: {},
     })),
-    readStoreAllowFromForDmPolicy: vi.fn(async () => []),
     registerPluginHttpRoute: mockState.registerPluginHttpRoute,
     resolveChannelMediaMaxBytes: vi.fn(() => 8 * 1024 * 1024),
     warnMissingProviderGroupPolicyFallbackOnce: vi.fn(),

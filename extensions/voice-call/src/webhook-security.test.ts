@@ -104,7 +104,8 @@ function expectAcceptedWebhookVersion(
   result: { ok: boolean; version?: string },
   version: "v2" | "v3",
 ) {
-  expect(result).toMatchObject({ ok: true, version });
+  expect(result.ok).toBe(true);
+  expect(result.version).toBe(version);
 }
 
 function verifyTwilioNgrokLoopback(signature: string) {

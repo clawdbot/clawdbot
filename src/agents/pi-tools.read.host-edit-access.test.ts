@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createHostWorkspaceEditTool } from "./pi-tools.read.js";
 
 type CapturedEditOperations = {
   access: (absolutePath: string) => Promise<void>;
@@ -30,8 +31,6 @@ vi.mock("@mariozechner/pi-coding-agent", async () => {
     },
   };
 });
-
-const { createHostWorkspaceEditTool } = await import("./pi-tools.read.js");
 
 describe("createHostWorkspaceEditTool host access mapping", () => {
   let tmpDir = "";

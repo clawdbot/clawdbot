@@ -1,6 +1,8 @@
+import type { SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const killProcessTreeMock = vi.hoisted(() => vi.fn());
@@ -32,7 +34,6 @@ describe("OpenClawStdioClientTransport", () => {
   it("starts stdio MCP servers in a disposable process group on POSIX", async () => {
     const child = new MockChildProcess();
     spawnMock.mockReturnValue(child);
-    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
 
     const transport = new OpenClawStdioClientTransport({
       command: "npx",
@@ -45,11 +46,7 @@ describe("OpenClawStdioClientTransport", () => {
     child.emit("spawn");
     await started;
 
-    const [command, args, options] = spawnMock.mock.calls[0] as [
-      string,
-      string[],
-      { env?: NodeJS.ProcessEnv },
-    ];
+    const [command, args, options] = spawnMock.mock.calls[0] as [string, string[], SpawnOptions];
     if (process.platform === "linux") {
       expect(command).toBe("/bin/sh");
       expect(args).toEqual([
@@ -63,15 +60,11 @@ describe("OpenClawStdioClientTransport", () => {
       expect(command).toBe("npx");
       expect(args).toEqual(["-y", "example-mcp"]);
     }
-    expect(options).toEqual(
-      expect.objectContaining({
-        cwd: "/tmp/example",
-        detached: process.platform !== "win32",
-        shell: false,
-        stdio: ["pipe", "pipe", "pipe"],
-      }),
-    );
-    expect(options.env).toEqual(expect.objectContaining({ EXAMPLE: "1" }));
+    expect(options.cwd).toBe("/tmp/example");
+    expect(options.detached).toBe(process.platform !== "win32");
+    expect(options.shell).toBe(false);
+    expect(options.stdio).toEqual(["pipe", "pipe", "pipe"]);
+    expect(options.env?.EXAMPLE).toBe("1");
     expect(transport.pid).toBe(4321);
     expect(transport.stderr).toBeInstanceOf(PassThrough);
   });
@@ -80,7 +73,6 @@ describe("OpenClawStdioClientTransport", () => {
     vi.useFakeTimers();
     const child = new MockChildProcess();
     spawnMock.mockReturnValue(child);
-    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
 
     const transport = new OpenClawStdioClientTransport({ command: "npx" });
     const started = transport.start();
@@ -100,7 +92,6 @@ describe("OpenClawStdioClientTransport", () => {
     vi.useFakeTimers();
     const child = new MockChildProcess();
     spawnMock.mockReturnValue(child);
-    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
 
     const transport = new OpenClawStdioClientTransport({ command: "npx" });
     const started = transport.start();
@@ -118,7 +109,6 @@ describe("OpenClawStdioClientTransport", () => {
   it("sends and receives JSON-RPC messages over stdio", async () => {
     const child = new MockChildProcess();
     spawnMock.mockReturnValue(child);
-    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
 
     const transport = new OpenClawStdioClientTransport({ command: "npx" });
     const onmessage = vi.fn();
@@ -152,16 +142,15 @@ describe("OpenClawStdioClientTransport", () => {
     };
     child.stdin = brokenStdin;
     spawnMock.mockReturnValue(child);
-    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
 
     const transport = new OpenClawStdioClientTransport({ command: "npx" });
     const started = transport.start();
     child.emit("spawn");
     await started;
 
-    await expect(
-      transport.send({ jsonrpc: "2.0", id: 2, method: "ping" }),
-    ).rejects.toThrow("EPIPE");
+    await expect(transport.send({ jsonrpc: "2.0", id: 2, method: "ping" })).rejects.toThrow(
+      "EPIPE",
+    );
   });
 
   it("rejects send() when stdin.write throws synchronously (#75438)", async () => {
@@ -172,15 +161,14 @@ describe("OpenClawStdioClientTransport", () => {
     };
     child.stdin = brokenStdin;
     spawnMock.mockReturnValue(child);
-    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
 
     const transport = new OpenClawStdioClientTransport({ command: "npx" });
     const started = transport.start();
     child.emit("spawn");
     await started;
 
-    await expect(
-      transport.send({ jsonrpc: "2.0", id: 3, method: "ping" }),
-    ).rejects.toThrow("write after end");
+    await expect(transport.send({ jsonrpc: "2.0", id: 3, method: "ping" })).rejects.toThrow(
+      "write after end",
+    );
   });
 });

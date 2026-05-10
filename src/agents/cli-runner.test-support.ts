@@ -38,8 +38,44 @@ const hoisted = vi.hoisted(
 
 setCliRunnerExecuteTestDeps({
   getProcessSupervisor: () => ({
-    spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
-      supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
+    spawn: async (params: Parameters<SupervisorSpawnFn>[0]) => {
+      let stdoutDelivered = false;
+      let stderrDelivered = false;
+      const wrappedParams = {
+        ...params,
+        onStdout: params.onStdout
+          ? (chunk: string) => {
+              stdoutDelivered = true;
+              params.onStdout?.(chunk);
+            }
+          : undefined,
+        onStderr: params.onStderr
+          ? (chunk: string) => {
+              stderrDelivered = true;
+              params.onStderr?.(chunk);
+            }
+          : undefined,
+      };
+      const managedRun = (await supervisorSpawnMock(wrappedParams)) as Awaited<
+        ReturnType<SupervisorSpawnFn>
+      >;
+      const wait = managedRun.wait;
+      return {
+        ...managedRun,
+        wait: async () => {
+          const exit = await wait();
+          if (params.captureOutput === false) {
+            if (!stdoutDelivered && exit.stdout) {
+              params.onStdout?.(exit.stdout);
+            }
+            if (!stderrDelivered && exit.stderr) {
+              params.onStderr?.(exit.stderr);
+            }
+          }
+          return exit;
+        },
+      };
+    },
     cancel: vi.fn(),
     cancelScope: vi.fn(),
     reconcileOrphans: vi.fn(),

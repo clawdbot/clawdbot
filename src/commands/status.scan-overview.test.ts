@@ -103,21 +103,17 @@ describe("collectStatusScanOverview", () => {
       useGatewayCallOverridesForChannelsStatus: true,
     });
 
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "channels.status",
-        url: "ws://127.0.0.1:18789",
-        token: "tok",
-      }),
-    );
-    expect(mocks.buildChannelsTable).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({
-        includeSetupFallbackPlugins: true,
-        showSecrets: false,
-        sourceConfig: { session: {} },
-      }),
-    );
+    expect(mocks.callGateway).toHaveBeenCalledOnce();
+    const gatewayRequest = mocks.callGateway.mock.calls[0]?.[0];
+    expect(gatewayRequest?.method).toBe("channels.status");
+    expect(gatewayRequest?.url).toBe("ws://127.0.0.1:18789");
+    expect(gatewayRequest?.token).toBe("tok");
+    expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
+    const channelTableCall = mocks.buildChannelsTable.mock.calls[0];
+    expect(typeof channelTableCall?.[0]).toBe("object");
+    expect(channelTableCall?.[1]?.includeSetupFallbackPlugins).toBe(true);
+    expect(channelTableCall?.[1]?.showSecrets).toBe(false);
+    expect(channelTableCall?.[1]?.sourceConfig).toStrictEqual({ session: {} });
     expect(result.channelIssues).toEqual([{ channel: "quietchat", message: "boom" }]);
   });
 
@@ -131,14 +127,12 @@ describe("collectStatusScanOverview", () => {
     });
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(mocks.buildChannelsTable).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({
-        includeSetupFallbackPlugins: false,
-        showSecrets: false,
-        sourceConfig: { session: {} },
-      }),
-    );
+    expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
+    const channelTableCall = mocks.buildChannelsTable.mock.calls[0];
+    expect(typeof channelTableCall?.[0]).toBe("object");
+    expect(channelTableCall?.[1]?.includeSetupFallbackPlugins).toBe(false);
+    expect(channelTableCall?.[1]?.showSecrets).toBe(false);
+    expect(channelTableCall?.[1]?.sourceConfig).toStrictEqual({ session: {} });
     expect(result.channelIssues).toStrictEqual([]);
   });
 

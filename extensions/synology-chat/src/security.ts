@@ -2,15 +2,12 @@
  * Security module: token validation, rate limiting, input sanitization, user allowlist.
  */
 
+import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   createFixedWindowRateLimiter,
   type FixedWindowRateLimiter,
 } from "openclaw/plugin-sdk/webhook-ingress";
-
-type DmAuthorizationResult =
-  | { allowed: true }
-  | { allowed: false; reason: "disabled" | "allowlist-empty" | "not-allowlisted" };
 
 /**
  * Validate webhook token using constant-time comparison.
@@ -23,44 +20,28 @@ export function validateToken(received: string, expected: string): boolean {
   return safeEqualSecret(received, expected);
 }
 
-/**
- * Check if a user ID is in the allowed list.
- * Allowlist mode must be explicit; empty lists should not match any user.
- */
-export function checkUserAllowed(userId: string, allowedUserIds: string[]): boolean {
-  if (allowedUserIds.length === 0) {
-    return false;
-  }
-  if (allowedUserIds.includes("*")) {
-    return true;
-  }
-  return allowedUserIds.includes(userId);
-}
-
-/**
- * Resolve DM authorization for a sender across all DM policy modes.
- * Keeps policy semantics in one place so webhook/startup behavior stays consistent.
- */
-export function authorizeUserForDm(
-  userId: string,
-  dmPolicy: "open" | "allowlist" | "disabled",
-  allowedUserIds: string[],
-): DmAuthorizationResult {
-  if (dmPolicy === "disabled") {
-    return { allowed: false, reason: "disabled" };
-  }
-  if (dmPolicy === "open") {
-    return checkUserAllowed(userId, allowedUserIds)
-      ? { allowed: true }
-      : { allowed: false, reason: "not-allowlisted" };
-  }
-  if (allowedUserIds.length === 0) {
-    return { allowed: false, reason: "allowlist-empty" };
-  }
-  if (!checkUserAllowed(userId, allowedUserIds)) {
-    return { allowed: false, reason: "not-allowlisted" };
-  }
-  return { allowed: true };
+export async function authorizeUserForDmWithIngress(params: {
+  accountId: string;
+  userId: string;
+  dmPolicy: "open" | "allowlist" | "disabled";
+  allowedUserIds: string[];
+}) {
+  return await resolveStableChannelMessageIngress({
+    channelId: "synology-chat",
+    accountId: params.accountId,
+    identity: {
+      key: "sender-id",
+      entryIdPrefix: "synology-chat-entry",
+    },
+    subject: { stableId: params.userId },
+    conversation: {
+      kind: "direct",
+      id: "direct",
+    },
+    event: { mayPair: false },
+    dmPolicy: params.dmPolicy,
+    allowFrom: params.allowedUserIds,
+  });
 }
 
 /**

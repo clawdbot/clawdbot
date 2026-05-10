@@ -27,12 +27,7 @@ export {
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
 export { setLineRuntime } from "./src/runtime.js";
-export {
-  firstDefined,
-  isSenderAllowed,
-  normalizeAllowFrom,
-  normalizeDmAllowFromWithStore,
-} from "./src/bot-access.js";
+export { firstDefined, normalizeAllowFrom } from "./src/bot-access.js";
 export { downloadLineMedia } from "./src/download.js";
 export { probeLineBot } from "./src/probe.js";
 export { buildTemplateMessageFromPayload } from "./src/template-messages.js";

@@ -237,4 +237,31 @@ describe("resolveCommandsSystemPromptBundle", () => {
       }),
     );
   });
+
+  it("uses config-backed prompt settings for the target agent", async () => {
+    vi.mocked(resolveSandboxRuntimeStatus).mockReturnValue({
+      sandboxed: false,
+      mode: "off",
+    } as never);
+    createOpenClawCodingToolsMock.mockReturnValue([{ name: "sessions_spawn" }] as never);
+    const params = makeParams();
+    params.cfg = {
+      agents: {
+        defaults: {
+          subagents: {
+            delegationMode: "prefer",
+          },
+        },
+      },
+    };
+
+    await resolveCommandsSystemPromptBundle(params);
+
+    expect(vi.mocked(buildAgentSystemPrompt)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subagentDelegationMode: "prefer",
+        toolNames: ["sessions_spawn"],
+      }),
+    );
+  });
 });

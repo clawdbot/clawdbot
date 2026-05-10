@@ -12,6 +12,11 @@ import {
   verifyDeviceSignature,
 } from "./device-identity.js";
 
+const SWIFT_RAW_DEVICE_ID = "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c";
+const SWIFT_RAW_PUBLIC_KEY = "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=";
+const SWIFT_RAW_PRIVATE_KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="; // pragma: allowlist secret
+const MISMATCHED_SWIFT_RAW_PRIVATE_KEY = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="; // pragma: allowlist secret
+
 async function withIdentity(
   run: (identity: ReturnType<typeof loadOrCreateDeviceIdentity>) => void,
 ) {
@@ -48,6 +53,110 @@ describe("device identity crypto helpers", () => {
       const before = fs.readFileSync(identityPath, "utf8");
 
       expect(loadDeviceIdentityIfPresent(identityPath)).toBeNull();
+      expect(fs.readFileSync(identityPath, "utf8")).toBe(before);
+    });
+  });
+
+  it("loads Swift raw-key identity files without generating a new device id", async () => {
+    await withTempDir("openclaw-device-identity-swift-", async (dir) => {
+      const identityPath = path.join(dir, "identity", "device.json");
+      fs.mkdirSync(path.dirname(identityPath), { recursive: true });
+      fs.writeFileSync(
+        identityPath,
+        `${JSON.stringify(
+          {
+            deviceId: SWIFT_RAW_DEVICE_ID,
+            publicKey: SWIFT_RAW_PUBLIC_KEY,
+            privateKey: SWIFT_RAW_PRIVATE_KEY,
+            createdAtMs: 1_700_000_000_000,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      const readonly = loadDeviceIdentityIfPresent(identityPath);
+      const loaded = loadOrCreateDeviceIdentity(identityPath);
+      const stored = JSON.parse(fs.readFileSync(identityPath, "utf8")) as Record<string, unknown>;
+
+      expect(readonly?.deviceId).toBe(SWIFT_RAW_DEVICE_ID);
+      expect(loaded.deviceId).toBe(SWIFT_RAW_DEVICE_ID);
+      expect(publicKeyRawBase64UrlFromPem(loaded.publicKeyPem)).toBe(
+        "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+      );
+      expect(
+        verifyDeviceSignature(
+          loaded.publicKeyPem,
+          "hello",
+          signDevicePayload(loaded.privateKeyPem, "hello"),
+        ),
+      ).toBe(true);
+      expect(stored).toMatchObject({
+        version: 1,
+        deviceId: SWIFT_RAW_DEVICE_ID,
+        publicKeyPem: expect.stringContaining("BEGIN PUBLIC KEY"),
+        privateKeyPem: expect.stringContaining("BEGIN PRIVATE KEY"),
+        createdAtMs: 1_700_000_000_000,
+      });
+      expect(stored).not.toHaveProperty("publicKey");
+      expect(stored).not.toHaveProperty("privateKey");
+    });
+  });
+
+  it("does not overwrite recognized invalid identity files", async () => {
+    await withTempDir("openclaw-device-identity-invalid-", async (dir) => {
+      const identityPath = path.join(dir, "identity", "device.json");
+      fs.mkdirSync(path.dirname(identityPath), { recursive: true });
+      fs.writeFileSync(
+        identityPath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            deviceId: "stale-device-id",
+            publicKeyPem: "not-a-valid-public-key",
+            privateKeyPem: "not-a-valid-private-key", // pragma: allowlist secret
+            createdAtMs: 1_700_000_000_000,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      const before = fs.readFileSync(identityPath, "utf8");
+
+      expect(loadDeviceIdentityIfPresent(identityPath)).toBeNull();
+      const loaded = loadOrCreateDeviceIdentity(identityPath);
+
+      expect(loaded.deviceId).not.toBe("stale-device-id");
+      expect(fs.readFileSync(identityPath, "utf8")).toBe(before);
+    });
+  });
+
+  it("does not migrate Swift raw-key identity files with mismatched key material", async () => {
+    await withTempDir("openclaw-device-identity-swift-invalid-", async (dir) => {
+      const identityPath = path.join(dir, "identity", "device.json");
+      fs.mkdirSync(path.dirname(identityPath), { recursive: true });
+      fs.writeFileSync(
+        identityPath,
+        `${JSON.stringify(
+          {
+            deviceId: SWIFT_RAW_DEVICE_ID,
+            publicKey: SWIFT_RAW_PUBLIC_KEY,
+            privateKey: MISMATCHED_SWIFT_RAW_PRIVATE_KEY,
+            createdAtMs: 1_700_000_000_000,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      const before = fs.readFileSync(identityPath, "utf8");
+
+      expect(loadDeviceIdentityIfPresent(identityPath)).toBeNull();
+      const loaded = loadOrCreateDeviceIdentity(identityPath);
+
+      expect(loaded.deviceId).not.toBe(SWIFT_RAW_DEVICE_ID);
       expect(fs.readFileSync(identityPath, "utf8")).toBe(before);
     });
   });

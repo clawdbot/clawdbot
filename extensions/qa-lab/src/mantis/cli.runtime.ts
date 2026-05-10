@@ -9,6 +9,10 @@ import {
   type MantisSlackDesktopSmokeOptions,
 } from "./slack-desktop-smoke.runtime.js";
 import {
+  runMantisTelegramDesktopBuilder,
+  type MantisTelegramDesktopBuilderOptions,
+} from "./telegram-desktop-builder.runtime.js";
+import {
   runMantisVisualDriver,
   runMantisVisualTask,
   type MantisVisualDriverOptions,
@@ -57,6 +61,23 @@ export async function runMantisSlackDesktopSmokeCommand(opts: MantisSlackDesktop
   }
   if (result.videoPath) {
     process.stdout.write(`Mantis Slack desktop video: ${result.videoPath}\n`);
+  }
+  if (result.status === "fail") {
+    process.exitCode = 1;
+  }
+}
+
+export async function runMantisTelegramDesktopBuilderCommand(
+  opts: MantisTelegramDesktopBuilderOptions,
+) {
+  const result = await runMantisTelegramDesktopBuilder(opts);
+  process.stdout.write(`Mantis Telegram desktop builder report: ${result.reportPath}\n`);
+  process.stdout.write(`Mantis Telegram desktop builder summary: ${result.summaryPath}\n`);
+  if (result.screenshotPath) {
+    process.stdout.write(`Mantis Telegram desktop builder screenshot: ${result.screenshotPath}\n`);
+  }
+  if (result.videoPath) {
+    process.stdout.write(`Mantis Telegram desktop builder video: ${result.videoPath}\n`);
   }
   if (result.status === "fail") {
     process.exitCode = 1;

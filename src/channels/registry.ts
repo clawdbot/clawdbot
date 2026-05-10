@@ -3,7 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { CHAT_CHANNEL_ORDER, normalizeChatChannelId, type ChatChannelId } from "./ids.js";
+import { normalizeChatChannelId, type ChatChannelId } from "./ids.js";
 import type { ChannelId } from "./plugins/channel-id.types.js";
 import type { ChannelMeta } from "./plugins/types.core.js";
 export { getChatChannelMeta } from "./chat-meta.js";

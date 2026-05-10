@@ -313,11 +313,9 @@ it("resolves config-only aws-sdk profiles without stored credentials", async () 
     cfg: BEDROCK_PROVIDER_CFG_WITH_PROFILE as never,
   });
 
-  expect(resolved).toMatchObject({
-    mode: "aws-sdk",
-    profileId: "amazon-bedrock:default",
-    source: "profile:amazon-bedrock:default",
-  });
+  expect(resolved.mode).toBe("aws-sdk");
+  expect(resolved.profileId).toBe("amazon-bedrock:default");
+  expect(resolved.source).toBe("profile:amazon-bedrock:default");
   expect(resolved.apiKey).toBeUndefined();
 });
 
@@ -328,11 +326,9 @@ it("uses configured aws-sdk profile order without stored credentials", async () 
     cfg: BEDROCK_PROVIDER_CFG_WITH_PROFILE as never,
   });
 
-  expect(resolved).toMatchObject({
-    mode: "aws-sdk",
-    profileId: "amazon-bedrock:default",
-    source: "profile:amazon-bedrock:default",
-  });
+  expect(resolved.mode).toBe("aws-sdk");
+  expect(resolved.profileId).toBe("amazon-bedrock:default");
+  expect(resolved.source).toBe("profile:amazon-bedrock:default");
   expect(resolved.apiKey).toBeUndefined();
 });
 
@@ -501,18 +497,17 @@ describe("getApiKeyForModel", () => {
       },
       async () => {
         const resolved = await resolveApiKeyForProvider({ provider: "claude-cli" });
-        expect(resolved).toMatchObject({
-          apiKey: "claude-cli-access",
-          profileId: "anthropic:claude-cli",
-          source: "profile:anthropic:claude-cli",
-          mode: "oauth",
-        });
+        expect(resolved.apiKey).toBe("claude-cli-access");
+        expect(resolved.profileId).toBe("anthropic:claude-cli");
+        expect(resolved.source).toBe("profile:anthropic:claude-cli");
+        expect(resolved.mode).toBe("oauth");
       },
     );
 
-    expect(cliCredentialMocks.readClaudeCliCredentialsCached).toHaveBeenCalledWith(
-      expect.objectContaining({ allowKeychainPrompt: false }),
-    );
+    const options = cliCredentialMocks.readClaudeCliCredentialsCached.mock.calls[0]?.[0] as
+      | { allowKeychainPrompt?: boolean }
+      | undefined;
+    expect(options?.allowKeychainPrompt).toBe(false);
   });
 
   it("throws when ZAI API key is missing", async () => {

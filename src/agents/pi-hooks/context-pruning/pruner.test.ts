@@ -390,7 +390,7 @@ describe("pruneContextMessages", () => {
 
     const toolResult = result[1] as Extract<AgentMessage, { role: "toolResult" }>;
     expect(toolResult.content).toHaveLength(1);
-    expect(toolResult.content[0]).toMatchObject({ type: "text" });
+    expect(toolResult.content[0]?.type).toBe("text");
     const textBlock = toolResult.content[0] as { type: "text"; text: string };
     expect(textBlock.text).toContain("[image removed during context pruning]");
     expect(textBlock.text).toContain(

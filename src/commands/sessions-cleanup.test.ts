@@ -228,22 +228,17 @@ describe("sessionsCleanupCommand", () => {
     expect(payload.appliedCount).toBe(1);
     expect(payload.pruned).toBe(0);
     expect(payload.capped).toBe(2);
-    expect(payload.diskBudget).toEqual(
-      expect.objectContaining({
-        removedFiles: 0,
-        removedEntries: 0,
-      }),
-    );
-    expect(mocks.runSessionsCleanup).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: { session: { store: "/cfg/sessions.json" } },
-        opts: expect.objectContaining({
-          enforce: true,
-          activeKey: "agent:main:main",
-        }),
-        targets: [{ agentId: "main", storePath: "/resolved/sessions.json" }],
-      }),
-    );
+    const diskBudget = payload.diskBudget as Record<string, unknown>;
+    expect(diskBudget.removedFiles).toBe(0);
+    expect(diskBudget.removedEntries).toBe(0);
+    expect(mocks.runSessionsCleanup).toHaveBeenCalledOnce();
+    const cleanupCall = mocks.runSessionsCleanup.mock.calls[0]?.[0];
+    expect(cleanupCall?.cfg).toEqual({ session: { store: "/cfg/sessions.json" } });
+    expect(cleanupCall?.opts.enforce).toBe(true);
+    expect(cleanupCall?.opts.activeKey).toBe("agent:main:main");
+    expect(cleanupCall?.targets).toEqual([
+      { agentId: "main", storePath: "/resolved/sessions.json" },
+    ]);
   });
 
   it("delegates non-store enforcing cleanup through the Gateway writer when reachable", async () => {
@@ -273,15 +268,13 @@ describe("sessionsCleanupCommand", () => {
       runtime,
     );
 
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "sessions.cleanup",
-        params: expect.objectContaining({ enforce: true }),
-        requiredMethods: ["sessions.cleanup"],
-      }),
-    );
+    expect(mocks.callGateway).toHaveBeenCalledOnce();
+    const gatewayCall = mocks.callGateway.mock.calls[0]?.[0];
+    expect(gatewayCall?.method).toBe("sessions.cleanup");
+    expect(gatewayCall?.params.enforce).toBe(true);
+    expect(gatewayCall?.requiredMethods).toEqual(["sessions.cleanup"]);
     expect(mocks.updateSessionStore).not.toHaveBeenCalled();
-    expect(JSON.parse(logs[0] ?? "{}")).toEqual(expect.objectContaining({ appliedCount: 1 }));
+    expect(JSON.parse(logs[0] ?? "{}").appliedCount).toBe(1);
   });
 
   it("returns dry-run JSON without mutating the store", async () => {
@@ -338,12 +331,9 @@ describe("sessionsCleanupCommand", () => {
     expect(payload.applied).toBeUndefined();
     expect(mocks.runSessionsCleanup).toHaveBeenCalled();
     expect(mocks.updateSessionStore).not.toHaveBeenCalled();
-    expect(payload.diskBudget).toEqual(
-      expect.objectContaining({
-        removedFiles: 1,
-        removedEntries: 1,
-      }),
-    );
+    const diskBudget = payload.diskBudget as Record<string, unknown>;
+    expect(diskBudget.removedFiles).toBe(1);
+    expect(diskBudget.removedEntries).toBe(1);
   });
 
   it("counts missing transcript entries when --fix-missing is enabled in dry-run", async () => {

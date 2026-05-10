@@ -229,6 +229,7 @@ export async function startNodeAgentAudioBridge(params: {
   });
 
   sttSession = resolved.provider.createSession({
+    cfg: params.fullConfig,
     providerConfig: resolved.providerConfig,
     onTranscript: (text) => {
       const trimmed = text.trim();
@@ -479,6 +480,7 @@ export async function startNodeRealtimeAudioBridge(params: {
 
   bridge = createRealtimeVoiceBridgeSession({
     provider: resolved.provider,
+    cfg: params.fullConfig,
     providerConfig: resolved.providerConfig,
     audioFormat: resolveGoogleMeetRealtimeAudioFormat(params.config),
     instructions: params.config.realtime.instructions,

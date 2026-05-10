@@ -28,6 +28,7 @@ function resolveTarget(runs: SubagentRunRecord[], token: string | undefined) {
     token,
     recentWindowMinutes: 30,
     label: (entry) => resolveSubagentLabel(entry),
+    aliases: (entry) => (entry.taskName ? [entry.taskName] : []),
     errors: {
       missingTarget: "missing",
       invalidIndex: (value) => `invalid:${value}`,
@@ -139,6 +140,49 @@ describe("subagents utils", () => {
       makeRun({ runId: "run-b", label: "dup" }),
     ];
     expect(resolveTarget(runs, "dup").error).toBe("ambiguous-label:dup");
+  });
+
+  it("resolves stable taskName aliases before labels and run ids", () => {
+    const runs = [
+      makeRun({ runId: "run-review-1", label: "Review", taskName: "code_review" }),
+      makeRun({ runId: "run-review-2", label: "Review copy", taskName: "copy_review" }),
+    ];
+
+    expectResolvedRunId(runs, "code_review", "run-review-1");
+    expectResolvedRunId(runs, "copy_", "run-review-2");
+  });
+
+  it("preserves exact label targets before taskName prefix aliases", () => {
+    const runs = [
+      makeRun({ runId: "run-review-label", label: "review" }),
+      makeRun({ runId: "run-review-docs", label: "docs", taskName: "review_docs" }),
+    ];
+
+    expectResolvedRunId(runs, "review", "run-review-label");
+    expectResolvedRunId(runs, "review_", "run-review-docs");
+  });
+
+  it("ignores stale duplicate taskName aliases when a current run reuses the handle", () => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW_MS);
+    const runs = [
+      makeRun({
+        runId: "run-old-review",
+        childSessionKey: "agent:main:subagent:old-review",
+        label: "Old review",
+        taskName: "review_subagents",
+        createdAt: NOW_MS - 2 * 60 * 60 * 1_000,
+        endedAt: NOW_MS - 90 * 60 * 1_000,
+      }),
+      makeRun({
+        runId: "run-current-review",
+        childSessionKey: "agent:main:subagent:current-review",
+        label: "Current review",
+        taskName: "review_subagents",
+        createdAt: NOW_MS - 1_000,
+      }),
+    ];
+
+    expectResolvedRunId(runs, "review_subagents", "run-current-review");
   });
 
   it("prefers the current live row when stale and current runs share a label on one child session", () => {

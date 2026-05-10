@@ -90,12 +90,10 @@ describe.skipIf(!LIVE)("image tool Ollama live", () => {
         image: imagePath,
       });
 
-      expect(result).toMatchObject({
-        content: [expect.objectContaining({ type: "text" })],
-      });
-      const text = (
-        result as { content?: Array<{ type?: string; text?: string }> }
-      ).content?.[0]?.text?.trim();
+      const content = (result as { content?: Array<{ type?: string; text?: string }> }).content;
+      expect(Array.isArray(content)).toBe(true);
+      expect(content?.[0]?.type).toBe("text");
+      const text = content?.[0]?.text?.trim();
       expect(text?.length ?? 0).toBeGreaterThan(0);
     });
   }, 180_000);

@@ -4,7 +4,7 @@ import {
   getTotalPendingReplies,
 } from "../auto-reply/reply/dispatcher-registry.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
-import { getTotalQueueSize } from "../process/command-queue.js";
+import { getTotalQueueSize, resetCommandQueueStateForTest } from "../process/command-queue.js";
 
 async function flushMicrotasks(count = 10): Promise<void> {
   for (let i = 0; i < count; i += 1) {
@@ -29,6 +29,7 @@ describe("gateway restart deferral", () => {
   let replyErrors: string[] = [];
 
   beforeEach(() => {
+    resetCommandQueueStateForTest();
     vi.clearAllMocks();
     replyErrors = [];
   });
@@ -37,6 +38,7 @@ describe("gateway restart deferral", () => {
     vi.restoreAllMocks();
     await flushMicrotasks();
     clearAllDispatchers();
+    resetCommandQueueStateForTest();
   });
 
   it("defers restart while reply delivery is in flight", async () => {

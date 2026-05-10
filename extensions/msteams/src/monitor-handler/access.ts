@@ -1,24 +1,47 @@
+import {
+  channelIngressRoutes,
+  resolveStableChannelMessageIngress,
+  type StableChannelIngressIdentityParams,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import {
   DEFAULT_ACCOUNT_ID,
   createChannelPairingController,
-  evaluateSenderGroupAccessForPolicy,
   isDangerousNameMatchingEnabled,
-  readStoreAllowFromForDmPolicy,
   resolveDefaultGroupPolicy,
-  resolveDmGroupAccessWithLists,
-  resolveEffectiveAllowFromLists,
-  resolveSenderScopedGroupPolicy,
   type OpenClawConfig,
 } from "../../runtime-api.js";
 import { normalizeMSTeamsConversationId } from "../inbound.js";
-import { resolveMSTeamsAllowlistMatch, resolveMSTeamsRouteConfig } from "../policy.js";
+import { resolveMSTeamsRouteConfig } from "../policy.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
+
+const MSTEAMS_SENDER_NAME_KIND = "plugin:msteams-sender-name" as const;
+const msteamsIngressIdentity = {
+  key: "sender-id",
+  normalize: normalizeIngressValue,
+  aliases: [
+    {
+      key: "sender-name",
+      kind: MSTEAMS_SENDER_NAME_KIND,
+      normalizeEntry: normalizeIngressValue,
+      normalizeSubject: normalizeIngressValue,
+      dangerous: true,
+    },
+  ],
+  isWildcardEntry: (entry) => normalizeIngressValue(entry) === "*",
+  resolveEntryId: ({ entryIndex, fieldKey }) =>
+    `msteams-entry-${entryIndex + 1}:${fieldKey === "sender-name" ? "name" : "id"}`,
+} satisfies StableChannelIngressIdentityParams;
+
+function normalizeIngressValue(value?: string | null): string | null {
+  return normalizeOptionalLowercaseString(value) ?? null;
+}
 
 export async function resolveMSTeamsSenderAccess(params: {
   cfg: OpenClawConfig;
   activity: MSTeamsTurnContext["activity"];
+  hasControlCommand?: boolean;
 }) {
   const activity = params.activity;
   const msteamsCfg = params.cfg.channels?.msteams;
@@ -35,26 +58,13 @@ export async function resolveMSTeamsSenderAccess(params: {
     accountId: DEFAULT_ACCOUNT_ID,
   });
   const dmPolicy = msteamsCfg?.dmPolicy ?? "pairing";
-  const storedAllowFrom = await readStoreAllowFromForDmPolicy({
-    provider: "msteams",
-    accountId: pairing.accountId,
-    dmPolicy,
-    readStore: pairing.readStoreForDmPolicy,
-  });
   const configuredDmAllowFrom = msteamsCfg?.allowFrom ?? [];
   const groupAllowFrom = msteamsCfg?.groupAllowFrom;
-  const resolvedAllowFromLists = resolveEffectiveAllowFromLists({
-    allowFrom: configuredDmAllowFrom,
-    groupAllowFrom,
-    storeAllowFrom: storedAllowFrom,
-    dmPolicy,
-  });
   const defaultGroupPolicy = resolveDefaultGroupPolicy(params.cfg);
   const groupPolicy =
     !isDirectMessage && msteamsCfg
       ? (msteamsCfg.groupPolicy ?? defaultGroupPolicy ?? "allowlist")
       : "disabled";
-  const effectiveGroupAllowFrom = resolvedAllowFromLists.effectiveGroupAllowFrom;
   const allowNameMatching = isDangerousNameMatchingEnabled(msteamsCfg);
   const channelGate = resolveMSTeamsRouteConfig({
     cfg: msteamsCfg,
@@ -65,60 +75,61 @@ export async function resolveMSTeamsSenderAccess(params: {
     allowNameMatching,
   });
 
-  // When a route-level (team/channel) allowlist is configured but the sender allowlist is
-  // empty, resolveSenderScopedGroupPolicy would otherwise downgrade the policy to "open",
-  // allowing any sender. To close this bypass (GHSA-g7cr-9h7q-4qxq), treat an empty sender
-  // allowlist as deny-all whenever the route allowlist is active.
-  const senderGroupPolicy =
-    channelGate.allowlistConfigured && effectiveGroupAllowFrom.length === 0
-      ? groupPolicy
-      : resolveSenderScopedGroupPolicy({
-          groupPolicy,
-          groupAllowFrom: effectiveGroupAllowFrom,
-        });
-  const access = resolveDmGroupAccessWithLists({
-    isGroup: !isDirectMessage,
+  const resolved = await resolveStableChannelMessageIngress({
+    channelId: "msteams",
+    accountId: pairing.accountId,
+    identity: msteamsIngressIdentity,
+    cfg: params.cfg,
+    readStoreAllowFrom: pairing.readAllowFromStore,
+    subject: {
+      stableId: senderId,
+      aliases: { "sender-name": senderName },
+    },
+    conversation: {
+      kind: isDirectMessage ? "direct" : convType === "channel" ? "channel" : "group",
+      id: conversationId,
+      parentId: activity.channelData?.team?.id,
+    },
+    route: channelIngressRoutes(
+      !isDirectMessage &&
+        channelGate.allowlistConfigured && {
+          id: "msteams:team-channel",
+          kind: "nestedAllowlist",
+          allowed: channelGate.allowed,
+          precedence: 0,
+          matchId: "msteams-route",
+          ...(channelGate.allowed && groupPolicy === "allowlist"
+            ? {
+                senderPolicy: "deny-when-empty" as const,
+                senderAllowFromSource: "effective-group" as const,
+              }
+            : {}),
+        },
+    ),
     dmPolicy,
-    groupPolicy: senderGroupPolicy,
+    groupPolicy,
+    policy: {
+      groupAllowFromFallbackToAllowFrom: true,
+      mutableIdentifierMatching: allowNameMatching ? "enabled" : "disabled",
+    },
     allowFrom: configuredDmAllowFrom,
     groupAllowFrom,
-    storeAllowFrom: storedAllowFrom,
-    groupAllowFromFallbackToAllowFrom: false,
-    isSenderAllowed: (allowFrom) =>
-      resolveMSTeamsAllowlistMatch({
-        allowFrom,
-        senderId,
-        senderName,
-        allowNameMatching,
-      }).allowed,
+    command: {
+      allowTextCommands: true,
+      hasControlCommand: params.hasControlCommand === true,
+      directGroupAllowFrom: isDirectMessage ? "effective" : "none",
+    },
   });
-  const senderGroupAccess = evaluateSenderGroupAccessForPolicy({
-    groupPolicy,
-    groupAllowFrom: effectiveGroupAllowFrom,
-    senderId,
-    isSenderAllowed: (_senderId, allowFrom) =>
-      resolveMSTeamsAllowlistMatch({
-        allowFrom,
-        senderId,
-        senderName,
-        allowNameMatching,
-      }).allowed,
-  });
-
   return {
-    msteamsCfg,
+    ...resolved,
     pairing,
     isDirectMessage,
     conversationId,
     senderId,
     senderName,
+    msteamsCfg,
     dmPolicy,
     channelGate,
-    access,
-    senderGroupAccess,
-    configuredDmAllowFrom,
-    effectiveDmAllowFrom: access.effectiveAllowFrom,
-    effectiveGroupAllowFrom,
     allowNameMatching,
     groupPolicy,
   };

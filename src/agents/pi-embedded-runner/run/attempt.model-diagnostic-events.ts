@@ -35,6 +35,7 @@ type ModelCallDiagnosticContext = {
   transport?: string;
   trace: DiagnosticTraceContext;
   nextCallId: () => string;
+  onStarted?: () => void;
 };
 
 type ModelCallEventBase = Omit<
@@ -453,6 +454,7 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
     const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(ctx.trace));
     const eventBase = baseModelCallEvent(ctx, callId, trace);
     emitModelCallStarted(eventBase);
+    ctx.onStarted?.();
     const startedAt = Date.now();
     const state: ModelCallObservationState = { responseStreamBytes: 0 };
     const propagatedOptions = withDiagnosticTraceparentHeader(options, trace, state);

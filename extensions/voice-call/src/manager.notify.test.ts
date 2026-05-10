@@ -76,6 +76,18 @@ function requireFirstPlayTtsCall(provider: FakeProvider) {
   return call;
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireSingleStartListeningCall(provider: FakeProvider) {
+  expect(provider.startListeningCalls).toHaveLength(1);
+  return requireRecord(provider.startListeningCalls[0], "start listening call");
+}
+
 type HarnessManager = Awaited<ReturnType<typeof createManagerHarness>>["manager"];
 
 async function waitForPlaybackDispatch() {
@@ -201,9 +213,8 @@ describe("CallManager notify and mapping", () => {
     await answerCall(manager, callId, "evt-conversation-twilio-realtime");
 
     expect(provider.playTtsCalls).toHaveLength(0);
-    expect(requireCall(manager, callId).metadata).toEqual(
-      expect.objectContaining({ initialMessage: "Tell Nana dinner is at 6pm." }),
-    );
+    const metadata = requireRecord(requireCall(manager, callId).metadata, "call metadata");
+    expect(metadata.initialMessage).toBe("Tell Nana dinner is at 6pm.");
   });
 
   it("still speaks initial message in notify mode when realtime is enabled", async () => {
@@ -266,12 +277,9 @@ describe("CallManager notify and mapping", () => {
     await answerCall(manager, callId, "evt-conversation-telnyx");
 
     expectFirstPlayTtsText(provider, "Telnyx hello");
-    expect(provider.startListeningCalls).toEqual([
-      expect.objectContaining({
-        callId,
-        providerCallId: "call-uuid",
-      }),
-    ]);
+    const startListeningCall = requireSingleStartListeningCall(provider);
+    expect(startListeningCall.callId).toBe(callId);
+    expect(startListeningCall.providerCallId).toBe("call-uuid");
     expect(requireCall(manager, callId).state).toBe("listening");
   });
 
@@ -290,16 +298,12 @@ describe("CallManager notify and mapping", () => {
       await answerCall(manager, callId, "evt-initial-message-start-listening-fails");
 
       expectFirstPlayTtsText(provider, "Twilio hello");
-      expect(provider.startListeningCalls).toEqual([
-        expect.objectContaining({
-          callId,
-          providerCallId: "call-uuid",
-        }),
-      ]);
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining(
-          `[voice-call] Failed to speak initial message for call ${callId}: synthetic start listening failure`,
-        ),
+      const startListeningCall = requireSingleStartListeningCall(provider);
+      expect(startListeningCall.callId).toBe(callId);
+      expect(startListeningCall.providerCallId).toBe("call-uuid");
+      expect(warn).toHaveBeenCalledOnce();
+      expect(String(warn.mock.calls[0]?.[0])).toContain(
+        `[voice-call] Failed to speak initial message for call ${callId}: synthetic start listening failure`,
       );
     } finally {
       warn.mockRestore();
@@ -315,7 +319,8 @@ describe("CallManager notify and mapping", () => {
 
     const afterFailure = requireCall(manager, callId);
     expect(provider.playTtsCalls).toHaveLength(1);
-    expect(afterFailure.metadata).toEqual(expect.objectContaining({ initialMessage: "Retry me" }));
+    const metadata = requireRecord(afterFailure.metadata, "call metadata after failed playback");
+    expect(metadata.initialMessage).toBe("Retry me");
     expect(afterFailure.state).toBe("listening");
 
     await answerCall(manager, callId, "evt-retry-2");

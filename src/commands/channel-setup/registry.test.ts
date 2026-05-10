@@ -36,29 +36,24 @@ describe("resolveChannelSetupWizardAdapterForPlugin", () => {
     const adapter = resolveChannelSetupWizardAdapterForPlugin(plugin);
 
     expect(adapter?.channel).toBe("demo");
-    await expect(
-      adapter?.getStatus({
-        cfg: {} as OpenClawConfig,
-        accountOverrides: { demo: "default" },
-      }),
-    ).resolves.toMatchObject({
-      channel: "demo",
-      configured: false,
+    const status = await adapter?.getStatus({
+      cfg: {} as OpenClawConfig,
+      accountOverrides: { demo: "default" },
     });
-    await expect(
-      adapter?.configure({
-        cfg: {} as OpenClawConfig,
-        runtime: {} as never,
-        prompter: {} as never,
-        options: {},
-        accountOverrides: { demo: "default" },
-        shouldPromptAccountIds: false,
-        forceAllowFrom: false,
-      }),
-    ).resolves.toMatchObject({
-      accountId: "default",
-      cfg: {},
+    expect(status?.channel).toBe("demo");
+    expect(status?.configured).toBe(false);
+
+    const configured = await adapter?.configure({
+      cfg: {} as OpenClawConfig,
+      runtime: {} as never,
+      prompter: {} as never,
+      options: {},
+      accountOverrides: { demo: "default" },
+      shouldPromptAccountIds: false,
+      forceAllowFrom: false,
     });
+    expect(configured?.accountId).toBe("default");
+    expect(configured?.cfg).toEqual({});
     expect(resolveChannelSetupWizardAdapterForPlugin(plugin)).toBe(adapter);
   });
 

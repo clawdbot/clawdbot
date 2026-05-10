@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   createFormattedPromptSnapshotFiles,
   deleteStalePromptSnapshotFiles,
@@ -38,10 +38,15 @@ function renderedPromptSection(content: string, heading: string, nextHeading: st
 }
 
 describe("happy path prompt snapshots", () => {
+  let generatedSnapshots: Awaited<ReturnType<typeof createFormattedPromptSnapshotFiles>>;
+
+  beforeAll(async () => {
+    generatedSnapshots = await createFormattedPromptSnapshotFiles();
+  });
+
   it("matches the committed Codex prompt snapshot artifacts", async () => {
-    const generated = await createFormattedPromptSnapshotFiles();
-    const expectedPaths = new Set(generated.map((file) => file.path));
-    for (const file of generated) {
+    const expectedPaths = new Set(generatedSnapshots.map((file) => file.path));
+    for (const file of generatedSnapshots) {
       expect(fs.readFileSync(file.path, "utf8"), file.path).toBe(file.content);
     }
     const committed = fs
@@ -74,8 +79,10 @@ describe("happy path prompt snapshots", () => {
   });
 
   it("renders the Codex model-bound prompt layers", async () => {
-    const generated = await createFormattedPromptSnapshotFiles();
-    const telegram = requireGeneratedSnapshot(generated, "telegram-direct-codex-message-tool.md");
+    const telegram = requireGeneratedSnapshot(
+      generatedSnapshots,
+      "telegram-direct-codex-message-tool.md",
+    );
 
     expect(telegram).toContain("## Reconstructed Model-Bound Prompt Layers");
     expect(telegram).toContain("### System: Codex Model Instructions (gpt-5.5, pragmatic)");
@@ -95,10 +102,18 @@ describe("happy path prompt snapshots", () => {
   });
 
   it("keeps heartbeat guidance in heartbeat collaboration mode only", async () => {
-    const generated = await createFormattedPromptSnapshotFiles();
-    const direct = requireGeneratedSnapshot(generated, "telegram-direct-codex-message-tool.md");
-    const group = requireGeneratedSnapshot(generated, "discord-group-codex-message-tool.md");
-    const heartbeat = requireGeneratedSnapshot(generated, "telegram-heartbeat-codex-tool.md");
+    const direct = requireGeneratedSnapshot(
+      generatedSnapshots,
+      "telegram-direct-codex-message-tool.md",
+    );
+    const group = requireGeneratedSnapshot(
+      generatedSnapshots,
+      "discord-group-codex-message-tool.md",
+    );
+    const heartbeat = requireGeneratedSnapshot(
+      generatedSnapshots,
+      "telegram-heartbeat-codex-tool.md",
+    );
     const heartbeatPhrase = "The purpose of heartbeats is to make you feel magical and proactive.";
 
     expect(direct).toContain('"collaborationMode": {');
@@ -177,8 +192,12 @@ describe("happy path prompt snapshots", () => {
       fs.mkdirSync(path.dirname(cachePath), { recursive: true });
       fs.writeFileSync(cachePath, JSON.stringify({ models: [] }));
 
-      await expect(findDefaultCatalogPath({ env: {}, homeDir: root })).resolves.toMatchObject({
+      await expect(findDefaultCatalogPath({ env: {}, homeDir: root })).resolves.toEqual({
         catalogPath: cachePath,
+        candidates: [
+          cachePath,
+          path.join(root, "code", "codex", "codex-rs", "models-manager", "models.json"),
+        ],
       });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });

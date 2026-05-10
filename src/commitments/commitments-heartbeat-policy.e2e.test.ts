@@ -110,13 +110,15 @@ describe("commitments heartbeat delivery policy e2e", () => {
       expect(result.status).toBe("ran");
       expect(sendTelegram).not.toHaveBeenCalled();
       const store = await loadCommitmentStore();
-      expect(store.commitments[0]).toMatchObject({
-        id: "cm_target_none",
-        status: "pending",
-        attempts: 0,
-      });
-      expect(store.commitments[0]).not.toHaveProperty("sourceUserText");
-      expect(store.commitments[0]).not.toHaveProperty("sourceAssistantText");
+      const [persistedCommitment] = store.commitments;
+      if (!persistedCommitment) {
+        throw new Error("missing persisted commitment");
+      }
+      expect(persistedCommitment.id).toBe("cm_target_none");
+      expect(persistedCommitment.status).toBe("pending");
+      expect(persistedCommitment.attempts).toBe(0);
+      expect(persistedCommitment).not.toHaveProperty("sourceUserText");
+      expect(persistedCommitment).not.toHaveProperty("sourceAssistantText");
     });
   });
 });

@@ -16,6 +16,32 @@ vi.mock("./tts.js", () => ({
   xaiTTS: xaiTTSMock,
 }));
 
+function requireLastTtsCall(): {
+  text?: string;
+  apiKey?: string;
+  baseUrl?: string;
+  voiceId?: string;
+  language?: string;
+  speed?: number;
+  responseFormat?: string;
+} {
+  const params = (xaiTTSMock.mock.calls as unknown as Array<[unknown]>).at(-1)?.[0] as
+    | {
+        text?: string;
+        apiKey?: string;
+        baseUrl?: string;
+        voiceId?: string;
+        language?: string;
+        speed?: number;
+        responseFormat?: string;
+      }
+    | undefined;
+  if (!params) {
+    throw new Error("Expected xaiTTS call");
+  }
+  return params;
+}
+
 describe("xai speech provider", () => {
   it("synthesizes mp3 audio and does not claim native voice-note compatibility", async () => {
     const provider = buildXaiSpeechProvider();
@@ -30,21 +56,16 @@ describe("xai speech provider", () => {
       timeoutMs: 5_000,
     });
 
-    expect(result).toMatchObject({
-      outputFormat: "mp3",
-      fileExtension: ".mp3",
-      voiceCompatible: false,
-    });
+    expect(result.outputFormat).toBe("mp3");
+    expect(result.fileExtension).toBe(".mp3");
+    expect(result.voiceCompatible).toBe(false);
     expect(result.audioBuffer.byteLength).toBeGreaterThan(0);
-    expect(xaiTTSMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "hello",
-        apiKey: "xai-key",
-        baseUrl: "https://api.x.ai/v1",
-        voiceId: "eve",
-        responseFormat: "mp3",
-      }),
-    );
+    const tts = requireLastTtsCall();
+    expect(tts.text).toBe("hello");
+    expect(tts.apiKey).toBe("xai-key");
+    expect(tts.baseUrl).toBe("https://api.x.ai/v1");
+    expect(tts.voiceId).toBe("eve");
+    expect(tts.responseFormat).toBe("mp3");
   });
 
   it("honors configured response formats", async () => {
@@ -62,11 +83,7 @@ describe("xai speech provider", () => {
 
     expect(result.outputFormat).toBe("wav");
     expect(result.fileExtension).toBe(".wav");
-    expect(xaiTTSMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        responseFormat: "wav",
-      }),
-    );
+    expect(requireLastTtsCall().responseFormat).toBe("wav");
   });
 
   it("honors voice, language, and speed overrides for telephony output", async () => {
@@ -94,13 +111,10 @@ describe("xai speech provider", () => {
       outputFormat: "pcm",
       sampleRate: 24_000,
     });
-    expect(xaiTTSMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        voiceId: "aura",
-        language: "es",
-        speed: 1.2,
-        responseFormat: "pcm",
-      }),
-    );
+    const tts = requireLastTtsCall();
+    expect(tts.voiceId).toBe("aura");
+    expect(tts.language).toBe("es");
+    expect(tts.speed).toBe(1.2);
+    expect(tts.responseFormat).toBe("pcm");
   });
 });

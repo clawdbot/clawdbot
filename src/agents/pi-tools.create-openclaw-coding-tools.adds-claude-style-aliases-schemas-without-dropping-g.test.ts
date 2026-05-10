@@ -123,11 +123,9 @@ describe("createOpenClawCodingTools read behavior", () => {
     const result = await wrapped.execute("read-strip-1", { path: "demo.txt", limit: 1 });
 
     const details = (result as { details?: { truncation?: Record<string, unknown> } }).details;
-    expect(details?.truncation).toMatchObject({
-      truncated: true,
-      outputLines: 1,
-      firstLineExceedsLimit: false,
-    });
+    expect(details?.truncation?.truncated).toBe(true);
+    expect(details?.truncation?.outputLines).toBe(1);
+    expect(details?.truncation?.firstLineExceedsLimit).toBe(false);
     expect(details?.truncation).not.toHaveProperty("content");
   });
 });

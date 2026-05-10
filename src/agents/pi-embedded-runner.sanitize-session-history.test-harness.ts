@@ -160,15 +160,15 @@ export function expectOpenAIResponsesStrictSanitizeCall(
   sanitizeSessionMessagesImagesMock: unknown,
   messages: AgentMessage[],
 ) {
-  expect(sanitizeSessionMessagesImagesMock).toHaveBeenCalledWith(
-    messages,
-    "session:history",
-    expect.objectContaining({
-      sanitizeMode: "images-only",
-      sanitizeToolCallIds: false,
-      toolCallIdMode: "strict",
-    }),
-  );
+  const mock = sanitizeSessionMessagesImagesMock as {
+    mock?: { calls: Array<[AgentMessage[], string, Record<string, unknown>]> };
+  };
+  const call = mock.mock?.calls[0];
+  expect(call?.[0]).toBe(messages);
+  expect(call?.[1]).toBe("session:history");
+  expect(call?.[2]?.sanitizeMode).toBe("images-only");
+  expect(call?.[2]?.sanitizeToolCallIds).toBe(false);
+  expect(call?.[2]?.toolCallIdMode).toBe("strict");
 }
 
 function makeSnapshotChangedOpenAIReasoningScenario() {

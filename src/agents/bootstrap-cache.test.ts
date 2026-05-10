@@ -1,9 +1,16 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 vi.mock("./workspace.js", () => ({
   loadWorkspaceBootstrapFiles: vi.fn(),
 }));
+
+import {
+  clearAllBootstrapSnapshots,
+  clearBootstrapSnapshot,
+  getOrLoadBootstrapFiles,
+} from "./bootstrap-cache.js";
+import { loadWorkspaceBootstrapFiles } from "./workspace.js";
 
 function makeFile(name: string, content: string): WorkspaceBootstrapFile {
   return {
@@ -16,17 +23,7 @@ function makeFile(name: string, content: string): WorkspaceBootstrapFile {
 
 describe("getOrLoadBootstrapFiles", () => {
   const files = [makeFile("AGENTS.md", "# Agent"), makeFile("SOUL.md", "# Soul")];
-  let clearAllBootstrapSnapshots: typeof import("./bootstrap-cache.js").clearAllBootstrapSnapshots;
-  let getOrLoadBootstrapFiles: typeof import("./bootstrap-cache.js").getOrLoadBootstrapFiles;
-  let workspaceModule: typeof import("./workspace.js");
-
-  const mockLoad = () => vi.mocked(workspaceModule.loadWorkspaceBootstrapFiles);
-
-  beforeAll(async () => {
-    ({ clearAllBootstrapSnapshots, getOrLoadBootstrapFiles } =
-      await import("./bootstrap-cache.js"));
-    workspaceModule = await import("./workspace.js");
-  });
+  const mockLoad = () => vi.mocked(loadWorkspaceBootstrapFiles);
 
   beforeEach(() => {
     clearAllBootstrapSnapshots();
@@ -87,18 +84,7 @@ describe("getOrLoadBootstrapFiles", () => {
 });
 
 describe("clearBootstrapSnapshot", () => {
-  let clearAllBootstrapSnapshots: typeof import("./bootstrap-cache.js").clearAllBootstrapSnapshots;
-  let clearBootstrapSnapshot: typeof import("./bootstrap-cache.js").clearBootstrapSnapshot;
-  let getOrLoadBootstrapFiles: typeof import("./bootstrap-cache.js").getOrLoadBootstrapFiles;
-  let workspaceModule: typeof import("./workspace.js");
-
-  const mockLoad = () => vi.mocked(workspaceModule.loadWorkspaceBootstrapFiles);
-
-  beforeAll(async () => {
-    ({ clearAllBootstrapSnapshots, clearBootstrapSnapshot, getOrLoadBootstrapFiles } =
-      await import("./bootstrap-cache.js"));
-    workspaceModule = await import("./workspace.js");
-  });
+  const mockLoad = () => vi.mocked(loadWorkspaceBootstrapFiles);
 
   beforeEach(() => {
     clearAllBootstrapSnapshots();

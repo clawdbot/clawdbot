@@ -122,6 +122,54 @@ async function requestAllowOnceApproval(
   return approvalId;
 }
 
+type ChatApprovalContext = {
+  agentId: string;
+  sessionKey: string;
+  turnSourceChannel: string;
+  turnSourceTo: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
+};
+
+async function requestChatAllowOnceApproval(params: {
+  ws: WebSocket;
+  command: string;
+  nodeId: string;
+  context: ChatApprovalContext;
+}): Promise<string> {
+  const approvalId = crypto.randomUUID();
+  const commandArgv = params.command.split(/\s+/).filter((part) => part.length > 0);
+  const requestP = rpcReq(params.ws, "exec.approval.request", {
+    id: approvalId,
+    command: params.command,
+    commandArgv,
+    systemRunPlan: {
+      argv: commandArgv,
+      cwd: null,
+      commandText: params.command,
+      agentId: params.context.agentId,
+      sessionKey: params.context.sessionKey,
+    },
+    nodeId: params.nodeId,
+    cwd: null,
+    host: "node",
+    agentId: params.context.agentId,
+    sessionKey: params.context.sessionKey,
+    turnSourceChannel: params.context.turnSourceChannel,
+    turnSourceTo: params.context.turnSourceTo,
+    turnSourceAccountId: params.context.turnSourceAccountId,
+    turnSourceThreadId: params.context.turnSourceThreadId,
+    timeoutMs: 30_000,
+  });
+  await rpcReq(params.ws, "exec.approval.resolve", {
+    id: approvalId,
+    decision: "allow-once",
+  });
+  const requested = await requestP;
+  expect(requested.ok).toBe(true);
+  return approvalId;
+}
+
 describe("node.invoke approval bypass", () => {
   let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
   let port: number;
@@ -193,6 +241,27 @@ describe("node.invoke approval bypass", () => {
 
   const connectOperator = async (scopes: string[]) => {
     return await connectOperatorWithRetry(scopes);
+  };
+
+  const connectTrustedBackend = async (scopes: string[]) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    trackConnectChallengeNonce(ws);
+    await new Promise<void>((resolve) => ws.once("open", resolve));
+    const res = await connectReq(ws, {
+      token: "secret",
+      scopes,
+      device: null,
+      client: {
+        id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        displayName: "agent",
+        version: "1.0.0",
+        platform: "test",
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+      timeoutMs: CONNECT_REQ_TIMEOUT_MS,
+    });
+    expect(res.ok).toBe(true);
+    return ws;
   };
 
   const connectOperatorWithNewDevice = async (scopes: string[]) => {
@@ -457,6 +526,101 @@ describe("node.invoke approval bypass", () => {
       wsApprover.close();
       wsCaller.close();
       wsOtherDevice.close();
+      node.stop();
+    }
+  });
+
+  test("bridges no-device chat approvals across backend reconnects only for the same turn source", async () => {
+    let invokeCount = 0;
+    let lastInvokeParams: Record<string, unknown> | null = null;
+    const node = await connectLinuxNode((payload) => {
+      invokeCount += 1;
+      const obj = payload as { paramsJSON?: unknown };
+      const raw = typeof obj?.paramsJSON === "string" ? obj.paramsJSON : "";
+      lastInvokeParams = raw ? (JSON.parse(raw) as Record<string, unknown>) : null;
+    });
+
+    const wsRequest = await connectTrustedBackend(["operator.write", "operator.approvals"]);
+    const wsReplay = await connectTrustedBackend(["operator.write", "operator.approvals"]);
+
+    try {
+      const nodeId = await getConnectedNodeId(wsRequest);
+      const context: ChatApprovalContext = {
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:12345",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "telegram:12345",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: "42",
+      };
+
+      const approvalId = await requestChatAllowOnceApproval({
+        ws: wsRequest,
+        command: "echo chat",
+        nodeId,
+        context,
+      });
+      const invoke = await rpcReq(wsReplay, "node.invoke", {
+        nodeId,
+        command: "system.run",
+        params: {
+          command: ["echo", "chat"],
+          rawCommand: "echo chat",
+          agentId: context.agentId,
+          sessionKey: context.sessionKey,
+          turnSourceChannel: context.turnSourceChannel,
+          turnSourceTo: context.turnSourceTo,
+          turnSourceAccountId: context.turnSourceAccountId,
+          turnSourceThreadId: context.turnSourceThreadId,
+          runId: approvalId,
+          approved: true,
+          approvalDecision: "allow-once",
+        },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(invoke.ok).toBe(true);
+      for (let i = 0; i < 100; i += 1) {
+        if (lastInvokeParams) {
+          break;
+        }
+        await sleep(50);
+      }
+      const forwardedParams = requireRecord(lastInvokeParams, "forwarded invoke params");
+      expect(forwardedParams["approved"]).toBe(true);
+      expect(forwardedParams["approvalDecision"]).toBe("allow-once");
+      expect(forwardedParams["turnSourceTo"]).toBeUndefined();
+
+      const mismatchApprovalId = await requestChatAllowOnceApproval({
+        ws: wsRequest,
+        command: "echo chat",
+        nodeId,
+        context,
+      });
+      const invokeCountBeforeMismatch = invokeCount;
+      const mismatch = await rpcReq(wsReplay, "node.invoke", {
+        nodeId,
+        command: "system.run",
+        params: {
+          command: ["echo", "chat"],
+          rawCommand: "echo chat",
+          agentId: context.agentId,
+          sessionKey: context.sessionKey,
+          turnSourceChannel: context.turnSourceChannel,
+          turnSourceTo: "telegram:67890",
+          turnSourceAccountId: context.turnSourceAccountId,
+          turnSourceThreadId: context.turnSourceThreadId,
+          runId: mismatchApprovalId,
+          approved: true,
+          approvalDecision: "allow-once",
+        },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(mismatch.ok).toBe(false);
+      expect(mismatch.error?.message ?? "").toContain("not valid for this client");
+      await expectNoForwardedInvoke(() => invokeCount > invokeCountBeforeMismatch);
+    } finally {
+      wsRequest.close();
+      wsReplay.close();
       node.stop();
     }
   });

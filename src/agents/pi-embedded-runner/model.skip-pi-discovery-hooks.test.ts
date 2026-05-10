@@ -50,6 +50,22 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 
 let resolveModelAsync: typeof import("./model.js").resolveModelAsync;
 
+function expectWorkspaceHookCall(mock: { mock: { calls: unknown[][] } }) {
+  expect(mock.mock.calls).toHaveLength(1);
+  const [arg] = mock.mock.calls[0] ?? [];
+  expect(arg).toBeTruthy();
+  if (!arg || typeof arg !== "object") {
+    throw new Error("Expected runtime hook call argument");
+  }
+  const call = arg as { context?: unknown; workspaceDir?: unknown };
+  expect(call.workspaceDir).toBe("/tmp/workspace");
+  expect(call.context).toBeTruthy();
+  if (!call.context || typeof call.context !== "object") {
+    throw new Error("Expected runtime hook context");
+  }
+  expect((call.context as { workspaceDir?: unknown }).workspaceDir).toBe("/tmp/workspace");
+}
+
 beforeEach(async () => {
   vi.clearAllMocks();
   ({ resolveModelAsync } = await import("./model.js"));
@@ -63,34 +79,18 @@ describe("resolveModelAsync skipPiDiscovery runtime hooks", () => {
     });
 
     expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      provider: "ollama",
-      id: "llama3.2:latest",
-      api: "ollama",
-    });
+    expect(result.model).toBeDefined();
+    if (!result.model) {
+      throw new Error("Expected resolved model");
+    }
+    expect(result.model.provider).toBe("ollama");
+    expect(result.model.id).toBe("llama3.2:latest");
+    expect(result.model.api).toBe("ollama");
     expect(mocks.discoverAuthStorage).not.toHaveBeenCalled();
     expect(mocks.discoverModels).not.toHaveBeenCalled();
-    expect(mocks.prepareProviderDynamicModel).toHaveBeenCalledTimes(1);
-    expect(mocks.prepareProviderDynamicModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceDir: "/tmp/workspace",
-        context: expect.objectContaining({ workspaceDir: "/tmp/workspace" }),
-      }),
-    );
-    expect(mocks.runProviderDynamicModel).toHaveBeenCalledTimes(1);
-    expect(mocks.runProviderDynamicModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceDir: "/tmp/workspace",
-        context: expect.objectContaining({ workspaceDir: "/tmp/workspace" }),
-      }),
-    );
-    expect(mocks.normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledTimes(1);
-    expect(mocks.normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceDir: "/tmp/workspace",
-        context: expect.objectContaining({ workspaceDir: "/tmp/workspace" }),
-      }),
-    );
+    expectWorkspaceHookCall(mocks.prepareProviderDynamicModel);
+    expectWorkspaceHookCall(mocks.runProviderDynamicModel);
+    expectWorkspaceHookCall(mocks.normalizeProviderResolvedModelWithPlugin);
     expect(mocks.applyProviderResolvedModelCompatWithPlugins).not.toHaveBeenCalled();
     expect(mocks.applyProviderResolvedTransportWithPlugin).not.toHaveBeenCalled();
     expect(mocks.normalizeProviderTransportWithPlugin).not.toHaveBeenCalled();

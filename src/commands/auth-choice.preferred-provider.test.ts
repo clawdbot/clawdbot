@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { resolvePluginProviders as resolvePluginProvidersFn } from "../plugins/providers.runtime.js";
+
+type ResolvePluginProvidersOptions = Parameters<typeof resolvePluginProvidersFn>[0];
 
 const resolveManifestProviderAuthChoice = vi.hoisted(() => vi.fn());
 const resolveManifestDeprecatedProviderAuthChoice = vi.hoisted(() => vi.fn());
@@ -121,11 +124,11 @@ describe("resolvePreferredProviderForAuthChoice", () => {
         includeUntrustedWorkspacePlugins: false,
       }),
     ).resolves.toBe("demo-provider");
-    expect(resolvePluginProviders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: "setup",
-        includeUntrustedWorkspacePlugins: false,
-      }),
-    );
+    expect(resolvePluginProviders).toHaveBeenCalledOnce();
+    const [pluginProviderOptions] = resolvePluginProviders.mock.calls[0] as unknown as [
+      ResolvePluginProvidersOptions,
+    ];
+    expect(pluginProviderOptions?.mode).toBe("setup");
+    expect(pluginProviderOptions?.includeUntrustedWorkspacePlugins).toBe(false);
   });
 });

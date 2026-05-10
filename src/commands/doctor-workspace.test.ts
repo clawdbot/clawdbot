@@ -20,6 +20,16 @@ import {
   shouldSuggestMemorySystem,
 } from "./doctor-workspace.js";
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.access(targetPath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected path to be missing: ${targetPath}`);
+}
+
 describe("root memory repair", () => {
   let tmpDir = "";
 
@@ -68,9 +78,7 @@ describe("root memory repair", () => {
     const canonical = await fs.readFile(path.join(tmpDir, "MEMORY.md"), "utf8");
     expect(canonical).toContain("# Canonical");
     expect(canonical).toContain("# Legacy");
-    await expect(fs.access(path.join(tmpDir, "memory.md"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(tmpDir, "memory.md"));
     if (migration.archivedLegacyPath === undefined) {
       throw new Error("expected archived legacy memory path");
     }
@@ -104,9 +112,7 @@ describe("root memory repair", () => {
     });
     const canonical = await fs.readFile(path.join(tmpDir, "MEMORY.md"), "utf8");
     expect(canonical).toContain("# Legacy");
-    await expect(fs.access(path.join(tmpDir, "memory.md"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(tmpDir, "memory.md"));
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining("Workspace memory root merged:"),
       "Doctor changes",

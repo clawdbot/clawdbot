@@ -39,11 +39,41 @@ function requireString(value: string | undefined, label: string): string {
   return value;
 }
 
-function requireValue<T>(value: T | undefined, label: string): T {
-  if (value === undefined) {
+function requireValue<T>(value: T | null | undefined, label: string): T {
+  if (value == null) {
     throw new Error(`expected ${label}`);
   }
   return value;
+}
+
+type TranscriptEntry = ReturnType<SessionManager["getEntries"]>[number];
+
+function requireEntryByIdAndType<T extends TranscriptEntry["type"]>(
+  entries: readonly TranscriptEntry[],
+  id: string,
+  type: T,
+  label: string,
+): Extract<TranscriptEntry, { type: T }> {
+  const entry = entries.find((candidate) => candidate.id === id);
+  if (!entry) {
+    throw new Error(`expected ${label}`);
+  }
+  if (entry.type !== type) {
+    throw new Error(`expected ${label} to be ${type}, got ${entry.type}`);
+  }
+  return entry as Extract<TranscriptEntry, { type: T }>;
+}
+
+function requireEntryByType<T extends TranscriptEntry["type"]>(
+  entries: readonly TranscriptEntry[],
+  type: T,
+  label: string,
+): Extract<TranscriptEntry, { type: T }> {
+  const entry = entries.find((candidate) => candidate.type === type);
+  if (!entry) {
+    throw new Error(`expected ${label}`);
+  }
+  return entry as Extract<TranscriptEntry, { type: T }>;
 }
 
 function createCompactedSession(sessionDir: string): {
@@ -91,10 +121,9 @@ describe("rotateTranscriptAfterCompaction", () => {
     const successorFile = requireString(result.sessionFile, "successor session file");
 
     const successor = SessionManager.open(successorFile);
-    expect(successor.getHeader()).toMatchObject({
-      parentSession: sessionFile,
-      cwd: dir,
-    });
+    const header = requireValue(successor.getHeader(), "successor header");
+    expect(header.parentSession).toBe(sessionFile);
+    expect(header.cwd).toBe(dir);
     expect(successor.buildSessionContext().messages.length).toBeGreaterThan(0);
   });
 
@@ -117,20 +146,19 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(await fs.readFile(sessionFile, "utf8")).toBe(originalBytes);
 
     const successor = SessionManager.open(successorFile);
-    expect(successor.getHeader()).toMatchObject({
-      id: successorSessionId,
-      parentSession: sessionFile,
-      cwd: dir,
-    });
+    const header = requireValue(successor.getHeader(), "successor header");
+    expect(header.id).toBe(successorSessionId);
+    expect(header.parentSession).toBe(sessionFile);
+    expect(header.cwd).toBe(dir);
     expect(successor.getEntries().length).toBeLessThan(originalEntryCount);
     expect(successor.getBranch()[0]?.type).toBe("model_change");
-    expect(successor.getBranch()).toContainEqual(
-      expect.objectContaining({
-        type: "custom",
-        customType: "test-extension",
-        data: { cursor: "before-compaction" },
-      }),
+    const customBranchEntry = requireEntryByType(
+      successor.getBranch(),
+      "custom",
+      "preserved custom branch entry",
     );
+    expect(customBranchEntry.customType).toBe("test-extension");
+    expect(customBranchEntry.data).toStrictEqual({ cursor: "before-compaction" });
 
     const context = successor.buildSessionContext();
     const contextText = JSON.stringify(context.messages);
@@ -184,17 +212,12 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(countEntryType("model_change")).toBe(1);
     expect(countEntryType("thinking_level_change")).toBe(1);
     expect(countEntryType("session_info")).toBe(1);
-    expect(entries.find((entry) => entry.type === "model_change")).toMatchObject({
-      provider: "openai",
-      modelId: "gpt-5.2",
-    });
-    expect(entries).toContainEqual(
-      expect.objectContaining({
-        type: "custom",
-        customType: "test-extension",
-        data: { cursor: "preserved" },
-      }),
-    );
+    const modelChange = requireEntryByType(entries, "model_change", "current model change");
+    expect(modelChange.provider).toBe("openai");
+    expect(modelChange.modelId).toBe("gpt-5.2");
+    const customEntry = requireEntryByType(entries, "custom", "preserved custom entry");
+    expect(customEntry.customType).toBe("test-extension");
+    expect(customEntry.data).toStrictEqual({ cursor: "preserved" });
 
     const context = successor.buildSessionContext();
     expect(context.thinkingLevel).toBe("high");
@@ -250,10 +273,8 @@ describe("rotateTranscriptAfterCompaction", () => {
       sessionFile: requireString(manager.getSessionFile(), "source session file"),
     });
 
-    expect(result).toMatchObject({
-      rotated: false,
-      reason: "no compaction entry",
-    });
+    expect(result.rotated).toBe(false);
+    expect(result.reason).toBe("no compaction entry");
   });
 
   it("uses a refreshed manager after manual boundary hardening", async () => {
@@ -297,9 +318,10 @@ describe("rotateTranscriptAfterCompaction", () => {
     const successorCompaction = successor
       .getEntries()
       .find((entry) => entry.type === "compaction" && entry.id === compactionId);
-    expect(successorCompaction).toMatchObject({
-      firstKeptEntryId: compactionId,
-    });
+    if (!successorCompaction || successorCompaction.type !== "compaction") {
+      throw new Error("expected successor compaction entry");
+    }
+    expect(successorCompaction.firstKeptEntryId).toBe(compactionId);
   });
 
   it("preserves unsummarized sibling branches and branch summaries", async () => {
@@ -338,14 +360,23 @@ describe("rotateTranscriptAfterCompaction", () => {
       requireString(result.sessionFile, "successor session file"),
     );
     const allEntries = successor.getEntries();
-    expect(allEntries.find((entry) => entry.id === branchSummaryId)).toMatchObject({
-      type: "branch_summary",
-      summary: "Summary of the abandoned branch.",
-    });
-    expect(allEntries.find((entry) => entry.id === siblingMsgId)).toMatchObject({
-      type: "message",
-      message: expect.objectContaining({ content: "do task B instead" }),
-    });
+    const branchSummary = requireEntryByIdAndType(
+      allEntries,
+      branchSummaryId,
+      "branch_summary",
+      "preserved branch summary",
+    );
+    expect(branchSummary.summary).toBe("Summary of the abandoned branch.");
+    const siblingMessage = requireEntryByIdAndType(
+      allEntries,
+      siblingMsgId,
+      "message",
+      "preserved sibling message",
+    );
+    if (!("content" in siblingMessage.message)) {
+      throw new Error("expected sibling message content");
+    }
+    expect(siblingMessage.message.content).toBe("do task B instead");
 
     const activeContextText = JSON.stringify(successor.buildSessionContext().messages);
     expect(activeContextText).toContain("Summary of main branch.");

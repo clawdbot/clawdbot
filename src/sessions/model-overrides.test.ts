@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
-import { applyModelOverrideToSessionEntry } from "./model-overrides.js";
+import {
+  applyModelOverrideToSessionEntry,
+  repairProviderWrappedModelOverride,
+} from "./model-overrides.js";
 
 function applyOpenAiSelection(entry: SessionEntry) {
   return applyModelOverrideToSessionEntry({
@@ -171,5 +174,59 @@ describe("applyModelOverrideToSessionEntry", () => {
     });
     expect(withFlag.updated).toBe(true);
     expect(withFlagEntry.liveModelSwitchPending).toBe(true);
+  });
+});
+
+describe("repairProviderWrappedModelOverride", () => {
+  it("restores a provider-wrapped override from aligned runtime model fields", () => {
+    const before = Date.now() - 5_000;
+    const entry: SessionEntry = {
+      sessionId: "sess-openrouter-repair-runtime",
+      updatedAt: before,
+      providerOverride: "anthropic",
+      modelOverride: "claude-haiku-4.5",
+      modelOverrideSource: "user",
+      modelProvider: "openrouter",
+      model: "anthropic/claude-haiku-4.5",
+      contextTokens: 200_000,
+    };
+
+    const result = repairProviderWrappedModelOverride({
+      entry,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.4",
+    });
+
+    expect(result.updated).toBe(true);
+    expect(entry.providerOverride).toBe("openrouter");
+    expect(entry.modelOverride).toBe("anthropic/claude-haiku-4.5");
+    expect(entry.modelOverrideSource).toBe("user");
+    expect(entry.modelProvider).toBeUndefined();
+    expect(entry.model).toBeUndefined();
+    expect(entry.contextTokens).toBeUndefined();
+    expect((entry.updatedAt ?? 0) > before).toBe(true);
+  });
+
+  it("clears a provider-wrapped override that matches the configured default", () => {
+    const before = Date.now() - 5_000;
+    const entry: SessionEntry = {
+      sessionId: "sess-openrouter-repair-default",
+      updatedAt: before,
+      providerOverride: "anthropic",
+      modelOverride: "claude-haiku-4.5",
+      modelOverrideSource: "user",
+    };
+
+    const result = repairProviderWrappedModelOverride({
+      entry,
+      defaultProvider: "openrouter",
+      defaultModel: "anthropic/claude-haiku-4.5",
+    });
+
+    expect(result.updated).toBe(true);
+    expect(entry.providerOverride).toBeUndefined();
+    expect(entry.modelOverride).toBeUndefined();
+    expect(entry.modelOverrideSource).toBeUndefined();
+    expect((entry.updatedAt ?? 0) > before).toBe(true);
   });
 });

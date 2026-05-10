@@ -54,6 +54,11 @@ function formatLegacyIssuePreview(issues: Partial<Record<string, number>>): stri
   if (issues.legacyPayloadKind) {
     lines.push(`- ${pluralize(issues.legacyPayloadKind, "job")} needs payload kind normalization`);
   }
+  if (issues.legacyPayloadCodexModel) {
+    lines.push(
+      `- ${pluralize(issues.legacyPayloadCodexModel, "job")} still uses legacy \`openai-codex/*\` cron model refs`,
+    );
+  }
   if (issues.legacyPayloadProvider) {
     lines.push(
       `- ${pluralize(issues.legacyPayloadProvider, "job")} still uses payload \`provider\` as a delivery alias`,

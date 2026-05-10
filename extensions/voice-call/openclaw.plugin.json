@@ -153,6 +153,16 @@
       "help": "Guides when the realtime voice model should call openclaw_agent_consult.",
       "advanced": true
     },
+    "realtime.consultThinkingLevel": {
+      "label": "Consult Thinking Level",
+      "help": "Optional override for the regular agent run behind realtime openclaw_agent_consult calls.",
+      "advanced": true
+    },
+    "realtime.consultFastMode": {
+      "label": "Consult Fast Mode",
+      "help": "Optional fast mode override for the regular agent run behind realtime openclaw_agent_consult calls.",
+      "advanced": true
+    },
     "realtime.fastContext.enabled": {
       "label": "Enable Fast Realtime Context",
       "help": "Searches memory/session context before the full consult agent.",
@@ -514,6 +524,13 @@
           "consultPolicy": {
             "type": "string",
             "enum": ["auto", "substantive", "always"]
+          },
+          "consultThinkingLevel": {
+            "type": "string",
+            "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"]
+          },
+          "consultFastMode": {
+            "type": "boolean"
           },
           "tools": {
             "type": "array",

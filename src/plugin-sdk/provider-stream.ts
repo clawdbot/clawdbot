@@ -1,7 +1,4 @@
-import {
-  createGoogleThinkingPayloadWrapper,
-  sanitizeGoogleThinkingPayload,
-} from "../agents/pi-embedded-runner/google-stream-wrappers.js";
+import { createGoogleThinkingPayloadWrapper } from "../agents/pi-embedded-runner/google-stream-wrappers.js";
 import { createMinimaxFastModeWrapper } from "../agents/pi-embedded-runner/minimax-stream-wrappers.js";
 import { resolveMoonshotThinkingKeep } from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
 import {
@@ -20,7 +17,6 @@ import {
 } from "../agents/pi-embedded-runner/openai-stream-wrappers.js";
 import {
   createKilocodeWrapper,
-  createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "../agents/pi-embedded-runner/proxy-stream-wrappers.js";

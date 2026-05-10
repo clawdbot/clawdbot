@@ -75,12 +75,12 @@ function expectSingleRejectedReplayHangup(params: {
   expect(params.first.status).toBe(200);
   expect(params.second.status).toBe(200);
   expect(params.provider.hangupCalls).toHaveLength(1);
-  expect(params.provider.hangupCalls[0]).toEqual(
-    expect.objectContaining({
-      providerCallId: "provider-inbound-1",
-      reason: "hangup-bot",
-    }),
-  );
+  const [hangupCall] = params.provider.hangupCalls;
+  if (!hangupCall) {
+    throw new Error("Expected rejected replay hangup call");
+  }
+  expect(hangupCall.providerCallId).toBe("provider-inbound-1");
+  expect(hangupCall.reason).toBe("hangup-bot");
   expect(params.manager.getCallByProviderCallId("provider-inbound-1")).toBeUndefined();
 }
 

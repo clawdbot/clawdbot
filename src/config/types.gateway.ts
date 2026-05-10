@@ -54,6 +54,8 @@ export type TalkRealtimeConfig = {
   model?: string;
   /** Provider voice override for realtime sessions. */
   voice?: string;
+  /** Additional system instructions appended to realtime Talk sessions. */
+  instructions?: string;
   /** Realtime execution mode. */
   mode?: "realtime" | "stt-tts" | "transcription";
   /** Byte/session transport. */
@@ -76,6 +78,18 @@ export type TalkConfig = {
   providers?: Record<string, TalkProviderConfig>;
   /** Realtime Talk provider, model, voice, mode, transport, and brain config. */
   realtime?: TalkRealtimeConfig;
+  /** Optional thinking level override for the agent run behind Talk realtime consults. */
+  consultThinkingLevel?:
+    | "off"
+    | "minimal"
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh"
+    | "adaptive"
+    | "max";
+  /** Optional fast mode override for the agent run behind Talk realtime consults. */
+  consultFastMode?: boolean;
   /** BCP 47 locale id used for Talk speech recognition on device nodes. */
   speechLocale?: string;
   /** Stop speaking when user starts talking (default: true). */

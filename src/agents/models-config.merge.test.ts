@@ -88,16 +88,14 @@ describe("models-config merge helpers", () => {
       } as ProviderConfig,
     );
 
-    expect(merged.models).toEqual([
-      expect.objectContaining({
-        id: "gpt-5.4",
-        input: ["text"],
-        reasoning: false,
-        cost: { input: 123, output: 456, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 2_000_000,
-        maxTokens: 200_000,
-      }),
-    ]);
+    const model = merged.models?.[0];
+    expect(merged.models).toHaveLength(1);
+    expect(model?.id).toBe("gpt-5.4");
+    expect(model?.input).toEqual(["text"]);
+    expect(model?.reasoning).toBe(false);
+    expect(model?.cost).toEqual({ input: 123, output: 456, cacheRead: 0, cacheWrite: 0 });
+    expect(model?.contextWindow).toBe(2_000_000);
+    expect(model?.maxTokens).toBe(200_000);
   });
 
   it("preserves explicit input modality overrides when implicit metadata has the same model id", () => {
@@ -129,13 +127,10 @@ describe("models-config merge helpers", () => {
       } as ProviderConfig,
     );
 
-    expect(merged.models?.[0]).toEqual(
-      expect.objectContaining({
-        id: "qwen3-vl:latest",
-        input: ["text", "image"],
-        reasoning: true,
-      }),
-    );
+    const model = merged.models?.[0];
+    expect(model?.id).toBe("qwen3-vl:latest");
+    expect(model?.input).toEqual(["text", "image"]);
+    expect(model?.reasoning).toBe(true);
   });
 
   it("merges explicit providers onto trimmed keys", () => {
@@ -148,9 +143,8 @@ describe("models-config merge helpers", () => {
       },
     });
 
-    expect(merged).toEqual({
-      custom: expect.objectContaining({ api: "openai-responses" }),
-    });
+    expect(Object.keys(merged)).toEqual(["custom"]);
+    expect(merged.custom?.api).toBe("openai-responses");
   });
 
   it("keeps existing providers alongside newly configured providers in merge mode", () => {
@@ -264,12 +258,8 @@ describe("models-config merge helpers", () => {
       secretRefManagedProviders: new Set<string>(),
     });
 
-    expect(merged.custom).toEqual(
-      expect.objectContaining({
-        apiKey: preservedApiKey,
-        baseUrl: "https://config.example/v1",
-      }),
-    );
+    expect(merged.custom?.apiKey).toBe(preservedApiKey);
+    expect(merged.custom?.baseUrl).toBe("https://config.example/v1");
   });
 
   it("replaces stale baseUrl when only model-level apis change", () => {

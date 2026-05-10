@@ -79,11 +79,9 @@ describe("resolveModelAsync startup retry", () => {
     );
 
     expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      provider: "openai-codex",
-      id: "gpt-5.4",
-      api: "openai-codex-responses",
-    });
+    expect(result.model?.provider).toBe("openai-codex");
+    expect(result.model?.id).toBe("gpt-5.4");
+    expect(result.model?.api).toBe("openai-codex-responses");
     expect(prepareProviderDynamicModelMock).toHaveBeenCalledTimes(2);
     expect(runProviderDynamicModelMock).toHaveBeenCalledTimes(2);
   });

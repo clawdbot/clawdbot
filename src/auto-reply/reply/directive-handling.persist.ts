@@ -166,9 +166,20 @@ export async function persistInlineDirectives(params: {
       directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
     let updated = false;
 
-    if (directives.hasThinkDirective && directives.thinkLevel) {
+    if (directives.clearThinkLevel) {
+      if (sessionEntry.thinkingLevel) {
+        delete sessionEntry.thinkingLevel;
+        updated = true;
+      }
+    } else if (directives.hasThinkDirective && directives.thinkLevel) {
       sessionEntry.thinkingLevel = directives.thinkLevel;
       updated = true;
+    }
+    if (directives.clearFastMode) {
+      if (sessionEntry.fastMode !== undefined) {
+        delete sessionEntry.fastMode;
+        updated = true;
+      }
     }
     if (
       directives.hasVerboseDirective &&

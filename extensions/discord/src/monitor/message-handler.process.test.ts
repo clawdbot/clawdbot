@@ -1659,7 +1659,7 @@ describe("processDiscordMessage draft streaming", () => {
     expect(draftStream.update).toHaveBeenCalledWith("Shelling\n🛠️ Exec\n• done");
   });
 
-  it("keeps Discord progress labels as rolling lines", async () => {
+  it("keeps Discord progress lines below the configured label", async () => {
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {

@@ -35,6 +35,25 @@ describe("getTelegramSequentialKey", () => {
     [
       {
         message: mockMessage({
+          chat: mockChat({ id: 123, type: "supergroup" }),
+          message_thread_id: 9,
+          is_topic_message: true,
+        }),
+      },
+      "telegram:123:topic:9",
+    ],
+    [
+      {
+        message: mockMessage({
+          chat: mockChat({ id: 123, type: "supergroup" }),
+          is_topic_message: true,
+        }),
+      },
+      "telegram:123:topic:1",
+    ],
+    [
+      {
+        message: mockMessage({
           chat: mockChat({ id: 123, type: "supergroup", is_forum: true }),
         }),
       },

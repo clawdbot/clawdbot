@@ -116,9 +116,21 @@ describe("RTT harness", () => {
       version: "2026.4.30-beta.1",
     });
 
-    expect(result).toMatchObject({
+    expect(result).toStrictEqual({
+      artifacts: {
+        rawObservedMessagesPath: "runs/run/raw/telegram-qa-observed-messages.json",
+        rawReportPath: "runs/run/raw/telegram-qa-report.md",
+        rawSummaryPath: "runs/run/raw/telegram-qa-summary.json",
+        resultPath: "runs/run/result.json",
+      },
       package: { spec: "openclaw@beta", version: "2026.4.30-beta.1" },
-      run: { durationMs: 12_000, id: "run", status: "pass" },
+      run: {
+        durationMs: 12_000,
+        finishedAt: "2026-05-01T00:00:12.000Z",
+        id: "run",
+        startedAt: "2026-05-01T00:00:00.000Z",
+        status: "pass",
+      },
       mode: {
         providerMode: "mock-openai",
         scenarios: ["telegram-mentioned-message-reply"],
@@ -131,9 +143,9 @@ describe("RTT harness", () => {
         p95Ms: 7000,
         maxMs: 7000,
         failedSamples: 0,
+        warmSamples: [4000, 5000, 7000],
       },
     });
-    expect(result.rtt.warmSamples).toEqual([4000, 5000, 7000]);
   });
 
   it("marks failed scenario summaries as failed results", () => {
@@ -195,7 +207,7 @@ describe("RTT harness", () => {
     ]);
 
     expect(parsed.spec).toBe("openclaw@latest");
-    expect(parsed.options).toMatchObject({
+    expect(parsed.options).toStrictEqual({
       packageTgz: "/tmp/openclaw.tgz",
       providerMode: "live-frontier",
       runs: 3,

@@ -22,22 +22,79 @@ describe("resolveVisibleModelCatalog", () => {
       { provider: "anthropic", id: "claude-test", name: "Claude Test" },
       { provider: "openai", id: "gpt-test", name: "GPT Test" },
     ];
+    const cfg = {} as OpenClawConfig;
 
     const result = resolveVisibleModelCatalog({
-      cfg: {} as OpenClawConfig,
+      cfg,
       catalog,
       defaultProvider: "openai",
       runtimeAuthDiscovery: false,
     });
 
-    expect(createProviderAuthCheckerMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowPluginSyntheticAuth: false,
-        discoverExternalCliAuth: false,
-      }),
-    );
+    expect(createProviderAuthCheckerMock).toHaveBeenCalledTimes(1);
+    const checkerOptions = createProviderAuthCheckerMock.mock.calls[0]?.[0];
+    expect(checkerOptions?.cfg).toBe(cfg);
+    expect(checkerOptions?.allowPluginSyntheticAuth).toBe(false);
+    expect(checkerOptions?.discoverExternalCliAuth).toBe(false);
     expect(authChecker).toHaveBeenCalledWith("anthropic");
     expect(authChecker).toHaveBeenCalledWith("openai");
     expect(result).toEqual([{ provider: "openai", id: "gpt-test", name: "GPT Test" }]);
+  });
+
+  it("limits visible catalog to provider wildcard entries after default discovery", () => {
+    const authChecker = vi.fn((provider: string) => provider !== "blocked");
+    createProviderAuthCheckerMock.mockReturnValue(authChecker);
+    const catalog: ModelCatalogEntry[] = [
+      { provider: "anthropic", id: "claude-test", name: "Claude Test" },
+      { provider: "openai-codex", id: "gpt-codex-test", name: "GPT Codex Test" },
+      { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
+      { provider: "blocked", id: "blocked-test", name: "Blocked Test" },
+    ];
+
+    const result = resolveVisibleModelCatalog({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "vllm/*": {},
+              "openai-codex/*": {},
+              "blocked/*": {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      catalog,
+      defaultProvider: "anthropic",
+      runtimeAuthDiscovery: true,
+    });
+
+    expect(createProviderAuthCheckerMock).toHaveBeenCalled();
+    expect(result).toEqual([
+      { provider: "openai-codex", id: "gpt-codex-test", name: "GPT Codex Test" },
+      { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
+    ]);
+  });
+
+  it("does not broaden visibility when selected providers have no catalog rows", () => {
+    const authChecker = vi.fn(() => true);
+    createProviderAuthCheckerMock.mockReturnValue(authChecker);
+
+    const result = resolveVisibleModelCatalog({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "vllm/*": {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      catalog: [{ provider: "anthropic", id: "claude-test", name: "Claude Test" }],
+      defaultProvider: "anthropic",
+      runtimeAuthDiscovery: true,
+    });
+
+    expect(createProviderAuthCheckerMock).toHaveBeenCalled();
+    expect(result).toEqual([]);
   });
 });

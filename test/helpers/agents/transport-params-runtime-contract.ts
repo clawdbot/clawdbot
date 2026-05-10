@@ -1,7 +1,6 @@
 export const OPENAI_GPT5_TRANSPORT_DEFAULTS = {
   parallel_tool_calls: true,
   text_verbosity: "low",
-  openaiWsWarmup: false,
 } as const;
 
 export const OPENAI_GPT5_TRANSPORT_DEFAULT_CASES = [

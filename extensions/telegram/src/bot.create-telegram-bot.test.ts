@@ -415,6 +415,71 @@ describe("createTelegramBot", () => {
     expect(events).toEqual(["busy:start", "status", "busy:end"]);
   });
 
+  it("lets Telegram topic messages without chat forum metadata use separate lanes", async () => {
+    installPerKeySequentializer();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    const events: string[] = [];
+    let releaseFirstTopic!: () => void;
+    const firstTopicGate = new Promise<void>((resolve) => {
+      releaseFirstTopic = resolve;
+    });
+
+    createTelegramBot({ token: "tok" });
+    const sequentializer = sequentializeSpy.mock.results[0]?.value as
+      | TelegramMiddleware
+      | undefined;
+    expect(sequentializer).toBeDefined();
+    if (!sequentializer) {
+      return;
+    }
+
+    const topicCtx = (threadId: number, updateId: number) => {
+      const base = makeForumGroupMessageCtx({ threadId, text: `topic ${threadId}` });
+      return {
+        ...base,
+        message: {
+          ...base.message,
+          message_id: updateId,
+          is_topic_message: true,
+          chat: {
+            id: -1001234567890,
+            type: "supergroup",
+            title: "Forum Group",
+          },
+        },
+        update: { update_id: updateId },
+      };
+    };
+
+    const firstPromise = sequentializer(topicCtx(10, 301), async () => {
+      events.push("first:start");
+      await firstTopicGate;
+      events.push("first:end");
+    });
+
+    await flushTelegramTestMicrotasks();
+    expect(events).toEqual(["first:start"]);
+
+    await sequentializer(topicCtx(20, 302), async () => {
+      events.push("second");
+    });
+
+    expect(events).toEqual(["first:start", "second"]);
+
+    releaseFirstTopic();
+    await firstPromise;
+    expect(events).toEqual(["first:start", "second", "first:end"]);
+  });
+
   it("keeps ordinary Telegram messages serialized within the same topic", async () => {
     installPerKeySequentializer();
     loadConfig.mockReturnValue({
@@ -686,6 +751,111 @@ describe("createTelegramBot", () => {
     expect(payload.Body).toContain("cmd:option_a");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
   });
+
+  it("toggles OC_MULTI buttons without routing through the generic callback message path", async () => {
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = requireValue(
+      onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as
+        | ((ctx: Record<string, unknown>) => Promise<void>)
+        | undefined,
+      "callback_query handler",
+    );
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-multi-toggle-1",
+        data: "OC_MULTI|toggle|env|prod",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 10,
+          reply_markup: {
+            inline_keyboard: [[{ text: "Prod", callback_data: "OC_MULTI|toggle|env|prod" }]],
+          },
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
+      reply_markup: {
+        inline_keyboard: [[{ text: "✅ Prod", callback_data: "OC_MULTI|toggle|env|prod" }]],
+      },
+    });
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-multi-toggle-1");
+  });
+
+  it("submits OC_MULTI selections as a synthetic inbound message", async () => {
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = requireValue(
+      onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as
+        | ((ctx: Record<string, unknown>) => Promise<void>)
+        | undefined,
+      "callback_query handler",
+    );
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-multi-submit-1",
+        data: "OC_MULTI|submit",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 10,
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "✅ Prod", callback_data: "OC_MULTI|toggle|env|prod" }],
+              [{ text: "Blue", callback_data: "OC_MULTI|toggle|blue" }],
+            ],
+          },
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(replySpy.mock.calls[0][0].Body).toContain("Multi-select submitted: env|prod");
+  });
+
+  it("submits OC_SELECT values as a synthetic inbound message and clears buttons", async () => {
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = requireValue(
+      onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as
+        | ((ctx: Record<string, unknown>) => Promise<void>)
+        | undefined,
+      "callback_query handler",
+    );
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-select-1",
+        data: "OC_SELECT|env|canary",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 10,
+          reply_markup: {
+            inline_keyboard: [[{ text: "Canary", callback_data: "OC_SELECT|env|canary" }]],
+          },
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(replySpy.mock.calls[0][0].Body).toContain("Single-select submitted: env|canary");
+  });
+
   it("preserves native command source for prefixed callback_query payloads", async () => {
     loadConfig.mockReturnValue({
       commands: { text: false, native: true },

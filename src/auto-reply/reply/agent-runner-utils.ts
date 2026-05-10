@@ -29,7 +29,6 @@ import {
 export { resolveProviderScopedAuthProfile, resolveRunAuthProfile };
 import {
   buildEmbeddedRunBaseParams as buildEmbeddedRunBaseParamsCore,
-  resolveModelFallbackOptions,
   resolveEnforceFinalTagWithResolver,
 } from "./agent-runner-run-params.js";
 export { resolveModelFallbackOptions } from "./agent-runner-run-params.js";

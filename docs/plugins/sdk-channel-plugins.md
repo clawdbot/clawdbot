@@ -74,6 +74,16 @@ remain available for compatibility dispatchers. Do not use those names for new
 channel code; new plugins should start with the `message` adapter, receipts, and
 receive/send lifecycle helpers on `openclaw/plugin-sdk/channel-message`.
 
+Channels migrating inbound authorization can use the experimental
+`openclaw/plugin-sdk/channel-ingress-runtime` subpath from runtime receive
+paths. The subpath keeps platform lookup and side effects in the plugin, while
+sharing allowlist state resolution, route/sender/command/event/activation
+decisions, redacted diagnostics, and turn-admission mapping. Keep plugin
+identity normalization in the descriptor you pass to the resolver; do not
+serialize raw match values from the resolved state or decision. See
+[Channel ingress API](/plugins/sdk-channel-ingress) for the API design,
+ownership boundary, and test expectations.
+
 If your channel supports typing indicators outside inbound replies, expose
 `heartbeat.sendTyping(...)` on the channel plugin. Core calls it with the
 resolved heartbeat delivery target before the heartbeat model run starts and

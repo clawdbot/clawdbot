@@ -43,12 +43,10 @@ function requireDangerousMatchingFinding(
   const finding = findings.find(
     (entry) => entry.checkId === "channels.discord.allowFrom.dangerous_name_matching_enabled",
   );
-  expect(finding).toMatchObject({
-    checkId: "channels.discord.allowFrom.dangerous_name_matching_enabled",
-  });
   if (!finding) {
     throw new Error("Expected dangerous name matching finding");
   }
+  expect(finding.checkId).toBe("channels.discord.allowFrom.dangerous_name_matching_enabled");
   return finding;
 }
 

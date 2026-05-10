@@ -18,8 +18,8 @@ function expectResolvedThinkingPlan(input: {
     thinkingOverrideRaw: input.thinkingOverrideRaw,
   });
 
-  expect(plan.status).toBe("ok");
-  expect(plan).toMatchObject({
+  expect(plan).toEqual({
+    status: "ok",
     thinkingOverride: input.expected,
     initialSessionPatch: { thinkingLevel: input.expected },
   });

@@ -27,18 +27,10 @@ import {
   normalizeOptionalAccountId,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "./config-runtime-api.js";
-import {
-  hasReadyMatrixEnvAuth,
-  resolveGlobalMatrixEnvConfig,
-  resolveMatrixEnvAuthReadiness,
-  resolveScopedMatrixEnvConfig,
-} from "./env-auth.js";
+import { resolveGlobalMatrixEnvConfig, resolveScopedMatrixEnvConfig } from "./env-auth.js";
 import { repairCurrentTokenStorageMetaDeviceId } from "./storage.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
-import {
-  resolveValidatedMatrixHomeserverUrl,
-  validateMatrixHomeserverUrl,
-} from "./url-validation.js";
+import { resolveValidatedMatrixHomeserverUrl } from "./url-validation.js";
 
 type MatrixAuthClientDeps = {
   MatrixClient: typeof import("../sdk.js").MatrixClient;

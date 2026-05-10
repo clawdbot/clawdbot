@@ -4,9 +4,9 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import { parseConfiguredModelVisibilityEntries } from "../../agents/model-selection-shared.js";
 import {
   buildConfiguredModelCatalog,
-  buildAllowedModelSet,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
@@ -14,6 +14,10 @@ import {
   resolveReasoningDefault,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
+import {
+  createModelVisibilityPolicy,
+  type ModelVisibilityPolicy,
+} from "../../agents/model-visibility-policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -24,7 +28,10 @@ export {
   resolveModelDirectiveSelection,
   type ModelDirectiveSelection,
 } from "./model-selection-directive.js";
-import { resolveStoredModelOverride } from "./stored-model-override.js";
+import {
+  isStaleHeartbeatAutoFallbackOverride,
+  resolveStoredModelOverride,
+} from "./stored-model-override.js";
 
 type ModelCatalog = ModelCatalogEntry[];
 
@@ -91,12 +98,15 @@ export async function createModelSelectionState(params: {
   storePath?: string;
   defaultProvider: string;
   defaultModel: string;
+  primaryProvider?: string;
+  primaryModel?: string;
   provider: string;
   model: string;
   hasModelDirective: boolean;
   /** True when heartbeat.model was explicitly resolved for this run.
    *  In that case, skip session-stored overrides so the heartbeat selection wins. */
   hasResolvedHeartbeatModelOverride?: boolean;
+  isHeartbeat?: boolean;
 }): Promise<ModelSelectionState> {
   const timingEnabled = shouldLogModelSelectionTiming();
   const startMs = timingEnabled ? Date.now() : 0;
@@ -123,13 +133,30 @@ export async function createModelSelectionState(params: {
 
   let provider = params.provider;
   let model = params.model;
+  const primaryProvider = params.primaryProvider ?? defaultProvider;
+  const primaryModel = params.primaryModel ?? defaultModel;
 
   const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
+  const visibility = parseConfiguredModelVisibilityEntries({ cfg });
+  const defaultProviderVisibleByWildcard = visibility.providerWildcards.has(
+    normalizeProviderId(defaultProvider),
+  );
   const configuredModelCatalog = buildConfiguredModelCatalog({ cfg });
-  const needsModelCatalog = params.hasModelDirective;
+  const needsModelCatalog =
+    params.hasModelDirective ||
+    Boolean(
+      hasAllowlist && visibility.providerWildcards.size > 0 && !defaultProviderVisibleByWildcard,
+    );
 
   let allowedModelKeys = new Set<string>();
   let allowedModelCatalog: ModelCatalog = configuredModelCatalog;
+  let visibilityPolicy: ModelVisibilityPolicy = createModelVisibilityPolicy({
+    cfg,
+    catalog: configuredModelCatalog,
+    defaultProvider,
+    defaultModel,
+    agentId: params.agentId,
+  });
   let modelCatalog: ModelCatalog | null = null;
   let resetModelOverride = false;
   let resetModelOverrideRef: string | undefined;
@@ -139,33 +166,46 @@ export async function createModelSelectionState(params: {
     overrideProvider: sessionEntry?.providerOverride,
     overrideModel: sessionEntry?.modelOverride,
   });
+  const directStoredModelOverride = directStoredOverride
+    ? { ...directStoredOverride, source: "session" as const }
+    : null;
+  const staleHeartbeatAutoFallbackOverride = isStaleHeartbeatAutoFallbackOverride({
+    isHeartbeat: params.isHeartbeat,
+    hasResolvedHeartbeatModelOverride: params.hasResolvedHeartbeatModelOverride,
+    sessionEntry,
+    storedOverride: directStoredModelOverride,
+    defaultProvider,
+    defaultModel,
+    primaryProvider: params.primaryProvider,
+    primaryModel: params.primaryModel,
+  });
 
   if (needsModelCatalog) {
     modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
     logStage("catalog-loaded", `entries=${modelCatalog.length}`);
-    const allowed = buildAllowedModelSet({
+    visibilityPolicy = createModelVisibilityPolicy({
       cfg,
       catalog: modelCatalog,
       defaultProvider,
       defaultModel,
       agentId: params.agentId,
     });
-    allowedModelCatalog = allowed.allowedCatalog;
-    allowedModelKeys = allowed.allowedKeys;
+    allowedModelCatalog = visibilityPolicy.allowedCatalog;
+    allowedModelKeys = visibilityPolicy.allowedKeys;
     logStage(
       "allowlist-built",
       `allowed=${allowedModelCatalog.length} keys=${allowedModelKeys.size}`,
     );
   } else if (hasAllowlist) {
-    const allowed = buildAllowedModelSet({
+    visibilityPolicy = createModelVisibilityPolicy({
       cfg,
       catalog: configuredModelCatalog,
       defaultProvider,
       defaultModel,
       agentId: params.agentId,
     });
-    allowedModelCatalog = allowed.allowedCatalog;
-    allowedModelKeys = allowed.allowedKeys;
+    allowedModelCatalog = visibilityPolicy.allowedCatalog;
+    allowedModelKeys = visibilityPolicy.allowedKeys;
     logStage(
       "configured-allowlist-built",
       `allowed=${allowedModelCatalog.length} keys=${allowedModelKeys.size}`,
@@ -180,10 +220,11 @@ export async function createModelSelectionState(params: {
       directStoredOverride.model,
     );
     const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
-    if (allowedModelKeys.size > 0 && !allowedModelKeys.has(key)) {
+    if (staleHeartbeatAutoFallbackOverride || !visibilityPolicy.allowsKey(key)) {
       const { updated } = applyModelOverrideToSessionEntry({
         entry: sessionEntry,
-        selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+        selection: { provider: primaryProvider, model: primaryModel, isDefault: true },
+        preserveAuthProfileOverride: staleHeartbeatAutoFallbackOverride,
       });
       if (updated) {
         sessionStore[sessionKey] = sessionEntry;
@@ -201,6 +242,23 @@ export async function createModelSelectionState(params: {
       }
     }
   }
+  if (staleHeartbeatAutoFallbackOverride) {
+    const normalizedCurrentSelection = normalizeModelRef(provider, model);
+    const currentSelectionKey = modelKey(
+      normalizedCurrentSelection.provider,
+      normalizedCurrentSelection.model,
+    );
+    const normalizedDirectOverride = directStoredOverride
+      ? normalizeModelRef(directStoredOverride.provider, directStoredOverride.model)
+      : null;
+    const directStoredOverrideKey = normalizedDirectOverride
+      ? modelKey(normalizedDirectOverride.provider, normalizedDirectOverride.model)
+      : undefined;
+    if (currentSelectionKey === directStoredOverrideKey) {
+      provider = primaryProvider;
+      model = primaryModel;
+    }
+  }
 
   const storedOverride = resolveStoredModelOverride({
     sessionEntry,
@@ -210,9 +268,12 @@ export async function createModelSelectionState(params: {
     defaultProvider,
   });
   // Skip stored session model override only when an explicit heartbeat.model
-  // was resolved. Heartbeat runs without heartbeat.model should still inherit
-  // the regular session/parent model override behavior.
-  const skipStoredOverride = params.hasResolvedHeartbeatModelOverride === true;
+  // was resolved. Heartbeats without heartbeat.model still inherit normal
+  // overrides unless a direct auto fallback override is stale for the current
+  // configured default.
+  const skipStoredOverride =
+    params.hasResolvedHeartbeatModelOverride === true ||
+    (staleHeartbeatAutoFallbackOverride && storedOverride?.source === "session");
 
   if (storedOverride?.model && !skipStoredOverride) {
     const normalizedStoredOverride = normalizeModelRef(
@@ -220,10 +281,24 @@ export async function createModelSelectionState(params: {
       storedOverride.model,
     );
     const key = modelKey(normalizedStoredOverride.provider, normalizedStoredOverride.model);
-    if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
+    if (visibilityPolicy.allowsKey(key)) {
       provider = normalizedStoredOverride.provider;
       model = normalizedStoredOverride.model;
     }
+  }
+
+  if (!params.hasModelDirective) {
+    const allowedInitialSelection = visibilityPolicy.resolveSelection({
+      provider,
+      model,
+    });
+    if (!allowedInitialSelection) {
+      throw new Error(
+        `Configured default model "${modelKey(provider, model)}" is not allowed by agents.defaults.models, and no allowed model is available.`,
+      );
+    }
+    provider = allowedInitialSelection.provider;
+    model = allowedInitialSelection.model;
   }
 
   if (sessionEntry && sessionStore && sessionKey && sessionEntry.authProfileOverride) {

@@ -141,10 +141,11 @@ describe("skills-install fallback edge cases", () => {
 
       expect(result.ok, testCase.label).toBe(false);
       testCase.assert(result);
-      expect(runCommandWithTimeoutMock, testCase.label).toHaveBeenCalledWith(
-        ["sudo", "-n", "true"],
-        expect.objectContaining({ timeoutMs: 5_000 }),
-      );
+      const sudoCall = runCommandWithTimeoutMock.mock.calls[0] as
+        | [string[], { timeoutMs?: number }]
+        | undefined;
+      expect(sudoCall?.[0], testCase.label).toEqual(["sudo", "-n", "true"]);
+      expect(sudoCall?.[1]?.timeoutMs, testCase.label).toBe(5_000);
       assertNoAptGetFallbackCalls();
     }
   });
@@ -204,16 +205,16 @@ describe("skills-install fallback edge cases", () => {
       });
 
       expect(result.ok).toBe(true);
-      expect(runCommandWithTimeoutMock).toHaveBeenNthCalledWith(
-        1,
-        ["/safe/homebrew/bin/brew", "install", "go"],
-        expect.objectContaining({ timeoutMs: 300_000 }),
-      );
-      expect(runCommandWithTimeoutMock).toHaveBeenNthCalledWith(
-        2,
-        ["/safe/homebrew/bin/brew", "--prefix"],
-        expect.objectContaining({ timeoutMs: 30_000 }),
-      );
+      const brewInstallCall = runCommandWithTimeoutMock.mock.calls[0] as
+        | [string[], { timeoutMs?: number }]
+        | undefined;
+      const brewPrefixCall = runCommandWithTimeoutMock.mock.calls[1] as
+        | [string[], { timeoutMs?: number }]
+        | undefined;
+      expect(brewInstallCall?.[0]).toEqual(["/safe/homebrew/bin/brew", "install", "go"]);
+      expect(brewInstallCall?.[1]?.timeoutMs).toBe(300_000);
+      expect(brewPrefixCall?.[0]).toEqual(["/safe/homebrew/bin/brew", "--prefix"]);
+      expect(brewPrefixCall?.[1]?.timeoutMs).toBe(30_000);
       const finalCall = runCommandWithTimeoutMock.mock.calls.at(-1) as
         | [string[], { env?: NodeJS.ProcessEnv }]
         | undefined;
@@ -256,15 +257,11 @@ describe("skills-install fallback edge cases", () => {
       });
 
       expect(result.ok).toBe(true);
-      expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
-        ["uv", "tool", "install", "example-package"],
-        expect.objectContaining({
-          timeoutMs: 10_000,
-        }),
-      );
       const firstCall = runCommandWithTimeoutMock.mock.calls[0] as
         | [string[], { timeoutMs?: number; env?: Record<string, string | undefined> }]
         | undefined;
+      expect(firstCall?.[0]).toEqual(["uv", "tool", "install", "example-package"]);
+      expect(firstCall?.[1]?.timeoutMs).toBe(10_000);
       const envArg = firstCall?.[1]?.env;
       expect(envArg).toBeUndefined();
     } finally {

@@ -742,6 +742,7 @@ export function createImageGenerateTool(options?: {
         inputImages,
         timeoutMs,
         providerOptions,
+        ssrfPolicy: remoteMediaSsrfPolicy,
       });
       const ignoredOverrides = result.ignoredOverrides ?? [];
       const displayProvider = sanitizeInlineDirectiveText(result.provider);

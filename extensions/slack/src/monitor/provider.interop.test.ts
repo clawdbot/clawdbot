@@ -275,7 +275,7 @@ describe("createSlackBoltApp", () => {
     expect(eagerAuthTestCalls).toBe(0);
   });
 
-  it("suppresses Slack's redundant pong timeout warning while forwarding other SDK warnings", () => {
+  it("suppresses Slack's redundant heartbeat timeout warnings while forwarding other SDK warnings", () => {
     const warnCalls: unknown[][] = [];
     const logger = createSlackSocketModeLogger({
       debug: () => {},
@@ -286,6 +286,7 @@ describe("createSlackBoltApp", () => {
 
     logger.setName("SlackWebSocket:1");
     logger.warn("A pong wasn't received from the server before the timeout of 15000ms!");
+    logger.warn("A ping wasn't received from the server before the timeout of 30000ms!");
     logger.warn("The logLevel given to Socket Mode was ignored as you also gave logger");
     logger.warn("another socket warning");
 

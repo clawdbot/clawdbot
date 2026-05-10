@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "../utils.js";
 import { applyMergePatch } from "./merge-patch.js";
-import { normalizeAgentModelRefForConfig } from "./model-input.js";
+import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -102,6 +102,17 @@ function formatConfigPath(path: string[]): string {
 function getPathValue(value: unknown, path: string[]): unknown {
   let current = value;
   for (const segment of path) {
+    if (Array.isArray(current)) {
+      if (!isNumericPathSegment(segment)) {
+        return undefined;
+      }
+      const index = Number.parseInt(segment, 10);
+      if (!Number.isFinite(index) || index < 0 || index >= current.length) {
+        return undefined;
+      }
+      current = current[index];
+      continue;
+    }
     if (!isRecord(current)) {
       return undefined;
     }
@@ -114,10 +125,22 @@ function setPathValue(value: unknown, path: string[], nextValue: unknown): unkno
   if (path.length === 0) {
     return cloneUnknown(nextValue);
   }
+  const [head, ...tail] = path;
+  if (Array.isArray(value)) {
+    if (!isNumericPathSegment(head)) {
+      return value;
+    }
+    const index = Number.parseInt(head, 10);
+    if (!Number.isFinite(index) || index < 0 || index >= value.length) {
+      return value;
+    }
+    const next = [...value];
+    next[index] = setPathValue(value[index], tail, nextValue);
+    return next;
+  }
   if (!isRecord(value)) {
     return value;
   }
-  const [head, ...tail] = path;
   return {
     ...value,
     [head]: setPathValue(value[head], tail, nextValue),
@@ -142,11 +165,32 @@ function isIncludeOwnedPath(rootAuthoredConfig: unknown, path: string[]): boolea
   );
 }
 
+function findOverlappingIncludeOwnedPath(
+  rootAuthoredConfig: unknown,
+  path: string[],
+): string[] | undefined {
+  return collectIncludeOwnedPaths(rootAuthoredConfig).find(
+    (includePath) => pathStartsWith(path, includePath) || pathStartsWith(includePath, path),
+  );
+}
+
 function setPathValueCreatingParents(value: unknown, path: string[], nextValue: unknown): unknown {
   if (path.length === 0) {
     return cloneUnknown(nextValue);
   }
   const [head, ...tail] = path;
+  if (Array.isArray(value) || isNumericPathSegment(head)) {
+    if (!isNumericPathSegment(head)) {
+      return value;
+    }
+    const index = Number.parseInt(head, 10);
+    if (!Number.isFinite(index) || index < 0) {
+      return value;
+    }
+    const next = Array.isArray(value) ? [...value] : [];
+    next[index] = setPathValueCreatingParents(next[index], tail, nextValue);
+    return next;
+  }
   const record = isRecord(value) ? value : {};
   return {
     ...record,
@@ -258,6 +302,58 @@ function preserveAuthoredAgentParams(params: {
   return next;
 }
 
+function normalizeAgentModelConfigForWrite(value: unknown): unknown {
+  if (typeof value === "string") {
+    const normalized = normalizeAgentModelRefForConfig(value);
+    return normalized === value ? value : normalized;
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  let mutated = false;
+  const next: Record<string, unknown> = { ...value };
+  if (typeof value.primary === "string") {
+    const primary = normalizeAgentModelRefForConfig(value.primary);
+    if (primary !== value.primary) {
+      next.primary = primary;
+      mutated = true;
+    }
+  }
+  if (Array.isArray(value.fallbacks)) {
+    const fallbacks = value.fallbacks.map((fallback) =>
+      typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
+    );
+    if (!isDeepStrictEqual(fallbacks, value.fallbacks)) {
+      next.fallbacks = fallbacks;
+      mutated = true;
+    }
+  }
+  return mutated ? next : value;
+}
+
+function normalizeAgentDefaultModelRefsForWrite(config: unknown): unknown {
+  const defaults = getPathValue(config, ["agents", "defaults"]);
+  if (!isRecord(defaults)) {
+    return config;
+  }
+
+  let next = config;
+  if (Object.prototype.hasOwnProperty.call(defaults, "model")) {
+    const normalizedModel = normalizeAgentModelConfigForWrite(defaults.model);
+    if (normalizedModel !== defaults.model) {
+      next = setPathValue(next, ["agents", "defaults", "model"], normalizedModel);
+    }
+  }
+  if (isRecord(defaults.models)) {
+    const normalizedModels = normalizeAgentModelMapForConfig(defaults.models);
+    if (normalizedModels !== defaults.models) {
+      next = setPathValue(next, ["agents", "defaults", "models"], normalizedModels);
+    }
+  }
+  return next;
+}
+
 function preserveUntouchedIncludes(params: {
   patch: unknown;
   rootAuthoredConfig: unknown;
@@ -277,33 +373,158 @@ function preserveUntouchedIncludes(params: {
   return next;
 }
 
+function hasPathValue(value: unknown, path: readonly string[]): boolean {
+  if (path.length === 0) {
+    return true;
+  }
+  const [head, ...tail] = path;
+  if (Array.isArray(value)) {
+    if (!isNumericPathSegment(head)) {
+      return false;
+    }
+    const index = Number.parseInt(head, 10);
+    if (!Number.isFinite(index) || index < 0 || index >= value.length) {
+      return false;
+    }
+    return tail.length === 0 || hasPathValue(value[index], tail);
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (isBlockedObjectKey(head) || !Object.prototype.hasOwnProperty.call(value, head)) {
+    return false;
+  }
+  return tail.length === 0 || hasPathValue(value[head], tail);
+}
+
+function mergeMissingExplicitValues(
+  currentValue: unknown,
+  explicitValue: unknown,
+): {
+  changed: boolean;
+  value: unknown;
+} {
+  if (!isRecord(currentValue) || !isRecord(explicitValue)) {
+    if (!Array.isArray(currentValue) || !Array.isArray(explicitValue)) {
+      return { changed: false, value: currentValue };
+    }
+    let changed = false;
+    const next = [...currentValue];
+    for (const [key, childExplicitValue] of Object.entries(explicitValue)) {
+      const index = Number.parseInt(key, 10);
+      if (!Number.isFinite(index) || index < 0) {
+        continue;
+      }
+      if (index >= next.length || next[index] === undefined) {
+        next[index] = cloneUnknown(childExplicitValue);
+        changed = true;
+        continue;
+      }
+      const childMerged = mergeMissingExplicitValues(next[index], childExplicitValue);
+      if (childMerged.changed) {
+        next[index] = childMerged.value;
+        changed = true;
+      }
+    }
+    return { changed, value: changed ? next : currentValue };
+  }
+  let changed = false;
+  const next: Record<string, unknown> = { ...currentValue };
+  for (const [key, childExplicitValue] of Object.entries(explicitValue)) {
+    if (isBlockedObjectKey(key)) {
+      continue;
+    }
+    if (!Object.prototype.hasOwnProperty.call(next, key)) {
+      next[key] = cloneUnknown(childExplicitValue);
+      changed = true;
+      continue;
+    }
+    const childMerged = mergeMissingExplicitValues(next[key], childExplicitValue);
+    if (childMerged.changed) {
+      next[key] = childMerged.value;
+      changed = true;
+    }
+  }
+  return { changed, value: changed ? next : currentValue };
+}
+
+export function injectExplicitlySetPaths(params: {
+  valueSource: unknown;
+  persistedCandidate: unknown;
+  explicitSetPaths?: readonly (readonly string[])[];
+  rootAuthoredConfig?: unknown;
+}): unknown {
+  if (!params.explicitSetPaths || params.explicitSetPaths.length === 0) {
+    return params.persistedCandidate;
+  }
+
+  let next = params.persistedCandidate;
+  for (const path of params.explicitSetPaths) {
+    if (path.length === 0 || path.some(isBlockedObjectKey)) {
+      continue;
+    }
+    const includeOwnedPath = params.rootAuthoredConfig
+      ? findOverlappingIncludeOwnedPath(params.rootAuthoredConfig, [...path])
+      : undefined;
+    if (includeOwnedPath) {
+      throw new Error(
+        `Config write would flatten $include-owned config at ${formatConfigPath(
+          includeOwnedPath,
+        )}; edit that include file directly or remove the $include first.`,
+      );
+    }
+    const nextValue = getPathValue(params.valueSource, [...path]);
+    if (nextValue === undefined) {
+      continue;
+    }
+    if (!hasPathValue(next, path)) {
+      next = setPathValueCreatingParents(next, [...path], nextValue);
+      continue;
+    }
+    const merged = mergeMissingExplicitValues(getPathValue(next, [...path]), nextValue);
+    if (merged.changed) {
+      next = setPathValue(next, [...path], merged.value);
+    }
+  }
+  return next;
+}
+
 export function resolvePersistCandidateForWrite(params: {
   runtimeConfig: unknown;
   sourceConfig: unknown;
   nextConfig: unknown;
   rootAuthoredConfig?: unknown;
   unsetPaths?: readonly string[][];
+  explicitSetPaths?: readonly (readonly string[])[];
+  explicitSetValueSource?: unknown;
 }): unknown {
   const patch = createMergePatch(params.runtimeConfig, params.nextConfig);
   const projectedSource = projectSourceOntoRuntimeShape(params.sourceConfig, params.runtimeConfig);
   const rootAuthoredConfig = params.rootAuthoredConfig ?? params.sourceConfig;
-  const persisted = preserveUntouchedIncludes({
+  const persistedBase = preserveUntouchedIncludes({
     patch,
     rootAuthoredConfig,
     persistedCandidate: applyMergePatch(projectedSource, patch),
+  });
+  const persisted = injectExplicitlySetPaths({
+    valueSource: params.explicitSetValueSource ?? params.nextConfig,
+    persistedCandidate: persistedBase,
+    explicitSetPaths: params.explicitSetPaths,
+    rootAuthoredConfig,
   });
   const withSchema = preserveRootSchemaUri({
     rootAuthoredConfig,
     nextConfig: params.nextConfig,
     persistedCandidate: persisted,
   });
-  return preserveAuthoredAgentParams({
+  const withAuthoredParams = preserveAuthoredAgentParams({
     sourceConfig: params.sourceConfig,
     nextConfig: params.nextConfig,
     rootAuthoredConfig,
     persistedCandidate: withSchema,
     unsetPaths: params.unsetPaths,
   });
+  return normalizeAgentDefaultModelRefsForWrite(withAuthoredParams);
 }
 
 function readRootSchemaUri(value: unknown): string | undefined {

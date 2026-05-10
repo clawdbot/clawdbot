@@ -109,7 +109,8 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain('"all-since-"');
     expect(workflow).toContain("npm-onboard-channel-agent gateway-network config-reload");
     expect(workflow).toContain("npm-onboard-channel-agent doctor-switch");
-    expect(workflow).toContain("update-channel-switch update-corrupt-plugin upgrade-survivor");
+    expect(workflow).toContain("update-channel-switch skill-install update-corrupt-plugin");
+    expect(workflow).toContain("update-corrupt-plugin upgrade-survivor");
     expect(workflow).toContain("published-upgrade-survivor");
     expect(workflow).toContain("published-upgrade-survivor update-restart-auth");
     expect(workflow).toContain("plugins-offline plugin-update");
@@ -230,7 +231,10 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("node .release-harness/scripts/docker-e2e.mjs github-outputs");
     expect(workflow).toContain("bash .release-harness/scripts/ci-docker-pull-retry.sh");
     const prepareDockerImage = workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image");
-    expect(workflowStep(prepareDockerImage, "Plan Docker E2E images").env).toMatchObject({
+    expect(workflowStep(prepareDockerImage, "Plan Docker E2E images").env).toEqual({
+      INCLUDE_OPENWEBUI: "${{ inputs.include_openwebui }}",
+      INCLUDE_RELEASE_PATH_SUITES: "${{ inputs.include_release_path_suites }}",
+      LANES: "${{ inputs.docker_lanes }}",
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "${{ inputs.published_upgrade_survivor_baseline }}",
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS:
         "${{ inputs.published_upgrade_survivor_baselines }}",
@@ -356,6 +360,8 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       "inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id",
     );
+    expect(workflow).not.toContain("openai-ws-stream-live-e2e");
+    expect(workflow).not.toContain("src/agents/openai-ws-stream.e2e.test.ts");
     expect(workflow).toContain("suite_id: live-gateway-advisory-docker-deepseek-fireworks");
     expect(workflow).toContain("suite_id: live-gateway-advisory-docker-opencode-openrouter");
     expect(workflow).toContain("suite_id: live-gateway-advisory-docker-xai-zai");
@@ -367,7 +373,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1");
-    expect((workflow.match(/service_tier=\\"priority\\"/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect((workflow.match(/service_tier=\\"fast\\"/g) ?? []).length).toBeGreaterThanOrEqual(2);
     expect(workflow).not.toContain(
       'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","--skip-git-repo-check"]',
     );
@@ -549,11 +555,11 @@ describe("package artifact reuse", () => {
       "artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}",
     );
     expect(workflow).toContain(
-      "package_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}",
+      "package_sha256: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.package_sha256 || '' }}",
     );
     expect(workflow).toContain("suite_profile: custom");
     expect(workflow).toContain(
-      "docker_lanes: doctor-switch update-channel-switch update-corrupt-plugin upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update",
+      "docker_lanes: doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update",
     );
     expect(workflow).toContain(
       "published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}",
@@ -643,6 +649,21 @@ describe("package artifact reuse", () => {
     expect(workflow).not.toContain("npm_telegram:");
   });
 
+  it("gives release build steps enough Node heap", () => {
+    for (const workflowPath of [LIVE_E2E_WORKFLOW, RELEASE_CHECKS_WORKFLOW]) {
+      const jobs = readWorkflow(workflowPath).jobs ?? {};
+      for (const [jobName, job] of Object.entries(jobs)) {
+        for (const step of job.steps ?? []) {
+          if (step.run === "pnpm build") {
+            expect(step.env, `${workflowPath}:${jobName}:${step.name}`).toMatchObject({
+              NODE_OPTIONS: "--max-old-space-size=8192",
+            });
+          }
+        }
+      }
+    }
+  });
+
   it("runs full release children from the trusted workflow ref", () => {
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
     const preparePackageJob = workflowJob(
@@ -672,9 +693,14 @@ describe("package artifact reuse", () => {
     expect(npmTelegramJob.if).toContain(
       "inputs.rerun_group == 'all' && inputs.release_profile == 'full'",
     );
-    expect(dispatchStep.env).toMatchObject({
+    expect(dispatchStep.env).toEqual({
+      CHILD_WORKFLOW_REF: "${{ github.ref_name }}",
+      GH_TOKEN: "${{ github.token }}",
       PACKAGE_ARTIFACT_NAME: "${{ needs.prepare_release_package.outputs.artifact_name }}",
+      PACKAGE_SPEC: "${{ inputs.npm_telegram_package_spec }}",
       PREPARE_PACKAGE_RESULT: "${{ needs.prepare_release_package.result }}",
+      PROVIDER_MODE: "${{ inputs.npm_telegram_provider_mode }}",
+      SCENARIO: "${{ inputs.npm_telegram_scenario }}",
       TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
     });
     expectTextToIncludeAll(dispatchStep.run, [
@@ -734,16 +760,18 @@ describe("package artifact reuse", () => {
     const validateStep = workflowStep(job, "Validate inputs and secrets");
     const runStep = workflowStep(job, "Run package Telegram E2E");
 
-    expect(currentRunDownload).toMatchObject({
+    expect(currentRunDownload).toEqual({
       if: "inputs.package_artifact_name != '' && inputs.package_artifact_run_id == ''",
+      name: "Download package-under-test artifact",
       uses: "actions/download-artifact@v8",
       with: {
         name: "${{ inputs.package_artifact_name }}",
         path: ".artifacts/telegram-package-under-test",
       },
     });
-    expect(releaseRunDownload).toMatchObject({
+    expect(releaseRunDownload).toEqual({
       if: "inputs.package_artifact_name != '' && inputs.package_artifact_run_id != ''",
+      name: "Download package-under-test artifact from release run",
       uses: "actions/download-artifact@v8",
       with: {
         "github-token": "${{ github.token }}",

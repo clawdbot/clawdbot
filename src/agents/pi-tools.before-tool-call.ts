@@ -791,6 +791,16 @@ export function isToolWrappedWithBeforeToolCallHook(tool: AnyAgentTool): boolean
   return taggedTool[BEFORE_TOOL_CALL_WRAPPED] === true;
 }
 
+export function copyBeforeToolCallHookMarker(source: AnyAgentTool, target: AnyAgentTool): void {
+  if (!isToolWrappedWithBeforeToolCallHook(source)) {
+    return;
+  }
+  Object.defineProperty(target, BEFORE_TOOL_CALL_WRAPPED, {
+    value: true,
+    enumerable: true,
+  });
+}
+
 export function consumeAdjustedParamsForToolCall(toolCallId: string, runId?: string): unknown {
   const adjustedParamsKey = buildAdjustedParamsKey({ runId, toolCallId });
   const params = adjustedParamsByToolCallId.get(adjustedParamsKey);

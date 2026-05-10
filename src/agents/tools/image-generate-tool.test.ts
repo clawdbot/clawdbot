@@ -120,6 +120,43 @@ function requireImageGenerateTool(tool: ReturnType<typeof createImageGenerateToo
   return tool;
 }
 
+type UnknownMock = { mock: { calls: unknown[][] } };
+
+function mockCallArg(
+  mock: unknown,
+  index: number,
+  label: string,
+  argIndex = 0,
+): Record<string, unknown> {
+  const calls = (mock as UnknownMock).mock?.calls;
+  if (!Array.isArray(calls)) {
+    throw new Error(`Expected ${label} to be a mock`);
+  }
+  const call = calls[index];
+  if (!call) {
+    throw new Error(`Expected ${label} call ${index + 1}`);
+  }
+  return call[argIndex] as Record<string, unknown>;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`Expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+type ImageGenerateTool = NonNullable<ReturnType<typeof createImageGenerateTool>>;
+type ToolResult = Awaited<ReturnType<ImageGenerateTool["execute"]>>;
+
+function resultDetails(result: ToolResult): Record<string, unknown> {
+  return requireRecord(result.details, "tool result details");
+}
+
+function resultText(result: ToolResult): string {
+  return (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+}
+
 function ensureDefaultImageGenerationProvidersStubbed() {
   if (vi.isMockFunction(imageGenerationRuntime.listRuntimeImageGenerationProviders)) {
     return;
@@ -572,26 +609,23 @@ describe("createImageGenerateTool", () => {
       size: "1024x1024",
     });
 
-    expect(generateImage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: {
-          agents: {
-            defaults: {
-              mediaMaxMb: 8,
-              imageGenerationModel: {
-                primary: "openai/gpt-image-1",
-              },
-            },
+    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+    expect(generateArgs.cfg).toEqual({
+      agents: {
+        defaults: {
+          mediaMaxMb: 8,
+          imageGenerationModel: {
+            primary: "openai/gpt-image-1",
           },
         },
-        prompt: "A cat wearing sunglasses",
-        agentDir: "/tmp/agent",
-        modelOverride: "openai/gpt-image-1",
-        size: "1024x1024",
-        count: 2,
-        inputImages: [],
-      }),
-    );
+      },
+    });
+    expect(generateArgs.prompt).toBe("A cat wearing sunglasses");
+    expect(generateArgs.agentDir).toBe("/tmp/agent");
+    expect(generateArgs.modelOverride).toBe("openai/gpt-image-1");
+    expect(generateArgs.size).toBe("1024x1024");
+    expect(generateArgs.count).toBe(2);
+    expect(generateArgs.inputImages).toEqual([]);
     expect(saveMediaBuffer).toHaveBeenNthCalledWith(
       1,
       Buffer.from("png-1"),
@@ -608,26 +642,17 @@ describe("createImageGenerateTool", () => {
       8 * 1024 * 1024,
       "cats/output.png",
     );
-    expect(result).toMatchObject({
-      content: [
-        {
-          type: "text",
-          text: expect.stringContaining("Generated 2 images with openai/gpt-image-1."),
-        },
-      ],
-      details: {
-        provider: "openai",
-        model: "gpt-image-1",
-        count: 2,
-        media: {
-          mediaUrls: ["/tmp/generated-1.png", "/tmp/generated-2.png"],
-        },
-        paths: ["/tmp/generated-1.png", "/tmp/generated-2.png"],
-        filename: "cats/output.png",
-        revisedPrompts: ["A more cinematic cat"],
-      },
-    });
-    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+    const text = resultText(result);
+    expect(text).toContain("Generated 2 images with openai/gpt-image-1.");
+    const details = resultDetails(result);
+    const media = requireRecord(details.media, "media details");
+    expect(details.provider).toBe("openai");
+    expect(details.model).toBe("gpt-image-1");
+    expect(details.count).toBe(2);
+    expect(media.mediaUrls).toEqual(["/tmp/generated-1.png", "/tmp/generated-2.png"]);
+    expect(details.paths).toEqual(["/tmp/generated-1.png", "/tmp/generated-2.png"]);
+    expect(details.filename).toBe("cats/output.png");
+    expect(details.revisedPrompts).toEqual(["A more cinematic cat"]);
     expect(text).toContain("MEDIA:/tmp/generated-1.png");
     expect(text).toContain("MEDIA:/tmp/generated-2.png");
   });
@@ -677,20 +702,10 @@ describe("createImageGenerateTool", () => {
       timeoutMs: 12_345,
     });
 
-    expect(generateImage).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        timeoutMs: 180_000,
-      }),
-    );
-    expect(generateImage).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        timeoutMs: 12_345,
-      }),
-    );
-    expect(defaultResult.details).toMatchObject({ timeoutMs: 180_000 });
-    expect(overrideResult.details).toMatchObject({ timeoutMs: 12_345 });
+    expect(mockCallArg(generateImage, 0, "generateImage").timeoutMs).toBe(180_000);
+    expect(mockCallArg(generateImage, 1, "generateImage").timeoutMs).toBe(12_345);
+    expect(resultDetails(defaultResult).timeoutMs).toBe(180_000);
+    expect(resultDetails(overrideResult).timeoutMs).toBe(12_345);
   });
 
   it("forwards output hints and OpenAI provider options", async () => {
@@ -727,26 +742,20 @@ describe("createImageGenerateTool", () => {
       },
     });
 
-    expect(generateImage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        quality: "low",
-        outputFormat: "jpeg",
-        providerOptions: {
-          openai: {
-            background: "opaque",
-            moderation: "low",
-            outputCompression: 60,
-            user: "end-user-42",
-          },
-        },
-      }),
-    );
-    expect(result).toMatchObject({
-      details: {
-        quality: "low",
-        outputFormat: "jpeg",
+    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+    expect(generateArgs.quality).toBe("low");
+    expect(generateArgs.outputFormat).toBe("jpeg");
+    expect(generateArgs.providerOptions).toEqual({
+      openai: {
+        background: "opaque",
+        moderation: "low",
+        outputCompression: 60,
+        user: "end-user-42",
       },
     });
+    const details = resultDetails(result);
+    expect(details.quality).toBe("low");
+    expect(details.outputFormat).toBe("jpeg");
   });
 
   it("forwards transparent OpenAI background requests with a PNG output format", async () => {
@@ -779,30 +788,21 @@ describe("createImageGenerateTool", () => {
       },
     });
 
-    expect(generateImage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: expect.objectContaining({
-          agents: expect.objectContaining({
-            defaults: expect.objectContaining({
-              imageGenerationModel: { primary: "openai/gpt-image-1.5" },
-            }),
-          }),
-        }),
-        outputFormat: "png",
-        providerOptions: {
-          openai: {
-            background: "transparent",
-          },
-        },
-      }),
-    );
-    expect(result).toMatchObject({
-      details: {
-        provider: "openai",
-        model: "gpt-image-1.5",
-        outputFormat: "png",
+    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+    const cfg = requireRecord(generateArgs.cfg, "generateImage config");
+    const agents = requireRecord(cfg.agents, "generateImage agents config");
+    const defaults = requireRecord(agents.defaults, "generateImage defaults config");
+    expect(defaults.imageGenerationModel).toEqual({ primary: "openai/gpt-image-1.5" });
+    expect(generateArgs.outputFormat).toBe("png");
+    expect(generateArgs.providerOptions).toEqual({
+      openai: {
+        background: "transparent",
       },
     });
+    const details = resultDetails(result);
+    expect(details.provider).toBe("openai");
+    expect(details.model).toBe("gpt-image-1.5");
+    expect(details.outputFormat).toBe("png");
   });
 
   it("includes MEDIA paths in content text so follow-up replies use the real saved file", async () => {
@@ -866,18 +866,16 @@ describe("createImageGenerateTool", () => {
     );
 
     const result = await tool.execute("call-regression", { prompt: "kodo sawaki zazen" });
-    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+    const text = resultText(result);
 
     expect(text).toContain(
       "MEDIA:/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
     );
-    expect(result.details).toMatchObject({
-      media: {
-        mediaUrls: [
-          "/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
-        ],
-      },
-    });
+    const details = resultDetails(result);
+    const media = requireRecord(details.media, "media details");
+    expect(media.mediaUrls).toEqual([
+      "/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
+    ]);
   });
 
   it("rejects counts outside the supported range", async () => {
@@ -938,18 +936,15 @@ describe("createImageGenerateTool", () => {
       image: "./fixtures/reference.png",
     });
 
-    expect(generateImage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        aspectRatio: undefined,
-        resolution: "4K",
-        inputImages: [
-          expect.objectContaining({
-            buffer: Buffer.from("input-image"),
-            mimeType: "image/png",
-          }),
-        ],
-      }),
-    );
+    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+    expect(generateArgs.aspectRatio).toBeUndefined();
+    expect(generateArgs.resolution).toBe("4K");
+    expect(generateArgs.inputImages).toEqual([
+      {
+        buffer: Buffer.from("input-image"),
+        mimeType: "image/png",
+      },
+    ]);
   });
 
   it("accepts managed inbound reference images for edit mode", async () => {
@@ -963,15 +958,17 @@ describe("createImageGenerateTool", () => {
       image: "media://inbound/reference.png",
     });
 
-    expect(webMedia.loadWebMedia).toHaveBeenCalledWith(
+    const loadArgs = mockCallArg(webMedia.loadWebMedia, 0, "loadWebMedia", 1);
+    expect(mockCallArg(webMedia.loadWebMedia, 0, "loadWebMedia", 0)).toBe(
       "media://inbound/reference.png",
-      expect.any(Object),
     );
+    expect(loadArgs).not.toBeNull();
+    expect(typeof loadArgs).toBe("object");
   });
 
   it("passes web_fetch SSRF policy to remote reference images", async () => {
     stubImageGenerationProviders();
-    stubEditedImageFlow({ width: 1024, height: 1024 });
+    const generateImage = stubEditedImageFlow({ width: 1024, height: 1024 });
     const defaultTool = requireImageGenerateTool(
       createImageGenerateTool({
         config: {
@@ -987,10 +984,10 @@ describe("createImageGenerateTool", () => {
       prompt: "Use this reference.",
       image: "http://198.18.0.153/reference.png",
     });
-    expect(webMedia.loadWebMedia).toHaveBeenLastCalledWith(
-      "http://198.18.0.153/reference.png",
-      expect.not.objectContaining({ ssrfPolicy: expect.anything() }),
-    );
+    const defaultLoadUrl = mockCallArg(webMedia.loadWebMedia, 0, "loadWebMedia", 0);
+    const defaultLoadOptions = mockCallArg(webMedia.loadWebMedia, 0, "loadWebMedia", 1);
+    expect(defaultLoadUrl).toBe("http://198.18.0.153/reference.png");
+    expect(requireRecord(defaultLoadOptions, "loadWebMedia options").ssrfPolicy).toBeUndefined();
 
     const tool = requireImageGenerateTool(
       createImageGenerateTool({
@@ -1009,12 +1006,15 @@ describe("createImageGenerateTool", () => {
       image: "http://198.18.0.153/reference.png",
     });
 
-    expect(webMedia.loadWebMedia).toHaveBeenCalledWith(
-      "http://198.18.0.153/reference.png",
-      expect.objectContaining({
-        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
-      }),
-    );
+    const configuredLoadUrl = mockCallArg(webMedia.loadWebMedia, 1, "loadWebMedia", 0);
+    const configuredLoadOptions = mockCallArg(webMedia.loadWebMedia, 1, "loadWebMedia", 1);
+    expect(configuredLoadUrl).toBe("http://198.18.0.153/reference.png");
+    expect(requireRecord(configuredLoadOptions, "loadWebMedia options").ssrfPolicy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+    });
+    expect(mockCallArg(generateImage, 1, "generateImage").ssrfPolicy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+    });
   });
 
   it("ignores non-finite mediaMaxMb when loading reference images", async () => {
@@ -1041,9 +1041,10 @@ describe("createImageGenerateTool", () => {
       image: "./fixtures/reference.png",
     });
 
-    expect(webMedia.loadWebMedia).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ maxBytes: undefined }),
+    expect(typeof mockCallArg(webMedia.loadWebMedia, 0, "loadWebMedia", 0)).toBe("string");
+    expect(mockCallArg(webMedia.loadWebMedia, 0, "loadWebMedia", 1)).toHaveProperty(
+      "maxBytes",
+      undefined,
     );
   });
 
@@ -1114,25 +1115,19 @@ describe("createImageGenerateTool", () => {
       prompt: "Remove the subject but keep the rest unchanged.",
       image: "./fixtures/reference.png",
     });
-    expect(result).toMatchObject({
-      details: {
-        provider: "openai",
-        model: "gpt-image-1",
-      },
-    });
+    const details = resultDetails(result);
+    expect(details.provider).toBe("openai");
+    expect(details.model).toBe("gpt-image-1");
 
-    expect(generateImage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelOverride: undefined,
-        resolution: undefined,
-        inputImages: [
-          expect.objectContaining({
-            buffer: Buffer.from("input-image"),
-            mimeType: "image/jpeg",
-          }),
-        ],
-      }),
-    );
+    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+    expect(generateArgs.modelOverride).toBeUndefined();
+    expect(generateArgs.resolution).toBeUndefined();
+    expect(generateArgs.inputImages).toEqual([
+      {
+        buffer: Buffer.from("input-image"),
+        mimeType: "image/jpeg",
+      },
+    ]);
   });
 
   it("forwards explicit aspect ratio and supports up to 5 reference images", async () => {
@@ -1148,16 +1143,15 @@ describe("createImageGenerateTool", () => {
       aspectRatio: "16:9",
     });
 
-    expect(generateImage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        autoProviderFallback: false,
-        aspectRatio: "16:9",
-        inputImages: expect.arrayContaining([
-          expect.objectContaining({ buffer: Buffer.from("input-image"), mimeType: "image/png" }),
-        ]),
-      }),
-    );
-    expect(generateImage.mock.calls[0]?.[0].inputImages).toHaveLength(5);
+    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+    expect(generateArgs.autoProviderFallback).toBe(false);
+    expect(generateArgs.aspectRatio).toBe("16:9");
+    const inputImages = generateArgs.inputImages as Array<{ buffer: Buffer; mimeType: string }>;
+    expect(inputImages).toHaveLength(5);
+    expect(inputImages[0]).toEqual({
+      buffer: Buffer.from("input-image"),
+      mimeType: "image/png",
+    });
   });
 
   it("reports ignored unsupported overrides instead of failing", async () => {
@@ -1215,18 +1209,17 @@ describe("createImageGenerateTool", () => {
       prompt: "A lobster at the movies",
       aspectRatio: "1:1",
     });
-    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+    const text = resultText(result);
 
     expect(text).toContain("Generated 1 image with openai/gpt-image-1.");
     expect(text).toContain(
       "Warning: Ignored unsupported overrides for openai/gpt-image-1: aspectRatio=1:1.",
     );
-    expect(result).toMatchObject({
-      details: {
-        warning: "Ignored unsupported overrides for openai/gpt-image-1: aspectRatio=1:1.",
-        ignoredOverrides: [{ key: "aspectRatio", value: "1:1" }],
-      },
-    });
+    const details = resultDetails(result);
+    expect(details.warning).toBe(
+      "Ignored unsupported overrides for openai/gpt-image-1: aspectRatio=1:1.",
+    );
+    expect(details.ignoredOverrides).toEqual([{ key: "aspectRatio", value: "1:1" }]);
   });
 
   it("surfaces normalized image geometry from runtime metadata", async () => {
@@ -1266,20 +1259,19 @@ describe("createImageGenerateTool", () => {
       size: "1280x720",
     });
 
-    expect(result.details).toMatchObject({
-      aspectRatio: "16:9",
-      normalization: {
-        aspectRatio: {
-          applied: "16:9",
-          derivedFrom: "size",
-        },
-      },
-      metadata: {
-        requestedSize: "1280x720",
-        normalizedAspectRatio: "16:9",
+    const details = resultDetails(result);
+    expect(details.aspectRatio).toBe("16:9");
+    expect(details.normalization).toEqual({
+      aspectRatio: {
+        applied: "16:9",
+        derivedFrom: "size",
       },
     });
-    expect(result.details).not.toHaveProperty("size");
+    expect(details.metadata).toEqual({
+      requestedSize: "1280x720",
+      normalizedAspectRatio: "16:9",
+    });
+    expect(details).not.toHaveProperty("size");
   });
 
   it("escapes image-generation summary text before appending tool MEDIA output", async () => {
@@ -1336,7 +1328,7 @@ describe("createImageGenerateTool", () => {
     const result = await tool.execute("call-openai-generate", {
       prompt: "A lobster at the movies",
     });
-    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+    const text = resultText(result);
     const parsed = splitMediaFromOutput(text);
 
     expect(text).toContain(
@@ -1344,13 +1336,12 @@ describe("createImageGenerateTool", () => {
     );
     expect(text).toContain("size=1024x1024\\nMEDIA:/etc/passwd\\t\\u2028\\u0000");
     expect(parsed.mediaUrls).toEqual(["/tmp/generated.png"]);
-    expect(result).toMatchObject({
-      details: {
-        provider: "openai\nMEDIA:/tmp/provider.png",
-        model: "gpt-image-1\nMEDIA:/etc/model.png",
-        ignoredOverrides: [{ key: "size", value: "1024x1024\nMEDIA:/etc/passwd\t\u2028\0" }],
-      },
-    });
+    const details = resultDetails(result);
+    expect(details.provider).toBe("openai\nMEDIA:/tmp/provider.png");
+    expect(details.model).toBe("gpt-image-1\nMEDIA:/etc/model.png");
+    expect(details.ignoredOverrides).toEqual([
+      { key: "size", value: "1024x1024\nMEDIA:/etc/passwd\t\u2028\0" },
+    ]);
   });
 
   it("rejects unsupported aspect ratios", async () => {
@@ -1395,7 +1386,7 @@ describe("createImageGenerateTool", () => {
     );
 
     const result = await tool.execute("call-list", { action: "list" });
-    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+    const text = resultText(result);
 
     expect(text).toContain("google (default gemini-3.1-flash-image-preview)");
     expect(text).toContain("gemini-3.1-flash-image-preview");
@@ -1406,31 +1397,27 @@ describe("createImageGenerateTool", () => {
     );
     expect(text).toContain("editing up to 5 refs");
     expect(text).toContain("aspect ratios 1:1, 16:9");
-    expect(result).toMatchObject({
-      details: {
-        providers: expect.arrayContaining([
-          expect.objectContaining({
-            id: "google",
-            defaultModel: "gemini-3.1-flash-image-preview",
-            authEnvVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-            models: expect.arrayContaining([
-              "gemini-3.1-flash-image-preview",
-              "gemini-3-pro-image-preview",
-            ]),
-            capabilities: expect.objectContaining({
-              edit: expect.objectContaining({
-                enabled: true,
-                maxInputImages: 5,
-              }),
-            }),
-          }),
-          expect.objectContaining({
-            id: "openai",
-            authEnvVars: ["OPENAI_API_KEY"],
-          }),
-        ]),
-      },
+    const details = resultDetails(result);
+    const providers = details.providers as Array<Record<string, unknown>>;
+    const googleProvider = providers.find((provider) => provider.id === "google");
+    const openaiProvider = providers.find((provider) => provider.id === "openai");
+    if (!googleProvider || !openaiProvider) {
+      throw new Error("Expected google and openai provider details");
+    }
+    expect(googleProvider.defaultModel).toBe("gemini-3.1-flash-image-preview");
+    expect(googleProvider.authEnvVars).toEqual(["GEMINI_API_KEY", "GOOGLE_API_KEY"]);
+    expect(googleProvider.models).toEqual([
+      "gemini-3.1-flash-image-preview",
+      "gemini-3-pro-image-preview",
+    ]);
+    const googleCapabilities = requireRecord(googleProvider.capabilities, "google capabilities");
+    expect(googleCapabilities.edit).toEqual({
+      enabled: true,
+      maxInputImages: 5,
+      supportsAspectRatio: true,
+      supportsResolution: true,
     });
+    expect(openaiProvider.authEnvVars).toEqual(["OPENAI_API_KEY"]);
   });
 
   it("skips auth hints for prototype-like provider ids", async () => {
@@ -1469,15 +1456,15 @@ describe("createImageGenerateTool", () => {
     );
 
     const result = await tool.execute("call-list-proto", { action: "list" });
-    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+    const text = resultText(result);
 
     expect(text).toContain("__proto__ (default proto-v1)");
     expect(text).not.toContain("auth: set");
-    expect(result).toMatchObject({
-      details: {
-        providers: [expect.objectContaining({ id: "__proto__", authEnvVars: [] })],
-      },
-    });
+    const details = resultDetails(result);
+    const providers = details.providers as Array<Record<string, unknown>>;
+    expect(providers).toHaveLength(1);
+    expect(providers[0]?.id).toBe("__proto__");
+    expect(providers[0]?.authEnvVars).toEqual([]);
   });
 
   it("rejects provider-specific edit limits before runtime", async () => {
@@ -1567,13 +1554,9 @@ describe("createImageGenerateTool", () => {
       image: "./fixtures/a.png",
       aspectRatio: "16:9",
     });
-    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+    const text = resultText(result);
 
-    expect(generateImage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        aspectRatio: "16:9",
-      }),
-    );
+    expect(mockCallArg(generateImage, 0, "generateImage").aspectRatio).toBe("16:9");
     expect(text).toContain(
       "Warning: Ignored unsupported overrides for fal/fal-ai/flux/dev: aspectRatio=16:9.",
     );

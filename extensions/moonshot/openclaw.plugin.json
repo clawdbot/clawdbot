@@ -33,6 +33,14 @@
     }
   },
   "modelCatalog": {
+    "aliases": {
+      "moonshotai": {
+        "provider": "moonshot"
+      },
+      "moonshot-ai": {
+        "provider": "moonshot"
+      }
+    },
     "providers": {
       "moonshot": {
         "baseUrl": "https://api.moonshot.ai/v1",

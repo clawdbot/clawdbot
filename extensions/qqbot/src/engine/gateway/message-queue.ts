@@ -1,40 +1,10 @@
-/**
- * Per-user concurrent message queue.
- *
- * Messages are serialized per **peer** (one DM user, one group, one guild
- * channel) and processed in parallel across peers up to
- * {@link DEFAULT_MAX_CONCURRENT_USERS}.
- *
- * Group-specific enhancements (added when merging from the standalone build):
- *   - Group peers have a larger queue cap ({@link DEFAULT_GROUP_QUEUE_SIZE})
- *     because groups can burst more chatter than a single DM.
- *   - When a group's queue overflows, bot-authored messages are evicted
- *     preferentially so human messages don't get dropped.
- *   - When draining a group peer with more than one queued message, the
- *     non-command messages are **merged** into one logical turn (see
- *     {@link mergeGroupMessages}). Slash commands are always processed
- *     individually to avoid conflating a "/stop" with surrounding chatter.
- *
- * The module is self-contained: the only injected dependency is the
- * logger / abort probe supplied via {@link MessageQueueContext}.
- */
-
 import { formatErrorMessage } from "../utils/format.js";
 
-// ============ Queue limits ============
-
-/** Global cap across all peers. */
 const DEFAULT_GLOBAL_QUEUE_SIZE = 1000;
-/** Per-DM / per-channel cap. */
 const DEFAULT_PER_PEER_QUEUE_SIZE = 20;
-/** Per-group cap — larger because groups burst more. */
 const DEFAULT_GROUP_QUEUE_SIZE = 50;
-/** Parallel fanout across peers. */
 const DEFAULT_MAX_CONCURRENT_USERS = 10;
 
-// ============ Types ============
-
-/** Mention entry carried on group messages (subset of QQ's shape). */
 export interface QueuedMention {
   scope?: "all" | "single";
   id?: string;
@@ -46,28 +16,15 @@ export interface QueuedMention {
   is_you?: boolean;
 }
 
-/**
- * Metadata attached to a merged group turn.
- *
- * When the drainer folds multiple non-command messages into one
- * representative turn, the merge information lands here instead of
- * being scattered across `_` -prefixed fields on {@link QueuedMessage}.
- */
 interface QueuedMergeInfo {
-  /** Number of original messages folded in. Always >= 2. */
   count: number;
-  /** Original messages in insertion order — `messages.at(-1)` is "current". */
   messages: readonly QueuedMessage[];
 }
 
-/**
- * Queue item used for asynchronous message handling without blocking heartbeats.
- */
 export interface QueuedMessage {
   type: "c2c" | "guild" | "dm" | "group";
   senderId: string;
   senderName?: string;
-  /** Whether the sender is another bot. Used by the eviction policy. */
   senderIsBot?: boolean;
   content: string;
   messageId: string;
@@ -82,13 +39,9 @@ export interface QueuedMessage {
     voice_wav_url?: string;
     asr_refer_text?: string;
   }>;
-  /** refIdx of the quoted message. */
   refMsgIdx?: string;
-  /** refIdx assigned to this message for future quoting. */
   msgIdx?: string;
-  /** QQ message type (103 = quote). */
   msgType?: number;
-  /** Referenced message elements (for quote messages). */
   msgElements?: Array<{
     msg_idx?: string;
     content?: string;
@@ -103,26 +56,12 @@ export interface QueuedMessage {
       asr_refer_text?: string;
     }>;
   }>;
-  /**
-   * Raw event type (e.g. `GROUP_AT_MESSAGE_CREATE`). Used by the gate to
-   * detect explicit @bot without parsing `mentions` ourselves, and by
-   * the group merger to decide whether the merged result represents an
-   * @bot turn.
-   */
   eventType?: string;
-  /** @mentions list from the raw event. */
   mentions?: QueuedMention[];
-  /** Scene info (source channel + ext bag). */
   messageScene?: { source?: string; ext?: string[] };
-
-  /**
-   * Set only on merged group turns; absent on single-message turns.
-   * See {@link mergeGroupMessages} for merge semantics.
-   */
   merge?: QueuedMergeInfo;
 }
 
-/** Convenience predicate: is this a merged multi-message turn? */
 export function isMergedTurn(msg: QueuedMessage): msg is QueuedMessage & {
   merge: QueuedMergeInfo;
 } {
@@ -136,19 +75,13 @@ interface MessageQueueContext {
     error: (msg: string, meta?: Record<string, unknown>) => void;
     debug?: (msg: string, meta?: Record<string, unknown>) => void;
   };
-  /** Abort-state probe supplied by the caller. */
   isAborted: () => boolean;
-  /** Per-group queue cap. Defaults to {@link DEFAULT_GROUP_QUEUE_SIZE}. */
   groupQueueSize?: number;
-  /** Per-DM / per-channel queue cap. Defaults to {@link DEFAULT_PER_PEER_QUEUE_SIZE}. */
   peerQueueSize?: number;
-  /** Global queue cap. Defaults to {@link DEFAULT_GLOBAL_QUEUE_SIZE}. */
   globalQueueSize?: number;
-  /** Max concurrent peers. Defaults to {@link DEFAULT_MAX_CONCURRENT_USERS}. */
   maxConcurrentUsers?: number;
 }
 
-/** Snapshot of the queue state for diagnostics. */
 interface QueueSnapshot {
   totalPending: number;
   activeUsers: number;
@@ -161,20 +94,14 @@ interface MessageQueue {
   startProcessor: (handleMessageFn: (msg: QueuedMessage) => Promise<void>) => void;
   getSnapshot: (senderPeerId: string) => QueueSnapshot;
   getMessagePeerId: (msg: QueuedMessage) => string;
-  /** Clear a user's queued messages and return how many were dropped. */
   clearUserQueue: (peerId: string) => number;
-  /** Execute one message immediately, bypassing the queue for urgent commands. */
   executeImmediate: (msg: QueuedMessage) => void;
 }
 
-// ============ Group merging ============
-
-/** Return true when the peer id refers to a group-like conversation. */
 function isGroupPeer(peerId: string): boolean {
   return peerId.startsWith("group:") || peerId.startsWith("guild:");
 }
 
-/** Slash-command test used by {@link drainGroupBatch}. */
 function isSlashCommand(msg: QueuedMessage): boolean {
   return (msg.content ?? "").trim().startsWith("/");
 }
@@ -264,11 +191,6 @@ export function mergeGroupMessages(batch: QueuedMessage[]): QueuedMessage {
   };
 }
 
-// ============ Queue factory ============
-
-/**
- * Create a per-user concurrent queue with built-in group enhancements.
- */
 export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
   const { accountId: _accountId, log } = ctx;
   const globalQueueSize = ctx.globalQueueSize ?? DEFAULT_GLOBAL_QUEUE_SIZE;
@@ -291,13 +213,6 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
     return `dm:${msg.senderId}`;
   };
 
-  /**
-   * Evict one message from an over-full queue.
-   *
-   * For group peers we prefer to drop a bot-authored message so human
-   * input never gets lost. Falling back to dropping the oldest keeps the
-   * queue bounded when all members are bots.
-   */
   const evictOne = (queue: QueuedMessage[], isGroup: boolean): QueuedMessage | undefined => {
     if (isGroup) {
       const botIdx = queue.findIndex((m) => m.senderIsBot);
@@ -308,7 +223,6 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
     return queue.shift();
   };
 
-  /** Run a single message, capturing errors in the log. */
   const processOne = async (msg: QueuedMessage, peerId: string, label: string): Promise<void> => {
     try {
       await handleMessageFnRef!(msg);
@@ -317,11 +231,6 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
     }
   };
 
-  /**
-   * Drain a group's batch:
-   *   - slash commands are processed one by one (order preserved);
-   *   - the remaining messages are merged into a single turn.
-   */
   const drainGroupBatch = async (batch: QueuedMessage[], peerId: string): Promise<void> => {
     const commands: QueuedMessage[] = [];
     const normal: QueuedMessage[] = [];
@@ -349,7 +258,6 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
     }
   };
 
-  /** Process one peer's queue serially. */
   const drainUserQueue = async (peerId: string): Promise<void> => {
     if (activeUsers.has(peerId)) {
       return;
@@ -370,7 +278,6 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
 
     try {
       while (queue.length > 0 && !ctx.isAborted()) {
-        // Group peers with more than one queued message: batch-merge.
         if (isGroup && queue.length > 1 && handleMessageFnRef) {
           const batch = queue.splice(0);
           totalEnqueued = Math.max(0, totalEnqueued - batch.length);
@@ -378,7 +285,6 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
           continue;
         }
 
-        // Single-message (or non-group) path.
         const msg = queue.shift()!;
         totalEnqueued = Math.max(0, totalEnqueued - 1);
         if (handleMessageFnRef) {
@@ -389,7 +295,6 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
       activeUsers.delete(peerId);
       userQueues.delete(peerId);
 
-      // Fill any freed concurrency slots.
       for (const [waitingPeerId, waitingQueue] of userQueues) {
         if (activeUsers.size >= maxConcurrentUsers) {
           break;

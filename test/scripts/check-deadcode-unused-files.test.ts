@@ -43,7 +43,9 @@ src/a.ts: src/a.ts
   it("reports unexpected and stale allowlist entries", () => {
     expect(
       compareUnusedFilesToAllowlist(["src/a.ts", "src/new.ts"], ["src/a.ts", "src/old.ts"]),
-    ).toMatchObject({
+    ).toStrictEqual({
+      actual: ["src/a.ts", "src/new.ts"],
+      allowed: ["src/a.ts", "src/old.ts"],
       unexpected: ["src/new.ts"],
       stale: ["src/old.ts"],
       duplicateAllowedCount: 0,
@@ -58,20 +60,36 @@ src/a.ts: src/a.ts
         ["src/a.ts"],
         ["src/platform.ts"],
       ),
-    ).toMatchObject({
+    ).toStrictEqual({
+      actual: ["src/a.ts", "src/platform.ts"],
+      allowed: ["src/a.ts"],
+      allowlistIsSorted: true,
+      duplicateAllowedCount: 0,
       unexpected: [],
       stale: [],
     });
     expect(
       compareUnusedFilesToAllowlist(["src/a.ts"], ["src/a.ts"], ["src/platform.ts"]),
-    ).toMatchObject({
+    ).toStrictEqual({
+      actual: ["src/a.ts"],
+      allowed: ["src/a.ts"],
+      allowlistIsSorted: true,
+      duplicateAllowedCount: 0,
       unexpected: [],
       stale: [],
     });
   });
 
   it("accepts exactly allowlisted unused files", () => {
-    expect(checkUnusedFiles("Unused files (1)\nsrc/a.ts: src/a.ts\n", ["src/a.ts"])).toMatchObject({
+    expect(checkUnusedFiles("Unused files (1)\nsrc/a.ts: src/a.ts\n", ["src/a.ts"])).toStrictEqual({
+      comparison: {
+        actual: ["src/a.ts"],
+        allowed: ["src/a.ts"],
+        allowlistIsSorted: true,
+        duplicateAllowedCount: 0,
+        stale: [],
+        unexpected: [],
+      },
       ok: true,
       message: "",
     });
@@ -80,8 +98,13 @@ src/a.ts: src/a.ts
   it("rejects unsorted allowlists", () => {
     expect(
       compareUnusedFilesToAllowlist(["src/a.ts", "src/b.ts"], ["src/b.ts", "src/a.ts"]),
-    ).toMatchObject({
+    ).toStrictEqual({
+      actual: ["src/a.ts", "src/b.ts"],
+      allowed: ["src/a.ts", "src/b.ts"],
       allowlistIsSorted: false,
+      duplicateAllowedCount: 0,
+      stale: [],
+      unexpected: [],
     });
   });
 });

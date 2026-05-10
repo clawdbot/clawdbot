@@ -85,6 +85,24 @@ function matchingExcludePatterns(patterns: string[], file: string): string[] {
   return patterns.filter((pattern) => path.matchesGlob(file, pattern));
 }
 
+function findAlias(alias: unknown, find: string): { find: string; replacement?: string } {
+  if (!Array.isArray(alias)) {
+    throw new Error("expected Vitest alias array");
+  }
+  const match = alias.find((entry) => {
+    return (
+      typeof entry === "object" &&
+      entry !== null &&
+      "find" in entry &&
+      (entry as { find?: unknown }).find === find
+    );
+  });
+  if (!match || typeof match !== "object" || !("find" in match)) {
+    throw new Error(`missing alias ${find}`);
+  }
+  return match as { find: string; replacement?: string };
+}
+
 function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
   if (!config.test) {
     throw new Error("expected scoped vitest test config");
@@ -103,25 +121,17 @@ function expectThreadedNonIsolatedRunner(config: {
 
 describe("resolveVitestIsolation", () => {
   it("aliases private QA plugin SDK subpaths for source tests only", () => {
-    expect(sharedVitestConfig.resolve.alias).toEqual(
-      expect.arrayContaining(
-        PRIVATE_PLUGIN_SDK_SUBPATHS.map((subpath) =>
-          expect.objectContaining({
-            find: `openclaw/plugin-sdk/${subpath}`,
-            replacement: path.join(process.cwd(), "src", "plugin-sdk", `${subpath}.ts`),
-          }),
-        ),
-      ),
-    );
-    expect(sharedVitestConfig.resolve.alias).not.toEqual(
-      expect.arrayContaining(
-        PRIVATE_PLUGIN_SDK_SUBPATHS.map((subpath) =>
-          expect.objectContaining({
-            find: `@openclaw/plugin-sdk/${subpath}`,
-          }),
-        ),
-      ),
-    );
+    for (const subpath of PRIVATE_PLUGIN_SDK_SUBPATHS) {
+      expect(findAlias(sharedVitestConfig.resolve.alias, `openclaw/plugin-sdk/${subpath}`)).toEqual(
+        {
+          find: `openclaw/plugin-sdk/${subpath}`,
+          replacement: path.join(process.cwd(), "src", "plugin-sdk", `${subpath}.ts`),
+        },
+      );
+      expect(() =>
+        findAlias(sharedVitestConfig.resolve.alias, `@openclaw/plugin-sdk/${subpath}`),
+      ).toThrow(`missing alias @openclaw/plugin-sdk/${subpath}`);
+    }
   });
 
   it("defaults shared scoped configs to the non-isolated runner", () => {
@@ -197,7 +207,8 @@ describe("createScopedVitestConfig", () => {
     const testConfig = requireTestConfig(config);
 
     expect(testConfig.include).toEqual(["**/*.test.ts"]);
-    expect(testConfig.exclude).toEqual(expect.arrayContaining(["channel/**", "dist/**"]));
+    expect(testConfig.exclude).toContain("channel/**");
+    expect(testConfig.exclude).toContain("dist/**");
   });
 
   it("narrows scoped includes to matching CLI file filters", () => {
@@ -361,7 +372,7 @@ describe("scoped vitest configs", () => {
   it("splits auto-reply into narrower scoped buckets", () => {
     const coreTestConfig = requireTestConfig(defaultAutoReplyCoreConfig);
     expect(coreTestConfig.include).toEqual(["*.test.ts"]);
-    expect(coreTestConfig.exclude).toEqual(expect.arrayContaining(["reply*.test.ts"]));
+    expect(coreTestConfig.exclude).toContain("reply*.test.ts");
     expect(requireTestConfig(defaultAutoReplyTopLevelConfig).include).toEqual(["reply*.test.ts"]);
     expect(requireTestConfig(defaultAutoReplyReplyConfig).include).toEqual(["reply/**/*.test.ts"]);
   });
@@ -477,10 +488,38 @@ describe("scoped vitest configs", () => {
   it("normalizes extension provider include patterns relative to the scoped dir", () => {
     const providersTestConfig = requireTestConfig(defaultExtensionProvidersConfig);
     expect(providersTestConfig.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(providersTestConfig.include).toEqual(
-      expect.arrayContaining(["xai/**/*.test.ts", "google/**/*.test.ts"]),
-    );
-    expect(providersTestConfig.include).not.toContain("openai/**/*.test.ts");
+    expect(providersTestConfig.include).toEqual([
+      "amazon-bedrock/**/*.test.ts",
+      "amazon-bedrock-mantle/**/*.test.ts",
+      "anthropic/**/*.test.ts",
+      "anthropic-vertex/**/*.test.ts",
+      "byteplus/**/*.test.ts",
+      "chutes/**/*.test.ts",
+      "comfy/**/*.test.ts",
+      "deepseek/**/*.test.ts",
+      "github-copilot/**/*.test.ts",
+      "google/**/*.test.ts",
+      "groq/**/*.test.ts",
+      "huggingface/**/*.test.ts",
+      "kimi-coding/**/*.test.ts",
+      "lmstudio/**/*.test.ts",
+      "microsoft/**/*.test.ts",
+      "microsoft-foundry/**/*.test.ts",
+      "minimax/**/*.test.ts",
+      "mistral/**/*.test.ts",
+      "qwen/**/*.test.ts",
+      "moonshot/**/*.test.ts",
+      "nvidia/**/*.test.ts",
+      "ollama/**/*.test.ts",
+      "openrouter/**/*.test.ts",
+      "qianfan/**/*.test.ts",
+      "stepfun/**/*.test.ts",
+      "together/**/*.test.ts",
+      "venice/**/*.test.ts",
+      "volcengine/**/*.test.ts",
+      "xai/**/*.test.ts",
+      "zai/**/*.test.ts",
+    ]);
     const openAiTestConfig = requireTestConfig(defaultExtensionProviderOpenAiConfig);
     expect(openAiTestConfig.dir).toBe(path.join(process.cwd(), "extensions"));
     expect(openAiTestConfig.include).toEqual(["openai/**/*.test.ts"]);
@@ -489,7 +528,15 @@ describe("scoped vitest configs", () => {
   it("normalizes extension messaging include patterns relative to the scoped dir", () => {
     const testConfig = requireTestConfig(defaultExtensionMessagingConfig);
     expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(testConfig.include).toEqual(expect.arrayContaining(["googlechat/**/*.test.ts"]));
+    expect(testConfig.include).toEqual([
+      "googlechat/**/*.test.ts",
+      "nextcloud-talk/**/*.test.ts",
+      "nostr/**/*.test.ts",
+      "qqbot/**/*.test.ts",
+      "synology-chat/**/*.test.ts",
+      "tlon/**/*.test.ts",
+      "twitch/**/*.test.ts",
+    ]);
   });
 
   it("normalizes matrix extension include patterns relative to the scoped dir", () => {
@@ -525,9 +572,7 @@ describe("scoped vitest configs", () => {
   it("normalizes zalo extension include patterns relative to the scoped dir", () => {
     const testConfig = requireTestConfig(defaultExtensionZaloConfig);
     expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(testConfig.include).toEqual(
-      expect.arrayContaining(["zalo/**/*.test.ts", "zalouser/**/*.test.ts"]),
-    );
+    expect(testConfig.include).toEqual(["zalo/**/*.test.ts", "zalouser/**/*.test.ts"]);
   });
 
   it("normalizes voice-call extension include patterns relative to the scoped dir", () => {
@@ -539,9 +584,11 @@ describe("scoped vitest configs", () => {
   it("normalizes memory extension include patterns relative to the scoped dir", () => {
     const testConfig = requireTestConfig(defaultExtensionMemoryConfig);
     expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(testConfig.include).toEqual(
-      expect.arrayContaining(["memory-core/**/*.test.ts", "memory-lancedb/**/*.test.ts"]),
-    );
+    expect(testConfig.include).toEqual([
+      "memory-core/**/*.test.ts",
+      "memory-lancedb/**/*.test.ts",
+      "memory-wiki/**/*.test.ts",
+    ]);
   });
 
   it("keeps telegram plugin tests out of the shared extensions lane", () => {
@@ -781,9 +828,7 @@ describe("scoped vitest configs", () => {
 
   it("keeps tooling tests in their own lane", () => {
     const testConfig = requireTestConfig(defaultToolingConfig);
-    expect(testConfig.include).toEqual(
-      expect.arrayContaining(["test/**/*.test.ts", "src/scripts/**/*.test.ts"]),
-    );
+    expect(testConfig.include).toEqual(["test/**/*.test.ts", "src/scripts/**/*.test.ts"]);
     expect(testConfig.include).not.toContain("src/config/doc-baseline.integration.test.ts");
   });
 

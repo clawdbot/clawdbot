@@ -80,7 +80,7 @@ describe("agentsListCommand", () => {
 
     expect(buildProviderStatusIndexMock).not.toHaveBeenCalled();
     const summary = (runtime.json[0] as Array<Record<string, unknown>>)[0];
-    expect(summary).toMatchObject({ id: "main" });
+    expect(summary?.id).toBe("main");
     expect(summary).not.toHaveProperty("routes");
     expect(summary).not.toHaveProperty("providers");
   });

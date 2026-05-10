@@ -62,6 +62,13 @@ function readAuditLog(home: string): unknown[] {
     .map((line) => JSON.parse(line));
 }
 
+function requireAuditRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected audit JSONL record");
+  }
+  return value as Record<string, unknown>;
+}
+
 describe("config io audit helpers", () => {
   const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-config-audit-" });
 
@@ -189,11 +196,10 @@ describe("config io audit helpers", () => {
 
     const records = readAuditLog(home);
     expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({
-      event: "config.write",
-      result: "rename",
-      nextHash: "next-hash",
-    });
+    const written = requireAuditRecord(records[0]);
+    expect(written.event).toBe("config.write");
+    expect(written.result).toBe("rename");
+    expect(written.nextHash).toBe("next-hash");
   });
 
   it("redacts argv values that follow known secret flag names", () => {
@@ -434,10 +440,9 @@ describe("config io audit helpers", () => {
 
     const records = readAuditLog(home);
     expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({
-      event: "config.write",
-      result: "rename",
-      nextHash: "next-hash",
-    });
+    const written = requireAuditRecord(records[0]);
+    expect(written.event).toBe("config.write");
+    expect(written.result).toBe("rename");
+    expect(written.nextHash).toBe("next-hash");
   });
 });

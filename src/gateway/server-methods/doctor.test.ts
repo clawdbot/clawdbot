@@ -158,18 +158,47 @@ const invokeDoctorMemoryRemHarness = async (
   });
 };
 
+function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+  expect(record).toBeDefined();
+  const actual = record as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+  return actual;
+}
+
+function respondPayload(respond: ReturnType<typeof vi.fn>, callIndex = 0): Record<string, unknown> {
+  const call = respond.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected respond call ${callIndex}`);
+  }
+  expect(call[0]).toBe(true);
+  expect(call[2]).toBeUndefined();
+  return call[1] as Record<string, unknown>;
+}
+
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0): Record<string, unknown> {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call[0] as Record<string, unknown>;
+}
+
+function findRecordByField(items: unknown, key: string, value: unknown) {
+  expect(Array.isArray(items)).toBe(true);
+  return (items as Array<Record<string, unknown>>).find((item) => item[key] === value);
+}
+
 const expectEmbeddingErrorResponse = (respond: ReturnType<typeof vi.fn>, error: string) => {
-  expect(respond).toHaveBeenCalledWith(
-    true,
-    expect.objectContaining({
-      agentId: "main",
-      embedding: {
-        ok: false,
-        error,
-      },
-    }),
-    undefined,
-  );
+  const payload = respondPayload(respond);
+  expectRecordFields(payload, {
+    agentId: "main",
+    embedding: {
+      ok: false,
+      error,
+    },
+  });
 };
 
 describe("doctor.memory.status", () => {
@@ -200,36 +229,33 @@ describe("doctor.memory.status", () => {
 
     await invokeDoctorMemoryStatus(respond, { params: { probe: true } });
 
-    expect(getMemorySearchManager).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
+    const managerInput = mockCallArg(getMemorySearchManager);
+    expect(managerInput.cfg).toBeDefined();
+    expectRecordFields(managerInput, {
       agentId: "main",
       purpose: "status",
     });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        agentId: "main",
-        provider: "gemini",
-        embedding: { ok: true },
-        dreaming: expect.objectContaining({
-          enabled: false,
-          shortTermCount: 0,
-          totalSignalCount: 0,
-          phaseSignalCount: 0,
-          promotedTotal: 0,
-          promotedToday: 0,
-          shortTermEntries: [],
-          signalEntries: [],
-          promotedEntries: [],
-          phases: expect.objectContaining({
-            deep: expect.objectContaining({
-              managedCronPresent: false,
-            }),
-          }),
-        }),
-      }),
-      undefined,
-    );
+    const payload = respondPayload(respond);
+    expectRecordFields(payload, {
+      agentId: "main",
+      provider: "gemini",
+      embedding: { ok: true },
+    });
+    const dreaming = expectRecordFields(payload.dreaming, {
+      enabled: false,
+      shortTermCount: 0,
+      totalSignalCount: 0,
+      phaseSignalCount: 0,
+      promotedTotal: 0,
+      promotedToday: 0,
+      shortTermEntries: [],
+      signalEntries: [],
+      promotedEntries: [],
+    });
+    const phases = expectRecordFields(dreaming.phases, {});
+    expectRecordFields(phases.deep, {
+      managedCronPresent: false,
+    });
     expect(close).toHaveBeenCalled();
   });
 
@@ -248,13 +274,8 @@ describe("doctor.memory.status", () => {
     await invokeDoctorMemoryStatus(respond);
 
     expect(probeEmbeddingAvailability).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        embedding: expect.objectContaining({ ok: false, checked: false }),
-      }),
-      undefined,
-    );
+    const payload = respondPayload(respond);
+    expectRecordFields(payload.embedding, { ok: false, checked: false });
     expect(close).toHaveBeenCalled();
   });
 
@@ -280,13 +301,8 @@ describe("doctor.memory.status", () => {
     await invokeDoctorMemoryStatus(respond);
 
     expect(probeEmbeddingAvailability).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        embedding: expect.objectContaining({ ok: true, checked: true, cached: true }),
-      }),
-      undefined,
-    );
+    const payload = respondPayload(respond);
+    expectRecordFields(payload.embedding, { ok: true, checked: true, cached: true });
     expect(close).toHaveBeenCalled();
   });
 
@@ -525,67 +541,63 @@ describe("doctor.memory.status", () => {
 
     try {
       await invokeDoctorMemoryStatus(respond, { cron: { list: cronList } });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          agentId: "main",
-          provider: "gemini",
-          embedding: expect.objectContaining({ ok: false, checked: false }),
-          dreaming: expect.objectContaining({
-            enabled: true,
-            timezone: "America/Los_Angeles",
-            shortTermCount: 1,
-            recallSignalCount: 2,
-            dailySignalCount: 1,
-            totalSignalCount: 3,
-            phaseSignalCount: 5,
-            lightPhaseHitCount: 2,
-            remPhaseHitCount: 3,
-            promotedTotal: 3,
-            promotedToday: 2,
-            shortTermEntries: [
-              expect.objectContaining({
-                path: "memory/2026-04-03.md",
-                snippet: "Emma prefers shorter, lower-pressure check-ins.",
-                totalSignalCount: 3,
-                lightHits: 2,
-                remHits: 3,
-                phaseHitCount: 5,
-              }),
-            ],
-            signalEntries: [
-              expect.objectContaining({
-                path: "memory/2026-04-03.md",
-                totalSignalCount: 3,
-              }),
-            ],
-            promotedEntries: expect.arrayContaining([
-              expect.objectContaining({
-                path: "memory/2026-04-04.md",
-                promotedAt: recentIso,
-              }),
-              expect.objectContaining({
-                path: "memory/2026-04-02.md",
-                promotedAt: recentIso,
-              }),
-              expect.objectContaining({
-                path: "memory/2026-04-01.md",
-                promotedAt: olderIso,
-              }),
-            ]),
-            phases: expect.objectContaining({
-              deep: expect.objectContaining({
-                cron: "0 */4 * * *",
-                recencyHalfLifeDays: 21,
-                maxAgeDays: 30,
-                managedCronPresent: true,
-                nextRunAtMs: now + 60_000,
-              }),
-            }),
-          }),
-        }),
-        undefined,
+      const payload = respondPayload(respond);
+      expectRecordFields(payload, {
+        agentId: "main",
+        provider: "gemini",
+      });
+      expectRecordFields(payload.embedding, { ok: false, checked: false });
+      const dreaming = expectRecordFields(payload.dreaming, {
+        enabled: true,
+        timezone: "America/Los_Angeles",
+        shortTermCount: 1,
+        recallSignalCount: 2,
+        dailySignalCount: 1,
+        totalSignalCount: 3,
+        phaseSignalCount: 5,
+        lightPhaseHitCount: 2,
+        remPhaseHitCount: 3,
+        promotedTotal: 3,
+        promotedToday: 2,
+      });
+      expectRecordFields((dreaming.shortTermEntries as unknown[])[0], {
+        path: "memory/2026-04-03.md",
+        snippet: "Emma prefers shorter, lower-pressure check-ins.",
+        totalSignalCount: 3,
+        lightHits: 2,
+        remHits: 3,
+        phaseHitCount: 5,
+      });
+      expectRecordFields((dreaming.signalEntries as unknown[])[0], {
+        path: "memory/2026-04-03.md",
+        totalSignalCount: 3,
+      });
+      expectRecordFields(
+        findRecordByField(dreaming.promotedEntries, "path", "memory/2026-04-04.md"),
+        {
+          promotedAt: recentIso,
+        },
       );
+      expectRecordFields(
+        findRecordByField(dreaming.promotedEntries, "path", "memory/2026-04-02.md"),
+        {
+          promotedAt: recentIso,
+        },
+      );
+      expectRecordFields(
+        findRecordByField(dreaming.promotedEntries, "path", "memory/2026-04-01.md"),
+        {
+          promotedAt: olderIso,
+        },
+      );
+      const phases = expectRecordFields(dreaming.phases, {});
+      expectRecordFields(phases.deep, {
+        cron: "0 */4 * * *",
+        recencyHalfLifeDays: 21,
+        maxAgeDays: 30,
+        managedCronPresent: true,
+        nextRunAtMs: now + 60_000,
+      });
       expect(close).toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
@@ -641,21 +653,15 @@ describe("doctor.memory.status", () => {
 
     try {
       await invokeDoctorMemoryStatus(respond);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          dreaming: expect.objectContaining({
-            shortTermCount: 0,
-            promotedTotal: 1,
-            phases: expect.objectContaining({
-              deep: expect.objectContaining({
-                managedCronPresent: false,
-              }),
-            }),
-          }),
-        }),
-        undefined,
-      );
+      const payload = respondPayload(respond);
+      const dreaming = expectRecordFields(payload.dreaming, {
+        shortTermCount: 0,
+        promotedTotal: 1,
+      });
+      const phases = expectRecordFields(dreaming.phases, {});
+      expectRecordFields(phases.deep, {
+        managedCronPresent: false,
+      });
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -699,20 +705,14 @@ describe("doctor.memory.status", () => {
 
     await invokeDoctorMemoryStatus(respond);
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        dreaming: expect.objectContaining({
-          enabled: true,
-          phases: expect.objectContaining({
-            deep: expect.objectContaining({
-              cron: "0 */4 * * *",
-            }),
-          }),
-        }),
-      }),
-      undefined,
-    );
+    const payload = respondPayload(respond);
+    const dreaming = expectRecordFields(payload.dreaming, {
+      enabled: true,
+    });
+    const phases = expectRecordFields(dreaming.phases, {});
+    expectRecordFields(phases.deep, {
+      cron: "0 */4 * * *",
+    });
     expect(close).toHaveBeenCalled();
   });
 
@@ -801,17 +801,12 @@ describe("doctor.memory.status", () => {
 
     try {
       await invokeDoctorMemoryStatus(respond);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          dreaming: expect.objectContaining({
-            shortTermCount: 0,
-            promotedTotal: 0,
-            storeError: "2 dreaming stores had read errors.",
-          }),
-        }),
-        undefined,
-      );
+      const payload = respondPayload(respond);
+      expectRecordFields(payload.dreaming, {
+        shortTermCount: 0,
+        promotedTotal: 0,
+        storeError: "2 dreaming stores had read errors.",
+      });
     } finally {
       readFileSpy.mockRestore();
       await fs.rm(workspaceRoot, { recursive: true, force: true });
@@ -927,17 +922,14 @@ describe("doctor.memory.dreamDiary", () => {
 
     try {
       await invokeDoctorMemoryDreamDiary(respond);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          agentId: "main",
-          found: true,
-          path: "DREAMS.md",
-          content: "## Dream Diary\n- staged durable memory\n",
-          updatedAtMs: expect.any(Number),
-        }),
-        undefined,
-      );
+      const payload = respondPayload(respond);
+      expectRecordFields(payload, {
+        agentId: "main",
+        found: true,
+        path: "DREAMS.md",
+        content: "## Dream Diary\n- staged durable memory\n",
+      });
+      expect(typeof payload.updatedAtMs).toBe("number");
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -951,17 +943,13 @@ describe("doctor.memory.dreamDiary", () => {
 
     try {
       await invokeDoctorMemoryDreamDiary(respond);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          agentId: "main",
-          found: true,
-          content: "lowercase diary\n",
-          updatedAtMs: expect.any(Number),
-        }),
-        undefined,
-      );
-      const payload = respond.mock.calls[0]?.[1] as { path?: unknown };
+      const payload = respondPayload(respond);
+      expectRecordFields(payload, {
+        agentId: "main",
+        found: true,
+        content: "lowercase diary\n",
+      });
+      expect(typeof payload.updatedAtMs).toBe("number");
       expect(["DREAMS.md", "dreams.md"]).toContain(payload.path);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
@@ -975,15 +963,11 @@ describe("doctor.memory.dreamDiary", () => {
 
     try {
       await invokeDoctorMemoryDreamDiary(respond);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          agentId: "main",
-          found: false,
-          path: "DREAMS.md",
-        }),
-        undefined,
-      );
+      expectRecordFields(respondPayload(respond), {
+        agentId: "main",
+        found: false,
+        path: "DREAMS.md",
+      });
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -1017,26 +1001,17 @@ describe("doctor.memory.dreamDiary", () => {
         workspaceDir,
         inputPaths: [path.join(workspaceDir, "memory", "2026-02-19.md")],
       });
-      expect(writeBackfillDiaryEntries).toHaveBeenCalledWith(
-        expect.objectContaining({
-          entries: [
-            expect.objectContaining({
-              bodyLines: expect.arrayContaining(["What Happened", "1. Bunji — partner"]),
-            }),
-          ],
-        }),
-      );
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          agentId: "main",
-          action: "backfill",
-          scannedFiles: 1,
-          written: 1,
-          replaced: 1,
-        }),
-        undefined,
-      );
+      const writeInput = mockCallArg(writeBackfillDiaryEntries);
+      const entry = (writeInput.entries as Array<Record<string, unknown>>)[0];
+      expect(entry.bodyLines).toContain("What Happened");
+      expect(entry.bodyLines).toContain("1. Bunji — partner");
+      expectRecordFields(respondPayload(respond), {
+        agentId: "main",
+        action: "backfill",
+        scannedFiles: 1,
+        written: 1,
+        replaced: 1,
+      });
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -1051,17 +1026,13 @@ describe("doctor.memory.dreamDiary", () => {
       await invokeDoctorMemoryBackfillDreamDiary(respond);
       expect(previewGroundedRemMarkdown).not.toHaveBeenCalled();
       expect(writeBackfillDiaryEntries).not.toHaveBeenCalled();
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          agentId: "main",
-          action: "backfill",
-          scannedFiles: 0,
-          written: 0,
-          replaced: 0,
-        }),
-        undefined,
-      );
+      expectRecordFields(respondPayload(respond), {
+        agentId: "main",
+        action: "backfill",
+        scannedFiles: 0,
+        written: 0,
+        replaced: 0,
+      });
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -1080,15 +1051,11 @@ describe("doctor.memory.dreamDiary", () => {
     try {
       await invokeDoctorMemoryResetDreamDiary(respond);
       expect(removeBackfillDiaryEntries).toHaveBeenCalledWith({ workspaceDir });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          agentId: "main",
-          action: "reset",
-          removedEntries: 3,
-        }),
-        undefined,
-      );
+      expectRecordFields(respondPayload(respond), {
+        agentId: "main",
+        action: "reset",
+        removedEntries: 3,
+      });
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -1157,38 +1124,33 @@ describe("doctor.memory.remHarness", () => {
 
     await invokeDoctorMemoryRemHarness(respond);
 
-    expect(previewRemHarness).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceDir: "/tmp/openclaw",
-        grounded: false,
-        includePromoted: false,
-        candidateLimit: 25,
-        groundedFileLimit: 10,
-        remPreviewLimit: 50,
-      }),
-    );
+    expectRecordFields(mockCallArg(previewRemHarness), {
+      workspaceDir: "/tmp/openclaw",
+      grounded: false,
+      includePromoted: false,
+      candidateLimit: 25,
+      groundedFileLimit: 10,
+      remPreviewLimit: 50,
+    });
     expect(previewGroundedRemMarkdown).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        ok: true,
-        agentId: "main",
-        workspaceDir: "/tmp/openclaw",
-        rem: expect.objectContaining({
-          skipped: false,
-          sourceEntryCount: 0,
-          reflections: [],
-          candidateTruths: [],
-        }),
-        grounded: null,
-        deep: expect.objectContaining({
-          candidateLimit: 25,
-          truncated: false,
-          candidates: [],
-        }),
-      }),
-      undefined,
-    );
+    const payload = respondPayload(respond);
+    expectRecordFields(payload, {
+      ok: true,
+      agentId: "main",
+      workspaceDir: "/tmp/openclaw",
+      grounded: null,
+    });
+    expectRecordFields(payload.rem, {
+      skipped: false,
+      sourceEntryCount: 0,
+      reflections: [],
+      candidateTruths: [],
+    });
+    expectRecordFields(payload.deep, {
+      candidateLimit: 25,
+      truncated: false,
+      candidates: [],
+    });
   });
 
   it("maps REM preview and deep candidates into the payload", async () => {
@@ -1227,33 +1189,26 @@ describe("doctor.memory.remHarness", () => {
 
     await invokeDoctorMemoryRemHarness(respond);
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        ok: true,
-        rem: expect.objectContaining({
-          reflections: ["reflection line"],
-          candidateTruths: [{ snippet: "truthy snippet", confidence: 0.72 }],
-          bodyLines: ["## REM", "- truthy snippet"],
-        }),
-        deep: expect.objectContaining({
-          candidateLimit: 25,
-          truncated: false,
-          candidates: [
-            expect.objectContaining({
-              key: "memory/2026-04-14.md:12:16",
-              path: "memory/2026-04-14.md",
-              snippet: "durable fact",
-              recallCount: 4,
-              uniqueQueries: 3,
-              avgScore: 0.81,
-              promoted: false,
-            }),
-          ],
-        }),
-      }),
-      undefined,
-    );
+    const payload = respondPayload(respond);
+    expectRecordFields(payload, { ok: true });
+    expectRecordFields(payload.rem, {
+      reflections: ["reflection line"],
+      candidateTruths: [{ snippet: "truthy snippet", confidence: 0.72 }],
+      bodyLines: ["## REM", "- truthy snippet"],
+    });
+    const deep = expectRecordFields(payload.deep, {
+      candidateLimit: 25,
+      truncated: false,
+    });
+    expectRecordFields((deep.candidates as unknown[])[0], {
+      key: "memory/2026-04-14.md:12:16",
+      path: "memory/2026-04-14.md",
+      snippet: "durable fact",
+      recallCount: 4,
+      uniqueQueries: 3,
+      avgScore: 0.81,
+      promoted: false,
+    });
   });
 
   it("invokes grounded preview when grounded=true and daily files exist", async () => {
@@ -1272,20 +1227,15 @@ describe("doctor.memory.remHarness", () => {
 
     await invokeDoctorMemoryRemHarness(respond, { grounded: true });
 
-    expect(previewRemHarness).toHaveBeenCalledWith(expect.objectContaining({ grounded: true }));
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        grounded: expect.objectContaining({
-          scannedFiles: 2,
-          files: [
-            { path: "memory/2026-04-13.md", renderedMarkdown: "## REM\n- a" },
-            { path: "memory/2026-04-14.md", renderedMarkdown: "## REM\n- b" },
-          ],
-        }),
-      }),
-      undefined,
-    );
+    expectRecordFields(mockCallArg(previewRemHarness), { grounded: true });
+    const payload = respondPayload(respond);
+    expectRecordFields(payload.grounded, {
+      scannedFiles: 2,
+      files: [
+        { path: "memory/2026-04-13.md", renderedMarkdown: "## REM\n- a" },
+        { path: "memory/2026-04-14.md", renderedMarkdown: "## REM\n- b" },
+      ],
+    });
   });
 
   it("passes bounded grounded and REM preview limits to the shared harness", async () => {
@@ -1293,13 +1243,11 @@ describe("doctor.memory.remHarness", () => {
 
     await invokeDoctorMemoryRemHarness(respond, { grounded: true });
 
-    expect(previewRemHarness).toHaveBeenCalledWith(
-      expect.objectContaining({
-        grounded: true,
-        groundedFileLimit: 10,
-        remPreviewLimit: 50,
-      }),
-    );
+    expectRecordFields(mockCallArg(previewRemHarness), {
+      grounded: true,
+      groundedFileLimit: 10,
+      remPreviewLimit: 50,
+    });
   });
 
   it("maps requested empty grounded preview into an empty payload", async () => {
@@ -1307,13 +1255,9 @@ describe("doctor.memory.remHarness", () => {
 
     await invokeDoctorMemoryRemHarness(respond, { grounded: true });
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        grounded: { scannedFiles: 0, files: [] },
-      }),
-      undefined,
-    );
+    expectRecordFields(respondPayload(respond), {
+      grounded: { scannedFiles: 0, files: [] },
+    });
   });
 
   it("returns an error payload when the recall store read fails", async () => {
@@ -1322,16 +1266,13 @@ describe("doctor.memory.remHarness", () => {
 
     await invokeDoctorMemoryRemHarness(respond);
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        ok: false,
-        agentId: "main",
-        workspaceDir: "/tmp/openclaw",
-        error: expect.stringContaining("disk boom"),
-      }),
-      undefined,
-    );
+    const payload = respondPayload(respond);
+    expectRecordFields(payload, {
+      ok: false,
+      agentId: "main",
+      workspaceDir: "/tmp/openclaw",
+    });
+    expect(String(payload.error)).toContain("disk boom");
   });
 
   it("caps deep candidates and reports truncated when the store exceeds the limit", async () => {
@@ -1365,7 +1306,7 @@ describe("doctor.memory.remHarness", () => {
 
     await invokeDoctorMemoryRemHarness(respond);
 
-    expect(previewRemHarness).toHaveBeenCalledWith(expect.objectContaining({ candidateLimit: 25 }));
+    expectRecordFields(mockCallArg(previewRemHarness), { candidateLimit: 25 });
     const payload = respond.mock.calls[0]?.[1] as {
       ok: boolean;
       deep: { candidateLimit: number; truncated: boolean; candidates: unknown[] };
@@ -1381,9 +1322,7 @@ describe("doctor.memory.remHarness", () => {
 
     await invokeDoctorMemoryRemHarness(respond, { limit: 500 });
 
-    expect(previewRemHarness).toHaveBeenCalledWith(
-      expect.objectContaining({ candidateLimit: 100 }),
-    );
+    expectRecordFields(mockCallArg(previewRemHarness), { candidateLimit: 100 });
     const payload = respond.mock.calls[0]?.[1] as {
       deep: { candidateLimit: number };
     };

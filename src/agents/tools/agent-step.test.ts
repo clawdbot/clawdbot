@@ -47,18 +47,23 @@ describe("runAgentStep", () => {
       }),
     ).resolves.toBe("done");
 
-    expect(gatewayCalls[0]?.params).toMatchObject({
-      message: expect.stringContaining("[Inter-session message"),
-      sessionKey: "agent:main:subagent:child",
-      deliver: false,
-      lane: "nested:agent:main:subagent:child",
-      inputProvenance: {
-        kind: "inter_session",
-        sourceTool: "sessions_send",
-      },
-    });
-    expect((gatewayCalls[0]?.params as { message?: string })?.message).toContain("isUser=false");
-    expect((gatewayCalls[0]?.params as { message?: string })?.message).toContain("hello");
+    const params = gatewayCalls[0]?.params as
+      | {
+          message?: string;
+          sessionKey?: string;
+          deliver?: boolean;
+          lane?: string;
+          inputProvenance?: { kind?: string; sourceTool?: string };
+        }
+      | undefined;
+    expect(params?.message).toContain("[Inter-session message");
+    expect(params?.sessionKey).toBe("agent:main:subagent:child");
+    expect(params?.deliver).toBe(false);
+    expect(params?.lane).toBe("nested:agent:main:subagent:child");
+    expect(params?.inputProvenance?.kind).toBe("inter_session");
+    expect(params?.inputProvenance?.sourceTool).toBe("sessions_send");
+    expect(params?.message).toContain("isUser=false");
+    expect(params?.message).toContain("hello");
     expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalledWith({
       sessionKey: "agent:main:subagent:child",
       reason: "nested-agent-step-complete",
@@ -112,11 +117,12 @@ describe("runAgentStep", () => {
     });
 
     expect(gatewayCalls).toStrictEqual([]);
-    expect(agentCommandFromIngress).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.stringContaining("internal announce step"),
-        transcriptMessage: "",
-      }),
-    );
+    expect(agentCommandFromIngress).toHaveBeenCalledTimes(1);
+    const ingressCalls = agentCommandFromIngress.mock.calls as unknown as Array<
+      [{ message?: string; transcriptMessage?: string }]
+    >;
+    const ingress = ingressCalls[0]?.[0];
+    expect(ingress?.message).toContain("internal announce step");
+    expect(ingress?.transcriptMessage).toBe("");
   });
 });

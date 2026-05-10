@@ -90,12 +90,10 @@ describe("doctor session transcript repair", () => {
 
     const result = await repairBrokenSessionTranscriptFile({ filePath, shouldRepair: true });
 
-    expect(result).toMatchObject({
-      broken: true,
-      repaired: true,
-      originalEntries: 6,
-      activeEntries: 3,
-    });
+    expect(result.broken).toBe(true);
+    expect(result.repaired).toBe(true);
+    expect(result.originalEntries).toBe(6);
+    expect(result.activeEntries).toBe(3);
     if (result.backupPath === undefined) {
       throw new Error("expected transcript backup path");
     }

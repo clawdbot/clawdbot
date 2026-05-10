@@ -59,6 +59,7 @@ const DEFAULT_TELEGRAM_BOT_RUNTIME: TelegramBotRuntime = {
   sequentialize,
   apiThrottler,
 };
+const TELEGRAM_TYPING_COALESCE_MS = 4_000;
 
 let telegramBotRuntimeForTest: TelegramBotRuntime | undefined;
 
@@ -562,6 +563,7 @@ export function createTelegramBotCore(
     sendChatActionFn: (chatId, action, threadParams) =>
       bot.api.sendChatAction(chatId, action, threadParams),
     logger: (message) => logVerbose(`telegram: ${message}`),
+    minIntervalMs: TELEGRAM_TYPING_COALESCE_MS,
   });
 
   const processMessage = createTelegramMessageProcessor({

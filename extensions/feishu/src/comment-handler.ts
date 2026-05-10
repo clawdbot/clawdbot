@@ -1,6 +1,5 @@
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
-import { resolveOpenDmAllowlistAccess } from "openclaw/plugin-sdk/security-runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
@@ -16,7 +15,7 @@ import {
   resolveDriveCommentEventTurn,
   type FeishuDriveCommentNoticeEvent,
 } from "./monitor.comment.js";
-import { resolveFeishuAllowlistMatch } from "./policy.js";
+import { resolveFeishuDmIngressAccess } from "./policy.js";
 import { getFeishuRuntime } from "./runtime.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
@@ -88,30 +87,19 @@ export async function handleFeishuCommentEvent(
     channel: "feishu",
     accountId: account.accountId,
   });
-  const storeAllowFrom =
-    dmPolicy !== "allowlist" && dmPolicy !== "open"
-      ? await pairing.readAllowFromStore().catch(() => [])
-      : [];
-  const effectiveDmAllowFrom = [...configAllowFrom, ...storeAllowFrom];
-  const senderAllowed = resolveFeishuAllowlistMatch({
-    allowFrom: effectiveDmAllowFrom,
-    senderId: turn.senderId,
-    senderIds: [turn.senderUserId],
-  }).allowed;
-  const dmAccessAllowed =
-    dmPolicy === "open"
-      ? resolveOpenDmAllowlistAccess({
-          effectiveAllowFrom: effectiveDmAllowFrom,
-          isSenderAllowed: (allowFrom) =>
-            resolveFeishuAllowlistMatch({
-              allowFrom,
-              senderId: turn.senderId,
-              senderIds: [turn.senderUserId],
-            }).allowed,
-        }).decision === "allow"
-      : senderAllowed;
-  if (!dmAccessAllowed) {
-    if (dmPolicy === "pairing") {
+  const dmIngress = await resolveFeishuDmIngressAccess({
+    cfg: params.cfg,
+    accountId: account.accountId,
+    dmPolicy,
+    allowFrom: configAllowFrom,
+    readAllowFromStore: pairing.readAllowFromStore,
+    senderOpenId: turn.senderId,
+    senderUserId: turn.senderUserId,
+    conversationId: turn.senderId,
+    mayPair: true,
+  });
+  if (dmIngress.ingress.admission !== "dispatch") {
+    if (dmIngress.ingress.admission === "pairing-required") {
       const client = createFeishuClient(account);
       await pairing.issueChallenge({
         senderId: turn.senderId,

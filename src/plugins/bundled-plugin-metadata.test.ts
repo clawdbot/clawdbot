@@ -35,6 +35,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "device-pair",
   "diagnostics-otel",
   "diagnostics-prometheus",
+  "diffs",
   "file-transfer",
   "google-meet",
   "llm-task",

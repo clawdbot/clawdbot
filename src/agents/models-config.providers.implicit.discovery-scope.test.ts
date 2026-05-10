@@ -87,16 +87,10 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       providerDiscoveryTimeoutMs: 1234,
     });
 
-    expect(mocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["openai"],
-      }),
-    );
-    expect(mocks.runProviderCatalog).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeoutMs: 1234,
-      }),
-    );
+    const [discoveryOptions] = mocks.resolveRuntimePluginDiscoveryProviders.mock.calls[0] ?? [];
+    expect(discoveryOptions?.onlyPluginIds).toEqual(["openai"]);
+    const [catalogOptions] = mocks.runProviderCatalog.mock.calls[0] ?? [];
+    expect(catalogOptions?.timeoutMs).toBe(1234);
   });
 
   it("can keep startup discovery on provider discovery entries only", async () => {
@@ -108,10 +102,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       providerDiscoveryEntriesOnly: true,
     });
 
-    expect(mocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        discoveryEntriesOnly: true,
-      }),
-    );
+    const [discoveryOptions] = mocks.resolveRuntimePluginDiscoveryProviders.mock.calls[0] ?? [];
+    expect(discoveryOptions?.discoveryEntriesOnly).toBe(true);
   });
 });

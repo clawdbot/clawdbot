@@ -161,11 +161,15 @@ const bundledPluginRoot = (pluginId: string) => ["extensions", pluginId].join("/
 const bundledPluginFile = (pluginId: string, relativePath: string) =>
   `${bundledPluginRoot(pluginId)}/${relativePath}`;
 const explicitNeverBundleDependencies = [
+  "@discordjs/voice",
   "@lancedb/lancedb",
   "@larksuiteoapi/node-sdk",
   "@matrix-org/matrix-sdk-crypto-nodejs",
+  "@vitest/expect",
   "matrix-js-sdk",
+  "prism-media",
   "qrcode-terminal",
+  "vitest",
 ].toSorted((left, right) => left.localeCompare(right));
 
 function shouldNeverBundleDependency(id: string): boolean {

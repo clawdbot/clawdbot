@@ -112,6 +112,11 @@ export function resolveMissingPluginCommandMessage(
       config?: OpenClawConfig;
       registry?: PluginManifestCommandAliasRegistry;
     }) => PluginManifestToolOwnerRecord | undefined;
+    resolveCliCommandSurfaceOwner?: (params: {
+      command: string | undefined;
+      config?: OpenClawConfig;
+      registry?: PluginManifestCommandAliasRegistry;
+    }) => string | undefined;
   },
 ): string | null {
   const normalizedPluginId = normalizeLowercaseStringOrEmpty(pluginId);
@@ -138,6 +143,13 @@ export function resolveMissingPluginCommandMessage(
   const parentPluginId = commandAlias?.pluginId;
   if (parentPluginId) {
     if (allow.length > 0 && !allow.includes(parentPluginId)) {
+      if (parentPluginId === normalizedPluginId) {
+        return (
+          `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
+          `\`plugins.allow\` excludes "${normalizedPluginId}". Add "${normalizedPluginId}" to ` +
+          `\`plugins.allow\` if you want that bundled plugin CLI surface.`
+        );
+      }
       return (
         `"${normalizedPluginId}" is not a plugin; it is a command provided by the ` +
         `"${parentPluginId}" plugin. Add "${parentPluginId}" to \`plugins.allow\` ` +
@@ -222,6 +234,33 @@ export function resolveMissingPluginCommandMessage(
   if (allow.length > 0 && !allow.includes(normalizedPluginId)) {
     if (parentPluginId && allow.includes(parentPluginId)) {
       return null;
+    }
+    const cliCommandSurfaceOwner = options?.resolveCliCommandSurfaceOwner
+      ? options.resolveCliCommandSurfaceOwner({
+          command: normalizedPluginId,
+          config,
+          ...(options?.registry ? { registry: options.registry } : {}),
+        })
+      : options?.registry
+        ? resolveManifestCommandAliasOwnerInRegistry({
+            command: normalizedPluginId,
+            registry: options.registry,
+          })?.pluginId
+        : undefined;
+    const normalizedCliCommandSurfaceOwner =
+      normalizeOptionalLowercaseString(cliCommandSurfaceOwner);
+    if (!normalizedCliCommandSurfaceOwner) {
+      return null;
+    }
+    if (allow.includes(normalizedCliCommandSurfaceOwner)) {
+      return null;
+    }
+    if (normalizedCliCommandSurfaceOwner !== normalizedPluginId) {
+      return (
+        `"${normalizedPluginId}" is not a plugin; it is a command provided by the ` +
+        `"${normalizedCliCommandSurfaceOwner}" plugin. Add "${normalizedCliCommandSurfaceOwner}" to ` +
+        `\`plugins.allow\` instead of "${normalizedPluginId}".`
+      );
     }
     return (
       `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +

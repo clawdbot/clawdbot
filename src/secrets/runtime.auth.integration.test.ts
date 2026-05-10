@@ -163,14 +163,18 @@ describe("secrets runtime snapshot auth integration", () => {
       });
       activateSecretsRuntimeSnapshot(refreshed);
 
-      expect(
-        getActiveSecretsRuntimeSnapshot()?.authStores.find(
-          (entry) => entry.agentDir === opsAgentDir,
-        )?.store.profiles["anthropic:ops"],
-      ).toMatchObject({
-        type: "api_key",
-        key: "sk-ops-runtime",
-        keyRef: { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
+      const profile = getActiveSecretsRuntimeSnapshot()?.authStores.find(
+        (entry) => entry.agentDir === opsAgentDir,
+      )?.store.profiles["anthropic:ops"];
+      expect(profile?.type).toBe("api_key");
+      if (profile?.type !== "api_key") {
+        throw new Error("Expected anthropic ops API key profile");
+      }
+      expect(profile.key).toBe("sk-ops-runtime");
+      expect(profile.keyRef).toEqual({
+        source: "env",
+        provider: "default",
+        id: "ANTHROPIC_API_KEY",
       });
     });
   });

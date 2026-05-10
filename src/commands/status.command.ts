@@ -177,14 +177,14 @@ export async function statusCommand(
         },
         async () => await resolveStatusSecurityAudit(input),
       ),
-    resolveUsage: async (timeoutMs) =>
+    resolveUsage: async (input) =>
       await withProgress(
         {
           label: "Fetching usage snapshot…",
           indeterminate: true,
           enabled: opts.json !== true,
         },
-        async () => await resolveStatusUsageSummary(timeoutMs),
+        async () => await resolveStatusUsageSummary(input),
       ),
     resolveHealth: async (input) =>
       await withProgress(

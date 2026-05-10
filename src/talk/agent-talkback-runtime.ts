@@ -64,13 +64,17 @@ export function createRealtimeVoiceAgentTalkbackQueue(
       question: trimmed,
       metadata: pending.metadata,
     };
+    let consultStartedAt: number | undefined;
     try {
       while (nextQuestion) {
         if (params.isStopped()) {
           return;
         }
         const currentQuestion = nextQuestion;
-        params.logger.info(`${params.logPrefix} consult: chars=${currentQuestion.question.length}`);
+        consultStartedAt = Date.now();
+        params.logger.info(
+          `${params.logPrefix} consult: chars=${currentQuestion.question.length} queued=${pendingQuestions.length}`,
+        );
         activeAbortController = new AbortController();
         const result = await params.consult({
           question: currentQuestion.question,
@@ -80,6 +84,9 @@ export function createRealtimeVoiceAgentTalkbackQueue(
         });
         activeAbortController = undefined;
         const text = result.text.trim();
+        params.logger.info(
+          `${params.logPrefix} consult done: elapsedMs=${Date.now() - consultStartedAt} answerChars=${text.length} queued=${pendingQuestions.length}`,
+        );
         if (!params.isStopped() && text) {
           params.deliver(text);
         }
@@ -91,7 +98,9 @@ export function createRealtimeVoiceAgentTalkbackQueue(
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
-      params.logger.warn(`${params.logPrefix} consult failed: ${message}`);
+      const elapsedDetail =
+        consultStartedAt === undefined ? "" : ` elapsedMs=${Date.now() - consultStartedAt}`;
+      params.logger.warn(`${params.logPrefix} consult failed:${elapsedDetail} ${message}`);
       params.deliver(params.fallbackText);
     } finally {
       active = false;
@@ -115,6 +124,9 @@ export function createRealtimeVoiceAgentTalkbackQueue(
       }
       if (active) {
         appendPendingQuestion(pendingQuestions, { question: trimmed, metadata });
+        params.logger.info(
+          `${params.logPrefix} consult queued: chars=${trimmed.length} queued=${pendingQuestions.length}`,
+        );
         clearDebounceTimer();
         return;
       }

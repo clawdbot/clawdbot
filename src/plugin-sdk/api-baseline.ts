@@ -98,9 +98,9 @@ function normalizeDeclarationImportSpecifier(repoRoot: string, value: string): s
 }
 
 function normalizeDeclarationText(repoRoot: string, value: string): string {
-  return value.replaceAll(/import\("([^"]+)"\)/g, (match, specifier: string) => {
+  return value.replaceAll(/import\("([^"]+)"/g, (match, specifier: string) => {
     const normalized = normalizeDeclarationImportSpecifier(repoRoot, specifier);
-    return normalized === specifier ? match : `import("${normalized}")`;
+    return normalized === specifier ? match : `import("${normalized}"`;
   });
 }
 
@@ -116,7 +116,13 @@ function createCompilerContext(repoRoot: string) {
     throw new Error(ts.flattenDiagnosticMessageText(configFile.error.messageText, "\n"));
   }
   const parsedConfig = ts.parseJsonConfigFileContent(configFile.config, ts.sys, repoRoot);
-  const program = ts.createProgram(parsedConfig.fileNames, parsedConfig.options);
+  const fileNames = parsedConfig.fileNames.toSorted((left, right) =>
+    compareText(
+      relativePath(repoRoot, path.resolve(left)),
+      relativePath(repoRoot, path.resolve(right)),
+    ),
+  );
+  const program = ts.createProgram(fileNames, parsedConfig.options);
   return {
     checker: program.getTypeChecker(),
     printer: ts.createPrinter({ newLine: ts.NewLineKind.LineFeed }),
@@ -199,6 +205,7 @@ function inferExportKind(
 
 function resolveSymbolAndDeclaration(
   checker: ts.TypeChecker,
+  repoRoot: string,
   symbol: ts.Symbol,
 ): {
   declaration: ts.Declaration | undefined;
@@ -206,7 +213,11 @@ function resolveSymbolAndDeclaration(
 } {
   const resolvedSymbol =
     symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
-  const declarations = resolvedSymbol.getDeclarations() ?? symbol.getDeclarations() ?? [];
+  const declarations = (
+    resolvedSymbol.getDeclarations() ??
+    symbol.getDeclarations() ??
+    []
+  ).toSorted((left, right) => compareDeclarations(repoRoot, left, right));
   const declaration = declarations.find((candidate) => candidate.kind !== ts.SyntaxKind.SourceFile);
   return { declaration, resolvedSymbol };
 }
@@ -290,6 +301,37 @@ function printNode(
     : normalizedText;
 }
 
+function compareText(left: string, right: string): number {
+  if (left < right) {
+    return -1;
+  }
+  if (left > right) {
+    return 1;
+  }
+  return 0;
+}
+
+function compareDeclarations(
+  repoRoot: string,
+  left: ts.Declaration,
+  right: ts.Declaration,
+): number {
+  const byPath = compareText(
+    relativePath(repoRoot, left.getSourceFile().fileName),
+    relativePath(repoRoot, right.getSourceFile().fileName),
+  );
+  if (byPath !== 0) {
+    return byPath;
+  }
+
+  const byStart = left.getStart() - right.getStart();
+  if (byStart !== 0) {
+    return byStart;
+  }
+
+  return left.kind - right.kind;
+}
+
 function buildExportSurface(params: {
   checker: ts.TypeChecker;
   printer: ts.Printer;
@@ -298,7 +340,7 @@ function buildExportSurface(params: {
   symbol: ts.Symbol;
 }): PluginSdkApiExport {
   const { checker, printer, program, repoRoot, symbol } = params;
-  const { declaration, resolvedSymbol } = resolveSymbolAndDeclaration(checker, symbol);
+  const { declaration, resolvedSymbol } = resolveSymbolAndDeclaration(checker, repoRoot, symbol);
   return {
     declaration: declaration ? printNode(repoRoot, checker, printer, declaration) : null,
     exportName: symbol.getName(),
@@ -331,7 +373,7 @@ function sortExports(left: PluginSdkApiExport, right: PluginSdkApiExport): numbe
   if (byKind !== 0) {
     return byKind;
   }
-  return left.exportName.localeCompare(right.exportName);
+  return compareText(left.exportName, right.exportName);
 }
 
 function buildModuleSurface(params: {
@@ -424,7 +466,7 @@ export async function renderPluginSdkApiBaseline(params?: {
         entrypoint,
       }),
     )
-    .toSorted((left, right) => left.importSpecifier.localeCompare(right.importSpecifier));
+    .toSorted((left, right) => compareText(left.importSpecifier, right.importSpecifier));
 
   const baseline: PluginSdkApiBaseline = {
     generatedBy: GENERATED_BY,

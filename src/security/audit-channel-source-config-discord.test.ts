@@ -113,13 +113,12 @@ describe("security audit channel source-config fallback discord", () => {
       ],
     });
 
-    expect(findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "channels.discord.commands.native.no_allowlists",
-          severity: "warn",
-        }),
-      ]),
+    const finding = findings.find(
+      (entry) => entry.checkId === "channels.discord.commands.native.no_allowlists",
     );
+    if (!finding) {
+      throw new Error("Expected Discord native command no-allowlists finding");
+    }
+    expect(finding.severity).toBe("warn");
   });
 });

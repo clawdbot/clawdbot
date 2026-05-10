@@ -108,7 +108,9 @@ describe("Google Meet voice-call gateway", () => {
       message: "Say exactly: I'm here and listening.",
     });
 
-    expect(result).toMatchObject({ callId: "call-1", dtmfSent: true, introSent: false });
+    expect(result.callId).toBe("call-1");
+    expect(result.dtmfSent).toBe(true);
+    expect(result.introSent).toBe(false);
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("Skipped intro speech because realtime bridge was not ready"),
     );

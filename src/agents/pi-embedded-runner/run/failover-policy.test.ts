@@ -61,6 +61,41 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("surfaces deterministic prompt format failures instead of rotating or falling back", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "format",
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "format",
+    });
+  });
+
+  it("can still rotate explicitly retryable prompt format failures", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        allowFormatRetry: true,
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "format",
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "rotate_profile",
+      reason: "format",
+    });
+  });
+
   it("treats classified assistant-side 429s as rotation candidates even without error stopReason", () => {
     expect(
       resolveRunFailoverDecision({
@@ -78,6 +113,47 @@ describe("resolveRunFailoverDecision", () => {
     ).toEqual({
       action: "rotate_profile",
       reason: "rate_limit",
+    });
+  });
+
+  it("surfaces deterministic assistant format failures instead of rotating or falling back", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "format",
+        timedOut: false,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "format",
+    });
+  });
+
+  it("can still rotate explicitly retryable assistant format failures", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        allowFormatRetry: true,
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "format",
+        timedOut: false,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "rotate_profile",
+      reason: "format",
     });
   });
 

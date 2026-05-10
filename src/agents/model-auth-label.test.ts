@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveModelAuthLabel } from "./model-auth-label.js";
 
 const mocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
@@ -30,13 +31,8 @@ vi.mock("./cli-credentials.js", () => ({
   readCodexCliCredentialsCached: mocks.readCodexCliCredentialsCached,
 }));
 
-let resolveModelAuthLabel: typeof import("./model-auth-label.js").resolveModelAuthLabel;
-
 describe("resolveModelAuthLabel", () => {
-  beforeEach(async () => {
-    if (!resolveModelAuthLabel) {
-      ({ resolveModelAuthLabel } = await import("./model-auth-label.js"));
-    }
+  beforeEach(() => {
     mocks.ensureAuthProfileStore.mockReset();
     mocks.externalCliDiscoveryForProviderAuth.mockReset();
     mocks.externalCliDiscoveryForProviderAuth.mockReturnValue(undefined);

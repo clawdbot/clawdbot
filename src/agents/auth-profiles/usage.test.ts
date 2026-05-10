@@ -890,18 +890,14 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     await markCodexFailureAt({ store, now });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://chatgpt.com/backend-api/wham/usage",
-      expect.objectContaining({
-        method: "GET",
-        headers: expect.objectContaining({
-          Authorization: "Bearer codex-access-token",
-          "ChatGPT-Account-Id": "acct_test_123",
-          originator: "openclaw",
-          "User-Agent": expect.stringMatching(/^openclaw\//),
-        }),
-      }),
-    );
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://chatgpt.com/backend-api/wham/usage");
+    expect(init.method).toBe("GET");
+    const headers = init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer codex-access-token");
+    expect(headers["ChatGPT-Account-Id"]).toBe("acct_test_123");
+    expect(headers.originator).toBe("openclaw");
+    expect(headers["User-Agent"]).toMatch(/^openclaw\//);
     expect(store.usageStats?.["openai-codex:default"]?.cooldownUntil).toBe(now + expectedMs);
   });
 

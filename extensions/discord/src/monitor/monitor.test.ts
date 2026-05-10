@@ -308,6 +308,16 @@ describe("discord component interactions", () => {
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(lastDispatchCtx?.BodyForAgent).toBe('Clicked "Approve".');
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+    expect(dispatchReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dispatcherOptions: expect.objectContaining({
+          responsePrefixContextProvider: expect.any(Function),
+        }),
+        replyOptions: expect.objectContaining({
+          onModelSelected: expect.any(Function),
+        }),
+      }),
+    );
     expect(resolveDiscordComponentEntry({ id: "btn_1" })).toBeNull();
   });
 

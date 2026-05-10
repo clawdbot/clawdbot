@@ -17,6 +17,10 @@ import {
   toStringOrEmpty,
 } from "./utils.js";
 
+const STATUS_CDP_HTTP_TIMEOUT_MS = 300;
+const STATUS_CDP_TRANSPORT_TIMEOUT_MS = 600;
+const STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS = 5_000;
+
 function handleBrowserRouteError(res: BrowserResponse, err: unknown) {
   const mapped = toBrowserErrorResponse(err);
   if (mapped) {
@@ -72,10 +76,13 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
   const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
   const [cdpHttp, cdpReady] = capabilities.usesChromeMcp
     ? await (async () => {
-        const ready = await profileCtx.isTransportAvailable(600);
+        const ready = await profileCtx.isTransportAvailable(STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS);
         return [ready, ready] as const;
       })()
-    : await Promise.all([profileCtx.isHttpReachable(300), profileCtx.isTransportAvailable(600)]);
+    : await Promise.all([
+        profileCtx.isHttpReachable(STATUS_CDP_HTTP_TIMEOUT_MS),
+        profileCtx.isTransportAvailable(STATUS_CDP_TRANSPORT_TIMEOUT_MS),
+      ]);
 
   const profileState = current.profiles.get(profileCtx.profile.name);
   let detectedBrowser: string | null = null;

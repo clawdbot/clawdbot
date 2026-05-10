@@ -1,4 +1,5 @@
 import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
+import { isModelKeyAllowedBySet } from "../../agents/model-selection-shared.js";
 import {
   type ModelAliasIndex,
   modelKey,
@@ -122,7 +123,10 @@ export function resolveModelSelectionFromDirective(params: {
   });
   if (explicit) {
     const explicitKey = modelKey(explicit.ref.provider, explicit.ref.model);
-    if (params.allowedModelKeys.size === 0 || params.allowedModelKeys.has(explicitKey)) {
+    if (
+      params.allowedModelKeys.size === 0 ||
+      isModelKeyAllowedBySet(params.allowedModelKeys, explicitKey)
+    ) {
       modelSelection = {
         provider: explicit.ref.provider,
         model: explicit.ref.model,

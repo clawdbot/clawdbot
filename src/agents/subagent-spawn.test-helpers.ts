@@ -105,13 +105,13 @@ export function expectPersistedRuntimeModel(params: {
   } else {
     expect(persistedKey).toMatch(params.sessionKey);
   }
-  expect(persistedEntry).toMatchObject({
-    modelProvider: params.provider,
-    model: params.model,
-    providerOverride: params.provider,
-    modelOverride: params.model,
-    ...(params.overrideSource ? { modelOverrideSource: params.overrideSource } : {}),
-  });
+  expect(persistedEntry?.modelProvider).toBe(params.provider);
+  expect(persistedEntry?.model).toBe(params.model);
+  expect(persistedEntry?.providerOverride).toBe(params.provider);
+  expect(persistedEntry?.modelOverride).toBe(params.model);
+  if (params.overrideSource) {
+    expect(persistedEntry?.modelOverrideSource).toBe(params.overrideSource);
+  }
 }
 
 export async function loadSubagentSpawnModuleForTest(params: {

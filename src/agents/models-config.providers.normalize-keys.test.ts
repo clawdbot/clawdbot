@@ -110,6 +110,102 @@ describe("normalizeProviders", () => {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
   });
+
+  it("normalizes retired Google Gemini model ids before emitting provider config", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        google: {
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          api: "google-generative-ai",
+          apiKey: "GOOGLE_API_KEY", // pragma: allowlist secret
+          models: [
+            createModel({
+              id: "gemini-3-pro-preview",
+              name: "Gemini 3 Pro",
+            }),
+          ],
+        },
+        "google-gemini-cli": {
+          baseUrl: "openclaw://google-gemini-cli",
+          models: [
+            createModel({
+              id: "gemini-3-pro-preview",
+              name: "Gemini CLI 3 Pro",
+            }),
+          ],
+        },
+        openrouter: {
+          baseUrl: "https://openrouter.ai/api/v1",
+          api: "openai-completions",
+          apiKey: "OPENROUTER_API_KEY", // pragma: allowlist secret
+          models: [
+            createModel({
+              id: "google/gemini-3-pro-preview",
+              name: "Gemini 3 Pro via OpenRouter",
+            }),
+          ],
+        },
+      };
+
+      const normalized = normalizeProviders({ providers, agentDir });
+
+      expect(normalized?.google?.models?.map((model) => model.id)).toEqual([
+        "gemini-3.1-pro-preview",
+      ]);
+      expect(normalized?.["google-gemini-cli"]?.models?.map((model) => model.id)).toEqual([
+        "gemini-3.1-pro-preview",
+      ]);
+      expect(normalized?.openrouter?.models?.map((model) => model.id)).toEqual([
+        "google/gemini-3.1-pro-preview",
+      ]);
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("deduplicates Google Gemini provider rows after model id normalization", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        google: {
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          api: "google-generative-ai",
+          apiKey: "GOOGLE_API_KEY", // pragma: allowlist secret
+          models: [
+            createModel({
+              id: "gemini-3-pro-preview",
+              name: "Pinned Gemini",
+              contextWindow: 12345,
+              cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+            }),
+            createModel({
+              id: "gemini-3.1-pro-preview",
+              name: "Discovered Gemini",
+              contextWindow: 1_048_576,
+              maxTokens: 65536,
+              reasoning: true,
+            }),
+          ],
+        },
+      };
+
+      const normalized = normalizeProviders({ providers, agentDir });
+
+      expect(normalized?.google?.models).toHaveLength(1);
+      expect(normalized?.google?.models?.[0]).toMatchObject({
+        id: "gemini-3.1-pro-preview",
+        name: "Pinned Gemini",
+        contextWindow: 12345,
+        maxTokens: 2048,
+        reasoning: false,
+        cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("replaces resolved env var value with env var name to prevent plaintext persistence", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     const env = {

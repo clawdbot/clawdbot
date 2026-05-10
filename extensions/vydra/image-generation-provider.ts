@@ -67,6 +67,7 @@ export function buildVydraImageGenerationProvider(): ImageGenerationProvider {
         timeoutMs: req.timeoutMs,
         fetchFn,
         allowPrivateNetwork,
+        ssrfPolicy: req.ssrfPolicy,
         dispatcherPolicy,
       });
 

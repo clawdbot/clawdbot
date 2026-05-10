@@ -41,6 +41,7 @@ import {
   sanitizeModelHeaders,
 } from "./model.inline-provider.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
+import { resolveBundledStaticCatalogModel } from "./model.static-catalog.js";
 
 type ProviderRuntimeHooks = {
   applyProviderResolvedModelCompatWithPlugins?: (
@@ -1060,6 +1061,7 @@ export async function resolveModelAsync(
   options?: {
     authStorage?: AuthStorage;
     modelRegistry?: ModelRegistry;
+    allowBundledStaticCatalogFallback?: boolean;
     retryTransientProviderRuntimeMiss?: boolean;
     runtimeHooks?: ProviderRuntimeHooks;
     skipProviderRuntimeHooks?: boolean;
@@ -1158,6 +1160,24 @@ export async function resolveModelAsync(
     // that disappears on the next message.
     model = await resolveDynamicAttempt();
   }
+  if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
+    const staticCatalogModel = resolveBundledStaticCatalogModel({
+      provider: normalizedRef.provider,
+      modelId: normalizedRef.model,
+      cfg,
+      workspaceDir,
+    });
+    if (staticCatalogModel) {
+      model = normalizeResolvedModel({
+        provider: normalizedRef.provider,
+        cfg,
+        agentDir: resolvedAgentDir,
+        workspaceDir,
+        model: staticCatalogModel,
+        runtimeHooks,
+      });
+    }
+  }
   if (model) {
     return { model, authStorage, modelRegistry };
   }
@@ -1203,6 +1223,14 @@ function buildUnknownModelError(params: {
     return suppressed;
   }
   const base = `Unknown model: ${params.provider}/${params.modelId}`;
+  const registrationHint = buildMissingProviderModelRegistrationHint({
+    provider: params.provider,
+    modelId: params.modelId,
+    cfg: params.cfg,
+  });
+  if (registrationHint) {
+    return `${base}. ${registrationHint}`;
+  }
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const hint = runtimeHooks.buildProviderUnknownModelHintWithPlugin({
     provider: params.provider,
@@ -1219,4 +1247,38 @@ function buildUnknownModelError(params: {
     },
   });
   return hint ? `${base}. ${hint}` : base;
+}
+
+function buildMissingProviderModelRegistrationHint(params: {
+  provider: string;
+  modelId: string;
+  cfg?: OpenClawConfig;
+}): string | undefined {
+  const configuredModels = params.cfg?.agents?.defaults?.models;
+  if (!configuredModels) {
+    return undefined;
+  }
+  const agentModelKey = modelKey(params.provider, params.modelId);
+  if (
+    !configuredModels[agentModelKey] &&
+    !configuredModels[`${params.provider}/${params.modelId}`]
+  ) {
+    return undefined;
+  }
+  const providerConfig = findNormalizedProviderValue(
+    params.cfg?.models?.providers,
+    params.provider,
+  ) as { models?: unknown } | undefined;
+  const providerModels = Array.isArray(providerConfig?.models) ? providerConfig.models : [];
+  const hasProviderModel = providerModels.some((entry) => {
+    if (!entry || typeof entry !== "object" || !("id" in entry)) {
+      return false;
+    }
+    const id = (entry as { id?: unknown }).id;
+    return typeof id === "string" && id === params.modelId;
+  });
+  if (hasProviderModel) {
+    return undefined;
+  }
+  return `Found agents.defaults.models["${agentModelKey}"], but no matching models.providers["${params.provider}"].models[] entry. Add { "id": "${params.modelId}" } to models.providers["${params.provider}"].models[] to register this provider model.`;
 }

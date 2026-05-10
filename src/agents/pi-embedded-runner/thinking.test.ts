@@ -453,10 +453,13 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       ),
     ).rejects.toBe(anthropicThinkingError);
     expect(callCount).toBe(2);
-    expect(contexts[1]?.messages?.[0]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }],
-    });
+    const retryMessage = contexts[1]?.messages?.[0];
+    if (!retryMessage || retryMessage.role !== "assistant") {
+      throw new Error("Expected Anthropic recovery retry to start with an assistant message");
+    }
+    expect(retryMessage.content).toEqual([
+      { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
+    ]);
   });
 
   it("retries with visible assistant text when stripping thinking leaves content", async () => {
@@ -487,10 +490,11 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       ),
     ).rejects.toBe(anthropicThinkingError);
 
-    expect(contexts[1]?.messages?.[0]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "visible answer" }],
-    });
+    const retryMessage = contexts[1]?.messages?.[0];
+    if (!retryMessage || retryMessage.role !== "assistant") {
+      throw new Error("Expected Anthropic recovery retry to start with an assistant message");
+    }
+    expect(retryMessage.content).toEqual([{ type: "text", text: "visible answer" }]);
   });
 
   it("does not retry when the stream fails after yielding a chunk", async () => {

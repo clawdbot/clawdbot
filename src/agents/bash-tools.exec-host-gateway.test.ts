@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalFollowupTarget } from "./bash-tools.exec-host-shared.js";
+import type { ExecApprovalFollowupFactory } from "./bash-tools.exec-types.js";
 
 type StrictInlineEvalBoundary =
   typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
@@ -310,11 +311,10 @@ describe("processGatewayAllowlist", () => {
       sessionKey: "agent:main:telegram:direct:123",
     });
 
-    expect(buildExecApprovalFollowupTargetMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:telegram:direct:123",
-      }),
-    );
+    const followupTargetInput = buildExecApprovalFollowupTargetMock.mock.calls[0]?.[0] as
+      | { sessionKey?: string }
+      | undefined;
+    expect(followupTargetInput?.sessionKey).toBe("agent:main:telegram:direct:123");
   });
 
   it("formats diagnostics approvals as direct pasteable followups", async () => {
@@ -354,7 +354,7 @@ describe("processGatewayAllowlist", () => {
     });
     buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
 
-    const approvalFollowup = vi.fn(async () =>
+    const approvalFollowup = vi.fn<ExecApprovalFollowupFactory>(async () =>
       [
         "OpenAI Codex harness:",
         "Codex diagnostics sent to OpenAI servers:",
@@ -375,27 +375,36 @@ describe("processGatewayAllowlist", () => {
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalled();
     });
-    expect(buildExecApprovalFollowupTargetMock).toHaveBeenCalledWith(
-      expect.objectContaining({ direct: true }),
-    );
-    expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
-      expect.objectContaining({ direct: true }),
-      expect.stringContaining("Diagnostics export created."),
-    );
+    const followupTargetInput = buildExecApprovalFollowupTargetMock.mock.calls[0]?.[0] as
+      | { direct?: boolean }
+      | undefined;
+    expect(followupTargetInput?.direct).toBe(true);
+
+    const followupTarget = sendExecApprovalFollowupResultMock.mock.calls[0]?.[0] as
+      | { direct?: boolean }
+      | null
+      | undefined;
+    expect(followupTarget?.direct).toBe(true);
     const followupText = sendExecApprovalFollowupResultMock.mock.calls[0]?.[1] ?? "";
+    expect(followupText).toContain("Diagnostics export created.");
     expect(followupText).toContain("Path: /tmp/openclaw-diagnostics.zip");
     expect(followupText).toContain("Contents (2 files):");
     expect(followupText).toContain("OpenAI Codex harness:");
     expect(followupText).toContain("Codex diagnostics sent to OpenAI servers:");
     expect(followupText).toContain("Codex thread id: `thread-1`");
-    expect(approvalFollowup).toHaveBeenCalledWith(
-      expect.objectContaining({
-        approvalId: "req-1",
-        sessionId: "sess-1",
-        trigger: "diagnostics",
-        outcome: expect.objectContaining({ status: "completed", exitCode: 0 }),
-      }),
-    );
+    const approvalInput = approvalFollowup.mock.calls[0]?.[0] as
+      | {
+          approvalId?: string;
+          sessionId?: string;
+          trigger?: string;
+          outcome?: { status?: string; exitCode?: number | null };
+        }
+      | undefined;
+    expect(approvalInput?.approvalId).toBe("req-1");
+    expect(approvalInput?.sessionId).toBe("sess-1");
+    expect(approvalInput?.trigger).toBe("diagnostics");
+    expect(approvalInput?.outcome?.status).toBe("completed");
+    expect(approvalInput?.outcome?.exitCode).toBe(0);
   });
 
   it("denies timed-out inline-eval requests instead of auto-running them", async () => {

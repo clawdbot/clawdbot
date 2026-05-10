@@ -1,13 +1,12 @@
+import type { ResolvedChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { describe, expect, it, vi } from "vitest";
-import type { DiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 
-function buildDmAccess(overrides: Partial<DiscordDmCommandAccess>): DiscordDmCommandAccess {
+function buildSenderAccess(
+  overrides: Pick<Partial<ResolvedChannelMessageIngress["senderAccess"]>, "decision">,
+): Pick<ResolvedChannelMessageIngress["senderAccess"], "decision"> {
   return {
     decision: "allow",
-    reason: "ok",
-    commandAuthorized: true,
-    allowMatch: { allowed: true, matchKey: "123", matchSource: "id" },
     ...overrides,
   };
 }
@@ -28,10 +27,8 @@ function createDmDecisionHarness(params?: { pairingCreated?: boolean }) {
 async function runPairingDecision(params?: { pairingCreated?: boolean }) {
   const harness = createDmDecisionHarness({ pairingCreated: params?.pairingCreated });
   const allowed = await handleDiscordDmCommandDecision({
-    dmAccess: buildDmAccess({
+    senderAccess: buildSenderAccess({
       decision: "pairing",
-      commandAuthorized: false,
-      allowMatch: { allowed: false },
     }),
     accountId: TEST_ACCOUNT_ID,
     sender: TEST_SENDER,
@@ -47,7 +44,7 @@ describe("handleDiscordDmCommandDecision", () => {
     const { onPairingCreated, onUnauthorized, upsertPairingRequest } = createDmDecisionHarness();
 
     const allowed = await handleDiscordDmCommandDecision({
-      dmAccess: buildDmAccess({ decision: "allow" }),
+      senderAccess: buildSenderAccess({ decision: "allow" }),
       accountId: TEST_ACCOUNT_ID,
       sender: TEST_SENDER,
       onPairingCreated,
@@ -93,10 +90,8 @@ describe("handleDiscordDmCommandDecision", () => {
     const { onPairingCreated, onUnauthorized, upsertPairingRequest } = createDmDecisionHarness();
 
     const allowed = await handleDiscordDmCommandDecision({
-      dmAccess: buildDmAccess({
+      senderAccess: buildSenderAccess({
         decision: "block",
-        commandAuthorized: false,
-        allowMatch: { allowed: false },
       }),
       accountId: TEST_ACCOUNT_ID,
       sender: TEST_SENDER,

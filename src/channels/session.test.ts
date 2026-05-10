@@ -13,6 +13,32 @@ type SessionModule = typeof import("./session.js");
 
 let recordInboundSession: SessionModule["recordInboundSession"];
 
+function requireFirstCallArg(mock: ReturnType<typeof vi.fn>): {
+  sessionKey?: string;
+  ctx?: MsgContext;
+  createIfMissing?: boolean;
+  deliveryContext?: {
+    channel?: string;
+    to?: string;
+  };
+} {
+  const arg = mock.mock.calls[0]?.[0] as
+    | {
+        sessionKey?: string;
+        ctx?: MsgContext;
+        createIfMissing?: boolean;
+        deliveryContext?: {
+          channel?: string;
+          to?: string;
+        };
+      }
+    | undefined;
+  if (!arg) {
+    throw new Error("Expected mock call argument");
+  }
+  return arg;
+}
+
 describe("recordInboundSession", () => {
   const ctx: MsgContext = {
     Provider: "demo-channel",
@@ -43,16 +69,11 @@ describe("recordInboundSession", () => {
       onRecordError: vi.fn(),
     });
 
-    expect(updateLastRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        ctx: undefined,
-        deliveryContext: expect.objectContaining({
-          channel: "demo-channel",
-          to: "demo-channel:1234",
-        }),
-      }),
-    );
+    const route = requireFirstCallArg(updateLastRouteMock);
+    expect(route.sessionKey).toBe("agent:main:main");
+    expect(route.ctx).toBeUndefined();
+    expect(route.deliveryContext?.channel).toBe("demo-channel");
+    expect(route.deliveryContext?.to).toBe("demo-channel:1234");
   });
 
   it("passes ctx when updating the same session key", async () => {
@@ -68,16 +89,11 @@ describe("recordInboundSession", () => {
       onRecordError: vi.fn(),
     });
 
-    expect(updateLastRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:demo-channel:1234:thread:42",
-        ctx,
-        deliveryContext: expect.objectContaining({
-          channel: "demo-channel",
-          to: "demo-channel:1234",
-        }),
-      }),
-    );
+    const route = requireFirstCallArg(updateLastRouteMock);
+    expect(route.sessionKey).toBe("agent:main:demo-channel:1234:thread:42");
+    expect(route.ctx).toBe(ctx);
+    expect(route.deliveryContext?.channel).toBe("demo-channel");
+    expect(route.deliveryContext?.to).toBe("demo-channel:1234");
   });
 
   it("normalizes mixed-case session keys before recording and route updates", async () => {
@@ -93,17 +109,12 @@ describe("recordInboundSession", () => {
       onRecordError: vi.fn(),
     });
 
-    expect(recordSessionMetaFromInboundMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:demo-channel:1234:thread:42",
-      }),
+    expect(requireFirstCallArg(recordSessionMetaFromInboundMock).sessionKey).toBe(
+      "agent:main:demo-channel:1234:thread:42",
     );
-    expect(updateLastRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:demo-channel:1234:thread:42",
-        ctx,
-      }),
-    );
+    const route = requireFirstCallArg(updateLastRouteMock);
+    expect(route.sessionKey).toBe("agent:main:demo-channel:1234:thread:42");
+    expect(route.ctx).toBe(ctx);
   });
 
   it("skips last-route updates when main DM owner pin mismatches sender", async () => {
@@ -147,16 +158,9 @@ describe("recordInboundSession", () => {
       onRecordError: vi.fn(),
     });
 
-    expect(recordSessionMetaFromInboundMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        createIfMissing: false,
-      }),
-    );
-    expect(updateLastRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        createIfMissing: false,
-      }),
-    );
+    expect(requireFirstCallArg(recordSessionMetaFromInboundMock).createIfMissing).toBe(false);
+    const route = requireFirstCallArg(updateLastRouteMock);
+    expect(route.sessionKey).toBe("agent:main:main");
+    expect(route.createIfMissing).toBe(false);
   });
 });

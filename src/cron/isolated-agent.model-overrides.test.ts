@@ -2,6 +2,10 @@ import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
+import type { PluginProviderRegistration } from "../plugins/registry.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   DEFAULT_AGENT_TURN_PAYLOAD,
   DEFAULT_MESSAGE,
@@ -14,8 +18,30 @@ import {
 } from "./isolated-agent.turn-test-helpers.js";
 import * as isolatedAgentRunRuntime from "./isolated-agent/run.runtime.js";
 
+function installThinkingTestProviders() {
+  const registry = createTestRegistry();
+  registry.providers = ["anthropic", "openai", "openrouter"].map(
+    (providerId): PluginProviderRegistration => ({
+      pluginId: providerId,
+      source: "test",
+      provider: {
+        id: providerId,
+        label: providerId,
+        auth: [],
+        resolveThinkingProfile: () => ({
+          levels: BASE_THINKING_LEVELS.map((id) => ({ id })),
+          defaultLevel: "off",
+        }),
+      },
+    }),
+  );
+  setActivePluginRegistry(registry);
+}
+
 describe("runCronIsolatedAgentTurn model overrides", () => {
   beforeEach(() => {
+    resetPluginRuntimeStateForTest();
+    installThinkingTestProviders();
     vi.spyOn(isolatedAgentRunRuntime, "resolveThinkingDefault").mockReturnValue("off");
     vi.mocked(runEmbeddedPiAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);

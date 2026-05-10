@@ -162,7 +162,7 @@ export const forcedUnitFastTestFiles = [
   "src/security/audit-summary.test.ts",
   "src/security/audit-synced-folder.test.ts",
   "src/security/audit-trust-model.test.ts",
-  "src/security/dm-policy-shared.test.ts",
+  "src/channels/message-access/message-access.test.ts",
   "src/security/audit-plugins-trust.test.ts",
   "src/security/audit-plugin-readonly-scope.test.ts",
   "src/security/audit-loopback-logging.test.ts",

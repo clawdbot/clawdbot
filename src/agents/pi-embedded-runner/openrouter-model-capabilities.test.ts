@@ -50,7 +50,7 @@ describe("openrouter-model-capabilities", () => {
                     id: "acme/top-level-max-completion",
                     name: "Top Level Max Completion",
                     architecture: { modality: "text+image->text" },
-                    supported_parameters: ["reasoning"],
+                    supported_parameters: ["reasoning", "tools"],
                     context_length: 65432,
                     max_completion_tokens: 12345,
                     pricing: { prompt: "0.000001", completion: "0.000002" },
@@ -76,18 +76,60 @@ describe("openrouter-model-capabilities", () => {
       const module = await importOpenRouterModelCapabilities("top-level-max-tokens");
       await module.loadOpenRouterModelCapabilities("acme/top-level-max-completion");
 
-      expect(module.getOpenRouterModelCapabilities("acme/top-level-max-completion")).toMatchObject({
-        input: ["text", "image"],
-        reasoning: true,
-        contextWindow: 65432,
-        maxTokens: 12345,
-      });
-      expect(module.getOpenRouterModelCapabilities("acme/top-level-max-output")).toMatchObject({
-        input: ["text", "image"],
-        reasoning: false,
-        contextWindow: 54321,
-        maxTokens: 23456,
-      });
+      const maxCompletion = module.getOpenRouterModelCapabilities("acme/top-level-max-completion");
+      expect(maxCompletion?.input).toEqual(["text", "image"]);
+      expect(maxCompletion?.reasoning).toBe(true);
+      expect(maxCompletion?.supportsTools).toBe(true);
+      expect(maxCompletion?.contextWindow).toBe(65432);
+      expect(maxCompletion?.maxTokens).toBe(12345);
+
+      const maxOutput = module.getOpenRouterModelCapabilities("acme/top-level-max-output");
+      expect(maxOutput?.input).toEqual(["text", "image"]);
+      expect(maxOutput?.reasoning).toBe(false);
+      expect(maxOutput?.supportsTools).toBeUndefined();
+      expect(maxOutput?.contextWindow).toBe(54321);
+      expect(maxOutput?.maxTokens).toBe(23456);
+    });
+  });
+
+  it("preserves explicit OpenRouter tool support metadata", async () => {
+    await withOpenRouterStateDir(async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({
+                data: [
+                  {
+                    id: "perplexity/sonar-deep-research",
+                    name: "Sonar Deep Research",
+                    supported_parameters: ["reasoning", "web_search_options"],
+                  },
+                  {
+                    id: "google/gemini-2.5-pro",
+                    name: "Gemini 2.5 Pro",
+                    supported_parameters: ["reasoning", "tools"],
+                  },
+                ],
+              }),
+              {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              },
+            ),
+        ),
+      );
+
+      const module = await importOpenRouterModelCapabilities("tool-support");
+      await module.loadOpenRouterModelCapabilities("perplexity/sonar-deep-research");
+
+      expect(
+        module.getOpenRouterModelCapabilities("perplexity/sonar-deep-research")?.supportsTools,
+      ).toBe(false);
+      expect(module.getOpenRouterModelCapabilities("google/gemini-2.5-pro")?.supportsTools).toBe(
+        true,
+      );
     });
   });
 

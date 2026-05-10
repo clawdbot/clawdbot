@@ -114,6 +114,14 @@ if (( PATHS_PASSED == 0 )); then
   if (( CHANGED_ONLY )); then
     SCAN_PATHS=()
     while IFS= read -r path; do
+      # OpenGrep errors when an explicit changed path is a symlink; scan the
+      # real target content, not duplicate guide aliases such as CLAUDE.md.
+      if [[ -L "$path" ]]; then
+        continue
+      fi
+      if [[ ! -f "$path" && ! -d "$path" ]]; then
+        continue
+      fi
       SCAN_PATHS+=( "$path" )
     done < <(
       {

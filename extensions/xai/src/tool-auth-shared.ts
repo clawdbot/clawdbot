@@ -18,6 +18,12 @@ type XaiFallbackAuth = {
   source: string;
 };
 const XAI_API_KEY_ENV_VAR = "XAI_API_KEY";
+const XAI_PROVIDER_ID = "xai";
+
+export type XaiToolAuthContext = {
+  hasAuthForProvider?: (providerId: string) => boolean;
+  resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
+};
 
 type ConfiguredRuntimeApiKeyResolution =
   | { status: "available"; value: string }
@@ -105,6 +111,38 @@ function readPluginXaiWebSearchApiKeyResult(
   );
 }
 
+function resolveConfiguredXaiToolApiKeyResult(params: {
+  runtimeConfig?: OpenClawConfig;
+  sourceConfig?: OpenClawConfig;
+}): ConfiguredRuntimeApiKeyResolution {
+  const runtimePlugin = readPluginXaiWebSearchApiKeyResult(params.runtimeConfig);
+  if (runtimePlugin.status === "available" || runtimePlugin.status === "blocked") {
+    return runtimePlugin;
+  }
+  const runtimeLegacy = readLegacyGrokApiKeyResult(params.runtimeConfig);
+  if (runtimeLegacy.status === "available" || runtimeLegacy.status === "blocked") {
+    return runtimeLegacy;
+  }
+  const sourcePlugin = readPluginXaiWebSearchApiKeyResult(params.sourceConfig);
+  if (sourcePlugin.status === "available" || sourcePlugin.status === "blocked") {
+    return sourcePlugin;
+  }
+  const sourceLegacy = readLegacyGrokApiKeyResult(params.sourceConfig);
+  if (sourceLegacy.status === "available" || sourceLegacy.status === "blocked") {
+    return sourceLegacy;
+  }
+  return { status: "missing" };
+}
+
+function hasXaiAuthProfile(auth?: XaiToolAuthContext): boolean {
+  return auth?.hasAuthForProvider?.(XAI_PROVIDER_ID) === true;
+}
+
+async function resolveXaiAuthProfileApiKey(auth?: XaiToolAuthContext): Promise<string | undefined> {
+  const value = await auth?.resolveApiKeyForProvider?.(XAI_PROVIDER_ID);
+  return normalizeSecretInputString(value);
+}
+
 export function resolveFallbackXaiAuth(cfg?: OpenClawConfig): XaiFallbackAuth | undefined {
   const pluginApiKey = readConfiguredOrManagedApiKey(
     resolveProviderWebSearchPluginConfig(cfg as Record<string, unknown> | undefined, "xai")?.apiKey,
@@ -134,44 +172,48 @@ export function resolveXaiToolApiKey(params: {
   runtimeConfig?: OpenClawConfig;
   sourceConfig?: OpenClawConfig;
 }): string | undefined {
-  const runtimePlugin = readPluginXaiWebSearchApiKeyResult(params.runtimeConfig);
-  if (runtimePlugin.status === "available") {
-    return runtimePlugin.value;
+  const configured = resolveConfiguredXaiToolApiKeyResult(params);
+  if (configured.status === "available") {
+    return configured.value;
   }
-  if (runtimePlugin.status === "blocked") {
-    return undefined;
-  }
-  const runtimeLegacy = readLegacyGrokApiKeyResult(params.runtimeConfig);
-  if (runtimeLegacy.status === "available") {
-    return runtimeLegacy.value;
-  }
-  if (runtimeLegacy.status === "blocked") {
-    return undefined;
-  }
-  const sourcePlugin = readPluginXaiWebSearchApiKeyResult(params.sourceConfig);
-  if (sourcePlugin.status === "available") {
-    return sourcePlugin.value;
-  }
-  if (sourcePlugin.status === "blocked") {
-    return undefined;
-  }
-  const sourceLegacy = readLegacyGrokApiKeyResult(params.sourceConfig);
-  if (sourceLegacy.status === "available") {
-    return sourceLegacy.value;
-  }
-  if (sourceLegacy.status === "blocked") {
+  if (configured.status === "blocked") {
     return undefined;
   }
   return readProviderEnvValue([XAI_API_KEY_ENV_VAR]);
+}
+
+export async function resolveXaiToolApiKeyWithAuth(params: {
+  runtimeConfig?: OpenClawConfig;
+  sourceConfig?: OpenClawConfig;
+  auth?: XaiToolAuthContext;
+}): Promise<string | undefined> {
+  const configured = resolveConfiguredXaiToolApiKeyResult(params);
+  if (configured.status === "available") {
+    return configured.value;
+  }
+  if (configured.status === "blocked") {
+    return undefined;
+  }
+  return (
+    (await resolveXaiAuthProfileApiKey(params.auth)) ?? readProviderEnvValue([XAI_API_KEY_ENV_VAR])
+  );
 }
 
 export function isXaiToolEnabled(params: {
   enabled?: boolean;
   runtimeConfig?: OpenClawConfig;
   sourceConfig?: OpenClawConfig;
+  auth?: XaiToolAuthContext;
 }): boolean {
   if (params.enabled === false) {
     return false;
   }
-  return Boolean(resolveXaiToolApiKey(params));
+  const configured = resolveConfiguredXaiToolApiKeyResult(params);
+  if (configured.status === "available") {
+    return true;
+  }
+  if (configured.status === "blocked") {
+    return false;
+  }
+  return hasXaiAuthProfile(params.auth) || Boolean(readProviderEnvValue([XAI_API_KEY_ENV_VAR]));
 }

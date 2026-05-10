@@ -20,6 +20,7 @@ import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import type { EventFrame } from "./protocol/index.js";
 
 // Aggregate docker live runs can contend on startup enough that the gateway
 // websocket handshake needs a wider budget than the single-provider reruns.
@@ -292,6 +293,7 @@ export async function connectTestGatewayClient(params: {
   maxAttemptTimeoutMs?: number;
   clientDisplayName?: string | null;
   requestTimeoutMs?: number;
+  onEvent?: (evt: EventFrame) => void;
   onRetry?: (attempt: number, error: Error) => void;
 }): Promise<GatewayClient> {
   const timeoutMs = params.timeoutMs ?? CLI_GATEWAY_CONNECT_TIMEOUT_MS;
@@ -331,6 +333,7 @@ async function connectClientOnce(params: {
   deviceIdentity?: DeviceIdentity;
   clientDisplayName?: string | null;
   requestTimeoutMs?: number;
+  onEvent?: (evt: EventFrame) => void;
 }): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let done = false;
@@ -367,6 +370,7 @@ async function connectClientOnce(params: {
       onHelloOk: () => finish({ client }),
       onConnectError: (error) => finish({ error }),
       onClose: failWithClose,
+      onEvent: params.onEvent,
     };
     if (params.clientDisplayName !== null) {
       clientOptions.clientDisplayName = params.clientDisplayName ?? "vitest-live";

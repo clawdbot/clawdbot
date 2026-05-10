@@ -46,22 +46,24 @@ describe("pi tool definition adapter", () => {
   it("wraps tool errors into a tool result", async () => {
     const result = await executeThrowingTool("boom", "call1");
 
-    expect(result.details).toMatchObject({
-      status: "error",
-      tool: "boom",
-    });
-    expect(result.details).toMatchObject({ error: "nope" });
+    const details = result.details as
+      | { status?: string; tool?: string; error?: string }
+      | undefined;
+    expect(details?.status).toBe("error");
+    expect(details?.tool).toBe("boom");
+    expect(details?.error).toBe("nope");
     expect(JSON.stringify(result.details)).not.toContain("\n    at ");
   });
 
   it("normalizes exec tool aliases in error results", async () => {
     const result = await executeThrowingTool("bash", "call2");
 
-    expect(result.details).toMatchObject({
-      status: "error",
-      tool: "exec",
-      error: "nope",
-    });
+    const details = result.details as
+      | { status?: string; tool?: string; error?: string }
+      | undefined;
+    expect(details?.status).toBe("error");
+    expect(details?.tool).toBe("exec");
+    expect(details?.error).toBe("nope");
   });
 
   it("coerces details-only tool results to include content", async () => {
@@ -81,7 +83,7 @@ describe("pi tool definition adapter", () => {
     expect(result.details).toEqual({
       hits: [{ id: "a1", score: 0.9 }],
     });
-    expect(result.content[0]).toMatchObject({ type: "text" });
+    expect(result.content[0]?.type).toBe("text");
     expect((result.content[0] as { text?: string }).text).toContain('"hits"');
   });
 
@@ -102,7 +104,7 @@ describe("pi tool definition adapter", () => {
       count: 2,
       ids: ["m1", "m2"],
     });
-    expect(result.content[0]).toMatchObject({ type: "text" });
+    expect(result.content[0]?.type).toBe("text");
     expect((result.content[0] as { text?: string }).text).toContain('"count"');
   });
 });

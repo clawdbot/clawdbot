@@ -1,0 +1,41 @@
+diff --git a/dist/acp-agent.js b/dist/acp-agent.js
+index d0af13a..0f84309 100644
+--- a/dist/acp-agent.js
++++ b/dist/acp-agent.js
+@@ -441,6 +441,7 @@ export class ClaudeAcpAgent {
+         session.promptRunning = true;
+         let handedOff = false;
+         let stopReason = "end_turn";
++        let sawResult = false;
+         try {
+             while (true) {
+                 const { value: message, done } = await session.query.next();
+@@ -448,6 +449,9 @@ export class ClaudeAcpAgent {
+                     if (session.cancelled) {
+                         return { stopReason: "cancelled" };
+                     }
++                    if (sawResult) {
++                        return { stopReason, usage: sessionUsage(session) };
++                    }
+                     break;
+                 }
+                 if (session.emitRawSDKMessages &&
+@@ -518,7 +522,7 @@ export class ClaudeAcpAgent {
+                                 break;
+                             }
+                             case "session_state_changed": {
+-                                if (message.state === "idle") {
++                                if (message.state === "idle" && sawResult) {
+                                     return { stopReason, usage: sessionUsage(session) };
+                                 }
+                                 break;
+@@ -637,6 +641,9 @@ export class ClaudeAcpAgent {
+                                 unreachable(message, this.logger);
+                                 break;
+                         }
++                        if (!isTaskNotification) {
++                            sawResult = true;
++                        }
+                         break;
+                     }
+                     case "stream_event": {

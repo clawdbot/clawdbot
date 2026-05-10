@@ -16,7 +16,10 @@ function expectTool<T extends { name: string }>(tools: T[], name: string): T {
 }
 
 export function expectReadWriteEditTools<T extends { name: string }>(tools: T[]) {
-  expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(["read", "write", "edit"]));
+  const names = tools.map((tool) => tool.name);
+  expect(names).toContain("read");
+  expect(names).toContain("write");
+  expect(names).toContain("edit");
   return {
     readTool: expectTool(tools, "read"),
     writeTool: expectTool(tools, "write"),
@@ -25,7 +28,9 @@ export function expectReadWriteEditTools<T extends { name: string }>(tools: T[])
 }
 
 export function expectReadWriteTools<T extends { name: string }>(tools: T[]) {
-  expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(["read", "write"]));
+  const names = tools.map((tool) => tool.name);
+  expect(names).toContain("read");
+  expect(names).toContain("write");
   return {
     readTool: expectTool(tools, "read"),
     writeTool: expectTool(tools, "write"),

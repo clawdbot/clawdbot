@@ -555,6 +555,13 @@ top-level phase timings for preflight, image build, package prep, lane pools,
 and cleanup. Use `pnpm test:docker:timings <summary.json>` to rank slow lanes
 and phases before deciding whether a broader rerun is justified.
 
+Skill install proof: use `pnpm test:docker:skill-install` or targeted
+`docker_lanes=skill-install` for live ClawHub skill-install validation. The
+lane installs the package tarball in a bare runner, keeps
+`skills.install.allowUploadedArchives=false`, resolves the current live slug
+from `openclaw skills search`, installs it, and verifies `.clawhub` origin/lock
+metadata. Prefer this checked-in script over inline heredoc Testbox recipes.
+
 ## Cheap Docker Reruns
 
 First derive the smallest rerun command from artifacts:

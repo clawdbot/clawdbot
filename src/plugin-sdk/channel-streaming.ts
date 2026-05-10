@@ -3,12 +3,9 @@ import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
-  ChannelDeliveryStreamingConfig,
-  ChannelPreviewStreamingConfig,
   ChannelStreamingCommandTextMode,
   ChannelStreamingProgressConfig,
   ChannelStreamingConfig,
-  SlackChannelStreamingConfig,
   StreamingMode,
   TextChunkMode,
 } from "../config/types.base.js";

@@ -251,21 +251,17 @@ describe("doctor repair sequencing", () => {
 
     expect(result.state.pendingChanges).toBe(true);
     expect(result.state.candidate.channels?.discord?.allowFrom).toEqual(["123"]);
-    expect(result.changeNotes).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("channels.discord.allowFrom: converted 1 numeric ID to strings"),
-        expect.stringContaining(
-          "channels.tools.exec.toolsBySender: migrated 1 legacy key to typed id: entries",
-        ),
-      ]),
+    expect(result.changeNotes.join("\n")).toContain(
+      "channels.discord.allowFrom: converted 1 numeric ID to strings",
+    );
+    expect(result.changeNotes.join("\n")).toContain(
+      "channels.tools.exec.toolsBySender: migrated 1 legacy key to typed id: entries",
     );
     expect(result.changeNotes.join("\n")).toContain("bad-keynext -> id:bad-keynext");
     expect(result.changeNotes.join("\n")).not.toContain("\u001B");
     expect(result.changeNotes.join("\n")).not.toContain("\r");
-    expect(result.warningNotes).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("channels.signal.accounts.ops-teamnext.dmPolicy"),
-      ]),
+    expect(result.warningNotes.join("\n")).toContain(
+      "channels.signal.accounts.ops-teamnext.dmPolicy",
     );
     expect(result.warningNotes.join("\n")).not.toContain("\u001B");
     expect(result.warningNotes.join("\n")).not.toContain("\r");
@@ -305,18 +301,10 @@ describe("doctor repair sequencing", () => {
     });
 
     expect(events).toEqual(["cleanup", "missing-installs"]);
-    expect(mocks.maybeRepairStaleManagedNpmBundledPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            entries: expect.objectContaining({
-              "google-meet": { enabled: true },
-            }),
-          }),
-        }),
-        prompter: { shouldRepair: true },
-      }),
-    );
+    expect(mocks.maybeRepairStaleManagedNpmBundledPlugins).toHaveBeenCalledOnce();
+    const cleanupCall = mocks.maybeRepairStaleManagedNpmBundledPlugins.mock.calls[0]?.[0];
+    expect(cleanupCall?.config.plugins?.entries?.["google-meet"]).toEqual({ enabled: true });
+    expect(cleanupCall?.prompter).toEqual({ shouldRepair: true });
   });
 
   it("emits Discord warnings when unsafe numeric ids block repair", async () => {
@@ -389,11 +377,11 @@ describe("doctor repair sequencing", () => {
     expect(result.state.pendingChanges).toBe(true);
     expect(result.state.candidate.plugins?.allow).toEqual(["telegram", "brave"]);
     expect(result.state.candidate.plugins?.entries?.brave?.enabled).toBe(true);
-    expect(result.changeNotes).toEqual(
-      expect.arrayContaining([
-        'Installed missing configured plugin "brave" from @openclaw/brave-plugin.',
-        "brave web search provider selected, enabled automatically.",
-      ]),
+    expect(result.changeNotes).toContain(
+      'Installed missing configured plugin "brave" from @openclaw/brave-plugin.',
+    );
+    expect(result.changeNotes).toContain(
+      "brave web search provider selected, enabled automatically.",
     );
   });
 

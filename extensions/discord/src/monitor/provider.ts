@@ -2,7 +2,7 @@ import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract
 import {
   listNativeCommandSpecsForConfig,
   listSkillCommandsForAgents,
-} from "openclaw/plugin-sdk/command-auth";
+} from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-types";
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {

@@ -141,12 +141,10 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(skill.eligible).toBe(false);
     expect(skill.requirements.bins).toEqual(["fakebin"]);
     expect(skill.missing.bins).toEqual(["fakebin"]);
-    expect(skill.install[0]).toMatchObject({
-      id: "brew",
-      kind: "brew",
-      label: "Install fakebin",
-      bins: ["fakebin"],
-    });
+    expect(skill.install[0]?.id).toBe("brew");
+    expect(skill.install[0]?.kind).toBe("brew");
+    expect(skill.install[0]?.label).toBe("Install fakebin");
+    expect(skill.install[0]?.bins).toEqual(["fakebin"]);
   });
 
   it("respects OS-gated skills", () => {

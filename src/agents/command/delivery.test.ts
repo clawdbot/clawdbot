@@ -30,6 +30,13 @@ vi.mock("../../auto-reply/reply/reply-media-paths.runtime.js", () => ({
 type NormalizeParams = Parameters<typeof normalizeAgentCommandReplyPayloads>[0];
 type RunResult = NormalizeParams["result"];
 type DeliverParams = Parameters<typeof deliverAgentCommandResult>[0];
+type TextPayloadLike = { text?: unknown };
+type MediaNormalizerOptions = {
+  sessionKey?: unknown;
+  agentId?: unknown;
+  workspaceDir?: unknown;
+  messageProvider?: unknown;
+};
 
 const slackOutboundForTest: ChannelOutboundAdapter = {
   deliveryMode: "direct",
@@ -64,6 +71,38 @@ function createResult(overrides: Partial<RunResult> = {}): RunResult {
     },
     ...(overrides.payloads ? { payloads: overrides.payloads } : {}),
   } as RunResult;
+}
+
+function expectTextPayload(payload: TextPayloadLike | undefined, text: string): void {
+  expect(payload?.text).toBe(text);
+}
+
+function requirePayload(payloads: readonly ReplyPayload[], index: number): ReplyPayload {
+  const payload = payloads.at(index);
+  if (!payload) {
+    throw new Error(`expected payload at index ${index}`);
+  }
+  return payload;
+}
+
+function latestNormalizerOptions(): MediaNormalizerOptions {
+  const options = createReplyMediaPathNormalizerMock.mock.calls.at(-1)?.[0];
+  if (!options || typeof options !== "object") {
+    throw new Error("expected media normalizer options");
+  }
+  return options as MediaNormalizerOptions;
+}
+
+function latestOutboundDeliveryArgs(): {
+  payloads: ReplyPayload[];
+  bestEffort?: boolean;
+  queuePolicy?: string;
+} {
+  const args = deliverOutboundPayloadsMock.mock.calls.at(-1)?.[0];
+  if (!args || typeof args !== "object") {
+    throw new Error("expected outbound delivery arguments");
+  }
+  return args as { payloads: ReplyPayload[]; bestEffort?: boolean; queuePolicy?: string };
 }
 
 async function deliverMediaReplyForTest(outboundSession: DeliverParams["outboundSession"]) {
@@ -114,11 +153,8 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       result: createResult(),
     });
 
-    expect(normalized).toMatchObject([
-      {
-        text: "Choose [[slack_buttons: Retry:retry]]",
-      },
-    ]);
+    expect(normalized).toHaveLength(1);
+    expectTextPayload(normalized[0], "Choose [[slack_buttons: Retry:retry]]");
   });
 
   it("renders response prefix templates with the selected runtime model", () => {
@@ -144,11 +180,8 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       }),
     });
 
-    expect(normalized).toMatchObject([
-      {
-        text: "[openai-codex/gpt-5.4] Ready.",
-      },
-    ]);
+    expect(normalized).toHaveLength(1);
+    expectTextPayload(normalized[0], "[openai-codex/gpt-5.4] Ready.");
   });
 
   it("keeps Slack options text intact for local preview when delivery is disabled", async () => {
@@ -178,7 +211,8 @@ describe("normalizeAgentCommandReplyPayloads", () => {
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith("Options: on, off.");
-    expect(delivered.payloads).toMatchObject([{ text: "Options: on, off." }]);
+    expect(delivered.payloads).toHaveLength(1);
+    expectTextPayload(delivered.payloads[0], "Options: on, off.");
   });
 
   it("normalizes reply-media paths before outbound delivery", async () => {
@@ -197,23 +231,19 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       agentId: "tester",
     } as never);
 
-    expect(createReplyMediaPathNormalizerMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:tester:slack:direct:alice",
-        agentId: "tester",
-        workspaceDir: "/tmp/agent-workspace",
-        messageProvider: "slack",
-      }),
-    );
-    expect(normalizerFn).toHaveBeenCalledWith(
-      expect.objectContaining({ mediaUrls: ["./out/photo.png"] }),
-    );
+    const normalizerOptions = latestNormalizerOptions();
+    expect(normalizerOptions.sessionKey).toBe("agent:tester:slack:direct:alice");
+    expect(normalizerOptions.agentId).toBe("tester");
+    expect(normalizerOptions.workspaceDir).toBe("/tmp/agent-workspace");
+    expect(normalizerOptions.messageProvider).toBe("slack");
+
+    const normalizedInput = normalizerFn.mock.calls.at(0)?.[0];
+    expect(normalizedInput?.mediaUrls).toStrictEqual(["./out/photo.png"]);
     expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(1);
-    const [firstCallArg] = deliverOutboundPayloadsMock.mock.calls[0] ?? [];
-    const deliverArgs = firstCallArg as { payloads: ReplyPayload[] } | undefined;
-    expect(deliverArgs?.payloads[0]).toMatchObject({
-      mediaUrls: ["/tmp/agent-workspace/out/photo.png"],
-    });
+    const deliverArgs = latestOutboundDeliveryArgs();
+    expect(requirePayload(deliverArgs.payloads, 0).mediaUrls).toStrictEqual([
+      "/tmp/agent-workspace/out/photo.png",
+    ]);
   });
 
   it("reports successful requested delivery", async () => {
@@ -288,12 +318,9 @@ describe("normalizeAgentCommandReplyPayloads", () => {
 
     expect(delivered.deliverySucceeded).toBe(false);
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("send failed"));
-    expect(deliverOutboundPayloadsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bestEffort: true,
-        queuePolicy: "best_effort",
-      }),
-    );
+    const deliverArgs = latestOutboundDeliveryArgs();
+    expect(deliverArgs.bestEffort).toBe(true);
+    expect(deliverArgs.queuePolicy).toBe("best_effort");
   });
 
   it("threads agentId into the normalizer when sessionKey is unresolved", async () => {
@@ -302,13 +329,10 @@ describe("normalizeAgentCommandReplyPayloads", () => {
 
     await deliverMediaReplyForTest({ agentId: "tester" } as never);
 
-    expect(createReplyMediaPathNormalizerMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "tester",
-        sessionKey: undefined,
-        workspaceDir: "/tmp/agent-workspace",
-      }),
-    );
+    const normalizerOptions = latestNormalizerOptions();
+    expect(normalizerOptions.agentId).toBe("tester");
+    expect(normalizerOptions.sessionKey).toBeUndefined();
+    expect(normalizerOptions.workspaceDir).toBe("/tmp/agent-workspace");
   });
 
   it("keeps LINE directive-only replies intact for local preview when delivery is disabled", async () => {
@@ -338,11 +362,11 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "[[buttons: Release menu | Choose an action | Retry:retry, Ignore:ignore]]",
     );
-    expect(delivered.payloads).toMatchObject([
-      {
-        text: "[[buttons: Release menu | Choose an action | Retry:retry, Ignore:ignore]]",
-      },
-    ]);
+    expect(delivered.payloads).toHaveLength(1);
+    expectTextPayload(
+      delivered.payloads[0],
+      "[[buttons: Release menu | Choose an action | Retry:retry, Ignore:ignore]]",
+    );
   });
 
   it("merges result metadata overrides into JSON output and returned results", async () => {
@@ -382,10 +406,8 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       },
       2,
     );
-    expect(delivered.meta).toMatchObject({
-      durationMs: 1,
-      transport: "embedded",
-      fallbackFrom: "gateway",
-    });
+    expect(delivered.meta.durationMs).toBe(1);
+    expect(delivered.meta.transport).toBe("embedded");
+    expect(delivered.meta.fallbackFrom).toBe("gateway");
   });
 });

@@ -51,6 +51,14 @@ function registerXaiAutoEnableProbe(): XaiAutoEnableProbe {
   return probe;
 }
 
+function requireEntry<T extends { id?: string }>(entries: T[], id: string): T {
+  const entry = entries.find((candidate) => candidate.id === id);
+  if (!entry) {
+    throw new Error(`Expected entry ${id}`);
+  }
+  return entry;
+}
+
 describe("xai provider plugin", () => {
   it("registers xAI speech providers for batch and streaming STT", async () => {
     const { mediaProviders, realtimeTranscriptionProviders } = await registerProviderPlugin({
@@ -59,24 +67,12 @@ describe("xai provider plugin", () => {
       name: "xAI Provider",
     });
 
-    expect(mediaProviders).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "xai",
-          capabilities: ["audio"],
-          defaultModels: { audio: "grok-stt" },
-        }),
-      ]),
-    );
-    expect(realtimeTranscriptionProviders).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "xai",
-          label: "xAI Realtime Transcription",
-          aliases: expect.arrayContaining(["xai-realtime"]),
-        }),
-      ]),
-    );
+    const mediaProvider = requireEntry(mediaProviders, "xai");
+    expect(mediaProvider.capabilities).toEqual(["audio"]);
+    expect(mediaProvider.defaultModels).toEqual({ audio: "grok-stt" });
+    const realtimeProvider = requireEntry(realtimeTranscriptionProviders, "xai");
+    expect(realtimeProvider.label).toBe("xAI Realtime Transcription");
+    expect(realtimeProvider.aliases).toContain("xai-realtime");
   });
 
   it("declares setup auto-enable reasons for plugin-owned tool config", () => {
@@ -102,33 +98,27 @@ describe("xai provider plugin", () => {
   it("owns replay policy for xAI OpenAI-compatible transports", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
-    expect(
-      provider.buildReplayPolicy?.({
-        provider: "xai",
-        modelApi: "openai-completions",
-        modelId: "grok-3",
-      } as never),
-    ).toMatchObject({
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      applyAssistantFirstOrderingFix: true,
-      validateGeminiTurns: true,
-      validateAnthropicTurns: true,
-    });
+    const completionsPolicy = provider.buildReplayPolicy?.({
+      provider: "xai",
+      modelApi: "openai-completions",
+      modelId: "grok-3",
+    } as never);
+    expect(completionsPolicy?.sanitizeToolCallIds).toBe(true);
+    expect(completionsPolicy?.toolCallIdMode).toBe("strict");
+    expect(completionsPolicy?.applyAssistantFirstOrderingFix).toBe(true);
+    expect(completionsPolicy?.validateGeminiTurns).toBe(true);
+    expect(completionsPolicy?.validateAnthropicTurns).toBe(true);
 
-    expect(
-      provider.buildReplayPolicy?.({
-        provider: "xai",
-        modelApi: "openai-responses",
-        modelId: "grok-4-fast",
-      } as never),
-    ).toMatchObject({
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      applyAssistantFirstOrderingFix: false,
-      validateGeminiTurns: false,
-      validateAnthropicTurns: false,
-    });
+    const responsesPolicy = provider.buildReplayPolicy?.({
+      provider: "xai",
+      modelApi: "openai-responses",
+      modelId: "grok-4-fast",
+    } as never);
+    expect(responsesPolicy?.sanitizeToolCallIds).toBe(true);
+    expect(responsesPolicy?.toolCallIdMode).toBe("strict");
+    expect(responsesPolicy?.applyAssistantFirstOrderingFix).toBe(false);
+    expect(responsesPolicy?.validateGeminiTurns).toBe(false);
+    expect(responsesPolicy?.validateAnthropicTurns).toBe(false);
   });
 
   it("wires provider stream shaping for fast mode and tool-stream defaults", async () => {
@@ -173,25 +163,22 @@ describe("xai provider plugin", () => {
   it("owns forward-compatible Grok model resolution", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
-    expect(
-      provider.resolveDynamicModel?.({
-        provider: "xai",
-        modelId: "grok-4.3",
-        modelRegistry: { find: () => null } as never,
-        providerConfig: {
-          api: "openai-completions",
-          baseUrl: "https://api.x.ai/v1",
-        },
-      } as never),
-    ).toMatchObject({
-      id: "grok-4.3",
+    const resolved = provider.resolveDynamicModel?.({
       provider: "xai",
-      api: "openai-completions",
-      baseUrl: "https://api.x.ai/v1",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 1_000_000,
-    });
+      modelId: "grok-4.3",
+      modelRegistry: { find: () => null } as never,
+      providerConfig: {
+        api: "openai-completions",
+        baseUrl: "https://api.x.ai/v1",
+      },
+    } as never);
+    expect(resolved?.id).toBe("grok-4.3");
+    expect(resolved?.provider).toBe("xai");
+    expect(resolved?.api).toBe("openai-completions");
+    expect(resolved?.baseUrl).toBe("https://api.x.ai/v1");
+    expect(resolved?.reasoning).toBe(true);
+    expect(resolved?.input).toEqual(["text", "image"]);
+    expect(resolved?.contextWindow).toBe(1_000_000);
   });
 
   it("marks modern Grok refs without accepting multi-agent ids", async () => {
@@ -214,41 +201,41 @@ describe("xai provider plugin", () => {
   it("owns xai compat flags for direct and downstream routed models", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
-    expect(
-      provider.normalizeResolvedModel?.({
-        provider: "xai",
-        modelId: "grok-4-1-fast",
-        model: createProviderModel({ id: "grok-4-1-fast" }),
-      } as never),
-    ).toMatchObject({
-      thinkingLevelMap: {
-        off: null,
-        minimal: null,
-        low: null,
-        medium: null,
-        high: null,
-        xhigh: null,
-      },
-      compat: {
-        toolSchemaProfile: "xai",
-        nativeWebSearchTool: true,
-        toolCallArgumentsEncoding: "html-entities",
-      },
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "xai",
+      modelId: "grok-4-1-fast",
+      model: createProviderModel({ id: "grok-4-1-fast" }),
+    } as never);
+    expect(normalized?.thinkingLevelMap).toEqual({
+      off: null,
+      minimal: "low",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "high",
     });
-    expect(
-      provider.contributeResolvedModelCompat?.({
+    const normalizedCompat = normalized?.compat as
+      | {
+          toolSchemaProfile?: string;
+          nativeWebSearchTool?: boolean;
+          toolCallArgumentsEncoding?: string;
+        }
+      | undefined;
+    expect(normalizedCompat?.toolSchemaProfile).toBe("xai");
+    expect(normalizedCompat?.nativeWebSearchTool).toBe(true);
+    expect(normalizedCompat?.toolCallArgumentsEncoding).toBe("html-entities");
+
+    const compat = provider.contributeResolvedModelCompat?.({
+      provider: "openrouter",
+      modelId: "x-ai/grok-4-1-fast",
+      model: createProviderModel({
+        id: "x-ai/grok-4-1-fast",
         provider: "openrouter",
-        modelId: "x-ai/grok-4-1-fast",
-        model: createProviderModel({
-          id: "x-ai/grok-4-1-fast",
-          provider: "openrouter",
-          baseUrl: "https://openrouter.ai/api/v1",
-        }),
-      } as never),
-    ).toMatchObject({
-      toolSchemaProfile: "xai",
-      nativeWebSearchTool: true,
-      toolCallArgumentsEncoding: "html-entities",
-    });
+        baseUrl: "https://openrouter.ai/api/v1",
+      }),
+    } as never);
+    expect(compat?.toolSchemaProfile).toBe("xai");
+    expect(compat?.nativeWebSearchTool).toBe(true);
+    expect(compat?.toolCallArgumentsEncoding).toBe("html-entities");
   });
 });

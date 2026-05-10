@@ -131,6 +131,19 @@ function resolveRecordPackageJsonPath(plugin: InstalledPluginIndexRecord): strin
   return relative.startsWith("..") || path.isAbsolute(relative) ? null : resolved;
 }
 
+function hasStalePersistedPluginDiagnostics(index: InstalledPluginIndex): boolean {
+  return index.diagnostics.some((diag) => {
+    const source = diag.source;
+    return (
+      typeof diag.pluginId === "string" &&
+      diag.pluginId.trim().length > 0 &&
+      typeof source === "string" &&
+      path.isAbsolute(source) &&
+      !fs.existsSync(source)
+    );
+  });
+}
+
 function hasStalePersistedPluginMetadata(index: InstalledPluginIndex): boolean {
   return index.plugins.some((plugin) => {
     if (!hasOptionalMissingPluginManifestFile(plugin)) {
@@ -235,6 +248,13 @@ export function loadPluginRegistrySnapshotWithMetadata(
           code: "persisted-registry-stale-source",
           message:
             "Persisted plugin registry points at a different bundled plugin tree; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+        });
+      } else if (hasStalePersistedPluginDiagnostics(persistedIndex)) {
+        diagnostics.push({
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message:
+            "Persisted plugin registry contains diagnostics referencing missing paths; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
         });
       } else if (hasStalePersistedPluginMetadata(persistedIndex)) {
         diagnostics.push({

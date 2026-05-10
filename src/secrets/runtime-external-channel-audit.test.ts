@@ -404,33 +404,31 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
     expect(
       getPath(snapshot.config, ["channels", "zalo", "accounts", "disabled", "botToken"]),
     ).toEqual(inactiveExecRef("ZALO_DISABLED_ACCOUNT_BOT_TOKEN"));
-    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
-      expect.arrayContaining([
-        "channels.discord.token",
-        "channels.discord.pluralkit.token",
-        "channels.discord.voice.tts.providers.openai.apiKey",
-        "channels.discord.accounts.disabled.token",
-        "channels.discord.accounts.disabled.pluralkit.token",
-        "channels.discord.accounts.disabled.voice.tts.providers.openai.apiKey",
-        "channels.feishu.appSecret",
-        "channels.feishu.encryptKey",
-        "channels.feishu.verificationToken",
-        "channels.feishu.accounts.disabled.appSecret",
-        "channels.feishu.accounts.disabled.encryptKey",
-        "channels.feishu.accounts.disabled.verificationToken",
-        "channels.googlechat.serviceAccount",
-        "channels.googlechat.accounts.disabled.serviceAccount",
-        "channels.msteams.appPassword",
-        "channels.nextcloud-talk.botSecret",
-        "channels.nextcloud-talk.apiPassword",
-        "channels.nextcloud-talk.accounts.disabled.botSecret",
-        "channels.nextcloud-talk.accounts.disabled.apiPassword",
-        "channels.zalo.botToken",
-        "channels.zalo.webhookSecret",
-        "channels.zalo.accounts.disabled.botToken",
-        "channels.zalo.accounts.disabled.webhookSecret",
-      ]),
-    );
+    expect(snapshot.warnings.map((warning) => warning.path)).toStrictEqual([
+      "channels.discord.token",
+      "channels.discord.accounts.disabled.token",
+      "channels.discord.pluralkit.token",
+      "channels.discord.accounts.disabled.pluralkit.token",
+      "channels.discord.voice.tts.providers.openai.apiKey",
+      "channels.discord.accounts.disabled.voice.tts.providers.openai.apiKey",
+      "channels.feishu.appSecret",
+      "channels.feishu.accounts.disabled.appSecret",
+      "channels.feishu.encryptKey",
+      "channels.feishu.accounts.disabled.encryptKey",
+      "channels.feishu.verificationToken",
+      "channels.feishu.accounts.disabled.verificationToken",
+      "channels.googlechat.serviceAccount",
+      "channels.googlechat.accounts.disabled.serviceAccount",
+      "channels.msteams.appPassword",
+      "channels.nextcloud-talk.botSecret",
+      "channels.nextcloud-talk.accounts.disabled.botSecret",
+      "channels.nextcloud-talk.apiPassword",
+      "channels.nextcloud-talk.accounts.disabled.apiPassword",
+      "channels.zalo.botToken",
+      "channels.zalo.accounts.disabled.botToken",
+      "channels.zalo.webhookSecret",
+      "channels.zalo.accounts.disabled.webhookSecret",
+    ]);
     expectMetadataBackedContractsWereUsed();
   });
 });

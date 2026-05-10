@@ -805,6 +805,7 @@ class NpmUpdateSmoke {
           this.linuxVm,
           "/usr/bin/env",
           "HOME=/root",
+          "OPENCLAW_ALLOW_ROOT=1",
           "PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/snap/bin",
           "bash",
           scriptPath,

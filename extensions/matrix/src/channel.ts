@@ -335,6 +335,13 @@ const matrixChannelOutbound: ChannelOutboundAdapter = {
       messageSendingHooks: true,
     },
   },
+  presentationCapabilities: {
+    supported: true,
+    buttons: true,
+    selects: true,
+    context: true,
+    divider: true,
+  },
   shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
     shouldSuppressLocalMatrixExecApprovalPrompt({
       cfg,
@@ -343,6 +350,14 @@ const matrixChannelOutbound: ChannelOutboundAdapter = {
     }),
   ...createRuntimeOutboundDelegates({
     getRuntime: loadMatrixChannelRuntime,
+    renderPresentation: {
+      resolve: (runtime) => runtime.matrixOutbound.renderPresentation,
+      unavailableMessage: "Matrix outbound presentation rendering is unavailable",
+    },
+    sendPayload: {
+      resolve: (runtime) => runtime.matrixOutbound.sendPayload,
+      unavailableMessage: "Matrix outbound payload delivery is unavailable",
+    },
     sendText: {
       resolve: (runtime) => runtime.matrixOutbound.sendText,
       unavailableMessage: "Matrix outbound text delivery is unavailable",

@@ -124,21 +124,111 @@ describe("manifest model catalog planner", () => {
       },
     });
 
+    expect(plan.entries).toHaveLength(1);
+    expect(plan.entries[0]?.pluginId).toBe("openai");
+    expect(plan.entries[0]?.provider).toBe("azure-openai-responses");
+    expect(plan.entries[0]?.discovery).toBe("static");
+    expect(plan.rows).toHaveLength(1);
+    expect(plan.rows[0]?.provider).toBe("azure-openai-responses");
+    expect(plan.rows[0]?.id).toBe("gpt-5.4");
+    expect(plan.rows[0]?.ref).toBe("azure-openai-responses/gpt-5.4");
+    expect(plan.rows[0]?.mergeKey).toBe("azure-openai-responses::gpt-5.4");
+    expect(plan.rows[0]?.api).toBe("azure-openai-responses");
+    expect(plan.rows[0]?.baseUrl).toBe("https://example.openai.azure.com/openai/v1");
+  });
+
+  // Regression for https://github.com/openclaw/openclaw/issues/73876.
+  // The user-facing complaint is that copying a model id from OpenRouter
+  // (which uses "moonshotai/kimi-k2.6" as the org slug) and dropping the
+  // "openrouter/" prefix to hit the direct API failed with "Unknown
+  // model: moonshotai/kimi-k2.6". The OpenAI plugin already shipped the
+  // alias pattern (azure-openai-responses → openai); applying it to the
+  // moonshot manifest lets the org-slug name resolve to moonshot's
+  // existing catalog without renaming the canonical provider id (which
+  // would break operators whose configs already say "moonshot/...").
+  it("plans moonshotai alias rows from the moonshot provider catalog", () => {
+    const plan = planManifestModelCatalogRows({
+      providerFilter: "moonshotai",
+      registry: {
+        plugins: [
+          {
+            id: "moonshot",
+            providers: ["moonshot"],
+            modelCatalog: {
+              aliases: {
+                moonshotai: {
+                  provider: "moonshot",
+                },
+                "moonshot-ai": {
+                  provider: "moonshot",
+                },
+              },
+              discovery: {
+                moonshot: "static",
+              },
+              providers: {
+                moonshot: {
+                  api: "openai-completions",
+                  baseUrl: "https://api.moonshot.ai/v1",
+                  models: [{ id: "kimi-k2.6", name: "Kimi K2.6" }],
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
     expect(plan.entries).toEqual([
       expect.objectContaining({
-        pluginId: "openai",
-        provider: "azure-openai-responses",
+        pluginId: "moonshot",
+        provider: "moonshotai",
         discovery: "static",
       }),
     ]);
     expect(plan.rows).toEqual([
       expect.objectContaining({
-        provider: "azure-openai-responses",
-        id: "gpt-5.4",
-        ref: "azure-openai-responses/gpt-5.4",
-        mergeKey: "azure-openai-responses::gpt-5.4",
-        api: "azure-openai-responses",
-        baseUrl: "https://example.openai.azure.com/openai/v1",
+        provider: "moonshotai",
+        id: "kimi-k2.6",
+        ref: "moonshotai/kimi-k2.6",
+        api: "openai-completions",
+        baseUrl: "https://api.moonshot.ai/v1",
+      }),
+    ]);
+  });
+
+  it("plans moonshot-ai alias rows from the moonshot provider catalog", () => {
+    const plan = planManifestModelCatalogRows({
+      providerFilter: "moonshot-ai",
+      registry: {
+        plugins: [
+          {
+            id: "moonshot",
+            providers: ["moonshot"],
+            modelCatalog: {
+              aliases: {
+                "moonshot-ai": {
+                  provider: "moonshot",
+                },
+              },
+              providers: {
+                moonshot: {
+                  api: "openai-completions",
+                  baseUrl: "https://api.moonshot.ai/v1",
+                  models: [{ id: "kimi-k2.6", name: "Kimi K2.6" }],
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(plan.rows).toEqual([
+      expect.objectContaining({
+        provider: "moonshot-ai",
+        id: "kimi-k2.6",
+        ref: "moonshot-ai/kimi-k2.6",
       }),
     ]);
   });
@@ -173,11 +263,7 @@ describe("manifest model catalog planner", () => {
 
     expect(plan.entries.map((entry) => entry.provider)).toEqual(["openai"]);
     expect(plan.rows.map((row) => row.ref)).toEqual(["openai/gpt-5.4"]);
-    expect(plan.rows).not.toContainEqual(
-      expect.objectContaining({
-        provider: "azure-openai-responses",
-      }),
-    );
+    expect(plan.rows.some((row) => row.provider === "azure-openai-responses")).toBe(false);
   });
 
   it("reports duplicate provider/model keys and excludes conflicted rows", () => {
@@ -223,10 +309,8 @@ describe("manifest model catalog planner", () => {
       },
     ]);
     expect(plan.rows).toHaveLength(1);
-    expect(plan.rows[0]).toMatchObject({
-      mergeKey: "openai::gpt-5.5",
-      name: "GPT-5.5",
-    });
+    expect(plan.rows[0]?.mergeKey).toBe("openai::gpt-5.5");
+    expect(plan.rows[0]?.name).toBe("GPT-5.5");
   });
 });
 

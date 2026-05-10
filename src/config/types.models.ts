@@ -51,7 +51,7 @@ type SupportedAnthropicMessagesCompatFields = Pick<
 >;
 
 type SupportedThinkingFormat =
-  | Exclude<NonNullable<OpenAICompletionsCompat["thinkingFormat"]>, "qwen" | "qwen-chat-template">
+  | NonNullable<OpenAICompletionsCompat["thinkingFormat"]>
   | "deepseek"
   | "openrouter";
 

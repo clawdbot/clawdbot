@@ -223,6 +223,35 @@ describe("diffs tool", () => {
     }
   });
 
+  it("uses default ttlSeconds when tool input omits ttlSeconds", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-02-27T16:00:00Z");
+    vi.setSystemTime(now);
+    try {
+      const screenshotter = createPngScreenshotter();
+      const tool = createToolWithScreenshotter(store, screenshotter, {
+        ...DEFAULT_DIFFS_TOOL_DEFAULTS,
+        ttlSeconds: 60,
+      });
+
+      const result = await tool.execute?.("tool-2c-default-ttl", {
+        before: "one\n",
+        after: "two\n",
+        mode: "file",
+      });
+      const filePath = (result?.details as Record<string, unknown>).filePath as string;
+      await expect(fs.stat(filePath)).resolves.toBeDefined();
+
+      vi.setSystemTime(new Date(now.getTime() + 61_000));
+      await store.cleanupExpired();
+      await expect(fs.stat(filePath)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("accepts image* tool options for backward compatibility", async () => {
     const screenshotter = createPngScreenshotter({
       assertImage: (image) => {

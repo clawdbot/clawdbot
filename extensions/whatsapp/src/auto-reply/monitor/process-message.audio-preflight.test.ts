@@ -219,8 +219,15 @@ describe("processMessage audio preflight transcription", () => {
     expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
       expect.objectContaining({
         ctx: expect.objectContaining({
+          AccountId: "default",
+          From: "+15550000002",
           MediaPaths: ["/tmp/voice.ogg"],
           MediaTypes: ["audio/ogg; codecs=opus"],
+          OriginatingChannel: "whatsapp",
+          OriginatingTo: "+15550000002",
+          Provider: "whatsapp",
+          Surface: "whatsapp",
+          To: "+15550000001",
         }),
       }),
     );

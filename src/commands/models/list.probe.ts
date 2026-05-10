@@ -152,6 +152,29 @@ function buildCandidateMap(modelCandidates: string[]): Map<string, string[]> {
   return map;
 }
 
+function catalogProbePriority(provider: string, modelId: string): number {
+  const id = modelId.trim().toLowerCase();
+  if (provider !== "anthropic") {
+    return 50;
+  }
+  if (/^claude-haiku-4-5-\d{8}$/.test(id)) {
+    return 0;
+  }
+  if (id === "claude-haiku-4-5") {
+    return 1;
+  }
+  if (id === "claude-sonnet-4-6" || id.startsWith("claude-sonnet-4-6-")) {
+    return 2;
+  }
+  if (id.startsWith("claude-sonnet-4-")) {
+    return 3;
+  }
+  if (id.startsWith("claude-3-")) {
+    return 100;
+  }
+  return 50;
+}
+
 function selectProbeModel(params: {
   provider: string;
   candidates: Map<string, string[]>;
@@ -162,7 +185,15 @@ function selectProbeModel(params: {
   if (direct && direct.length > 0) {
     return { provider, model: direct[0] };
   }
-  const fromCatalog = catalog.find((entry) => normalizeProviderId(entry.provider) === provider);
+  const fromCatalog = catalog
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry }) => normalizeProviderId(entry.provider) === provider)
+    .toSorted((left, right) => {
+      const priority =
+        catalogProbePriority(provider, left.entry.id) -
+        catalogProbePriority(provider, right.entry.id);
+      return priority || left.index - right.index;
+    })[0]?.entry;
   if (fromCatalog) {
     return { provider, model: fromCatalog.id };
   }

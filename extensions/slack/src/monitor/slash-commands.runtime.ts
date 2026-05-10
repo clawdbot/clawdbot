@@ -4,17 +4,17 @@ import {
   listNativeCommandSpecsForConfig as listNativeCommandSpecsForConfigImpl,
   parseCommandArgs as parseCommandArgsImpl,
   resolveCommandArgMenu as resolveCommandArgMenuImpl,
-} from "openclaw/plugin-sdk/command-auth";
+} from "openclaw/plugin-sdk/command-auth-native";
 
 type BuildCommandTextFromArgs =
-  typeof import("openclaw/plugin-sdk/command-auth").buildCommandTextFromArgs;
+  typeof import("openclaw/plugin-sdk/command-auth-native").buildCommandTextFromArgs;
 type FindCommandByNativeName =
-  typeof import("openclaw/plugin-sdk/command-auth").findCommandByNativeName;
+  typeof import("openclaw/plugin-sdk/command-auth-native").findCommandByNativeName;
 type ListNativeCommandSpecsForConfig =
-  typeof import("openclaw/plugin-sdk/command-auth").listNativeCommandSpecsForConfig;
-type ParseCommandArgs = typeof import("openclaw/plugin-sdk/command-auth").parseCommandArgs;
+  typeof import("openclaw/plugin-sdk/command-auth-native").listNativeCommandSpecsForConfig;
+type ParseCommandArgs = typeof import("openclaw/plugin-sdk/command-auth-native").parseCommandArgs;
 type ResolveCommandArgMenu =
-  typeof import("openclaw/plugin-sdk/command-auth").resolveCommandArgMenu;
+  typeof import("openclaw/plugin-sdk/command-auth-native").resolveCommandArgMenu;
 
 export function buildCommandTextFromArgs(
   ...args: Parameters<BuildCommandTextFromArgs>

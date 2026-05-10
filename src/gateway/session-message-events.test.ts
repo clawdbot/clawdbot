@@ -119,21 +119,16 @@ async function emitTranscriptUpdateAndCollectEvents(params: {
 
 async function expectNoMessageWithin(params: {
   action?: () => Promise<void> | void;
-  watch: () => Promise<unknown>;
+  watch: (timeoutMs: number) => Promise<unknown>;
   timeoutMs?: number;
 }): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 300;
-  let received = false;
-  const watch = params
-    .watch()
-    .then(() => {
-      received = true;
-    })
-    .catch(() => undefined);
+  const received = params.watch(timeoutMs).then(
+    () => true,
+    () => false,
+  );
   await params.action?.();
-  await new Promise((resolve) => setTimeout(resolve, timeoutMs));
-  expect(received).toBe(false);
-  await watch;
+  await expect(received).resolves.toBe(false);
 }
 
 describe("session.message websocket events", () => {
@@ -226,19 +221,19 @@ describe("session.message websocket events", () => {
         event: "session.message",
       });
       await expectNoMessageWithin({
-        watch: () =>
+        watch: (timeoutMs) =>
           onceMessage(
             unsubscribedWs,
             (message) => message.type === "event" && message.event === "session.message",
-            300,
+            timeoutMs,
           ),
       });
       await expectNoMessageWithin({
-        watch: () =>
+        watch: (timeoutMs) =>
           onceMessage(
             nodeWs,
             (message) => message.type === "event" && message.event === "session.message",
-            300,
+            timeoutMs,
           ),
       });
     } finally {
@@ -644,7 +639,7 @@ describe("session.message websocket events", () => {
       expect(mainAppend.ok).toBe(true);
 
       await expectNoMessageWithin({
-        watch: () =>
+        watch: (timeoutMs) =>
           onceMessage(
             ws,
             (message) =>
@@ -652,7 +647,7 @@ describe("session.message websocket events", () => {
               message.event === "session.message" &&
               (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
                 "agent:main:worker",
-            300,
+            timeoutMs,
           ),
         action: async () => {
           const workerAppend = await appendAssistantMessageToSessionTranscript({
@@ -671,7 +666,7 @@ describe("session.message websocket events", () => {
       expect(unsubscribeRes.payload?.subscribed).toBe(false);
 
       await expectNoMessageWithin({
-        watch: () =>
+        watch: (timeoutMs) =>
           onceMessage(
             ws,
             (message) =>
@@ -679,7 +674,7 @@ describe("session.message websocket events", () => {
               message.event === "session.message" &&
               (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
                 "agent:main:main",
-            300,
+            timeoutMs,
           ),
         action: async () => {
           const hiddenAppend = await appendAssistantMessageToSessionTranscript({

@@ -75,7 +75,9 @@ describe("parsePluginReleaseArgs", () => {
   });
 
   it("parses explicit all-publishable mode", () => {
-    expect(parsePluginReleaseArgs(["--selection-mode", "all-publishable"])).toMatchObject({
+    expect(parsePluginReleaseArgs(["--selection-mode", "all-publishable"])).toEqual({
+      baseRef: undefined,
+      headRef: undefined,
       selectionMode: "all-publishable",
       selection: [],
       pluginsFlagProvided: false,
@@ -285,11 +287,15 @@ describe("collectPublishablePluginPackages", () => {
         packageNames: ["@openclaw/demo-plugin"],
       }),
     ).toEqual([
-      expect.objectContaining({
+      {
         extensionId: "demo-plugin",
+        packageDir: "extensions/demo-plugin",
+        installNpmSpec: "@openclaw/demo-plugin",
+        channel: "beta",
         packageName: "@openclaw/demo-plugin",
         publishTag: "beta",
-      }),
+        version: "2026.4.10-beta.1",
+      },
     ]);
   });
 
@@ -337,12 +343,15 @@ describe("collectPublishablePluginPackages", () => {
     });
 
     expect(collectPublishablePluginPackages(repoDir)).toEqual([
-      expect.objectContaining({
-        channel: "alpha",
+      {
+        extensionId: "demo-plugin",
+        packageDir: "extensions/demo-plugin",
+        installNpmSpec: "@openclaw/demo-plugin",
         packageName: "@openclaw/demo-plugin",
+        channel: "alpha",
         publishTag: "alpha",
         version: "2026.4.10-alpha.1",
-      }),
+      },
     ]);
   });
 });

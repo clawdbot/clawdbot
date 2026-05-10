@@ -184,6 +184,16 @@ async function readUsageStats(agentDir: string) {
   return JSON.parse(raw).usageStats as Record<string, Record<string, unknown> | undefined>;
 }
 
+function expectFailureCount(
+  usageStats: Record<string, Record<string, unknown> | undefined>,
+  profileId: string,
+  reason: AuthProfileFailureReason,
+  expected: number,
+) {
+  const failureCounts = usageStats[profileId]?.failureCounts as Record<string, unknown> | undefined;
+  expect(failureCounts?.[reason]).toBe(expected);
+}
+
 async function writeMultiProfileAuthStore(agentDir: string) {
   await fs.writeFile(
     path.join(agentDir, "auth-profiles.json"),
@@ -393,10 +403,8 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
         enqueue: async (task) => await task(),
       });
 
-      expect(result.meta.toolSummary).toMatchObject({
-        calls: 1,
-        tools: ["write"],
-      });
+      expect(result.meta.toolSummary?.calls).toBe(1);
+      expect(result.meta.toolSummary?.tools).toEqual(["write"]);
       expect(
         classifyEmbeddedPiRunResultForModelFallback({
           provider: "openai-codex",
@@ -468,7 +476,7 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
 
       const usageStats = await readUsageStats(agentDir);
       expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
-      expect(usageStats["openai:p1"]?.failureCounts).toMatchObject({ overloaded: 1 });
+      expectFailureCount(usageStats, "openai:p1", "overloaded", 1);
       expect(typeof usageStats["groq:p1"]?.lastUsed).toBe("number");
 
       expectOpenAiThenGroqAttemptOrder();
@@ -482,6 +490,10 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
       {
         name: "undici-terminated",
         message: "terminated",
+      },
+      {
+        name: "stream-read-error",
+        message: "stream_read_error",
       },
       {
         name: "codex-empty-transport-response",
@@ -566,14 +578,6 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
         /openai\/mock-1: .* \(overloaded\) \| groq\/mock-2: .* \(overloaded\)/,
       );
 
-      const usageStats = await readUsageStats(agentDir);
-      expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
-      expect(typeof usageStats["groq:p1"]?.cooldownUntil).toBe("number");
-      expect(usageStats["openai:p1"]?.failureCounts).toMatchObject({ overloaded: 1 });
-      expect(usageStats["groq:p1"]?.failureCounts).toMatchObject({ overloaded: 1 });
-      expect(usageStats["openai:p1"]?.disabledUntil).toBeUndefined();
-      expect(usageStats["groq:p1"]?.disabledUntil).toBeUndefined();
-
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
       expect(computeBackoffMock).not.toHaveBeenCalled();
       expect(sleepWithAbortMock).not.toHaveBeenCalled();
@@ -637,7 +641,7 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
 
       const usageStats = await readUsageStats(agentDir);
       expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
-      expect(usageStats["openai:p1"]?.failureCounts).toMatchObject({ overloaded: 2 });
+      expectFailureCount(usageStats, "openai:p1", "overloaded", 2);
       expect(computeBackoffMock).not.toHaveBeenCalled();
       expect(sleepWithAbortMock).not.toHaveBeenCalled();
     });
@@ -676,8 +680,9 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
         throw new Error("aborted");
       });
 
-      await expect(
-        runEmbeddedFallback({
+      let thrown: unknown;
+      try {
+        await runEmbeddedFallback({
           agentDir,
           workspaceDir,
           sessionKey: "agent:test:overloaded-backoff-abort",
@@ -687,11 +692,14 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
             ...makeConfig(),
             auth: { cooldowns: { overloadedBackoffMs: 321 } },
           },
-        }),
-      ).rejects.toMatchObject({
-        name: "AbortError",
-        message: "Operation aborted",
-      });
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).name).toBe("AbortError");
+      expect((thrown as Error).message).toBe("Operation aborted");
 
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
       const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as

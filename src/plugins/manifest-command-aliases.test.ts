@@ -21,7 +21,7 @@ describe("manifest command aliases", () => {
     ]);
   });
 
-  it("resolves aliases without treating plugin ids as command aliases", () => {
+  it("resolves explicit same-id aliases without treating other plugin ids as aliases", () => {
     const registry = {
       plugins: [
         {
@@ -32,6 +32,10 @@ describe("manifest command aliases", () => {
           id: "memory",
           enabledByDefault: true,
           commandAliases: [{ name: "legacy-memory" }],
+        },
+        {
+          id: "matrix",
+          commandAliases: [{ name: "matrix" }],
         },
       ],
     };
@@ -45,6 +49,12 @@ describe("manifest command aliases", () => {
       pluginId: "memory",
       enabledByDefault: true,
       name: "legacy-memory",
+    });
+    expect(
+      resolveManifestCommandAliasOwnerInRegistry({ command: "matrix", registry }),
+    ).toMatchObject({
+      pluginId: "matrix",
+      name: "matrix",
     });
   });
 

@@ -12,7 +12,7 @@ import {
 const { repoRoot, sourceRoots, resolveFromRepo } = createPairingGuardContext(import.meta.url);
 
 const allowedFiles = new Set([
-  resolveFromRepo("src/security/dm-policy-shared.ts"),
+  resolveFromRepo("src/channels/message-access/legacy-policy.ts"),
   resolveFromRepo("src/channels/allow-from.ts"),
   // Config migration/audit logic may intentionally reference store + group fields.
   resolveFromRepo("src/security/fix.ts"),

@@ -40,6 +40,16 @@ const losslessClawToolRegistry: PluginManifestCommandAliasRegistry = {
   ],
 };
 
+const browserCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
+  plugins: [
+    {
+      id: "browser",
+      enabledByDefault: true,
+      commandAliases: [{ name: "browser" }],
+    },
+  ],
+};
+
 describe("isGatewayRunFastPathArgv", () => {
   it("matches only plain gateway foreground starts without root options or help", () => {
     expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway"])).toBe(true);
@@ -191,11 +201,15 @@ describe("shouldUseBrowserHelpFastPath", () => {
 describe("resolveMissingPluginCommandMessage", () => {
   it("explains plugins.allow misses for a bundled plugin command", () => {
     expect(
-      resolveMissingPluginCommandMessage("browser", {
-        plugins: {
-          allow: ["quietchat"],
+      resolveMissingPluginCommandMessage(
+        "browser",
+        {
+          plugins: {
+            allow: ["quietchat"],
+          },
         },
-      }),
+        { registry: browserCommandAliasRegistry },
+      ),
     ).toContain('`plugins.allow` excludes "browser"');
   });
 
@@ -402,7 +416,7 @@ describe("resolveMissingPluginCommandMessage", () => {
     expect(message).toContain('"lossless-claw"');
   });
 
-  it("preserves the plugins.allow suggestion when the unknown name is not a plugin tool", () => {
+  it("returns null for unknown names excluded by plugins.allow", () => {
     const message = resolveMissingPluginCommandMessage(
       "totally-unknown",
       {
@@ -412,14 +426,30 @@ describe("resolveMissingPluginCommandMessage", () => {
       },
       { registry: losslessClawToolRegistry },
     );
-    expect(message).not.toBeNull();
-    expect(message).toContain('`plugins.allow` excludes "totally-unknown"');
+    expect(message).toBeNull();
+  });
+
+  it("points metadata-only CLI roots in plugins.allow at their parent plugin", () => {
+    const message = resolveMissingPluginCommandMessage(
+      "qa",
+      {
+        plugins: {
+          allow: ["browser"],
+        },
+      },
+      {
+        resolveCliCommandSurfaceOwner: () => "qa-lab",
+      },
+    );
+    expect(message).toContain('"qa" is not a plugin');
+    expect(message).toContain('"qa-lab"');
+    expect(message).toContain('Add "qa-lab" to `plugins.allow` instead of "qa"');
   });
 
   it("does not attribute a tool to an owning plugin excluded by plugins.allow", () => {
     // The owning plugin is denied via plugins.allow, so the manifest-declared
-    // tool is not available through the owning plugin. Fall through to the
-    // standard plugins.allow message instead of falsely attributing it.
+    // tool is not available through the owning plugin. Tool names are not CLI
+    // command surfaces, so do not suggest adding the tool name to plugins.allow.
     const message = resolveMissingPluginCommandMessage(
       "lcm_recent",
       {
@@ -429,9 +459,7 @@ describe("resolveMissingPluginCommandMessage", () => {
       },
       { registry: losslessClawToolRegistry },
     );
-    expect(message).not.toBeNull();
-    expect(message).not.toContain("agent tool available");
-    expect(message).toContain('`plugins.allow` excludes "lcm_recent"');
+    expect(message).toBeNull();
   });
 
   it("does not attribute a tool to an owning plugin disabled via plugins.entries", () => {

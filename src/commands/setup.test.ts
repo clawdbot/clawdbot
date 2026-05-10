@@ -8,9 +8,11 @@ function createSetupDeps(home: string) {
   const configPath = path.join(home, ".openclaw", "openclaw.json");
   return {
     createConfigIO: () => ({ configPath }),
-    ensureAgentWorkspace: vi.fn(async (params?: { dir?: string }) => ({
-      dir: params?.dir ?? path.join(home, ".openclaw", "workspace"),
-    })),
+    ensureAgentWorkspace: vi.fn(
+      async (params?: { dir?: string; skipOptionalBootstrapFiles?: string[] }) => ({
+        dir: params?.dir ?? path.join(home, ".openclaw", "workspace"),
+      }),
+    ),
     formatConfigPath: (value: string) => value,
     logConfigUpdated: vi.fn(
       (runtime: { log: (message: string) => void }, opts: { path?: string; suffix?: string }) => {
@@ -61,10 +63,11 @@ describe("setupCommand", () => {
 
       const logs = runtime.log.mock.calls.map((call) => String(call[0])).join("\n");
       expect(logs).toContain(
-        "Setup complete: local config, workspace, and session directories are ready.",
+        "Setup complete: config, workspace, and session directories are ready.",
       );
+      expect(logs).toContain("openclaw onboard");
       expect(logs).toContain("openclaw configure");
-      expect(logs).toContain("openclaw setup --wizard");
+      expect(logs).toContain("openclaw channels add");
     });
   });
 
@@ -131,12 +134,10 @@ describe("setupCommand", () => {
 
       await setupCommand(undefined, runtime, deps);
 
-      expect(deps.ensureAgentWorkspace).toHaveBeenCalledWith(
-        expect.objectContaining({
-          dir: workspace,
-          skipOptionalBootstrapFiles: ["IDENTITY.md", "USER.md"],
-        }),
-      );
+      expect(deps.ensureAgentWorkspace).toHaveBeenCalledOnce();
+      const [workspaceParams] = deps.ensureAgentWorkspace.mock.calls[0] ?? [];
+      expect(workspaceParams?.dir).toBe(workspace);
+      expect(workspaceParams?.skipOptionalBootstrapFiles).toEqual(["IDENTITY.md", "USER.md"]);
     });
   });
 

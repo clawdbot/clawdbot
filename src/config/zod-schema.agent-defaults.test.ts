@@ -32,6 +32,32 @@ describe("agent defaults schema", () => {
     ).toMatchObject({ success: true });
   });
 
+  it("accepts subagent delegation mode on defaults and agent entries", () => {
+    expect(
+      AgentDefaultsSchema.safeParse({
+        subagents: {
+          delegationMode: "prefer",
+        },
+      }),
+    ).toMatchObject({ success: true });
+    expect(
+      AgentEntrySchema.safeParse({
+        id: "coordinator",
+        subagents: {
+          delegationMode: "suggest",
+        },
+      }),
+    ).toMatchObject({ success: true });
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({
+        subagents: {
+          delegationMode: "required",
+        },
+      }),
+      "subagents.delegationMode",
+    );
+  });
+
   it("accepts videoGenerationModel", () => {
     expect(
       AgentDefaultsSchema.safeParse({

@@ -47,6 +47,7 @@ type DiffsPluginConfig = {
     /** @deprecated Use fileMaxWidth. */
     imageMaxWidth?: number;
     mode?: DiffMode;
+    ttlSeconds?: number;
   };
   security?: {
     allowRemoteViewer?: boolean;
@@ -89,6 +90,7 @@ export const DEFAULT_DIFFS_TOOL_DEFAULTS: DiffToolDefaults = {
   fileScale: DEFAULT_IMAGE_QUALITY_PROFILES.standard.scale,
   fileMaxWidth: DEFAULT_IMAGE_QUALITY_PROFILES.standard.maxWidth,
   mode: "both",
+  ttlSeconds: 1800,
 };
 
 type DiffsPluginSecurityConfig = {
@@ -168,6 +170,12 @@ const DiffsPluginJsonSchemaSource = z.strictObject({
         .optional()
         .describe("Deprecated alias for fileMaxWidth."),
       mode: z.enum(DIFF_MODES).default(DEFAULT_DIFFS_TOOL_DEFAULTS.mode).optional(),
+      ttlSeconds: z
+        .number()
+        .min(1)
+        .max(21_600)
+        .default(DEFAULT_DIFFS_TOOL_DEFAULTS.ttlSeconds)
+        .optional(),
     })
     .optional(),
   security: z
@@ -281,6 +289,7 @@ export function resolveDiffsPluginDefaults(config: unknown): DiffToolDefaults {
     fileScale: normalizeFileScale(fileScale, profile.scale),
     fileMaxWidth: normalizeFileMaxWidth(fileMaxWidth, profile.maxWidth),
     mode: normalizeMode(defaults.mode),
+    ttlSeconds: normalizeTtlSeconds(defaults.ttlSeconds),
   };
 }
 
@@ -377,6 +386,14 @@ function normalizeFileMaxWidth(fileMaxWidth: number | undefined, fallback: numbe
 
 function normalizeMode(mode?: DiffMode): DiffMode {
   return mode && DIFF_MODES.includes(mode) ? mode : DEFAULT_DIFFS_TOOL_DEFAULTS.mode;
+}
+
+function normalizeTtlSeconds(ttlSeconds?: number): number {
+  if (ttlSeconds === undefined || !Number.isFinite(ttlSeconds)) {
+    return DEFAULT_DIFFS_TOOL_DEFAULTS.ttlSeconds;
+  }
+  const rounded = Math.floor(ttlSeconds);
+  return Math.min(Math.max(rounded, 1), 21_600);
 }
 
 export function resolveDiffImageRenderOptions(params: {

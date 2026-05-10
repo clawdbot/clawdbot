@@ -2031,7 +2031,7 @@ describe("active-memory plugin", () => {
       { pluginId: "other-plugin", lines: ["Other Plugin: keep me"] },
       {
         pluginId: "active-memory",
-        lines: [expect.stringContaining("🧩 Active Memory: status=empty")],
+        lines: [expect.stringContaining("🧩 Active Memory: status=no_relevant_memory")],
       },
     ]);
   });
@@ -2073,8 +2073,7 @@ describe("active-memory plugin", () => {
     expect(hasDebugLine("no configured memory tools available")).toBe(true);
     expect(hasWarnLine("No callable tools remain")).toBe(false);
     const lines = getActiveMemoryLines(sessionKey);
-    expect(lines).toEqual([expect.stringContaining("🧩 Active Memory: status=empty")]);
-    expect(lines.join("\n")).not.toContain("status=unavailable");
+    expect(lines).toEqual([expect.stringContaining("🧩 Active Memory: status=unavailable")]);
   });
 
   it("skips missing memory tools when the allowlist error includes inherited sources", async () => {
@@ -2099,7 +2098,7 @@ describe("active-memory plugin", () => {
     expect(hasDebugLine("no configured memory tools available")).toBe(true);
     expect(hasWarnLine("No callable tools remain")).toBe(false);
     expect(getActiveMemoryLines(sessionKey)).toEqual([
-      expect.stringContaining("🧩 Active Memory: status=empty"),
+      expect.stringContaining("🧩 Active Memory: status=unavailable"),
     ]);
   });
 
@@ -2131,7 +2130,7 @@ describe("active-memory plugin", () => {
     expect(result).toBeUndefined();
     expect(hasDebugLine("no configured memory tools available")).toBe(true);
     expect(getActiveMemoryLines(sessionKey)).toEqual([
-      expect.stringContaining("🧩 Active Memory: status=empty"),
+      expect.stringContaining("🧩 Active Memory: status=unavailable"),
     ]);
   });
 
@@ -2157,7 +2156,7 @@ describe("active-memory plugin", () => {
     expect(hasDebugLine("no configured memory tools available")).toBe(true);
     expect(hasWarnLine("No callable tools remain")).toBe(false);
     expect(getActiveMemoryLines(sessionKey)).toEqual([
-      expect.stringContaining("🧩 Active Memory: status=empty"),
+      expect.stringContaining("🧩 Active Memory: status=unavailable"),
     ]);
   });
 
@@ -2185,7 +2184,7 @@ describe("active-memory plugin", () => {
       expect(hasDebugLine("no configured memory tools available")).toBe(false);
       expect(hasWarnLine(reason)).toBe(true);
       expect(getActiveMemoryLines(sessionKey)).toEqual([
-        expect.stringContaining("🧩 Active Memory: status=empty"),
+        expect.stringContaining("🧩 Active Memory: status=failed"),
       ]);
     },
   );
@@ -2521,7 +2520,7 @@ describe("active-memory plugin", () => {
 
     expect(result).toBeUndefined();
     expect(getActiveMemoryLines(sessionKey)).toEqual([
-      expect.stringContaining("🧩 Active Memory: status=empty"),
+      expect.stringContaining("🧩 Active Memory: status=failed"),
     ]);
     expect(getActiveMemoryLines(sessionKey).join("\n")).not.toContain(
       "must not be surfaced from generic errors",
@@ -2625,7 +2624,7 @@ describe("active-memory plugin", () => {
     ).resolves.toMatchObject({ backend: "qmd", hits: 1 });
   });
 
-  it("caches ok and empty results but not timeout_partial results", () => {
+  it("caches ok summaries but not empty, no-relevant, or timeout_partial results", () => {
     expect(
       __testing.shouldCacheResult({
         status: "timeout_partial",
@@ -2647,10 +2646,17 @@ describe("active-memory plugin", () => {
         elapsedMs: 1,
         summary: null,
       }),
-    ).toBe(true);
+    ).toBe(false);
+    expect(
+      __testing.shouldCacheResult({
+        status: "no_relevant_memory",
+        elapsedMs: 1,
+        summary: null,
+      }),
+    ).toBe(false);
   });
 
-  it("caches empty recall results", async () => {
+  it("does not cache no-relevant-memory recall results", async () => {
     api.pluginConfig = {
       agents: ["main"],
       logging: true,
@@ -2679,16 +2685,11 @@ describe("active-memory plugin", () => {
       },
     );
 
-    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(2);
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(
-      infoLines.some(
-        (line: string) =>
-          line.includes(" cached status=empty ") || line.includes(" cached status=empty"),
-      ),
-    ).toBe(true);
+    expect(infoLines.some((line: string) => line.includes("cached status="))).toBe(false);
   });
 
   it("surfaces timeout_partial summaries in status lines, metadata, and prompt prefixes", () => {
@@ -2911,7 +2912,7 @@ describe("active-memory plugin", () => {
     expect(wallClockMs).toBeLessThan(CONFIGURED_TIMEOUT_MS + HARD_DEADLINE_MARGIN_MS);
   });
 
-  it("fast-fails terminal zero-hit memory_search results without waiting for recall timeout", async () => {
+  it("does not fast-fail terminal zero-hit memory_search results as empty", async () => {
     const CONFIGURED_TIMEOUT_MS = 1_000;
     __testing.setMinimumTimeoutMsForTests(1);
     __testing.setSetupGraceTimeoutMsForTests(0);
@@ -2947,10 +2948,10 @@ describe("active-memory plugin", () => {
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expectLinesToContain(infoLines, "done status=empty");
-    expectLinesNotToContain(infoLines, "done status=timeout");
+    expectLinesToContain(infoLines, "done status=timeout");
+    expectLinesNotToContain(infoLines, "done status=empty");
     expect(getActiveMemoryLines(sessionKey)).toEqual([
-      expect.stringContaining("🧩 Active Memory: status=empty"),
+      expect.stringContaining("🧩 Active Memory: status=timeout"),
       expect.stringContaining("🔎 Active Memory Debug: backend=qmd searchMs=8 hits=0"),
     ]);
   });
@@ -3039,10 +3040,10 @@ describe("active-memory plugin", () => {
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expectLinesToContain(infoLines, "done status=empty");
+    expectLinesToContain(infoLines, "done status=unavailable");
     expectLinesNotToContain(infoLines, "done status=timeout");
     expect(getActiveMemoryLines(sessionKey)).toEqual([
-      expect.stringContaining("🧩 Active Memory: status=empty"),
+      expect.stringContaining("🧩 Active Memory: status=unavailable"),
       expect.stringContaining(
         "🔎 Active Memory Debug: Memory search is unavailable due to an embedding/provider error. Check the embedding provider configuration, then retry memory_search.",
       ),
@@ -3301,7 +3302,7 @@ describe("active-memory plugin", () => {
       {
         pluginId: "active-memory",
         lines: [
-          expect.stringContaining("🧩 Active Memory: status=empty"),
+          expect.stringContaining("🧩 Active Memory: status=unavailable"),
           expect.stringContaining(
             "🔎 Active Memory Debug: Memory search is unavailable because the embedding provider quota is exhausted. Top up or switch embedding provider, then retry memory_search.",
           ),

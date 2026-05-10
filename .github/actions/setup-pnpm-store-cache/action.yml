@@ -39,6 +39,7 @@ runs:
     - name: Setup pnpm (corepack retry)
       shell: bash
       env:
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
         PNPM_VERSION: ${{ inputs.pnpm-version }}
       run: |
         set -euo pipefail

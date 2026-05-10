@@ -520,6 +520,8 @@ jobs:
           install-bun: "false"
 
       - name: Build dist
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build:ci-artifacts
 
       - name: Build Control UI
@@ -602,14 +604,14 @@ jobs:
 
           if [ "$RUN_CHANNELS" = "true" ]; then
             start_check "channels" env \
-              NODE_OPTIONS=--max-old-space-size=6144 \
+              NODE_OPTIONS=--max-old-space-size=8192 \
               OPENCLAW_VITEST_MAX_WORKERS=1 \
               pnpm test:channels
           fi
 
           if [ "$RUN_CORE_SUPPORT_BOUNDARY" = "true" ]; then
             start_check "core-support-boundary" env \
-              NODE_OPTIONS=--max-old-space-size=6144 \
+              NODE_OPTIONS=--max-old-space-size=8192 \
               OPENCLAW_VITEST_MAX_WORKERS=2 \
               node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
           fi
@@ -1120,7 +1122,7 @@ jobs:
 
       - name: Run Node 22 compatibility
         env:
-          NODE_OPTIONS: --max-old-space-size=6144
+          NODE_OPTIONS: --max-old-space-size=8192
         run: |
           pnpm build
           pnpm ui:build
@@ -1200,7 +1202,7 @@ jobs:
 
       - name: Run Node test shard
         env:
-          NODE_OPTIONS: --max-old-space-size=6144
+          NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
@@ -1795,7 +1797,7 @@ jobs:
     runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-windows-2025' || 'windows-2025' }}
     timeout-minutes: 60
     env:
-      NODE_OPTIONS: --max-old-space-size=6144
+      NODE_OPTIONS: --max-old-space-size=8192
       # Keep total concurrency predictable on the smaller Windows runner.
       OPENCLAW_VITEST_MAX_WORKERS: 1
       OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD: 1

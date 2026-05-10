@@ -717,7 +717,7 @@ hook surface. Plugins can block native Codex tools through `before_tool_call`,
 observe results through `after_tool_call`, and participate in Codex
 `PermissionRequest` approvals. The bridge does not rewrite Codex-native tool
 arguments yet. The exact Codex runtime support boundary lives in the
-[Codex harness v1 support contract](/plugins/codex-harness#v1-support-contract).
+[Codex harness v1 support contract](/plugins/codex-harness-runtime#v1-support-contract).
 
 For full typed hook behavior, see [SDK overview](/plugins/sdk-overview#hook-decision-semantics).
 

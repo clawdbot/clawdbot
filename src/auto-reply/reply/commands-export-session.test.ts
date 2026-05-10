@@ -89,6 +89,8 @@ vi.mock("node:fs/promises", async () => {
   };
 });
 
+import { buildExportSessionReply } from "./commands-export-session.js";
+
 function makeParams(): HandleCommandsParams {
   return {
     cfg: {},
@@ -156,8 +158,6 @@ describe("buildExportSessionReply", () => {
   });
 
   it("resolves store and transcript paths from the target session agent", async () => {
-    const { buildExportSessionReply } = await import("./commands-export-session.js");
-
     await buildExportSessionReply(makeParams());
 
     expect(hoisted.resolveDefaultSessionStorePathMock).toHaveBeenCalledWith("target");
@@ -168,7 +168,6 @@ describe("buildExportSessionReply", () => {
   });
 
   it("prefers the active command storePath over the default target-agent store", async () => {
-    const { buildExportSessionReply } = await import("./commands-export-session.js");
     hoisted.loadSessionStoreMock.mockReturnValue({
       "agent:target:session": {
         sessionId: "session-1",
@@ -192,7 +191,6 @@ describe("buildExportSessionReply", () => {
   });
 
   it("uses the target store entry even when the wrapper sessionEntry is missing", async () => {
-    const { buildExportSessionReply } = await import("./commands-export-session.js");
     hoisted.loadSessionStoreMock.mockReturnValue({
       "agent:target:session": {
         sessionId: "session-from-store",
@@ -216,8 +214,6 @@ describe("buildExportSessionReply", () => {
   });
 
   it("injects scripts and session data through the real export template", async () => {
-    const { buildExportSessionReply } = await import("./commands-export-session.js");
-
     await buildExportSessionReply(makeParams());
 
     const html = hoisted.writeFileMock.mock.calls[0]?.[1];
@@ -243,7 +239,6 @@ describe("buildExportSessionReply", () => {
   });
 
   it("suffixes colliding default export filenames instead of overwriting", async () => {
-    const { buildExportSessionReply } = await import("./commands-export-session.js");
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-05T10:11:12.345Z"));
     const collision = Object.assign(new Error("exists"), { code: "EEXIST" });
@@ -269,7 +264,6 @@ describe("buildExportSessionReply", () => {
   });
 
   it("preserves replacement text with dollar sequences", async () => {
-    const { buildExportSessionReply } = await import("./commands-export-session.js");
     hoisted.exportHtmlTemplateContents.set(
       "template.html",
       [

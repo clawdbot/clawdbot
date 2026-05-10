@@ -35,6 +35,10 @@ import {
   type SessionPatchHookContext,
   type SessionPatchHookEvent,
 } from "../../hooks/internal-hooks.js";
+import {
+  measureDiagnosticsTimelineSpan,
+  measureDiagnosticsTimelineSpanSync,
+} from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
@@ -456,20 +460,28 @@ function resolveAbortSessionKey(params: {
   return params.requestedKey;
 }
 
+function collectTrackedActiveSessionRunKeys(
+  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
+): Set<string> {
+  const keys = new Set<string>();
+  if (!(context.chatAbortControllers instanceof Map)) {
+    return keys;
+  }
+  for (const active of context.chatAbortControllers.values()) {
+    if (typeof active.sessionKey === "string" && active.sessionKey.trim()) {
+      keys.add(active.sessionKey);
+    }
+  }
+  return keys;
+}
+
 function hasTrackedActiveSessionRun(params: {
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
   requestedKey: string;
   canonicalKey: string;
 }): boolean {
-  if (!(params.context.chatAbortControllers instanceof Map)) {
-    return false;
-  }
-  for (const active of params.context.chatAbortControllers.values()) {
-    if (active.sessionKey === params.canonicalKey || active.sessionKey === params.requestedKey) {
-      return true;
-    }
-  }
-  return false;
+  const activeSessionKeys = collectTrackedActiveSessionRunKeys(params.context);
+  return activeSessionKeys.has(params.canonicalKey) || activeSessionKeys.has(params.requestedKey);
 }
 
 async function interruptSessionRunIfActive(params: {
@@ -690,33 +702,88 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const p = params;
     const cfg = context.getRuntimeConfig();
-    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
-    const listStore =
-      p.configuredAgentsOnly === true ? filterSessionStoreToConfiguredAgents(cfg, store) : store;
-    const modelCatalog = await loadOptionalSessionsListModelCatalog(context);
-    const result = await listSessionsFromStoreAsync({
-      cfg,
-      storePath,
-      store: listStore,
-      modelCatalog,
-      opts: p,
-    });
-    respond(
-      true,
-      {
-        ...result,
-        sessions: result.sessions.map((session) =>
-          Object.assign({}, session, {
-            hasActiveRun: hasTrackedActiveSessionRun({
-              context,
-              requestedKey: session.key,
-              canonicalKey: session.key,
+    const configuredAgentsOnly = p.configuredAgentsOnly === true;
+    const payload = await measureDiagnosticsTimelineSpan(
+      "gateway.sessions.list",
+      async () => {
+        const { storePath, store } = measureDiagnosticsTimelineSpanSync(
+          "gateway.sessions.list.store_load",
+          () =>
+            loadCombinedSessionStoreForGateway(cfg, {
+              agentId: p.agentId,
+              configuredAgentsOnly,
             }),
-          }),
-        ),
+          {
+            config: cfg,
+            phase: "sessions.list",
+            attributes: {
+              agentId: p.agentId ?? null,
+              configuredAgentsOnly,
+            },
+          },
+        );
+        const listStore = configuredAgentsOnly
+          ? filterSessionStoreToConfiguredAgents(cfg, store)
+          : store;
+        const modelCatalog = await measureDiagnosticsTimelineSpan(
+          "gateway.sessions.list.model_catalog",
+          () => loadOptionalSessionsListModelCatalog(context),
+          {
+            config: cfg,
+            phase: "sessions.list",
+          },
+        );
+        const result = await measureDiagnosticsTimelineSpan(
+          "gateway.sessions.list.rows",
+          () =>
+            listSessionsFromStoreAsync({
+              cfg,
+              storePath,
+              store: listStore,
+              modelCatalog,
+              opts: p,
+            }),
+          {
+            config: cfg,
+            phase: "sessions.list",
+            attributes: {
+              storeEntries: Object.keys(listStore).length,
+            },
+          },
+        );
+        const sessions = measureDiagnosticsTimelineSpanSync(
+          "gateway.sessions.list.active_run_flags",
+          () => {
+            const activeSessionKeys = collectTrackedActiveSessionRunKeys(context);
+            return result.sessions.map((session) =>
+              Object.assign({}, session, {
+                hasActiveRun: activeSessionKeys.has(session.key),
+              }),
+            );
+          },
+          {
+            config: cfg,
+            phase: "sessions.list",
+            attributes: {
+              sessions: result.sessions.length,
+            },
+          },
+        );
+        return {
+          ...result,
+          sessions,
+        };
       },
-      undefined,
+      {
+        config: cfg,
+        phase: "sessions.list",
+        attributes: {
+          agentId: p.agentId ?? null,
+          configuredAgentsOnly,
+        },
+      },
     );
+    respond(true, payload, undefined);
   },
   "sessions.cleanup": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsCleanupParams, "sessions.cleanup", respond)) {

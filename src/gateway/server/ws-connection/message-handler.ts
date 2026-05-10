@@ -95,6 +95,7 @@ import {
   type ErrorShape,
   errorShape,
   formatValidationErrors,
+  MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   validateConnectParams,
   validateRequestFrame,
@@ -502,17 +503,27 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
 
         // protocol negotiation
         const { minProtocol, maxProtocol } = connectParams;
-        if (maxProtocol < PROTOCOL_VERSION || minProtocol > PROTOCOL_VERSION) {
+        const supportsCurrentProtocol =
+          maxProtocol >= PROTOCOL_VERSION && minProtocol <= PROTOCOL_VERSION;
+        const supportsProbeRestartProtocol =
+          connectParams.client.mode === GATEWAY_CLIENT_MODES.PROBE &&
+          maxProtocol >= MIN_PROBE_PROTOCOL_VERSION &&
+          minProtocol <= PROTOCOL_VERSION;
+        if (!supportsCurrentProtocol && !supportsProbeRestartProtocol) {
           markHandshakeFailure("protocol-mismatch", {
             minProtocol,
             maxProtocol,
             expectedProtocol: PROTOCOL_VERSION,
+            minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
           });
           logWsControl.warn(
             `protocol mismatch conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
           );
           sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "protocol mismatch", {
-            details: { expectedProtocol: PROTOCOL_VERSION },
+            details: {
+              expectedProtocol: PROTOCOL_VERSION,
+              minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
+            },
           });
           close(1002, "protocol mismatch");
           return;

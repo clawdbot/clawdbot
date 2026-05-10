@@ -508,9 +508,9 @@ Supported candidate sources:
 
 `OpenClaw Release Checks` runs Package Acceptance with `source=artifact`, the
 prepared release package artifact, `suite_profile=custom`,
-`docker_lanes=doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update`,
+`docker_lanes=doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update`,
 `telegram_mode=mock-openai`. Package Acceptance keeps migration, update,
-configured-auth update restart, stale plugin dependency cleanup, offline plugin
+configured-auth update restart, live ClawHub skill install, stale plugin dependency cleanup, offline plugin
 fixtures, plugin update, and Telegram package QA against the same resolved
 tarball. Blocking release checks use the default latest published package
 baseline; `run_release_soak=true` or
@@ -559,8 +559,8 @@ Common package profiles:
 
 - `smoke`: quick package install/channel/agent, gateway network, and config
   reload lanes
-- `package`: install/update/restart/plugin package contracts without live
-  ClawHub; this is the release-check default
+- `package`: install/update/restart/plugin package contracts plus live ClawHub
+  skill install proof; this is the release-check default
 - `product`: `package` plus MCP channels, cron/subagent cleanup, OpenAI web
   search, and OpenWebUI
 - `full`: Docker release-path chunks with OpenWebUI

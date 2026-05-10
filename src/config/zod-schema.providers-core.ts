@@ -551,6 +551,7 @@ const DiscordVoiceRealtimeSchema = z
     toolPolicy: DiscordVoiceRealtimeToolPolicySchema.optional(),
     consultPolicy: DiscordVoiceRealtimeConsultPolicySchema.optional(),
     bargeIn: z.boolean().optional(),
+    minBargeInAudioEndMs: z.number().int().min(0).max(10_000).optional(),
     debounceMs: z.number().int().positive().max(10_000).optional(),
     providers: z.record(z.string(), z.record(z.string(), z.unknown()).optional()).optional(),
   })
@@ -575,7 +576,7 @@ const DiscordVoiceAgentSessionSchema = z
 const DiscordVoiceSchema = z
   .object({
     enabled: z.boolean().optional(),
-    mode: z.enum(["stt-tts", "talk-buffer", "bidi"]).optional(),
+    mode: z.enum(["stt-tts", "agent-proxy", "bidi"]).optional(),
     agentSession: DiscordVoiceAgentSessionSchema.optional(),
     model: z.string().min(1).optional(),
     realtime: DiscordVoiceRealtimeSchema.optional(),
@@ -1202,6 +1203,7 @@ export const SignalAccountSchemaBase = z
 export const SignalAccountSchema = SignalAccountSchemaBase;
 
 export const SignalConfigSchema = SignalAccountSchemaBase.extend({
+  apiMode: z.enum(["auto", "native", "container"]).optional(),
   accounts: z.record(z.string(), SignalAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {

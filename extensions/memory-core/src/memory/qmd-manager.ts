@@ -643,6 +643,18 @@ export class QmdMemoryManager implements MemorySearchManager {
     return null;
   }
 
+  private parseConflictingCollectionNameFromAddError(message: string): string | null {
+    if (
+      !normalizeLowercaseStringOrEmpty(message).includes(
+        "a collection already exists for this path and pattern",
+      )
+    ) {
+      return null;
+    }
+    const match = /^\s*Name:\s*([a-z0-9._-]+)\s*\(qmd:\/\/[^)\s]+\/?\)\s*$/im.exec(message);
+    return match?.[1] ?? null;
+  }
+
   private async tryRebindConflictingCollection(params: {
     collection: ManagedCollection;
     existing: Map<string, ListedCollection>;
@@ -660,6 +672,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
 
     if (!conflictName) {
+      const parsedConflictName = this.parseConflictingCollectionNameFromAddError(addErrorMessage);
+      if (parsedConflictName) {
+        log.warn(
+          `qmd collection add conflict for ${collection.name}: qmd reported existing collection ${parsedConflictName}, but list output did not include verifiable path/pattern metadata; refusing automatic rebind. If ${parsedConflictName} is stale, remove it manually with 'qmd collection remove ${parsedConflictName}'`,
+        );
+      }
       return false;
     }
     if (conflictName === collection.name) {

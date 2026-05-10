@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { findGitRoot } from "../infra/git-root.js";
+import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import {
   formatUserTime,
   resolveUserTimeFormat,
@@ -23,6 +24,7 @@ type RuntimeInfoInput = {
   /** Supported message actions for the current channel (e.g., react, edit, unsend) */
   channelActions?: string[];
   repoRoot?: string;
+  activeProcessSessions?: ActiveProcessSessionReference[];
 };
 
 type SystemPromptRuntimeParams = {

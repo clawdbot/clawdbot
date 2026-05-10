@@ -38,6 +38,8 @@ export type RealtimeTalkWebRtcSdpSessionResult = {
   model?: string;
   voice?: string;
   expiresAt?: number;
+  consultThinkingLevel?: string;
+  consultFastMode?: boolean;
 };
 
 export type RealtimeTalkJsonPcmWebSocketSessionResult = {
@@ -51,6 +53,8 @@ export type RealtimeTalkJsonPcmWebSocketSessionResult = {
   model?: string;
   voice?: string;
   expiresAt?: number;
+  consultThinkingLevel?: string;
+  consultFastMode?: boolean;
 };
 
 export type RealtimeTalkGatewayRelaySessionResult = {
@@ -61,6 +65,8 @@ export type RealtimeTalkGatewayRelaySessionResult = {
   model?: string;
   voice?: string;
   expiresAt?: number;
+  consultThinkingLevel?: string;
+  consultFastMode?: boolean;
 };
 
 export type RealtimeTalkManagedRoomSessionResult = {
@@ -71,6 +77,8 @@ export type RealtimeTalkManagedRoomSessionResult = {
   model?: string;
   voice?: string;
   expiresAt?: number;
+  consultThinkingLevel?: string;
+  consultFastMode?: boolean;
 };
 
 export type RealtimeTalkSessionResult =
@@ -88,6 +96,8 @@ export type RealtimeTalkTransportContext = {
   client: GatewayBrowserClient;
   sessionKey: string;
   callbacks: RealtimeTalkCallbacks;
+  consultThinkingLevel?: string;
+  consultFastMode?: boolean;
 };
 
 export function createRealtimeTalkEventEmitter(

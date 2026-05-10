@@ -519,15 +519,13 @@ function expectRegistryErrorDiagnostic(params: {
   pluginId: string;
   message: string;
 }) {
-  expect(params.registry.diagnostics, params.message).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        level: "error",
-        pluginId: params.pluginId,
-        message: params.message,
-      }),
-    ]),
+  const diagnostic = params.registry.diagnostics.find(
+    (entry) =>
+      entry.level === "error" &&
+      entry.pluginId === params.pluginId &&
+      entry.message === params.message,
   );
+  expect(diagnostic, params.message).toBeDefined();
 }
 
 function expectDiagnosticContaining(params: {
@@ -536,15 +534,13 @@ function expectDiagnosticContaining(params: {
   level?: string;
   pluginId?: string;
 }) {
-  expect(params.registry.diagnostics, params.message).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        ...(params.level ? { level: params.level } : {}),
-        ...(params.pluginId ? { pluginId: params.pluginId } : {}),
-        message: expect.stringContaining(params.message),
-      }),
-    ]),
+  const diagnostic = params.registry.diagnostics.find(
+    (entry) =>
+      (!params.level || entry.level === params.level) &&
+      (!params.pluginId || entry.pluginId === params.pluginId) &&
+      entry.message.includes(params.message),
   );
+  expect(diagnostic, params.message).toBeDefined();
 }
 
 function expectNoDiagnosticContaining(params: {
@@ -553,15 +549,13 @@ function expectNoDiagnosticContaining(params: {
   level?: string;
   pluginId?: string;
 }) {
-  expect(params.registry.diagnostics, params.message).not.toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        ...(params.level ? { level: params.level } : {}),
-        ...(params.pluginId ? { pluginId: params.pluginId } : {}),
-        message: expect.stringContaining(params.message),
-      }),
-    ]),
+  const diagnostic = params.registry.diagnostics.find(
+    (entry) =>
+      (!params.level || entry.level === params.level) &&
+      (!params.pluginId || entry.pluginId === params.pluginId) &&
+      entry.message.includes(params.message),
   );
+  expect(diagnostic, params.message).toBeUndefined();
 }
 
 function createWarningLogger(warnings: string[]) {
@@ -985,11 +979,10 @@ describe("loadOpenClawPlugins", () => {
       }),
     );
 
-    expect(registry.plugins.find((entry) => entry.id === plugin.id)).toMatchObject({
-      id: plugin.id,
-      status: "loaded",
-      rootDir: fs.realpathSync.native(plugin.dir),
-    });
+    const record = registry.plugins.find((entry) => entry.id === plugin.id);
+    expect(record?.id).toBe(plugin.id);
+    expect(record?.status).toBe("loaded");
+    expect(record?.rootDir).toBe(fs.realpathSync.native(plugin.dir));
   });
 
   it("refreshes bundled plugin-sdk aliases without deleting the shared alias directory", () => {
@@ -1247,12 +1240,11 @@ describe("loadOpenClawPlugins", () => {
       autoEnabledReasons: autoEnabled.autoEnabledReasons,
     });
 
-    expect(registry.plugins.find((entry) => entry.id === "telegram")).toMatchObject({
-      explicitlyEnabled: false,
-      activated: true,
-      activationSource: "auto",
-      activationReason: "telegram configured",
-    });
+    const telegram = registry.plugins.find((entry) => entry.id === "telegram");
+    expect(telegram?.explicitlyEnabled).toBe(false);
+    expect(telegram?.activated).toBe(true);
+    expect(telegram?.activationSource).toBe("auto");
+    expect(telegram?.activationReason).toBe("telegram configured");
   });
 
   it("materializes auto-enabled bundled channels into restrictive allowlists", () => {
@@ -1284,12 +1276,10 @@ describe("loadOpenClawPlugins", () => {
     expect(autoEnabled.config.plugins?.allow).toEqual(["browser", "telegram"]);
     expect(telegram?.status).toBe("loaded");
     expect(telegram?.error).toBeUndefined();
-    expect(telegram).toMatchObject({
-      explicitlyEnabled: false,
-      activated: true,
-      activationSource: "auto",
-      activationReason: "telegram configured",
-    });
+    expect(telegram?.explicitlyEnabled).toBe(false);
+    expect(telegram?.activated).toBe(true);
+    expect(telegram?.activationSource).toBe("auto");
+    expect(telegram?.activationReason).toBe("telegram configured");
   });
 
   it("preserves all auto-enable reasons in activation metadata", () => {
@@ -1325,12 +1315,11 @@ describe("loadOpenClawPlugins", () => {
       },
     });
 
-    expect(registry.plugins.find((entry) => entry.id === "telegram")).toMatchObject({
-      explicitlyEnabled: false,
-      activated: true,
-      activationSource: "auto",
-      activationReason: "telegram configured; telegram selected for startup",
-    });
+    const telegram = registry.plugins.find((entry) => entry.id === "telegram");
+    expect(telegram?.explicitlyEnabled).toBe(false);
+    expect(telegram?.activated).toBe(true);
+    expect(telegram?.activationSource).toBe("auto");
+    expect(telegram?.activationReason).toBe("telegram configured; telegram selected for startup");
   });
 
   it("keeps explicit plugin enablement distinct from derived activation", () => {
@@ -1354,12 +1343,11 @@ describe("loadOpenClawPlugins", () => {
       activationSourceConfig: config,
     });
 
-    expect(registry.plugins.find((entry) => entry.id === "demo")).toMatchObject({
-      explicitlyEnabled: true,
-      activated: true,
-      activationSource: "explicit",
-      activationReason: "enabled in config",
-    });
+    const demo = registry.plugins.find((entry) => entry.id === "demo");
+    expect(demo?.explicitlyEnabled).toBe(true);
+    expect(demo?.activated).toBe(true);
+    expect(demo?.activationSource).toBe("explicit");
+    expect(demo?.activationReason).toBe("enabled in config");
   });
 
   it("preserves package.json metadata for bundled memory plugins", () => {
@@ -1542,14 +1530,8 @@ module.exports = { id: "manifest-only-plugin", register() { throw new Error("man
         });
 
         expect(fs.existsSync(importedMarker)).toBe(false);
-        expect(registry.plugins).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              id: "manifest-only-plugin",
-              status: "loaded",
-            }),
-          ]),
-        );
+        const record = registry.plugins.find((entry) => entry.id === "manifest-only-plugin");
+        expect(record?.status).toBe("loaded");
       },
     },
     {
@@ -1598,14 +1580,13 @@ module.exports = { id: "manifest-surfaces-plugin", register() { throw new Error(
 
         const record = registry.plugins.find((entry) => entry.id === "manifest-surfaces-plugin");
         expect(fs.existsSync(importedMarker)).toBe(false);
-        expect(record).toEqual(
-          expect.objectContaining({
-            channelIds: ["manifest-surfaces-channel"],
-            providerIds: ["manifest-surfaces-provider"],
-            cliBackendIds: ["manifest-surfaces-cli", "manifest-surfaces-setup-cli"],
-            commands: ["manifest-surfaces-command"],
-          }),
-        );
+        expect(record?.channelIds).toEqual(["manifest-surfaces-channel"]);
+        expect(record?.providerIds).toEqual(["manifest-surfaces-provider"]);
+        expect(record?.cliBackendIds).toEqual([
+          "manifest-surfaces-cli",
+          "manifest-surfaces-setup-cli",
+        ]);
+        expect(record?.commands).toEqual(["manifest-surfaces-command"]);
       },
     },
     {
@@ -1655,14 +1636,8 @@ module.exports = { id: "manifest-surfaces-plugin", register() { throw new Error(
           registry,
           message: "memory slot plugin not found or not marked as memory: memory-demo",
         });
-        expect(registry.plugins).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              id: "memory-demo",
-              memorySlotSelected: true,
-            }),
-          ]),
-        );
+        const record = registry.plugins.find((entry) => entry.id === "memory-demo");
+        expect(record?.memorySlotSelected).toBe(true);
       },
     },
     {
@@ -1692,14 +1667,8 @@ module.exports = { id: "throws-after-import", register() {} };`,
         });
 
         try {
-          expect(registry.plugins).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                id: "throws-after-import",
-                status: "error",
-              }),
-            ]),
-          );
+          const record = registry.plugins.find((entry) => entry.id === "throws-after-import");
+          expect(record?.status).toBe("error");
           expect(listImportedRuntimePluginIds()).toContain("throws-after-import");
           expect(Number(Reflect.get(globalThis, importMarker) ?? 0)).toBeGreaterThan(0);
         } finally {
@@ -1755,17 +1724,15 @@ module.exports = { id: "throws-after-import", register() {} };`,
         const registry = loadOpenClawPlugins(nestedOptions);
 
         try {
-          expect(Reflect.get(globalThis, marker)).toMatchObject({
-            name: PluginLoadReentryError.name,
-            message: expect.stringContaining("plugin load reentry detected"),
-          });
-          expect(registry.plugins.find((entry) => entry.id === "reentrant-snapshot")).toMatchObject(
-            {
-              status: "error",
-              error: expect.stringContaining("plugin load reentry detected"),
-              failurePhase: "register",
-            },
-          );
+          const reentryError = Reflect.get(globalThis, marker) as
+            | { name?: unknown; message?: unknown }
+            | undefined;
+          expect(reentryError?.name).toBe(PluginLoadReentryError.name);
+          expect(String(reentryError?.message)).toContain("plugin load reentry detected");
+          const record = registry.plugins.find((entry) => entry.id === "reentrant-snapshot");
+          expect(record?.status).toBe("error");
+          expect(record?.error).toContain("plugin load reentry detected");
+          expect(record?.failurePhase).toBe("register");
         } finally {
           Reflect.deleteProperty(globalThis, marker);
           Reflect.deleteProperty(globalThis, reenterFnMarker);
@@ -1815,11 +1782,8 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
         try {
           expect(Reflect.get(globalThis, marker)).toBe("undefined");
-          expect(
-            registry.plugins.find((entry) => entry.id === "runtime-registry-reentry"),
-          ).toMatchObject({
-            status: "loaded",
-          });
+          const record = registry.plugins.find((entry) => entry.id === "runtime-registry-reentry");
+          expect(record?.status).toBe("loaded");
         } finally {
           Reflect.deleteProperty(globalThis, marker);
           Reflect.deleteProperty(globalThis, resolverMarker);
@@ -2097,13 +2061,13 @@ module.exports = { id: "throws-after-import", register() {} };`,
     });
 
     expect(listAgentHarnessIds()).toStrictEqual([]);
-    expect(registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        pluginId: "bad-harness",
-        message: 'agent harness "broken" registration missing required runtime methods',
-      }),
+    const diagnostic = registry.diagnostics.find(
+      (entry) =>
+        entry.level === "error" &&
+        entry.pluginId === "bad-harness" &&
+        entry.message === 'agent harness "broken" registration missing required runtime methods',
     );
+    expect(diagnostic).toBeDefined();
   });
 
   it("does not register internal hooks globally during non-activating loads", () => {
@@ -2682,10 +2646,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(scoped.plugins.find((entry) => entry.id === "snapshot-detached-runtime")?.status).toBe(
       "loaded",
     );
-    expect(getDetachedTaskLifecycleRuntimeRegistration()).toMatchObject({
-      pluginId: "active-runtime",
-      runtime: activeRuntime,
-    });
+    const runtimeRegistration = getDetachedTaskLifecycleRuntimeRegistration();
+    expect(runtimeRegistration?.pluginId).toBe("active-runtime");
+    expect(runtimeRegistration?.runtime).toBe(activeRuntime);
   });
 
   it("clears newly-registered detached task runtimes when plugin register fails", () => {
@@ -2812,10 +2775,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(getPluginCommandSpecs()).toEqual([
       { name: "hue", description: "Control Hue lights", acceptsArgs: false },
     ]);
-    expect(resolvePluginInteractiveNamespaceMatch("telegram", "hue:on")).toMatchObject({
-      namespace: "hue",
-      payload: "on",
-    });
+    const match = resolvePluginInteractiveNamespaceMatch("telegram", "hue:on");
+    expect(match?.namespace).toBe("hue");
+    expect(match?.payload).toBe("on");
 
     const dedupeKey = "telegram:hue:callback-1";
     expect(claimPluginInteractiveCallbackDedupe(dedupeKey, 1_000)).toBe(true);
@@ -2835,13 +2797,10 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(getPluginCommandSpecs()).toEqual([
       { name: "hue", description: "Control Hue lights", acceptsArgs: false },
     ]);
-    expect(
-      resolvePluginInteractiveNamespaceMatch("telegram", "hue:on")?.registration,
-    ).toMatchObject({
-      pluginId: "cached-command-interactive",
-      namespace: "hue",
-      channel: "telegram",
-    });
+    const registration = resolvePluginInteractiveNamespaceMatch("telegram", "hue:on")?.registration;
+    expect(registration?.pluginId).toBe("cached-command-interactive");
+    expect(registration?.namespace).toBe("hue");
+    expect(registration?.channel).toBe("telegram");
     expect(claimPluginInteractiveCallbackDedupe(dedupeKey, 1_003)).toBe(false);
   });
 
@@ -3089,14 +3048,13 @@ module.exports = { id: "throws-after-import", register() {} };`,
     });
 
     expect(registry.tools).toStrictEqual([]);
-    expect(registry.diagnostics).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          pluginId: "undeclared-tool-owner",
-          message: "plugin must declare contracts.tools before registering agent tools",
-        }),
-      ]),
-    );
+    expect(
+      registry.diagnostics.some(
+        (entry) =>
+          entry.pluginId === "undeclared-tool-owner" &&
+          entry.message === "plugin must declare contracts.tools before registering agent tools",
+      ),
+    ).toBe(true);
   });
 
   it("rejects plugin tool names outside the manifest tool contract", () => {
@@ -3131,14 +3089,13 @@ module.exports = { id: "throws-after-import", register() {} };`,
     });
 
     expect(registry.tools).toStrictEqual([]);
-    expect(registry.diagnostics).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          pluginId: "wrong-tool-owner",
-          message: "plugin must declare contracts.tools for: runtime_tool",
-        }),
-      ]),
-    );
+    expect(
+      registry.diagnostics.some(
+        (entry) =>
+          entry.pluginId === "wrong-tool-owner" &&
+          entry.message === "plugin must declare contracts.tools for: runtime_tool",
+      ),
+    ).toBe(true);
   });
 
   it("caches non-activating snapshots without restoring global side effects", () => {
@@ -3851,11 +3808,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
     });
 
     const telegram = registry.channels.find((entry) => entry.plugin.id === "telegram")?.plugin;
-    expect(telegram?.meta).toMatchObject({
-      id: "telegram",
-      label: "Telegram",
-      docsPath: "/channels/telegram",
-    });
+    expect(telegram?.meta.id).toBe("telegram");
+    expect(telegram?.meta.label).toBe("Telegram");
+    expect(telegram?.meta.docsPath).toBe("/channels/telegram");
     expectDiagnosticContaining({
       registry,
       level: "warn",
@@ -4348,9 +4303,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
       registry,
       message: "api.registerHttpHandler(...) was removed",
     });
-    expect(errors).toEqual(
-      expect.arrayContaining([expect.stringContaining("api.registerHttpHandler(...) was removed")]),
-    );
+    expect(
+      errors.some((message) => message.includes("api.registerHttpHandler(...) was removed")),
+    ).toBe(true);
   });
 
   it("does not rewrite unrelated registerHttpHandler helper failures", () => {
@@ -5036,20 +4991,16 @@ module.exports = {
         );
       }
       if (expectedSetupSecretId) {
-        expect(registry.channelSetups[0]?.plugin.secrets?.secretTargetRegistryEntries).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              id: expectedSetupSecretId,
-            }),
-          ]),
-        );
-        expect(registry.channels[0]?.plugin.secrets?.secretTargetRegistryEntries).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              id: expectedSetupSecretId,
-            }),
-          ]),
-        );
+        expect(
+          registry.channelSetups[0]?.plugin.secrets?.secretTargetRegistryEntries?.some(
+            (entry) => entry.id === expectedSetupSecretId,
+          ),
+        ).toBe(true);
+        expect(
+          registry.channels[0]?.plugin.secrets?.secretTargetRegistryEntries?.some(
+            (entry) => entry.id === expectedSetupSecretId,
+          ),
+        ).toBe(true);
       }
     },
   );
@@ -5346,10 +5297,11 @@ module.exports = {
 
     expect(
       registry.channels.find((entry) => entry.plugin.id === "healthy-chat")?.plugin.meta,
-    ).toMatchObject({
-      label: "Healthy Chat",
-      docsPath: "/channels/healthy-chat",
-    });
+    ).toBeDefined();
+    const healthyMeta = registry.channels.find((entry) => entry.plugin.id === "healthy-chat")
+      ?.plugin.meta;
+    expect(healthyMeta?.label).toBe("Healthy Chat");
+    expect(healthyMeta?.docsPath).toBe("/channels/healthy-chat");
     expect(registry.plugins.find((entry) => entry.id === "healthy-channel")?.status).toBe("loaded");
     expectDiagnosticContaining({
       registry,
@@ -5523,15 +5475,14 @@ module.exports = {
     expect(registry.plugins.find((entry) => entry.id === "next-turn-policy")?.status).toBe(
       "loaded",
     );
-    expect(registry.diagnostics).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          pluginId: "next-turn-policy",
-          message:
+    expect(
+      registry.diagnostics.some(
+        (entry) =>
+          entry.pluginId === "next-turn-policy" &&
+          entry.message ===
             "next-turn injection blocked by plugins.entries.next-turn-policy.hooks.allowPromptInjection=false",
-        }),
-      ]),
-    );
+      ),
+    ).toBe(true);
   });
 
   it("keeps prompt-injection typed hooks enabled by default", () => {
@@ -6625,13 +6576,10 @@ module.exports = {
       expect(registry.plugins.find((entry) => entry.id === "trusted-plugin")?.status).toBe(
         "loaded",
       );
-      expect(registry.plugins.find((entry) => entry.id === "untrusted-plugin")).toMatchObject({
-        status: "disabled",
-        error: "not in allowlist",
-      });
-      expect(warnings).not.toEqual(
-        expect.arrayContaining([expect.stringContaining("plugins.allow is empty")]),
-      );
+      const untrustedPlugin = registry.plugins.find((entry) => entry.id === "untrusted-plugin");
+      expect(untrustedPlugin?.status).toBe("disabled");
+      expect(untrustedPlugin?.error).toBe("not in allowlist");
+      expect(warnings.some((message) => message.includes("plugins.allow is empty"))).toBe(false);
       expect(
         warnings.some(
           (message) =>

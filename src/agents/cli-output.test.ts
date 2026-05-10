@@ -272,10 +272,16 @@ describe("parseCliJsonl", () => {
       "local-cli",
     );
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       text: "dialect says hello",
       sessionId: "session-dialect",
-      usage: { input: 5, output: 2 },
+      usage: {
+        input: 5,
+        output: 2,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: undefined,
+      },
     });
   });
 

@@ -1,4 +1,10 @@
-import { complete, type Api, type Model } from "@mariozechner/pi-ai";
+import {
+  completeSimple,
+  type Api,
+  type Model,
+  type ThinkingLevel as SimpleCompletionThinkingLevel,
+} from "@mariozechner/pi-ai";
+import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
@@ -32,6 +38,7 @@ type AllowedMissingApiKeyMode = ResolvedProviderAuth["mode"];
 export type SimpleCompletionModelOptions = {
   maxTokens?: number;
   temperature?: number;
+  reasoning?: ThinkLevel | SimpleCompletionThinkingLevel;
   signal?: AbortSignal;
 };
 
@@ -160,10 +167,14 @@ export async function prepareSimpleCompletionModel(params: {
   profileId?: string;
   preferredProfile?: string;
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
+  allowBundledStaticCatalogFallback?: boolean;
   skipPiDiscovery?: boolean;
 }): Promise<PreparedSimpleCompletionModel> {
   const resolved = params.skipPiDiscovery
     ? await resolveModelAsync(params.provider, params.modelId, params.agentDir, params.cfg, {
+        ...(params.allowBundledStaticCatalogFallback !== undefined
+          ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
+          : {}),
         skipPiDiscovery: true,
       })
     : resolveModel(params.provider, params.modelId, params.agentDir, params.cfg);
@@ -240,6 +251,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   modelRef?: string;
   preferredProfile?: string;
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
+  allowBundledStaticCatalogFallback?: boolean;
   skipPiDiscovery?: boolean;
 }): Promise<PreparedSimpleCompletionModelForAgent> {
   const selection = resolveSimpleCompletionSelectionForAgent({
@@ -260,6 +272,9 @@ export async function prepareSimpleCompletionModelForAgent(params: {
     profileId: selection.profileId,
     preferredProfile: params.preferredProfile,
     allowMissingApiKeyModes: params.allowMissingApiKeyModes,
+    ...(params.allowBundledStaticCatalogFallback !== undefined
+      ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
+      : {}),
     skipPiDiscovery: params.skipPiDiscovery,
   });
   if ("error" in prepared) {
@@ -278,13 +293,32 @@ export async function prepareSimpleCompletionModelForAgent(params: {
 export async function completeWithPreparedSimpleCompletionModel(params: {
   model: Model<Api>;
   auth: ResolvedProviderAuth;
-  context: Parameters<typeof complete>[1];
+  context: Parameters<typeof completeSimple>[1];
   cfg?: OpenClawConfig;
   options?: SimpleCompletionModelOptions;
 }) {
   const completionModel = prepareModelForSimpleCompletion({ model: params.model, cfg: params.cfg });
-  return await complete(completionModel, params.context, {
-    ...params.options,
+  const { reasoning: rawReasoning, ...options } = params.options ?? {};
+  const reasoning = normalizeSimpleCompletionReasoning(rawReasoning);
+  return await completeSimple(completionModel, params.context, {
+    ...options,
+    ...(reasoning ? { reasoning } : {}),
     apiKey: params.auth.apiKey,
   });
+}
+
+function normalizeSimpleCompletionReasoning(
+  reasoning: SimpleCompletionModelOptions["reasoning"],
+): SimpleCompletionThinkingLevel | undefined {
+  switch (reasoning) {
+    case undefined:
+    case "off":
+      return undefined;
+    case "adaptive":
+      return "medium";
+    case "max":
+      return "xhigh";
+    default:
+      return reasoning;
+  }
 }

@@ -16,6 +16,7 @@ import {
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
+import { normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { normalizeProviderId } from "./provider-id.js";
@@ -196,14 +197,15 @@ function normalizePersistedModelCatalogEntry(
     contextTokens?: number;
   },
 ): ModelCatalogEntry | undefined {
-  const id = normalizeOptionalString(entry.id) ?? "";
-  if (!id) {
+  const rawId = normalizeOptionalString(entry.id) ?? "";
+  if (!rawId) {
     return undefined;
   }
   const provider = normalizeProviderId(providerRaw);
   if (!provider) {
     return undefined;
   }
+  const id = normalizeConfiguredProviderCatalogModelId(provider, rawId);
   const name = normalizeOptionalString(entry.name ?? id) || id;
   const contextWindow =
     typeof entry?.contextWindow === "number" && entry.contextWindow > 0
@@ -379,14 +381,15 @@ export async function loadModelCatalog(params?: {
       logStage("suppress-resolver-ready");
 
       for (const entry of entries) {
-        const id = normalizeOptionalString(entry?.id) ?? "";
-        if (!id) {
+        const rawId = normalizeOptionalString(entry?.id) ?? "";
+        if (!rawId) {
           continue;
         }
         const provider = normalizeOptionalString(entry?.provider) ?? "";
         if (!provider) {
           continue;
         }
+        const id = normalizeConfiguredProviderCatalogModelId(provider, rawId);
         if (shouldSuppressBuiltInModel({ provider, id })) {
           continue;
         }
@@ -425,7 +428,14 @@ export async function loadModelCatalog(params?: {
           },
         });
         if (supplemental.length > 0) {
-          appendCatalogEntriesIfAbsent(models, supplemental);
+          const normalizedSupplemental: ModelCatalogEntry[] = [];
+          for (const entry of supplemental) {
+            normalizedSupplemental.push({
+              ...entry,
+              id: normalizeConfiguredProviderCatalogModelId(entry.provider, entry.id),
+            });
+          }
+          appendCatalogEntriesIfAbsent(models, normalizedSupplemental);
         }
       }
       logStage("plugin-models-merged", `entries=${models.length}`);

@@ -169,13 +169,11 @@ describe("sandbox config merges", () => {
         strictHostKeyChecking: false,
       },
     });
-    expect(ssh).toMatchObject({
-      target: "agent@example.com:2222",
-      command: "ssh",
-      identityFile: "~/.ssh/global",
-      certificateFile: "~/.ssh/agent-cert.pub",
-      strictHostKeyChecking: false,
-    });
+    expect(ssh.target).toBe("agent@example.com:2222");
+    expect(ssh.command).toBe("ssh");
+    expect(ssh.identityFile).toBe("~/.ssh/global");
+    expect(ssh.certificateFile).toBe("~/.ssh/agent-cert.pub");
+    expect(ssh.strictHostKeyChecking).toBe(false);
 
     const sshShared = resolveSandboxSshConfig({
       scope: "shared",

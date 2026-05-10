@@ -28,8 +28,6 @@ import {
   buildResolvedApprovalView,
 } from "./approval-view-model.js";
 import type {
-  ApprovalActionView,
-  ApprovalMetadataView,
   ExpiredApprovalView,
   PendingApprovalView,
   ResolvedApprovalView,

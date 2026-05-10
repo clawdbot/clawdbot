@@ -2,11 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { AuthProfileStore } from "./auth-profiles.js";
 import { resolvePiCredentialMapFromStore } from "./pi-auth-credentials.js";
 import {
   addEnvBackedPiCredentials,
   scrubLegacyStaticAuthJsonEntriesForDiscovery,
 } from "./pi-auth-discovery-core.js";
+import { discoverAuthStorage } from "./pi-model-discovery.js";
 
 vi.mock("./model-auth-env-vars.js", () => ({
   listProviderEnvAuthLookupKeys: () => ["mistral", "workspace-cloud"],
@@ -63,6 +65,10 @@ async function writeLegacyAuthJson(
   await fs.writeFile(path.join(agentDir, "auth.json"), JSON.stringify(authEntries, null, 2));
 }
 
+async function writeAuthProfilesJson(agentDir: string, store: AuthProfileStore): Promise<void> {
+  await fs.writeFile(path.join(agentDir, "auth-profiles.json"), JSON.stringify(store, null, 2));
+}
+
 async function readLegacyAuthJson(agentDir: string): Promise<Record<string, unknown>> {
   return JSON.parse(await fs.readFile(path.join(agentDir, "auth.json"), "utf8")) as Record<
     string,
@@ -103,10 +109,93 @@ describe("discoverAuthStorage", () => {
       type: "api_key",
       key: "sk-ant-runtime",
     });
-    expect(credentials["openai-codex"]).toMatchObject({
-      type: "oauth",
-      access: "oauth-access",
-      refresh: "oauth-refresh",
+    const codexCredential = credentials["openai-codex"] as
+      | { type?: string; access?: string; refresh?: string }
+      | undefined;
+    expect(codexCredential?.type).toBe("oauth");
+    expect(codexCredential?.access).toBe("oauth-access");
+    expect(codexCredential?.refresh).toBe("oauth-refresh");
+  });
+
+  it("keeps keyRef and tokenRef profiles visible only for read-only pi discovery", () => {
+    const credentials = resolvePiCredentialMapFromStore({
+      version: 1,
+      profiles: {
+        "openrouter:default": {
+          type: "api_key",
+          provider: "openrouter",
+          keyRef: { source: "exec", provider: "keychain", id: "OPENROUTER_API_KEY" },
+        },
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_AUTH_TOKEN" },
+        },
+        "expired:default": {
+          type: "token",
+          provider: "expired",
+          tokenRef: { source: "env", provider: "default", id: "EXPIRED_AUTH_TOKEN" },
+          expires: Date.now() - 1_000,
+        },
+      },
+    });
+    const discoveryCredentials = resolvePiCredentialMapFromStore(
+      {
+        version: 1,
+        profiles: {
+          "openrouter:default": {
+            type: "api_key",
+            provider: "openrouter",
+            keyRef: { source: "exec", provider: "keychain", id: "OPENROUTER_API_KEY" },
+          },
+          "anthropic:default": {
+            type: "token",
+            provider: "anthropic",
+            tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_AUTH_TOKEN" },
+          },
+          "expired:default": {
+            type: "token",
+            provider: "expired",
+            tokenRef: { source: "env", provider: "default", id: "EXPIRED_AUTH_TOKEN" },
+            expires: Date.now() - 1_000,
+          },
+        },
+      },
+      { includeSecretRefPlaceholders: true },
+    );
+
+    expect(credentials.openrouter).toBeUndefined();
+    expect(credentials.anthropic).toBeUndefined();
+    expect(discoveryCredentials.openrouter?.type).toBe("api_key");
+    expect(discoveryCredentials.anthropic?.type).toBe("api_key");
+    expect(discoveryCredentials.expired).toBeUndefined();
+  });
+
+  it("marks keyRef-only auth profiles configured for read-only model discovery", async () => {
+    await withAgentDir(async (agentDir) => {
+      await writeAuthProfilesJson(agentDir, {
+        version: 1,
+        profiles: {
+          "fixture-ref-provider:default": {
+            type: "api_key",
+            provider: "fixture-ref-provider",
+            keyRef: { source: "exec", provider: "keychain", id: "FIXTURE_API_KEY" },
+          },
+        },
+      });
+
+      const readOnlyStorage = discoverAuthStorage(agentDir, {
+        readOnly: true,
+        skipExternalAuthProfiles: true,
+        env: {},
+      });
+      const runtimeStorage = discoverAuthStorage(agentDir, {
+        skipExternalAuthProfiles: true,
+        env: {},
+      });
+
+      expect(readOnlyStorage.hasAuth("fixture-ref-provider")).toBe(true);
+      expect(runtimeStorage.hasAuth("fixture-ref-provider")).toBe(false);
     });
   });
 
@@ -126,10 +215,9 @@ describe("discoverAuthStorage", () => {
 
       const parsed = await readLegacyAuthJson(agentDir);
       expect(parsed.openrouter).toBeUndefined();
-      expect(parsed["openai-codex"]).toMatchObject({
-        type: "oauth",
-        access: "oauth-access",
-      });
+      const codexEntry = parsed["openai-codex"] as { type?: string; access?: string } | undefined;
+      expect(codexEntry?.type).toBe("oauth");
+      expect(codexEntry?.access).toBe("oauth-access");
     });
   });
 
@@ -145,7 +233,9 @@ describe("discoverAuthStorage", () => {
         scrubLegacyStaticAuthJsonEntriesForDiscovery(path.join(agentDir, "auth.json"));
 
         const parsed = await readLegacyAuthJson(agentDir);
-        expect(parsed.openrouter).toMatchObject({ type: "api_key", key: "legacy-static-key" });
+        const openrouterEntry = parsed.openrouter as { type?: string; key?: string } | undefined;
+        expect(openrouterEntry?.type).toBe("api_key");
+        expect(openrouterEntry?.key).toBe("legacy-static-key");
       } finally {
         if (previous === undefined) {
           delete process.env.OPENCLAW_AUTH_STORE_READONLY;

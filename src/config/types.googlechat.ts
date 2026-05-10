@@ -4,7 +4,7 @@ import type {
   GroupPolicy,
   ReplyToMode,
 } from "./types.base.js";
-import type { ChannelHealthMonitorConfig } from "./types.channels.js";
+import type { ChannelHealthMonitorConfig } from "./types.channel-health.js";
 import type { DmConfig } from "./types.messages.js";
 import type { SecretRef } from "./types.secrets.js";
 
@@ -121,9 +121,3 @@ export type GoogleChatConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & GoogleChatAccountConfig;
-
-declare module "./types.channels.js" {
-  interface ChannelsConfig {
-    googlechat?: GoogleChatConfig;
-  }
-}

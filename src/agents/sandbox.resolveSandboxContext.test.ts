@@ -288,11 +288,11 @@ describe("resolveSandboxContext", () => {
         workspaceDir: "/tmp/openclaw-test",
       });
 
-      expect(ensureSandboxBrowserMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
-        }),
-      );
+      const browserCalls = ensureSandboxBrowserMock.mock.calls as unknown as Array<
+        [{ ssrfPolicy?: unknown }]
+      >;
+      const [browserOptions] = browserCalls[0] ?? [];
+      expect(browserOptions?.ssrfPolicy).toEqual({ dangerouslyAllowPrivateNetwork: true });
     } finally {
       restore();
     }
@@ -322,18 +322,26 @@ describe("resolveSandboxContext", () => {
       workspaceDir,
     });
 
-    expect(result).toMatchObject({ workspaceDir: expect.any(String) });
     if (!result) {
       throw new Error("expected sandbox workspace resolution");
     }
-    expect(syncSkillsToWorkspaceMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sourceWorkspaceDir: workspaceDir,
-        targetWorkspaceDir: result?.workspaceDir,
-        config: cfg,
-        agentId: "main",
-        eligibility: { remote: { note: "test-remote" } },
-      }),
-    );
+    expect(typeof result.workspaceDir).toBe("string");
+    const syncCalls = syncSkillsToWorkspaceMock.mock.calls as unknown as Array<
+      [
+        {
+          sourceWorkspaceDir?: string;
+          targetWorkspaceDir?: string;
+          config?: OpenClawConfig;
+          agentId?: string;
+          eligibility?: unknown;
+        },
+      ]
+    >;
+    const [syncOptions] = syncCalls[0] ?? [];
+    expect(syncOptions?.sourceWorkspaceDir).toBe(workspaceDir);
+    expect(syncOptions?.targetWorkspaceDir).toBe(result.workspaceDir);
+    expect(syncOptions?.config).toBe(cfg);
+    expect(syncOptions?.agentId).toBe("main");
+    expect(syncOptions?.eligibility).toEqual({ remote: { note: "test-remote" } });
   }, 15_000);
 });

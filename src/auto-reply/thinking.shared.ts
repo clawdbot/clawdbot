@@ -83,6 +83,14 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   return undefined;
 }
 
+export function isSessionDefaultDirectiveValue(raw?: string | null): boolean {
+  const key = normalizeOptionalLowercaseString(raw);
+  if (!key) {
+    return false;
+  }
+  return ["default", "inherit", "inherited", "clear", "reset", "unpin"].includes(key);
+}
+
 export function formatXHighModelHint(): string {
   return "provider models that advertise xhigh reasoning";
 }

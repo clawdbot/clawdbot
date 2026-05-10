@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
-} from "../agents/subagent-registry.js";
+} from "../agents/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
@@ -118,7 +118,7 @@ function listSingleSession(params: {
 
 describe("listSessionsFromStore search", () => {
   afterEach(() => {
-    resetSubagentRegistryForTests({ persist: false });
+    resetSubagentRegistryForTests();
     resetAgentRunContextForTest();
   });
 

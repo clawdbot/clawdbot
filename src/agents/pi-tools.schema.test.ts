@@ -86,13 +86,13 @@ describe("normalizeToolParameterSchema", () => {
     };
 
     expect(cleaned.$defs).toBeUndefined();
-    expect(cleaned.properties).toMatchObject({
+    expect(cleaned.properties).toEqual({
       foo: {
         type: "string",
         enum: ["a", "b"],
       },
     });
-    expect(cleaned.properties?.foo).toMatchObject({
+    expect(cleaned.properties?.foo).toEqual({
       type: "string",
       enum: ["a", "b"],
     });
@@ -428,22 +428,31 @@ describe("normalizeToolParameters", () => {
     );
 
     expect(streamCalls).toBe(2);
-    expect(execute).toHaveBeenCalledWith("call-null-args", {}, undefined, expect.any(Function));
+    const executeCall = execute.mock.calls[0];
+    expect(executeCall?.[0]).toBe("call-null-args");
+    expect(executeCall?.[1]).toEqual({});
+    expect(executeCall?.[2]).toBeUndefined();
+    expect(typeof executeCall?.[3]).toBe("function");
     const toolResult = messages.find((message) => message.role === "toolResult");
-    expect(toolResult).toMatchObject({
-      role: "toolResult",
-      toolCallId: "call-null-args",
-      toolName: "wiki_lint",
-      isError: false,
-      content: [{ type: "text", text: "wiki ok" }],
-    });
+    const toolResultRecord = toolResult as
+      | {
+          role?: string;
+          toolCallId?: string;
+          toolName?: string;
+          isError?: boolean;
+          content?: unknown;
+        }
+      | undefined;
+    expect(toolResultRecord?.role).toBe("toolResult");
+    expect(toolResultRecord?.toolCallId).toBe("call-null-args");
+    expect(toolResultRecord?.toolName).toBe("wiki_lint");
+    expect(toolResultRecord?.isError).toBe(false);
+    expect(toolResultRecord?.content).toEqual([{ type: "text", text: "wiki ok" }]);
     const endedToolCall = events.find((event) => event.type === "tool_execution_end");
-    expect(endedToolCall).toMatchObject({
-      type: "tool_execution_end",
-      toolCallId: "call-null-args",
-      toolName: "wiki_lint",
-      isError: false,
-    });
+    expect(endedToolCall?.type).toBe("tool_execution_end");
+    expect(endedToolCall?.toolCallId).toBe("call-null-args");
+    expect(endedToolCall?.toolName).toBe("wiki_lint");
+    expect(endedToolCall?.isError).toBe(false);
     expect(JSON.stringify(messages)).not.toContain("Validation failed for tool");
   });
 

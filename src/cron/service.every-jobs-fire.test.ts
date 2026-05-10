@@ -35,10 +35,15 @@ describe("CronService interval/cron jobs fire on time", () => {
     enqueueSystemEvent: ReturnType<typeof vi.fn>,
     expectedText: string,
   ) => {
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      expectedText,
-      expect.objectContaining({ agentId: undefined }),
-    );
+    const matchingCall = enqueueSystemEvent.mock.calls.find(([text]) => text === expectedText);
+    if (!matchingCall) {
+      throw new Error(`missing system event ${expectedText}`);
+    }
+    const options = matchingCall[1] as Record<string, unknown>;
+    expect(options.agentId).toBeUndefined();
+    expect(options.sessionKey).toBeUndefined();
+    expect(typeof options.contextKey).toBe("string");
+    expect(String(options.contextKey).startsWith("cron:")).toBe(true);
   };
 
   const countMainSystemEvents = (

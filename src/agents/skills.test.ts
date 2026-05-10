@@ -318,19 +318,13 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       config,
     });
 
-    expect(commands).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          name: "workflows_review",
-          skillName: "workflows:review",
-          description: "Review code with a structured checklist",
-          promptTemplate: "Review the branch carefully.",
-        }),
-      ]),
+    const command = commands.find((entry) => entry.skillName === "workflows:review");
+    expect(command?.name).toBe("workflows_review");
+    expect(command?.description).toBe("Review code with a structured checklist");
+    expect(command?.promptTemplate).toBe("Review the branch carefully.");
+    expect(command?.sourceFilePath).toContain(
+      path.join(pluginRoot, "commands", "workflows-review.md"),
     );
-    expect(
-      commands.find((entry) => entry.skillName === "workflows:review")?.sourceFilePath,
-    ).toContain(path.join(pluginRoot, "commands", "workflows-review.md"));
   });
 });
 

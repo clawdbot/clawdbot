@@ -108,6 +108,7 @@ describe("cron protocol conformance", () => {
       "format",
       "rate_limit",
       "billing",
+      "server_error",
       "timeout",
       "model_not_found",
       "empty_response",

@@ -1521,6 +1521,20 @@
       "text": "Slash commands"
     },
     {
+      "count": 2,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Talk options"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "gpt-realtime-2"
+    },
+    {
       "count": 1,
       "kind": "html-attribute",
       "name": "placeholder",
@@ -1553,6 +1567,13 @@
       "kind": "html-attribute",
       "name": "title",
       "path": "ui/src/ui/views/chat.ts",
+      "text": "Talk options"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/ui/views/chat.ts",
       "text": "Unpin"
     },
     {
@@ -1567,7 +1588,21 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
+      "text": "Auto"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
       "text": "close"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Default"
     },
     {
       "count": 2,
@@ -1595,7 +1630,56 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
+      "text": "Gateway relay"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Google"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "High"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
       "text": "instant"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Low"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Medium"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Minimal"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Model"
     },
     {
       "count": 2,
@@ -1616,6 +1700,41 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
+      "text": "OpenAI"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Prefix ms"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Provider"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Provider WebSocket"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Reasoning"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
       "text": "run"
     },
     {
@@ -1626,11 +1745,46 @@
       "text": "select"
     },
     {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Silence ms"
+    },
+    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
       "text": "Tab"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Transport"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "VAD"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Voice"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "WebRTC"
     },
     {
       "count": 1,

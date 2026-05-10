@@ -67,7 +67,7 @@ const finalizeSetupWizard = vi.hoisted(() =>
     }
 
     const hatch = await options.prompter.select({
-      message: "How do you want to hatch your bot?",
+      message: "How do you want to hatch your agent?",
       options: [],
     });
     if (hatch !== "tui") {
@@ -346,13 +346,13 @@ describe("runSetupWizard", () => {
 
     const caseDir = await makeCaseDir("provider-missing-id-");
     const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) => {
-      if (message === "Select setup mode") {
+      if (message === "Setup mode") {
         return "quickstart";
       }
       if (message === "Select channel (QuickStart)") {
         return "__skip__";
       }
-      if (message === "How do you want to hatch your bot?") {
+      if (message === "How do you want to hatch your agent?") {
         return "skip";
       }
       return "skip";
@@ -543,7 +543,7 @@ describe("runSetupWizard", () => {
     }
 
     const select = vi.fn(async (opts: WizardSelectParams<unknown>) => {
-      if (opts.message === "How do you want to hatch your bot?") {
+      if (opts.message === "How do you want to hatch your agent?") {
         return "tui";
       }
       return "quickstart";

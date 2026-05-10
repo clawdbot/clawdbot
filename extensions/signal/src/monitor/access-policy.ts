@@ -1,20 +1,109 @@
+import {
+  createChannelIngressResolver,
+  defineStableChannelIngressIdentity,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import {
-  readStoreAllowFromForDmPolicy,
-  resolveDmGroupAccessWithLists,
-} from "openclaw/plugin-sdk/security-runtime";
-import { isSignalSenderAllowed, type SignalSender } from "../identity.js";
+  formatSignalSenderId,
+  looksLikeUuid,
+  normalizeSignalAllowRecipient,
+  type SignalSender,
+} from "../identity.js";
 
 type SignalDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
 type SignalGroupPolicy = "open" | "allowlist" | "disabled";
 
-function isSignalGroupAllowed(groupId: string | undefined, allowEntries: string[]): boolean {
-  if (!groupId) {
-    return false;
+const SIGNAL_UUID_KIND = "plugin:signal-uuid" as const;
+const SIGNAL_GROUP_KIND = "plugin:signal-group" as const;
+
+function strippedSignalEntry(
+  entry: string,
+): { trimmed: string; signalStripped: string; lower: string } | null {
+  const trimmed = entry.trim();
+  if (!trimmed) {
+    return null;
   }
-  const candidates = new Set([groupId, `group:${groupId}`, `signal:group:${groupId}`]);
-  return allowEntries.some((entry) => candidates.has(entry));
+  const signalStripped = trimmed.replace(/^signal:/i, "").trim();
+  const lower = signalStripped.toLowerCase();
+  return { trimmed, signalStripped, lower };
+}
+
+function normalizeSignalGroupEntry(entry: string): string | null {
+  const parsed = strippedSignalEntry(entry);
+  if (!parsed) {
+    return null;
+  }
+  const { trimmed, signalStripped, lower } = parsed;
+  if (lower.startsWith("group:")) {
+    const groupId = signalStripped.slice("group:".length).trim();
+    return groupId || null;
+  }
+  return trimmed;
+}
+
+function normalizeSignalUuidEntry(entry: string): string | null {
+  const parsed = strippedSignalEntry(entry);
+  if (!parsed) {
+    return null;
+  }
+  const { signalStripped, lower } = parsed;
+  if (lower.startsWith("uuid:")) {
+    const raw = signalStripped.slice("uuid:".length).trim();
+    return raw || null;
+  }
+  return looksLikeUuid(signalStripped) ? signalStripped : null;
+}
+
+function normalizeSignalPhoneEntry(entry: string): string | null {
+  const parsed = strippedSignalEntry(entry);
+  if (!parsed) {
+    return null;
+  }
+  return normalizeSignalAllowRecipient(parsed.trimmed) ?? null;
+}
+
+const signalIngressIdentity = defineStableChannelIngressIdentity({
+  key: "stable",
+  normalizeEntry: () => null,
+  aliases: [
+    {
+      key: "phone",
+      kind: "phone",
+      normalizeEntry: normalizeSignalPhoneEntry,
+      normalizeSubject: (value: string) => value,
+      sensitivity: "pii",
+    },
+    {
+      key: "uuid",
+      kind: SIGNAL_UUID_KIND,
+      normalizeEntry: normalizeSignalUuidEntry,
+      normalizeSubject: (value: string) => value,
+      sensitivity: "pii",
+    },
+    {
+      key: "group",
+      kind: SIGNAL_GROUP_KIND,
+      normalizeEntry: normalizeSignalGroupEntry,
+      normalizeSubject: (value: string) => value,
+    },
+  ],
+  isWildcardEntry: (entry) => entry.trim() === "*",
+  resolveEntryId({ entryIndex, fieldKey }) {
+    return `entry-${entryIndex + 1}:${fieldKey}`;
+  },
+});
+
+function signalSubjectInput(params: { sender: SignalSender; groupId?: string }) {
+  return {
+    stableId: formatSignalSenderId(params.sender),
+    aliases: {
+      phone: params.sender.kind === "phone" ? params.sender.e164 : undefined,
+      uuid: params.sender.kind === "uuid" ? params.sender.raw : undefined,
+      group: params.groupId,
+    },
+  };
 }
 
 export async function resolveSignalAccessState(params: {
@@ -25,34 +114,44 @@ export async function resolveSignalAccessState(params: {
   groupAllowFrom: string[];
   sender: SignalSender;
   groupId?: string;
+  isGroup?: boolean;
+  cfg?: Pick<OpenClawConfig, "accessGroups" | "commands">;
+  hasControlCommand?: boolean;
+  readStoreAllowFrom?: () => Promise<string[]>;
 }) {
-  const storeAllowFrom = await readStoreAllowFromForDmPolicy({
-    provider: "signal",
+  const isGroup = params.isGroup ?? params.groupId != null;
+  const command =
+    params.hasControlCommand === true
+      ? {
+          allowTextCommands: true,
+          directGroupAllowFrom: "effective" as const,
+        }
+      : undefined;
+  const ingress = createChannelIngressResolver({
+    channelId: "signal",
     accountId: params.accountId,
-    dmPolicy: params.dmPolicy,
+    identity: signalIngressIdentity,
+    cfg: params.cfg,
+    ...(params.readStoreAllowFrom ? { readStoreAllowFrom: params.readStoreAllowFrom } : {}),
+    useDefaultPairingStore: params.readStoreAllowFrom == null,
   });
-  const isSenderAllowed = (allowEntries: string[]) =>
-    isSignalSenderAllowed(params.sender, allowEntries);
-  const isSenderOrGroupAllowed = (allowEntries: string[]) =>
-    isSenderAllowed(allowEntries) || isSignalGroupAllowed(params.groupId, allowEntries);
-  const resolveAccessDecision = (isGroup: boolean) =>
-    resolveDmGroupAccessWithLists({
-      isGroup,
-      dmPolicy: params.dmPolicy,
-      groupPolicy: params.groupPolicy,
-      allowFrom: params.allowFrom,
-      groupAllowFrom: params.groupAllowFrom,
-      storeAllowFrom,
-      isSenderAllowed: isGroup ? isSenderOrGroupAllowed : isSenderAllowed,
-    });
-  const dmAccess = resolveAccessDecision(false);
-  return {
-    resolveAccessDecision,
-    isGroupAllowed: isSenderOrGroupAllowed,
-    dmAccess,
-    effectiveDmAllow: dmAccess.effectiveAllowFrom,
-    effectiveGroupAllow: dmAccess.effectiveGroupAllowFrom,
-  };
+  return await ingress.message({
+    subject: signalSubjectInput({
+      sender: params.sender,
+      groupId: isGroup ? params.groupId : undefined,
+    }),
+    conversation: {
+      kind: isGroup ? "group" : "direct",
+      id: isGroup ? (params.groupId ?? "unknown") : params.sender.raw,
+    },
+    ...(isGroup ? { event: { mayPair: false } } : {}),
+    dmPolicy: params.dmPolicy,
+    groupPolicy: params.groupPolicy,
+    policy: { groupAllowFromFallbackToAllowFrom: true },
+    allowFrom: params.allowFrom,
+    groupAllowFrom: params.groupAllowFrom,
+    command,
+  });
 }
 
 export async function handleSignalDirectMessageAccess(params: {

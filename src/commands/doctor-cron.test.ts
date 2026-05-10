@@ -91,6 +91,13 @@ function requirePersistedJob(jobs: Array<Record<string, unknown>>, index: number
   return job;
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
 describe("maybeRepairLegacyCronStore", () => {
   it("repairs legacy cron store fields and migrates notify fallback to webhook delivery", async () => {
     const storePath = await makeTempStorePath();
@@ -110,19 +117,16 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(job.jobId).toBeUndefined();
     expect(job.id).toBe("legacy-job");
     expect(job.notify).toBeUndefined();
-    expect(job.schedule).toMatchObject({
-      kind: "cron",
-      expr: "0 7 * * *",
-      tz: "UTC",
-    });
-    expect(job.delivery).toMatchObject({
-      mode: "webhook",
-      to: "https://example.invalid/cron-finished",
-    });
-    expect(job.payload).toMatchObject({
-      kind: "systemEvent",
-      text: "Morning brief",
-    });
+    const schedule = requireRecord(job.schedule, "cron schedule");
+    expect(schedule.kind).toBe("cron");
+    expect(schedule.expr).toBe("0 7 * * *");
+    expect(schedule.tz).toBe("UTC");
+    const delivery = requireRecord(job.delivery, "cron delivery");
+    expect(delivery.mode).toBe("webhook");
+    expect(delivery.to).toBe("https://example.invalid/cron-finished");
+    const payload = requireRecord(job.payload, "cron payload");
+    expect(payload.kind).toBe("systemEvent");
+    expect(payload.text).toBe("Morning brief");
 
     expect(noteSpy).toHaveBeenCalledWith(
       expect.stringContaining("Legacy cron job storage detected"),
@@ -296,10 +300,9 @@ describe("maybeRepairLegacyCronStore", () => {
     const jobs = await readPersistedJobs(storePath);
     const job = requirePersistedJob(jobs, 0);
     expect(job.notify).toBeUndefined();
-    expect(job.delivery).toMatchObject({
-      mode: "webhook",
-      to: "https://example.invalid/cron-finished",
-    });
+    const delivery = requireRecord(job.delivery, "cron delivery");
+    expect(delivery.mode).toBe("webhook");
+    expect(delivery.to).toBe("https://example.invalid/cron-finished");
   });
 
   it("repairs legacy root delivery threadId hints into delivery", async () => {
@@ -336,12 +339,11 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(job.channel).toBeUndefined();
     expect(job.to).toBeUndefined();
     expect(job.threadId).toBeUndefined();
-    expect(job.delivery).toMatchObject({
-      mode: "announce",
-      channel: "telegram",
-      to: "-1001234567890",
-      threadId: "99",
-    });
+    const delivery = requireRecord(job.delivery, "cron delivery");
+    expect(delivery.mode).toBe("announce");
+    expect(delivery.channel).toBe("telegram");
+    expect(delivery.to).toBe("-1001234567890");
+    expect(delivery.threadId).toBe("99");
   });
 
   it("rewrites stale managed dreaming jobs to the isolated agentTurn shape", async () => {
@@ -377,16 +379,14 @@ describe("maybeRepairLegacyCronStore", () => {
     const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
       jobs: Array<Record<string, unknown>>;
     };
-    const [job] = persisted.jobs;
-    expect(job).toMatchObject({
-      sessionTarget: "isolated",
-      payload: {
-        kind: "agentTurn",
-        message: "__openclaw_memory_core_short_term_promotion_dream__",
-        lightContext: true,
-      },
-      delivery: { mode: "none" },
-    });
+    const job = requirePersistedJob(persisted.jobs, 0);
+    expect(job.sessionTarget).toBe("isolated");
+    const payload = requireRecord(job.payload, "cron payload");
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.message).toBe("__openclaw_memory_core_short_term_promotion_dream__");
+    expect(payload.lightContext).toBe(true);
+    const delivery = requireRecord(job.delivery, "cron delivery");
+    expect(delivery.mode).toBe("none");
     expect(noteSpy).toHaveBeenCalledWith(expect.stringContaining("managed dreaming job"), "Cron");
     expect(noteSpy).toHaveBeenCalledWith(
       expect.stringContaining("Rewrote 1 managed dreaming job"),

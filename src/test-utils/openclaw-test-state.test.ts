@@ -4,7 +4,13 @@ import { describe, expect, it } from "vitest";
 import { createOpenClawTestState, withOpenClawTestState } from "./openclaw-test-state.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected missing path: ${targetPath}`);
 }
 
 describe("openclaw test state", () => {
@@ -153,14 +159,12 @@ describe("openclaw test state", () => {
         });
 
         expect(profilePath).toBe(path.join(state.agentDir(), "auth-profiles.json"));
-        expect(JSON.parse(await fs.readFile(profilePath, "utf8"))).toMatchObject({
-          version: 1,
-          profiles: {
-            "openai:test": {
-              provider: "openai",
-            },
-          },
-        });
+        const profiles = JSON.parse(await fs.readFile(profilePath, "utf8")) as {
+          version?: unknown;
+          profiles?: Record<string, { provider?: unknown }>;
+        };
+        expect(profiles.version).toBe(1);
+        expect(profiles.profiles?.["openai:test"]?.provider).toBe("openai");
       },
     );
   });
@@ -172,15 +176,9 @@ describe("openclaw test state", () => {
       },
       async (state) => {
         const config = JSON.parse(await fs.readFile(state.configPath, "utf8"));
-        expect(config).toMatchObject({
-          update: {
-            channel: "stable",
-          },
-          plugins: {
-            enabled: true,
-            allow: ["discord", "telegram", "whatsapp", "memory"],
-          },
-        });
+        expect(config.update?.channel).toBe("stable");
+        expect(config.plugins?.enabled).toBe(true);
+        expect(config.plugins?.allow).toStrictEqual(["discord", "telegram", "whatsapp", "memory"]);
       },
     );
   });

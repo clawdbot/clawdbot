@@ -66,10 +66,8 @@ describe("test-live-media", () => {
 
     expect(plan).toHaveLength(1);
     const [entry] = plan;
-    expect(entry).toMatchObject({
-      suite: { id: "video" },
-      providers: ["fal", "openai", "runway"],
-    });
+    expect(entry?.suite.id).toBe("video");
+    expect(entry?.providers).toEqual(["fal", "openai", "runway"]);
   });
 
   it("forwards quiet flags separately from passthrough args", async () => {

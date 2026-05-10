@@ -50,7 +50,9 @@ export const execSchema = Type.Object({
 });
 
 export const processSchema = Type.Object({
-  action: Type.String({ description: "Process action" }),
+  action: Type.String({
+    description: "Process action (list|poll|log|write|send-keys|submit|paste|kill|clear|remove)",
+  }),
   sessionId: Type.Optional(Type.String({ description: "Session id for actions other than list" })),
   data: Type.Optional(Type.String({ description: "Data to write for write" })),
   keys: Type.Optional(

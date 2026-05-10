@@ -42,6 +42,30 @@ function createUniqueResponseSchema(index: number) {
   };
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireFirstCallParam(calls: ReadonlyArray<readonly unknown[]>, label: string) {
+  const call = calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call[0];
+}
+
+function expectToolContext(value: unknown, expected: { cwd?: string; mode: "tool" }) {
+  const ctx = requireRecord(value, "tool context");
+  if (expected.cwd !== undefined) {
+    expect(ctx.cwd).toBe(expected.cwd);
+  }
+  expect(ctx.mode).toBe(expected.mode);
+  expect(ctx.signal).toBeInstanceOf(AbortSignal);
+}
+
 describe("resolveLobsterCwd", () => {
   it("defaults to the current working directory", () => {
     expect(resolveLobsterCwd(undefined)).toBe(process.cwd());
@@ -84,14 +108,12 @@ describe("createEmbeddedLobsterRunner", () => {
     });
 
     expect(runtime.runToolRequest).toHaveBeenCalledTimes(1);
-    expect(runtime.runToolRequest).toHaveBeenCalledWith({
-      pipeline: "exec --json=true echo hi",
-      ctx: expect.objectContaining({
-        cwd: process.cwd(),
-        mode: "tool",
-        signal: expect.any(AbortSignal),
-      }),
-    });
+    const request = requireRecord(
+      requireFirstCallParam(runtime.runToolRequest.mock.calls, "run tool request"),
+      "run tool request",
+    );
+    expect(request.pipeline).toBe("exec --json=true echo hi");
+    expectToolContext(request.ctx, { cwd: process.cwd(), mode: "tool" });
     expect(envelope).toEqual({
       ok: true,
       status: "ok",
@@ -130,14 +152,14 @@ describe("createEmbeddedLobsterRunner", () => {
         maxStdoutBytes: 4096,
       });
 
-      expect(runtime.runToolRequest).toHaveBeenCalledWith({
-        filePath: workflowPath,
-        args: { limit: 3 },
-        ctx: expect.objectContaining({
-          cwd: tempDir,
-          mode: "tool",
-        }),
-      });
+      expect(runtime.runToolRequest).toHaveBeenCalledOnce();
+      const request = requireRecord(
+        requireFirstCallParam(runtime.runToolRequest.mock.calls, "workflow run tool request"),
+        "workflow run tool request",
+      );
+      expect(request.filePath).toBe(workflowPath);
+      expect(request.args).toEqual({ limit: 3 });
+      expectToolContext(request.ctx, { cwd: tempDir, mode: "tool" });
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -257,15 +279,14 @@ describe("createEmbeddedLobsterRunner", () => {
       maxStdoutBytes: 4096,
     });
 
-    expect(runtime.resumeToolRequest).toHaveBeenCalledWith({
-      token: "resume-token",
-      approved: false,
-      ctx: expect.objectContaining({
-        cwd: process.cwd(),
-        mode: "tool",
-        signal: expect.any(AbortSignal),
-      }),
-    });
+    expect(runtime.resumeToolRequest).toHaveBeenCalledOnce();
+    const request = requireRecord(
+      requireFirstCallParam(runtime.resumeToolRequest.mock.calls, "resume tool request"),
+      "resume tool request",
+    );
+    expect(request.token).toBe("resume-token");
+    expect(request.approved).toBe(false);
+    expectToolContext(request.ctx, { cwd: process.cwd(), mode: "tool" });
     expect(envelope).toEqual({
       ok: true,
       status: "cancelled",
@@ -299,11 +320,14 @@ describe("createEmbeddedLobsterRunner", () => {
       maxStdoutBytes: 4096,
     });
 
-    expect(runtime.resumeToolRequest).toHaveBeenCalledWith({
-      approvalId: "dbc98d05",
-      approved: true,
-      ctx: expect.objectContaining({ mode: "tool" }),
-    });
+    expect(runtime.resumeToolRequest).toHaveBeenCalledOnce();
+    const request = requireRecord(
+      requireFirstCallParam(runtime.resumeToolRequest.mock.calls, "approval resume tool request"),
+      "approval resume tool request",
+    );
+    expect(request.approvalId).toBe("dbc98d05");
+    expect(request.approved).toBe(true);
+    expectToolContext(request.ctx, { mode: "tool" });
   });
 
   it("passes approvalId through the normalized needs_approval envelope", async () => {

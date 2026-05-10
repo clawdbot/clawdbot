@@ -14,6 +14,7 @@ export type BrowserExecutable = {
 };
 
 const CHROME_VERSION_RE = /\b(\d+)(?:\.\d+){1,3}\b/g;
+const PLAYWRIGHT_BROWSERS_PATH_ENV = "PLAYWRIGHT_BROWSERS_PATH";
 
 const CHROMIUM_BUNDLE_IDS = new Set([
   "com.google.Chrome",
@@ -485,6 +486,48 @@ function findFirstChromeExecutable(candidates: string[]): BrowserExecutable | nu
   return null;
 }
 
+function findPlaywrightChromiumExecutableCandidatesLinux(): Array<BrowserExecutable> {
+  const candidates: Array<BrowserExecutable> = [];
+  for (const browserPath of getPlaywrightBrowserCachePaths()) {
+    for (const entry of readSortedDirNames(browserPath)) {
+      if (!entry.startsWith("chromium-")) {
+        continue;
+      }
+      for (const linuxDir of ["chrome-linux64", "chrome-linux"]) {
+        candidates.push({
+          kind: "chromium",
+          path: path.join(browserPath, entry, linuxDir, "chrome"),
+        });
+      }
+    }
+  }
+  return candidates;
+}
+
+function getPlaywrightBrowserCachePaths(): string[] {
+  const configured = normalizeOptionalString(process.env[PLAYWRIGHT_BROWSERS_PATH_ENV]);
+  const candidates = [
+    configured && configured !== "0" ? configured : null,
+    path.join(os.homedir(), ".cache", "ms-playwright"),
+  ];
+  const seen = new Set<string>();
+  return candidates.filter((candidate): candidate is string => {
+    if (!candidate || seen.has(candidate)) {
+      return false;
+    }
+    seen.add(candidate);
+    return true;
+  });
+}
+
+function readSortedDirNames(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir).toSorted();
+  } catch {
+    return [];
+  }
+}
+
 export function findChromeExecutableMac(): BrowserExecutable | null {
   const candidates: Array<BrowserExecutable> = [
     {
@@ -568,6 +611,7 @@ export function findChromeExecutableLinux(): BrowserExecutable | null {
     { kind: "chromium", path: "/usr/lib/chromium/chromium" },
     { kind: "chromium", path: "/usr/lib/chromium-browser/chromium-browser" },
     { kind: "chromium", path: "/snap/bin/chromium" },
+    ...findPlaywrightChromiumExecutableCandidatesLinux(),
   ];
 
   return findFirstExecutable(candidates);

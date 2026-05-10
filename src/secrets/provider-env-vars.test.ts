@@ -8,37 +8,26 @@ import {
 
 describe("provider env vars", () => {
   it("keeps the auth scrub list broader than the global secret env list", () => {
-    expect(listKnownProviderAuthEnvVarNames()).toEqual(
-      expect.arrayContaining([
-        "GITHUB_TOKEN",
-        "GH_TOKEN",
-        "ANTHROPIC_OAUTH_TOKEN",
-        "BRAVE_API_KEY",
-        "DEEPGRAM_API_KEY",
-        "FIRECRAWL_API_KEY",
-        "GROQ_API_KEY",
-        "PERPLEXITY_API_KEY",
-        "OPENROUTER_API_KEY",
-        "TAVILY_API_KEY",
-      ]),
-    );
-    expect(listKnownSecretEnvVarNames()).toEqual(
-      expect.arrayContaining([
-        "GITHUB_TOKEN",
-        "GH_TOKEN",
-        "ANTHROPIC_OAUTH_TOKEN",
-        "BRAVE_API_KEY",
-        "DEEPGRAM_API_KEY",
-        "FIRECRAWL_API_KEY",
-        "GROQ_API_KEY",
-        "PERPLEXITY_API_KEY",
-        "OPENROUTER_API_KEY",
-        "TAVILY_API_KEY",
-      ]),
-    );
-    expect(listKnownProviderAuthEnvVarNames()).toEqual(
-      expect.arrayContaining(["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"]),
-    );
+    const sharedSecretNames = [
+      "GITHUB_TOKEN",
+      "GH_TOKEN",
+      "ANTHROPIC_OAUTH_TOKEN",
+      "BRAVE_API_KEY",
+      "DEEPGRAM_API_KEY",
+      "FIRECRAWL_API_KEY",
+      "GROQ_API_KEY",
+      "PERPLEXITY_API_KEY",
+      "OPENROUTER_API_KEY",
+      "TAVILY_API_KEY",
+    ];
+    const providerAuthNames = listKnownProviderAuthEnvVarNames();
+    const secretNames = listKnownSecretEnvVarNames();
+    for (const name of sharedSecretNames) {
+      expect(providerAuthNames).toContain(name);
+      expect(secretNames).toContain(name);
+    }
+    expect(providerAuthNames).toContain("MINIMAX_CODE_PLAN_KEY");
+    expect(providerAuthNames).toContain("MINIMAX_CODING_API_KEY");
     expect(listKnownSecretEnvVarNames()).not.toContain("OPENCLAW_API_KEY");
   });
 

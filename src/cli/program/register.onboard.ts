@@ -92,7 +92,7 @@ function pickOnboardProviderAuthOptionValues(
 export function registerOnboardCommand(program: Command) {
   const command = program
     .command("onboard")
-    .description("Interactive onboarding for the gateway, workspace, and skills")
+    .description("Guided setup for auth, models, Gateway, workspace, channels, and skills")
     .addHelpText(
       "after",
       () =>
@@ -105,7 +105,7 @@ export function registerOnboardCommand(program: Command) {
     )
     .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
     .option("--non-interactive", "Run without prompts", false)
-    .option("--modern", "Use the Crestodian conversational onboarding preview", false)
+    .option("--modern", "Use the conversational setup/repair assistant", false)
     .option(
       "--accept-risk",
       "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",

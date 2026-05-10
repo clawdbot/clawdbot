@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { moveMemoryIndexFiles, runMemoryAtomicReindex } from "./manager-atomic-reindex.js";
+import {
+  moveMemoryIndexFiles,
+  removeMemoryIndexFiles,
+  runMemoryAtomicReindex,
+} from "./manager-atomic-reindex.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -132,6 +136,101 @@ describe("memory manager atomic reindex", () => {
 
     expect(rename).toHaveBeenCalledTimes(1);
     expect(wait).not.toHaveBeenCalled();
+  });
+
+  it.each(["EBUSY", "EPERM", "EACCES"] as const)(
+    "retries transient %s rm failures during index file cleanup",
+    async (code) => {
+      const calls: string[] = [];
+      const rm: typeof fs.rm = vi.fn(async (filePath) => {
+        calls.push(String(filePath));
+        if (calls.length === 1) {
+          throw Object.assign(new Error("busy"), { code });
+        }
+      });
+      const wait = vi.fn().mockResolvedValue(undefined);
+
+      await removeMemoryIndexFiles("index.sqlite.tmp", {
+        fileOps: { rename: fs.rename, rm, wait },
+        maxRemoveAttempts: 3,
+        removeRetryDelayMs: 10,
+      });
+
+      expect(calls).toEqual([
+        "index.sqlite.tmp",
+        "index.sqlite.tmp",
+        "index.sqlite.tmp-wal",
+        "index.sqlite.tmp-shm",
+      ]);
+      expect(wait).toHaveBeenCalledTimes(1);
+      expect(wait).toHaveBeenCalledWith(10);
+    },
+  );
+
+  it("throws after exhausting transient rm retries", async () => {
+    const rm = vi.fn().mockRejectedValue(Object.assign(new Error("busy"), { code: "EBUSY" }));
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      removeMemoryIndexFiles("index.sqlite.tmp", {
+        fileOps: { rename: fs.rename, rm, wait },
+        maxRemoveAttempts: 3,
+        removeRetryDelayMs: 10,
+      }),
+    ).rejects.toMatchObject({ code: "EBUSY" });
+
+    expect(rm).toHaveBeenCalledTimes(3);
+    expect(wait).toHaveBeenCalledTimes(2);
+    expect(wait).toHaveBeenNthCalledWith(1, 10);
+    expect(wait).toHaveBeenNthCalledWith(2, 20);
+  });
+
+  it("does not retry non-transient rm failures", async () => {
+    const rm = vi.fn().mockRejectedValue(Object.assign(new Error("invalid"), { code: "EINVAL" }));
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      removeMemoryIndexFiles("index.sqlite.tmp", {
+        fileOps: { rename: fs.rename, rm, wait },
+        maxRemoveAttempts: 3,
+        removeRetryDelayMs: 10,
+      }),
+    ).rejects.toMatchObject({ code: "EINVAL" });
+
+    expect(rm).toHaveBeenCalledTimes(1);
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("closes temp resources before removing temp files after build failure", async () => {
+    const events: string[] = [];
+    let tempClosed = false;
+    const rm: typeof fs.rm = vi.fn(async (filePath) => {
+      events.push(tempClosed ? `rm:${String(filePath)}:closed` : `rm:${String(filePath)}:open`);
+    });
+
+    await expect(
+      runMemoryAtomicReindex({
+        targetPath: "index.sqlite",
+        tempPath: "index.sqlite.tmp",
+        beforeTempCleanup: async () => {
+          events.push("close-temp");
+          tempClosed = true;
+        },
+        fileOptions: {
+          fileOps: { rename: fs.rename, rm, wait: vi.fn().mockResolvedValue(undefined) },
+        },
+        build: async () => {
+          throw new Error("embedding failure");
+        },
+      }),
+    ).rejects.toThrow("embedding failure");
+
+    expect(events).toEqual([
+      "close-temp",
+      "rm:index.sqlite.tmp:closed",
+      "rm:index.sqlite.tmp-wal:closed",
+      "rm:index.sqlite.tmp-shm:closed",
+    ]);
   });
 });
 

@@ -347,7 +347,7 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
-  it("does not force 1M context when context1m is not enabled", () => {
+  it("returns 1M context for Anthropic opus/sonnet 4 even without context1m", () => {
     const result = resolveContextTokensForModel({
       cfg: {
         models: {
@@ -374,7 +374,28 @@ describe("resolveContextTokensForModel", () => {
       allowAsyncLoad: false,
     });
 
-    expect(result).toBe(200_000);
+    expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+  });
+
+  it("returns 1M context for Anthropic sonnet 4 even when config reports 200k", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [testModelContextWindow("claude-sonnet-4-6", 200_000)],
+            },
+          },
+        },
+      },
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
   it("does not force 1M context for non-opus/sonnet Anthropic models", () => {

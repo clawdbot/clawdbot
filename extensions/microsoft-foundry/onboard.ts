@@ -11,7 +11,6 @@ import {
   execAz,
   getAccessTokenResult,
   getLoggedInAccount,
-  listSubscriptions,
 } from "./cli.js";
 import {
   type AzAccount,

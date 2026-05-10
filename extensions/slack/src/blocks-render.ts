@@ -1,6 +1,6 @@
 import type { Block, KnownBlock } from "@slack/web-api";
 import {
-  presentationToInteractiveReply,
+  presentationToInteractiveControlsReply,
   reduceInteractiveReply,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type {
@@ -227,11 +227,7 @@ export function buildSlackPresentationBlocks(
       blocks.push({ type: "divider" });
     }
   }
-  const interactive = presentationToInteractiveReply({
-    blocks: presentation.blocks.filter(
-      (block) => block.type === "buttons" || block.type === "select",
-    ),
-  });
+  const interactive = presentationToInteractiveControlsReply(presentation);
   blocks.push(...buildSlackInteractiveBlocks(interactive, options));
   return blocks;
 }

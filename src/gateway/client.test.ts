@@ -933,6 +933,29 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
+  it("keeps requested scopes when reusing a stored device token", () => {
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "stored-device-token",
+      scopes: ["operator.write"],
+    });
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      scopes: ["operator.admin"],
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+
+    expect(connectFrameFrom(ws)).toMatchObject({
+      token: "stored-device-token",
+      deviceToken: "stored-device-token",
+    });
+    expect(connectScopesFrom(ws)).toEqual(["operator.admin"]);
+    client.stop();
+  });
+
   it("loads stored device auth from the provided env", () => {
     loadDeviceAuthTokenMock.mockReturnValue({
       token: "stored-device-token",

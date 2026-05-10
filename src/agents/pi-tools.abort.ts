@@ -1,6 +1,7 @@
 import { copyPluginToolMeta } from "../plugins/tools.js";
 import { bindAbortRelay } from "../utils/fetch-timeout.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
+import { copyBeforeToolCallHookMarker } from "./pi-tools.before-tool-call.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
 function throwAbortError(): never {
@@ -68,5 +69,6 @@ export function wrapToolWithAbortSignal(
   };
   copyPluginToolMeta(tool, wrappedTool);
   copyChannelAgentToolMeta(tool as never, wrappedTool as never);
+  copyBeforeToolCallHookMarker(tool, wrappedTool);
   return wrappedTool;
 }

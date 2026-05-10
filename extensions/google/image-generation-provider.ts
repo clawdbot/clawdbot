@@ -177,6 +177,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
         fetchFn: fetch,
         pinDns: false,
         allowPrivateNetwork,
+        ssrfPolicy: req.ssrfPolicy,
         dispatcherPolicy,
       });
 

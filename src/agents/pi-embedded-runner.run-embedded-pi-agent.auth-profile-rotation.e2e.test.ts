@@ -513,6 +513,10 @@ async function runAutoPinnedPromptErrorRotationCase(params: {
     });
 
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+    await vi.waitFor(async () => {
+      const usageStats = await readUsageStats(agentDir);
+      expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
+    });
     const usageStats = await readUsageStats(agentDir);
     return { usageStats };
   });
@@ -580,6 +584,60 @@ async function withAgentWorkspace<T>(
     await fs.rm(agentDir, { recursive: true, force: true });
     await fs.rm(workspaceDir, { recursive: true, force: true });
   }
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireLogRecord(
+  records: ReadonlyArray<unknown>,
+  message: string,
+): Record<string, unknown> {
+  const record = records.find(
+    (candidate) => requireRecord(candidate, "log record").message === message,
+  );
+  if (!record) {
+    throw new Error(`expected log record: ${message}`);
+  }
+  return requireRecord(record, message);
+}
+
+async function expectFailoverError(
+  promise: Promise<unknown>,
+  expected: {
+    name?: string;
+    profileId?: string;
+    reason?: string;
+    provider?: string;
+    model?: string;
+  },
+) {
+  let thrown: unknown;
+  try {
+    await promise;
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(Error);
+  const errorRecord = requireRecord(thrown, "failover error");
+  expect(errorRecord.name).toBe(expected.name ?? "FailoverError");
+  if (expected.profileId !== undefined) {
+    expect(errorRecord.profileId).toBe(expected.profileId);
+  }
+  if (expected.reason !== undefined) {
+    expect(errorRecord.reason).toBe(expected.reason);
+  }
+  if (expected.provider !== undefined) {
+    expect(errorRecord.provider).toBe(expected.provider);
+  }
+  if (expected.model !== undefined) {
+    expect(errorRecord.model).toBe(expected.model);
+  }
+  return errorRecord;
 }
 
 async function runTurnWithCooldownSeed(params: {
@@ -863,37 +921,36 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     await logCapture.flush();
 
     const safeProfileId = redactIdentifier("openai:p1", { len: 12 });
-    expect(logCapture.records).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          message: "embedded run failover decision",
-          attributes: expect.objectContaining({
-            event: "embedded_run_failover_decision",
-            runId: "run:overloaded-logging",
-            decision: "rotate_profile",
-            failoverReason: "overloaded",
-            profileId: safeProfileId,
-            sourceProvider: "openai",
-            sourceModel: "mock-1",
-            providerErrorType: "overloaded_error",
-            rawErrorPreview: expect.stringContaining('"request_id":"sha256:'),
-          }),
-        }),
-      ]),
+    const failoverDecision = requireLogRecord(logCapture.records, "embedded run failover decision");
+    const failoverAttributes = requireRecord(
+      failoverDecision.attributes,
+      "failover decision attributes",
     );
-    expect(logCapture.records).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          message: "auth profile failure state updated",
-          attributes: expect.objectContaining({
-            event: "auth_profile_failure_state_updated",
-            runId: "run:overloaded-logging",
-            profileId: safeProfileId,
-            reason: "overloaded",
-          }),
-        }),
-      ]),
-    );
+    expect(failoverAttributes.event).toBe("embedded_run_failover_decision");
+    expect(failoverAttributes.runId).toBe("run:overloaded-logging");
+    expect(failoverAttributes.decision).toBe("rotate_profile");
+    expect(failoverAttributes.failoverReason).toBe("overloaded");
+    expect(failoverAttributes.profileId).toBe(safeProfileId);
+    expect(failoverAttributes.sourceProvider).toBe("openai");
+    expect(failoverAttributes.sourceModel).toBe("mock-1");
+    expect(failoverAttributes.providerErrorType).toBe("overloaded_error");
+    expect(failoverAttributes.rawErrorPreview).toContain('"request_id":"sha256:');
+
+    await vi.waitFor(async () => {
+      await logCapture.flush();
+      const failureStateUpdate = requireLogRecord(
+        logCapture.records,
+        "auth profile failure state updated",
+      );
+      const failureStateAttributes = requireRecord(
+        failureStateUpdate.attributes,
+        "failure state attributes",
+      );
+      expect(failureStateAttributes.event).toBe("auth_profile_failure_state_updated");
+      expect(failureStateAttributes.runId).toBe("run:overloaded-logging");
+      expect(failureStateAttributes.profileId).toBe(safeProfileId);
+      expect(failureStateAttributes.reason).toBe("overloaded");
+    });
   });
 
   it("rotates for overloaded prompt failures across auto-pinned profiles", async () => {
@@ -908,7 +965,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     expect(sleepWithAbortMock).not.toHaveBeenCalled();
   });
 
-  it("starts the retry attempt before prompt failure cooldown marking finishes", async () => {
+  it("does not wait for prompt failure cooldown marking before retrying", async () => {
     let releaseMark: (() => void) | undefined;
     const markCanFinish = new Promise<void>((resolve) => {
       releaseMark = resolve;
@@ -1067,7 +1124,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
 
       mockSingleErrorAttempt({ errorMessage: "rate limit" });
 
-      await expect(
+      await expectFailoverError(
         runEmbeddedPiAgentInline({
           sessionId: "session:test",
           sessionKey: "agent:test:user",
@@ -1083,13 +1140,13 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
           timeoutMs: 5_000,
           runId: "run:user",
         }),
-      ).rejects.toMatchObject({
-        name: "FailoverError",
-        profileId: "openai:p1",
-        reason: "rate_limit",
-        provider: "openai",
-        model: "mock-1",
-      });
+        {
+          profileId: "openai:p1",
+          reason: "rate_limit",
+          provider: "openai",
+          model: "mock-1",
+        },
+      );
 
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
       await expectProfileP2UsageUnchanged(agentDir);
@@ -1164,11 +1221,13 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       });
 
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
-      expect(runEmbeddedAttemptMock.mock.calls[0]?.[0]).toMatchObject({
-        authProfileId: "openai-codex:work",
-        authProfileIdSource: "user",
-        provider: "codex-cli",
-      });
+      const attemptParams = requireRecord(
+        runEmbeddedAttemptMock.mock.calls[0]?.[0],
+        "embedded attempt params",
+      );
+      expect(attemptParams.authProfileId).toBe("openai-codex:work");
+      expect(attemptParams.authProfileIdSource).toBe("user");
+      expect(attemptParams.provider).toBe("codex-cli");
     });
   });
 
@@ -1227,7 +1286,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         },
       });
 
-      await expect(
+      await expectFailoverError(
         runEmbeddedPiAgentInline({
           sessionId: "session:test",
           sessionKey: "agent:test:cooldown-failover",
@@ -1242,12 +1301,12 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
           timeoutMs: 5_000,
           runId: "run:cooldown-failover",
         }),
-      ).rejects.toMatchObject({
-        name: "FailoverError",
-        reason: "unknown",
-        provider: "openai",
-        model: "mock-1",
-      });
+        {
+          reason: "unknown",
+          provider: "openai",
+          model: "mock-1",
+        },
+      );
 
       expect(runEmbeddedAttemptMock).not.toHaveBeenCalled();
     });
@@ -1398,7 +1457,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         },
       });
 
-      await expect(
+      await expectFailoverError(
         runEmbeddedPiAgentInline({
           sessionId: "session:test",
           sessionKey: "agent:support:cooldown-failover",
@@ -1414,12 +1473,12 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
           runId: "run:agent-override-fallback",
           agentId: "support",
         }),
-      ).rejects.toMatchObject({
-        name: "FailoverError",
-        reason: "unknown",
-        provider: "openai",
-        model: "mock-1",
-      });
+        {
+          reason: "unknown",
+          provider: "openai",
+          model: "mock-1",
+        },
+      );
 
       expect(runEmbeddedAttemptMock).not.toHaveBeenCalled();
     });
@@ -1443,7 +1502,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         },
       });
 
-      await expect(
+      await expectFailoverError(
         runEmbeddedPiAgentInline({
           sessionId: "session:test",
           sessionKey: "agent:test:disabled-failover",
@@ -1458,12 +1517,12 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
           timeoutMs: 5_000,
           runId: "run:disabled-failover",
         }),
-      ).rejects.toMatchObject({
-        name: "FailoverError",
-        reason: "billing",
-        provider: "openai",
-        model: "mock-1",
-      });
+        {
+          reason: "billing",
+          provider: "openai",
+          model: "mock-1",
+        },
+      );
 
       expect(runEmbeddedAttemptMock).not.toHaveBeenCalled();
     });
@@ -1479,7 +1538,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         await fs.writeFile(authPath, JSON.stringify({ version: 1, profiles: {} }));
         await fs.writeFile(authStatePath, JSON.stringify({ version: 1, usageStats: {} }));
 
-        await expect(
+        await expectFailoverError(
           runEmbeddedPiAgentInline({
             sessionId: "session:test",
             sessionKey: "agent:test:auth-unavailable",
@@ -1494,7 +1553,8 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
             timeoutMs: 5_000,
             runId: "run:auth-unavailable",
           }),
-        ).rejects.toMatchObject({ name: "FailoverError", reason: "auth" });
+          { reason: "auth" },
+        );
 
         expect(runEmbeddedAttemptMock).not.toHaveBeenCalled();
       });
@@ -1536,13 +1596,11 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       } catch (err) {
         thrown = err;
       }
-
-      expect(thrown).toMatchObject({
-        name: "FailoverError",
-        reason: "billing",
-        provider: "openai",
-        model: "mock-rotated",
-      });
+      const errorRecord = requireRecord(thrown, "billing failover error");
+      expect(errorRecord.name).toBe("FailoverError");
+      expect(errorRecord.reason).toBe("billing");
+      expect(errorRecord.provider).toBe("openai");
+      expect(errorRecord.model).toBe("mock-rotated");
       expect(thrown).toBeInstanceOf(Error);
       expect((thrown as Error).message).toContain("openai (mock-rotated) returned a billing error");
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);

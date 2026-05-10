@@ -153,6 +153,10 @@ export function buildNodeSystemRunInvoke(params: {
   cwd: string | undefined;
   agentId: string | undefined;
   sessionKey: string | undefined;
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
   approved?: boolean;
   approvalDecision?: "allow-once" | "allow-always" | null;
   runId?: string;
@@ -174,6 +178,14 @@ export function buildNodeSystemRunInvoke(params: {
       timeoutMs,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
+      ...(params.turnSourceChannel != null ? { turnSourceChannel: params.turnSourceChannel } : {}),
+      ...(params.turnSourceTo != null ? { turnSourceTo: params.turnSourceTo } : {}),
+      ...(params.turnSourceAccountId != null
+        ? { turnSourceAccountId: params.turnSourceAccountId }
+        : {}),
+      ...(params.turnSourceThreadId != null
+        ? { turnSourceThreadId: params.turnSourceThreadId }
+        : {}),
       approved: params.approved,
       approvalDecision: params.approvalDecision ?? undefined,
       runId: params.runId ?? undefined,

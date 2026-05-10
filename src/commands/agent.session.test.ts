@@ -150,18 +150,16 @@ describe("agent session resolution", () => {
       const resolution = resolveSession({ cfg, sessionId });
       expect(resolution.sessionKey).toBe(sessionKey);
       const agentId = resolveSessionAgentId({ sessionKey: resolution.sessionKey, config: cfg });
-      expect(
-        buildOutboundSessionContext({
-          cfg,
-          sessionKey: resolution.sessionKey,
-          agentId,
-        }),
-      ).toEqual(
-        expect.objectContaining({
-          key: sessionKey,
-          agentId: "exec",
-        }),
-      );
+      const outboundContext = buildOutboundSessionContext({
+        cfg,
+        sessionKey: resolution.sessionKey,
+        agentId,
+      });
+      if (!outboundContext) {
+        throw new Error("expected outbound session context");
+      }
+      expect(outboundContext.key).toBe(sessionKey);
+      expect(outboundContext.agentId).toBe("exec");
     });
   });
 });

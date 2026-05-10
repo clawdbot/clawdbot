@@ -50,6 +50,9 @@ export const pluginSdkDocMetadata = {
   "plugin-test-runtime": {
     category: "utilities",
   },
+  "access-groups": {
+    category: "channel",
+  },
   "channel-actions": {
     category: "channel",
   },
@@ -66,6 +69,12 @@ export const pluginSdkDocMetadata = {
     category: "channel",
   },
   "channel-pairing": {
+    category: "channel",
+  },
+  "channel-ingress": {
+    category: "channel",
+  },
+  "channel-ingress-runtime": {
     category: "channel",
   },
   "channel-reply-pipeline": {

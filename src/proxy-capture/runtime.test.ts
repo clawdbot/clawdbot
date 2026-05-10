@@ -106,7 +106,7 @@ describe("debug proxy runtime", () => {
     finalizeDebugProxyCapture(settings, deps);
 
     const request = events.find((event) => event.kind === "request");
-    expect(JSON.parse(String(request?.headersJson))).toMatchObject({
+    expect(JSON.parse(String(request?.headersJson))).toStrictEqual({
       "content-type": "application/json",
       "x-hidden": "yes",
     });
@@ -141,7 +141,7 @@ describe("debug proxy runtime", () => {
     finalizeDebugProxyCapture(settings, deps);
 
     const request = events.find((event) => event.kind === "request");
-    expect(JSON.parse(String(request?.headersJson))).toMatchObject({
+    expect(JSON.parse(String(request?.headersJson))).toStrictEqual({
       Authorization: "[REDACTED]",
       Cookie: "[REDACTED]",
       "x-api-key": "[REDACTED]",
@@ -149,7 +149,7 @@ describe("debug proxy runtime", () => {
       "x-safe": "visible",
     });
     const response = events.find((event) => event.kind === "response");
-    expect(JSON.parse(String(response?.headersJson))).toMatchObject({
+    expect(JSON.parse(String(response?.headersJson))).toStrictEqual({
       "content-type": "application/json",
       "set-cookie": "[REDACTED]",
     });

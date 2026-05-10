@@ -19,11 +19,14 @@ describe("image asset helpers", () => {
       mimeType: "image/png",
       base64: buffer.toString("base64"),
     });
-    expect(generatedImageAssetFromDataUrl({ dataUrl, index: 1 })).toMatchObject({
-      buffer,
-      mimeType: "image/png",
-      fileName: "image-2.png",
-    });
+    const asset = generatedImageAssetFromDataUrl({ dataUrl, index: 1 });
+    expect(asset).toBeDefined();
+    if (!asset) {
+      throw new Error("Expected generated image asset");
+    }
+    expect(asset.buffer).toEqual(buffer);
+    expect(asset.mimeType).toBe("image/png");
+    expect(asset.fileName).toBe("image-2.png");
   });
 
   it("normalizes image file extensions", () => {

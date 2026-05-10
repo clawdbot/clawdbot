@@ -28,6 +28,21 @@ type HistoryEntry = {
   summary?: unknown;
 };
 
+type RawTranscriptReseedReason =
+  | "auth-profile"
+  | "auth-epoch"
+  | "system-prompt"
+  | "mcp"
+  | "missing-transcript"
+  | "session-expired";
+
+const RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS = new Set<RawTranscriptReseedReason>([
+  "missing-transcript",
+  "system-prompt",
+  "mcp",
+  "session-expired",
+]);
+
 function coerceHistoryText(content: unknown): string {
   if (typeof content === "string") {
     return content.trim();
@@ -190,20 +205,36 @@ export async function loadCliSessionReseedMessages(params: {
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
+  allowRawTranscriptReseed?: boolean;
+  rawTranscriptReseedReason?: RawTranscriptReseedReason;
 }): Promise<unknown[]> {
   const entries = await loadCliSessionEntries(params);
+  const loadRawTail = () => {
+    if (
+      params.allowRawTranscriptReseed !== true ||
+      !params.rawTranscriptReseedReason ||
+      !RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS.has(params.rawTranscriptReseedReason)
+    ) {
+      return [];
+    }
+    const rawTail = entries.flatMap((entry) => {
+      const candidate = entry as HistoryEntry;
+      return candidate.type === "message" ? [candidate.message] : [];
+    });
+    return limitAgentHookHistoryMessages(rawTail, MAX_CLI_SESSION_HISTORY_MESSAGES);
+  };
   const latestCompactionIndex = entries.findLastIndex((entry) => {
     const candidate = entry as HistoryEntry;
     return candidate.type === "compaction" && typeof candidate.summary === "string";
   });
   if (latestCompactionIndex < 0) {
-    return [];
+    return loadRawTail();
   }
 
   const compaction = entries[latestCompactionIndex] as HistoryEntry;
   const summary = typeof compaction.summary === "string" ? compaction.summary.trim() : "";
   if (!summary) {
-    return [];
+    return loadRawTail();
   }
 
   const tailMessages = entries.slice(latestCompactionIndex + 1).flatMap((entry) => {

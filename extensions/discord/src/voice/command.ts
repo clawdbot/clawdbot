@@ -75,6 +75,7 @@ async function authorizeVoiceCommand(
   const access = await authorizeDiscordVoiceIngress({
     cfg: params.cfg,
     discordConfig: params.discordConfig,
+    accountId: params.accountId,
     groupPolicy: params.groupPolicy,
     useAccessGroups: params.useAccessGroups,
     guild: interaction.guild,

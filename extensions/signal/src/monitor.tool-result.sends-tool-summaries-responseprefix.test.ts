@@ -6,7 +6,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createSignalToolResultConfig,
   config,
-  flush,
   getSignalToolResultTestMocks,
   installSignalToolResultTestHooks,
   setSignalToolResultTestConfig,
@@ -60,8 +59,6 @@ async function receiveSignalPayloads(params: {
     abortSignal: abortController.signal,
     ...params.opts,
   });
-
-  await flush();
 }
 
 function hasQueuedReactionEventFor(sender: string) {

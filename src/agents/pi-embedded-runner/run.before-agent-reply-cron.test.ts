@@ -36,17 +36,18 @@ describe("runEmbeddedPiAgent cron before_agent_reply seam", () => {
       prompt: "__openclaw_memory_core_short_term_promotion_dream__",
     });
 
-    expect(mockedGlobalHookRunner.runBeforeAgentReply).toHaveBeenCalledWith(
-      { cleanedBody: "__openclaw_memory_core_short_term_promotion_dream__" },
-      expect.objectContaining({
-        jobId: "cron-job-123",
-        agentId: "main",
-        sessionId: "test-session",
-        sessionKey: "test-key",
-        workspaceDir: "/tmp/workspace",
-        trigger: "cron",
-      }),
-    );
+    expect(mockedGlobalHookRunner.runBeforeAgentReply).toHaveBeenCalledTimes(1);
+    const [hookPayload, hookContext] =
+      mockedGlobalHookRunner.runBeforeAgentReply.mock.calls[0] ?? [];
+    expect(hookPayload).toEqual({
+      cleanedBody: "__openclaw_memory_core_short_term_promotion_dream__",
+    });
+    expect(hookContext?.jobId).toBe("cron-job-123");
+    expect(hookContext?.agentId).toBe("main");
+    expect(hookContext?.sessionId).toBe("test-session");
+    expect(hookContext?.sessionKey).toBe("test-key");
+    expect(hookContext?.workspaceDir).toBe("/tmp/workspace");
+    expect(hookContext?.trigger).toBe("cron");
     expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.text).toBe("dreaming claimed");
   });
@@ -93,11 +94,10 @@ describe("runEmbeddedPiAgent cron before_agent_reply seam", () => {
       promptMode: "none",
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelRun: true,
-        promptMode: "none",
-      }),
-    );
+    const [attemptParams] = (mockedRunEmbeddedAttempt.mock.calls[0] ?? []) as [
+      { modelRun?: boolean; promptMode?: string }?,
+    ];
+    expect(attemptParams?.modelRun).toBe(true);
+    expect(attemptParams?.promptMode).toBe("none");
   });
 });

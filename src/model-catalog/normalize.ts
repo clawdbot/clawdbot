@@ -223,6 +223,8 @@ function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefi
     thinkingFormat === "openai" ||
     thinkingFormat === "openrouter" ||
     thinkingFormat === "deepseek" ||
+    thinkingFormat === "qwen" ||
+    thinkingFormat === "qwen-chat-template" ||
     thinkingFormat === "zai"
   ) {
     compat.thinkingFormat = thinkingFormat;

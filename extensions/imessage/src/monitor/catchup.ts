@@ -9,12 +9,10 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 // anything that landed in chat.db while the bridge was disconnected.
 // Without a recovery pass, those messages are permanently lost.
 //
-// This module mirrors the design of the retired BlueBubbles catchup
-// (`extensions/bluebubbles/src/catchup.ts` in commit 07bf572f35^), adapted
-// for the imsg JSON-RPC `messages.history` fetch path. The replay loop is
-// pluggable via the `dispatch` callback so the same `evaluateIMessageInbound`
-// + `dispatchInboundMessage` path used by the live `imsg watch` loop runs
-// unchanged on replayed rows.
+// This module keeps catchup on the same inbound evaluation and dispatch path
+// as live `imsg watch` notifications. The replay loop is pluggable via the
+// `dispatch` callback so `evaluateIMessageInbound` + `dispatchInboundMessage`
+// runs unchanged on replayed rows.
 //
 // See https://github.com/openclaw/openclaw/issues/78649 for design discussion.
 

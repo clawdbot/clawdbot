@@ -39,18 +39,20 @@ describe("migrateLegacyDreamingPayloadShape", () => {
     const jobs = [staleDreamingJob()];
     const result = migrateLegacyDreamingPayloadShape(jobs);
     expect(result).toEqual({ changed: true, rewrittenCount: 1 });
-    expect(jobs[0]).toMatchObject({
-      sessionTarget: "isolated",
-      payload: { kind: "agentTurn", message: DREAMING_TOKEN, lightContext: true },
-      delivery: { mode: "none" },
+    expect(jobs[0]?.sessionTarget).toBe("isolated");
+    expect(jobs[0]?.payload).toEqual({
+      kind: "agentTurn",
+      message: DREAMING_TOKEN,
+      lightContext: true,
     });
+    expect(jobs[0]?.delivery).toEqual({ mode: "none" });
   });
 
   it("identifies the managed job by description tag even when name was edited", () => {
-    const jobs = [{ ...staleDreamingJob(), name: "Custom Name" }];
+    const jobs: Array<Record<string, unknown>> = [{ ...staleDreamingJob(), name: "Custom Name" }];
     const result = migrateLegacyDreamingPayloadShape(jobs);
     expect(result.rewrittenCount).toBe(1);
-    expect(jobs[0]).toMatchObject({ sessionTarget: "isolated" });
+    expect(jobs[0]?.sessionTarget).toBe("isolated");
   });
 
   it("identifies the managed job by name + payload token when description tag is missing", () => {
@@ -131,8 +133,8 @@ describe("migrateLegacyDreamingPayloadShape", () => {
     ] as Array<Record<string, unknown>>;
     const result = migrateLegacyDreamingPayloadShape(jobs);
     expect(result).toEqual({ changed: true, rewrittenCount: 1 });
-    expect(jobs[0]).toMatchObject({ sessionTarget: "isolated" });
-    expect(jobs[1]).toMatchObject({ sessionTarget: "main" });
+    expect(jobs[0]?.sessionTarget).toBe("isolated");
+    expect(jobs[1]?.sessionTarget).toBe("main");
     expect(jobs[2]).toEqual(migratedDreamingJob());
   });
 });

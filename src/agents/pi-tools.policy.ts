@@ -26,7 +26,7 @@ import {
   type SessionCapabilityStore,
   type SubagentSessionRole,
 } from "./subagent-capabilities.js";
-import { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import {
   mergeAlsoAllowPolicy,
   normalizeToolName,
@@ -327,7 +327,7 @@ export function resolveTrustedGroupId(params: {
   });
 }
 
-function resolveProviderToolPolicy(params: {
+export function resolveProviderToolPolicy(params: {
   byProvider?: Record<string, ToolPolicyConfig>;
   modelProvider?: string;
   modelId?: string;

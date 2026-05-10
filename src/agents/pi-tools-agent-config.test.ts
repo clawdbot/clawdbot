@@ -218,7 +218,11 @@ describe("Agent-specific tool filtering", () => {
       await expect(applyPatchTool.execute("tc1", { input: patch })).rejects.toThrow(
         /Path escapes sandbox root/,
       );
-      await expect(fs.readFile(escapedPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      const readError = await fs.readFile(escapedPath, "utf8").then(
+        () => undefined,
+        (err: NodeJS.ErrnoException) => err,
+      );
+      expect(readError?.code).toBe("ENOENT");
     });
   });
 

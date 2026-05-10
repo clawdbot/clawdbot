@@ -67,9 +67,9 @@ function runWrappedPayloadCase(params: {
   payload?: Record<string, unknown>;
 }) {
   const payload = params.payload ?? { store: false };
-  let capturedOptions: (SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined;
+  let capturedOptions: SimpleStreamOptions | undefined;
   const baseStreamFn: StreamFn = (model, _context, options) => {
-    capturedOptions = options as (SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined;
+    capturedOptions = options;
     options?.onPayload?.(payload, model);
     return {} as ReturnType<StreamFn>;
   };
@@ -576,7 +576,6 @@ describe("buildOpenAIProvider", () => {
     expect(extraParams).toMatchObject({
       transport: "sse",
     });
-    expect(extraParams?.openaiWsWarmup).toBeUndefined();
     expect(result.payload.store).toBe(true);
     expect(result.payload.context_management).toEqual([
       { type: "compaction", compact_threshold: 140_000 },
@@ -743,12 +742,11 @@ describe("buildOpenAIProvider", () => {
     expect(result.payload.tools).toEqual([{ type: "function", name: "web_search" }]);
   });
 
-  it("preserves explicit OpenAI responses transport and warmup overrides", () => {
+  it("preserves explicit OpenAI responses transport overrides", () => {
     const provider = buildOpenAIProvider();
 
     const explicit = {
       transport: "websocket",
-      openaiWsWarmup: false,
       fastMode: true,
     };
 
@@ -761,7 +759,7 @@ describe("buildOpenAIProvider", () => {
     ).toBe(explicit);
   });
 
-  it("defaults Codex responses transport without forcing warmup flags", () => {
+  it("defaults Codex responses transport without forcing extra flags", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
     expect(
@@ -777,7 +775,6 @@ describe("buildOpenAIProvider", () => {
 
     const explicit = {
       transport: "sse",
-      openaiWsWarmup: false,
     };
     expect(
       provider.prepareExtraParams?.({
@@ -823,7 +820,6 @@ describe("buildOpenAIProvider", () => {
     });
 
     expect(result.options?.transport).toBeUndefined();
-    expect(result.options?.openaiWsWarmup).toBeUndefined();
     expect(result.payload.reasoning).toEqual({ effort: "none" });
   });
 

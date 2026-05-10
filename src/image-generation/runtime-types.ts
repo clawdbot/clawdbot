@@ -1,6 +1,7 @@
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type {
   GeneratedImageAsset,
   ImageGenerationBackground,
@@ -32,6 +33,8 @@ export type GenerateImageParams = {
   /** Optional per-request provider timeout in milliseconds. */
   timeoutMs?: number;
   providerOptions?: ImageGenerationProviderOptions;
+  /** SSRF policy to propagate into image-generation provider HTTP calls. */
+  ssrfPolicy?: SsrFPolicy;
 };
 
 export type GenerateImageRuntimeResult = {

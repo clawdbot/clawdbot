@@ -46,6 +46,7 @@ export function resolveSubagentTargetFromRuns(params: {
   token: string | undefined;
   recentWindowMinutes: number;
   label: (entry: SubagentRunRecord) => string;
+  aliases?: (entry: SubagentRunRecord) => string[];
   isActive?: (entry: SubagentRunRecord) => boolean;
   errors: {
     missingTarget: string;
@@ -96,6 +97,16 @@ export function resolveSubagentTargetFromRuns(params: {
       : { error: params.errors.unknownSession(trimmed) };
   }
   const lowered = normalizeLowercaseStringOrEmpty(trimmed);
+  const aliases = params.aliases ?? (() => []);
+  const byExactAlias = numericOrder.filter((entry) =>
+    aliases(entry).some((alias) => normalizeLowercaseStringOrEmpty(alias) === lowered),
+  );
+  if (byExactAlias.length === 1) {
+    return { entry: byExactAlias[0] };
+  }
+  if (byExactAlias.length > 1) {
+    return { error: params.errors.ambiguousLabel(trimmed) };
+  }
   const byExactLabel = deduped.filter(
     (entry) => normalizeLowercaseStringOrEmpty(params.label(entry)) === lowered,
   );
@@ -104,6 +115,15 @@ export function resolveSubagentTargetFromRuns(params: {
   }
   if (byExactLabel.length > 1) {
     return { error: params.errors.ambiguousLabel(trimmed) };
+  }
+  const byAliasPrefix = numericOrder.filter((entry) =>
+    aliases(entry).some((alias) => normalizeLowercaseStringOrEmpty(alias).startsWith(lowered)),
+  );
+  if (byAliasPrefix.length === 1) {
+    return { entry: byAliasPrefix[0] };
+  }
+  if (byAliasPrefix.length > 1) {
+    return { error: params.errors.ambiguousLabelPrefix(trimmed) };
   }
   const byLabelPrefix = deduped.filter((entry) =>
     normalizeLowercaseStringOrEmpty(params.label(entry)).startsWith(lowered),

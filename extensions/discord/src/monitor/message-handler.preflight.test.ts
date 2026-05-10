@@ -13,7 +13,8 @@ vi.mock("../pluralkit.js", () => ({
 vi.mock("./preflight-audio.runtime.js", () => ({
   transcribeFirstAudio: transcribeFirstAudioMock,
 }));
-vi.mock("./dm-command-auth.js", () => ({
+vi.mock("./dm-command-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./dm-command-auth.js")>()),
   resolveDiscordDmCommandAccess: resolveDiscordDmCommandAccessMock,
 }));
 vi.mock("./dm-command-decision.js", () => ({
@@ -317,9 +318,14 @@ describe("preflightDiscordMessage", () => {
     transcribeFirstAudioMock.mockReset();
     resolveDiscordDmCommandAccessMock.mockReset();
     resolveDiscordDmCommandAccessMock.mockResolvedValue({
-      commandAuthorized: true,
-      decision: "allow",
-      allowMatch: { allowed: true, matchedBy: "allowFrom", value: "123" },
+      senderAccess: {
+        allowed: true,
+        decision: "allow",
+        reasonCode: "dm_policy_allowlisted",
+      },
+      commandAccess: {
+        authorized: true,
+      },
     });
     handleDiscordDmCommandDecisionMock.mockReset();
     handleDiscordDmCommandDecisionMock.mockResolvedValue(undefined);

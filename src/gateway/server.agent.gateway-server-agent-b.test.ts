@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
@@ -533,6 +534,30 @@ describe("gateway server agent", () => {
     expect(ackPayload.runId).not.toBe("");
     expect(finalPayload.runId).toBe(ackPayload.runId);
     expect(finalPayload.status).toBe("ok");
+  });
+
+  test("agent final response surfaces redacted ACP runtime cause details", async () => {
+    const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
+    vi.mocked(agentCommand).mockRejectedValueOnce(
+      new AcpRuntimeError("ACP_TURN_FAILED", "Internal error", {
+        cause: new Error(`upstream rejected token=${token}`),
+      }),
+    );
+
+    const final = await sendAgentWsRequestAndWaitFinal(ws, {
+      reqId: "ag-acp-error-detail",
+      message: "hi",
+      idempotencyKey: "idem-agent-acp-error-detail",
+    });
+
+    const finalError = final.error as { message?: string } | undefined;
+    const errorMessage = finalError?.message ?? "";
+    expect(final.ok).toBe(false);
+    expect(final.payload?.status).toBe("error");
+    expect(errorMessage).toMatch(/ACP_TURN_FAILED/);
+    expect(errorMessage).toMatch(/Internal error/);
+    expect(errorMessage).toMatch(/upstream rejected/);
+    expect(JSON.stringify(final)).not.toContain(token);
   });
 
   test("agent dedupes by idempotencyKey after completion", async () => {

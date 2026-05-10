@@ -346,6 +346,7 @@ export class VoiceCallWebhookServer {
     const streamConfig: MediaStreamConfig = {
       transcriptionProvider: provider,
       providerConfig,
+      cfg: this.fullConfig ?? (this.coreConfig as OpenClawConfig | null) ?? undefined,
       preStartTimeoutMs: streaming.preStartTimeoutMs,
       maxPendingConnections: streaming.maxPendingConnections,
       maxPendingConnectionsPerIp: streaming.maxPendingConnectionsPerIp,

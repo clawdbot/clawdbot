@@ -33,6 +33,7 @@ import {
   validateSkillsStatusParams,
   validateSkillsUpdateParams,
 } from "../protocol/index.js";
+import { installUploadedSkillArchive, skillsUploadHandlers } from "./skills-upload.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 function collectSkillBins(entries: SkillEntry[]): string[] {
@@ -67,6 +68,7 @@ function collectSkillBins(entries: SkillEntry[]): string[] {
 }
 
 export const skillsHandlers: GatewayRequestHandlers = {
+  ...skillsUploadHandlers,
   "skills.status": ({ params, respond, context }) => {
     if (!validateSkillsStatusParams(params)) {
       respond(
@@ -215,6 +217,31 @@ export const skillsHandlers: GatewayRequestHandlers = {
             }
           : result,
         result.ok ? undefined : errorShape(ErrorCodes.UNAVAILABLE, result.error),
+      );
+      return;
+    }
+    if (params && typeof params === "object" && "source" in params && params.source === "upload") {
+      const p = params as {
+        source: "upload";
+        uploadId: string;
+        slug: string;
+        force?: boolean;
+        sha256?: string;
+        timeoutMs?: number;
+      };
+      const result = await installUploadedSkillArchive({
+        uploadId: p.uploadId,
+        slug: p.slug,
+        force: Boolean(p.force),
+        sha256: p.sha256,
+        timeoutMs: p.timeoutMs,
+        workspaceDir: workspaceDirRaw,
+        context,
+      });
+      respond(
+        result.ok,
+        result,
+        result.ok ? undefined : errorShape(result.errorCode, result.error),
       );
       return;
     }

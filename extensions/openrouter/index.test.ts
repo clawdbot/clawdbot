@@ -38,9 +38,9 @@ describe("openrouter provider hooks", () => {
     expect(modelCatalogProvider.liveCatalog).toEqual(expect.any(Function));
   });
 
-  it("includes Kimi K2.6 in the bundled catalog", () => {
-    expect(buildOpenrouterProvider().models?.map((model) => model.id)).toContain(
-      "moonshotai/kimi-k2.6",
+  it("includes current Kimi models in the bundled catalog", () => {
+    expect(buildOpenrouterProvider().models?.map((model) => model.id)).toEqual(
+      expect.arrayContaining(["moonshotai/kimi-k2.6", "moonshotai/kimi-k2.5"]),
     );
   });
 

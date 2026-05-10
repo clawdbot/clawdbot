@@ -274,20 +274,16 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
         payload: { text: "hello", role: "user" },
       });
 
-      expect(call.metadata).toEqual(
-        expect.objectContaining({
-          lastTalkEventAt: "2026-05-05T06:00:00.000Z",
-          lastTalkEventType: "transcript.done",
-          recentTalkEvents: [
-            {
-              at: "2026-05-05T06:00:00.000Z",
-              type: "transcript.done",
-              sessionId: "voice-call:provider-call-1:MZ-talk",
-              turnId: "MZ-talk:turn:1",
-            },
-          ],
-        }),
-      );
+      expect(call.metadata?.lastTalkEventAt).toBe("2026-05-05T06:00:00.000Z");
+      expect(call.metadata?.lastTalkEventType).toBe("transcript.done");
+      expect(call.metadata?.recentTalkEvents).toEqual([
+        {
+          at: "2026-05-05T06:00:00.000Z",
+          type: "transcript.done",
+          sessionId: "voice-call:provider-call-1:MZ-talk",
+          turnId: "MZ-talk:turn:1",
+        },
+      ]);
     } finally {
       await server.stop();
     }
@@ -1535,15 +1531,16 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       media.config.onSpeechStart?.("CA-inbound");
       media.config.onTranscript?.("CA-inbound", "hello");
       expect(clearTtsQueue).toHaveBeenCalledTimes(2);
-      expect(processEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "call.speech",
-          callId: "call-inbound",
-          providerCallId: "CA-inbound",
-          transcript: "hello",
-          isFinal: true,
-        }),
-      );
+      expect(processEvent).toHaveBeenCalledTimes(1);
+      const event = processEvent.mock.calls[0]?.[0] as NormalizedEvent | undefined;
+      expect(event?.type).toBe("call.speech");
+      if (event?.type !== "call.speech") {
+        throw new Error("expected media transcript callback to emit a speech event");
+      }
+      expect(event.callId).toBe("call-inbound");
+      expect(event.providerCallId).toBe("CA-inbound");
+      expect(event.transcript).toBe("hello");
+      expect(event.isFinal).toBe(true);
       expect(handleInboundResponse).toHaveBeenCalledWith("call-inbound", "hello");
     } finally {
       await server.stop();

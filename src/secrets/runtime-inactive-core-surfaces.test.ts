@@ -3,6 +3,16 @@ import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-s
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
+function expectWarningPaths(
+  snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>,
+  expectedPaths: string[],
+): void {
+  const warningPaths = new Set(snapshot.warnings.map((warning) => warning.path));
+  for (const expectedPath of expectedPaths) {
+    expect(warningPaths.has(expectedPath)).toBe(true);
+  }
+}
+
 describe("secrets runtime snapshot inactive core surfaces", () => {
   it("skips inactive core refs and emits diagnostics", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
@@ -29,11 +39,9 @@ describe("secrets runtime snapshot inactive core surfaces", () => {
       loadablePluginOrigins: new Map(),
     });
 
-    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
-      expect.arrayContaining([
-        "agents.defaults.memorySearch.remote.apiKey",
-        "gateway.auth.password",
-      ]),
-    );
+    expectWarningPaths(snapshot, [
+      "agents.defaults.memorySearch.remote.apiKey",
+      "gateway.auth.password",
+    ]);
   });
 });

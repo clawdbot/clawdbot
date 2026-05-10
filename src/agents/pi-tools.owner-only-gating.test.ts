@@ -57,7 +57,7 @@ describe("owner-only tool gating", () => {
   it("restricts node-originated runs to the node-safe tool subset", () => {
     const tools = createOpenClawCodingTools({ messageProvider: "node", senderIsOwner: false });
     const toolNames = tools.map((tool) => tool.name);
-    expect(toolNames).toEqual(expect.arrayContaining(["canvas"]));
+    expect(toolNames).toContain("canvas");
     expect(toolNames).not.toContain("exec");
     expect(toolNames).not.toContain("read");
     expect(toolNames).not.toContain("write");

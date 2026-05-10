@@ -63,6 +63,8 @@ describe("transcodeAudioBufferToOpus", () => {
         "48000",
         "-ac",
         "1",
+        "-f",
+        "opus",
         capturedOutputPath,
       ],
       { timeoutMs: 1234 },

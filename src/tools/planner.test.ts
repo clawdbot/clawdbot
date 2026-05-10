@@ -58,10 +58,9 @@ describe("buildToolPlan", () => {
     }
 
     expect(error).toBeInstanceOf(ToolPlanContractError);
-    expect(error).toMatchObject({
-      code: "duplicate-tool-name",
-      toolName: "read",
-    });
+    const contractError = error as ToolPlanContractError;
+    expect(contractError.code).toBe("duplicate-tool-name");
+    expect(contractError.toolName).toBe("read");
   });
 
   it("fails closed when a visible descriptor has no executor", () => {
@@ -75,10 +74,9 @@ describe("buildToolPlan", () => {
     }
 
     expect(error).toBeInstanceOf(ToolPlanContractError);
-    expect(error).toMatchObject({
-      code: "missing-executor",
-      toolName: "read",
-    });
+    const contractError = error as ToolPlanContractError;
+    expect(contractError.code).toBe("missing-executor");
+    expect(contractError.toolName).toBe("read");
   });
 
   it("does not require an executor for unavailable descriptors", () => {

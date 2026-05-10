@@ -7,6 +7,8 @@ const LIVE_ACP_TIMEOUT_MS = 20 * 60 * 1000;
 const LIVE_CLI_TIMEOUT_MS = 20 * 60 * 1000;
 const LIVE_PROFILE_TIMEOUT_MS = 30 * 60 * 1000;
 const OPENWEBUI_TIMEOUT_MS = 20 * 60 * 1000;
+const RELEASE_OPENWEBUI_COMMAND =
+  "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENWEBUI_SMOKE_MODE=models OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui";
 export const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS = 24;
 const upgradeSurvivorCommand = "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:upgrade-survivor";
 const updateRestartAuthCommand =
@@ -123,6 +125,22 @@ const bundledPluginInstallUninstallLanes = Array.from(
     ),
 );
 
+function livePluginToolLane() {
+  return liveLane(
+    "live-plugin-tool",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-plugin-tool",
+    {
+      cacheKey: "plugin-tool",
+      e2eImageKind: "bare",
+      provider: "openai",
+      resources: ["npm"],
+      stateScenario: "empty",
+      timeoutMs: 20 * 60 * 1000,
+      weight: 3,
+    },
+  );
+}
+
 export const mainLanes = [
   liveLane("live-models", liveDockerScriptCommand("test-live-models-docker.sh"), {
     providers: ["claude-cli", "codex-cli", "google-gemini-cli"],
@@ -182,6 +200,11 @@ export const mainLanes = [
     stateScenario: "empty",
     weight: 2,
   }),
+  npmLane("codex-on-demand", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:codex-on-demand", {
+    resources: ["service"],
+    stateScenario: "empty",
+    weight: 3,
+  }),
   npmLane(
     "npm-onboard-channel-agent",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
@@ -235,6 +258,13 @@ export const mainLanes = [
       weight: 3,
     },
   ),
+  npmLane("skill-install", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install", {
+    retryPatterns: LIVE_RETRY_PATTERNS,
+    retries: 1,
+    stateScenario: "empty",
+    timeoutMs: 10 * 60 * 1000,
+    weight: 2,
+  }),
   npmLane("upgrade-survivor", upgradeSurvivorCommand, {
     stateScenario: "upgrade-survivor",
     timeoutMs: 20 * 60 * 1000,
@@ -360,6 +390,7 @@ export const tailLanes = [
       weight: 3,
     },
   ),
+  livePluginToolLane(),
   liveLane(
     "live-cli-backend-codex",
     liveDockerScriptCommand(
@@ -458,6 +489,7 @@ const releasePathPluginRuntimeLanes = [
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-web-search-minimal",
     { stateScenario: "empty", timeoutMs: 8 * 60 * 1000 },
   ),
+  livePluginToolLane(),
 ];
 
 const releasePathPluginRuntimePluginLanes = [
@@ -483,6 +515,7 @@ const releasePathPluginRuntimeServiceLanes = [
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-web-search-minimal",
     { stateScenario: "empty", timeoutMs: 8 * 60 * 1000 },
   ),
+  livePluginToolLane(),
 ];
 
 const releasePathPluginRuntimeCoreLanes = [
@@ -499,12 +532,17 @@ const releasePathBundledChannelLanes = [
 const releasePathPackageInstallOpenAiLanes = [
   npmLane(
     "install-e2e-openai",
-    "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local pnpm test:install:e2e",
+    "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=1500 OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=300 pnpm test:install:e2e",
     {
       resources: ["service"],
       weight: 3,
     },
   ),
+  npmLane("codex-on-demand", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:codex-on-demand", {
+    resources: ["service"],
+    stateScenario: "empty",
+    weight: 3,
+  }),
 ];
 
 const releasePathPackageInstallAnthropicLanes = [
@@ -547,6 +585,13 @@ const releasePathPackageUpdateCoreLanes = [
       weight: 3,
     },
   ),
+  npmLane("skill-install", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install", {
+    retryPatterns: LIVE_RETRY_PATTERNS,
+    retries: 1,
+    stateScenario: "empty",
+    timeoutMs: 10 * 60 * 1000,
+    weight: 2,
+  }),
   npmLane("upgrade-survivor", upgradeSurvivorCommand, {
     stateScenario: "upgrade-survivor",
     timeoutMs: 20 * 60 * 1000,
@@ -626,7 +671,7 @@ const legacyReleasePathChunks = {
 };
 
 function openWebUILane() {
-  return liveLane("openwebui", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui", {
+  return liveLane("openwebui", RELEASE_OPENWEBUI_COMMAND, {
     e2eImageKind: "functional",
     needsLiveImage: false,
     provider: "openai",

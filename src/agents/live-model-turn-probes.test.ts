@@ -48,10 +48,14 @@ describe("live model turn probes", () => {
 
   it("builds an image probe with native image content", () => {
     const context = buildLiveModelImageProbeContext({});
-    expect(context.messages[0]?.content).toEqual([
-      expect.objectContaining({ type: "text" }),
-      expect.objectContaining({ type: "image", mimeType: "image/png" }),
-    ]);
+    const content = context.messages[0]?.content;
+    expect(Array.isArray(content)).toBe(true);
+    if (!Array.isArray(content)) {
+      throw new Error("Expected image probe content blocks");
+    }
+    expect(content[0]?.type).toBe("text");
+    expect(content[1]?.type).toBe("image");
+    expect(content[1]).toHaveProperty("mimeType", "image/png");
   });
 
   it("extracts assistant text blocks only", () => {
@@ -88,7 +92,7 @@ describe("live model turn probes", () => {
 
   it("skips known stale file probe routes", () => {
     expect(shouldSkipLiveModelFileProbe({ provider: "opencode-go", id: "glm-5" })).toBe(true);
-    expect(shouldSkipLiveModelFileProbe({ provider: "google", id: "gemini-3-pro-preview" })).toBe(
+    expect(shouldSkipLiveModelFileProbe({ provider: "google", id: "gemini-3.1-pro-preview" })).toBe(
       true,
     );
     expect(shouldSkipLiveModelFileProbe({ provider: "opencode-go", id: "mimo-v2-omni" })).toBe(

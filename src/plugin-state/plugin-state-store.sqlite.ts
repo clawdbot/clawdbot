@@ -59,6 +59,15 @@ type PluginStateDatabase = {
   walMaintenance: SqliteWalMaintenance;
 };
 
+type PluginStateSeedEntryForTests = {
+  pluginId: string;
+  namespace: string;
+  key: string;
+  valueJson: string;
+  createdAt?: number;
+  expiresAt?: number | null;
+};
+
 let cachedDatabase: PluginStateDatabase | null = null;
 
 function normalizeNumber(value: number | bigint | null): number | undefined {
@@ -631,6 +640,34 @@ export function sweepExpiredPluginStateEntries(): number {
 
 export function isPluginStateDatabaseOpen(): boolean {
   return cachedDatabase !== null;
+}
+
+export function clearPluginStateSqliteStoreForTests(): void {
+  const store = openPluginStateDatabase("clear");
+  store.db.exec("DELETE FROM plugin_state_entries;");
+}
+
+export function seedPluginStateSqliteEntriesForTests(
+  entries: readonly PluginStateSeedEntryForTests[],
+): void {
+  if (entries.length === 0) {
+    return;
+  }
+
+  const now = Date.now();
+  runWriteTransaction("register", (store) => {
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index];
+      store.statements.upsertEntry.run({
+        plugin_id: entry.pluginId,
+        namespace: entry.namespace,
+        entry_key: entry.key,
+        value_json: entry.valueJson,
+        created_at: entry.createdAt ?? now + index,
+        expires_at: entry.expiresAt ?? null,
+      });
+    }
+  });
 }
 
 export function probePluginStateStore(): PluginStateStoreProbeResult {

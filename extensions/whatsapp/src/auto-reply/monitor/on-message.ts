@@ -162,6 +162,13 @@ export function createWebOnMessageHandler(params: {
             ctx: {
               MediaPaths: [msg.mediaPath],
               MediaTypes: msg.mediaType ? [msg.mediaType] : undefined,
+              From: msg.from,
+              To: msg.to,
+              Provider: "whatsapp",
+              Surface: "whatsapp",
+              OriginatingChannel: "whatsapp",
+              OriginatingTo: conversationId,
+              AccountId: route.accountId,
             },
             cfg: params.cfg,
           })) ?? null;

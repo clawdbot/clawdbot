@@ -88,7 +88,7 @@ describe("directive behavior", () => {
       } as OpenClawConfig,
     });
     expect(fastText).toContain("Current fast mode: on (config)");
-    expect(fastText).toContain("Options: status, on, off.");
+    expect(fastText).toContain("Options: status, on, off, default.");
 
     const { text: verboseText } = await runDirectiveStatus("/verbose", {
       currentVerboseLevel: "on",
@@ -154,7 +154,7 @@ describe("directive behavior", () => {
     });
 
     expect(statusText).toContain("Current fast mode: on (config)");
-    expect(statusText).toContain("Options: status, on, off.");
+    expect(statusText).toContain("Options: status, on, off, default.");
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
   it("enforces per-agent elevated restrictions and status visibility", async () => {

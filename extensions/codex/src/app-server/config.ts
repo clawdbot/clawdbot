@@ -31,7 +31,6 @@ export type CodexAppServerEffectiveApprovalPolicy =
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
-type CodexDynamicToolsProfile = "native-first" | "openclaw-compat";
 export type CodexDynamicToolsLoading = "searchable" | "direct";
 export type CodexPluginDestructivePolicy = boolean;
 
@@ -110,7 +109,6 @@ export type CodexAppServerRuntimeOptions = {
 };
 
 export type CodexPluginConfig = {
-  codexDynamicToolsProfile?: CodexDynamicToolsProfile;
   codexDynamicToolsLoading?: CodexDynamicToolsLoading;
   codexDynamicToolsExclude?: string[];
   discovery?: {
@@ -194,7 +192,6 @@ const codexAppServerApprovalPolicySchema = z.enum([
 ]);
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
-const codexDynamicToolsProfileSchema = z.enum(["native-first", "openclaw-compat"]);
 const codexDynamicToolsLoadingSchema = z.enum(["searchable", "direct"]);
 const codexAppServerServiceTierSchema = z
   .preprocess(
@@ -222,7 +219,6 @@ const codexPluginsConfigSchema = z
 
 const codexPluginConfigSchema = z
   .object({
-    codexDynamicToolsProfile: codexDynamicToolsProfileSchema.optional(),
     codexDynamicToolsLoading: codexDynamicToolsLoadingSchema.optional(),
     codexDynamicToolsExclude: z.array(z.string()).optional(),
     discovery: z

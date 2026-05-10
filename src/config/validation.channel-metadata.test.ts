@@ -171,9 +171,7 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.config.channels?.telegram).toEqual(
-        expect.objectContaining({ dmPolicy: "pairing" }),
-      );
+      expect(result.config.channels?.telegram?.dmPolicy).toBe("pairing");
     }
   });
 });
@@ -199,9 +197,7 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
     if (result.ok) {
       // AJV defaults ARE injected into validated.config even in raw mode.
       // This is intentional — see comment above.
-      expect(result.config.channels?.telegram).toEqual(
-        expect.objectContaining({ dmPolicy: "pairing" }),
-      );
+      expect(result.config.channels?.telegram?.dmPolicy).toBe("pairing");
     }
   });
 });

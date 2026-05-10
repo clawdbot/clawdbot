@@ -264,6 +264,27 @@ describe("buildModelsKeyboard", () => {
     expect(result[1]?.[0]?.text).toBe("unknown-id");
   });
 
+  it("prefixes provider in fallback label for nested provider-local ids (OpenRouter)", () => {
+    const result = buildModelsKeyboard({
+      provider: "openrouter",
+      models: ["openai/gpt-5.4-mini"],
+      currentPage: 1,
+      totalPages: 1,
+    });
+    expect(result[0]?.[0]?.text).toBe("openrouter/openai/gpt-5.4-mini");
+  });
+
+  it("marks nested provider-local id as current when full ref matches", () => {
+    const result = buildModelsKeyboard({
+      provider: "openrouter",
+      models: ["openai/gpt-5.4-mini"],
+      currentModel: "openrouter/openai/gpt-5.4-mini",
+      currentPage: 1,
+      totalPages: 1,
+    });
+    expect(result[0]?.[0]?.text).toBe("openrouter/openai/gpt-5.4-mini ✓");
+  });
+
   it("uses provider-scoped modelNames keys to avoid cross-provider collisions", () => {
     const modelNames = new Map([
       ["openai/shared-id", "OpenAI Shared"],

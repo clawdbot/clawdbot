@@ -116,9 +116,7 @@ describe("sandbox fs bridge local backend e2e", () => {
         await expect(
           fs.readFile(path.join(workspaceDir, "nested", "hello.txt"), "utf8"),
         ).resolves.toBe("from-backend");
-        expect(scripts).toEqual(
-          expect.arrayContaining([expect.stringContaining("operation = sys.argv[1]")]),
-        );
+        expect(scripts.some((script) => script.includes("operation = sys.argv[1]"))).toBe(true);
       } finally {
         await fs.rm(stateDir, { recursive: true, force: true });
       }

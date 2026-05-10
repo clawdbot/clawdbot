@@ -55,11 +55,9 @@ describe("getResolvedLoggerSettings", () => {
 
     const settings = logging.getResolvedLoggerSettings();
 
-    expect(settings).toMatchObject({
-      level: "debug",
-      file: "/tmp/openclaw-configured.log",
-      maxFileBytes: 2048,
-    });
+    expect(settings.level).toBe("debug");
+    expect(settings.file).toBe("/tmp/openclaw-configured.log");
+    expect(settings.maxFileBytes).toBe(2048);
   });
 
   it("uses defaults when no logging config is available", () => {

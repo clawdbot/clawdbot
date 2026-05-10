@@ -3,20 +3,12 @@ import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-import {
-  DM_GROUP_ACCESS_REASON,
-  resolveDmGroupAccessWithLists,
-} from "openclaw/plugin-sdk/channel-policy";
-import { resolveSenderCommandAuthorization } from "openclaw/plugin-sdk/command-auth";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import {
-  evaluateGroupRouteAccessForPolicy,
-  resolveSenderScopedGroupPolicy,
-} from "openclaw/plugin-sdk/group-access";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
@@ -38,6 +30,7 @@ import {
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeStringEntries,
 } from "openclaw/plugin-sdk/text-runtime";
 import {
   buildZalouserGroupCandidates,
@@ -73,10 +66,6 @@ export type ZalouserMonitorResult = {
 };
 
 const ZALOUSER_TEXT_LIMIT = 2000;
-
-function normalizeZalouserEntry(entry: string): string {
-  return entry.replace(/^(zalouser|zlu):/i, "").trim();
-}
 
 function buildNameIndex<T>(items: T[], nameFn: (item: T) => string | undefined): Map<string, T[]> {
   const index = new Map<string, T[]>();
@@ -128,6 +117,14 @@ type ZalouserGroupHistoryState = {
   groupHistories: Map<string, HistoryEntry[]>;
 };
 
+function normalizeZalouserAllowEntry(entry: string): string {
+  return entry.replace(/^(zalouser|zlu):/i, "").trim();
+}
+
+function normalizeZalouserSender(value: string): string | null {
+  return normalizeOptionalLowercaseString(normalizeZalouserAllowEntry(value)) || null;
+}
+
 function resolveInboundQueueKey(message: ZaloInboundMessage): string {
   const threadId = message.threadId?.trim() || "unknown";
   if (message.isGroup) {
@@ -140,6 +137,40 @@ function resolveInboundQueueKey(message: ZaloInboundMessage): string {
 function resolveZalouserDmSessionScope(config: OpenClawConfig) {
   const configured = config.session?.dmScope;
   return configured === "main" || !configured ? "per-channel-peer" : configured;
+}
+
+function resolveZalouserRouteAccess(params: {
+  groupPolicy: "open" | "disabled" | "allowlist";
+  configured: boolean;
+  matched: boolean;
+  enabled?: boolean;
+}): {
+  allowed: boolean;
+  reason?: "disabled" | "empty_allowlist" | "route_not_allowlisted" | "route_disabled";
+} {
+  if (params.groupPolicy === "disabled") {
+    return { allowed: false, reason: "disabled" };
+  }
+  if (params.matched && params.enabled === false) {
+    return { allowed: false, reason: "route_disabled" };
+  }
+  if (params.groupPolicy !== "allowlist") {
+    return { allowed: true };
+  }
+  if (!params.configured) {
+    return { allowed: false, reason: "empty_allowlist" };
+  }
+  return params.matched ? { allowed: true } : { allowed: false, reason: "route_not_allowlisted" };
+}
+
+function senderScopedZalouserGroupPolicy(params: {
+  groupPolicy: "open" | "disabled" | "allowlist";
+  groupAllowFrom: readonly string[];
+}) {
+  if (params.groupPolicy === "disabled") {
+    return "disabled";
+  }
+  return params.groupAllowFrom.length > 0 ? "allowlist" : "open";
 }
 
 function resolveZalouserInboundSessionKey(params: {
@@ -191,20 +222,6 @@ function logVerbose(core: ZalouserCoreRuntime, runtime: RuntimeEnv, message: str
   if (core.logging.shouldLogVerbose()) {
     runtime.log(`[zalouser] ${message}`);
   }
-}
-
-function isSenderAllowed(senderId: string | undefined, allowFrom: string[]): boolean {
-  if (allowFrom.includes("*")) {
-    return true;
-  }
-  const normalizedSenderId = normalizeOptionalLowercaseString(senderId);
-  if (!normalizedSenderId) {
-    return false;
-  }
-  return allowFrom.some((entry) => {
-    const normalized = normalizeLowercaseStringOrEmpty(entry).replace(/^(zalouser|zlu):/i, "");
-    return normalized === normalizedSenderId;
-  });
 }
 
 function resolveGroupRequireMention(params: {
@@ -330,11 +347,11 @@ async function processMessage(
         allowNameMatching,
       }),
     );
-    const routeAccess = evaluateGroupRouteAccessForPolicy({
+    const routeAccess = resolveZalouserRouteAccess({
       groupPolicy,
-      routeAllowlistConfigured,
-      routeMatched: Boolean(groupEntry),
-      routeEnabled: isZalouserGroupEntryAllowed(groupEntry),
+      configured: routeAllowlistConfigured,
+      matched: Boolean(groupEntry),
+      enabled: isZalouserGroupEntryAllowed(groupEntry),
     });
     if (!routeAccess.allowed) {
       if (routeAccess.reason === "disabled") {
@@ -355,33 +372,50 @@ async function processMessage(
   }
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
-  const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));
-  const configGroupAllowFrom = (account.config.groupAllowFrom ?? []).map((v) => String(v));
+  const configAllowFrom = normalizeStringEntries(account.config.allowFrom);
+  const configGroupAllowFrom = normalizeStringEntries(account.config.groupAllowFrom);
   const senderGroupPolicy =
     routeAllowlistConfigured && configGroupAllowFrom.length === 0
       ? groupPolicy
-      : resolveSenderScopedGroupPolicy({
+      : senderScopedZalouserGroupPolicy({
           groupPolicy,
           groupAllowFrom: configGroupAllowFrom,
         });
-  const storeAllowFrom =
-    !isGroup && dmPolicy !== "allowlist" && dmPolicy !== "open"
-      ? await pairing.readAllowFromStore().catch(() => [])
-      : [];
-  const accessDecision = resolveDmGroupAccessWithLists({
-    isGroup,
+  const shouldComputeCommandAuth = core.channel.commands.shouldComputeCommandAuthorized(
+    commandBody,
+    config,
+  );
+  const accessDecision = await resolveStableChannelMessageIngress({
+    channelId: "zalouser",
+    accountId: account.accountId,
+    identity: {
+      normalize: normalizeZalouserSender,
+      sensitivity: "pii",
+      entryIdPrefix: "zalouser-entry",
+    },
+    cfg: config,
+    readStoreAllowFrom: async () => await pairing.readAllowFromStore(),
+    subject: { stableId: senderId },
+    conversation: {
+      kind: isGroup ? "group" : "direct",
+      id: isGroup ? "group" : senderId,
+    },
     dmPolicy,
     groupPolicy: senderGroupPolicy,
+    policy: { groupAllowFromFallbackToAllowFrom: false },
     allowFrom: configAllowFrom,
     groupAllowFrom: configGroupAllowFrom,
-    storeAllowFrom,
-    groupAllowFromFallbackToAllowFrom: false,
-    isSenderAllowed: (allowFrom) => isSenderAllowed(senderId, allowFrom),
+    command: shouldComputeCommandAuth
+      ? {
+          directGroupAllowFrom: "effective",
+          commandGroupAllowFromFallbackToAllowFrom: true,
+        }
+      : undefined,
   });
-  if (isGroup && accessDecision.decision !== "allow") {
-    if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST) {
+  if (isGroup && accessDecision.senderAccess.decision !== "allow") {
+    if (accessDecision.senderAccess.reasonCode === "group_policy_empty_allowlist") {
       logVerbose(core, runtime, "Blocked zalouser group message (no group allowlist)");
-    } else if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED) {
+    } else if (accessDecision.senderAccess.reasonCode === "group_policy_not_allowlisted") {
       logVerbose(
         core,
         runtime,
@@ -391,8 +425,8 @@ async function processMessage(
     return;
   }
 
-  if (!isGroup && accessDecision.decision !== "allow") {
-    if (accessDecision.decision === "pairing") {
+  if (!isGroup && accessDecision.senderAccess.decision !== "allow") {
+    if (accessDecision.senderAccess.decision === "pairing") {
       await pairing.issueChallenge({
         senderId,
         senderIdLine: `Your Zalo user id: ${senderId}`,
@@ -414,7 +448,7 @@ async function processMessage(
       });
       return;
     }
-    if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.DM_POLICY_DISABLED) {
+    if (accessDecision.senderAccess.reasonCode === "dm_policy_disabled") {
       logVerbose(core, runtime, `Blocked zalouser DM from ${senderId} (dmPolicy=disabled)`);
     } else {
       logVerbose(
@@ -426,23 +460,9 @@ async function processMessage(
     return;
   }
 
-  const { commandAuthorized } = await resolveSenderCommandAuthorization({
-    cfg: config,
-    rawBody: commandBody,
-    isGroup,
-    dmPolicy,
-    configuredAllowFrom: configAllowFrom,
-    configuredGroupAllowFrom: configGroupAllowFrom,
-    senderId,
-    isSenderAllowed,
-    channel: "zalouser",
-    accountId: account.accountId,
-    readAllowFromStore: async () => storeAllowFrom,
-    shouldComputeCommandAuthorized: (body, cfg) =>
-      core.channel.commands.shouldComputeCommandAuthorized(body, cfg),
-    resolveCommandAuthorizedFromAuthorizers: (params) =>
-      core.channel.commands.resolveCommandAuthorizedFromAuthorizers(params),
-  });
+  const commandAuthorized = accessDecision.commandAccess.requested
+    ? accessDecision.commandAccess.authorized
+    : undefined;
   const hasControlCommand = core.channel.commands.isControlCommandMessage(commandBody, config);
   if (isGroup && hasControlCommand && commandAuthorized !== true) {
     logVerbose(
@@ -668,81 +688,64 @@ async function processMessage(
     },
   };
 
-  await core.channel.turn.run({
+  await core.channel.turn.runAssembled({
     channel: "zalouser",
     accountId: account.accountId,
-    raw: message,
-    adapter: {
-      ingest: () => ({
-        id: messageSid ?? `${message.timestampMs}`,
-        timestamp: message.timestampMs,
-        rawText: rawBody,
-        textForAgent: rawBody,
-        textForCommands: commandBody,
-        raw: message,
-      }),
-      resolveTurn: () => ({
-        cfg: config,
-        channel: "zalouser",
-        accountId: account.accountId,
-        agentId: route.agentId,
-        routeSessionKey: route.sessionKey,
-        storePath,
-        ctxPayload,
-        recordInboundSession: core.channel.session.recordInboundSession,
-        dispatchReplyWithBufferedBlockDispatcher:
-          core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
-        delivery: {
-          preparePayload: (payload) => {
-            if (payload.text === undefined) {
-              return payload;
-            }
-            return {
-              ...payload,
-              text: core.channel.text.convertMarkdownTables(
-                payload.text,
-                core.channel.text.resolveMarkdownTableMode({
-                  cfg: config,
-                  channel: "zalouser",
-                  accountId: account.accountId,
-                }),
-              ),
-            };
-          },
-          durable: () => ({
-            to: normalizedTo,
-          }),
-          deliver: async (payload) => {
-            return await deliverZalouserReply({
-              payload: payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string },
-              profile: account.profile,
-              chatId,
-              isGroup,
-              runtime,
-              core,
-              config,
+    cfg: config,
+    agentId: route.agentId,
+    routeSessionKey: route.sessionKey,
+    storePath,
+    ctxPayload,
+    recordInboundSession: core.channel.session.recordInboundSession,
+    dispatchReplyWithBufferedBlockDispatcher:
+      core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+    delivery: {
+      preparePayload: (payload) => {
+        if (payload.text === undefined) {
+          return payload;
+        }
+        return {
+          ...payload,
+          text: core.channel.text.convertMarkdownTables(
+            payload.text,
+            core.channel.text.resolveMarkdownTableMode({
+              cfg: config,
+              channel: "zalouser",
               accountId: account.accountId,
-              tableMode: "off",
-            });
-          },
-          onDelivered: (_payload, _info, result) => {
-            if (result?.visibleReplySent !== false) {
-              statusSink?.({ lastOutboundAt: Date.now() });
-            }
-          },
-          onError: (err, info) => {
-            runtime.error(
-              `[${account.accountId}] Zalouser ${info.kind} reply failed: ${String(err)}`,
-            );
-          },
-        },
-        replyPipeline,
-        record: {
-          onRecordError: (err) => {
-            runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
-          },
-        },
+            }),
+          ),
+        };
+      },
+      durable: () => ({
+        to: normalizedTo,
       }),
+      deliver: async (payload) => {
+        return await deliverZalouserReply({
+          payload: payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string },
+          profile: account.profile,
+          chatId,
+          isGroup,
+          runtime,
+          core,
+          config,
+          accountId: account.accountId,
+          tableMode: "off",
+        });
+      },
+      onDelivered: (_payload, _info, result) => {
+        if (result?.visibleReplySent !== false) {
+          statusSink?.({ lastOutboundAt: Date.now() });
+        }
+      },
+      onError: (err, info) => {
+        runtime.error(`[${account.accountId}] Zalouser ${info.kind} reply failed: ${String(err)}`);
+      },
+    },
+    replyPipeline,
+    record: {
+      onRecordError: (err) => {
+        runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
+      },
     },
   });
   if (isGroup && historyKey) {
@@ -834,10 +837,10 @@ export async function monitorZalouserProvider(
   try {
     const profile = account.profile;
     const allowFromEntries = (account.config.allowFrom ?? [])
-      .map((entry) => normalizeZalouserEntry(String(entry)))
+      .map((entry) => normalizeZalouserAllowEntry(String(entry)))
       .filter((entry) => entry && entry !== "*");
     const groupAllowFromEntries = (account.config.groupAllowFrom ?? [])
-      .map((entry) => normalizeZalouserEntry(String(entry)))
+      .map((entry) => normalizeZalouserAllowEntry(String(entry)))
       .filter((entry) => entry && entry !== "*");
     const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
 
@@ -888,7 +891,7 @@ export async function monitorZalouserProvider(
       const unresolved: string[] = [];
       const nextGroups = { ...groupsConfig };
       for (const entry of groupKeys) {
-        const cleaned = normalizeZalouserEntry(entry);
+        const cleaned = normalizeZalouserAllowEntry(entry);
         if (/^\d+$/.test(cleaned)) {
           if (!nextGroups[cleaned]) {
             nextGroups[cleaned] = groupsConfig[entry];

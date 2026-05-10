@@ -44,7 +44,7 @@ describe("codex app-server protocol source resolver", () => {
     createProtocolSchema(codexRepo);
     delete process.env.OPENCLAW_CODEX_REPO;
 
-    await expect(resolveCodexAppServerProtocolSource(worktreeRoot)).resolves.toMatchObject({
+    await expect(resolveCodexAppServerProtocolSource(worktreeRoot)).resolves.toEqual({
       codexRepo,
       sourceRoot: path.join(codexRepo, "codex-rs/app-server-protocol/schema"),
     });

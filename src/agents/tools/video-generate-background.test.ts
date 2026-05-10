@@ -54,11 +54,9 @@ describe("video generate background helpers", () => {
       providerId: "openai",
     });
 
-    expect(handle).toMatchObject({
-      taskId: "task-123",
-      requesterSessionKey: "agent:main:discord:direct:123",
-      taskLabel: "friendly lobster surfing",
-    });
+    expect(handle?.taskId).toBe("task-123");
+    expect(handle?.requesterSessionKey).toBe("agent:main:discord:direct:123");
+    expect(handle?.taskLabel).toBe("friendly lobster surfing");
     expectQueuedTaskRun({
       taskExecutorMocks,
       taskKind: VIDEO_GENERATION_TASK_KIND,
@@ -100,9 +98,7 @@ describe("video generate background helpers", () => {
     }
 
     expect(handle.runId).toMatch(/^tool:video_generate:/);
-    expect(getAgentRunContext(handle.runId)).toMatchObject({
-      sessionKey: "agent:main:discord:channel:123",
-    });
+    expect(getAgentRunContext(handle.runId)?.sessionKey).toBe("agent:main:discord:channel:123");
 
     const beforeProgress = Date.now();
     recordVideoGenerationTaskProgress({

@@ -1,8 +1,10 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { getApiProvider, streamSimple } from "@mariozechner/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as providerTransportStream from "../provider-transport-stream.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../system-prompt-cache-boundary.js";
 import {
+  __testing,
   describeEmbeddedAgentStreamStrategy,
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentStreamFn,
@@ -27,13 +29,16 @@ const overrideBoundaryAwareStreamFnOnce = (streamFn: StreamFn): void => {
   );
 };
 
+afterEach(() => {
+  __testing.resetPiNativeCodexResponsesStreamFnForTest();
+});
+
 describe("describeEmbeddedAgentStreamStrategy", () => {
   it("describes provider-owned stream paths explicitly", () => {
     expect(
       describeEmbeddedAgentStreamStrategy({
         currentStreamFn: undefined,
         providerStreamFn: vi.fn() as never,
-        shouldUseWebSocketTransport: false,
         model: {
           api: "openai-completions",
           provider: "ollama",
@@ -47,7 +52,6 @@ describe("describeEmbeddedAgentStreamStrategy", () => {
     expect(
       describeEmbeddedAgentStreamStrategy({
         currentStreamFn: undefined,
-        shouldUseWebSocketTransport: false,
         model: {
           api: "openai-responses",
           provider: "openai",
@@ -57,25 +61,23 @@ describe("describeEmbeddedAgentStreamStrategy", () => {
     ).toBe("boundary-aware:openai-responses");
   });
 
-  it("describes default Codex fallback shaping", () => {
+  it("describes default Codex fallback as PI native", () => {
     expect(
       describeEmbeddedAgentStreamStrategy({
         currentStreamFn: undefined,
-        shouldUseWebSocketTransport: false,
         model: {
           api: "openai-codex-responses",
           provider: "openai-codex",
           id: "codex-mini-latest",
         } as never,
       }),
-    ).toBe("boundary-aware:openai-codex-responses");
+    ).toBe("pi-native-codex-responses");
   });
 
   it("keeps custom session streams labeled as custom", () => {
     expect(
       describeEmbeddedAgentStreamStrategy({
         currentStreamFn: vi.fn() as never,
-        shouldUseWebSocketTransport: false,
         model: {
           api: "openai-responses",
           provider: "openai",
@@ -89,7 +91,6 @@ describe("describeEmbeddedAgentStreamStrategy", () => {
     expect(
       describeEmbeddedAgentStreamStrategy({
         currentStreamFn: vi.fn() as never,
-        shouldUseWebSocketTransport: false,
         model: {
           api: "anthropic-messages",
           provider: "cloudflare-ai-gateway",
@@ -120,7 +121,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
   it("still routes supported streamSimple fallbacks through boundary-aware transports", () => {
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-responses",
@@ -132,25 +132,37 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     expect(streamFn).not.toBe(streamSimple);
   });
 
-  it("routes Codex responses fallbacks through boundary-aware transports", () => {
+  it("routes Codex responses fallbacks through PI native transport", async () => {
+    const nativeStreamFn = vi.fn(async (_model, context, options) => ({ context, options }));
+    __testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-codex-responses",
         provider: "openai-codex",
         id: "codex-mini-latest",
       } as never,
+      resolvedApiKey: "oauth-bearer-token",
     });
 
     expect(streamFn).not.toBe(streamSimple);
+    await expect(
+      streamFn(
+        { provider: "openai-codex", id: "codex-mini-latest" } as never,
+        { systemPrompt: `intro${SYSTEM_PROMPT_CACHE_BOUNDARY}tail` } as never,
+        {},
+      ),
+    ).resolves.toMatchObject({
+      context: { systemPrompt: "intro\ntail" },
+      options: { apiKey: "oauth-bearer-token" },
+    });
+    expect(nativeStreamFn).toHaveBeenCalledTimes(1);
   });
 
   it("routes GitHub Copilot fallbacks through boundary-aware transports", () => {
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-responses",
@@ -172,7 +184,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
 
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: nativeStreamFn,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-completions",
@@ -196,7 +207,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
 
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: currentStreamFn as never,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "anthropic-messages",
@@ -226,7 +236,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
       providerStreamFn,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-completions",
@@ -252,7 +261,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
       providerStreamFn,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       signal,
       model: {
@@ -277,7 +285,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
       providerStreamFn,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       signal: runSignal,
       model: {
@@ -296,12 +303,11 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     });
   });
 
-  it("injects the resolved run api key into the boundary-aware Codex Responses fallback", async () => {
-    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
-    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+  it("injects the resolved run api key into the PI native Codex Responses fallback", async () => {
+    const nativeStreamFn = vi.fn(async (_model, _context, options) => options);
+    __testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-codex-responses",
@@ -314,18 +320,17 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     await expect(
       streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {}),
     ).resolves.toMatchObject({ apiKey: "oauth-bearer-token" });
-    expect(innerStreamFn).toHaveBeenCalledTimes(1);
+    expect(nativeStreamFn).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to authStorage when no resolved api key is available for boundary-aware fallback", async () => {
-    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+  it("falls back to authStorage when no resolved api key is available for PI native fallback", async () => {
+    const nativeStreamFn = vi.fn(async (_model, _context, options) => options);
     const authStorage = {
       getApiKey: vi.fn(async () => "stored-bearer-token"),
     };
-    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+    __testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-codex-responses",
@@ -341,13 +346,12 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     expect(authStorage.getApiKey).toHaveBeenCalledWith("openai-codex");
   });
 
-  it("forwards the run abort signal into the boundary-aware fallback when callers omit one", async () => {
-    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+  it("forwards the run abort signal into the PI native fallback when callers omit one", async () => {
+    const nativeStreamFn = vi.fn(async (_model, _context, options) => options);
     const runSignal = new AbortController().signal;
-    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+    __testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       signal: runSignal,
       model: {
@@ -363,14 +367,13 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     ).resolves.toMatchObject({ signal: runSignal, apiKey: "oauth-bearer-token" });
   });
 
-  it("does not overwrite an explicit signal on the boundary-aware fallback path", async () => {
-    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+  it("does not overwrite an explicit signal on the PI native fallback path", async () => {
+    const nativeStreamFn = vi.fn(async (_model, _context, options) => options);
     const runSignal = new AbortController().signal;
     const explicitSignal = new AbortController().signal;
-    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+    __testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       signal: runSignal,
       model: {
@@ -388,13 +391,12 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     ).resolves.toMatchObject({ signal: explicitSignal });
   });
 
-  it("forwards the run signal on the sync boundary-aware fallback path without auth credentials", async () => {
-    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+  it("forwards the run signal on the sync PI native fallback path without auth credentials", async () => {
+    const nativeStreamFn = vi.fn(async (_model, _context, options) => options);
     const runSignal = new AbortController().signal;
-    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+    __testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       signal: runSignal,
       model: {
@@ -409,12 +411,11 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     ).resolves.toMatchObject({ signal: runSignal });
   });
 
-  it("does not strip cache boundary markers on the boundary-aware fallback path", async () => {
-    const innerStreamFn = vi.fn(async (_model, context, _options) => context);
-    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+  it("strips cache boundary markers on the PI native fallback path", async () => {
+    const nativeStreamFn = vi.fn(async (_model, context, _options) => context);
+    __testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-codex-responses",
@@ -424,9 +425,9 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       resolvedApiKey: "oauth-bearer-token",
     });
 
-    const systemPrompt = "intro<<openclaw-cache-boundary>>tail";
+    const systemPrompt = `intro${SYSTEM_PROMPT_CACHE_BOUNDARY}tail`;
     await expect(
       streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, { systemPrompt } as never, {}),
-    ).resolves.toMatchObject({ systemPrompt });
+    ).resolves.toMatchObject({ systemPrompt: "intro\ntail" });
   });
 });

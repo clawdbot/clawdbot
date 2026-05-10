@@ -66,7 +66,7 @@ export function describeExecTool(params?: { agentId?: string; hasCronTool?: bool
 export function describeProcessTool(params?: { hasCronTool?: boolean }): string {
   return [
     "Manage running exec sessions for commands already started: list, poll, log, write, send-keys, submit, paste, kill.",
-    "Use poll/log when you need status, logs, quiet-success confirmation, or completion confirmation when automatic completion wake is unavailable. Use write/send-keys/submit/paste/kill for input or intervention.",
+    "Use poll/log when you need status, logs, quiet-success confirmation, or completion confirmation when automatic completion wake is unavailable. Use poll/log also for input-wait hints. Use write/send-keys/submit/paste/kill for input or intervention.",
     params?.hasCronTool
       ? "Do not use process polling to emulate timers or reminders; use cron for scheduled follow-ups."
       : undefined,

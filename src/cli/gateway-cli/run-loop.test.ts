@@ -560,7 +560,7 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("routes external SIGUSR1 through the restart scheduler before draining", async () => {
+  it("clears stale restart state before routing external SIGUSR1 through the scheduler", async () => {
     vi.clearAllMocks();
     consumeGatewaySigusr1RestartAuthorization.mockReturnValueOnce(false);
     isGatewaySigusr1RestartExternallyAllowed.mockReturnValueOnce(true);
@@ -576,11 +576,37 @@ describe("runGatewayLoop", () => {
         delayMs: 0,
         reason: "SIGUSR1",
       });
+      expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
+      expect(markGatewaySigusr1RestartHandled.mock.invocationCallOrder[0]).toBeLessThan(
+        scheduleGatewaySigusr1Restart.mock.invocationCallOrder[0] ?? 0,
+      );
       expect(close).not.toHaveBeenCalled();
       expect(start).toHaveBeenCalledTimes(1);
-      expect(markGatewaySigusr1RestartHandled).not.toHaveBeenCalled();
     });
   });
+
+  it("clears the in-flight restart token when an unauthorized SIGUSR1 is ignored", async () => {
+    vi.clearAllMocks();
+    consumeGatewaySigusr1RestartAuthorization.mockReturnValueOnce(false);
+    isGatewaySigusr1RestartExternallyAllowed.mockReturnValueOnce(false);
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, start } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+
+      sigusr1();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
+      expect(scheduleGatewaySigusr1Restart).not.toHaveBeenCalled();
+      expect(close).not.toHaveBeenCalled();
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
+      );
+    });
+  });
+
   it("releases the lock before exiting on spawned restart", async () => {
     vi.clearAllMocks();
     peekGatewaySigusr1RestartReason.mockReturnValue(undefined);

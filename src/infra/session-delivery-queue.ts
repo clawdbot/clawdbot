@@ -2,6 +2,7 @@ export {
   ackSessionDelivery,
   enqueueSessionDelivery,
   failSessionDelivery,
+  loadPendingSessionDelivery,
   loadPendingSessionDeliveries,
   resolveSessionDeliveryQueueDir,
 } from "./session-delivery-queue-storage.js";

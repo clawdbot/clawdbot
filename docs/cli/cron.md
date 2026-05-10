@@ -70,6 +70,14 @@ Note: isolated cron runs treat run-level agent failures as job errors even when
 no reply payload is produced, so model/provider failures still increment error
 counters and trigger failure notifications.
 
+If an isolated run times out before the first model request, `openclaw cron show`
+and `openclaw cron runs` include a phase-specific error such as
+`setup timed out before runner start` or
+`stalled before first model call (last phase: context-engine)`.
+For CLI-backed providers, the pre-model watchdog stays active until the external
+CLI turn starts, so session lookup, hook, auth, prompt, and CLI setup stalls are
+reported as pre-model cron failures.
+
 ## Scheduling
 
 ### One-shot jobs

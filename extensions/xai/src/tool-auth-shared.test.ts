@@ -5,6 +5,7 @@ import {
   resolveFallbackXaiAuth,
   resolveFallbackXaiApiKey,
   resolveXaiToolApiKey,
+  resolveXaiToolApiKeyWithAuth,
 } from "./tool-auth-shared.js";
 
 describe("xai tool auth helpers", () => {
@@ -138,6 +139,17 @@ describe("xai tool auth helpers", () => {
     expect(isXaiToolEnabled({ enabled: true })).toBe(true);
   });
 
+  it("uses xAI auth profiles when tool config and env are absent", async () => {
+    const auth = {
+      hasAuthForProvider: (providerId: string) => providerId === "xai",
+      resolveApiKeyForProvider: async (providerId: string) =>
+        providerId === "xai" ? "profile-key" : undefined, // pragma: allowlist secret
+    };
+
+    expect(isXaiToolEnabled({ auth })).toBe(true);
+    await expect(resolveXaiToolApiKeyWithAuth({ auth })).resolves.toBe("profile-key");
+  });
+
   it("does not use env fallback when a non-env SecretRef is configured but unavailable", () => {
     vi.stubEnv("XAI_API_KEY", "env-key");
 
@@ -162,6 +174,34 @@ describe("xai tool auth helpers", () => {
         },
       }),
     ).toBeUndefined();
+  });
+
+  it("does not bypass blocked explicit tool config with auth profiles", async () => {
+    const auth = {
+      hasAuthForProvider: (providerId: string) => providerId === "xai",
+      resolveApiKeyForProvider: async () => "profile-key", // pragma: allowlist secret
+    };
+
+    const sourceConfig = {
+      plugins: {
+        entries: {
+          xai: {
+            config: {
+              webSearch: {
+                apiKey: {
+                  source: "file",
+                  provider: "vault",
+                  id: "/xai/tool-key",
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(isXaiToolEnabled({ sourceConfig, auth })).toBe(false);
+    await expect(resolveXaiToolApiKeyWithAuth({ sourceConfig, auth })).resolves.toBeUndefined();
   });
 
   it("resolves env SecretRefs from source config when runtime snapshot is unavailable", () => {

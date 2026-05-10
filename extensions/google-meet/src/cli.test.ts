@@ -812,6 +812,69 @@ describe("google-meet CLI", () => {
     }
   });
 
+  it("delegates test speech mode to the gateway-owned runtime", async () => {
+    const callGatewayFromCli = vi.fn(async () => ({
+      createdSession: true,
+      spoken: true,
+      speechOutputVerified: true,
+      speechOutputTimedOut: false,
+      session: {
+        id: "meet_gateway",
+        url: "https://meet.google.com/abc-defg-hij",
+        state: "active",
+        transport: "chrome",
+        mode: "bidi",
+        participantIdentity: "signed-in Google Chrome profile",
+        createdAt: "2026-04-25T00:00:00.000Z",
+        updatedAt: "2026-04-25T00:00:01.000Z",
+        realtime: { enabled: true, strategy: "bidi", provider: "openai" },
+        notes: [],
+      },
+    }));
+    const ensureRuntime = vi.fn(async () => {
+      throw new Error("local runtime should not be loaded");
+    });
+    const stdout = captureStdout();
+    try {
+      await setupCli({
+        callGatewayFromCli,
+        ensureRuntime: ensureRuntime as unknown as () => Promise<GoogleMeetRuntime>,
+      }).parseAsync(
+        [
+          "googlemeet",
+          "test-speech",
+          "https://meet.google.com/abc-defg-hij",
+          "--transport",
+          "chrome",
+          "--mode",
+          "bidi",
+          "--message",
+          "Hello meeting",
+        ],
+        { from: "user" },
+      );
+
+      expect(callGatewayFromCli).toHaveBeenCalledWith(
+        "googlemeet.testSpeech",
+        { json: true, timeout: expect.any(String) },
+        {
+          url: "https://meet.google.com/abc-defg-hij",
+          transport: "chrome",
+          mode: "bidi",
+          message: "Hello meeting",
+        },
+        { progress: false },
+      );
+      expect(ensureRuntime).not.toHaveBeenCalled();
+      expect(JSON.parse(stdout.output())).toMatchObject({
+        createdSession: true,
+        session: { mode: "bidi" },
+      });
+    } finally {
+      stdout.restore();
+    }
+  });
+
   it("runs a listen-first health probe", async () => {
     const testListen = vi.fn(async () => ({
       createdSession: true,

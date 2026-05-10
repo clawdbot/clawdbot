@@ -35,7 +35,13 @@ async function withCameraTempDir<T>(run: (dir: string) => Promise<T>): Promise<T
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected missing path: ${targetPath}`);
 }
 
 describe("nodes camera helpers", () => {

@@ -26,7 +26,6 @@ import { collectGatewayConfigFindings as collectGatewayConfigFindingsBase } from
 import type {
   SecurityAuditFinding,
   SecurityAuditReport,
-  SecurityAuditSeverity,
   SecurityAuditSummary,
 } from "./audit.types.js";
 import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";

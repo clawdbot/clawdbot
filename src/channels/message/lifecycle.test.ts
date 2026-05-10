@@ -21,25 +21,16 @@ describe("message lifecycle primitives", () => {
     };
 
     const preview = createLiveMessageState({ receipt });
-    expect(preview).toEqual(
-      expect.objectContaining({
-        phase: "previewing",
-        canFinalizeInPlace: true,
-      }),
-    );
+    expect(preview.phase).toBe("previewing");
+    expect(preview.canFinalizeInPlace).toBe(true);
 
-    expect(markLiveMessageFinalized(preview, receipt)).toEqual(
-      expect.objectContaining({
-        phase: "finalized",
-        canFinalizeInPlace: false,
-      }),
-    );
-    expect(markLiveMessageCancelled(preview)).toEqual(
-      expect.objectContaining({
-        phase: "cancelled",
-        canFinalizeInPlace: false,
-      }),
-    );
+    const finalized = markLiveMessageFinalized(preview, receipt);
+    expect(finalized.phase).toBe("finalized");
+    expect(finalized.canFinalizeInPlace).toBe(false);
+
+    const cancelled = markLiveMessageCancelled(preview);
+    expect(cancelled.phase).toBe("cancelled");
+    expect(cancelled.canFinalizeInPlace).toBe(false);
   });
 
   it("tracks live preview rendered batch updates", () => {
@@ -58,12 +49,9 @@ describe("message lifecycle primitives", () => {
       },
     };
 
-    expect(markLiveMessagePreviewUpdated(preview, rendered)).toEqual(
-      expect.objectContaining({
-        phase: "previewing",
-        lastRendered: rendered,
-      }),
-    );
+    const updated = markLiveMessagePreviewUpdated(preview, rendered);
+    expect(updated.phase).toBe("previewing");
+    expect(updated.lastRendered).toBe(rendered);
   });
 
   it("finalizes live previews in place with preview receipts", async () => {
@@ -89,21 +77,23 @@ describe("message lifecycle primitives", () => {
     expect(result.kind).toBe("preview-finalized");
     expect(editFinal).toHaveBeenCalledWith("preview-1", { text: "done" });
     expect(deliverNormally).not.toHaveBeenCalled();
-    expect(result.liveState).toEqual(
-      expect.objectContaining({
-        phase: "finalized",
-        canFinalizeInPlace: false,
-        receipt: expect.objectContaining({
-          primaryPlatformMessageId: "preview-1",
-          platformMessageIds: ["preview-1"],
-        }),
-      }),
-    );
-    expect(onPreviewFinalized).toHaveBeenCalledWith(
-      "preview-1",
-      expect.objectContaining({ primaryPlatformMessageId: "preview-1" }),
-      result.liveState,
-    );
+    const liveState = result.liveState;
+    if (!liveState) {
+      throw new Error("expected finalized live state");
+    }
+    expect(liveState.phase).toBe("finalized");
+    expect(liveState.canFinalizeInPlace).toBe(false);
+    expect(liveState.receipt?.primaryPlatformMessageId).toBe("preview-1");
+    expect(liveState.receipt?.platformMessageIds).toEqual(["preview-1"]);
+    expect(onPreviewFinalized).toHaveBeenCalledTimes(1);
+    const [previewId, receiptArg, stateArg] = onPreviewFinalized.mock.calls[0] as unknown as [
+      string,
+      { primaryPlatformMessageId?: string },
+      unknown,
+    ];
+    expect(previewId).toBe("preview-1");
+    expect(receiptArg.primaryPlatformMessageId).toBe("preview-1");
+    expect(stateArg).toBe(liveState);
   });
 
   it("treats live preview fallback delivery as terminal state", async () => {
@@ -129,12 +119,12 @@ describe("message lifecycle primitives", () => {
     expect(discardPending).toHaveBeenCalledTimes(1);
     expect(deliverNormally).toHaveBeenCalledWith({ text: "with media" });
     expect(clear).toHaveBeenCalledTimes(1);
-    expect(result.liveState).toEqual(
-      expect.objectContaining({
-        phase: "cancelled",
-        canFinalizeInPlace: false,
-      }),
-    );
+    const liveState = result.liveState;
+    if (!liveState) {
+      throw new Error("expected fallback live state");
+    }
+    expect(liveState.phase).toBe("cancelled");
+    expect(liveState.canFinalizeInPlace).toBe(false);
   });
 
   it("delivers through finalizable live preview adapters", async () => {
@@ -222,14 +212,14 @@ describe("message lifecycle primitives", () => {
     expect(result.kind).toBe("preview-retained");
     expect(result.liveState?.phase).toBe("previewing");
     expect(deliverNormally).not.toHaveBeenCalled();
-    expect(handlePreviewEditError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error: editError,
-        id: "preview-maybe-final",
-        edit: { text: "done" },
-        payload: { text: "done" },
-      }),
-    );
+    expect(handlePreviewEditError).toHaveBeenCalledTimes(1);
+    const [editErrorContext] = handlePreviewEditError.mock.calls[0] as unknown as [
+      { error: unknown; id?: string; edit?: unknown; payload?: unknown },
+    ];
+    expect(editErrorContext.error).toBe(editError);
+    expect(editErrorContext.id).toBe("preview-maybe-final");
+    expect(editErrorContext.edit).toEqual({ text: "done" });
+    expect(editErrorContext.payload).toEqual({ text: "done" });
   });
 
   it("does not fallback-send after a successful preview edit when finalization hooks fail", async () => {
@@ -268,16 +258,12 @@ describe("message lifecycle primitives", () => {
       receivedAt: 123,
     });
 
-    expect(ctx).toEqual(
-      expect.objectContaining({
-        id: "rx-1",
-        channel: "telegram",
-        message: { text: "hello" },
-        ackPolicy: "after_receive_record",
-        ackState: "pending",
-        receivedAt: 123,
-      }),
-    );
+    expect(ctx.id).toBe("rx-1");
+    expect(ctx.channel).toBe("telegram");
+    expect(ctx.message).toEqual({ text: "hello" });
+    expect(ctx.ackPolicy).toBe("after_receive_record");
+    expect(ctx.ackState).toBe("pending");
+    expect(ctx.receivedAt).toBe(123);
   });
 
   it("acks and nacks receive contexts through explicit hooks", async () => {
@@ -335,24 +321,19 @@ describe("message lifecycle primitives", () => {
   });
 
   it("creates durable message state records with normalized errors", () => {
-    expect(
-      createDurableMessageStateRecord({
-        intent: {
-          id: "intent-1",
-          channel: "telegram",
-          to: "12345",
-          durability: "required",
-        },
-        state: "failed",
-        error: new Error("network"),
-        updatedAt: 123,
-      }),
-    ).toEqual(
-      expect.objectContaining({
-        state: "failed",
-        errorMessage: "network",
-        updatedAt: 123,
-      }),
-    );
+    const record = createDurableMessageStateRecord({
+      intent: {
+        id: "intent-1",
+        channel: "telegram",
+        to: "12345",
+        durability: "required",
+      },
+      state: "failed",
+      error: new Error("network"),
+      updatedAt: 123,
+    });
+    expect(record.state).toBe("failed");
+    expect(record.errorMessage).toBe("network");
+    expect(record.updatedAt).toBe(123);
   });
 });

@@ -2,8 +2,6 @@ import http from "node:http";
 import https from "node:https";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type {
-  QaBusConversation,
-  QaBusEvent,
   QaBusInboundMessageInput,
   QaBusMessage,
   QaBusPollResult,

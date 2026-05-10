@@ -11,7 +11,7 @@ import type {
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
-} from "./types.channels.js";
+} from "./types.channel-health.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
@@ -323,9 +323,3 @@ export type TelegramConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & TelegramAccountConfig;
-
-declare module "./types.channels.js" {
-  interface ChannelsConfig {
-    telegram?: TelegramConfig;
-  }
-}

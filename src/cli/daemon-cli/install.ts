@@ -23,6 +23,7 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { formatCliCommand } from "../command-format.js";
+import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
 import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
 import {
   createDaemonInstallActionContext,
@@ -94,12 +95,12 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
-    fail("Invalid port");
+    fail(formatInvalidPortOption("--port"));
     return;
   }
   const port = portOverride ?? resolveGatewayPort(cfg);
-  if (!Number.isFinite(port) || port <= 0) {
-    fail("Invalid port");
+  if (!Number.isFinite(port) || port <= 0 || port > 65_535) {
+    fail(formatInvalidConfigPort("gateway.port"));
     return;
   }
   const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_GATEWAY_DAEMON_RUNTIME;

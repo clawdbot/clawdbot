@@ -15,12 +15,23 @@ function requireDangerousFlagsFinding(
   label: string,
 ) {
   const finding = findings.find((entry) => entry.checkId === "config.insecure_or_dangerous_flags");
-  expect(finding, label).toMatchObject({
-    checkId: "config.insecure_or_dangerous_flags",
-  });
   if (!finding) {
     throw new Error(`Expected dangerous flags finding for ${label}`);
   }
+  expect(finding.checkId, label).toBe("config.insecure_or_dangerous_flags");
+  return finding;
+}
+
+function requireFinding(
+  findings: ReturnType<typeof collectGatewayConfigFindings>,
+  checkId: string,
+  label: string,
+) {
+  const finding = findings.find((entry) => entry.checkId === checkId);
+  if (!finding) {
+    throw new Error(`Expected ${checkId} finding for ${label}`);
+  }
+  expect(finding.checkId, label).toBe(checkId);
   return finding;
 }
 
@@ -79,9 +90,12 @@ describe("security audit gateway exposure findings", () => {
     for (const testCase of cases) {
       const findings = collectGatewayConfigFindings(testCase.cfg, testCase.cfg, {});
       if ("expectedFinding" in testCase) {
-        expect(findings, testCase.name).toEqual(
-          expect.arrayContaining([expect.objectContaining(testCase.expectedFinding)]),
+        const exposureFinding = requireFinding(
+          findings,
+          testCase.expectedFinding.checkId,
+          testCase.name,
         );
+        expect(exposureFinding.severity, testCase.name).toBe(testCase.expectedFinding.severity);
       }
       const finding = requireDangerousFlagsFinding(findings, testCase.name);
       expect(finding.severity, testCase.name).toBe("warn");
@@ -135,7 +149,8 @@ describe("security audit gateway exposure findings", () => {
     },
   ])("$name", ({ cfg, expectedFinding, expectedNoFinding }) => {
     const findings = collectGatewayConfigFindings(cfg, cfg, {});
-    expect(findings).toEqual(expect.arrayContaining([expect.objectContaining(expectedFinding)]));
+    const finding = requireFinding(findings, expectedFinding.checkId, expectedFinding.checkId);
+    expect(finding.severity).toBe(expectedFinding.severity);
     if (expectedNoFinding) {
       expect(findings.map((finding) => finding.checkId)).not.toContain(expectedNoFinding);
     }

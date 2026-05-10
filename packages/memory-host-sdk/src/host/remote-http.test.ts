@@ -27,12 +27,8 @@ describe("package withRemoteHttpResponse", () => {
       ...deps,
     });
 
-    expect(deps.calls[0]).toEqual(
-      expect.objectContaining({
-        url: "https://memory.example/v1/embeddings",
-        mode: MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE,
-      }),
-    );
+    expect(deps.calls[0]).toHaveProperty("url", "https://memory.example/v1/embeddings");
+    expect(deps.calls[0]).toHaveProperty("mode", MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE);
   });
 
   it("keeps strict guarded fetch mode when proxy env would not proxy the target", async () => {

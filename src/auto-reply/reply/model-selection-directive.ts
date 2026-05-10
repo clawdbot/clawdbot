@@ -1,4 +1,5 @@
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
+import { isModelKeyAllowedBySet } from "../../agents/model-selection-shared.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 
@@ -300,6 +301,9 @@ export function resolveModelDirectiveSelection(params: {
       }
       const provider = normalizeProviderId(key.slice(0, slash));
       const model = key.slice(slash + 1);
+      if (model === "*") {
+        continue;
+      }
       if (providerFilter && provider !== providerFilter) {
         continue;
       }
@@ -320,7 +324,7 @@ export function resolveModelDirectiveSelection(params: {
       }
       for (const match of aliasMatches) {
         const key = modelKey(match.provider, match.model);
-        if (!allowedModelKeys.has(key)) {
+        if (!isModelKeyAllowedBySet(allowedModelKeys, key)) {
           continue;
         }
         if (!candidates.some((c) => c.provider === match.provider && c.model === match.model)) {
@@ -395,7 +399,7 @@ export function resolveModelDirectiveSelection(params: {
   }
 
   const resolvedKey = modelKey(resolved.ref.provider, resolved.ref.model);
-  if (allowedModelKeys.size === 0 || allowedModelKeys.has(resolvedKey)) {
+  if (allowedModelKeys.size === 0 || isModelKeyAllowedBySet(allowedModelKeys, resolvedKey)) {
     return {
       selection: {
         provider: resolved.ref.provider,

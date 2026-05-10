@@ -241,4 +241,45 @@ describe("handleFastCommand", () => {
       }),
     );
   });
+
+  it("clears fast mode for /fast default", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/fast default";
+    params.sessionEntry = {
+      sessionId: "target-session",
+      updatedAt: Date.now(),
+      fastMode: true,
+    };
+    params.sessionStore = { [params.sessionKey]: params.sessionEntry };
+
+    const result = await handleFastCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toBe("⚙️ Fast mode reset to default.");
+    expect(params.sessionEntry.fastMode).toBeUndefined();
+    expect(params.sessionStore[params.sessionKey]?.fastMode).toBeUndefined();
+  });
+
+  it("clears fast mode on the target store entry for /fast default", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/fast default";
+    params.sessionEntry = {
+      sessionId: "wrapper-session",
+      updatedAt: Date.now(),
+      fastMode: false,
+    };
+    params.sessionStore = {
+      [params.sessionKey]: {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        fastMode: true,
+      },
+    };
+
+    const result = await handleFastCommand(params, true);
+
+    expect(result?.reply?.text).toBe("⚙️ Fast mode reset to default.");
+    expect(params.sessionEntry.fastMode).toBe(false);
+    expect(params.sessionStore[params.sessionKey]?.fastMode).toBeUndefined();
+  });
 });

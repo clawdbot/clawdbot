@@ -51,11 +51,6 @@ export { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbou
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 export { buildBaseAccountStatusSnapshot } from "openclaw/plugin-sdk/status-helpers";
-export { resolveSenderCommandAuthorization } from "openclaw/plugin-sdk/command-auth";
-export {
-  evaluateGroupRouteAccessForPolicy,
-  resolveSenderScopedGroupPolicy,
-} from "openclaw/plugin-sdk/group-access";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export {
   deliverTextOrMediaReply,

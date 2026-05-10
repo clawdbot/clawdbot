@@ -5,6 +5,8 @@ import {
   formatPortDiagnostics,
   formatPortListener,
   isDualStackLoopbackGatewayListeners,
+  isExpectedGatewayListeners,
+  isSingleExpectedGatewayListener,
 } from "./ports-format.js";
 
 describe("ports-format", () => {
@@ -42,8 +44,37 @@ describe("ports-format", () => {
       { pid: 4242, commandLine: "openclaw-gateway", address: "[::1]:18789" },
     ];
     expect(isDualStackLoopbackGatewayListeners(listeners, 18789)).toBe(true);
-    expect(buildPortHints(listeners, 18789)).toEqual([
+    expect(isExpectedGatewayListeners(listeners, 18789)).toBe(true);
+    expect(buildPortHints(listeners, 18789)).toEqual([]);
+  });
+
+  it.each([
+    "127.0.0.1:18789",
+    "[::1]:18789",
+    "localhost:18789",
+    "0.0.0.0:18789",
+    "[::]:18789",
+    "*:18789",
+  ])("treats a single expected Gateway listener on %s as benign", (address) => {
+    const listeners = [{ pid: 4242, commandLine: "openclaw-gateway", address }];
+
+    expect(isSingleExpectedGatewayListener(listeners, 18789)).toBe(true);
+    expect(isExpectedGatewayListeners(listeners, 18789)).toBe(true);
+    expect(buildPortHints(listeners, 18789)).toEqual([]);
+  });
+
+  it("keeps Gateway conflict hints for ambiguous Gateway listeners", () => {
+    expect(
+      buildPortHints(
+        [
+          { pid: 4242, commandLine: "openclaw-gateway", address: "0.0.0.0:18789" },
+          { pid: 4243, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
+        ],
+        18789,
+      ),
+    ).toEqual([
       expect.stringContaining("Gateway already running locally."),
+      expect.stringContaining("Multiple listeners detected"),
     ]);
   });
 

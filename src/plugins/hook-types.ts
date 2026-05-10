@@ -9,10 +9,6 @@ import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
-import {
-  PLUGIN_PROMPT_MUTATION_RESULT_FIELDS,
-  stripPromptMutationFieldsFromLegacyHookResult,
-} from "./hook-before-agent-start.types.js";
 import type {
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
@@ -412,10 +408,7 @@ export type PluginHookToolContext = {
   trace?: DiagnosticTraceContext;
   toolName: string;
   toolCallId?: string;
-  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Plugin callers type JSON reads by namespace.
-  getSessionExtension?: <T extends PluginJsonValue = PluginJsonValue>(
-    namespace: string,
-  ) => T | undefined;
+  getSessionExtension?: (namespace: string) => PluginJsonValue | undefined;
   channelId?: string;
 };
 

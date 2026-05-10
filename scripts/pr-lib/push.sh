@@ -102,23 +102,39 @@ mutation($input: CreateCommitOnBranchInput!) {
 GRAPHQL
 )
 
+  local additions_file deletions_file
+  additions_file=$(mktemp)
+  deletions_file=$(mktemp)
+  printf '%s\n' "$additions" >"$additions_file"
+  printf '%s\n' "$deletions" >"$deletions_file"
+
   local variables
   variables=$(jq -n \
     --arg nwo "$repo_nwo" \
     --arg branch "$branch" \
     --arg oid "$expected_oid" \
     --arg headline "$commit_headline" \
-    --argjson additions "$additions" \
-    --argjson deletions "$deletions" \
+    --slurpfile additions "$additions_file" \
+    --slurpfile deletions "$deletions_file" \
     '{input: {
       branch: { repositoryNameWithOwner: $nwo, branchName: $branch },
       message: { headline: $headline },
-      fileChanges: { additions: $additions, deletions: $deletions },
+      fileChanges: { additions: $additions[0], deletions: $deletions[0] },
       expectedHeadOid: $oid
     }}')
+  rm -f "$additions_file" "$deletions_file"
+
+  local variables_file
+  variables_file=$(mktemp)
+  printf '%s\n' "$variables" >"$variables_file"
+
+  local payload
+  payload=$(jq -n --arg query "$query" --slurpfile variables "$variables_file" \
+    '{query: $query, variables: $variables[0]}')
+  rm -f "$variables_file"
 
   local result
-  result=$(gh api graphql -f query="$query" --input - <<< "$variables" 2>&1) || {
+  result=$(gh api graphql --input - <<< "$payload" 2>&1) || {
     echo "GraphQL push failed: $result" >&2
     return 1
   }

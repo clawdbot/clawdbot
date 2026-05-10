@@ -12,13 +12,15 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
           models: {
             providers: {
               openai: {
-                apiKey: "sk-config",
                 baseUrl: "https://proxy.example.test/openai/v1",
               },
             },
           },
         } as never,
         model: "text-embedding-3-small",
+        remote: {
+          apiKey: "sk-test",
+        },
       },
     });
 
@@ -43,7 +45,9 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
       },
     });
 
-    expect(client.headers).toMatchObject({
+    expect(client.headers).toEqual({
+      Authorization: "Bearer sk-test",
+      "Content-Type": "application/json",
       originator: "openclaw",
       version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",

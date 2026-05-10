@@ -764,8 +764,16 @@ describe("runReplyAgent typing (heartbeat)", () => {
         payloads: [{ text: "final" }],
         meta: {},
       });
-      vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(
-        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+      vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(async (args) => {
+        const { run, onFallbackStep } = args;
+        await onFallbackStep?.({
+          fallbackStepType: "fallback_step",
+          fallbackStepFromModel: "fireworks/fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+          fallbackStepToModel: "deepinfra/moonshotai/Kimi-K2.5",
+          fallbackStepFromFailureReason: "rate_limit",
+          fallbackStepFinalOutcome: "succeeded",
+        });
+        return {
           result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
           provider: "deepinfra",
           model: "moonshotai/Kimi-K2.5",
@@ -777,8 +785,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
               reason: "rate_limit",
             },
           ],
-        }),
-      );
+        };
+      });
 
       const { run } = createMinimalRun({
         resolvedVerboseLevel: testCase.verbose,
@@ -809,6 +817,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         phases.filter((phase) => phase === "fallback"),
         testCase.name,
       ).toHaveLength(1);
+      expect(phases, testCase.name).toContain("fallback_step");
     }
   });
 
@@ -1161,6 +1170,62 @@ describe("runReplyAgent typing (heartbeat)", () => {
         fallbackSpy.mockRestore();
       }
     }
+  });
+
+  it("does not persist fallback state for an equivalent CLI runtime alias", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      fallbackNoticeSelectedModel: "anthropic/claude-opus-4-7",
+      fallbackNoticeActiveModel: "claude-cli/claude-opus-4-7",
+      fallbackNoticeReason: "selected model unavailable",
+    };
+    const sessionStore = { main: sessionEntry };
+    const dir = await mkdtemp(join(tmpdir(), "openclaw-agent-runner-cli-alias-"));
+    const storePath = join(dir, "sessions.json");
+    await writeFile(storePath, JSON.stringify({ main: sessionEntry }), "utf8");
+
+    state.runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "final" }],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "claude-opus-4-7",
+          usage: { input: 36_000, output: 19_000 },
+        },
+      },
+    });
+
+    const { run } = createMinimalRun({
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      runOverrides: {
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        config: {
+          agents: {
+            defaults: {
+              cliBackends: {
+                "claude-cli": { command: "claude" },
+              },
+            },
+          },
+        },
+      },
+    });
+    await run();
+
+    const stored = JSON.parse(await readFile(storePath, "utf8")).main as SessionEntry;
+    expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
+    expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
+    expect(stored.fallbackNoticeSelectedModel).toBeUndefined();
+    expect(stored.fallbackNoticeActiveModel).toBeUndefined();
+    expect(stored.modelProvider).toBe("claude-cli");
+    expect(stored.model).toBe("claude-opus-4-7");
+    expect(stored.totalTokens).toBe(36_000);
+    expect(stored.totalTokensFresh).toBe(true);
   });
 
   it("surfaces overflow fallback when embedded run returns empty payloads", async () => {

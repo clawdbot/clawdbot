@@ -30,14 +30,15 @@ describe("web_search redirect resolution hardening", () => {
 
     const resolved = await resolveCitationRedirectUrl("https://example.com/start");
     expect(resolved).toBe("https://example.com/final");
-    expect(withStrictWebToolsEndpointMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://example.com/start",
-        timeoutMs: 5000,
-        init: { method: "HEAD" },
-      }),
-      expect.any(Function),
-    );
+    expect(withStrictWebToolsEndpointMock).toHaveBeenCalledTimes(1);
+    const [params, run] = withStrictWebToolsEndpointMock.mock.calls[0] as [
+      { url?: unknown; timeoutMs?: unknown; init?: { method?: unknown } },
+      unknown,
+    ];
+    expect(params.url).toBe("https://example.com/start");
+    expect(params.timeoutMs).toBe(5000);
+    expect(params.init?.method).toBe("HEAD");
+    expect(typeof run).toBe("function");
   });
 
   it("falls back to the original URL when guarded resolution fails", async () => {

@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MSTeamsConfig } from "../runtime-api.js";
-import {
-  isMSTeamsGroupAllowed,
-  resolveMSTeamsReplyPolicy,
-  resolveMSTeamsRouteConfig,
-} from "./policy.js";
+import { resolveMSTeamsReplyPolicy, resolveMSTeamsRouteConfig } from "./policy.js";
 
 function resolveNamedTeamRouteConfig(allowNameMatching = false) {
   const cfg: MSTeamsConfig = {
@@ -155,86 +151,6 @@ describe("msteams policy", () => {
         globalConfig: { requireMention: false, replyStyle: "thread" },
       });
       expect(policy).toEqual({ requireMention: false, replyStyle: "thread" });
-    });
-  });
-
-  describe("isMSTeamsGroupAllowed", () => {
-    it("allows when policy is open", () => {
-      expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "open",
-          allowFrom: [],
-          senderId: "user-id",
-          senderName: "User",
-        }),
-      ).toBe(true);
-    });
-
-    it("blocks when policy is disabled", () => {
-      expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "disabled",
-          allowFrom: ["user-id"],
-          senderId: "user-id",
-          senderName: "User",
-        }),
-      ).toBe(false);
-    });
-
-    it("blocks allowlist when empty", () => {
-      expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "allowlist",
-          allowFrom: [],
-          senderId: "user-id",
-          senderName: "User",
-        }),
-      ).toBe(false);
-    });
-
-    it("allows allowlist when sender matches", () => {
-      expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "allowlist",
-          allowFrom: ["User-Id"],
-          senderId: "user-id",
-          senderName: "User",
-        }),
-      ).toBe(true);
-    });
-
-    it("blocks sender-name allowlist matches by default", () => {
-      expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "allowlist",
-          allowFrom: ["user"],
-          senderId: "other",
-          senderName: "User",
-        }),
-      ).toBe(false);
-    });
-
-    it("allows sender-name allowlist matches when explicitly enabled", () => {
-      expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "allowlist",
-          allowFrom: ["user"],
-          senderId: "other",
-          senderName: "User",
-          allowNameMatching: true,
-        }),
-      ).toBe(true);
-    });
-
-    it("allows allowlist wildcard", () => {
-      expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "allowlist",
-          allowFrom: ["*"],
-          senderId: "other",
-          senderName: "User",
-        }),
-      ).toBe(true);
     });
   });
 });

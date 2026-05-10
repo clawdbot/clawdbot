@@ -1537,6 +1537,119 @@ describe("createTelegramBot", () => {
     expect(payload.SenderUsername).toBe("ada");
   });
 
+  it("adds live chat and reply-target windows for stale group replies", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const baseCtx = {
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    await handler({
+      ...baseCtx,
+      message: {
+        chat: { id: 42, type: "group", title: "Ops" },
+        text: "Earlier deployment answer",
+        date: 1736380200,
+        message_id: 100,
+        from: { id: 777, is_bot: true, first_name: "Assistant" },
+      },
+    });
+    await handler({
+      ...baseCtx,
+      message: {
+        chat: { id: 42, type: "group", title: "Ops" },
+        text: "Lunch after standup?",
+        date: 1736380800,
+        message_id: 200,
+        from: { id: 201, is_bot: false, first_name: "Sam" },
+      },
+    });
+    await handler({
+      ...baseCtx,
+      message: {
+        chat: { id: 42, type: "group", title: "Ops" },
+        text: "After the incident review.",
+        date: 1736380860,
+        message_id: 201,
+        from: { id: 202, is_bot: false, first_name: "Riley" },
+      },
+    });
+
+    replySpy.mockClear();
+    await handler({
+      ...baseCtx,
+      message: {
+        chat: { id: 42, type: "group", title: "Ops" },
+        text: "@openclaw_bot thoughts?",
+        date: 1736380920,
+        message_id: 202,
+        from: { id: 203, is_bot: false, first_name: "Avery" },
+        reply_to_message: {
+          chat: { id: 42, type: "group", title: "Ops" },
+          text: "Earlier deployment answer",
+          date: 1736380200,
+          message_id: 100,
+          from: { id: 777, is_bot: true, first_name: "Assistant" },
+        },
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.UntrustedStructuredContext).toEqual([
+      expect.objectContaining({
+        label: "Nearby reply target window",
+        payload: expect.objectContaining({
+          relation: "around_reply_target",
+          messages: expect.arrayContaining([
+            expect.objectContaining({
+              message_id: "100",
+              sender: "Assistant",
+              body: "Earlier deployment answer",
+              is_reply_target: true,
+            }),
+          ]),
+        }),
+      }),
+      expect.objectContaining({
+        label: "Current local chat window",
+        payload: expect.objectContaining({
+          relation: "before_current_message",
+          messages: expect.arrayContaining([
+            expect.objectContaining({
+              message_id: "200",
+              sender: "Sam",
+              body: "Lunch after standup?",
+            }),
+            expect.objectContaining({
+              message_id: "201",
+              sender: "Riley",
+              body: "After the incident review.",
+            }),
+          ]),
+        }),
+      }),
+    ]);
+  });
+
   it("uses quote text when a Telegram partial reply is received", async () => {
     onSpy.mockClear();
     sendMessageSpy.mockClear();

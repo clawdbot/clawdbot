@@ -257,7 +257,7 @@ run_update_smoke() {
   set +e
   UPDATE_JSON="$(
     run_with_heartbeat "openclaw update" \
-      env npm_config_omit=optional NPM_CONFIG_OMIT=optional \
+      env npm_config_omit=optional NPM_CONFIG_OMIT=optional OPENCLAW_ALLOW_ROOT=1 \
       openclaw update --tag "$UPDATE_TAG_URL" --yes --json 2>"$update_stderr_file"
   )"
   update_status=$?

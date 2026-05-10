@@ -32,6 +32,7 @@ export type SessionsState = {
 };
 
 type LoadSessionsOverrides = {
+  agentId?: string;
   activeMinutes?: number;
   limit?: number;
   includeGlobal?: boolean;
@@ -434,6 +435,10 @@ async function loadSessionsOnce(
       includeUnknown,
       configuredAgentsOnly,
     };
+    const agentId = overrides?.agentId?.trim();
+    if (agentId) {
+      params.agentId = agentId;
+    }
     if (activeMinutes > 0) {
       params.activeMinutes = activeMinutes;
     }

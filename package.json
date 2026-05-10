@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.5.8",
+  "version": "2026.5.10-beta.1",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -618,6 +618,10 @@
       "types": "./dist/plugin-sdk/agent-config-primitives.d.ts",
       "default": "./dist/plugin-sdk/agent-config-primitives.js"
     },
+    "./plugin-sdk/access-groups": {
+      "types": "./dist/plugin-sdk/access-groups.d.ts",
+      "default": "./dist/plugin-sdk/access-groups.js"
+    },
     "./plugin-sdk/allow-from": {
       "types": "./dist/plugin-sdk/allow-from.d.ts",
       "default": "./dist/plugin-sdk/allow-from.js"
@@ -801,6 +805,14 @@
     "./plugin-sdk/channel-lifecycle": {
       "types": "./dist/plugin-sdk/channel-lifecycle.d.ts",
       "default": "./dist/plugin-sdk/channel-lifecycle.js"
+    },
+    "./plugin-sdk/channel-ingress": {
+      "types": "./dist/plugin-sdk/channel-ingress.d.ts",
+      "default": "./dist/plugin-sdk/channel-ingress.js"
+    },
+    "./plugin-sdk/channel-ingress-runtime": {
+      "types": "./dist/plugin-sdk/channel-ingress-runtime.d.ts",
+      "default": "./dist/plugin-sdk/channel-ingress-runtime.js"
     },
     "./plugin-sdk/channel-message": {
       "types": "./dist/plugin-sdk/channel-message.d.ts",
@@ -1355,6 +1367,7 @@
     "crabbox:run": "node scripts/crabbox-wrapper.mjs run",
     "crabbox:stop": "node scripts/crabbox-wrapper.mjs stop",
     "crabbox:warmup": "node scripts/crabbox-wrapper.mjs warmup",
+    "discord:opus:install": "node scripts/install-discord-native-opus.mjs",
     "deadcode:ci": "pnpm deadcode:report:ci:knip && pnpm deadcode:report:ci:ts-unused",
     "deadcode:dependencies": "pnpm --config.minimum-release-age=0 dlx knip@6.8.0 --config config/knip.config.ts --production --no-progress --reporter compact --dependencies --no-config-hints",
     "deadcode:knip": "pnpm dlx knip --config config/knip.config.ts --production --no-progress --reporter compact --files --dependencies",
@@ -1418,6 +1431,7 @@
     "lint:docker-e2e": "node scripts/check-docker-e2e-boundaries.mjs",
     "lint:docs": "pnpm dlx --config.resolution-mode=highest markdownlint-cli2 --config config/markdownlint-cli2.jsonc",
     "lint:docs:fix": "pnpm dlx --config.resolution-mode=highest markdownlint-cli2 --config config/markdownlint-cli2.jsonc --fix",
+    "lint:extensions:no-deprecated-channel-access": "node --import tsx scripts/check-no-deprecated-channel-access.ts",
     "lint:extensions": "node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions",
     "lint:extensions:bundled": "node scripts/run-bundled-extension-oxlint.mjs",
     "lint:extensions:channels": "node scripts/run-extension-channel-oxlint.mjs",
@@ -1557,6 +1571,7 @@
     "test:docker:live-codex-bind": "OPENCLAW_LIVE_CODEX_BIND=1 OPENCLAW_LIVE_CODEX_TEST_FILES=src/gateway/gateway-codex-bind.live.test.ts bash scripts/test-live-codex-harness-docker.sh",
     "test:docker:live-codex-harness": "bash scripts/test-live-codex-harness-docker.sh",
     "test:docker:live-codex-npm-plugin": "bash scripts/e2e/codex-npm-plugin-live-docker.sh",
+    "test:docker:live-plugin-tool": "bash scripts/e2e/live-plugin-tool-docker.sh",
     "test:docker:live-gateway": "bash scripts/test-live-gateway-models-docker.sh",
     "test:docker:live-gateway:claude": "OPENCLAW_LIVE_GATEWAY_PROVIDERS=claude-cli OPENCLAW_LIVE_GATEWAY_MODELS=claude-cli/claude-sonnet-4-6 bash scripts/test-live-gateway-models-docker.sh",
     "test:docker:live-gateway:codex": "OPENCLAW_LIVE_GATEWAY_PROVIDERS=codex-cli OPENCLAW_LIVE_GATEWAY_MODELS=codex-cli/gpt-5.5 bash scripts/test-live-gateway-models-docker.sh",
@@ -1568,6 +1583,7 @@
     "test:docker:live:all": "OPENCLAW_DOCKER_ALL_LIVE_MODE=only node scripts/test-docker-all.mjs",
     "test:docker:local:all": "OPENCLAW_DOCKER_ALL_LIVE_MODE=skip node scripts/test-docker-all.mjs",
     "test:docker:mcp-channels": "bash scripts/e2e/mcp-channels-docker.sh",
+    "test:docker:codex-on-demand": "bash scripts/e2e/codex-on-demand-docker.sh",
     "test:docker:npm-onboard-channel-agent": "bash scripts/e2e/npm-onboard-channel-agent-docker.sh",
     "test:docker:npm-onboard-discord-channel-agent": "OPENCLAW_NPM_ONBOARD_CHANNEL=discord bash scripts/e2e/npm-onboard-channel-agent-docker.sh",
     "test:docker:npm-onboard-slack-channel-agent": "OPENCLAW_NPM_ONBOARD_CHANNEL=slack bash scripts/e2e/npm-onboard-channel-agent-docker.sh",
@@ -1584,6 +1600,7 @@
     "test:docker:qr": "bash scripts/e2e/qr-import-docker.sh",
     "test:docker:rerun": "node scripts/docker-e2e-rerun.mjs",
     "test:docker:session-runtime-context": "bash scripts/e2e/session-runtime-context-docker.sh",
+    "test:docker:skill-install": "bash scripts/e2e/skill-install-docker.sh",
     "test:docker:timings": "node scripts/docker-e2e-timings.mjs",
     "test:docker:update-channel-switch": "bash scripts/e2e/update-channel-switch-docker.sh",
     "test:docker:update-corrupt-plugin": "bash scripts/e2e/update-corrupt-plugin-docker.sh",
@@ -1684,28 +1701,28 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.21.0",
-    "@anthropic-ai/sdk": "0.93.0",
+    "@anthropic-ai/sdk": "0.95.1",
     "@anthropic-ai/vertex-sdk": "^0.16.0",
-    "@aws-sdk/client-bedrock": "3.1042.0",
-    "@aws-sdk/client-bedrock-runtime": "3.1042.0",
+    "@aws-sdk/client-bedrock": "3.1045.0",
+    "@aws-sdk/client-bedrock-runtime": "3.1045.0",
     "@aws-sdk/credential-provider-node": "3.972.39",
     "@aws/bedrock-token-generator": "^1.1.0",
     "@clack/core": "^1.3.0",
     "@clack/prompts": "^1.3.0",
-    "@google/genai": "^1.51.0",
+    "@google/genai": "^2.0.1",
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@homebridge/ciao": "^1.3.8",
     "@lydell/node-pty": "1.2.0-beta.12",
-    "@mariozechner/pi-agent-core": "0.73.0",
-    "@mariozechner/pi-ai": "0.73.0",
-    "@mariozechner/pi-coding-agent": "0.73.0",
-    "@mariozechner/pi-tui": "0.73.0",
+    "@mariozechner/pi-agent-core": "0.73.1",
+    "@mariozechner/pi-ai": "0.73.1",
+    "@mariozechner/pi-coding-agent": "0.73.1",
+    "@mariozechner/pi-tui": "0.73.1",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "^0.6.0",
     "@openclaw/fs-safe": "github:openclaw/fs-safe#c7ccb99d3058f2acf2ad2758ad2470c7e113a53c",
     "@slack/bolt": "^4.7.2",
-    "@slack/types": "^2.21.0",
+    "@slack/types": "^2.21.1",
     "@slack/web-api": "^7.15.2",
     "ajv": "^8.20.0",
     "chalk": "^5.6.2",
@@ -1719,25 +1736,25 @@
     "grammy": "^1.42.0",
     "https-proxy-agent": "^9.0.0",
     "ipaddr.js": "^2.4.0",
-    "jiti": "^2.6.1",
+    "jiti": "^2.7.0",
     "json5": "^2.2.3",
     "jszip": "^3.10.1",
-    "kysely": "0.28.17",
+    "kysely": "0.29.0",
     "linkedom": "^0.18.12",
     "markdown-it": "14.1.1",
     "minimatch": "10.2.5",
     "node-edge-tts": "^1.2.10",
-    "openai": "^6.36.0",
+    "openai": "^6.37.0",
     "openshell": "0.1.0",
     "pdfjs-dist": "^5.7.284",
     "playwright-core": "1.59.1",
     "proxy-agent": "^8.0.1",
     "qrcode": "1.5.4",
-    "tar": "7.5.13",
+    "tar": "7.5.15",
     "tokenjuice": "0.7.0",
     "tree-sitter-bash": "^0.25.1",
     "tslog": "^4.10.2",
-    "typebox": "1.1.37",
+    "typebox": "1.1.38",
     "undici": "8.2.0",
     "web-push": "^3.6.7",
     "web-tree-sitter": "^0.26.8",
@@ -1747,25 +1764,25 @@
   },
   "devDependencies": {
     "@a2ui/lit": "0.9.3",
-    "@copilotkit/aimock": "1.17.0",
+    "@copilotkit/aimock": "1.19.5",
     "@grammyjs/types": "^3.26.0",
     "@lit-labs/signals": "^0.2.0",
     "@lit/context": "^1.1.6",
     "@mdx-js/mdx": "^3.1.1",
     "@types/express": "^5.0.6",
     "@types/markdown-it": "^14.1.2",
-    "@types/node": "25.6.0",
+    "@types/node": "25.6.2",
     "@types/ws": "^8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260504.1",
+    "@typescript/native-preview": "7.0.0-dev.20260509.2",
     "@vitest/coverage-v8": "^4.1.5",
-    "jscpd": "4.0.9",
+    "jscpd": "4.1.0",
     "jsdom": "^29.1.1",
     "lit": "^3.3.2",
-    "oxfmt": "0.47.0",
-    "oxlint": "^1.62.0",
+    "oxfmt": "0.48.0",
+    "oxlint": "^1.63.0",
     "oxlint-tsgolint": "^0.22.1",
     "signal-utils": "0.21.1",
-    "tsdown": "0.21.10",
+    "tsdown": "0.22.0",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.5"
@@ -1788,10 +1805,10 @@
   "packageManager": "pnpm@10.33.2+sha512.a90faf6feeab71ad6c6e57f94e0fe1a12f5dcc22cd754db40ae9593eb6a3e0b6b12e3540218bb37ae083404b1f2ce6db2a4121e979829b4aff94b99f49da1cf8",
   "pnpm": {
     "overrides": {
-      "@anthropic-ai/sdk": "0.93.0",
-      "hono": "4.12.14",
+      "@anthropic-ai/sdk": "0.95.1",
+      "hono": "4.12.18",
       "@hono/node-server": "1.19.14",
-      "@aws-sdk/client-bedrock-runtime": "3.1024.0",
+      "@aws-sdk/client-bedrock-runtime": "3.1045.0",
       "axios": "1.16.0",
       "fast-uri": "3.1.2",
       "follow-redirects": "1.16.0",
@@ -1807,8 +1824,8 @@
       "path-to-regexp": "8.4.0",
       "qs": "6.14.2",
       "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-      "typebox": "1.1.37",
-      "tar": "7.5.13",
+      "typebox": "1.1.38",
+      "tar": "7.5.15",
       "tough-cookie": "4.1.3",
       "yauzl": "3.2.1",
       "protobufjs": "7.5.5",
@@ -1816,7 +1833,6 @@
     },
     "onlyBuiltDependencies": [
       "@openclaw/fs-safe",
-      "@discordjs/opus",
       "@google/genai",
       "@lydell/node-pty",
       "@matrix-org/matrix-sdk-crypto-nodejs",
@@ -1831,6 +1847,7 @@
       "sharp"
     ],
     "ignoredBuiltDependencies": [
+      "@discordjs/opus",
       "koffi",
       "tree-sitter-bash"
     ],
@@ -1847,8 +1864,8 @@
       }
     },
     "patchedDependencies": {
-      "@whiskeysockets/baileys@7.0.0-rc.9": "patches/@whiskeysockets__baileys@7.0.0-rc.9.patch",
-      "@agentclientprotocol/claude-agent-acp@0.32.0": "patches/@agentclientprotocol__claude-agent-acp@0.32.0.patch"
+      "@whiskeysockets/baileys@7.0.0-rc10": "patches/@whiskeysockets__baileys@7.0.0-rc10.patch",
+      "@agentclientprotocol/claude-agent-acp@0.33.1": "patches/@agentclientprotocol__claude-agent-acp@0.33.1.patch"
     }
   }
 }

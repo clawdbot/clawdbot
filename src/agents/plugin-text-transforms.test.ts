@@ -88,14 +88,16 @@ describe("plugin text transforms", () => {
     ) as unknown as { systemPrompt: string; messages: Array<{ content: unknown[] }> };
 
     expect(context.systemPrompt).toBe("Use pine mailbox inside north tower");
-    expect(context.messages[0]?.content[0]).toMatchObject({
-      type: "text",
-      text: "Please use the blue basket",
-    });
-    expect(context.messages[0]?.content[1]).toMatchObject({
-      type: "image",
-      url: "data:image/png;base64,abc",
-    });
+    const textContent = context.messages[0]?.content[0] as
+      | { type?: string; text?: string }
+      | undefined;
+    expect(textContent?.type).toBe("text");
+    expect(textContent?.text).toBe("Please use the blue basket");
+    const imageContent = context.messages[0]?.content[1] as
+      | { type?: string; url?: string }
+      | undefined;
+    expect(imageContent?.type).toBe("image");
+    expect(imageContent?.url).toBe("data:image/png;base64,abc");
   });
 
   it("wraps stream functions with inbound and outbound replacements", async () => {
@@ -147,13 +149,10 @@ describe("plugin text transforms", () => {
     const result = await stream.result();
 
     expect(capturedContext?.systemPrompt).toBe("Keep red basket untouched here");
-    expect(capturedContext?.messages).toMatchObject([{ role: "user", content: "Use blue basket" }]);
-    expect(events[0]).toMatchObject({
-      type: "text_delta",
-      delta: "red basket on the left shelf",
-    });
-    expect(result.content).toMatchObject([
-      { type: "text", text: "final red basket on the left shelf" },
-    ]);
+    expect(capturedContext?.messages).toEqual([{ role: "user", content: "Use blue basket" }]);
+    const firstEvent = events[0] as { type?: string; delta?: string } | undefined;
+    expect(firstEvent?.type).toBe("text_delta");
+    expect(firstEvent?.delta).toBe("red basket on the left shelf");
+    expect(result.content).toEqual([{ type: "text", text: "final red basket on the left shelf" }]);
   });
 });

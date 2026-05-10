@@ -10,10 +10,10 @@ OpenClaw supports Grok as a `web_search` provider, using xAI web-grounded
 responses to produce AI-synthesized answers backed by live search results
 with citations.
 
-The same `XAI_API_KEY` can also power the built-in `x_search` tool for X
-(formerly Twitter) post search. If you store the key under
-`plugins.entries.xai.config.webSearch.apiKey`, OpenClaw now reuses it as a
-fallback for the bundled xAI model provider too.
+The same xAI API key can also power the built-in `x_search` tool for X
+(formerly Twitter) post search and the `code_execution` tool. If you store the
+key under `plugins.entries.xai.config.webSearch.apiKey`, OpenClaw now reuses it
+as a fallback for the bundled xAI model provider too.
 
 For post-level X metrics such as reposts, replies, bookmarks, or views, prefer
 `x_search` with the exact post URL or status ID instead of a broad search

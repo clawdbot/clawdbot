@@ -18,6 +18,7 @@ import {
   mergeCronRunDiagnostics,
 } from "../run-diagnostics.js";
 import type {
+  CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
   CronDeliveryTrace,
   CronDeliveryTraceMessageTarget,
@@ -426,6 +427,7 @@ type RunCronAgentTurnParams = {
   abortSignal?: AbortSignal;
   signal?: AbortSignal;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+  onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   sessionKey: string;
   agentId?: string;
   lane?: string;
@@ -1060,6 +1062,7 @@ export async function runCronIsolatedAgentTurn(params: {
   abortSignal?: AbortSignal;
   signal?: AbortSignal;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+  onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   sessionKey: string;
   agentId?: string;
   lane?: string;
@@ -1083,7 +1086,24 @@ export async function runCronIsolatedAgentTurn(params: {
       agentId: prepared.context.agentId,
       sessionId: prepared.context.runSessionId,
       sessionKey: prepared.context.runSessionKey,
+      phase: "runner_entered",
+      provider: prepared.context.liveSelection.provider,
+      model: prepared.context.liveSelection.model,
     });
+  const notifyExecutionPhase = (
+    info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &
+      Partial<Omit<CronAgentExecutionPhaseUpdate, "jobId" | "phase">>,
+  ) => {
+    params.onExecutionPhase?.({
+      jobId: params.job.id,
+      agentId: prepared.context.agentId,
+      sessionId: prepared.context.runSessionId,
+      sessionKey: prepared.context.runSessionKey,
+      provider: prepared.context.liveSelection.provider,
+      model: prepared.context.liveSelection.model,
+      ...info,
+    });
+  };
 
   try {
     const { executeCronRun } = await loadCronExecutorRuntime();
@@ -1113,6 +1133,7 @@ export async function runCronIsolatedAgentTurn(params: {
       persistSessionEntry: prepared.context.persistSessionEntry,
       abortSignal,
       onExecutionStarted: notifyExecutionStarted,
+      onExecutionPhase: notifyExecutionPhase,
       abortReason,
       isAborted,
       thinkLevel: prepared.context.thinkLevel,

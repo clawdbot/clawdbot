@@ -34,6 +34,7 @@ type SubagentListItem = {
   line: string;
   runId: string;
   sessionKey: string;
+  taskName?: string;
   label: string;
   task: string;
   status: string;
@@ -255,12 +256,15 @@ export function buildSubagentList(params: {
     const runtime = formatDurationCompact(runtimeMs) ?? "n/a";
     const label = truncateLine(resolveSubagentLabel(entry), 48);
     const task = truncateLine(entry.task.trim(), params.taskMaxChars ?? 72);
-    const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}`;
+    const taskName = entry.taskName?.trim();
+    const taskNamePrefix = taskName ? `${taskName}: ` : "";
+    const line = `${index}. ${taskNamePrefix}${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}`;
     const view: SubagentListItem = {
       index,
       line,
       runId: entry.runId,
       sessionKey: entry.childSessionKey,
+      ...(taskName ? { taskName } : {}),
       label,
       task,
       status,

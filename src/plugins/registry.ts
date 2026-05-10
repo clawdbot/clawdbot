@@ -102,29 +102,10 @@ import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type {
-  PluginCliBackendRegistration,
-  PluginCliRegistration,
-  PluginCommandRegistration,
-  PluginControlUiDescriptorRegistryRegistration,
-  PluginConversationBindingResolvedHandlerRegistration,
-  PluginHostedMediaResolverRegistration,
-  PluginHookRegistration,
   PluginHttpRouteRegistration as RegistryTypesPluginHttpRouteRegistration,
-  PluginAgentHarnessRegistration,
-  PluginMemoryEmbeddingProviderRegistration,
-  PluginNodeHostCommandRegistration,
-  PluginProviderRegistration,
   PluginRecord,
-  PluginRegistry,
   PluginRegistryParams,
-  PluginReloadRegistration,
-  PluginRuntimeLifecycleRegistryRegistration,
-  PluginSecurityAuditCollectorRegistration,
-  PluginServiceRegistration,
-  PluginSessionExtensionRegistryRegistration,
   PluginTextTransformsRegistration,
-  PluginToolMetadataRegistryRegistration,
-  PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";

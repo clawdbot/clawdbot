@@ -1,5 +1,5 @@
 import {
-  presentationToInteractiveReply,
+  presentationToInteractiveControlsReply,
   reduceInteractiveReply,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type {
@@ -111,11 +111,7 @@ export function buildDiscordPresentationComponents(
     }
   }
   const interactiveSpec = buildDiscordInteractiveComponents(
-    presentationToInteractiveReply({
-      blocks: presentation.blocks.filter(
-        (block) => block.type === "buttons" || block.type === "select",
-      ),
-    }),
+    presentationToInteractiveControlsReply(presentation),
   );
   if (interactiveSpec?.blocks?.length) {
     spec.blocks?.push(...interactiveSpec.blocks);

@@ -41,6 +41,21 @@ function makeEvent(overrides?: Partial<InternalHookEvent>): InternalHookEvent {
   };
 }
 
+function expectBootCall(
+  index: number,
+  expected: { cfg: unknown; workspaceDir: string; agentId: string },
+) {
+  const params = runBootOnce.mock.calls[index]?.[0] as
+    | { cfg?: unknown; workspaceDir?: unknown; agentId?: unknown }
+    | undefined;
+  if (!params) {
+    throw new Error(`missing boot call ${index}`);
+  }
+  expect(params.cfg).toBe(expected.cfg);
+  expect(params.workspaceDir).toBe(expected.workspaceDir);
+  expect(params.agentId).toBe(expected.agentId);
+}
+
 describe("boot-md handler", () => {
   function setupTwoAgentBootConfig() {
     const cfg = { agents: { list: [{ id: "main" }, { id: "ops" }] } };
@@ -84,12 +99,8 @@ describe("boot-md handler", () => {
 
     expect(listAgentIds).toHaveBeenCalledWith(cfg);
     expect(runBootOnce).toHaveBeenCalledTimes(2);
-    expect(runBootOnce).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg, workspaceDir: MAIN_WORKSPACE_DIR, agentId: "main" }),
-    );
-    expect(runBootOnce).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg, workspaceDir: OPS_WORKSPACE_DIR, agentId: "ops" }),
-    );
+    expectBootCall(0, { cfg, workspaceDir: MAIN_WORKSPACE_DIR, agentId: "main" });
+    expectBootCall(1, { cfg, workspaceDir: OPS_WORKSPACE_DIR, agentId: "ops" });
   });
 
   it("runs boot for single default agent when no agents configured", async () => {
@@ -99,9 +110,7 @@ describe("boot-md handler", () => {
     await runBootChecklist(makeEvent({ context: { cfg } }));
 
     expect(runBootOnce).toHaveBeenCalledTimes(1);
-    expect(runBootOnce).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg, workspaceDir: MAIN_WORKSPACE_DIR, agentId: "main" }),
-    );
+    expectBootCall(0, { cfg, workspaceDir: MAIN_WORKSPACE_DIR, agentId: "main" });
   });
 
   it("logs warning details when a per-agent boot run fails", async () => {
@@ -144,8 +153,6 @@ describe("boot-md handler", () => {
     await runBootChecklist(makeEvent({ context: { cfg } }));
 
     expect(runBootOnce).toHaveBeenCalledTimes(1);
-    expect(runBootOnce).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg, workspaceDir: MAIN_WORKSPACE_DIR, agentId: "main" }),
-    );
+    expectBootCall(0, { cfg, workspaceDir: MAIN_WORKSPACE_DIR, agentId: "main" });
   });
 });

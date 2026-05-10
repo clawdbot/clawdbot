@@ -584,13 +584,12 @@ describe("handleMessageUpdate commentary phase", () => {
     );
 
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
-    expect(onAgentEvent.mock.calls[0]?.[0]).toMatchObject({
-      stream: "assistant",
-      data: {
-        text: "Done.",
-        delta: "Done.",
-      },
-    });
+    const event = onAgentEvent.mock.calls[0]?.[0] as
+      | { stream?: string; data?: { text?: string; delta?: string } }
+      | undefined;
+    expect(event?.stream).toBe("assistant");
+    expect(event?.data?.text).toBe("Done.");
+    expect(event?.data?.delta).toBe("Done.");
   });
 
   it("contains synchronous text_end flush failures", async () => {
@@ -630,18 +629,28 @@ describe("handleMessageEnd", () => {
       },
     } as never);
 
-    expect(warn).toHaveBeenCalledWith(
+    const warnCall = warn.mock.calls[0];
+    expect(warnCall?.[0]).toBe(
       "Assistant reply looks like a tool call, but no structured tool invocation was emitted; treating it as text.",
-      expect.objectContaining({
-        runId: "run-1",
-        sessionId: "session-1",
-        provider: "ollama",
-        model: "qwen-local",
-        pattern: "json_tool_call",
-        toolName: "read",
-        registeredTool: true,
-      }),
     );
+    const metadata = warnCall?.[1] as
+      | {
+          runId?: string;
+          sessionId?: string;
+          provider?: string;
+          model?: string;
+          pattern?: string;
+          toolName?: string;
+          registeredTool?: boolean;
+        }
+      | undefined;
+    expect(metadata?.runId).toBe("run-1");
+    expect(metadata?.sessionId).toBe("session-1");
+    expect(metadata?.provider).toBe("ollama");
+    expect(metadata?.model).toBe("qwen-local");
+    expect(metadata?.pattern).toBe("json_tool_call");
+    expect(metadata?.toolName).toBe("read");
+    expect(metadata?.registeredTool).toBe(true);
   });
 
   it("does not warn when the assistant emitted a structured tool call", () => {
@@ -830,13 +839,12 @@ describe("handleMessageEnd", () => {
     } as never);
 
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
-    expect(onAgentEvent.mock.calls[0]?.[0]).toMatchObject({
-      stream: "assistant",
-      data: {
-        text: "Done.",
-        delta: "",
-        replace: true,
-      },
-    });
+    const event = onAgentEvent.mock.calls[0]?.[0] as
+      | { stream?: string; data?: { text?: string; delta?: string; replace?: boolean } }
+      | undefined;
+    expect(event?.stream).toBe("assistant");
+    expect(event?.data?.text).toBe("Done.");
+    expect(event?.data?.delta).toBe("");
+    expect(event?.data?.replace).toBe(true);
   });
 });

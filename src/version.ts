@@ -48,7 +48,7 @@ function readVersionFromJsonCandidates(
 function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
   for (const value of values) {
     const trimmed = normalizeOptionalString(value);
-    if (trimmed) {
+    if (trimmed && trimmed.toLowerCase() !== "undefined" && trimmed.toLowerCase() !== "null") {
       return trimmed;
     }
   }

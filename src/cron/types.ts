@@ -125,11 +125,30 @@ export type CronRunOutcome = {
   diagnostics?: CronRunDiagnostics;
 };
 
+export type CronAgentExecutionPhase =
+  | "runner_entered"
+  | "workspace"
+  | "runtime_plugins"
+  | "model_resolution"
+  | "auth"
+  | "context_engine"
+  | "attempt_dispatch"
+  | "context_assembled"
+  | "model_call_started";
+
 export type CronAgentExecutionStarted = {
   jobId: string;
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
+  phase?: CronAgentExecutionPhase;
+  provider?: string;
+  model?: string;
+  firstModelCallStarted?: boolean;
+};
+
+export type CronAgentExecutionPhaseUpdate = CronAgentExecutionStarted & {
+  phase: CronAgentExecutionPhase;
 };
 
 export type CronFailureAlert = {

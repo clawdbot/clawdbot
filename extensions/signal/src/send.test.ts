@@ -5,7 +5,7 @@ const resolveOutboundAttachmentFromUrlMock = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => ({ path: "/tmp/image.png", contentType: "image/png" })),
 );
 
-vi.mock("./client.js", () => ({
+vi.mock("./client-adapter.js", () => ({
   signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
 }));
 

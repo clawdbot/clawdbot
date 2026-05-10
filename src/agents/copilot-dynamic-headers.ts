@@ -1,7 +1,7 @@
 import type { Context } from "@mariozechner/pi-ai";
-import { buildCopilotIdeHeaders } from "../plugin-sdk/provider-auth.js";
+import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "../plugin-sdk/provider-auth.js";
 
-export { buildCopilotIdeHeaders } from "../plugin-sdk/provider-auth.js";
+export { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "../plugin-sdk/provider-auth.js";
 
 function inferCopilotInitiator(messages: Context["messages"]): "agent" | "user" {
   const last = messages[messages.length - 1];
@@ -43,7 +43,7 @@ export function buildCopilotDynamicHeaders(params: {
 }): Record<string, string> {
   return {
     ...buildCopilotIdeHeaders(),
-    "Copilot-Integration-Id": "vscode-chat",
+    "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
     "Openai-Organization": "github-copilot",
     "x-initiator": inferCopilotInitiator(params.messages),
     ...(params.hasImages ? { "Copilot-Vision-Request": "true" } : {}),

@@ -239,6 +239,44 @@ operators can switch to Hetzner when AWS capacity is slow or unavailable. Use
 this lane when you want "a Linux desktop with Slack and a claw running" instead
 of only a bot-to-bot Slack transcript.
 
+`Mantis Telegram Live` wraps the existing Telegram live QA lane in the same PR
+evidence pipeline. It checks out the trusted candidate ref in a separate
+worktree, runs `pnpm openclaw qa telegram --credential-source convex
+--credential-role ci`, writes a `mantis-evidence.json` manifest from the
+Telegram QA summary and observed-message artifact, renders the redacted
+transcript HTML through a Crabbox desktop browser, generates a motion-trimmed GIF
+with `crabbox media preview`, and posts the inline PR evidence comment when a PR
+number is available. This lane is transcript-visual rather than logged-in
+Telegram Web proof: the Telegram Bot API gives stable live message evidence, but
+Telegram Web login state is not required for normal Mantis automation.
+
+For human-in-the-loop Telegram desktop setup, use the scenario builder:
+
+```bash
+pnpm openclaw qa mantis telegram-desktop-builder \
+  --credential-source convex \
+  --credential-role maintainer \
+  --keep-lease
+```
+
+The builder leases or reuses a Crabbox desktop, installs the native Linux
+Telegram Desktop binary, optionally restores a user-session archive, configures
+OpenClaw with the leased Telegram SUT bot token, starts `openclaw gateway run`
+on port `38974`, posts a driver-bot readiness message to the leased private
+group, then captures a screenshot and MP4 from the visible VNC desktop. A bot
+token never logs Telegram Desktop in; it only configures OpenClaw. The desktop
+viewer is a separate Telegram user session restored from
+`--telegram-profile-archive-env <name>` or created manually through VNC and kept
+alive with `--keep-lease`.
+
+Useful Telegram desktop builder flags:
+
+- `--lease-id <cbx_...>` reruns against a VM where an operator already logged in to Telegram Desktop.
+- `--telegram-profile-archive-env <name>` reads a base64 `.tgz` Telegram Desktop profile archive from that env var and restores it before launch.
+- `--telegram-profile-dir <remote-path>` controls the remote Telegram Desktop profile directory. The default is `$HOME/.local/share/TelegramDesktop`.
+- `--no-gateway-setup` installs and opens Telegram Desktop without configuring OpenClaw.
+- `--credential-source convex --credential-role ci` uses the shared credential broker instead of direct Telegram env tokens.
+
 Every PR-publishing scenario writes `mantis-evidence.json` next to its report.
 This schema is the handoff between scenario code and GitHub comments:
 
@@ -305,6 +343,19 @@ ref:
 ```text
 @Mantis discord status reactions baseline=origin/main candidate=HEAD
 ```
+
+Telegram live QA can also be triggered from a PR comment:
+
+```text
+@Mantis telegram
+@Mantis telegram scenario=telegram-status-command
+@Mantis telegram scenarios=telegram-status-command,telegram-mentioned-message-reply
+```
+
+By default it uses the current PR head SHA as the candidate and runs
+`telegram-status-command`. Maintainers can override `candidate=...`,
+`provider=aws|hetzner`, and `lease=<cbx_...>` when they need a specific ref or a
+pre-warmed Crabbox desktop.
 
 ClawSweeper command examples:
 

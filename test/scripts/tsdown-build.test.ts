@@ -7,6 +7,7 @@ import {
   createTsdownOutputScanner,
   pruneSourceCheckoutBundledPluginNodeModules,
   pruneStaleRootChunkFiles,
+  pruneUntrackedGeneratedSourceDeclarations,
   resolveTsdownBuildInvocation,
   runTsdownBuildInvocation,
 } from "../../scripts/tsdown-build.mjs";
@@ -53,9 +54,19 @@ describe("resolveTsdownBuildInvocation", () => {
         stdio: ["ignore", "pipe", "pipe"],
         shell: false,
         windowsVerbatimArguments: undefined,
-        env: {},
+        env: { NODE_OPTIONS: "--max-old-space-size=6144" },
       },
     });
+  });
+
+  it("preserves explicit tsdown heap settings", () => {
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=8192" },
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
   });
 
   it("keeps source-checkout prune best-effort", () => {
@@ -137,6 +148,37 @@ describe("resolveTsdownBuildInvocation", () => {
     await expectPathMissing(pluginGeneratedFile);
     await expectPathMissing(path.join(rootDir, "dist-runtime"));
     await expect(fsPromises.readFile(unrelatedFile, "utf8")).resolves.toBe("keep\n");
+  });
+
+  it("prunes untracked generated declaration files that shadow source entries", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-source-dts-");
+    const signalDir = path.join(rootDir, "extensions", "signal");
+    const signalSrcDir = path.join(signalDir, "src");
+    await fsPromises.mkdir(signalSrcDir, { recursive: true });
+    await fsPromises.writeFile(path.join(signalDir, "api.ts"), "export {};\n");
+    await fsPromises.writeFile(path.join(signalDir, "api.d.ts"), "export {};\n");
+    await fsPromises.writeFile(path.join(signalSrcDir, "probe.ts"), "export {};\n");
+    await fsPromises.writeFile(path.join(signalSrcDir, "probe.d.ts"), "export {};\n");
+    await fsPromises.writeFile(
+      path.join(signalSrcDir, "ambient.d.ts"),
+      "declare const x: string;\n",
+    );
+
+    const removed = pruneUntrackedGeneratedSourceDeclarations({
+      cwd: rootDir,
+      spawnSync: () => ({
+        status: 0,
+        stdout:
+          "extensions/signal/api.d.ts\nextensions/signal/src/probe.d.ts\nextensions/signal/src/ambient.d.ts\n",
+      }),
+    });
+
+    expect(removed).toBe(2);
+    await expectPathMissing(path.join(signalDir, "api.d.ts"));
+    await expectPathMissing(path.join(signalSrcDir, "probe.d.ts"));
+    await expect(
+      fsPromises.readFile(path.join(signalSrcDir, "ambient.d.ts"), "utf8"),
+    ).resolves.toBe("declare const x: string;\n");
   });
 });
 

@@ -365,6 +365,28 @@ describe("fetchWithTimeoutGuarded", () => {
     });
   });
 
+  it("merges full SSRF policy into JSON request guards", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    await postJsonRequest({
+      url: "https://api.example.com/v1/test",
+      headers: new Headers(),
+      body: { ok: true },
+      fetchFn: fetch,
+      allowPrivateNetwork: true,
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    expect(getFirstGuardedFetchCall().policy).toEqual({
+      allowPrivateNetwork: true,
+      allowRfc2544BenchmarkRange: true,
+    });
+  });
+
   it("forwards explicit pinDns overrides to JSON requests", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(null, { status: 200 }),

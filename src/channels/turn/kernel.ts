@@ -28,7 +28,6 @@ import type {
   ChannelTurnDeliveryAdapter,
   ChannelTurnHistoryFinalizeOptions,
   ChannelTurnLogEvent,
-  ChannelTurnReplyPipelineOptions,
   ChannelTurnResolved,
   ChannelTurnResult,
   DispatchedChannelTurnResult,

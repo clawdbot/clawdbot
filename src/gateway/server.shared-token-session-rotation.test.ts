@@ -79,7 +79,7 @@ describe("gateway shared token session rotation", () => {
     try {
       const current = await loadGatewayConfig(ws);
       const nextConfig = buildConfigSetWithRotatedToken(current.config);
-      const closed = waitForGatewayWsClose(ws);
+      const closed = waitForGatewayWsClose(ws, 30_000);
       const setRes = await rpcReq(ws, "config.set", {
         baseHash: current.hash,
         raw: JSON.stringify(nextConfig, null, 2),

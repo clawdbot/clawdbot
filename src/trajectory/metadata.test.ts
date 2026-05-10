@@ -171,10 +171,8 @@ describe("trajectory metadata", () => {
     expect(config.redacted?.providers?.openai?.apiKey).toBe(REDACTED_SENTINEL);
     expect(plugins.source).toBe("active-registry");
     expect(plugins.entries?.map((entry) => entry.id)).toEqual(["demo-plugin"]);
-    expect(skills.entries?.[0]).toMatchObject({
-      id: "weather",
-      filePath: "/tmp/workspace/skills/weather/SKILL.md",
-    });
+    expect(skills.entries?.[0]?.id).toBe("weather");
+    expect(skills.entries?.[0]?.filePath).toBe("/tmp/workspace/skills/weather/SKILL.md");
   });
 
   it("captures final artifact summaries for export sidecars", () => {
@@ -202,14 +200,13 @@ describe("trajectory metadata", () => {
       messagingToolSentTargets: [],
     });
 
-    expect(artifacts).toMatchObject({
-      finalStatus: "success",
-      assistantTexts: ["done"],
-      itemLifecycle: {
-        startedCount: 2,
-        completedCount: 2,
-        activeCount: 0,
-      },
-    });
+    expect(artifacts.finalStatus).toBe("success");
+    expect(artifacts.assistantTexts).toEqual(["done"]);
+    const lifecycle = artifacts.itemLifecycle as
+      | { startedCount?: number; completedCount?: number; activeCount?: number }
+      | undefined;
+    expect(lifecycle?.startedCount).toBe(2);
+    expect(lifecycle?.completedCount).toBe(2);
+    expect(lifecycle?.activeCount).toBe(0);
   });
 });

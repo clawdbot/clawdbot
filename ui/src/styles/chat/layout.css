@@ -690,6 +690,38 @@
   color: var(--text);
 }
 
+.agent-chat__talk-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
+}
+
+.agent-chat__talk-options label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+
+.agent-chat__talk-options input,
+.agent-chat__talk-options select {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0 8px;
+}
+
 .agent-chat__input-divider {
   width: 1px;
   height: 16px;

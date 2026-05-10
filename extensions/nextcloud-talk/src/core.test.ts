@@ -7,7 +7,7 @@ import {
   normalizeNextcloudTalkMessagingTarget,
   stripNextcloudTalkTargetPrefix,
 } from "./normalize.js";
-import { resolveNextcloudTalkAllowlistMatch, resolveNextcloudTalkGroupAllow } from "./policy.js";
+import { resolveNextcloudTalkAllowlistMatch } from "./policy.js";
 import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
 import { resolveNextcloudTalkOutboundSessionRoute } from "./session-route.js";
 import {
@@ -291,7 +291,7 @@ describe("nextcloud talk core", () => {
     expect(retryClaim).toBe("claimed");
   });
 
-  it("resolves allowlist matches and group policy decisions", () => {
+  it("resolves allowlist matches", () => {
     expect(
       resolveNextcloudTalkAllowlistMatch({
         allowFrom: ["*"],
@@ -310,90 +310,5 @@ describe("nextcloud talk core", () => {
         senderId: "other",
       }).allowed,
     ).toBe(false);
-
-    expect(
-      resolveNextcloudTalkGroupAllow({
-        groupPolicy: "disabled",
-        outerAllowFrom: ["owner"],
-        innerAllowFrom: ["room-user"],
-        senderId: "owner",
-      }),
-    ).toEqual({
-      allowed: false,
-      outerMatch: { allowed: false },
-      innerMatch: { allowed: false },
-    });
-    expect(
-      resolveNextcloudTalkGroupAllow({
-        groupPolicy: "open",
-        outerAllowFrom: [],
-        innerAllowFrom: [],
-        senderId: "owner",
-      }),
-    ).toEqual({
-      allowed: true,
-      outerMatch: { allowed: true },
-      innerMatch: { allowed: true },
-    });
-    expect(
-      resolveNextcloudTalkGroupAllow({
-        groupPolicy: "allowlist",
-        outerAllowFrom: [],
-        innerAllowFrom: [],
-        senderId: "owner",
-      }),
-    ).toEqual({
-      allowed: false,
-      outerMatch: { allowed: false },
-      innerMatch: { allowed: false },
-    });
-    expect(
-      resolveNextcloudTalkGroupAllow({
-        groupPolicy: "allowlist",
-        outerAllowFrom: [],
-        innerAllowFrom: ["room-user"],
-        senderId: "room-user",
-      }),
-    ).toEqual({
-      allowed: true,
-      outerMatch: { allowed: false },
-      innerMatch: { allowed: true, matchKey: "room-user", matchSource: "id" },
-    });
-    expect(
-      resolveNextcloudTalkGroupAllow({
-        groupPolicy: "allowlist",
-        outerAllowFrom: ["team-owner"],
-        innerAllowFrom: ["room-user"],
-        senderId: "room-user",
-      }),
-    ).toEqual({
-      allowed: false,
-      outerMatch: { allowed: false },
-      innerMatch: { allowed: true, matchKey: "room-user", matchSource: "id" },
-    });
-    expect(
-      resolveNextcloudTalkGroupAllow({
-        groupPolicy: "allowlist",
-        outerAllowFrom: ["team-owner"],
-        innerAllowFrom: ["room-user"],
-        senderId: "team-owner",
-      }),
-    ).toEqual({
-      allowed: false,
-      outerMatch: { allowed: true, matchKey: "team-owner", matchSource: "id" },
-      innerMatch: { allowed: false },
-    });
-    expect(
-      resolveNextcloudTalkGroupAllow({
-        groupPolicy: "allowlist",
-        outerAllowFrom: ["shared-user"],
-        innerAllowFrom: ["shared-user"],
-        senderId: "shared-user",
-      }),
-    ).toEqual({
-      allowed: true,
-      outerMatch: { allowed: true, matchKey: "shared-user", matchSource: "id" },
-      innerMatch: { allowed: true, matchKey: "shared-user", matchSource: "id" },
-    });
   });
 });

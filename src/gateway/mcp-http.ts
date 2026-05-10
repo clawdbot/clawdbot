@@ -11,8 +11,6 @@ import { logDebug, logWarn } from "../logger.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
-  createMcpLoopbackServerConfig,
-  getActiveMcpLoopbackRuntime,
   setActiveMcpLoopbackRuntime,
 } from "./mcp-http.loopback-runtime.js";
 import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";

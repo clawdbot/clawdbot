@@ -543,13 +543,9 @@ describe("plugin-sdk root alias", () => {
     );
     const lazyModule = loadRootAliasWithStubs({ monolithicExports });
 
-    expect(rootSdk).toEqual(
-      expect.objectContaining({
-        emptyPluginConfigSchema: expect.any(Function),
-        resolveControlCommandGate: expect.any(Function),
-        onDiagnosticEvent: expect.any(Function),
-      }),
-    );
+    expect(rootSdk.emptyPluginConfigSchema).toEqual(expect.any(Function));
+    expect(rootSdk.resolveControlCommandGate).toEqual(expect.any(Function));
+    expect(rootSdk.onDiagnosticEvent).toEqual(expect.any(Function));
 
     for (const name of legacyRootExportNames) {
       expect(lazyModule.moduleExports[name]).toBe(monolithicExports[name]);

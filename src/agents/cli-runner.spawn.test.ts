@@ -768,27 +768,19 @@ describe("runCliAgent spawn path", () => {
           event: { type: "content_block_delta", delta: { type: "text_delta", text: " world" } },
         }) + "\n",
       );
+      input.onStdout?.(
+        JSON.stringify({
+          type: "result",
+          session_id: "session-123",
+          result: "Hello world",
+        }) + "\n",
+      );
       return createManagedRun({
         reason: "exit",
         exitCode: 0,
         exitSignal: null,
         durationMs: 50,
-        stdout: [
-          JSON.stringify({ type: "init", session_id: "session-123" }),
-          JSON.stringify({
-            type: "stream_event",
-            event: { type: "content_block_delta", delta: { type: "text_delta", text: "Hello" } },
-          }),
-          JSON.stringify({
-            type: "stream_event",
-            event: { type: "content_block_delta", delta: { type: "text_delta", text: " world" } },
-          }),
-          JSON.stringify({
-            type: "result",
-            session_id: "session-123",
-            result: "Hello world",
-          }),
-        ].join("\n"),
+        stdout: "",
         stderr: "",
         timedOut: false,
         noOutputTimedOut: false,

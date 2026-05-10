@@ -449,7 +449,7 @@ describe("pairing store", () => {
         channel: "telegram",
         code: created.code,
       });
-      expect(approved).toMatchObject({ id: "67890" });
+      expect(approved?.id).toBe("67890");
       await expectAccountScopedEntryIsolated("67890");
 
       const filtered = await createTelegramPairingRequest("yy", "filtered");

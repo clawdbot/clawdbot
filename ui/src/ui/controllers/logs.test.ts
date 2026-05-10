@@ -17,12 +17,9 @@ describe("parseLogLine", () => {
       time: "2026-03-13T14:07:12.138-05:00",
     });
 
-    expect(parseLogLine(line)).toEqual(
-      expect.objectContaining({
-        level: "warn",
-        subsystem: "gateway/ws",
-        message: "closed before connect conn=abc code=4008 reason=connect failed",
-      }),
-    );
+    const parsed = parseLogLine(line);
+    expect(parsed.level).toBe("warn");
+    expect(parsed.subsystem).toBe("gateway/ws");
+    expect(parsed.message).toBe("closed before connect conn=abc code=4008 reason=connect failed");
   });
 });

@@ -9,8 +9,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { SynologyChatChannelConfigSchema } from "./config-schema.js";
 import {
-  authorizeUserForDm,
-  checkUserAllowed,
+  authorizeUserForDmWithIngress,
   RateLimiter,
   sanitizeInput,
   validateToken,
@@ -317,32 +316,90 @@ describe("synology-chat security helpers", () => {
     expect(validateToken("short", "muchlongertoken")).toBe(false);
   });
 
-  it("enforces allowlists and DM policy decisions", () => {
-    expect(checkUserAllowed("user1", [])).toBe(false);
-    expect(checkUserAllowed("user1", ["user1", "user2"])).toBe(true);
-    expect(checkUserAllowed("user3", ["user1", "user2"])).toBe(false);
+  it("matches DM policy decisions through channel ingress", async () => {
+    await expect(
+      authorizeUserForDmWithIngress({
+        accountId: "default",
+        userId: "user1",
+        dmPolicy: "open",
+        allowedUserIds: [],
+      }),
+    ).resolves.toMatchObject({
+      senderAccess: {
+        allowed: false,
+        reasonCode: "dm_policy_not_allowlisted",
+      },
+    });
+    await expect(
+      authorizeUserForDmWithIngress({
+        accountId: "default",
+        userId: "user1",
+        dmPolicy: "open",
+        allowedUserIds: ["*"],
+      }),
+    ).resolves.toMatchObject({ senderAccess: { allowed: true } });
+    await expect(
+      authorizeUserForDmWithIngress({
+        accountId: "default",
+        userId: "user1",
+        dmPolicy: "disabled",
+        allowedUserIds: ["user1"],
+      }),
+    ).resolves.toMatchObject({
+      senderAccess: {
+        allowed: false,
+        reasonCode: "dm_policy_disabled",
+      },
+    });
+    await expect(
+      authorizeUserForDmWithIngress({
+        accountId: "default",
+        userId: "user1",
+        dmPolicy: "allowlist",
+        allowedUserIds: [],
+      }),
+    ).resolves.toMatchObject({
+      senderAccess: {
+        allowed: false,
+        reasonCode: "dm_policy_not_allowlisted",
+      },
+    });
+    await expect(
+      authorizeUserForDmWithIngress({
+        accountId: "default",
+        userId: "user9",
+        dmPolicy: "allowlist",
+        allowedUserIds: ["user1"],
+      }),
+    ).resolves.toMatchObject({
+      senderAccess: {
+        allowed: false,
+        reasonCode: "dm_policy_not_allowlisted",
+      },
+    });
+    await expect(
+      authorizeUserForDmWithIngress({
+        accountId: "default",
+        userId: "user1",
+        dmPolicy: "allowlist",
+        allowedUserIds: ["user1", "user2"],
+      }),
+    ).resolves.toMatchObject({ senderAccess: { allowed: true } });
+  });
 
-    expect(authorizeUserForDm("user1", "open", [])).toEqual({
-      allowed: false,
-      reason: "not-allowlisted",
+  it("redacts Synology user IDs and allowlist entries from ingress state/decision", async () => {
+    const auth = await authorizeUserForDmWithIngress({
+      accountId: "default",
+      userId: "raw-sensitive-user-id",
+      dmPolicy: "allowlist",
+      allowedUserIds: ["raw-sensitive-user-id"],
     });
-    expect(authorizeUserForDm("user1", "open", ["*"])).toEqual({ allowed: true });
-    expect(authorizeUserForDm("user1", "open", ["user1"])).toEqual({ allowed: true });
-    expect(authorizeUserForDm("user1", "disabled", ["user1"])).toEqual({
-      allowed: false,
-      reason: "disabled",
+
+    const serialized = JSON.stringify({
+      state: auth.state,
+      decision: auth.ingress,
     });
-    expect(authorizeUserForDm("user1", "allowlist", [])).toEqual({
-      allowed: false,
-      reason: "allowlist-empty",
-    });
-    expect(authorizeUserForDm("user9", "allowlist", ["user1"])).toEqual({
-      allowed: false,
-      reason: "not-allowlisted",
-    });
-    expect(authorizeUserForDm("user1", "allowlist", ["user1", "user2"])).toEqual({
-      allowed: true,
-    });
+    expect(serialized).not.toContain("raw-sensitive-user-id");
   });
 
   it("sanitizes prompt injection markers and long inputs", () => {

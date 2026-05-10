@@ -194,6 +194,76 @@ function createGatewayCommand(entrypoint: string) {
   };
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).toBeTypeOf("object");
+  expect(value, label).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+function callArg(mock: { mock: { calls: Array<Array<unknown>> } }, index: number, label: string) {
+  const call = mock.mock.calls.at(index);
+  expect(call, label).toBeDefined();
+  return call?.[0];
+}
+
+function expectCallField(
+  mock: { mock: { calls: Array<Array<unknown>> } },
+  field: string,
+  expected: unknown,
+) {
+  const options = requireRecord(callArg(mock, 0, `first ${field} call`), field);
+  expect(options[field]).toEqual(expected);
+  return options;
+}
+
+function expectGatewayAuthToken(value: unknown, expected: string) {
+  const root = requireRecord(value, "config root");
+  const gateway = requireRecord(root.gateway, "config.gateway");
+  const auth = requireRecord(gateway.auth, "config.gateway.auth");
+  expect(auth.token).toBe(expected);
+}
+
+function readGatewayAuthToken(value: unknown) {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const root = value as Record<string, unknown>;
+  const gateway = root.gateway;
+  if (!gateway || typeof gateway !== "object") {
+    return undefined;
+  }
+  const auth = (gateway as Record<string, unknown>).auth;
+  if (!auth || typeof auth !== "object") {
+    return undefined;
+  }
+  return (auth as Record<string, unknown>).token;
+}
+
+function expectCallConfigGatewayAuthToken(
+  mock: { mock: { calls: Array<Array<unknown>> } },
+  expected: string,
+) {
+  const matched = mock.mock.calls.some(([value]) => {
+    const options = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+    return readGatewayAuthToken(options.config) === expected;
+  });
+  expect(matched).toBe(true);
+}
+
+function expectNoteContaining(messagePart: string, title: string) {
+  const messages = mocks.note.mock.calls
+    .filter(([, callTitle]) => callTitle === title)
+    .map(([message]) => String(message));
+  expect(messages.some((message) => message.includes(messagePart))).toBe(true);
+}
+
+function expectNoNoteContaining(messagePart: string, title: string) {
+  const messages = mocks.note.mock.calls
+    .filter(([, callTitle]) => callTitle === title)
+    .map(([message]) => String(message));
+  expect(messages.some((message) => message.includes(messagePart))).toBe(false);
+}
+
 function setupGatewayEntrypointRepairScenario(params: {
   currentEntrypoint: string;
   installEntrypoint: string;
@@ -288,22 +358,8 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     await runRepair(cfg);
 
-    expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expectedGatewayToken: "config-token",
-      }),
-    );
-    expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          gateway: expect.objectContaining({
-            auth: expect.objectContaining({
-              token: "config-token",
-            }),
-          }),
-        }),
-      }),
-    );
+    expectCallField(mocks.auditGatewayServiceConfig, "expectedGatewayToken", "config-token");
+    expectCallConfigGatewayAuthToken(mocks.buildGatewayInstallPlan, "config-token");
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).toHaveBeenCalledTimes(1);
@@ -343,14 +399,12 @@ describe("maybeRepairGatewayServiceConfig", () => {
     const runtimeNotes = mocks.note.mock.calls.filter(([, title]) => title === "Gateway runtime");
     const runtimeMessages = runtimeNotes.map(([message]) => message);
     expect(runtimeMessages).not.toContain("duplicate doctor runtime warning");
-    expect(runtimeMessages).not.toEqual(
-      expect.arrayContaining([expect.stringContaining("not found")]),
-    );
-    expect(runtimeMessages).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("Using /home/orin/.nvm/versions/node/v22.22.2/bin/node"),
-      ]),
-    );
+    expect(runtimeMessages.some((message) => String(message).includes("not found"))).toBe(false);
+    expect(
+      runtimeMessages.some((message) =>
+        String(message).includes("Using /home/orin/.nvm/versions/node/v22.22.2/bin/node"),
+      ),
+    ).toBe(true);
   });
 
   it("passes planned managed env keys into service audit for legacy inline secret detection", async () => {
@@ -382,10 +436,10 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     await runRepair({ gateway: {} });
 
-    expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expectedManagedServiceEnvKeys: new Set(["TAVILY_API_KEY"]),
-      }),
+    expectCallField(
+      mocks.auditGatewayServiceConfig,
+      "expectedManagedServiceEnvKeys",
+      new Set(["TAVILY_API_KEY"]),
     );
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
@@ -416,16 +470,12 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     await runRepair({ gateway: { port: 18888 } });
 
-    expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expectedPort: 18888,
-      }),
+    expectCallField(mocks.auditGatewayServiceConfig, "expectedPort", 18888);
+    const installOptions = requireRecord(
+      callArg(mocks.install, 0, "install call"),
+      "install options",
     );
-    expect(mocks.install).toHaveBeenCalledWith(
-      expect.objectContaining({
-        programArguments: expect.arrayContaining(["18888"]),
-      }),
-    );
+    expect(installOptions.programArguments).toContain("18888");
   });
 
   it("repairs gateway services with embedded proxy environment values", async () => {
@@ -473,34 +523,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
       await runRepair(cfg);
 
-      expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
-        expect.objectContaining({
-          expectedGatewayToken: "env-token",
-        }),
+      expectCallField(mocks.auditGatewayServiceConfig, "expectedGatewayToken", "env-token");
+      expectCallConfigGatewayAuthToken(mocks.buildGatewayInstallPlan, "env-token");
+      const replaceOptions = requireRecord(
+        callArg(mocks.replaceConfigFile, 0, "replaceConfigFile call"),
+        "replaceConfigFile options",
       );
-      expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
-        expect.objectContaining({
-          config: expect.objectContaining({
-            gateway: expect.objectContaining({
-              auth: expect.objectContaining({
-                token: "env-token",
-              }),
-            }),
-          }),
-        }),
-      );
-      expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          nextConfig: expect.objectContaining({
-            gateway: expect.objectContaining({
-              auth: expect.objectContaining({
-                token: "env-token",
-              }),
-            }),
-          }),
-          afterWrite: { mode: "auto" },
-        }),
-      );
+      expectGatewayAuthToken(replaceOptions.nextConfig, "env-token");
+      expect(replaceOptions.afterWrite).toEqual({ mode: "auto" });
       expect(mocks.stage).not.toHaveBeenCalled();
       expect(mocks.install).toHaveBeenCalledTimes(1);
     });
@@ -570,18 +600,17 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     await runRepair({ gateway: {} });
 
-    expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: expect.objectContaining({
-          OPENCLAW_WRAPPER: wrapperPath,
-        }),
-        existingEnvironment: expect.objectContaining({
-          OPENCLAW_WRAPPER: wrapperPath,
-        }),
-      }),
+    const installPlanOptions = requireRecord(
+      callArg(mocks.buildGatewayInstallPlan, 0, "buildGatewayInstallPlan call"),
+      "buildGatewayInstallPlan options",
     );
-    expect(mocks.note).not.toHaveBeenCalledWith(
-      expect.stringContaining("Gateway service entrypoint does not match the current install."),
+    expect(requireRecord(installPlanOptions.env, "install env").OPENCLAW_WRAPPER).toBe(wrapperPath);
+    expect(
+      requireRecord(installPlanOptions.existingEnvironment, "install existing environment")
+        .OPENCLAW_WRAPPER,
+    ).toBe(wrapperPath);
+    expectNoNoteContaining(
+      "Gateway service entrypoint does not match the current install.",
       "Gateway service config",
     );
     expect(mocks.note).toHaveBeenCalledWith(
@@ -788,16 +817,8 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     await runRepair(cfg);
 
-    expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expectedGatewayToken: undefined,
-      }),
-    );
-    expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: cfg,
-      }),
-    );
+    expectCallField(mocks.auditGatewayServiceConfig, "expectedGatewayToken", undefined);
+    expectCallField(mocks.buildGatewayInstallPlan, "config", cfg);
     expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
@@ -816,34 +837,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
         await runRepair(cfg);
 
-        expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
-          expect.objectContaining({
-            expectedGatewayToken: undefined,
-          }),
+        expectCallField(mocks.auditGatewayServiceConfig, "expectedGatewayToken", undefined);
+        const replaceOptions = requireRecord(
+          callArg(mocks.replaceConfigFile, 0, "replaceConfigFile call"),
+          "replaceConfigFile options",
         );
-        expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
-          expect.objectContaining({
-            nextConfig: expect.objectContaining({
-              gateway: expect.objectContaining({
-                auth: expect.objectContaining({
-                  token: "stale-token",
-                }),
-              }),
-            }),
-            afterWrite: { mode: "auto" },
-          }),
-        );
-        expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
-          expect.objectContaining({
-            config: expect.objectContaining({
-              gateway: expect.objectContaining({
-                auth: expect.objectContaining({
-                  token: "stale-token",
-                }),
-              }),
-            }),
-          }),
-        );
+        expectGatewayAuthToken(replaceOptions.nextConfig, "stale-token");
+        expect(replaceOptions.afterWrite).toEqual({ mode: "auto" });
+        expectCallConfigGatewayAuthToken(mocks.buildGatewayInstallPlan, "stale-token");
         expect(mocks.stage).not.toHaveBeenCalled();
         expect(mocks.install).toHaveBeenCalledTimes(1);
       },
@@ -921,11 +922,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         await runRepair(cfg);
 
         expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-        expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
-          expect.objectContaining({
-            config: cfg,
-          }),
-        );
+        expectCallField(mocks.buildGatewayInstallPlan, "config", cfg);
         expect(mocks.stage).not.toHaveBeenCalled();
       },
     );

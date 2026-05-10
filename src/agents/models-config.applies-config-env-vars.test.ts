@@ -188,6 +188,64 @@ describe("models-config", () => {
     expect(observedSnapshot).toBe(pluginMetadataSnapshot);
   });
 
+  it("normalizes retired Gemini ids preserved from existing models.json rows", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: { models: { mode: "merge", providers: {} } },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        existingRaw: "",
+        existingParsed: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              api: "google-generative-ai",
+              apiKey: "GOOGLE_API_KEY", // pragma: allowlist secret
+              models: [
+                {
+                  id: "gemini-3-pro-preview",
+                  name: "Gemini 3 Pro",
+                  input: ["text"],
+                },
+              ],
+            },
+          },
+        },
+      },
+      {
+        resolveImplicitProviders: async () => ({
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-responses",
+            apiKey: "OPENAI_API_KEY", // pragma: allowlist secret
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "GPT-5.5",
+                input: ["text"],
+                reasoning: true,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 400000,
+                maxTokens: 128000,
+              },
+            ],
+          },
+        }),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { models?: Array<{ id?: string }> }>;
+    };
+    expect(parsed.providers?.google?.models?.map((model) => model.id)).toEqual([
+      "gemini-3.1-pro-preview",
+    ]);
+  });
+
   it("uses config env.vars entries for implicit provider discovery without mutating process.env", async () => {
     await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
       unsetEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR]);

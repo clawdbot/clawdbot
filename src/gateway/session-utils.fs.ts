@@ -8,12 +8,7 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
 import { stripEnvelope } from "./chat-sanitize.js";
-import {
-  resolveSessionTranscriptCandidates,
-  archiveFileOnDisk,
-  archiveSessionTranscripts,
-  cleanupArchivedSessionTranscripts,
-} from "./session-transcript-files.fs.js";
+import { resolveSessionTranscriptCandidates } from "./session-transcript-files.fs.js";
 import {
   readSessionTranscriptIndex,
   type IndexedTranscriptEntry,

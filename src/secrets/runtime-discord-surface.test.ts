@@ -156,11 +156,10 @@ describe("secrets runtime snapshot discord surface", () => {
       provider: "default",
       id: "MISSING_DISCORD_WORK_VOICE_TTS_OPENAI",
     });
-    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
-      expect.arrayContaining([
-        "channels.discord.voice.tts.providers.openai.apiKey",
-        "channels.discord.accounts.work.voice.tts.providers.openai.apiKey",
-      ]),
+    const warningPaths = snapshot.warnings.map((warning) => warning.path);
+    expect(warningPaths).toContain("channels.discord.voice.tts.providers.openai.apiKey");
+    expect(warningPaths).toContain(
+      "channels.discord.accounts.work.voice.tts.providers.openai.apiKey",
     );
   });
 
@@ -260,12 +259,11 @@ describe("secrets runtime snapshot discord surface", () => {
         id: "DISCORD_DISABLED_OVERRIDE_PK_TOKEN",
       },
     );
-    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
-      expect.arrayContaining([
-        "channels.discord.accounts.disabledOverride.voice.tts.providers.openai.apiKey",
-        "channels.discord.accounts.disabledOverride.pluralkit.token",
-      ]),
+    const warningPaths = snapshot.warnings.map((warning) => warning.path);
+    expect(warningPaths).toContain(
+      "channels.discord.accounts.disabledOverride.voice.tts.providers.openai.apiKey",
     );
+    expect(warningPaths).toContain("channels.discord.accounts.disabledOverride.pluralkit.token");
   });
 
   it("skips top-level Discord voice refs when all enabled accounts override nested voice config", async () => {

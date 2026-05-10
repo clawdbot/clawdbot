@@ -1,6 +1,6 @@
 import type { CodexPluginConfig } from "./config.js";
 
-export const CODEX_NATIVE_FIRST_DYNAMIC_TOOL_EXCLUDES = [
+export const CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES = [
   "read",
   "write",
   "edit",
@@ -20,16 +20,13 @@ export function normalizeCodexDynamicToolName(name: string): string {
   return DYNAMIC_TOOL_NAME_ALIASES[normalized] ?? normalized;
 }
 
-export function applyCodexDynamicToolProfile<T extends { name: string }>(
+export function filterCodexDynamicTools<T extends { name: string }>(
   tools: T[],
-  config: Pick<CodexPluginConfig, "codexDynamicToolsProfile" | "codexDynamicToolsExclude">,
+  config: Pick<CodexPluginConfig, "codexDynamicToolsExclude">,
 ): T[] {
   const excludes = new Set<string>();
-  const profile = config.codexDynamicToolsProfile ?? "native-first";
-  if (profile === "native-first") {
-    for (const name of CODEX_NATIVE_FIRST_DYNAMIC_TOOL_EXCLUDES) {
-      excludes.add(name);
-    }
+  for (const name of CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES) {
+    excludes.add(name);
   }
   for (const name of config.codexDynamicToolsExclude ?? []) {
     const trimmed = normalizeCodexDynamicToolName(name);

@@ -20,6 +20,9 @@ describe("cross-OS release checks workflow", () => {
 
     expect(wrapper).toContain("command -v npm.cmd");
     expect(wrapper).toContain('npm_tool_dir="$(cygpath -w "${tool_dir}")"');
+    expect(wrapper).toContain('npm_cli_arg="$(cygpath -w "${npm_cli_js}")"');
+    expect(wrapper).toContain('loader_arg="$(cygpath -w "${loader_path}")"');
+    expect(wrapper).toContain('"${node_cmd}" "${npm_cli_arg}" install --prefix "${npm_tool_dir}"');
     expect(wrapper).toContain('"${npm_cmd}" install --prefix "${npm_tool_dir}"');
     expect(wrapper).toContain('exec "${node_cmd}" --import "${loader_url}"');
   });

@@ -43,6 +43,36 @@ function makeStore(profileId?: string, credential?: OAuthCredential): AuthProfil
   };
 }
 
+function expectSingleProfileCredential(
+  profiles: ReturnType<typeof resolveExternalCliAuthProfiles>,
+  profileId: string,
+) {
+  expect(profiles).toHaveLength(1);
+  expect(profiles[0]?.profileId).toBe(profileId);
+  expect(profiles[0]?.credential).toBeTruthy();
+  return profiles[0]?.credential as Record<string, unknown>;
+}
+
+function expectCredentialFields(
+  credential: Record<string, unknown> | undefined,
+  expected: Record<string, unknown>,
+) {
+  expect(credential).toBeTruthy();
+  for (const [key, value] of Object.entries(expected)) {
+    expect(credential?.[key]).toBe(value);
+  }
+}
+
+function expectReaderPolicyCall(mock: { mock: { calls: unknown[][] } }) {
+  expect(mock.mock.calls).toHaveLength(1);
+  const [arg] = mock.mock.calls[0] ?? [];
+  expect(arg).toBeTruthy();
+  if (!arg || typeof arg !== "object") {
+    throw new Error("Expected CLI reader options");
+  }
+  expect((arg as { allowKeychainPrompt?: unknown }).allowKeychainPrompt).toBe(false);
+}
+
 describe("external cli oauth resolution", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -258,17 +288,15 @@ describe("external cli oauth resolution", () => {
       providerIds: ["openai-codex"],
     });
 
-    expect(profiles).toEqual([
+    expectCredentialFields(
+      expectSingleProfileCredential(profiles, OPENAI_CODEX_DEFAULT_PROFILE_ID),
       {
-        profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
-        credential: expect.objectContaining({
-          provider: "openai-codex",
-          access: "codex-cli-access",
-          refresh: "codex-cli-refresh",
-          accountId: "acct-codex",
-        }),
+        provider: "openai-codex",
+        access: "codex-cli-access",
+        refresh: "codex-cli-refresh",
+        accountId: "acct-codex",
       },
-    ]);
+    );
   });
 
   it("keeps any existing default codex oauth over Codex CLI bootstrap credentials", () => {
@@ -324,17 +352,12 @@ describe("external cli oauth resolution", () => {
       providerIds: ["claude-cli"],
     });
 
-    expect(profiles).toEqual([
-      {
-        profileId: CLAUDE_CLI_PROFILE_ID,
-        credential: expect.objectContaining({
-          type: "oauth",
-          provider: "claude-cli",
-          access: "claude-cli-access",
-          refresh: "claude-cli-refresh",
-        }),
-      },
-    ]);
+    expectCredentialFields(expectSingleProfileCredential(profiles, CLAUDE_CLI_PROFILE_ID), {
+      type: "oauth",
+      provider: "claude-cli",
+      access: "claude-cli-access",
+      refresh: "claude-cli-refresh",
+    });
   });
 
   it("skips external cli readers outside the scoped provider set", () => {
@@ -382,15 +405,10 @@ describe("external cli oauth resolution", () => {
       }),
     );
 
-    expect(profiles).toEqual([
-      {
-        profileId: CLAUDE_CLI_PROFILE_ID,
-        credential: expect.objectContaining({
-          provider: "claude-cli",
-          access: "claude-cli-fresh-access",
-        }),
-      },
-    ]);
+    expectCredentialFields(expectSingleProfileCredential(profiles, CLAUDE_CLI_PROFILE_ID), {
+      provider: "claude-cli",
+      access: "claude-cli-fresh-access",
+    });
   });
 
   it("passes non-prompting keychain policy to scoped Claude CLI credential reads", () => {
@@ -407,18 +425,11 @@ describe("external cli oauth resolution", () => {
       allowKeychainPrompt: false,
     });
 
-    expect(profiles).toEqual([
-      {
-        profileId: CLAUDE_CLI_PROFILE_ID,
-        credential: expect.objectContaining({
-          type: "oauth",
-          provider: "claude-cli",
-        }),
-      },
-    ]);
-    expect(mocks.readClaudeCliCredentialsCached).toHaveBeenCalledWith(
-      expect.objectContaining({ allowKeychainPrompt: false }),
-    );
+    expectCredentialFields(expectSingleProfileCredential(profiles, CLAUDE_CLI_PROFILE_ID), {
+      type: "oauth",
+      provider: "claude-cli",
+    });
+    expectReaderPolicyCall(mocks.readClaudeCliCredentialsCached);
     expect(mocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
     expect(mocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
   });
@@ -437,18 +448,14 @@ describe("external cli oauth resolution", () => {
       allowKeychainPrompt: false,
     });
 
-    expect(profiles).toEqual([
+    expectCredentialFields(
+      expectSingleProfileCredential(profiles, OPENAI_CODEX_DEFAULT_PROFILE_ID),
       {
-        profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
-        credential: expect.objectContaining({
-          type: "oauth",
-          provider: "openai-codex",
-        }),
+        type: "oauth",
+        provider: "openai-codex",
       },
-    ]);
-    expect(mocks.readCodexCliCredentialsCached).toHaveBeenCalledWith(
-      expect.objectContaining({ allowKeychainPrompt: false }),
     );
+    expectReaderPolicyCall(mocks.readCodexCliCredentialsCached);
     expect(mocks.readClaudeCliCredentialsCached).not.toHaveBeenCalled();
     expect(mocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
   });
@@ -495,7 +502,7 @@ describe("external cli oauth resolution", () => {
     const profilesById = new Map(
       profiles.map((profile) => [profile.profileId, profile.credential]),
     );
-    expect(profilesById.get(MINIMAX_CLI_PROFILE_ID)).toMatchObject({
+    expectCredentialFields(profilesById.get(MINIMAX_CLI_PROFILE_ID) as Record<string, unknown>, {
       access: "minimax-fresh-access",
       refresh: "minimax-fresh-refresh",
     });

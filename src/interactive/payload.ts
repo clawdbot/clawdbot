@@ -75,6 +75,10 @@ export type MessagePresentationSelectBlock = {
   options: MessagePresentationOption[];
 };
 
+export type MessagePresentationInteractiveBlock =
+  | MessagePresentationButtonsBlock
+  | MessagePresentationSelectBlock;
+
 export type MessagePresentationBlock =
   | MessagePresentationTextBlock
   | MessagePresentationContextBlock
@@ -299,6 +303,20 @@ export function presentationToInteractiveReply(
   return blocks.length > 0 ? { blocks } : undefined;
 }
 
+export function isMessagePresentationInteractiveBlock(
+  block: MessagePresentationBlock,
+): block is MessagePresentationInteractiveBlock {
+  return block.type === "buttons" || block.type === "select";
+}
+
+export function presentationToInteractiveControlsReply(
+  presentation: MessagePresentation,
+): InteractiveReply | undefined {
+  return presentationToInteractiveReply({
+    blocks: presentation.blocks.filter(isMessagePresentationInteractiveBlock),
+  });
+}
+
 export function interactiveReplyToPresentation(
   interactive: InteractiveReply,
 ): MessagePresentation | undefined {
@@ -320,6 +338,7 @@ export function interactiveReplyToPresentation(
 
 export function renderMessagePresentationFallbackText(params: {
   presentation?: MessagePresentation;
+  emptyFallback?: string | null;
   text?: string | null;
 }): string {
   const lines: string[] = [];
@@ -356,7 +375,8 @@ export function renderMessagePresentationFallbackText(params: {
       }
     }
   }
-  return lines.join("\n\n");
+  const rendered = lines.join("\n\n");
+  return rendered || normalizeOptionalString(params.emptyFallback) || "";
 }
 
 export function hasReplyChannelData(value: unknown): value is Record<string, unknown> {

@@ -1,9 +1,12 @@
 {
   "name": "@openclaw/signal",
-  "version": "2026.5.8",
+  "version": "2026.5.10-beta.1",
   "private": true,
   "description": "OpenClaw Signal channel plugin",
   "type": "module",
+  "dependencies": {
+    "ws": "^8.20.0"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

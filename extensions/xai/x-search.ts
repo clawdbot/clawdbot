@@ -8,7 +8,11 @@ import {
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { isXaiToolEnabled, resolveXaiToolApiKey } from "./src/tool-auth-shared.js";
+import {
+  isXaiToolEnabled,
+  resolveXaiToolApiKeyWithAuth,
+  type XaiToolAuthContext,
+} from "./src/tool-auth-shared.js";
 import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
 import {
   buildXaiXSearchPayload,
@@ -60,19 +64,22 @@ function resolveXSearchEnabled(params: {
   cfg?: unknown;
   config?: Record<string, unknown>;
   runtimeConfig?: unknown;
+  auth?: XaiToolAuthContext;
 }): boolean {
   return isXaiToolEnabled({
     enabled: params.config?.enabled as boolean | undefined,
     runtimeConfig: params.runtimeConfig as never,
     sourceConfig: params.cfg as never,
+    auth: params.auth,
   });
 }
 
-function resolveXSearchApiKey(params: {
+async function resolveXSearchApiKey(params: {
   sourceConfig?: unknown;
   runtimeConfig?: unknown;
-}): string | undefined {
-  return resolveXaiToolApiKey(params as never);
+  auth?: XaiToolAuthContext;
+}): Promise<string | undefined> {
+  return await resolveXaiToolApiKeyWithAuth(params as never);
 }
 
 function normalizeOptionalIsoDate(value: string | undefined, label: string): string | undefined {
@@ -125,6 +132,7 @@ function buildXSearchCacheKey(params: {
 export function createXSearchTool(options?: {
   config?: unknown;
   runtimeConfig?: Record<string, unknown> | null;
+  auth?: XaiToolAuthContext;
 }) {
   const xSearchConfig = resolveXSearchConfig(options?.config);
   const runtimeConfig = options?.runtimeConfig ?? getRuntimeConfigSnapshot();
@@ -133,15 +141,17 @@ export function createXSearchTool(options?: {
       cfg: options?.config,
       config: xSearchConfig,
       runtimeConfig: runtimeConfig ?? undefined,
+      auth: options?.auth,
     })
   ) {
     return null;
   }
 
   return createXSearchToolDefinition(async (_toolCallId: string, args: Record<string, unknown>) => {
-    const apiKey = resolveXSearchApiKey({
+    const apiKey = await resolveXSearchApiKey({
       sourceConfig: options?.config,
       runtimeConfig: runtimeConfig ?? undefined,
+      auth: options?.auth,
     });
     if (!apiKey) {
       return jsonResult(buildMissingXSearchApiKeyPayload());

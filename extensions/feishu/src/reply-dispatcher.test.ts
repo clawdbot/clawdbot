@@ -288,6 +288,37 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("does not attach automatic mentions to plain text replies", async () => {
+    const { options } = createDispatcherHarness({
+      replyToMessageId: "om_msg",
+    });
+    await options.deliver({ text: "plain text" }, { kind: "final" });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock.mock.calls[0]?.[0]).not.toHaveProperty("mentions");
+  });
+
+  it("does not attach automatic mentions to card replies", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: false,
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      replyToMessageId: "om_msg",
+    });
+    await options.deliver({ text: "card text" }, { kind: "final" });
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendStructuredCardFeishuMock.mock.calls[0]?.[0]).not.toHaveProperty("mentions");
+  });
+
   it("suppresses internal block payload delivery", async () => {
     const { options } = createDispatcherHarness();
     await options.deliver({ text: "internal reasoning chunk" }, { kind: "block" });
@@ -334,7 +365,22 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
-  it("keeps core block streaming disabled when Feishu blockStreaming is explicitly false", () => {
+  it("does not prepend automatic mentions to streaming card closes", async () => {
+    const overrides = {
+      runtime: createRuntimeLogger(),
+      mentionTargets: [{ openId: "ou-target", name: "Target User", key: "@_user_1" }],
+    } as Partial<ReplyDispatcherArgs>;
+    const { options } = createDispatcherHarness(overrides);
+    await options.deliver({ text: "```md\nanswer\n```" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\nanswer\n```", {
+      note: "Agent: agent",
+    });
+  });
+
+  it("keeps core block streaming disabled when Feishu blockStreaming is explicitly false", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
       appId: "app_id",

@@ -63,13 +63,12 @@ describe("security audit config include permissions", () => {
       exec: undefined,
       platform: undefined,
     });
-    expect(findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "fs.config_include.perms_world_readable",
-          severity: "critical",
-        }),
-      ]),
+    const finding = findings.find(
+      (entry) => entry.checkId === "fs.config_include.perms_world_readable",
     );
+    if (!finding) {
+      throw new Error("Expected world-readable include finding");
+    }
+    expect(finding.severity).toBe("critical");
   });
 });

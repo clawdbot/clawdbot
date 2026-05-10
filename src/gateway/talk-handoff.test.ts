@@ -11,6 +11,48 @@ import {
   verifyTalkHandoffToken,
 } from "./talk-handoff.js";
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`Expected ${label}`);
+  }
+  return value;
+}
+
+function expectFields(
+  value: unknown,
+  label: string,
+  fields: Record<string, unknown>,
+): Record<string, unknown> {
+  const record = requireRecord(value, label);
+  for (const [key, expected] of Object.entries(fields)) {
+    expect(record[key]).toEqual(expected);
+  }
+  return record;
+}
+
+function requireRoom(value: unknown, label = "handoff room"): Record<string, unknown> {
+  return requireRecord(requireRecord(value, label).room, `${label} room`);
+}
+
+function requireEvents(value: unknown, label = "handoff result"): unknown[] {
+  return requireArray(requireRecord(value, label).events, `${label} events`);
+}
+
+function expectEventFields(
+  events: unknown[],
+  index: number,
+  fields: Record<string, unknown>,
+): Record<string, unknown> {
+  return expectFields(events[index], `event ${index}`, fields);
+}
+
 describe("talk handoff store", () => {
   it("creates an expiring managed-room handoff without storing the plaintext token", () => {
     vi.useFakeTimers();
@@ -29,7 +71,7 @@ describe("talk handoff store", () => {
     });
     const record = getTalkHandoff(handoff.id);
 
-    expect(handoff).toMatchObject({
+    const handoffRecord = expectFields(handoff, "created handoff", {
       roomId: `talk_${handoff.id}`,
       roomUrl: `/talk/rooms/talk_${handoff.id}`,
       sessionKey: "session:main",
@@ -44,16 +86,14 @@ describe("talk handoff store", () => {
       brain: "agent-consult",
       createdAt: Date.parse("2026-05-05T12:00:00.000Z"),
       expiresAt: Date.parse("2026-05-05T12:00:05.000Z"),
-      room: {
-        activeClientId: undefined,
-        recentTalkEvents: [
-          expect.objectContaining({
-            type: "session.started",
-            sessionId: `talk_${handoff.id}`,
-            transport: "managed-room",
-          }),
-        ],
-      },
+    });
+    const room = requireRecord(handoffRecord.room, "created handoff room");
+    expect(room.activeClientId).toBeUndefined();
+    const events = requireArray(room.recentTalkEvents, "recent talk events");
+    expectEventFields(events, 0, {
+      type: "session.started",
+      sessionId: `talk_${handoff.id}`,
+      transport: "managed-room",
     });
     expect(handoff).not.toHaveProperty("tokenHash");
     if (record === undefined) {
@@ -75,17 +115,18 @@ describe("talk handoff store", () => {
       ok: false,
       reason: "invalid_token",
     });
-    expect(joinTalkHandoff(handoff.id, handoff.token)).toMatchObject({
+    const join = joinTalkHandoff(handoff.id, handoff.token);
+    const joinRecord = expectFields(join, "join result", {
       ok: true,
-      events: [expect.objectContaining({ type: "session.ready" })],
-      record: expect.objectContaining({
-        id: handoff.id,
-        roomId: handoff.roomId,
-        sessionKey: "session:main",
-      }),
+    });
+    expectEventFields(requireEvents(joinRecord), 0, { type: "session.ready" });
+    expectFields(joinRecord.record, "joined record", {
+      id: handoff.id,
+      roomId: handoff.roomId,
+      sessionKey: "session:main",
     });
 
-    expect(revokeTalkHandoff(handoff.id)).toMatchObject({ revoked: true });
+    expectFields(revokeTalkHandoff(handoff.id), "revoke result", { revoked: true });
     expect(joinTalkHandoff(handoff.id, handoff.token)).toEqual({
       ok: false,
       reason: "not_found",
@@ -97,59 +138,53 @@ describe("talk handoff store", () => {
     const handoff = createTalkHandoff({ sessionKey: "session:main" });
 
     const firstJoin = joinTalkHandoff(handoff.id, handoff.token, { clientId: "conn-1" });
-    expect(firstJoin).toMatchObject({
+    expectFields(firstJoin, "first join", {
       ok: true,
-      events: [
-        expect.objectContaining({
-          type: "session.ready",
-          sessionId: handoff.roomId,
-          payload: expect.objectContaining({ clientId: "conn-1" }),
-        }),
-      ],
-      record: {
-        room: expect.objectContaining({
-          activeClientId: "conn-1",
-        }),
-      },
     });
+    const firstReady = expectEventFields(requireEvents(firstJoin, "first join"), 0, {
+      type: "session.ready",
+      sessionId: handoff.roomId,
+    });
+    expect(requireRecord(firstReady.payload, "first ready payload").clientId).toBe("conn-1");
+    expect(
+      requireRoom(requireRecord(firstJoin, "first join").record, "first join record")
+        .activeClientId,
+    ).toBe("conn-1");
 
     const secondJoin = joinTalkHandoff(handoff.id, handoff.token, { clientId: "conn-2" });
-    expect(secondJoin).toMatchObject({
+    expectFields(secondJoin, "second join", {
       ok: true,
-      events: [
-        expect.objectContaining({
-          type: "session.replaced",
-          sessionId: handoff.roomId,
-          payload: expect.objectContaining({
-            previousClientId: "conn-1",
-            nextClientId: "conn-2",
-          }),
-        }),
-        expect.objectContaining({
-          type: "session.ready",
-          sessionId: handoff.roomId,
-          payload: expect.objectContaining({ clientId: "conn-2" }),
-        }),
-      ],
-      record: {
-        room: expect.objectContaining({
-          activeClientId: "conn-2",
-        }),
-      },
     });
+    const secondEvents = requireEvents(secondJoin, "second join");
+    const replaced = expectEventFields(secondEvents, 0, {
+      type: "session.replaced",
+      sessionId: handoff.roomId,
+    });
+    expectFields(requireRecord(replaced.payload, "replaced payload"), "replaced payload", {
+      previousClientId: "conn-1",
+      nextClientId: "conn-2",
+    });
+    const ready = expectEventFields(secondEvents, 1, {
+      type: "session.ready",
+      sessionId: handoff.roomId,
+    });
+    expect(requireRecord(ready.payload, "ready payload").clientId).toBe("conn-2");
+    expect(
+      requireRoom(requireRecord(secondJoin, "second join").record, "second join record")
+        .activeClientId,
+    ).toBe("conn-2");
 
-    expect(revokeTalkHandoff(handoff.id)).toMatchObject({
+    const revoked = revokeTalkHandoff(handoff.id);
+    expectFields(revoked, "revoke result", {
       revoked: true,
       activeClientId: "conn-2",
-      events: [
-        expect.objectContaining({
-          type: "session.closed",
-          sessionId: handoff.roomId,
-          payload: expect.objectContaining({ reason: "revoked" }),
-          final: true,
-        }),
-      ],
     });
+    const closed = expectEventFields(requireEvents(revoked, "revoke result"), 0, {
+      type: "session.closed",
+      sessionId: handoff.roomId,
+      final: true,
+    });
+    expect(requireRecord(closed.payload, "closed payload").reason).toBe("revoked");
   });
 
   it("records managed-room turn start, end, and cancellation events", () => {
@@ -161,34 +196,36 @@ describe("talk handoff store", () => {
       clientId: "conn-1",
       turnId: "turn-1",
     });
-    expect(start).toMatchObject({
+    expectFields(start, "turn start", {
       ok: true,
       turnId: "turn-1",
-      events: [expect.objectContaining({ type: "turn.started", turnId: "turn-1" })],
-      record: {
-        room: expect.objectContaining({
-          activeClientId: "conn-1",
-          activeTurnId: "turn-1",
-        }),
-      },
     });
+    expectEventFields(requireEvents(start, "turn start"), 0, {
+      type: "turn.started",
+      turnId: "turn-1",
+    });
+    expectFields(
+      requireRoom(requireRecord(start, "turn start").record, "turn start record"),
+      "turn room",
+      {
+        activeClientId: "conn-1",
+        activeTurnId: "turn-1",
+      },
+    );
 
-    expect(endTalkHandoffTurn(handoff.id, handoff.token)).toMatchObject({
+    const ended = endTalkHandoffTurn(handoff.id, handoff.token);
+    expectFields(ended, "turn end", {
       ok: true,
       turnId: "turn-1",
-      events: [
-        expect.objectContaining({
-          type: "turn.ended",
-          turnId: "turn-1",
-          final: true,
-        }),
-      ],
-      record: {
-        room: expect.not.objectContaining({
-          activeTurnId: expect.any(String),
-        }),
-      },
     });
+    expectEventFields(requireEvents(ended, "turn end"), 0, {
+      type: "turn.ended",
+      turnId: "turn-1",
+      final: true,
+    });
+    expect(
+      requireRoom(requireRecord(ended, "turn end").record, "turn end record").activeTurnId,
+    ).toBeUndefined();
 
     expect(cancelTalkHandoffTurn(handoff.id, handoff.token)).toEqual({
       ok: false,
@@ -196,18 +233,17 @@ describe("talk handoff store", () => {
     });
 
     startTalkHandoffTurn(handoff.id, handoff.token, { turnId: "turn-2" });
-    expect(cancelTalkHandoffTurn(handoff.id, handoff.token, { reason: "barge-in" })).toMatchObject({
+    const cancelled = cancelTalkHandoffTurn(handoff.id, handoff.token, { reason: "barge-in" });
+    expectFields(cancelled, "turn cancellation", {
       ok: true,
       turnId: "turn-2",
-      events: [
-        expect.objectContaining({
-          type: "turn.cancelled",
-          turnId: "turn-2",
-          final: true,
-          payload: expect.objectContaining({ reason: "barge-in" }),
-        }),
-      ],
     });
+    const cancelledEvent = expectEventFields(requireEvents(cancelled, "turn cancellation"), 0, {
+      type: "turn.cancelled",
+      turnId: "turn-2",
+      final: true,
+    });
+    expect(requireRecord(cancelledEvent.payload, "cancelled payload").reason).toBe("barge-in");
   });
 
   it("rejects stale managed-room turn completion without clearing the active turn", () => {
@@ -229,7 +265,9 @@ describe("talk handoff store", () => {
     });
     expect(getTalkHandoff(handoff.id)?.room.talk.activeTurnId).toBe("turn-current");
 
-    expect(endTalkHandoffTurn(handoff.id, handoff.token, { turnId: "turn-current" })).toMatchObject(
+    expectFields(
+      endTalkHandoffTurn(handoff.id, handoff.token, { turnId: "turn-current" }),
+      "current turn end",
       {
         ok: true,
         turnId: "turn-current",
@@ -263,26 +301,28 @@ describe("talk handoff store", () => {
       ok: false,
       reason: "invalid_token",
     });
-    expect(joinTalkHandoff(first.id, first.token)).toMatchObject({
+    const firstJoin = joinTalkHandoff(first.id, first.token);
+    const firstJoinRecord = expectFields(firstJoin, "first join", {
       ok: true,
-      events: [expect.objectContaining({ type: "session.ready" })],
-      record: expect.objectContaining({
-        roomId: first.roomId,
-        sessionKey: "agent:main:first",
-        channel: "browser",
-        target: "host:local",
-        provider: "openai",
-      }),
     });
-    expect(joinTalkHandoff(second.id, second.token)).toMatchObject({
+    expectEventFields(requireEvents(firstJoin), 0, { type: "session.ready" });
+    expectFields(firstJoinRecord.record, "first joined record", {
+      roomId: first.roomId,
+      sessionKey: "agent:main:first",
+      channel: "browser",
+      target: "host:local",
+      provider: "openai",
+    });
+    const secondJoin = joinTalkHandoff(second.id, second.token);
+    const secondJoinRecord = expectFields(secondJoin, "second join", {
       ok: true,
-      events: [expect.objectContaining({ type: "session.ready" })],
-      record: expect.objectContaining({
-        roomId: second.roomId,
-        sessionKey: "agent:main:second",
-        channel: "browser",
-        target: "host:local",
-      }),
+    });
+    expectEventFields(requireEvents(secondJoin), 0, { type: "session.ready" });
+    expectFields(secondJoinRecord.record, "second joined record", {
+      roomId: second.roomId,
+      sessionKey: "agent:main:second",
+      channel: "browser",
+      target: "host:local",
     });
   });
 });

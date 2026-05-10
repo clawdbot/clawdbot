@@ -27,18 +27,22 @@ const ensureOllamaModelPulledMock = vi.hoisted(() => vi.fn(async () => {}));
 const buildOllamaProviderMock = vi.hoisted(() => vi.fn());
 const queryOllamaModelShowInfoMock = vi.hoisted(() => vi.fn());
 const buildOllamaModelDefinitionMock = vi.hoisted(() =>
-  vi.fn((modelId: string, contextWindow?: number, capabilities?: string[]) => ({
-    id: modelId,
-    name: modelId,
-    reasoning: capabilities?.includes("thinking") ?? false,
-    input: capabilities?.includes("vision") ? ["text", "image"] : ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: contextWindow ?? 8192,
-    maxTokens: 8192,
-    compat: capabilities
-      ? { supportsTools: capabilities.includes("tools"), supportsUsageInStreaming: true }
-      : { supportsUsageInStreaming: true },
-  })),
+  vi.fn((modelId: string, contextWindow?: number, capabilities?: string[]) => {
+    const normalized = modelId.trim().toLowerCase();
+    const isKnownCloudReasoningModel = /^deepseek-v4-(?:flash|pro):cloud$/.test(normalized);
+    return {
+      id: modelId,
+      name: modelId,
+      reasoning: isKnownCloudReasoningModel || (capabilities?.includes("thinking") ?? false),
+      input: capabilities?.includes("vision") ? ["text", "image"] : ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: contextWindow ?? 8192,
+      maxTokens: 8192,
+      compat: capabilities
+        ? { supportsTools: capabilities.includes("tools"), supportsUsageInStreaming: true }
+        : { supportsUsageInStreaming: true },
+    };
+  }),
 );
 const createConfiguredOllamaStreamFnMock = vi.hoisted(() =>
   vi.fn((_params: { model: unknown; providerBaseUrl?: string }) => ({}) as never),
@@ -468,7 +472,7 @@ describe("ollama plugin", () => {
     });
     queryOllamaModelShowInfoMock.mockResolvedValueOnce({
       contextWindow: 1048576,
-      capabilities: ["completion", "tools", "thinking"],
+      capabilities: ["completion", "tools"],
     });
 
     try {

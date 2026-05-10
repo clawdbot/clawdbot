@@ -563,11 +563,11 @@ describe("test-projects args", () => {
       },
     );
 
-    expect(specs[0]?.env).toMatchObject({
-      KEEP_ME: "1",
-      OPENCLAW_VITEST_FS_MODULE_CACHE_PATH:
-        "/repo/node_modules/.experimental-vitest-cache/0-test-vitest-vitest.gateway.config.ts",
-    });
+    const firstEnv = specs[0]?.env;
+    expect(firstEnv?.KEEP_ME).toBe("1");
+    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+      "/repo/node_modules/.experimental-vitest-cache/0-test-vitest-vitest.gateway.config.ts",
+    );
     expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
       "/repo/node_modules/.experimental-vitest-cache/1-test-vitest-vitest.gateway-server.config.ts",
     );

@@ -106,14 +106,13 @@ describe("video generation task status", () => {
     expect(buildVideoGenerationTaskStatusText(activeTask, { duplicateGuard: true })).toContain(
       "Do not call video_generate again for this request.",
     );
-    expect(buildVideoGenerationTaskStatusDetails(activeTask)).toMatchObject({
-      active: true,
-      existingTask: true,
-      status: "running",
-      taskKind: VIDEO_GENERATION_TASK_KIND,
-      provider: "openai",
-      progressSummary: "Generating video",
-    });
+    const details = buildVideoGenerationTaskStatusDetails(activeTask);
+    expect(details.active).toBe(true);
+    expect(details.existingTask).toBe(true);
+    expect(details.status).toBe("running");
+    expect(details.taskKind).toBe(VIDEO_GENERATION_TASK_KIND);
+    expect(details.provider).toBe("openai");
+    expect(details.progressSummary).toBe("Generating video");
   });
 
   it("builds prompt context for active session work", () => {

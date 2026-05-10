@@ -33,7 +33,7 @@ import type {
   ToolCallLocation,
   ToolKind,
 } from "@agentclientprotocol/sdk";
-import { listThinkingLevels } from "../auto-reply/thinking.js";
+import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
 import type { GatewaySessionRow, SessionsListResult } from "../gateway/session-utils.js";
@@ -358,7 +358,7 @@ function buildSessionPresentation(params: {
     ...params.overrides,
   };
   const availableLevelIds: string[] = row.thinkingLevels?.map((level) => level.id) ?? [
-    ...listThinkingLevels(row.modelProvider, row.model),
+    ...BASE_THINKING_LEVELS,
   ];
   const currentModeId = normalizeOptionalString(row.thinkingLevel) || "adaptive";
   if (!availableLevelIds.includes(currentModeId)) {

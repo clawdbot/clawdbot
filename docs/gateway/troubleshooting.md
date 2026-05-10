@@ -62,6 +62,53 @@ openclaw config get meta.lastTouchedVersion
 For intentional downgrade or emergency recovery only, set `OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1` for the single command. Leave it unset for normal operation.
 </Warning>
 
+## Skill symlink skipped as path escape
+
+Use this when logs include:
+
+```text
+Skipping escaped skill path outside its configured root: ... reason=symlink-escape
+```
+
+OpenClaw treats every skill root as a containment boundary. A symlink under
+`~/.agents/skills`, `<workspace>/.agents/skills`, `<workspace>/skills`, or
+`~/.openclaw/skills` is skipped when its real target resolves outside that root
+unless the target is explicitly trusted.
+
+Inspect the link:
+
+```bash
+ls -l ~/.agents/skills/<name>
+realpath ~/.agents/skills/<name>
+openclaw config get skills.load
+```
+
+If the target is intentional, configure both the direct skill root and the
+allowed symlink target:
+
+```json5
+{
+  skills: {
+    load: {
+      extraDirs: ["~/Projects/manager/skills"],
+      allowSymlinkTargets: ["~/Projects/manager/skills"],
+    },
+  },
+}
+```
+
+Then start a new session or wait for the skills watcher to refresh. Restart the
+gateway if the running process predates the config change.
+
+Do not use broad targets such as `~`, `/`, or a whole synced project folder.
+Keep `allowSymlinkTargets` scoped to the real skill root that contains trusted
+`SKILL.md` directories.
+
+Related:
+
+- [Skills config](/tools/skills-config#symlinked-sibling-repos)
+- [Configuration examples](/gateway/configuration-examples#symlinked-sibling-skill-repo)
+
 ## Anthropic 429 extra usage required for long context
 
 Use this when logs/errors include: `HTTP 429: rate_limit_error: Extra usage is required for long context requests`.

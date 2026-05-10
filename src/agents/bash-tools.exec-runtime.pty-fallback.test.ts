@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  type DiagnosticExecProcessCompletedEvent,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import type { ManagedRun, SpawnInput } from "../process/supervisor/index.js";
@@ -91,11 +92,10 @@ test("exec falls back when PTY spawn fails", async () => {
   expect(outcome.status).toBe("completed");
   expect(outcome.aggregated).toContain("ok");
   expect(warnings.join("\n")).toContain("PTY spawn failed");
-  expect(supervisorSpawnMock).toHaveBeenNthCalledWith(1, expect.objectContaining({ mode: "pty" }));
-  expect(supervisorSpawnMock).toHaveBeenNthCalledWith(
-    2,
-    expect.objectContaining({ mode: "child" }),
-  );
+  const firstSpawnInput = supervisorSpawnMock.mock.calls[0]?.[0] as SpawnInput | undefined;
+  const secondSpawnInput = supervisorSpawnMock.mock.calls[1]?.[0] as SpawnInput | undefined;
+  expect(firstSpawnInput?.mode).toBe("pty");
+  expect(secondSpawnInput?.mode).toBe("child");
 });
 
 test("exec cleans session state when PTY fallback spawn also fails", async () => {
@@ -138,17 +138,18 @@ test("exec emits bounded process diagnostics without command text", async () => 
     await handle.promise;
     await flushDiagnosticEvents();
 
-    const event = events.find((item) => item.type === "exec.process.completed");
-    expect(event).toMatchObject({
-      type: "exec.process.completed",
-      target: "host",
-      mode: "child",
-      outcome: "completed",
-      durationMs: expect.any(Number),
-      commandLength: command.length,
-      exitCode: 0,
-      sessionKey: "session-1",
-    });
+    const event = events.find(
+      (item): item is DiagnosticExecProcessCompletedEvent => item.type === "exec.process.completed",
+    );
+    expect(event).toBeDefined();
+    expect(event?.type).toBe("exec.process.completed");
+    expect(event?.target).toBe("host");
+    expect(event?.mode).toBe("child");
+    expect(event?.outcome).toBe("completed");
+    expect(typeof event?.durationMs).toBe("number");
+    expect(event?.commandLength).toBe(command.length);
+    expect(event?.exitCode).toBe(0);
+    expect(event?.sessionKey).toBe("session-1");
     const serialized = JSON.stringify(event);
     expect(serialized).not.toContain("printf");
     expect(serialized).not.toContain("super-secret-value");

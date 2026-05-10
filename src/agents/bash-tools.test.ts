@@ -768,13 +768,11 @@ describe("exec notifyOnExit", () => {
     );
     const formatted = await drainNotifyEvents();
 
-    expect(finished).toMatchObject({
-      id: sessionId,
-      status: PROCESS_STATUS_COMPLETED,
-      exitCode: 0,
-    });
+    expect(finished?.id).toBe(sessionId);
+    expect(finished?.status).toBe(PROCESS_STATUS_COMPLETED);
+    expect(finished?.exitCode).toBe(0);
     expect(hasEvent).toBe(true);
-    expect(queuedEvent).toMatchObject({ trusted: false });
+    expect(queuedEvent?.trusted).toBe(false);
     expect(formatted).toBeUndefined();
   });
 
@@ -794,14 +792,10 @@ describe("exec notifyOnExit", () => {
       event.text.includes(sessionId.slice(0, 8)),
     );
 
-    expect(queuedEvent).toMatchObject({
-      trusted: false,
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:-1003774691294:topic:47",
-        threadId: "47",
-      },
-    });
+    expect(queuedEvent?.trusted).toBe(false);
+    expect(queuedEvent?.deliveryContext?.channel).toBe("telegram");
+    expect(queuedEvent?.deliveryContext?.to).toBe("telegram:-1003774691294:topic:47");
+    expect(queuedEvent?.deliveryContext?.threadId).toBe("47");
   });
 
   it("scopes notifyOnExit heartbeat wake to the exec session key", async () => {

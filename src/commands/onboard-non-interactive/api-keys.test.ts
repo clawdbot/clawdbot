@@ -190,10 +190,8 @@ describe("resolveNonInteractiveApiKey", () => {
     });
 
     expect(result).toEqual({ key: "custom-profile-key", source: "profile" });
-    expect(resolveApiKeyForProfile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        profileId: "custom-models-custom-local:default",
-      }),
-    );
+    expect(resolveApiKeyForProfile).toHaveBeenCalledOnce();
+    const [profileParams] = resolveApiKeyForProfile.mock.calls[0] ?? [];
+    expect(profileParams?.profileId).toBe("custom-models-custom-local:default");
   });
 });

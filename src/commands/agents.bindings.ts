@@ -3,6 +3,7 @@ import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { normalizeChannelId as normalizeBundledChannelId } from "../channels/registry.js";
+import { formatUnknownChannelMessage } from "../cli/error-format.js";
 import { isRouteBinding, listRouteBindings } from "../config/bindings.js";
 import type { AgentRouteBinding } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -313,12 +314,14 @@ export function parseBindingSpecs(params: {
     const [channelRaw, accountRaw] = trimmed.split(":", 2);
     const channel = normalizeBindingChannelId(channelRaw, params.config);
     if (!channel) {
-      errors.push(`Unknown channel "${channelRaw}".`);
+      errors.push(formatUnknownChannelMessage({ channel: channelRaw }));
       continue;
     }
     let accountId: string | undefined = accountRaw?.trim();
     if (accountRaw !== undefined && !accountId) {
-      errors.push(`Invalid binding "${trimmed}" (empty account id).`);
+      errors.push(
+        `Invalid binding "${trimmed}". Account id is empty. Use <channel>:<account>, for example telegram:default.`,
+      );
       continue;
     }
     accountId = resolveBindingAccountId({

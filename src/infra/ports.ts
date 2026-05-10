@@ -91,5 +91,7 @@ export {
   classifyPortListener,
   formatPortDiagnostics,
   isDualStackLoopbackGatewayListeners,
+  isExpectedGatewayListeners,
+  isSingleExpectedGatewayListener,
 } from "./ports-format.js";
 export { inspectPortUsage } from "./ports-inspect.js";

@@ -48,11 +48,16 @@ describe("tool schema runtime diagnostics", () => {
     expect(mocks.log.warn).toHaveBeenCalledTimes(1);
     expect(mocks.log.warn).toHaveBeenCalledWith(
       "provider tool schema diagnostics: 2 tools for example: alpha (2 violations), beta (1 violation)",
-      expect.objectContaining({
+      {
         provider: "example",
+        toolCount: 2,
         diagnosticCount: 2,
         tools: ["0:alpha", "1:beta"],
-      }),
+        diagnostics: [
+          { index: 0, tool: "alpha", violations: ["one", "two"], violationCount: 2 },
+          { index: 1, tool: "beta", violations: ["one"], violationCount: 1 },
+        ],
+      },
     );
   });
 });

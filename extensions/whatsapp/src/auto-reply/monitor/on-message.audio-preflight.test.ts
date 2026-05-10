@@ -316,6 +316,48 @@ describe("createWebOnMessageHandler audio preflight", () => {
     );
   });
 
+  it("passes routing ctx fields to transcribeFirstAudio so echoTranscript can deliver (#79778)", async () => {
+    let capturedCtx: unknown;
+    transcribeFirstAudioMock.mockImplementation(async ({ ctx }: { ctx: unknown }) => {
+      capturedCtx = ctx;
+      return "transcribed voice note";
+    });
+    const handler = createWebOnMessageHandler({
+      cfg: {
+        channels: {
+          whatsapp: {
+            ackReaction: { enabled: true },
+          },
+        },
+      } as never,
+      verbose: false,
+      connectionId: "conn-1",
+      maxMediaBytes: 1024 * 1024,
+      groupHistoryLimit: 20,
+      groupHistories: new Map(),
+      groupMemberNames: new Map(),
+      echoTracker: makeEchoTracker() as never,
+      backgroundTasks: new Set(),
+      replyResolver: vi.fn() as never,
+      replyLogger: {
+        info: () => {},
+        warn: () => {},
+        debug: () => {},
+        error: () => {},
+      } as never,
+      baseMentionConfig: {} as never,
+      account: { authDir: "/tmp/auth", accountId: "default" },
+    });
+
+    await handler(makeAudioMsg());
+
+    expect(capturedCtx).toMatchObject({
+      Provider: "whatsapp",
+      OriginatingTo: "+15550000002",
+      From: "+15550000002",
+    });
+  });
+
   it("does not transcribe group voice when policy gating rejects before mention", async () => {
     applyGroupGatingMock.mockResolvedValueOnce({ shouldProcess: false });
     const handler = createWebOnMessageHandler({

@@ -10,6 +10,20 @@ OpenClaw builds a custom system prompt for every agent run. The prompt is **Open
 
 The prompt is assembled by OpenClaw and injected into each agent run.
 
+Prompt assembly has three layers:
+
+- `buildAgentSystemPrompt` renders the prompt from explicit inputs. It should
+  stay a pure renderer and should not read global config directly.
+- `resolveAgentSystemPromptConfig` resolves config-backed prompt knobs such as
+  owner display, TTS hints, model aliases, memory citation mode, and sub-agent
+  delegation mode for a specific agent.
+- Runtime adapters (embedded, CLI, command/export previews, compaction) gather
+  live facts such as tools, sandbox state, channel capabilities, context files,
+  and provider prompt contributions, then call the configured prompt facade.
+
+This keeps exported/debug prompt surfaces aligned with live runs without
+turning every runtime-specific detail into one monolithic builder.
+
 Provider plugins can contribute cache-aware prompt guidance without replacing
 the full OpenClaw-owned prompt. The provider runtime can:
 
@@ -76,6 +90,13 @@ The Tooling section also includes runtime guidance for long-running work:
   push-based and auto-announces back to the requester
 - do not poll `subagents list` / `sessions_list` in a loop just to wait for
   completion
+
+`agents.defaults.subagents.delegationMode` can strengthen this guidance. The
+default `suggest` mode keeps the baseline nudge. `prefer` adds a dedicated
+**Sub-Agent Delegation** section telling the main agent to act as a responsive
+coordinator and push anything more involved than a direct reply through
+`sessions_spawn`. This is prompt-only; tool policy still controls whether
+`sessions_spawn` is available.
 
 When the experimental `update_plan` tool is enabled, Tooling also tells the
 model to use it only for non-trivial multi-step work, keep exactly one
@@ -158,8 +179,11 @@ All of these files are **injected into the context window** on every turn unless
 a file-specific gate applies. `HEARTBEAT.md` is omitted on normal runs when
 heartbeats are disabled for the default agent or
 `agents.defaults.heartbeat.includeSystemPromptSection` is false. Keep injected
-files concise — especially `MEMORY.md`, which can grow over time and lead to
-unexpectedly high context usage and more frequent compaction.
+files concise, especially `MEMORY.md`. `MEMORY.md` is intended to stay a
+curated long-term summary; detailed daily notes belong in `memory/*.md` where
+`memory_search` and `memory_get` can retrieve them on demand. Oversized
+`MEMORY.md` files increase prompt usage and can be partially injected because of
+the bootstrap file limits below.
 
 When a session runs on the native Codex harness, Codex loads `AGENTS.md`
 through its own project-doc discovery. OpenClaw still resolves the remaining
@@ -180,6 +204,12 @@ occurs, OpenClaw can inject a concise system-prompt warning notice; control this
 `agents.defaults.bootstrapPromptTruncationWarning` (`off`, `once`, `always`;
 default: `once`). Detailed raw/injected counts stay in diagnostics such as
 `/context`, `/status`, doctor, and logs.
+
+For memory files, truncation is not data loss: the file remains intact on disk,
+but the model only sees the shortened injected copy until it reads or searches
+memory directly. If `MEMORY.md` is repeatedly truncated, distill it into a
+shorter durable summary and move detailed history into `memory/*.md`, or
+intentionally raise the bootstrap limits.
 
 Sub-agent sessions only inject `AGENTS.md` and `TOOLS.md` (other bootstrap files
 are filtered out to keep the sub-agent context small).

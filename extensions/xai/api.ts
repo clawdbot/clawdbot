@@ -3,10 +3,7 @@ import {
   normalizeNativeXaiModelId,
   normalizeProviderId,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  applyXaiModelCompat,
-  resolveXaiModelCompatPatch,
-} from "openclaw/plugin-sdk/provider-tools";
+import { resolveXaiModelCompatPatch as resolveXaiModelCompatPatchBase } from "openclaw/plugin-sdk/provider-tools";
 import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
 
 export { buildXaiProvider } from "./provider-catalog.js";
@@ -30,8 +27,8 @@ export {
   applyXaiModelCompat,
   HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
   XAI_TOOL_SCHEMA_PROFILE,
-  resolveXaiModelCompatPatch,
 } from "openclaw/plugin-sdk/provider-tools";
+export const resolveXaiModelCompatPatch = resolveXaiModelCompatPatchBase;
 
 const XAI_NATIVE_ENDPOINT_HOSTS = new Set(["api.x.ai", "api.grok.x.ai"]);
 

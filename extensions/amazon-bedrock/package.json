@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/amazon-bedrock-provider",
-  "version": "2026.5.8",
+  "version": "2026.5.10-beta.1",
   "private": true,
   "description": "OpenClaw Amazon Bedrock provider plugin",
   "type": "module",
   "dependencies": {
-    "@aws-sdk/client-bedrock": "3.1042.0",
-    "@aws-sdk/client-bedrock-runtime": "3.1042.0",
+    "@aws-sdk/client-bedrock": "3.1045.0",
+    "@aws-sdk/client-bedrock-runtime": "3.1045.0",
     "@aws-sdk/credential-provider-node": "3.972.39",
     "@smithy/shared-ini-file-loader": "4.4.9"
   },

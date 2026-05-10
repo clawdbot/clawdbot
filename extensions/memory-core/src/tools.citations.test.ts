@@ -4,6 +4,7 @@ import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
 } from "openclaw/plugin-sdk/memory-host-core";
+import { readMemoryHostEvents } from "openclaw/plugin-sdk/memory-host-events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getMemorySearchManagerMockCalls,
@@ -259,6 +260,15 @@ describe("memory tools", () => {
       expect(entries[0]).toMatchObject({
         path: "memory/2026-04-03.md",
         recallCount: 1,
+      });
+      const events = await waitFor(async () => {
+        const memoryEvents = await readMemoryHostEvents({ workspaceDir });
+        expect(memoryEvents).toHaveLength(1);
+        return memoryEvents;
+      });
+      expect(events[0]).toMatchObject({
+        type: "memory.recall.recorded",
+        query: "glacier backup",
       });
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });

@@ -100,13 +100,18 @@ describe("check-extension-package-tsc-boundary", () => {
       thrownError = error;
     }
 
-    expect(thrownError).toMatchObject({
-      message: expect.stringContaining("kind: lock-contention"),
-      fullOutput: expect.stringContaining(
-        "another extension package boundary check is already running",
-      ),
-      kind: "lock-contention",
-    });
+    expect(thrownError).toBeInstanceOf(Error);
+    if (!(thrownError instanceof Error)) {
+      throw new Error("expected boundary lock contention to throw an Error");
+    }
+    expect(thrownError.message).toContain("kind: lock-contention");
+    expect(thrownError.message).toContain(
+      "another extension package boundary check is already running",
+    );
+    expect((thrownError as { fullOutput?: unknown }).fullOutput).toContain(
+      "another extension package boundary check is already running",
+    );
+    expect((thrownError as { kind?: unknown }).kind).toBe("lock-contention");
 
     release();
 
@@ -319,12 +324,23 @@ describe("check-extension-package-tsc-boundary", () => {
       (error: unknown) => error,
     );
 
-    expect(failure).toMatchObject({
-      message: expect.stringContaining("[... 6 earlier lines omitted ...]"),
-      fullOutput: expect.stringContaining("src/plugins/contracts/rootdir-boundary-canary.ts"),
-      kind: "nonzero-exit",
-    });
-    const elapsedMs = (failure as { elapsedMs?: unknown }).elapsedMs;
+    expect(failure).toBeInstanceOf(Error);
+    if (!(failure instanceof Error)) {
+      throw new Error("expected failed canary step to reject with an Error");
+    }
+    expect(failure.message).toContain("[... 6 earlier lines omitted ...]");
+    const failureMetadata = failure as {
+      elapsedMs?: unknown;
+      fullOutput?: unknown;
+      kind?: unknown;
+      status?: unknown;
+    };
+    expect(failureMetadata.fullOutput).toContain(
+      "src/plugins/contracts/rootdir-boundary-canary.ts",
+    );
+    expect(failureMetadata.kind).toBe("nonzero-exit");
+    expect(failureMetadata.status).toBeUndefined();
+    const elapsedMs = failureMetadata.elapsedMs;
     expect(typeof elapsedMs).toBe("number");
     if (typeof elapsedMs !== "number") {
       throw new Error("expected failure elapsedMs to be a number");

@@ -10,10 +10,6 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/system-event-runtime.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
 }));
-vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
-  readStoreAllowFromForDmPolicy: async () => [],
-}));
-
 type SlackChannelHandler = (args: {
   event: Record<string, unknown>;
   body: unknown;

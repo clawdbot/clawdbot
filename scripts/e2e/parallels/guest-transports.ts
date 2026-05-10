@@ -263,12 +263,16 @@ export class LinuxGuest {
   ) {}
 
   exec(args: string[], options: GuestExecOptions = {}): string {
-    const result = run("prlctl", ["exec", this.vmName, "/usr/bin/env", "HOME=/root", ...args], {
-      check: false,
-      input: options.input,
-      quiet: true,
-      timeoutMs: this.phases.remainingTimeoutMs(options.timeoutMs),
-    });
+    const result = run(
+      "prlctl",
+      ["exec", this.vmName, "/usr/bin/env", "HOME=/root", "OPENCLAW_ALLOW_ROOT=1", ...args],
+      {
+        check: false,
+        input: options.input,
+        quiet: true,
+        timeoutMs: this.phases.remainingTimeoutMs(options.timeoutMs),
+      },
+    );
     this.phases.append(result.stdout);
     this.phases.append(result.stderr);
     throwIfFailed("Linux guest command", result, options.check);
@@ -279,7 +283,16 @@ export class LinuxGuest {
     const scriptPath = `/tmp/openclaw-parallels-${process.pid}-${Date.now()}.sh`;
     const write = run(
       "prlctl",
-      ["exec", this.vmName, "/usr/bin/env", "HOME=/root", "dd", `of=${scriptPath}`, "bs=1048576"],
+      [
+        "exec",
+        this.vmName,
+        "/usr/bin/env",
+        "HOME=/root",
+        "OPENCLAW_ALLOW_ROOT=1",
+        "dd",
+        `of=${scriptPath}`,
+        "bs=1048576",
+      ],
       {
         input: `umask 022\n${script}`,
         quiet: true,

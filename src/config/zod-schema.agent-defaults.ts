@@ -259,6 +259,7 @@ export const AgentDefaultsSchema = z
     maxConcurrent: z.number().int().positive().optional(),
     subagents: z
       .object({
+        delegationMode: z.enum(["suggest", "prefer"]).optional(),
         allowAgents: z.array(z.string()).optional(),
         maxConcurrent: z.number().int().positive().optional(),
         maxSpawnDepth: z

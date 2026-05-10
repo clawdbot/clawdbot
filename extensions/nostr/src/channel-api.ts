@@ -9,7 +9,3 @@ export {
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-export {
-  createPreCryptoDirectDmAuthorizer,
-  resolveInboundDirectDmAccessWithRuntime,
-} from "openclaw/plugin-sdk/direct-dm-access";

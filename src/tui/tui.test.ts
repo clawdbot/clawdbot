@@ -71,9 +71,9 @@ describe("tui slash commands", () => {
 
   it("includes gateway text commands", () => {
     const commands = getSlashCommands({});
-    expect(commands.map((command) => command.name)).toEqual(
-      expect.arrayContaining(["context", "commands"]),
-    );
+    const names = commands.map((command) => command.name);
+    expect(names).toContain("context");
+    expect(names).toContain("commands");
   });
 
   it("includes /auth in local embedded mode", () => {

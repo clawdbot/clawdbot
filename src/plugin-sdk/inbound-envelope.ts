@@ -4,7 +4,7 @@ type RouteLike = {
 };
 
 type RoutePeerLike = {
-  kind: string;
+  kind: "direct" | "group" | "channel";
   id: string | number;
 };
 

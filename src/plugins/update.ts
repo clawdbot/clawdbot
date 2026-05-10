@@ -469,6 +469,11 @@ function resolveNpmSpecPackageName(spec: string | undefined): string | undefined
   return spec ? parseRegistryNpmSpec(spec)?.name : undefined;
 }
 
+function resolveExactNpmSpecVersion(spec: string | undefined): string | undefined {
+  const parsed = spec ? parseRegistryNpmSpec(spec) : null;
+  return parsed?.selectorKind === "exact-version" ? parsed.selector : undefined;
+}
+
 function resolveClawHubSpecPackageName(spec: string | undefined): string | undefined {
   return spec ? parseClawHubPluginSpec(spec)?.name : undefined;
 }
@@ -1236,7 +1241,11 @@ export async function updateNpmInstalledPlugins(params: {
         continue;
       }
 
-      const nextVersion = probe.version ?? "unknown";
+      const probeSpec = usedNpmFallback ? npmSpecs?.fallbackSpec : effectiveSpec;
+      const resolvedProbeVersion =
+        probe.version ??
+        (record.source === "npm" ? resolveExactNpmSpecVersion(probeSpec) : undefined);
+      const nextVersion = resolvedProbeVersion ?? "unknown";
       const currentLabel = currentVersion ?? "unknown";
       const gitProbe =
         record.source === "git"
@@ -1246,13 +1255,15 @@ export async function updateNpmInstalledPlugins(params: {
       const unchanged =
         record.source === "git" && record.gitCommit && gitProbe?.commit
           ? record.gitCommit === gitProbe.commit
-          : Boolean(currentVersion && probe.version && currentVersion === probe.version);
+          : Boolean(
+              currentVersion && resolvedProbeVersion && currentVersion === resolvedProbeVersion,
+            );
       if (unchanged) {
         outcomes.push({
           pluginId,
           status: "unchanged",
           currentVersion: currentVersion ?? undefined,
-          nextVersion: probe.version ?? undefined,
+          nextVersion: resolvedProbeVersion,
           message: `${pluginId} is up to date (${currentLabel}).`,
         });
       } else {
@@ -1260,7 +1271,7 @@ export async function updateNpmInstalledPlugins(params: {
           pluginId,
           status: "updated",
           currentVersion: currentVersion ?? undefined,
-          nextVersion: probe.version ?? undefined,
+          nextVersion: resolvedProbeVersion,
           message: `Would update ${pluginId}: ${currentLabel} -> ${nextVersion}.`,
         });
       }

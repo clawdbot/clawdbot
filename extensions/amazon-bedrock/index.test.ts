@@ -6,6 +6,7 @@ import {
   buildPluginApi,
   registerSingleProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setAwsSharedIniFileLoaderForTest } from "./aws-credential-refresh.js";
 import { resetBedrockDiscoveryCacheForTest } from "./discovery.js";
@@ -338,28 +339,38 @@ describe("amazon-bedrock provider plugin", () => {
   });
 
   it("refreshes AWS shared config cache before Bedrock sends", async () => {
-    const order: string[] = [];
-    refreshSharedConfigCache.mockImplementationOnce(async () => {
-      order.push("refresh");
-    });
-    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
-    const wrapped = provider.wrapStreamFn?.({
-      provider: "amazon-bedrock",
-      modelId: ANTHROPIC_MODEL,
-      streamFn: spyStreamFn,
-    } as never);
-    const result = wrapped?.(ANTHROPIC_MODEL_DESCRIPTOR, { messages: [] } as never, {
-      onPayload: () => {
-        order.push("original");
+    await withEnvAsync(
+      {
+        AWS_ACCESS_KEY_ID: undefined,
+        AWS_SECRET_ACCESS_KEY: undefined,
+        AWS_BEARER_TOKEN_BEDROCK: undefined,
+        AWS_BEDROCK_SKIP_AUTH: undefined,
       },
-    }) as Record<string, unknown> | undefined;
+      async () => {
+        const order: string[] = [];
+        refreshSharedConfigCache.mockImplementationOnce(async () => {
+          order.push("refresh");
+        });
+        const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+        const wrapped = provider.wrapStreamFn?.({
+          provider: "amazon-bedrock",
+          modelId: ANTHROPIC_MODEL,
+          streamFn: spyStreamFn,
+        } as never);
+        const result = wrapped?.(ANTHROPIC_MODEL_DESCRIPTOR, { messages: [] } as never, {
+          onPayload: () => {
+            order.push("original");
+          },
+        }) as Record<string, unknown> | undefined;
 
-    await (
-      result?.onPayload as ((p: Record<string, unknown>, model: unknown) => unknown) | undefined
-    )?.({}, ANTHROPIC_MODEL_DESCRIPTOR);
+        await (
+          result?.onPayload as ((p: Record<string, unknown>, model: unknown) => unknown) | undefined
+        )?.({}, ANTHROPIC_MODEL_DESCRIPTOR);
 
-    expect(refreshSharedConfigCache).toHaveBeenCalledWith({ ignoreCache: true });
-    expect(order).toEqual(["refresh", "original"]);
+        expect(refreshSharedConfigCache).toHaveBeenCalledWith({ ignoreCache: true });
+        expect(order).toEqual(["refresh", "original"]);
+      },
+    );
   });
 
   it("omits temperature for Bedrock Opus 4.7 model ids", async () => {

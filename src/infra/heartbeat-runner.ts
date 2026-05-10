@@ -106,12 +106,7 @@ import {
   resolveNextHeartbeatDueMs,
   seekNextActivePhaseDueMs,
 } from "./heartbeat-schedule.js";
-import {
-  isHeartbeatEnabledForAgent,
-  resolveHeartbeatIntervalMs,
-  resolveHeartbeatSummaryForAgent,
-  type HeartbeatSummary,
-} from "./heartbeat-summary.js";
+import { isHeartbeatEnabledForAgent, resolveHeartbeatIntervalMs } from "./heartbeat-summary.js";
 import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {

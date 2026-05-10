@@ -123,6 +123,51 @@ describe("Feishu Card Action Handler", () => {
     resetProcessedFeishuCardActionTokensForTests();
   });
 
+  function mockCallArg(
+    mock: { mock: { calls: unknown[][] } },
+    index: number,
+    label: string,
+  ): unknown {
+    const call = mock.mock.calls[index];
+    if (!call) {
+      throw new Error(`Expected ${label} call ${index + 1}`);
+    }
+    return call[0];
+  }
+
+  function requireRecord(value: unknown, label: string): Record<string, unknown> {
+    if (!value || typeof value !== "object") {
+      throw new Error(`Expected ${label}`);
+    }
+    return value as Record<string, unknown>;
+  }
+
+  function handleMessageEvent(callIndex = 0) {
+    const arg = requireRecord(
+      mockCallArg(vi.mocked(handleFeishuMessage), callIndex, "handleFeishuMessage"),
+      "handleFeishuMessage args",
+    );
+    return requireRecord(arg.event, "Feishu message event");
+  }
+
+  function handleMessage(callIndex = 0) {
+    return requireRecord(handleMessageEvent(callIndex).message, "Feishu message");
+  }
+
+  function sendMessageCall(callIndex = 0) {
+    return requireRecord(
+      mockCallArg(sendMessageFeishuMock, callIndex, "sendMessageFeishu"),
+      "sendMessageFeishu args",
+    );
+  }
+
+  function sendCardCall(callIndex = 0) {
+    return requireRecord(
+      mockCallArg(sendCardFeishuMock, callIndex, "sendCardFeishu"),
+      "sendCardFeishu args",
+    );
+  }
+
   it("handles card action with text payload", async () => {
     const event: FeishuCardActionEvent = {
       operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
@@ -133,16 +178,9 @@ describe("Feishu Card Action Handler", () => {
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(handleFeishuMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({
-          message: expect.objectContaining({
-            content: '{"text":"/ping"}',
-            chat_id: "chat1",
-          }),
-        }),
-      }),
-    );
+    const message = handleMessage();
+    expect(message.content).toBe('{"text":"/ping"}');
+    expect(message.chat_id).toBe("chat1");
   });
 
   it("handles card action with JSON object payload", async () => {
@@ -155,16 +193,9 @@ describe("Feishu Card Action Handler", () => {
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(handleFeishuMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({
-          message: expect.objectContaining({
-            content: '{"text":"{\\"key\\":\\"val\\"}"}',
-            chat_id: "u123", // Fallback to open_id
-          }),
-        }),
-      }),
-    );
+    const message = handleMessage();
+    expect(message.content).toBe('{"text":"{\\"key\\":\\"val\\"}"}');
+    expect(message.chat_id).toBe("u123"); // Fallback to open_id
   });
 
   it("routes quick command actions with operator and conversation context", async () => {
@@ -176,23 +207,15 @@ describe("Feishu Card Action Handler", () => {
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(handleFeishuMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({
-          sender: expect.objectContaining({
-            sender_id: expect.objectContaining({
-              open_id: "u123",
-              user_id: "uid1",
-              union_id: "un1",
-            }),
-          }),
-          message: expect.objectContaining({
-            chat_id: "chat1",
-            content: '{"text":"/help"}',
-          }),
-        }),
-      }),
-    );
+    const eventArg = handleMessageEvent();
+    const sender = requireRecord(eventArg.sender, "Feishu sender");
+    const senderId = requireRecord(sender.sender_id, "Feishu sender id");
+    expect(senderId.open_id).toBe("u123");
+    expect(senderId.user_id).toBe("uid1");
+    expect(senderId.union_id).toBe("un1");
+    const message = requireRecord(eventArg.message, "Feishu message");
+    expect(message.chat_id).toBe("chat1");
+    expect(message.content).toBe('{"text":"/help"}');
   });
 
   it("opens an approval card for metadata actions", async () => {
@@ -222,39 +245,27 @@ describe("Feishu Card Action Handler", () => {
 
     await handleFeishuCardAction({ cfg, event, runtime, accountId: "main" });
 
-    expect(sendCardFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "chat:chat1",
-        accountId: "main",
-        card: expect.objectContaining({
-          config: expect.objectContaining({
-            width_mode: "fill",
-          }),
-          header: expect.objectContaining({
-            title: expect.objectContaining({ content: "Confirm action" }),
-          }),
-          body: expect.objectContaining({
-            elements: expect.arrayContaining([
-              expect.objectContaining({
-                tag: "action",
-                actions: expect.arrayContaining([
-                  expect.objectContaining({
-                    value: expect.objectContaining({
-                      c: expect.objectContaining({
-                        u: "u123",
-                        h: "chat1",
-                        t: "group",
-                        s: "agent:codex:feishu:chat:chat1",
-                      }),
-                    }),
-                  }),
-                ]),
-              }),
-            ]),
-          }),
-        }),
-      }),
-    );
+    const cardCall = sendCardCall();
+    expect(cardCall.to).toBe("chat:chat1");
+    expect(cardCall.accountId).toBe("main");
+    const card = requireRecord(cardCall.card, "Feishu card");
+    expect(requireRecord(card.config, "Feishu card config").width_mode).toBe("fill");
+    const header = requireRecord(card.header, "Feishu card header");
+    expect(requireRecord(header.title, "Feishu card title").content).toBe("Confirm action");
+    const body = requireRecord(card.body, "Feishu card body");
+    const elements = body.elements as Array<Record<string, unknown>>;
+    const actionElement = elements.find((element) => element.tag === "action");
+    if (!actionElement) {
+      throw new Error("Expected action element");
+    }
+    const actions = actionElement.actions as Array<Record<string, unknown>>;
+    const actionValue = requireRecord(actions[0]?.value, "Feishu approval action value");
+    const approvalContext = requireRecord(actionValue.c, "Feishu approval context");
+    expect(approvalContext.u).toBe("u123");
+    expect(approvalContext.h).toBe("chat1");
+    expect(approvalContext.t).toBe("group");
+    expect(approvalContext.s).toBe("agent:codex:feishu:chat:chat1");
+    expect(typeof approvalContext.e).toBe("number");
     expectFirstSentCardUsesFillWidthOnly(sendCardFeishuMock);
     expect(handleFeishuMessage).not.toHaveBeenCalled();
   });
@@ -268,15 +279,7 @@ describe("Feishu Card Action Handler", () => {
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(handleFeishuMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({
-          message: expect.objectContaining({
-            content: '{"text":"/new"}',
-          }),
-        }),
-      }),
-    );
+    expect(handleMessage().content).toBe('{"text":"/new"}');
   });
 
   it("safely rejects stale structured actions", async () => {
@@ -292,12 +295,9 @@ describe("Feishu Card Action Handler", () => {
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "chat:chat1",
-        text: expect.stringContaining("expired"),
-      }),
-    );
+    const sendMessage = sendMessageCall();
+    expect(sendMessage.to).toBe("chat:chat1");
+    expect(String(sendMessage.text)).toContain("expired");
     expect(handleFeishuMessage).not.toHaveBeenCalled();
   });
 
@@ -312,11 +312,7 @@ describe("Feishu Card Action Handler", () => {
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: expect.stringContaining("different user"),
-      }),
-    );
+    expect(String(sendMessageCall().text)).toContain("different user");
     expect(handleFeishuMessage).not.toHaveBeenCalled();
   });
 
@@ -337,12 +333,9 @@ describe("Feishu Card Action Handler", () => {
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "chat:chat1",
-        text: "Cancelled.",
-      }),
-    );
+    const sendMessage = sendMessageCall();
+    expect(sendMessage.to).toBe("chat:chat1");
+    expect(sendMessage.text).toBe("Cancelled.");
   });
 
   it("preserves p2p callbacks for DM quick actions", async () => {
@@ -356,16 +349,9 @@ describe("Feishu Card Action Handler", () => {
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(handleFeishuMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({
-          message: expect.objectContaining({
-            chat_id: "p2p-chat-1",
-            chat_type: "p2p",
-          }),
-        }),
-      }),
-    );
+    const message = handleMessage();
+    expect(message.chat_id).toBe("p2p-chat-1");
+    expect(message.chat_type).toBe("p2p");
   });
 
   it("resolves DM chat type from the Feishu chat API when card context omits it", async () => {
@@ -384,16 +370,9 @@ describe("Feishu Card Action Handler", () => {
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(handleFeishuMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({
-          message: expect.objectContaining({
-            chat_id: "oc_dm_chat_123",
-            chat_type: "p2p",
-          }),
-        }),
-      }),
-    );
+    const message = handleMessage();
+    expect(message.chat_id).toBe("oc_dm_chat_123");
+    expect(message.chat_type).toBe("p2p");
     expect(createFeishuClientMock).toHaveBeenCalledTimes(1);
   });
 
@@ -445,15 +424,7 @@ describe("Feishu Card Action Handler", () => {
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(handleFeishuMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({
-          message: expect.objectContaining({
-            chat_type: "p2p",
-          }),
-        }),
-      }),
-    );
+    expect(handleMessage().chat_type).toBe("p2p");
   });
 
   it("falls back to p2p when Feishu chat API throws", async () => {
@@ -472,15 +443,7 @@ describe("Feishu Card Action Handler", () => {
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(handleFeishuMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({
-          message: expect.objectContaining({
-            chat_type: "p2p",
-          }),
-        }),
-      }),
-    );
+    expect(handleMessage().chat_type).toBe("p2p");
   });
 
   it("drops duplicate structured callback tokens", async () => {

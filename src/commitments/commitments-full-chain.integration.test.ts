@@ -112,14 +112,12 @@ describe("commitments full-chain integration", () => {
       if (!pendingCommitment) {
         throw new Error("Expected pending commitment");
       }
-      expect(pendingCommitment).toMatchObject({
-        status: "pending",
-        agentId: "main",
-        sessionKey,
-        channel: "telegram",
-        to: "155462274",
-        suggestedText: "How did the interview go?",
-      });
+      expect(pendingCommitment.status).toBe("pending");
+      expect(pendingCommitment.agentId).toBe("main");
+      expect(pendingCommitment.sessionKey).toBe(sessionKey);
+      expect(pendingCommitment.channel).toBe("telegram");
+      expect(pendingCommitment.to).toBe("155462274");
+      expect(pendingCommitment.suggestedText).toBe("How did the interview go?");
       expect(pendingCommitment.dueWindow.earliestMs).toBe(dueMs);
       expect(pendingCommitment).not.toHaveProperty("sourceUserText");
       expect(pendingCommitment).not.toHaveProperty("sourceAssistantText");
@@ -161,21 +159,22 @@ describe("commitments full-chain integration", () => {
       });
 
       expect(result.status).toBe("ran");
-      expect(sendTelegram).toHaveBeenCalledWith(
-        "155462274",
-        "How did the interview go?",
-        expect.objectContaining({ accountId: "primary" }),
-      );
+      expect(sendTelegram).toHaveBeenCalledOnce();
+      const sendCall = sendTelegram.mock.calls[0];
+      if (!sendCall) {
+        throw new Error("Expected Telegram send call");
+      }
+      expect(sendCall[0]).toBe("155462274");
+      expect(sendCall[1]).toBe("How did the interview go?");
+      expect(sendCall[2]?.accountId).toBe("primary");
       const deliveredStore = await loadCommitmentStore();
       const [deliveredCommitment] = deliveredStore.commitments;
       if (!deliveredCommitment) {
         throw new Error("Expected delivered commitment");
       }
-      expect(deliveredCommitment).toMatchObject({
-        status: "sent",
-        attempts: 1,
-        sentAtMs: dueMs + 60_000,
-      });
+      expect(deliveredCommitment.status).toBe("sent");
+      expect(deliveredCommitment.attempts).toBe(1);
+      expect(deliveredCommitment.sentAtMs).toBe(dueMs + 60_000);
     });
   });
 });

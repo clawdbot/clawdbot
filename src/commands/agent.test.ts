@@ -9,6 +9,7 @@ import * as attemptExecutionRuntime from "../agents/command/attempt-execution.ru
 import { loadManifestModelCatalog, loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,7 +19,10 @@ import {
   resetAgentEventsForTest,
   resetAgentRunContextForTest,
 } from "../infra/agent-events.js";
+import type { PluginProviderRegistration } from "../plugins/registry.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { agentCommand, agentCommandFromIngress } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -321,8 +325,30 @@ function mockModelCatalogOnce(entries: ReturnType<typeof loadManifestModelCatalo
   vi.mocked(loadModelCatalog).mockResolvedValueOnce(entries);
 }
 
+function installThinkingTestProviders() {
+  const registry = createTestRegistry();
+  registry.providers = ["anthropic", "codex", "ollama", "openai", "openrouter"].map(
+    (providerId): PluginProviderRegistration => ({
+      pluginId: providerId,
+      source: "test",
+      provider: {
+        id: providerId,
+        label: providerId,
+        auth: [],
+        resolveThinkingProfile: () => ({
+          levels: BASE_THINKING_LEVELS.map((id) => ({ id })),
+          defaultLevel: "off",
+        }),
+      },
+    }),
+  );
+  setActivePluginRegistry(registry);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  resetPluginRuntimeStateForTest();
+  installThinkingTestProviders();
   clearSessionStoreCacheForTest();
   resetAgentEventsForTest();
   resetAgentRunContextForTest();
@@ -354,13 +380,13 @@ describe("agentCommand", () => {
         runtime,
       );
 
-      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith({
-        scope: "all",
-        config: expect.any(Object),
-        activationSourceConfig: expect.any(Object),
-        workspaceDir: path.join(home, "openclaw"),
-        onlyPluginIds: ["codex"],
-      });
+      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).toHaveBeenCalledOnce();
+      const registryLoad = pluginRegistryMocks.ensurePluginRegistryLoaded.mock.calls[0]?.[0];
+      expect(registryLoad?.scope).toBe("all");
+      expect(registryLoad?.config).toBeTypeOf("object");
+      expect(registryLoad?.activationSourceConfig).toBeTypeOf("object");
+      expect(registryLoad?.workspaceDir).toBe(path.join(home, "openclaw"));
+      expect(registryLoad?.onlyPluginIds).toEqual(["codex"]);
       expectLastRunProviderModel("openai", "gpt-5.2");
     });
   });
@@ -515,11 +541,9 @@ describe("agentCommand", () => {
         { sendMessageTelegram },
       );
 
-      expect(sendMessageTelegram).toHaveBeenCalledWith(
-        "+1222",
-        "assistant-visible",
-        expect.objectContaining({ verbose: false }),
-      );
+      expect(sendMessageTelegram).toHaveBeenCalledWith("+1222", "assistant-visible", {
+        verbose: false,
+      });
       expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).toHaveBeenCalledTimes(1);
       const persistArgs = vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript).mock
         .calls[0]?.[0];
@@ -541,13 +565,9 @@ describe("agentCommand", () => {
       await agentCommand({ message: "ping", agentId: "main" }, runtime);
 
       const callArgs = getLastEmbeddedCall();
-      expect(callArgs).toEqual(
-        expect.objectContaining({
-          provider: "openai",
-          model: "gpt-5.5",
-          fastMode: true,
-        }),
-      );
+      expect(callArgs?.provider).toBe("openai");
+      expect(callArgs?.model).toBe("gpt-5.5");
+      expect(callArgs?.fastMode).toBe(true);
     });
   });
 
@@ -567,13 +587,11 @@ describe("agentCommand", () => {
 
       expect(loadModelCatalog).not.toHaveBeenCalled();
       expectLastRunProviderModel("openrouter", "openrouter/auto");
-      expect(modelSelectionModule.resolveThinkingDefault).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: "openrouter",
-          model: "auto",
-          catalog: undefined,
-        }),
-      );
+      const thinkingDefaultCall = vi.mocked(modelSelectionModule.resolveThinkingDefault).mock
+        .calls[0]?.[0];
+      expect(thinkingDefaultCall?.provider).toBe("openrouter");
+      expect(thinkingDefaultCall?.model).toBe("openrouter/auto");
+      expect(thinkingDefaultCall?.catalog).toBeUndefined();
     });
   });
 
@@ -594,15 +612,11 @@ describe("agentCommand", () => {
       );
 
       const callArgs = getLastEmbeddedCall();
-      expect(callArgs).toEqual(
-        expect.objectContaining({
-          provider: "openrouter",
-          model: "openrouter/auto",
-          modelRun: true,
-          promptMode: "none",
-          disableTools: true,
-        }),
-      );
+      expect(callArgs?.provider).toBe("openrouter");
+      expect(callArgs?.model).toBe("openrouter/auto");
+      expect(callArgs?.modelRun).toBe(true);
+      expect(callArgs?.promptMode).toBe("none");
+      expect(callArgs?.disableTools).toBe(true);
     });
   });
 
@@ -647,16 +661,12 @@ describe("agentCommand", () => {
 
       expect(runTurn).not.toHaveBeenCalled();
       const callArgs = getLastEmbeddedCall();
-      expect(callArgs).toEqual(
-        expect.objectContaining({
-          provider: "openrouter",
-          model: "openrouter/auto",
-          prompt: "Reply with exactly OPENCLAW-MODEL-OK",
-          modelRun: true,
-          promptMode: "none",
-          disableTools: true,
-        }),
-      );
+      expect(callArgs?.provider).toBe("openrouter");
+      expect(callArgs?.model).toBe("openrouter/auto");
+      expect(callArgs?.prompt).toBe("Reply with exactly OPENCLAW-MODEL-OK");
+      expect(callArgs?.modelRun).toBe(true);
+      expect(callArgs?.promptMode).toBe("none");
+      expect(callArgs?.disableTools).toBe(true);
     });
   });
 

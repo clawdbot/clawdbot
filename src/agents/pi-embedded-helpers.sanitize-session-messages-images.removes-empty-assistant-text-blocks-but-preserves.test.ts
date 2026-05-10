@@ -85,6 +85,24 @@ function expectSingleAssistantContentEntry(
   expectEntry((content as Array<{ type?: string; text?: string }>)[0] ?? {});
 }
 
+function expectContentBlock(
+  block:
+    | { type?: string; text?: string; thinking?: string; thought_signature?: string }
+    | undefined,
+  expected: { type: string; text?: string; thinking?: string; thought_signature?: string },
+) {
+  expect(block?.type).toBe(expected.type);
+  if (expected.text !== undefined) {
+    expect(block?.text).toBe(expected.text);
+  }
+  if (expected.thinking !== undefined) {
+    expect(block?.thinking).toBe(expected.thinking);
+  }
+  if (expected.thought_signature !== undefined) {
+    expect(block?.thought_signature).toBe(expected.thought_signature);
+  }
+}
+
 describe("sanitizeSessionMessagesImages", () => {
   it("keeps tool call + tool result IDs unchanged by default", async () => {
     const input = makeToolCallResultPairInput();
@@ -401,13 +419,13 @@ describe("sanitizeSessionMessagesImages", () => {
         "redacted_thinking",
         "text",
       ]);
-      expect(content?.[0]).toMatchObject({
+      expectContentBlock(content?.[0], {
         type: "thinking",
         thinking: "first",
         thought_signature: "sig-1",
       });
-      expect(content?.[1]).toMatchObject({ type: "text", text: "visible" });
-      expect(content?.[2]).toMatchObject({
+      expectContentBlock(content?.[1], { type: "text", text: "visible" });
+      expectContentBlock(content?.[2], {
         type: "redacted_thinking",
         thought_signature: "sig-2",
       });

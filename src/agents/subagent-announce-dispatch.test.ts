@@ -124,11 +124,9 @@ describe("runSubagentAnnounceDispatch", () => {
       direct,
     });
 
-    expect(result).toMatchObject({
-      delivered: false,
-      path: "direct",
-      error: "failed",
-    });
+    expect(result.delivered).toBe(false);
+    expect(result.path).toBe("direct");
+    expect(result.error).toBe("failed");
     expect(result.phases).toEqual([
       { phase: "direct-primary", delivered: false, path: "direct", error: "failed" },
       { phase: "queue-fallback", delivered: false, path: "none", error: undefined },
@@ -175,11 +173,9 @@ describe("runSubagentAnnounceDispatch", () => {
 
     expect(direct).toHaveBeenCalledTimes(1);
     expect(queue).not.toHaveBeenCalled();
-    expect(result).toMatchObject({
-      delivered: false,
-      path: "direct",
-      error: "direct failed before abort",
-    });
+    expect(result.delivered).toBe(false);
+    expect(result.path).toBe("direct");
+    expect(result.error).toBe("direct failed before abort");
     expect(result.phases).toEqual([
       {
         phase: "direct-primary",

@@ -54,7 +54,7 @@ it("uses expanded max_tokens for openai verification probes", () => {
     modelId: "detected-model",
   });
 
-  expect(request.body).toMatchObject({ max_tokens: 16 });
+  expect(request.body.max_tokens).toBe(16);
 });
 it("uses azure responses-specific headers and body for openai verification probes", () => {
   const request = buildOpenAiVerificationProbeRequest({
@@ -100,7 +100,7 @@ it("uses expanded max_tokens for anthropic verification probes", () => {
   });
 
   expect(request.endpoint).toBe("https://example.com/v1/messages");
-  expect(request.body).toMatchObject({ max_tokens: 1 });
+  expect(request.body.max_tokens).toBe(1);
 });
 
 describe("applyCustomApiConfig", () => {
@@ -291,10 +291,9 @@ describe("applyCustomApiConfig", () => {
       "custom",
       "custom-2",
     ]);
-    expect(result.config.models?.providers?.["custom-2"]).toMatchObject({
-      baseUrl: "http://localhost:11434/v1",
-      models: [{ id: "llama3" }],
-    });
+    const provider = result.config.models?.providers?.["custom-2"];
+    expect(provider?.baseUrl).toBe("http://localhost:11434/v1");
+    expect(provider?.models?.[0]?.id).toBe("llama3");
   });
 
   it("does not add azure fields for non-azure URLs", () => {

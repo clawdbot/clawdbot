@@ -78,11 +78,8 @@ describe("secrets runtime external channel origin discovery", () => {
 
     expect(requireDiscordConfig(snapshot).token).toBe("resolved-discord-token");
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalled();
-    expect(loadChannelSecretContractApiMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channelId: "discord",
-        loadablePluginOrigins: new Map([["discord", "global"]]),
-      }),
-    );
+    const loadCall = loadChannelSecretContractApiMock.mock.calls[0]?.[0];
+    expect(loadCall?.channelId).toBe("discord");
+    expect(loadCall?.loadablePluginOrigins).toEqual(new Map([["discord", "global"]]));
   });
 });

@@ -96,6 +96,19 @@ const BAILEYS_MEDIA_DISPATCHER_HEADER_REPLACEMENT = [
   "                    // `dispatch`.",
   "                    ...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",
 ].join("\n");
+const BAILEYS_MEDIA_UPLOAD_WITH_FETCH_DISPATCHER_NEEDLE = [
+  "    const response = await fetch(url, {",
+  "        dispatcher: agent,",
+  "        method: 'POST',",
+].join("\n");
+const BAILEYS_MEDIA_UPLOAD_WITH_FETCH_DISPATCHER_REPLACEMENT = [
+  "    const response = await fetch(url, {",
+  "        // Baileys may pass a generic agent in some runtimes. Undici's dispatcher",
+  "        // option only accepts Dispatcher-compatible implementations, so only wire",
+  "        // it through when the object actually implements dispatch.",
+  "        ...(typeof agent?.dispatch === 'function' ? { dispatcher: agent } : {}),",
+  "        method: 'POST',",
+].join("\n");
 const BAILEYS_MEDIA_ONCE_IMPORT_RE = /import\s+\{\s*once\s*\}\s+from\s+['"]events['"]/u;
 const BAILEYS_MEDIA_ASYNC_CONTEXT_RE =
   /async\s+function\s+encryptedStream|encryptedStream\s*=\s*async/u;
@@ -639,21 +652,37 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
       encryptedStreamResolved = true;
     }
 
-    const dispatcherAlreadyPatched = patchedText.includes(
-      "...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",
-    );
-    const dispatcherPatchable =
+    const dispatcherAlreadyPatched =
+      patchedText.includes(
+        "...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",
+      ) ||
+      patchedText.includes(
+        "...(typeof agent?.dispatch === 'function' ? { dispatcher: agent } : {}),",
+      );
+    const legacyDispatcherPatchable =
       patchedText.includes(BAILEYS_MEDIA_DISPATCHER_NEEDLE) &&
       patchedText.includes(BAILEYS_MEDIA_DISPATCHER_HEADER_NEEDLE);
+    const uploadWithFetchDispatcherPatchable = patchedText.includes(
+      BAILEYS_MEDIA_UPLOAD_WITH_FETCH_DISPATCHER_NEEDLE,
+    );
     let dispatcherResolved = dispatcherAlreadyPatched;
 
-    if (!dispatcherResolved && dispatcherPatchable) {
+    if (!dispatcherResolved && legacyDispatcherPatchable) {
       patchedText = patchedText
         .replace(BAILEYS_MEDIA_DISPATCHER_NEEDLE, BAILEYS_MEDIA_DISPATCHER_REPLACEMENT)
         .replace(
           BAILEYS_MEDIA_DISPATCHER_HEADER_NEEDLE,
           BAILEYS_MEDIA_DISPATCHER_HEADER_REPLACEMENT,
         );
+      applied = true;
+      dispatcherResolved = true;
+    }
+
+    if (!dispatcherResolved && uploadWithFetchDispatcherPatchable) {
+      patchedText = patchedText.replace(
+        BAILEYS_MEDIA_UPLOAD_WITH_FETCH_DISPATCHER_NEEDLE,
+        BAILEYS_MEDIA_UPLOAD_WITH_FETCH_DISPATCHER_REPLACEMENT,
+      );
       applied = true;
       dispatcherResolved = true;
     }

@@ -29,6 +29,13 @@ function fakeCtx(overrides: Partial<OpenClawPluginToolContext> = {}): OpenClawPl
   };
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
+}
+
 describe("lobster plugin tool", () => {
   it("returns the Lobster envelope in details", async () => {
     const runner = {
@@ -54,12 +61,11 @@ describe("lobster plugin tool", () => {
       timeoutMs: 1000,
       maxStdoutBytes: 512_000,
     });
-    expect(res.details).toMatchObject({
-      ok: true,
-      status: "ok",
-      output: [{ hello: "world" }],
-      requiresApproval: null,
-    });
+    const details = requireRecord(res.details, "lobster tool details");
+    expect(details.ok).toBe(true);
+    expect(details.status).toBe("ok");
+    expect(details.output).toEqual([{ hello: "world" }]);
+    expect(details.requiresApproval).toBeNull();
   });
 
   it("supports approval envelopes without changing the tool contract", async () => {
@@ -94,15 +100,13 @@ describe("lobster plugin tool", () => {
       timeoutMs: 1500,
       maxStdoutBytes: 4096,
     });
-    expect(res.details).toMatchObject({
-      ok: true,
-      status: "needs_approval",
-      requiresApproval: {
-        type: "approval_request",
-        prompt: "Send these alerts?",
-        resumeToken: "resume-token-1",
-      },
-    });
+    const details = requireRecord(res.details, "approval lobster tool details");
+    expect(details.ok).toBe(true);
+    expect(details.status).toBe("needs_approval");
+    const approval = requireRecord(details.requiresApproval, "approval request");
+    expect(approval.type).toBe("approval_request");
+    expect(approval.prompt).toBe("Send these alerts?");
+    expect(approval.resumeToken).toBe("resume-token-1");
   });
 
   it("throws when the runner returns an error envelope", async () => {
@@ -172,16 +176,13 @@ describe("lobster plugin tool", () => {
         approvalId: "approval-1",
       },
     });
-    expect(res.details).toMatchObject({
-      ok: true,
-      status: "needs_approval",
-      flow: {
-        flowId: "flow-1",
-      },
-      mutation: {
-        applied: true,
-      },
-    });
+    const details = requireRecord(res.details, "managed run lobster tool details");
+    expect(details.ok).toBe(true);
+    expect(details.status).toBe("needs_approval");
+    const flow = requireRecord(details.flow, "managed run flow details");
+    expect(flow.flowId).toBe("flow-1");
+    const mutation = requireRecord(details.mutation, "managed run mutation details");
+    expect(mutation.applied).toBe(true);
   });
 
   it("rejects managed TaskFlow params when no bound taskFlow runtime is available", async () => {
@@ -251,13 +252,11 @@ describe("lobster plugin tool", () => {
       timeoutMs: 20_000,
       maxStdoutBytes: 512_000,
     });
-    expect(res.details).toMatchObject({
-      ok: true,
-      status: "ok",
-      mutation: {
-        applied: true,
-      },
-    });
+    const details = requireRecord(res.details, "managed resume lobster tool details");
+    expect(details.ok).toBe(true);
+    expect(details.status).toBe("ok");
+    const mutation = requireRecord(details.mutation, "managed resume mutation details");
+    expect(mutation.applied).toBe(true);
   });
 
   it("rejects managed TaskFlow resume mode without a token or approvalId", async () => {

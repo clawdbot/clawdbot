@@ -134,7 +134,9 @@ describe("sanitizeToolUseResultPairing", () => {
       "toolResult",
       "user",
     ]);
-    expect(getAssistantToolCallBlocks(result.messages)).toMatchObject([
+    expect(
+      getAssistantToolCallBlocks(result.messages).map(({ id, name }) => ({ id, name })),
+    ).toEqual([
       { id: "call_1", name: "read" },
       { id: "call_2", name: "exec" },
       { id: "call_3", name: "write" },
@@ -339,7 +341,7 @@ describe("sanitizeToolCallInputs legacy block filtering", () => {
 
     const out = sanitizeToolCallInputs(input, { allowedToolNames: ["write", "exec"] });
 
-    expect(getAssistantToolCallBlocks(out)).toMatchObject([
+    expect(getAssistantToolCallBlocks(out).map(({ type, name }) => ({ type, name }))).toEqual([
       { type: "tool_call", name: "write" },
       { type: "function_call", name: "exec" },
     ]);

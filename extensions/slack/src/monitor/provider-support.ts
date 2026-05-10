@@ -19,6 +19,7 @@ type SlackSocketDisconnect = Awaited<ReturnType<typeof waitForSlackSocketDisconn
 
 const OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS = 15_000;
 const SLACK_SOCKET_PONG_TIMEOUT_WARNING_PREFIX = "A pong wasn't received from the server";
+const SLACK_SOCKET_PING_TIMEOUT_WARNING_PREFIX = "A ping wasn't received from the server";
 const SLACK_SOCKET_LOG_LEVEL_IGNORED_WARNING_RE =
   /^The logLevel given to .+ was ignored as you also gave logger$/;
 
@@ -142,9 +143,11 @@ export function publishSlackDisconnectedStatus(
   });
 }
 
-function isSlackSocketPongTimeoutWarning(args: readonly unknown[]) {
+function isSlackSocketHeartbeatTimeoutWarning(args: readonly unknown[]) {
   return (
-    typeof args[0] === "string" && args[0].startsWith(SLACK_SOCKET_PONG_TIMEOUT_WARNING_PREFIX)
+    typeof args[0] === "string" &&
+    (args[0].startsWith(SLACK_SOCKET_PONG_TIMEOUT_WARNING_PREFIX) ||
+      args[0].startsWith(SLACK_SOCKET_PING_TIMEOUT_WARNING_PREFIX))
   );
 }
 
@@ -176,7 +179,10 @@ export function createSlackSocketModeLogger(
     debug: () => {},
     info: () => {},
     warn: (...args: unknown[]) => {
-      if (isSlackSocketPongTimeoutWarning(args) || isSlackSocketSelfInflictedLoggerWarning(args)) {
+      if (
+        isSlackSocketHeartbeatTimeoutWarning(args) ||
+        isSlackSocketSelfInflictedLoggerWarning(args)
+      ) {
         return;
       }
       remember(args);

@@ -17,7 +17,6 @@ export {
   formatSignalPairingIdLine,
   formatSignalSenderDisplay,
   formatSignalSenderId,
-  isSignalGroupAllowed,
   isSignalSenderAllowed,
   looksLikeUuid,
   normalizeSignalAllowRecipient,

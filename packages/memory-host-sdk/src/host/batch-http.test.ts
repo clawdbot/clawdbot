@@ -49,15 +49,12 @@ describe("postJsonWithRetry", () => {
     });
 
     expect(result).toEqual({ ok: true, ids: [1, 2] });
-    expect(postJsonMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://memory.example/v1/batch",
-        headers: { Authorization: "Bearer test" },
-        body: { chunks: ["a", "b"] },
-        errorPrefix: "memory batch failed",
-        attachStatus: true,
-      }),
-    );
+    const postJsonParams = postJsonMock.mock.calls[0]?.[0];
+    expect(postJsonParams?.url).toBe("https://memory.example/v1/batch");
+    expect(postJsonParams?.headers).toEqual({ Authorization: "Bearer test" });
+    expect(postJsonParams?.body).toEqual({ chunks: ["a", "b"] });
+    expect(postJsonParams?.errorPrefix).toBe("memory batch failed");
+    expect(postJsonParams?.attachStatus).toBe(true);
 
     const retryOptions = requireRetryOptions(retryAsyncMock.mock.calls[0]);
     expect(retryOptions.attempts).toBe(3);
@@ -73,17 +70,21 @@ describe("postJsonWithRetry", () => {
       Object.assign(new Error("memory batch failed: 503 backend down"), { status: 503 }),
     );
 
-    await expect(
-      postJsonWithRetry({
+    let error: unknown;
+    try {
+      await postJsonWithRetry({
         url: "https://memory.example/v1/batch",
         headers: {},
         body: { chunks: [] },
         errorPrefix: "memory batch failed",
         retryImpl: retryAsyncMock as typeof import("./retry-utils.js").retryAsync,
-      }),
-    ).rejects.toMatchObject({
-      message: expect.stringContaining("memory batch failed: 503 backend down"),
-      status: 503,
-    });
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("memory batch failed: 503 backend down");
+    expect((error as { status?: unknown }).status).toBe(503);
   });
 });

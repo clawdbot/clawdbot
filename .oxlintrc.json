@@ -30,6 +30,7 @@
     "eslint/no-useless-computed-key": "error",
     "eslint/no-useless-concat": "error",
     "eslint/no-useless-constructor": "error",
+    "eslint/no-unused-vars": "off",
     "eslint/no-warning-comments": "error",
     "eslint/no-unmodified-loop-condition": "error",
     "eslint/no-new-wrappers": "error",

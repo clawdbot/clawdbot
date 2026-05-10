@@ -101,14 +101,10 @@ describe("gateway status output", () => {
       discoveryCount: 0,
     });
 
-    expect(warnings).toContainEqual(
-      expect.objectContaining({
-        code: "no_gateway_reachable",
-        message: expect.stringContaining("openclaw gateway status --deep --require-rpc"),
-        targetIds: ["localLoopback"],
-      }),
-    );
-    expect(warnings.at(0)?.message).toContain("lsof -nP -iTCP:<port>");
+    const warning = warnings.find((entry) => entry.code === "no_gateway_reachable");
+    expect(warning?.message).toContain("openclaw gateway status --deep --require-rpc");
+    expect(warning?.targetIds).toStrictEqual(["localLoopback"]);
+    expect(warning?.message).toContain("lsof -nP -iTCP:<port>");
   });
 
   it("derives summary capability from reachable probes only in json output", () => {
@@ -145,13 +141,13 @@ describe("gateway status output", () => {
       primaryTargetId: "reachable-read",
     });
 
-    expect(mocks.writeRuntimeJson).toHaveBeenCalledWith(
-      runtime,
-      expect.objectContaining({
-        ok: true,
-        capability: "read_only",
-      }),
-    );
+    expect(mocks.writeRuntimeJson).toHaveBeenCalledOnce();
+    expect(mocks.writeRuntimeJson.mock.calls[0]?.[0]).toBe(runtime);
+    const payload = mocks.writeRuntimeJson.mock.calls[0]?.[1] as
+      | { ok?: unknown; capability?: unknown }
+      | undefined;
+    expect(payload?.ok).toBe(true);
+    expect(payload?.capability).toBe("read_only");
   });
 
   it("derives summary capability from reachable probes only in text output", () => {
@@ -219,22 +215,22 @@ describe("gateway status output", () => {
       primaryTargetId: "detail-timeout",
     });
 
-    expect(mocks.writeRuntimeJson).toHaveBeenCalledWith(
-      runtime,
-      expect.objectContaining({
-        ok: true,
-        degraded: true,
-        primaryTargetId: "detail-timeout",
-        targets: [
-          expect.objectContaining({
-            connect: expect.objectContaining({
-              ok: true,
-              rpcOk: false,
-              error: "timeout",
-            }),
-          }),
-        ],
-      }),
-    );
+    expect(mocks.writeRuntimeJson).toHaveBeenCalledOnce();
+    expect(mocks.writeRuntimeJson.mock.calls[0]?.[0]).toBe(runtime);
+    const payload = mocks.writeRuntimeJson.mock.calls[0]?.[1] as
+      | {
+          ok?: unknown;
+          degraded?: unknown;
+          primaryTargetId?: unknown;
+          targets?: Array<{ connect?: { ok?: unknown; rpcOk?: unknown; error?: unknown } }>;
+        }
+      | undefined;
+    expect(payload?.ok).toBe(true);
+    expect(payload?.degraded).toBe(true);
+    expect(payload?.primaryTargetId).toBe("detail-timeout");
+    expect(payload?.targets).toHaveLength(1);
+    expect(payload?.targets?.[0]?.connect?.ok).toBe(true);
+    expect(payload?.targets?.[0]?.connect?.rpcOk).toBe(false);
+    expect(payload?.targets?.[0]?.connect?.error).toBe("timeout");
   });
 });

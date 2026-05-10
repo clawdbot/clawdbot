@@ -81,21 +81,17 @@ describe("executeStatusScanFromOverview", () => {
       memoryPlugin: { enabled: false, slot: null, reason: "memorySearch not configured" },
       runtime: {},
     });
-    expect(result).toEqual(
-      expect.objectContaining({
-        cfg: overview.cfg,
-        sourceConfig: overview.sourceConfig,
-        secretDiagnostics: ["diag"],
-        tailscaleDns: "box.tail.ts.net",
-        tailscaleHttpsUrl: "https://box.tail.ts.net",
-        gatewayConnection: { url: "ws://127.0.0.1:18789", urlSource: "local" },
-        gatewayMode: "local",
-        gatewayReachable: true,
-        channels: { rows: [], details: [] },
-        summary: { sessions: { count: 1 } },
-        memory: { agentId: "main", backend: "builtin", provider: "memory-core" },
-        pluginCompatibility: [],
-      }),
-    );
+    expect(result.cfg).toBe(overview.cfg);
+    expect(result.sourceConfig).toBe(overview.sourceConfig);
+    expect(result.secretDiagnostics).toEqual(["diag"]);
+    expect(result.tailscaleDns).toBe("box.tail.ts.net");
+    expect(result.tailscaleHttpsUrl).toBe("https://box.tail.ts.net");
+    expect(result.gatewayConnection).toEqual({ url: "ws://127.0.0.1:18789", urlSource: "local" });
+    expect(result.gatewayMode).toBe("local");
+    expect(result.gatewayReachable).toBe(true);
+    expect(result.channels).toEqual({ rows: [], details: [] });
+    expect(result.summary).toEqual({ sessions: { count: 1 } });
+    expect(result.memory).toEqual({ agentId: "main", backend: "builtin", provider: "memory-core" });
+    expect(result.pluginCompatibility).toEqual([]);
   });
 });

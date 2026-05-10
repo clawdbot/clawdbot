@@ -6,6 +6,7 @@ import { sendMessage } from "../infra/outbound/message.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import { buildExecApprovalFollowupIdempotencyKey } from "./bash-tools.exec-approval-followup-state.js";
 import {
   formatExecDeniedUserMessage,
   isExecDeniedResultText,
@@ -23,6 +24,8 @@ type ExecApprovalFollowupParams = {
   turnSourceThreadId?: string | number;
   resultText: string;
   direct?: boolean;
+  internalRuntimeHandoffId?: string;
+  idempotencyKey?: string;
 };
 
 function buildExecDeniedFollowupPrompt(resultText: string): string {
@@ -149,6 +152,8 @@ function buildAgentFollowupArgs(params: {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  internalRuntimeHandoffId?: string;
+  idempotencyKey?: string;
 }) {
   const { deliveryTarget, sessionOnlyOriginChannel } = params;
   // When the followup run has no deliverable route and no gateway-internal channel,
@@ -176,7 +181,14 @@ function buildAgentFollowupArgs(params: {
       : sessionOnlyOriginChannel
         ? params.turnSourceThreadId
         : undefined,
-    idempotencyKey: `exec-approval-followup:${params.approvalId}`,
+    idempotencyKey:
+      params.idempotencyKey ??
+      buildExecApprovalFollowupIdempotencyKey({
+        approvalId: params.approvalId,
+      }),
+    ...(params.internalRuntimeHandoffId
+      ? { internalRuntimeHandoffId: params.internalRuntimeHandoffId }
+      : {}),
   };
 }
 
@@ -250,6 +262,8 @@ export async function sendExecApprovalFollowup(
           turnSourceTo: params.turnSourceTo,
           turnSourceAccountId: params.turnSourceAccountId,
           turnSourceThreadId: params.turnSourceThreadId,
+          internalRuntimeHandoffId: params.internalRuntimeHandoffId,
+          idempotencyKey: params.idempotencyKey,
         }),
         { expectFinal: true },
       );

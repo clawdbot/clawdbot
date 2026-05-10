@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadSqliteVecExtension } from "./sqlite-vec.js";
 
 function mockMissingSqliteVecPackage(): void {
   vi.doMock("sqlite-vec", () => {
@@ -8,19 +9,13 @@ function mockMissingSqliteVecPackage(): void {
   });
 }
 
-async function importLoader() {
-  return import("./sqlite-vec.js");
-}
-
 afterEach(() => {
   vi.doUnmock("sqlite-vec");
-  vi.resetModules();
 });
 
 describe("loadSqliteVecExtension", () => {
   it("loads explicit extensionPath without importing bundled sqlite-vec", async () => {
     mockMissingSqliteVecPackage();
-    const { loadSqliteVecExtension } = await importLoader();
     const db = {
       enableLoadExtension: vi.fn(),
       loadExtension: vi.fn(),
@@ -38,7 +33,6 @@ describe("loadSqliteVecExtension", () => {
 
   it("returns a valid memorySearch extensionPath hint when sqlite-vec is absent", async () => {
     mockMissingSqliteVecPackage();
-    const { loadSqliteVecExtension } = await importLoader();
     const db = {
       enableLoadExtension: vi.fn(),
       loadExtension: vi.fn(),

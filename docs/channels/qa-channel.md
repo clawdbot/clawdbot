@@ -44,7 +44,14 @@ Account keys:
 - `botUserId` - Matrix-style bot user id used in target grammar.
 - `botDisplayName` - display name for outbound messages.
 - `pollTimeoutMs` - long-poll wait window. Integer between 100 and 30000.
-- `allowFrom` - sender allowlist (user ids or `"*"`).
+- `allowFrom` - sender allowlist (user ids or `"*"`). Direct messages and
+  allowlisted group policy both use these synthetic sender ids.
+- `groupPolicy` - shared-room policy: `"open"` (default), `"allowlist"`, or
+  `"disabled"`.
+- `groupAllowFrom` - optional shared-room sender allowlist. When omitted under
+  `"allowlist"`, QA Channel falls back to `allowFrom`.
+- `groups.<room>.requireMention` - require a bot mention before replying in a
+  specific group/channel room. `groups."*"` sets the default.
 - `defaultTo` - fallback target when none is supplied.
 - `actions.messages` / `actions.reactions` / `actions.search` / `actions.threads` - per-action tool gating.
 

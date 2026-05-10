@@ -49,7 +49,7 @@ for attempt in 1 2; do
   rm -f "$HOME/.openclaw/agents/main/sessions/$session_id.jsonl"
   output_file="$(mktemp)"
   set +e
-  ${input.auth.apiKeyEnv}=${shellQuote(input.auth.apiKeyValue)} ${command} agent --local --agent main --session-id "$session_id" --message 'Reply with exact ASCII text OK only.' --thinking minimal --json >"$output_file" 2>&1
+  OPENCLAW_ALLOW_ROOT="\${OPENCLAW_ALLOW_ROOT:-}" ${input.auth.apiKeyEnv}=${shellQuote(input.auth.apiKeyValue)} ${command} agent --local --agent main --session-id "$session_id" --message 'Reply with exact ASCII text OK only.' --thinking minimal --json >"$output_file" 2>&1
   rc=$?
   set -e
   cat "$output_file"
@@ -164,16 +164,23 @@ PY
 stop_openclaw_gateway_processes() {
   OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw gateway stop || true
   pkill -f 'openclaw.*gateway' >/dev/null 2>&1 || true
+  if command -v lsof >/dev/null 2>&1; then
+    pids="$(lsof -tiTCP:18789 -sTCP:LISTEN 2>/dev/null || true)"
+    if [ -n "$pids" ]; then
+      kill $pids >/dev/null 2>&1 || true
+      sleep 2
+      kill -9 $pids >/dev/null 2>&1 || true
+    fi
+  fi
 }
 start_openclaw_gateway() {
-  if /opt/homebrew/bin/openclaw gateway restart; then
-    return
-  fi
-  pkill -f 'openclaw.*gateway' >/dev/null 2>&1 || true
+  stop_openclaw_gateway_processes
   rm -f /tmp/openclaw-parallels-macos-gateway.log
-  nohup env OPENCLAW_HOME="$HOME" OPENCLAW_STATE_DIR="$HOME/.openclaw" OPENCLAW_CONFIG_PATH="$HOME/.openclaw/openclaw.json" ${input.auth.apiKeyEnv}=${shellQuote(
+  trap '' HUP
+  /usr/bin/env OPENCLAW_HOME="$HOME" OPENCLAW_STATE_DIR="$HOME/.openclaw" OPENCLAW_CONFIG_PATH="$HOME/.openclaw/openclaw.json" ${input.auth.apiKeyEnv}=${shellQuote(
     input.auth.apiKeyValue,
   )} /opt/homebrew/bin/openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-macos-gateway.log 2>&1 </dev/null &
+  sleep 1
 }
 wait_for_gateway() {
   deadline=$((SECONDS + 240))
@@ -251,6 +258,7 @@ ${windowsAssertAgentOkScript(input)}`;
 export function linuxUpdateScript(input: NpmUpdateScriptInput): string {
   return String.raw`set -euo pipefail
 export PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/snap/bin
+export OPENCLAW_ALLOW_ROOT=1
 scrub_future_plugin_entries() {
   node - <<'JS'
 const fs = require("node:fs");
@@ -273,14 +281,14 @@ fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
 JS
 }
 stop_openclaw_gateway_processes() {
-  OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw gateway stop || true
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 OPENCLAW_ALLOW_ROOT=1 openclaw gateway stop || true
   pkill -f 'openclaw.*gateway' >/dev/null 2>&1 || true
 }
 start_openclaw_gateway() {
   pkill -f "openclaw gateway run" >/dev/null 2>&1 || true
   rm -f /tmp/openclaw-parallels-linux-gateway.log
   setsid sh -lc ${shellQuote(
-    `exec env OPENCLAW_HOME=/root OPENCLAW_STATE_DIR=/root/.openclaw OPENCLAW_CONFIG_PATH=/root/.openclaw/openclaw.json OPENCLAW_DISABLE_BONJOUR=1 ${input.auth.apiKeyEnv}=${shellQuote(
+    `exec env OPENCLAW_HOME=/root OPENCLAW_STATE_DIR=/root/.openclaw OPENCLAW_CONFIG_PATH=/root/.openclaw/openclaw.json OPENCLAW_DISABLE_BONJOUR=1 OPENCLAW_ALLOW_ROOT=1 ${input.auth.apiKeyEnv}=${shellQuote(
       input.auth.apiKeyValue,
     )} openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-linux-gateway.log 2>&1`,
   )} >/dev/null 2>&1 < /dev/null &

@@ -302,6 +302,7 @@ describe("basic browser routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(isTransportAvailable).toHaveBeenCalledTimes(1);
+    expect(isTransportAvailable).toHaveBeenCalledWith(5_000);
     expect(isHttpReachable).not.toHaveBeenCalled();
     expect(response.body).toMatchObject({
       cdpHttp: true,

@@ -19,15 +19,13 @@ describe("buildApiErrorObservationFields", () => {
       '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_overload"}',
     );
 
-    expect(observed).toMatchObject({
-      rawErrorPreview: expect.stringContaining('"request_id":"sha256:'),
-      rawErrorHash: expect.stringMatching(/^sha256:/),
-      rawErrorFingerprint: expect.stringMatching(/^sha256:/),
-      providerRuntimeFailureKind: "timeout",
-      providerErrorType: "overloaded_error",
-      providerErrorMessagePreview: "Overloaded",
-      requestIdHash: expect.stringMatching(/^sha256:/),
-    });
+    expect(observed.rawErrorPreview).toContain('"request_id":"sha256:');
+    expect(observed.rawErrorHash?.startsWith("sha256:")).toBe(true);
+    expect(observed.rawErrorFingerprint?.startsWith("sha256:")).toBe(true);
+    expect(observed.providerRuntimeFailureKind).toBe("timeout");
+    expect(observed.providerErrorType).toBe("overloaded_error");
+    expect(observed.providerErrorMessagePreview).toBe("Overloaded");
+    expect(observed.requestIdHash?.startsWith("sha256:")).toBe(true);
     expect(observed.rawErrorPreview).not.toContain("req_overload");
   });
 
@@ -66,15 +64,13 @@ describe("buildApiErrorObservationFields", () => {
       '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_prev"}',
     );
 
-    expect(observed).toMatchObject({
-      textPreview: expect.stringContaining('"request_id":"sha256:'),
-      textHash: expect.stringMatching(/^sha256:/),
-      textFingerprint: expect.stringMatching(/^sha256:/),
-      providerRuntimeFailureKind: "timeout",
-      providerErrorType: "overloaded_error",
-      providerErrorMessagePreview: "Overloaded",
-      requestIdHash: expect.stringMatching(/^sha256:/),
-    });
+    expect(observed.textPreview).toContain('"request_id":"sha256:');
+    expect(observed.textHash?.startsWith("sha256:")).toBe(true);
+    expect(observed.textFingerprint?.startsWith("sha256:")).toBe(true);
+    expect(observed.providerRuntimeFailureKind).toBe("timeout");
+    expect(observed.providerErrorType).toBe("overloaded_error");
+    expect(observed.providerErrorMessagePreview).toBe("Overloaded");
+    expect(observed.requestIdHash?.startsWith("sha256:")).toBe(true);
     expect(observed.textPreview).not.toContain("req_prev");
   });
 
@@ -83,11 +79,9 @@ describe("buildApiErrorObservationFields", () => {
       "LLM error overloaded_error: Overloaded (request_id: req_plaintext_123)",
     );
 
-    expect(observed).toMatchObject({
-      rawErrorPreview: expect.stringContaining("request_id: sha256:"),
-      rawErrorFingerprint: expect.stringMatching(/^sha256:/),
-      requestIdHash: expect.stringMatching(/^sha256:/),
-    });
+    expect(observed.rawErrorPreview).toContain("request_id: sha256:");
+    expect(observed.rawErrorFingerprint?.startsWith("sha256:")).toBe(true);
+    expect(observed.requestIdHash?.startsWith("sha256:")).toBe(true);
     expect(observed.rawErrorPreview).not.toContain("req_plaintext_123");
   });
 
@@ -120,10 +114,10 @@ describe("buildApiErrorObservationFields", () => {
     const oversized = "X".repeat(70_000);
     const bounded = "X".repeat(64_000);
 
-    expect(buildApiErrorObservationFields(oversized)).toMatchObject({
-      rawErrorHash: buildApiErrorObservationFields(bounded).rawErrorHash,
-      rawErrorFingerprint: buildApiErrorObservationFields(bounded).rawErrorFingerprint,
-    });
+    const observed = buildApiErrorObservationFields(oversized);
+    const boundedObserved = buildApiErrorObservationFields(bounded);
+    expect(observed.rawErrorHash).toBe(boundedObserved.rawErrorHash);
+    expect(observed.rawErrorFingerprint).toBe(boundedObserved.rawErrorFingerprint);
   });
 
   it("returns empty observation fields for empty input", () => {
@@ -185,10 +179,8 @@ describe("buildApiErrorObservationFields", () => {
       '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}',
     );
 
-    expect(observed).toMatchObject({
-      httpCode: "401",
-      providerRuntimeFailureKind: "unclassified",
-    });
+    expect(observed.httpCode).toBe("401");
+    expect(observed.providerRuntimeFailureKind).toBe("unclassified");
   });
 });
 

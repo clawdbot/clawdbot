@@ -58,20 +58,20 @@ describe("matrix qa cli registration", () => {
     const matrix = qa.commands.find((command) => command.name() === "matrix");
     const optionNames = matrix?.options.map((option) => option.long) ?? [];
 
-    expect(optionNames).toEqual(
-      expect.arrayContaining([
-        "--repo-root",
-        "--output-dir",
-        "--provider-mode",
-        "--model",
-        "--alt-model",
-        "--scenario",
-        "--fast",
-        "--profile",
-        "--fail-fast",
-        "--sut-account",
-      ]),
-    );
+    for (const optionName of [
+      "--repo-root",
+      "--output-dir",
+      "--provider-mode",
+      "--model",
+      "--alt-model",
+      "--scenario",
+      "--fast",
+      "--profile",
+      "--fail-fast",
+      "--sut-account",
+    ]) {
+      expect(optionNames).toContain(optionName);
+    }
     expect(optionNames).not.toContain("--credential-source");
     expect(optionNames).not.toContain("--credential-role");
   });

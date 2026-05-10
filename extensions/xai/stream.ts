@@ -43,6 +43,10 @@ function supportsExplicitImageInput(model: { input?: unknown }): boolean {
   return Array.isArray(model.input) && model.input.includes("image");
 }
 
+function supportsReasoningControls(model: { reasoning?: unknown }): boolean {
+  return model.reasoning === true;
+}
+
 const TOOL_RESULT_IMAGE_REPLAY_TEXT = "Attached image(s) from tool result:";
 
 type ReplayableInputImagePart =
@@ -170,9 +174,11 @@ export function createXaiToolPayloadCompatibilityWrapper(
             payloadObj.tools = payloadObj.tools.map((tool) => stripUnsupportedStrictFlag(tool));
           }
           normalizeXaiResponsesToolResultPayload(payloadObj, model);
-          delete payloadObj.reasoning;
-          delete payloadObj.reasoningEffort;
-          delete payloadObj.reasoning_effort;
+          if (!supportsReasoningControls(model)) {
+            delete payloadObj.reasoning;
+            delete payloadObj.reasoningEffort;
+            delete payloadObj.reasoning_effort;
+          }
         }
         return originalOnPayload?.(payload, model);
       },

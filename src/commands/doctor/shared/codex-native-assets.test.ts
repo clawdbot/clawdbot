@@ -35,6 +35,10 @@ function codexConfig(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function hasAsset(hits: Array<{ kind: string; path: string }>, kind: string, assetPath: string) {
+  return hits.some((hit) => hit.kind === kind && hit.path === assetPath);
+}
+
 afterEach(async () => {
   for (const root of tempRoots) {
     await fs.rm(root, { recursive: true, force: true });
@@ -70,29 +74,21 @@ describe("scanCodexNativeAssets", () => {
       env: { CODEX_HOME: codexHome, HOME: root },
     });
 
-    expect(hits).toEqual(
-      expect.arrayContaining([
-        { kind: "skill", path: path.join(codexHome, "skills", "tweet-helper") },
-        { kind: "skill", path: path.join(root, ".agents", "skills", "agent-helper") },
-        {
-          kind: "plugin",
-          path: path.join(
-            codexHome,
-            "plugins",
-            "cache",
-            "openai-primary-runtime",
-            "documents",
-            "1.0.0",
-          ),
-        },
-        { kind: "config", path: path.join(codexHome, "config.toml") },
-        { kind: "hooks", path: path.join(codexHome, "hooks", "hooks.json") },
-      ]),
+    expect(hasAsset(hits, "skill", path.join(codexHome, "skills", "tweet-helper"))).toBe(true);
+    expect(hasAsset(hits, "skill", path.join(root, ".agents", "skills", "agent-helper"))).toBe(
+      true,
     );
-    expect(hits).not.toEqual(
-      expect.arrayContaining([
-        { kind: "skill", path: path.join(codexHome, "skills", ".system", "system-skill") },
-      ]),
+    expect(
+      hasAsset(
+        hits,
+        "plugin",
+        path.join(codexHome, "plugins", "cache", "openai-primary-runtime", "documents", "1.0.0"),
+      ),
+    ).toBe(true);
+    expect(hasAsset(hits, "config", path.join(codexHome, "config.toml"))).toBe(true);
+    expect(hasAsset(hits, "hooks", path.join(codexHome, "hooks", "hooks.json"))).toBe(true);
+    expect(hasAsset(hits, "skill", path.join(codexHome, "skills", ".system", "system-skill"))).toBe(
+      false,
     );
   });
 

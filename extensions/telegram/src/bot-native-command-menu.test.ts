@@ -94,6 +94,24 @@ describe("bot-native-command-menu", () => {
     expect(result.textBudgetDropCount).toBe(1);
   });
 
+  it("does not reuse cached capped results for delimiter-like descriptions", () => {
+    const first = buildCappedTelegramMenuCommands({
+      allCommands: [{ command: "a", description: "b\0c\0d" }],
+    });
+    const second = buildCappedTelegramMenuCommands({
+      allCommands: [
+        { command: "a", description: "b" },
+        { command: "c", description: "d" },
+      ],
+    });
+
+    expect(first.commandsToRegister).toEqual([{ command: "a", description: "b\0c\0d" }]);
+    expect(second.commandsToRegister).toEqual([
+      { command: "a", description: "b" },
+      { command: "c", description: "d" },
+    ]);
+  });
+
   it("validates plugin command specs and reports conflicts", () => {
     const existingCommands = new Set(["native"]);
 
@@ -219,16 +237,23 @@ describe("bot-native-command-menu", () => {
     expect(hashCommandList(a)).not.toBe(hashCommandList(b));
   });
 
+  it("produces different hashes for delimiter-like command lists", () => {
+    const a = [{ command: "a", description: "b\0c\0d" }];
+    const b = [
+      { command: "a", description: "b" },
+      { command: "c", description: "d" },
+    ];
+    expect(hashCommandList(a)).not.toBe(hashCommandList(b));
+  });
+
   it("skips sync when command hash is unchanged (#32017)", async () => {
     const deleteMyCommands = vi.fn(async () => undefined);
     const setMyCommands = vi.fn(async () => undefined);
     const runtimeLog = vi.fn();
 
-    // Use a unique accountId so cached hashes from other tests don't interfere.
     const accountId = `test-skip-${Date.now()}`;
     const commands = [{ command: "skip_test", description: "Skip test command" }];
 
-    // First sync — no cached hash, should call setMyCommands.
     syncMenuCommandsWithMocks({
       deleteMyCommands,
       setMyCommands,
@@ -242,7 +267,6 @@ describe("bot-native-command-menu", () => {
       expect(setMyCommands).toHaveBeenCalledTimes(2);
     });
 
-    // Second sync with the same commands — hash is cached, should skip.
     syncMenuCommandsWithMocks({
       deleteMyCommands,
       setMyCommands,
@@ -252,7 +276,6 @@ describe("bot-native-command-menu", () => {
       botIdentity: "bot-a",
     });
 
-    // setMyCommands should NOT have been called again for either scope.
     expect(setMyCommands).toHaveBeenCalledTimes(2);
   });
 

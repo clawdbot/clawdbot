@@ -11,6 +11,7 @@ import { isSecretsApplyPlan, type SecretsApplyPlan } from "../secrets/plan.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
+import { formatGatewayCommandFailure } from "./error-format.js";
 import { addGatewayClientOptions, callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 
 type SecretsReloadOptions = GatewayRpcOpts & { json?: boolean };
@@ -82,7 +83,11 @@ export function registerSecretsCli(program: Command) {
     } catch (err) {
       defaultRuntime.error(
         danger(
-          `Secrets reload failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} to inspect the active gateway.`,
+          formatGatewayCommandFailure({
+            action: "reload secrets",
+            error: err,
+            inspectCommand: "openclaw gateway status --deep",
+          }),
         ),
       );
       defaultRuntime.exit(1);

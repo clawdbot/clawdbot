@@ -65,6 +65,28 @@ describe("xai x_search tool", () => {
     expect(tool?.name).toBe("x_search");
   });
 
+  it("enables x_search from an xAI auth profile and uses it for requests", async () => {
+    const mockFetch = installXSearchFetch();
+    const tool = createXSearchTool({
+      config: {},
+      auth: {
+        hasAuthForProvider: (providerId) => providerId === "xai",
+        resolveApiKeyForProvider: async (providerId) =>
+          providerId === "xai" ? "xai-profile-key" : undefined, // pragma: allowlist secret
+      },
+    });
+
+    expect(tool?.name).toBe("x_search");
+    await tool?.execute?.("x-search:auth-profile", {
+      query: "auth profile search",
+    });
+
+    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect((request?.headers as Record<string, string> | undefined)?.Authorization).toBe(
+      "Bearer xai-profile-key",
+    );
+  });
+
   it("enables x_search when the xAI plugin web search key is configured", () => {
     const tool = createXSearchTool({
       config: {

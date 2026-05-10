@@ -471,7 +471,8 @@ actor MacNodeRuntime {
     }
 
     private func resolveA2UIHostUrl() async -> String? {
-        Self.resolveA2UIHostUrl(from: await self.canvasSurfaceUrl())
+        let canvasSurfaceUrl = await self.canvasSurfaceUrl()
+        return Self.resolveA2UIHostUrl(from: canvasSurfaceUrl)
     }
 
     private static func resolveA2UIHostUrl(from raw: String?) -> String? {
@@ -485,7 +486,8 @@ actor MacNodeRuntime {
         if !forceRefresh, let current = await self.resolveA2UIHostUrl() {
             return current
         }
-        return Self.resolveA2UIHostUrl(from: await self.refreshCanvasSurfaceUrl())
+        let refreshedCanvasSurfaceUrl = await self.refreshCanvasSurfaceUrl()
+        return Self.resolveA2UIHostUrl(from: refreshedCanvasSurfaceUrl)
     }
 
     private func isA2UIReady(poll: Bool = false) async -> Bool {

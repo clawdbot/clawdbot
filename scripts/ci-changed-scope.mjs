@@ -35,7 +35,7 @@ const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
 const WINDOWS_SCOPE_RE =
-  /^(src\/process\/|src\/infra\/windows-install-roots\.ts$|src\/plugins\/import-specifier(?:\.test)?\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|scripts\/(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|js)$|test\/scripts\/(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/ci\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
+  /^(src\/process\/|src\/infra\/windows-install-roots\.ts$|src\/plugins\/import-specifier(?:\.test)?\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|scripts\/(?:install\.ps1|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|js))$|test\/scripts\/(?:install-ps1|npm-runner|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/ci\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
 const WINDOWS_TEST_SCOPE_RE =
   /^(src\/process\/(?:exec\.windows|windows-command)\.test\.ts$|src\/infra\/windows-install-roots\.test\.ts$|src\/plugins\/import-specifier\.test\.ts$|src\/shared\/runtime-import\.test\.ts$|test\/scripts\/(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.test\.ts$)/;
 const TEST_ONLY_PATH_RE =
@@ -47,7 +47,7 @@ const NATIVE_ONLY_RE =
 const FAST_INSTALL_SMOKE_SCOPE_RE =
   /^(Dockerfile$|\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|scripts\/ci-changed-scope\.mjs$|scripts\/postinstall-bundled-plugins\.mjs$|scripts\/e2e\/(?:Dockerfile(?:\.qr-import)?|agents-delete-shared-workspace-docker\.sh|gateway-network-docker\.sh)$|extensions\/[^/]+\/(?:package\.json|openclaw\.plugin\.json)$|\.github\/workflows\/install-smoke\.yml$|\.github\/actions\/setup-node-env\/action\.yml$)/;
 const FULL_INSTALL_SMOKE_SCOPE_RE =
-  /^(Dockerfile$|\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|scripts\/ci-changed-scope\.mjs$|scripts\/install\.sh$|scripts\/test-install-sh-docker\.sh$|scripts\/docker\/|scripts\/e2e\/(?:Dockerfile(?:\.qr-import)?|qr-import-docker\.sh|bun-global-install-smoke\.sh)$|\.github\/workflows\/install-smoke\.yml$|\.github\/actions\/setup-node-env\/action\.yml$)/;
+  /^(Dockerfile$|\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|scripts\/ci-changed-scope\.mjs$|scripts\/install(?:-cli)?\.sh$|scripts\/install\.ps1$|scripts\/test-install-sh-docker\.sh$|scripts\/docker\/|scripts\/e2e\/(?:Dockerfile(?:\.qr-import)?|qr-import-docker\.sh|bun-global-install-smoke\.sh)$|\.github\/workflows\/(?:install-smoke|website-installer-sync)\.yml$|\.github\/actions\/setup-node-env\/action\.yml$)/;
 const FAST_INSTALL_SMOKE_RUNTIME_SCOPE_RE = /^src\/(?:channels|gateway|plugin-sdk|plugins)\//;
 const NODE_FAST_PLUGIN_CONTRACT_SCOPE_RE =
   /^(src\/plugins\/contracts\/(?:inventory\/bundled-capability-metadata|registry|tts-contract-suites)\.ts$|scripts\/test-projects(?:\.test-support)?\.mjs$|test\/scripts\/test-projects\.test\.ts$)/;

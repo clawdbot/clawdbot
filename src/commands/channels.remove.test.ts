@@ -174,13 +174,10 @@ describe("channelsRemoveCommand", () => {
 
     expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
     expect(registryRefreshMocks.refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
-    expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        channels: expect.objectContaining({
-          "external-chat": expect.anything(),
-        }),
-      }),
-    );
+    const writtenConfig = configMocks.writeConfigFile.mock.calls[0]?.[0] as
+      | { channels?: Record<string, unknown> }
+      | undefined;
+    expect(writtenConfig?.channels?.["external-chat"]).toBeUndefined();
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
@@ -243,12 +240,9 @@ describe("channelsRemoveCommand", () => {
       clientName: "gateway-client",
       deviceIdentity: null,
     });
-    expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        channels: expect.objectContaining({
-          "external-chat": expect.anything(),
-        }),
-      }),
-    );
+    const writtenConfig = configMocks.writeConfigFile.mock.calls[0]?.[0] as
+      | { channels?: Record<string, unknown> }
+      | undefined;
+    expect(writtenConfig?.channels?.["external-chat"]).toBeUndefined();
   });
 });

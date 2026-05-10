@@ -54,11 +54,9 @@ describe("sanitizeSessionHistory toolResult details stripping", () => {
     });
 
     const toolResult = sanitized.find((m) => m && typeof m === "object" && m.role === "toolResult");
-    expect(toolResult).toMatchObject({
-      role: "toolResult",
-      toolCallId: "call1",
-      toolName: "web_fetch",
-    });
+    expect(toolResult?.role).toBe("toolResult");
+    expect(toolResult?.toolCallId).toBe("call1");
+    expect(toolResult?.toolName).toBe("web_fetch");
     expect(toolResult).not.toHaveProperty("details");
 
     const serialized = JSON.stringify(sanitized);
@@ -80,9 +78,10 @@ describe("sanitizeSessionHistory toolResult details stripping", () => {
       sessionId: "test",
     });
 
-    expect(sanitized[0]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "plain reply" }],
-    });
+    const assistant = sanitized[0];
+    if (!assistant || assistant.role !== "assistant") {
+      throw new Error("Expected sanitized first message to be an assistant message");
+    }
+    expect(assistant?.content).toEqual([{ type: "text", text: "plain reply" }]);
   });
 });

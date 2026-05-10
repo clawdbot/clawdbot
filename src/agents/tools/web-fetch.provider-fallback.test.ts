@@ -95,12 +95,10 @@ describe("web_fetch provider fallback normalization", () => {
     expect(details.title).toContain("Provider Title");
     expect(details.warning).toContain("Provider Warning");
     expect(details.truncated).toBe(true);
-    expect(details.externalContent).toMatchObject({
-      untrusted: true,
-      source: "web_fetch",
-      wrapped: true,
-      provider: "firecrawl",
-    });
+    expect(details.externalContent?.untrusted).toBe(true);
+    expect(details.externalContent?.source).toBe("web_fetch");
+    expect(details.externalContent?.wrapped).toBe(true);
+    expect(details.externalContent?.provider).toBe("firecrawl");
   });
 
   it("keeps requested url and only accepts safe provider finalUrl values", async () => {
@@ -209,17 +207,15 @@ describe("web_fetch provider fallback normalization", () => {
 
     expect(details.wrappedLength).toBeGreaterThan(200);
     expect(details.wrappedLength).toBeLessThanOrEqual(640);
-    expect(details.externalContent).toMatchObject({
-      provider: "firecrawl",
-    });
-    expect(resolveWebFetchDefinitionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: runtimeConfig,
-        runtimeWebFetch: expect.objectContaining({
-          selectedProvider: "firecrawl",
-        }),
-      }),
-    );
+    expect(details.externalContent?.provider).toBe("firecrawl");
+    const definitionInput = resolveWebFetchDefinitionMock.mock.calls[0]?.[0] as
+      | {
+          config?: OpenClawConfig;
+          runtimeWebFetch?: { selectedProvider?: string };
+        }
+      | undefined;
+    expect(definitionInput?.config).toBe(runtimeConfig);
+    expect(definitionInput?.runtimeWebFetch?.selectedProvider).toBe("firecrawl");
   });
 
   it("scopes provider fallback cache entries by the late-bound provider", async () => {

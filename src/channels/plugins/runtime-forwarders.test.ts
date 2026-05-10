@@ -3,6 +3,11 @@ import {
   createRuntimeDirectoryLiveAdapter,
   createRuntimeOutboundDelegates,
 } from "./runtime-forwarders.js";
+import type { ChannelOutboundAdapter } from "./types.adapters.js";
+
+type RenderPresentationParams = Parameters<
+  NonNullable<ChannelOutboundAdapter["renderPresentation"]>
+>[0];
 
 describe("createRuntimeDirectoryLiveAdapter", () => {
   it("forwards live directory calls through the runtime getter", async () => {
@@ -28,16 +33,37 @@ describe("createRuntimeDirectoryLiveAdapter", () => {
 
 describe("createRuntimeOutboundDelegates", () => {
   it("forwards outbound methods through the runtime getter", async () => {
+    const renderPresentation = vi.fn(async (ctx: RenderPresentationParams) => ({
+      ...ctx.payload,
+      text: "rendered",
+    }));
+    const sendPayload = vi.fn(async () => ({ channel: "x", messageId: "payload-1" }));
     const sendText = vi.fn(async () => ({ channel: "x", messageId: "1" }));
     const outbound = createRuntimeOutboundDelegates({
-      getRuntime: async () => ({ outbound: { sendText } }),
+      getRuntime: async () => ({ outbound: { renderPresentation, sendPayload, sendText } }),
+      renderPresentation: { resolve: (runtime) => runtime.outbound.renderPresentation },
+      sendPayload: { resolve: (runtime) => runtime.outbound.sendPayload },
       sendText: { resolve: (runtime) => runtime.outbound.sendText },
     });
 
+    await expect(
+      outbound.renderPresentation?.({
+        payload: { text: "raw" },
+        presentation: { blocks: [{ type: "text", text: "shown" }] },
+        ctx: {} as never,
+      }),
+    ).resolves.toEqual({
+      text: "rendered",
+    });
+    await expect(
+      outbound.sendPayload?.({ cfg: {} as never, to: "a", text: "hi", payload: { text: "hi" } }),
+    ).resolves.toEqual({ channel: "x", messageId: "payload-1" });
     await expect(outbound.sendText?.({ cfg: {} as never, to: "a", text: "hi" })).resolves.toEqual({
       channel: "x",
       messageId: "1",
     });
+    expect(renderPresentation).toHaveBeenCalled();
+    expect(sendPayload).toHaveBeenCalled();
     expect(sendText).toHaveBeenCalled();
   });
 

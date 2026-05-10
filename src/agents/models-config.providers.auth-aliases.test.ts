@@ -78,6 +78,23 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderSyntheticAuthWithPlugin,
 }));
 
+function expectAuthResult(
+  value: ReturnType<ReturnType<typeof createProviderAuthResolver>>,
+  expected: {
+    apiKey?: string;
+    mode: string;
+    source: string;
+    profileId?: string;
+  },
+) {
+  expect(value.apiKey).toBe(expected.apiKey);
+  expect(value.mode).toBe(expected.mode);
+  expect(value.source).toBe(expected.source);
+  if ("profileId" in expected) {
+    expect(value.profileId).toBe(expected.profileId);
+  }
+}
+
 describe("provider auth aliases", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -95,12 +112,12 @@ describe("provider auth aliases", () => {
       { version: 1, profiles: {} },
     );
 
-    expect(resolveAuth("fixture-provider")).toMatchObject({
+    expectAuthResult(resolveAuth("fixture-provider"), {
       apiKey: "FIXTURE_PROVIDER_API_KEY",
       mode: "api_key",
       source: "env",
     });
-    expect(resolveAuth("fixture-provider-plan")).toMatchObject({
+    expectAuthResult(resolveAuth("fixture-provider-plan"), {
       apiKey: "FIXTURE_PROVIDER_API_KEY",
       mode: "api_key",
       source: "env",
@@ -119,13 +136,13 @@ describe("provider auth aliases", () => {
       },
     });
 
-    expect(resolveAuth("fixture-provider")).toMatchObject({
+    expectAuthResult(resolveAuth("fixture-provider"), {
       apiKey: "FIXTURE_PROVIDER_API_KEY",
       mode: "api_key",
       source: "profile",
       profileId: "fixture-provider:default",
     });
-    expect(resolveAuth("fixture-provider-plan")).toMatchObject({
+    expectAuthResult(resolveAuth("fixture-provider-plan"), {
       apiKey: "FIXTURE_PROVIDER_API_KEY",
       mode: "api_key",
       source: "profile",
@@ -169,12 +186,12 @@ describe("provider auth aliases", () => {
       {},
     );
 
-    expect(resolveAuth("openai")).toMatchObject({
+    expectAuthResult(resolveAuth("openai"), {
       apiKey: "OPENAI_API_KEY",
       mode: "api_key",
       source: "env",
     });
-    expect(resolveAuth("evil-openai")).toMatchObject({
+    expectAuthResult(resolveAuth("evil-openai"), {
       apiKey: undefined,
       mode: "none",
       source: "none",
@@ -225,7 +242,7 @@ describe("provider auth aliases", () => {
       },
     );
 
-    expect(resolveAuth("openai-compatible")).toMatchObject({
+    expectAuthResult(resolveAuth("openai-compatible"), {
       apiKey: "OPENAI_API_KEY",
       mode: "api_key",
       source: "env",

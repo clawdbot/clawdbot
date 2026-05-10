@@ -1,6 +1,7 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { ensureModelAllowlistEntry } from "openclaw/plugin-sdk/provider-onboard";
+import { applyVolcengineToolSchemaCompat } from "./api.js";
 import { DOUBAO_CODING_MODEL_CATALOG, DOUBAO_MODEL_CATALOG } from "./models.js";
 import { buildDoubaoCodingProvider, buildDoubaoProvider } from "./provider-catalog.js";
 import { buildVolcengineSpeechProvider } from "./speech-provider.js";
@@ -18,6 +19,7 @@ export default definePluginEntry({
       label: "Volcengine",
       docsPath: "/concepts/model-providers#volcano-engine-doubao",
       envVars: ["VOLCANO_ENGINE_API_KEY"],
+      hookAliases: ["volcengine-plan"],
       auth: [
         createProviderApiKeyAuthMethod({
           providerId: PROVIDER_ID,
@@ -78,6 +80,7 @@ export default definePluginEntry({
         }));
         return [...volcengineModels, ...volcenginePlanModels];
       },
+      normalizeResolvedModel: ({ model }) => applyVolcengineToolSchemaCompat(model),
     });
     api.registerSpeechProvider(buildVolcengineSpeechProvider());
   },

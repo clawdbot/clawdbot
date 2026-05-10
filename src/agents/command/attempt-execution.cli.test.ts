@@ -881,6 +881,65 @@ describe("CLI attempt execution", () => {
     );
   });
 
+  it("forwards trusted elevated defaults to embedded agent runs", async () => {
+    const sessionKey = "agent:main:telegram:direct:123";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-elevated-followup",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const bashElevated = {
+      enabled: true,
+      allowed: true,
+      defaultLevel: "on" as const,
+    };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedPiRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "openai",
+      originalProvider: "openai",
+      modelOverride: "gpt-5.4",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "follow up after approved exec",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-elevated-followup",
+      opts: {
+        senderIsOwner: false,
+        bashElevated,
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "telegram",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "openai",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-5.4",
+        bashElevated,
+      }),
+    );
+  });
+
   it("forwards one-shot CLI cleanup to CLI providers", async () => {
     const sessionKey = "agent:main:direct:cleanup-claude-cli";
     const sessionEntry: SessionEntry = {

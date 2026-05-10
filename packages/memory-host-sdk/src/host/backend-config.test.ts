@@ -190,7 +190,7 @@ describe("resolveMemoryBackendConfig", () => {
     if (!custom) {
       throw new Error("expected custom-notes qmd collection");
     }
-    expect(custom).toMatchObject({ path: path.resolve("/workspace/root", "notes") });
+    expect(custom.path).toBe(path.resolve("/workspace/root", "notes"));
   });
 
   it("scopes qmd collection names per agent", () => {
@@ -442,12 +442,8 @@ describe("memorySearch.extraPaths integration", () => {
     expect(result.backend).toBe("qmd");
     const paths = customCollectionPaths(result);
     expect(paths.length).toBeGreaterThanOrEqual(2);
-    expect(paths).toEqual(
-      expect.arrayContaining([
-        resolveComparablePath("/home/user/docs"),
-        resolveComparablePath("/home/user/vault"),
-      ]),
-    );
+    expect(paths).toContain(resolveComparablePath("/home/user/docs"));
+    expect(paths).toContain(resolveComparablePath("/home/user/vault"));
   });
 
   it("merges default and per-agent memorySearch.extraPaths for QMD collections", () => {

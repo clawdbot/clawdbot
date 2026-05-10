@@ -174,6 +174,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     },
     turn: {
       run: runChannelTurn,
+      runAssembled: dispatchAssembledChannelTurn,
       runResolved: runResolvedChannelTurn,
       buildContext: buildChannelTurnContext,
       runPrepared: runPreparedChannelTurn,

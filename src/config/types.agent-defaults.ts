@@ -19,6 +19,7 @@ import type { MemorySearchConfig } from "./types.tools.js";
 export type AgentContextInjection = "always" | "continuation-skip" | "never";
 export type OptionalBootstrapFileName = "SOUL.md" | "USER.md" | "HEARTBEAT.md" | "IDENTITY.md";
 export type EmbeddedPiExecutionContract = "default" | "strict-agentic";
+export type SubagentDelegationMode = "suggest" | "prefer";
 
 export type Gpt5PromptOverlayConfig = {
   /** Friendly interaction-style layer for GPT-5-family models (default: friendly). */
@@ -149,6 +150,8 @@ export type CliBackendConfig = {
   imagePathScope?: "temp" | "workspace";
   /** Serialize runs for this CLI. */
   serialize?: boolean;
+  /** Opt in to bounded raw transcript reseed before compaction for safe session resets. */
+  reseedFromRawTranscriptWhenUncompacted?: boolean;
   /** Runtime reliability tuning for this backend's process lifecycle. */
   reliability?: {
     /** Live-session output caps for CLIs that stream JSONL through a long-lived process. */
@@ -420,6 +423,8 @@ export type AgentDefaultsConfig = {
   maxConcurrent?: number;
   /** Sub-agent defaults (spawned via sessions_spawn). */
   subagents?: {
+    /** Prompt-only guidance for how strongly the main agent should delegate work. Default: "suggest". */
+    delegationMode?: SubagentDelegationMode;
     /** Default allowlist of target agent ids for sessions_spawn. Use "*" to allow any. */
     allowAgents?: string[];
     /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 1. */

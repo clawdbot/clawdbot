@@ -166,7 +166,7 @@ describe("discord config schema", () => {
   it("accepts Discord realtime voice modes", () => {
     const cfg = expectValidDiscordConfig({
       voice: {
-        mode: "bidi",
+        mode: "agent-proxy",
         model: "openai-codex/gpt-5.5",
         realtime: {
           provider: "openai",
@@ -175,6 +175,7 @@ describe("discord config schema", () => {
           toolPolicy: "safe-read-only",
           consultPolicy: "always",
           bargeIn: true,
+          minBargeInAudioEndMs: 500,
           providers: {
             openai: {
               apiKey: "sk-test",
@@ -185,7 +186,7 @@ describe("discord config schema", () => {
       },
     });
 
-    expect(cfg.voice?.mode).toBe("bidi");
+    expect(cfg.voice?.mode).toBe("agent-proxy");
     expect(cfg.voice?.model).toBe("openai-codex/gpt-5.5");
     expect(cfg.voice?.realtime?.provider).toBe("openai");
     expect(cfg.voice?.realtime?.model).toBe("gpt-realtime-2");
@@ -193,14 +194,18 @@ describe("discord config schema", () => {
     expect(cfg.voice?.realtime?.toolPolicy).toBe("safe-read-only");
     expect(cfg.voice?.realtime?.consultPolicy).toBe("always");
     expect(cfg.voice?.realtime?.bargeIn).toBe(true);
+    expect(cfg.voice?.realtime?.minBargeInAudioEndMs).toBe(500);
   });
 
   it("rejects invalid Discord realtime voice modes", () => {
     for (const voice of [
       { mode: "realtime" },
+      { mode: "talk-buffer" },
       { mode: "bidi", realtime: { toolPolicy: "dangerous" } },
-      { mode: "talk-buffer", realtime: { consultPolicy: "substantive" } },
-      { mode: "talk-buffer", realtime: { debounceMs: 10_001 } },
+      { mode: "agent-proxy", realtime: { consultPolicy: "substantive" } },
+      { mode: "agent-proxy", realtime: { debounceMs: 10_001 } },
+      { mode: "agent-proxy", realtime: { minBargeInAudioEndMs: -1 } },
+      { mode: "agent-proxy", realtime: { minBargeInAudioEndMs: 10_001 } },
       { agentSession: { mode: "target" } },
     ]) {
       expectInvalidDiscordConfig({ voice });

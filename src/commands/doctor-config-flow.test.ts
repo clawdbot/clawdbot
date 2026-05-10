@@ -1414,9 +1414,7 @@ describe("doctor config flow", () => {
         },
       },
     });
-    expect(doctorWarnings).not.toEqual(
-      expect.arrayContaining([expect.stringContaining("mutable allowlist")]),
-    );
+    expect(doctorWarnings.some((line) => line.includes("mutable allowlist"))).toBe(false);
   });
 
   it("warns when hooks transformsDir points outside the hook transforms root", async () => {
@@ -1541,16 +1539,14 @@ describe("doctor config flow", () => {
       },
     });
 
-    expect(doctorWarnings).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining(
+    expect(
+      doctorWarnings.some((line) =>
+        line.includes(
           'channels.telegram: channel is configured, but plugin "telegram" is disabled by plugins.entries.telegram.enabled=false.',
         ),
-      ]),
-    );
-    expect(doctorWarnings).not.toEqual(
-      expect.arrayContaining([expect.stringContaining("first-time setup mode")]),
-    );
+      ),
+    ).toBe(true);
+    expect(doctorWarnings.some((line) => line.includes("first-time setup mode"))).toBe(false);
   });
 
   it("shows plugin-blocked guidance instead of first-time Telegram guidance when plugins are disabled globally", async () => {
@@ -1566,16 +1562,14 @@ describe("doctor config flow", () => {
       },
     });
 
-    expect(doctorWarnings).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining(
+    expect(
+      doctorWarnings.some((line) =>
+        line.includes(
           "channels.telegram: channel is configured, but plugins.enabled=false blocks channel plugins globally.",
         ),
-      ]),
-    );
-    expect(doctorWarnings).not.toEqual(
-      expect.arrayContaining([expect.stringContaining("first-time setup mode")]),
-    );
+      ),
+    ).toBe(true);
+    expect(doctorWarnings.some((line) => line.includes("first-time setup mode"))).toBe(false);
   });
 
   it("warns on mutable Zalouser group entries when dangerous name matching is disabled", async () => {
@@ -1609,9 +1603,7 @@ describe("doctor config flow", () => {
       },
     });
 
-    expect(doctorWarnings).not.toEqual(
-      expect.arrayContaining([expect.stringContaining("channels.zalouser.groups")]),
-    );
+    expect(doctorWarnings.some((line) => line.includes("channels.zalouser.groups"))).toBe(false);
   });
 
   it("warns when imessage group allowlist is empty even if allowFrom is set", async () => {
@@ -2446,28 +2438,18 @@ describe("doctor config flow", () => {
       };
     };
     expect(cfg.heartbeat).toBeUndefined();
-    expect(cfg.agents?.defaults?.heartbeat).toMatchObject({
-      model: "anthropic/claude-3-5-haiku-20241022",
-      every: "30m",
-    });
+    expect(cfg.agents?.defaults?.heartbeat?.model).toBe("anthropic/claude-3-5-haiku-20241022");
+    expect(cfg.agents?.defaults?.heartbeat?.every).toBe("30m");
     expect(cfg.gateway?.bind).toBe("lan");
     expect(cfg.session?.maintenance?.rotateBytes).toBeUndefined();
-    expect(cfg.session?.threadBindings).toMatchObject({
-      idleHours: 24,
-    });
-    expect(cfg.channels?.discord?.threadBindings).toMatchObject({
-      idleHours: 12,
-    });
-    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings).toMatchObject({
-      idleHours: 6,
-    });
+    expect(cfg.session?.threadBindings?.idleHours).toBe(24);
+    expect(cfg.channels?.discord?.threadBindings?.idleHours).toBe(12);
+    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings?.idleHours).toBe(6);
     expect(cfg.session?.threadBindings?.ttlHours).toBeUndefined();
     expect(cfg.channels?.discord?.threadBindings?.ttlHours).toBeUndefined();
     expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings?.ttlHours).toBeUndefined();
-    expect(cfg.channels?.defaults?.heartbeat).toMatchObject({
-      showOk: true,
-      showAlerts: false,
-    });
+    expect(cfg.channels?.defaults?.heartbeat?.showOk).toBe(true);
+    expect(cfg.channels?.defaults?.heartbeat?.showAlerts).toBe(false);
   });
 
   it("warns clearly about legacy config surfaces and points to doctor --fix", async () => {

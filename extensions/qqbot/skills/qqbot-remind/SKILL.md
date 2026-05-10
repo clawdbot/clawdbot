@@ -1,6 +1,6 @@
 ---
 name: qqbot-remind
-description: QQBot 定时提醒。支持一次性和周期性提醒的创建、查询、取消。当通过 QQ 通道通信且涉及提醒/定时任务时使用。
+description: QQBot scheduled reminders. Create, list, and cancel one-time or recurring reminders when a QQ conversation involves reminders, alarms, or scheduled tasks.
 metadata: { "openclaw": { "emoji": "⏰", "requires": { "config": ["channels.qqbot"] } } }
 ---
 

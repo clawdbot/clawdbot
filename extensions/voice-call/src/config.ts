@@ -287,6 +287,20 @@ export type VoiceCallRealtimeAgentContextConfig = z.infer<
   typeof VoiceCallRealtimeAgentContextConfigSchema
 >;
 
+export const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "adaptive",
+  "max",
+]);
+export type VoiceCallRealtimeConsultThinkingLevel = z.infer<
+  typeof VoiceCallRealtimeConsultThinkingLevelSchema
+>;
+
 const VoiceCallStreamingProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
   .default({});
@@ -305,6 +319,10 @@ const VoiceCallRealtimeConfigSchema = z
     toolPolicy: VoiceCallRealtimeToolPolicySchema.default("safe-read-only"),
     /** Guidance for when the realtime model should call the OpenClaw agent consult tool. */
     consultPolicy: VoiceCallRealtimeConsultPolicySchema.default("auto"),
+    /** Optional thinking level override for the regular agent behind realtime consults. */
+    consultThinkingLevel: VoiceCallRealtimeConsultThinkingLevelSchema.optional(),
+    /** Optional fast mode override for the regular agent behind realtime consults. */
+    consultFastMode: z.boolean().optional(),
     /** Tool definitions exposed to the realtime provider. */
     tools: z.array(RealtimeToolSchema).default([]),
     /** Low-latency memory/session context for the consult tool. */
@@ -686,6 +704,10 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
         defaultRealtimeStreamPathForServePath(serve.path ?? defaults.serve.path),
       tools:
         (config.realtime?.tools as RealtimeToolConfig[] | undefined) ?? defaults.realtime.tools,
+      consultThinkingLevel: VoiceCallRealtimeConsultThinkingLevelSchema.optional().parse(
+        config.realtime?.consultThinkingLevel ?? defaults.realtime.consultThinkingLevel,
+      ),
+      consultFastMode: config.realtime?.consultFastMode ?? defaults.realtime.consultFastMode,
       fastContext: realtimeFastContext,
       agentContext: realtimeAgentContext,
       providers: realtimeProviders,

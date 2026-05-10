@@ -98,25 +98,15 @@ describe("flows commands", () => {
         }>;
       };
 
-      expect(payload).toMatchObject({
-        count: 1,
-        status: "blocked",
-        flows: [
-          {
-            flowId: flow.flowId,
-            taskSummary: {
-              total: 1,
-              active: 1,
-            },
-            tasks: [
-              {
-                runId: "run-child-1",
-                label: "Inspect PR 123",
-              },
-            ],
-          },
-        ],
-      });
+      expect(payload.count).toBe(1);
+      expect(payload.status).toBe("blocked");
+      expect(payload.flows).toHaveLength(1);
+      expect(payload.flows[0]?.flowId).toBe(flow.flowId);
+      expect(payload.flows[0]?.taskSummary.total).toBe(1);
+      expect(payload.flows[0]?.taskSummary.active).toBe(1);
+      expect(payload.flows[0]?.tasks).toHaveLength(1);
+      expect(payload.flows[0]?.tasks[0]?.runId).toBe("run-child-1");
+      expect(payload.flows[0]?.tasks[0]?.label).toBe("Inspect PR 123");
     });
   });
 

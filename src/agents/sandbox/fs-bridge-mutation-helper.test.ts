@@ -57,7 +57,14 @@ function runWritePlan(args: string[], input?: string, env?: NodeJS.ProcessEnv) {
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  let err: unknown;
+  try {
+    await fs.access(targetPath);
+  } catch (caught) {
+    err = caught;
+  }
+  expect(err).toBeInstanceOf(Error);
+  expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
 const hasAbsolutePythonCandidate = SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES.some((candidate) =>

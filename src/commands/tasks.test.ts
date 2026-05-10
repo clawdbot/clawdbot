@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -10,6 +12,7 @@ import {
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { tasksAuditCommand, tasksMaintenanceCommand } from "./tasks.js";
 
 function createRuntime(): RuntimeEnv {
@@ -29,15 +32,17 @@ const zeroTaskAuditCounts = {
   stale_running: 0,
 };
 
-async function withTaskCommandStateDir(run: () => Promise<void>): Promise<void> {
+async function withTaskCommandStateDir(
+  run: (state: OpenClawTestState) => Promise<void>,
+): Promise<void> {
   await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-tasks-command-" },
-    async () => {
+    async (state) => {
       resetTaskRegistryDeliveryRuntimeForTests();
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
       try {
-        await run();
+        await run(state);
       } finally {
         resetTaskRegistryDeliveryRuntimeForTests();
         resetTaskRegistryForTests({ persist: false });
@@ -120,11 +125,9 @@ describe("tasks commands", () => {
       };
 
       expect(limitedPayload.findings).toHaveLength(1);
-      expect(limitedPayload.findings[0]).toMatchObject({
-        kind: "task_flow",
-        code: "stale_running",
-        token: runningFlow.flowId,
-      });
+      expect(limitedPayload.findings[0]?.kind).toBe("task_flow");
+      expect(limitedPayload.findings[0]?.code).toBe("stale_running");
+      expect(limitedPayload.findings[0]?.token).toBe(runningFlow.flowId);
     });
   });
 
@@ -163,6 +166,113 @@ describe("tasks commands", () => {
       expect(payload.auditBefore.taskFlows.byCode.stale_running).toBe(0);
       expect(payload.auditAfter.byCode).toStrictEqual(zeroTaskAuditCounts);
       expect(payload.auditAfter.taskFlows.byCode.stale_running).toBe(0);
+    });
+  });
+
+  it("applies a conservative session registry sweep for stale cron run sessions", async () => {
+    await withTaskCommandStateDir(async (state) => {
+      const now = Date.now();
+      vi.useFakeTimers();
+      vi.setSystemTime(now);
+      const sessionsDir = state.sessionsDir("main");
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const old = now - 8 * 24 * 60 * 60_000;
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            "agent:main:cron:done-job:run:old-run": {
+              sessionId: "done-run",
+              updatedAt: old,
+            },
+            "agent:main:cron:running-job:run:old-run": {
+              sessionId: "running-run",
+              updatedAt: old,
+            },
+            "agent:main:cron:done-job:run:recent-run": {
+              sessionId: "recent-run",
+              updatedAt: now - 60_000,
+            },
+            "agent:main:telegram:dm:old": {
+              sessionId: "ordinary-old-session",
+              updatedAt: old,
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      await state.writeJson("cron/jobs.json", {
+        version: 1,
+        jobs: [
+          {
+            id: "running-job",
+            name: "Running job",
+            enabled: true,
+            schedule: { kind: "every", everyMs: 60_000 },
+            sessionTarget: "isolated",
+            sessionKey: "cron:running-job",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "ping" },
+            delivery: { mode: "none" },
+            createdAtMs: now,
+            updatedAtMs: now,
+            state: {},
+          },
+          {
+            id: "done-job",
+            name: "Done job",
+            enabled: true,
+            schedule: { kind: "every", everyMs: 60_000 },
+            sessionTarget: "isolated",
+            sessionKey: "cron:done-job",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "ping" },
+            delivery: { mode: "none" },
+            createdAtMs: now,
+            updatedAtMs: now,
+            state: {},
+          },
+        ],
+      });
+      await state.writeJson("cron/jobs-state.json", {
+        version: 1,
+        jobs: {
+          "running-job": {
+            updatedAtMs: now,
+            state: { runningAtMs: now - 5_000 },
+          },
+          "done-job": {
+            updatedAtMs: now,
+            state: {},
+          },
+        },
+      });
+
+      const runtime = createRuntime();
+      await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
+
+      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
+        maintenance: {
+          sessions: {
+            pruned: number;
+            runningCronJobs: number;
+            stores: Array<{ pruned: number; preservedRunning: number }>;
+          };
+        };
+      };
+      expect(payload.maintenance.sessions.pruned).toBe(1);
+      expect(payload.maintenance.sessions.runningCronJobs).toBe(1);
+      expect(payload.maintenance.sessions.stores[0]?.pruned).toBe(1);
+      expect(payload.maintenance.sessions.stores[0]?.preservedRunning).toBe(1);
+
+      const updated = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
+      expect(updated["agent:main:cron:done-job:run:old-run"]).toBeUndefined();
+      expect(updated["agent:main:cron:running-job:run:old-run"]).toBeDefined();
+      expect(updated["agent:main:cron:done-job:run:recent-run"]).toBeDefined();
+      expect(updated["agent:main:telegram:dm:old"]).toBeDefined();
     });
   });
 });

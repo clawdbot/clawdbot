@@ -205,6 +205,8 @@ const ModelCompatSchema = z
         z.literal("openai"),
         z.literal("openrouter"),
         z.literal("deepseek"),
+        z.literal("qwen"),
+        z.literal("qwen-chat-template"),
         z.literal("zai"),
       ])
       .optional(),
@@ -640,6 +642,7 @@ export const CliBackendSchema = z
     imageMode: z.union([z.literal("repeat"), z.literal("list")]).optional(),
     imagePathScope: z.union([z.literal("temp"), z.literal("workspace")]).optional(),
     serialize: z.boolean().optional(),
+    reseedFromRawTranscriptWhenUncompacted: z.boolean().optional(),
     reliability: z
       .object({
         outputLimits: CliBackendOutputLimitsSchema,

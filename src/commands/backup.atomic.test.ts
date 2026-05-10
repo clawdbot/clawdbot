@@ -56,7 +56,12 @@ describe("backupCreateCommand atomic archive write", () => {
   }
 
   async function expectPathMissing(targetPath: string): Promise<void> {
-    await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+    try {
+      await fs.access(targetPath);
+      throw new Error(`expected missing path: ${targetPath}`);
+    } catch (error) {
+      expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    }
   }
 
   it("does not leave a partial final archive behind when tar creation fails", async () => {

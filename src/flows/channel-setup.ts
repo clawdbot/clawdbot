@@ -238,7 +238,7 @@ export async function setupChannels(
   const shouldConfigure = options?.skipConfirm
     ? true
     : await prompter.confirm({
-        message: "Configure chat channels now?",
+        message: "Set up a chat channel now?",
         initialValue: true,
       });
   if (!shouldConfigure) {
@@ -373,7 +373,9 @@ export async function setupChannels(
     const disabledHint = resolveConfigDisabledHint(channel);
     if (disabledHint) {
       await prompter.note(
-        `${channel} cannot be configured while ${disabledHint}. Enable it before setup.`,
+        `${channel} cannot be configured while ${disabledHint}. Enable it, then run ${formatCliCommand(
+          "openclaw channels add",
+        )} again.`,
         "Channel setup",
       );
       return false;
@@ -382,7 +384,9 @@ export async function setupChannels(
     next = result.config;
     if (!result.enabled) {
       await prompter.note(
-        `Cannot enable ${channel}: ${result.reason ?? "plugin disabled"}.`,
+        `Cannot enable ${channel}: ${result.reason ?? "plugin disabled"}. Run ${formatCliCommand(
+          "openclaw plugins list",
+        )} to inspect plugin state.`,
         "Channel setup",
       );
       return false;
@@ -447,7 +451,12 @@ export async function setupChannels(
     }
     const adapter = getVisibleSetupFlowAdapter(channel);
     if (!adapter) {
-      await prompter.note(`${channel} does not support guided setup yet.`, "Channel setup");
+      await prompter.note(
+        `${channel} does not have an interactive setup screen yet. Run ${formatCliCommand(
+          `openclaw channels add --channel ${channel} --help`,
+        )} for supported flags.`,
+        "Channel setup",
+      );
       return;
     }
     const result = await adapter.configure({

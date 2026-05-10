@@ -388,17 +388,12 @@ describe("subagent announce seam flow", () => {
 
     expect(didAnnounce).toBe(true);
     expect(agentSpy).toHaveBeenCalledTimes(1);
-    expect(agentSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "agent",
-        params: expect.objectContaining({
-          sessionKey: "agent:main:main",
-          deliver: false,
-          bestEffortDeliver: true,
-          accountId: "default",
-        }),
-      }),
-    );
+    const agentCall = agentSpy.mock.calls[0]?.[0];
+    expect(agentCall?.method).toBe("agent");
+    expect(agentCall?.params?.sessionKey).toBe("agent:main:main");
+    expect(agentCall?.params?.deliver).toBe(false);
+    expect(agentCall?.params?.bestEffortDeliver).toBe(true);
+    expect(agentCall?.params?.accountId).toBe("default");
   });
 
   it("keeps nested subagent completion announces channel-less in session-only mode", async () => {
@@ -468,13 +463,9 @@ describe("subagent announce seam flow", () => {
     expect(didAnnounce).toBe(true);
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const agentCall = agentSpy.mock.calls[0]?.[0];
-    expect(agentCall?.params).toEqual(
-      expect.objectContaining({
-        deliver: true,
-        channel: "telegram",
-        accountId: "bot-123",
-        to: "-1001234567890",
-      }),
-    );
+    expect(agentCall?.params?.deliver).toBe(true);
+    expect(agentCall?.params?.channel).toBe("telegram");
+    expect(agentCall?.params?.accountId).toBe("bot-123");
+    expect(agentCall?.params?.to).toBe("-1001234567890");
   });
 });

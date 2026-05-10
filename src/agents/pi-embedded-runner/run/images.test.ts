@@ -267,7 +267,7 @@ describe("loadImageFromRef", () => {
         },
       );
 
-      expect(image).toMatchObject({ type: "image" });
+      expect(image?.type).toBe("image");
       expect(image?.data.length).toBeGreaterThan(0);
     } finally {
       await fs.rm(sandboxParent, { recursive: true, force: true });

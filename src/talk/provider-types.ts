@@ -50,6 +50,11 @@ export type RealtimeVoiceToolCallEvent = {
 };
 
 export type RealtimeVoiceToolResultOptions = {
+  /**
+   * Submit the tool result without prompting the realtime provider to generate a new assistant
+   * response. Use when another channel has already delivered the user-visible answer.
+   */
+  suppressResponse?: boolean;
   willContinue?: boolean;
 };
 
@@ -95,6 +100,7 @@ export type RealtimeVoiceProviderConfiguredContext = {
 };
 
 export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
+  cfg?: OpenClawConfig;
   providerConfig: RealtimeVoiceProviderConfig;
   audioFormat?: RealtimeVoiceAudioFormat;
   instructions?: string;
@@ -104,11 +110,16 @@ export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
 };
 
 export type RealtimeVoiceBrowserSessionCreateRequest = {
+  cfg?: OpenClawConfig;
   providerConfig: RealtimeVoiceProviderConfig;
   instructions?: string;
   tools?: RealtimeVoiceTool[];
   model?: string;
   voice?: string;
+  vadThreshold?: number;
+  silenceDurationMs?: number;
+  prefixPaddingMs?: number;
+  reasoningEffort?: string;
 };
 
 export type RealtimeVoiceBrowserAudioContract = {
@@ -188,4 +199,6 @@ export type RealtimeVoiceBargeInOptions = {
    * This lets providers interrupt output even when the sink cannot provide real playback marks.
    */
   audioPlaybackActive?: boolean;
+  /** Interrupt even when normal barge-in audio-duration guards would treat the event as echo. */
+  force?: boolean;
 };

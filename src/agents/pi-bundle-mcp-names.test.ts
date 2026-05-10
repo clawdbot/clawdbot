@@ -14,6 +14,20 @@ describe("pi bundle MCP names", () => {
     expect(sanitizeServerName("vigil:harbor", usedNames)).toBe("vigil-harbor-2");
   });
 
+  it("keeps server and tool fragments provider-safe when they start with digits", () => {
+    const usedNames = new Set<string>();
+    const serverName = sanitizeServerName("12306", usedNames);
+
+    expect(serverName).toBe("mcp-12306");
+    expect(
+      buildSafeToolName({
+        serverName,
+        toolName: "2024-query",
+        reservedNames: new Set(),
+      }),
+    ).toBe(`mcp-12306${TOOL_NAME_SEPARATOR}tool-2024-query`);
+  });
+
   it("builds provider-safe tool names and avoids collisions", () => {
     const reservedNames = normalizeReservedToolNames(["memory__status"]);
 

@@ -97,6 +97,28 @@ export function isCliRuntimeAlias(runtime: string | undefined): boolean {
   return normalized ? CLI_RUNTIME_ALIASES.has(normalizeProviderId(normalized)) : false;
 }
 
+function canonicalizeRuntimeAliasProvider(provider: string): string {
+  return resolveLegacyRuntimeModelProviderAlias(provider)?.provider ?? provider;
+}
+
+function normalizeRuntimeModelRefForComparison(raw: string): string {
+  const trimmed = raw.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0 || slash >= trimmed.length - 1) {
+    return normalizeProviderId(canonicalizeRuntimeAliasProvider(trimmed));
+  }
+  const provider = trimmed.slice(0, slash).trim();
+  const model = trimmed.slice(slash + 1).trim();
+  const canonicalProvider = normalizeProviderId(canonicalizeRuntimeAliasProvider(provider));
+  return model ? `${canonicalProvider}/${model}` : canonicalProvider;
+}
+
+export function areRuntimeModelRefsEquivalent(left: string, right: string): boolean {
+  return (
+    normalizeRuntimeModelRefForComparison(left) === normalizeRuntimeModelRefForComparison(right)
+  );
+}
+
 function resolveConfiguredRuntime(params: {
   cfg?: OpenClawConfig;
   provider: string;

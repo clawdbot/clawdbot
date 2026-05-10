@@ -216,10 +216,15 @@ describe("spawnSubagentDirect filename validation", () => {
       : [];
     expect(retainedDirs).toHaveLength(0);
     const deleteCall = calls.find((entry) => entry.method === "sessions.delete");
-    expect(deleteCall?.params).toMatchObject({
-      key: expect.stringMatching(/^agent:main:subagent:/),
-      deleteTranscript: true,
-      emitLifecycleHooks: false,
-    });
+    const deleteParams = deleteCall?.params as
+      | {
+          key?: string;
+          deleteTranscript?: boolean;
+          emitLifecycleHooks?: boolean;
+        }
+      | undefined;
+    expect(deleteParams?.key).toMatch(/^agent:main:subagent:/);
+    expect(deleteParams?.deleteTranscript).toBe(true);
+    expect(deleteParams?.emitLifecycleHooks).toBe(false);
   });
 });

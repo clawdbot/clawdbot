@@ -124,6 +124,7 @@ describe("collectCodexRouteWarnings", () => {
       cfg: {
         agents: {
           defaults: {
+            agentRuntime: { id: "codex" },
             model: {
               primary: "openai-codex/gpt-5.5",
               fallbacks: ["openai-codex/gpt-5.4", "anthropic/claude-sonnet-4-6"],
@@ -191,7 +192,11 @@ describe("collectCodexRouteWarnings", () => {
     });
 
     expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toEqual([expect.stringContaining("Repaired Codex model routes")]);
+    expect(result.changes).toEqual([
+      expect.stringContaining("Repaired Codex model routes"),
+      "Removed agents.defaults.agentRuntime; runtime is now provider/model scoped.",
+      "Removed agents.list.worker.agentRuntime; runtime is now provider/model scoped.",
+    ]);
     expect(result.cfg.agents?.defaults?.model).toEqual({
       primary: "openai/gpt-5.5",
       fallbacks: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
@@ -207,11 +212,9 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.agents?.defaults?.models).toEqual({
       "openai/gpt-5.5": { alias: "codex" },
     });
-    expect(result.cfg.agents?.list?.[0]).toMatchObject({
-      id: "worker",
-      model: "openai/gpt-5.4",
-      agentRuntime: { id: "codex" },
-    });
+    expect(result.cfg.agents?.list?.[0]?.id).toBe("worker");
+    expect(result.cfg.agents?.list?.[0]?.model).toBe("openai/gpt-5.4");
+    expect(result.cfg.agents?.list?.[0]?.agentRuntime).toBeUndefined();
     expect(result.cfg.channels?.modelByChannel?.telegram?.default).toBe("openai/gpt-5.4");
     expect(result.cfg.hooks?.mappings?.[0]?.model).toBe("openai/gpt-5.4-mini");
     expect(result.cfg.hooks?.gmail?.model).toBe("openai/gpt-5.4");
@@ -271,26 +274,22 @@ describe("collectCodexRouteWarnings", () => {
     });
 
     expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
-    expect(store.main).toMatchObject({
-      updatedAt: 123,
-      modelProvider: "openai",
-      model: "gpt-5.5",
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
-      modelOverrideSource: "auto",
-      authProfileOverride: "openai-codex:default",
-      authProfileOverrideSource: "auto",
-      authProfileOverrideCompactionCount: 2,
-    });
+    expect(store.main.updatedAt).toBe(123);
+    expect(store.main.modelProvider).toBe("openai");
+    expect(store.main.model).toBe("gpt-5.5");
+    expect(store.main.providerOverride).toBe("openai");
+    expect(store.main.modelOverride).toBe("gpt-5.4");
+    expect(store.main.modelOverrideSource).toBe("auto");
+    expect(store.main.authProfileOverride).toBe("openai-codex:default");
+    expect(store.main.authProfileOverrideSource).toBe("auto");
+    expect(store.main.authProfileOverrideCompactionCount).toBe(2);
     expect(store.main.agentHarnessId).toBeUndefined();
     expect(store.main.agentRuntimeOverride).toBeUndefined();
     expect(store.main.fallbackNoticeSelectedModel).toBeUndefined();
     expect(store.main.fallbackNoticeActiveModel).toBeUndefined();
     expect(store.main.fallbackNoticeReason).toBeUndefined();
-    expect(store.other).toMatchObject({
-      updatedAt: 2,
-      agentHarnessId: "codex",
-    });
+    expect(store.other.updatedAt).toBe(2);
+    expect(store.other.agentHarnessId).toBe("codex");
   });
 
   it("keeps Codex session auth pins while leaving runtime unpinned", () => {
@@ -311,13 +310,11 @@ describe("collectCodexRouteWarnings", () => {
     });
 
     expect(result).toEqual({ changed: true, sessionKeys: ["main"] });
-    expect(store.main).toMatchObject({
-      updatedAt: 123,
-      providerOverride: "openai",
-      modelOverride: "gpt-5.5",
-      authProfileOverride: "openai-codex:default",
-      authProfileOverrideSource: "auto",
-    });
+    expect(store.main.updatedAt).toBe(123);
+    expect(store.main.providerOverride).toBe("openai");
+    expect(store.main.modelOverride).toBe("gpt-5.5");
+    expect(store.main.authProfileOverride).toBe("openai-codex:default");
+    expect(store.main.authProfileOverrideSource).toBe("auto");
     expect(store.main.agentHarnessId).toBeUndefined();
     expect(store.main.agentRuntimeOverride).toBeUndefined();
   });
@@ -343,12 +340,10 @@ describe("collectCodexRouteWarnings", () => {
     });
 
     expect(result).toEqual({ changed: false, sessionKeys: [] });
-    expect(store.main).toMatchObject({
-      updatedAt: 1,
-      agentHarnessId: "pi",
-      agentRuntimeOverride: "pi",
-      authProfileOverride: "openai:work",
-    });
+    expect(store.main.updatedAt).toBe(1);
+    expect(store.main.agentHarnessId).toBe("pi");
+    expect(store.main.agentRuntimeOverride).toBe("pi");
+    expect(store.main.authProfileOverride).toBe("openai:work");
   });
 
   it("repairs legacy routes without probing OAuth readiness", () => {

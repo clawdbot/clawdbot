@@ -40,7 +40,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { emitAgentEvent, onAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -130,6 +130,8 @@ type FallbackSelectionState = Pick<
   | "providerOverride"
   | "modelOverride"
   | "modelOverrideSource"
+  | "modelOverrideFallbackOriginProvider"
+  | "modelOverrideFallbackOriginModel"
   | "authProfileOverride"
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
@@ -139,6 +141,8 @@ const FALLBACK_SELECTION_STATE_KEYS = [
   "providerOverride",
   "modelOverride",
   "modelOverrideSource",
+  "modelOverrideFallbackOriginProvider",
+  "modelOverrideFallbackOriginModel",
   "authProfileOverride",
   "authProfileOverrideSource",
   "authProfileOverrideCompactionCount",
@@ -165,6 +169,20 @@ function setFallbackSelectionStateField(
     case "modelOverrideSource":
       if (entry.modelOverrideSource !== value) {
         entry.modelOverrideSource = value as SessionEntry["modelOverrideSource"];
+        return true;
+      }
+      return false;
+    case "modelOverrideFallbackOriginProvider":
+      if (entry.modelOverrideFallbackOriginProvider !== value) {
+        entry.modelOverrideFallbackOriginProvider =
+          value as SessionEntry["modelOverrideFallbackOriginProvider"];
+        return true;
+      }
+      return false;
+    case "modelOverrideFallbackOriginModel":
+      if (entry.modelOverrideFallbackOriginModel !== value) {
+        entry.modelOverrideFallbackOriginModel =
+          value as SessionEntry["modelOverrideFallbackOriginModel"];
         return true;
       }
       return false;
@@ -196,6 +214,8 @@ function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionS
     providerOverride: entry.providerOverride,
     modelOverride: entry.modelOverride,
     modelOverrideSource: entry.modelOverrideSource,
+    modelOverrideFallbackOriginProvider: entry.modelOverrideFallbackOriginProvider,
+    modelOverrideFallbackOriginModel: entry.modelOverrideFallbackOriginModel,
     authProfileOverride: entry.authProfileOverride,
     authProfileOverrideSource: entry.authProfileOverrideSource,
     authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
@@ -205,6 +225,8 @@ function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionS
 function buildFallbackSelectionState(params: {
   provider: string;
   model: string;
+  originProvider: string;
+  originModel: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
 }): FallbackSelectionState {
@@ -212,10 +234,30 @@ function buildFallbackSelectionState(params: {
     providerOverride: params.provider,
     modelOverride: params.model,
     modelOverrideSource: "auto",
+    modelOverrideFallbackOriginProvider: params.originProvider,
+    modelOverrideFallbackOriginModel: params.originModel,
     authProfileOverride: params.authProfileId,
     authProfileOverrideSource: params.authProfileId ? params.authProfileIdSource : undefined,
     authProfileOverrideCompactionCount: undefined,
   };
+}
+
+function resolveFallbackSelectionOrigin(params: { entry: SessionEntry; run: FollowupRun["run"] }): {
+  provider: string;
+  model: string;
+} {
+  if (params.entry.modelOverrideSource === "auto") {
+    const persistedOriginProvider = normalizeOptionalString(
+      params.entry.modelOverrideFallbackOriginProvider,
+    );
+    const persistedOriginModel = normalizeOptionalString(
+      params.entry.modelOverrideFallbackOriginModel,
+    );
+    if (persistedOriginProvider && persistedOriginModel) {
+      return { provider: persistedOriginProvider, model: persistedOriginModel };
+    }
+  }
+  return { provider: params.run.provider, model: params.run.model };
 }
 
 export function applyFallbackCandidateSelectionToEntry(params: {
@@ -229,9 +271,12 @@ export function applyFallbackCandidateSelectionToEntry(params: {
     return { updated: false };
   }
   const scopedAuthProfile = resolveRunAuthProfile(params.run, params.provider);
+  const origin = resolveFallbackSelectionOrigin({ entry: params.entry, run: params.run });
   const nextState = buildFallbackSelectionState({
     provider: params.provider,
     model: params.model,
+    originProvider: origin.provider,
+    originModel: origin.model,
     authProfileId: scopedAuthProfile.authProfileId,
     authProfileIdSource: scopedAuthProfile.authProfileIdSource,
   });
@@ -467,7 +512,7 @@ function buildMissingApiKeyFailureText(message: string): string | null {
     return null;
   }
   if (provider === "openai" && normalizedMessage.includes("OpenAI Codex OAuth")) {
-    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.5`, or set `OPENAI_API_KEY`, then try again.";
+    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the Codex OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
   }
   if (SAFE_MISSING_API_KEY_PROVIDERS.has(provider)) {
     return `⚠️ Missing API key for provider "${provider}". Configure the gateway auth for that provider, then try again.`;
@@ -1010,6 +1055,22 @@ function createEmbeddedLifecycleTerminalBackstop(params: { runId: string; sessio
   return { emit, note };
 }
 
+function emitModelFallbackStepLifecycle(params: {
+  runId: string;
+  sessionKey?: string;
+  step: Record<string, unknown>;
+}) {
+  emitAgentEvent({
+    runId: params.runId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    stream: "lifecycle",
+    data: {
+      phase: "fallback_step",
+      ...params.step,
+    },
+  });
+}
+
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   transcriptCommandBody?: string;
@@ -1362,6 +1423,13 @@ export async function runAgentTurnWithFallback(params: {
         runId,
         sessionId: params.followupRun.run.sessionId,
         lane: runLane,
+        onFallbackStep: (step) => {
+          emitModelFallbackStepLifecycle({
+            runId,
+            sessionKey: params.sessionKey,
+            step,
+          });
+        },
         classifyResult: async ({ result, provider, model }) => {
           const classification = outcomePlan.classifyRunResult({
             result,
@@ -1440,6 +1508,45 @@ export async function runAgentTurnWithFallback(params: {
             });
             return (async () => {
               let lifecycleTerminalEmitted = false;
+              let lastBridgedAssistantText: string | undefined;
+              let assistantBridgeUnsubscribed = false;
+              let assistantBridgeDelivery: Promise<void> = Promise.resolve();
+              const deliverBridgedAssistantText = async (text: string): Promise<void> => {
+                const textForTyping = await handlePartialForTyping({ text } as ReplyPayload);
+                if (textForTyping === undefined || !params.opts?.onPartialReply) {
+                  return;
+                }
+                await params.opts.onPartialReply({ text: textForTyping });
+              };
+              const queueBridgedAssistantText = (text: string) => {
+                assistantBridgeDelivery = assistantBridgeDelivery
+                  .then(() => deliverBridgedAssistantText(text))
+                  .catch(() => undefined);
+              };
+              const drainAssistantBridgeDelivery = async (): Promise<void> => {
+                await assistantBridgeDelivery;
+              };
+              const rawUnsubscribeAssistantBridge = onAgentEvent((evt) => {
+                if (evt.runId !== runId || evt.stream !== "assistant") {
+                  return;
+                }
+                if (params.followupRun.run.silentExpected) {
+                  return;
+                }
+                const text = typeof evt.data.text === "string" ? evt.data.text : undefined;
+                if (text === undefined || text === lastBridgedAssistantText) {
+                  return;
+                }
+                lastBridgedAssistantText = text;
+                queueBridgedAssistantText(text);
+              });
+              const unsubscribeAssistantBridge = () => {
+                if (assistantBridgeUnsubscribed) {
+                  return;
+                }
+                assistantBridgeUnsubscribed = true;
+                rawUnsubscribeAssistantBridge();
+              };
               try {
                 const result = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,
@@ -1486,6 +1593,9 @@ export async function runAgentTurnWithFallback(params: {
                   result.meta?.systemPromptReport,
                 );
 
+                unsubscribeAssistantBridge();
+                await drainAssistantBridgeDelivery();
+
                 // CLI backends don't emit streaming assistant events, so we need to
                 // emit one with the final text so server-chat can populate its buffer
                 // and send the response to TUI/WebSocket clients.
@@ -1511,6 +1621,8 @@ export async function runAgentTurnWithFallback(params: {
 
                 return result;
               } catch (err) {
+                unsubscribeAssistantBridge();
+                await drainAssistantBridgeDelivery();
                 if (rollbackFallbackCandidateSelection) {
                   try {
                     await rollbackFallbackCandidateSelection();
@@ -1534,6 +1646,7 @@ export async function runAgentTurnWithFallback(params: {
                 lifecycleTerminalEmitted = true;
                 throw err;
               } finally {
+                unsubscribeAssistantBridge();
                 // Defensive backstop: never let a CLI run complete without a terminal
                 // lifecycle event, otherwise downstream consumers can hang.
                 if (!lifecycleTerminalEmitted) {

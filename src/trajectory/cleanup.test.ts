@@ -32,7 +32,13 @@ function pointerFile(sessionId: string, runtimeFile: string): string {
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  let statError: unknown;
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    statError = error;
+  }
+  expect((statError as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
 }
 
 describe("trajectory cleanup", () => {

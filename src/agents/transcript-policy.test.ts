@@ -366,6 +366,25 @@ describe("resolveTranscriptPolicy", () => {
     expectStrictOpenAiCompatibleReplayDefaults("custom-openai-proxy");
   });
 
+  it("enables assistant prefill stripping for unowned Claude OpenAI Responses routes (#79688)", () => {
+    const claudePolicy = resolveTranscriptPolicy({
+      provider: "anthropic-foundry",
+      modelId: "anthropic-foundry/claude-opus-4-7",
+      modelApi: "openai-responses",
+    });
+    expect(claudePolicy.sanitizeToolCallIds).toBe(true);
+    expect(claudePolicy.toolCallIdMode).toBe("strict");
+    expect(claudePolicy.validateAnthropicTurns).toBe(true);
+    expect(claudePolicy.validateGeminiTurns).toBe(false);
+
+    const gptPolicy = resolveTranscriptPolicy({
+      provider: "custom-openai-proxy",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+    });
+    expect(gptPolicy.validateAnthropicTurns).toBe(false);
+  });
+
   it("preserves thinking blocks for newer Claude models in unowned Anthropic transport fallback", () => {
     // Opus 4.6 via custom proxy: should NOT drop thinking blocks
     const opus46 = resolveTranscriptPolicy({
@@ -390,6 +409,64 @@ describe("resolveTranscriptPolicy", () => {
       modelApi: "anthropic-messages",
     });
     expect(sonnet37.dropThinkingBlocks).toBe(true);
+  });
+
+  it("strips thinking blocks for unowned Anthropic-compatible models that opt out of reasoning", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "qiniu",
+      modelId: "moonshotai/kimi-k2.5",
+      modelApi: "anthropic-messages",
+      model: {
+        id: "moonshotai/kimi-k2.5",
+        name: "Kimi K2.5",
+        provider: "qiniu",
+        api: "anthropic-messages",
+        baseUrl: "https://api.qnaigc.com",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 256_000,
+        maxTokens: 16_384,
+        compat: { supportsReasoningEffort: false },
+      },
+    });
+
+    expect(policy.dropThinkingBlocks).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(true);
+  });
+
+  it("does not reuse cached unowned Anthropic policies across reasoning compat changes", () => {
+    const config = {} as OpenClawConfig;
+    const model = {
+      id: "moonshotai/kimi-k2.5",
+      name: "Kimi K2.5",
+      provider: "qiniu",
+      api: "anthropic-messages" as const,
+      baseUrl: "https://api.qnaigc.com",
+      reasoning: false,
+      input: ["text" as const, "image" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 256_000,
+      maxTokens: 16_384,
+    };
+
+    const defaultPolicy = resolveTranscriptPolicy({
+      config,
+      provider: "qiniu",
+      modelId: "moonshotai/kimi-k2.5",
+      modelApi: "anthropic-messages",
+      model,
+    });
+    const noReasoningPolicy = resolveTranscriptPolicy({
+      config,
+      provider: "qiniu",
+      modelId: "moonshotai/kimi-k2.5",
+      modelApi: "anthropic-messages",
+      model: { ...model, compat: { supportsReasoningEffort: false } },
+    });
+
+    expect(defaultPolicy.dropThinkingBlocks).toBe(false);
+    expect(noReasoningPolicy.dropThinkingBlocks).toBe(true);
   });
 
   it("preserves transport defaults when a runtime plugin has not adopted replay hooks", () => {

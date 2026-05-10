@@ -218,11 +218,9 @@ describe("noteDevicePairingHealth", () => {
       healthOk: true,
     });
 
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "device.pair.list",
-      }),
-    );
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+    const [gatewayRequest] = callGatewayMock.mock.calls[0] ?? [];
+    expect(gatewayRequest?.method).toBe("device.pair.list");
     expect(noteMock).toHaveBeenCalledTimes(1);
     expect(String(noteMock.mock.calls[0]?.[0] ?? "")).toContain("req-gateway-1");
   });

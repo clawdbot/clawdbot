@@ -506,8 +506,68 @@ describe("chat voice controls", () => {
   it("keeps Talk visible without the stale browser dictation button", () => {
     const container = renderChatView();
 
-    expect(container.querySelectorAll('[aria-label="Start Talk"]')).toHaveLength(1);
+    expect(container.querySelector('[aria-label="Start Talk"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Talk options"]')).not.toBeNull();
     expect(container.querySelector('[aria-label="Voice input"]')).toBeNull();
+  });
+
+  it("renders editable Talk launch options", () => {
+    const onRealtimeTalkOptionsChange = vi.fn();
+    const container = renderChatView({
+      realtimeTalkOptionsOpen: true,
+      realtimeTalkOptions: {
+        provider: "openai",
+        model: "gpt-realtime-2",
+        voice: "marin",
+        transport: "webrtc",
+        vadThreshold: "0.45",
+        silenceDurationMs: "650",
+        prefixPaddingMs: "250",
+        reasoningEffort: "low",
+      },
+      onRealtimeTalkOptionsChange,
+    });
+
+    const model = container.querySelector<HTMLInputElement>(
+      '.agent-chat__talk-options input[placeholder="gpt-realtime-2"]',
+    );
+    const voice = container.querySelector<HTMLSelectElement>(
+      ".agent-chat__talk-options label:nth-of-type(4) select",
+    );
+    const voiceOptions = Array.from(
+      container.querySelectorAll<HTMLOptionElement>(
+        ".agent-chat__talk-options label:nth-of-type(4) option",
+      ),
+    ).map((option) => option.value);
+    const reasoningOptions = Array.from(
+      container.querySelectorAll<HTMLOptionElement>(
+        ".agent-chat__talk-options label:nth-of-type(5) option",
+      ),
+    ).map((option) => option.value);
+
+    expect(voice).not.toBeNull();
+    expect(voiceOptions).toEqual([
+      "",
+      "alloy",
+      "ash",
+      "ballad",
+      "coral",
+      "echo",
+      "sage",
+      "shimmer",
+      "verse",
+      "marin",
+      "cedar",
+    ]);
+    expect(voiceOptions).not.toContain("nova");
+    expect(voiceOptions).not.toContain("onyx");
+    expect(voiceOptions).not.toContain("fable");
+    expect(reasoningOptions).toEqual(["", "minimal", "low", "medium", "high"]);
+    expect(model).not.toBeNull();
+    model!.value = "gpt-realtime-mini";
+    model!.dispatchEvent(new Event("input", { bubbles: true }));
+
+    expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({ model: "gpt-realtime-mini" });
   });
 
   it("lets users dismiss Talk start errors", () => {

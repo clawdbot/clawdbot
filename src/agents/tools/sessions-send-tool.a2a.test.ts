@@ -141,11 +141,10 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
 
     requireGatewayCall("sessions.list");
     const sendCall = requireGatewayCall("send");
-    expect(sendCall.params).toMatchObject({
-      channel: "discord",
-      to: "channel:target-room",
-      accountId,
-    });
+    const sendParams = sendCall.params as Record<string, unknown>;
+    expect(sendParams.channel).toBe("discord");
+    expect(sendParams.to).toBe("channel:target-room");
+    expect(sendParams.accountId).toBe(accountId);
   });
 
   it.each(["NO_REPLY", "HEARTBEAT_OK", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
@@ -188,16 +187,14 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       waitRunId: "run-delayed",
     });
 
-    expect(waitForAgentRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-delayed",
-      }),
-    );
-    expect(readLatestAssistantReplySnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:discord:group:dev",
-      }),
-    );
+    const waitInput = vi.mocked(waitForAgentRun).mock.calls[0]?.[0] as
+      | { runId?: string }
+      | undefined;
+    expect(waitInput?.runId).toBe("run-delayed");
+    const snapshotInput = vi.mocked(readLatestAssistantReplySnapshot).mock.calls[0]?.[0] as
+      | { sessionKey?: string }
+      | undefined;
+    expect(snapshotInput?.sessionKey).toBe("agent:main:discord:group:dev");
     expect(runAgentStep).not.toHaveBeenCalled();
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
@@ -216,12 +213,11 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
         roundOneReply: "Worker completed successfully",
       });
 
-      expect(runAgentStep).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: "Agent-to-agent announce step.",
-          transcriptMessage: "",
-        }),
-      );
+      const stepInput = vi.mocked(runAgentStep).mock.calls[0]?.[0] as
+        | { message?: string; transcriptMessage?: string }
+        | undefined;
+      expect(stepInput?.message).toBe("Agent-to-agent announce step.");
+      expect(stepInput?.transcriptMessage).toBe("");
       expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
     },
   );

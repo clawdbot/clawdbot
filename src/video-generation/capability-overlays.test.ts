@@ -34,11 +34,11 @@ describe("video-generation capability overlays", () => {
       },
     );
 
-    expect(merged.generate).toMatchObject({
+    expect(merged.generate).toEqual({
       supportsAudio: false,
       supportsWatermark: true,
     });
-    expect(merged.imageToVideo).toMatchObject({
+    expect(merged.imageToVideo).toEqual({
       enabled: false,
       maxInputImages: 0,
       supportsAudio: false,
@@ -65,11 +65,11 @@ describe("video-generation capability overlays", () => {
     );
 
     expect(merged.providerOptions).toEqual({ seed: "number", draft: "boolean" });
-    expect(merged.generate).toMatchObject({
+    expect(merged.generate).toEqual({
       supportsAudio: true,
       supportsWatermark: true,
     });
-    expect(merged.imageToVideo).toMatchObject({
+    expect(merged.imageToVideo).toEqual({
       enabled: true,
       maxInputImages: 4,
     });

@@ -6,6 +6,7 @@ import {
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
+import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
@@ -289,9 +290,13 @@ export async function runProviderPluginAuthMethod(params: {
     await params.prompter.note(result.notes.join("\n"), "Provider notes");
   }
 
+  const defaultModel = result.defaultModel
+    ? normalizeAgentModelRefForConfig(result.defaultModel)
+    : undefined;
+
   return {
     config: nextConfig,
-    defaultModel: result.defaultModel,
+    ...(defaultModel ? { defaultModel } : {}),
   };
 }
 

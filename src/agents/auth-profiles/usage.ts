@@ -5,10 +5,8 @@ import { logAuthProfileFailureStateChange } from "./state-observation.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 import {
-  clearExpiredCooldowns,
   isActiveUnusableWindow,
   isAuthCooldownBypassedForProvider,
-  isProfileInCooldown,
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
 export {

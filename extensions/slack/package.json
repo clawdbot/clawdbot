@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/slack",
-  "version": "2026.5.8",
+  "version": "2026.5.10-beta.1",
   "private": true,
   "description": "OpenClaw Slack channel plugin",
   "type": "module",
   "dependencies": {
     "@slack/bolt": "^4.7.2",
-    "@slack/types": "^2.21.0",
+    "@slack/types": "^2.21.1",
     "@slack/web-api": "^7.15.2",
     "https-proxy-agent": "^9.0.0"
   },

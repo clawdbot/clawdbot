@@ -43,7 +43,7 @@ OpenClaw selects models in this order:
 
 <AccordionGroup>
   <Accordion title="Related model surfaces">
-    - `agents.defaults.models` is the allowlist/catalog of models OpenClaw can use (plus aliases).
+    - `agents.defaults.models` is the allowlist/catalog of models OpenClaw can use (plus aliases). Use `provider/*` entries to limit visible providers while keeping provider discovery dynamic.
     - `agents.defaults.imageModel` is used **only when** the primary model can't accept images.
     - `agents.defaults.pdfModel` is used by the `pdf` tool. If omitted, the tool falls back to `agents.defaults.imageModel`, then the resolved session/default model.
     - `agents.defaults.imageGenerationModel` is used by the shared image-generation capability. If omitted, `image_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered image-generation providers in provider-id order. If you set a specific provider/model, also configure that provider's auth/API key.
@@ -63,7 +63,7 @@ The same `provider/model` can mean different things depending on where it came f
 - User session selections are exact. `/model`, the model picker, `session_status(model=...)`, and `sessions.patch` store `modelOverrideSource: "user"`; if that selected provider/model is unreachable, OpenClaw fails visibly instead of falling through to another configured model.
 - Cron `--model` / payload `model` is a per-job primary. It still uses configured fallbacks unless the job supplies explicit payload `fallbacks` (use `fallbacks: []` for a strict cron run).
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing explicit `models.providers.*.models` instead of loading the full built-in catalog.
-- The Control UI model picker asks the Gateway for its configured model view: `agents.defaults.models` when present, otherwise explicit `models.providers.*.models` plus providers with usable auth. The full built-in catalog is reserved for explicit browse views such as `models.list` with `view: "all"` or `openclaw models list --all`.
+- The Control UI model picker asks the Gateway for its configured model view: `agents.defaults.models` when present, including provider-wide `provider/*` entries, otherwise explicit `models.providers.*.models` plus providers with usable auth. The full built-in catalog is reserved for explicit browse views such as `models.list` with `view: "all"` or `openclaw models list --all`.
 
 ## Quick model policy
 
@@ -88,7 +88,7 @@ It can set up model + auth for common providers, including **OpenAI Code (Codex)
 - `agents.defaults.pdfModel.primary` and `agents.defaults.pdfModel.fallbacks`
 - `agents.defaults.imageGenerationModel.primary` and `agents.defaults.imageGenerationModel.fallbacks`
 - `agents.defaults.videoGenerationModel.primary` and `agents.defaults.videoGenerationModel.fallbacks`
-- `agents.defaults.models` (allowlist + aliases + provider params)
+- `agents.defaults.models` (allowlist + aliases + provider params + `provider/*` dynamic provider entries)
 - `models.providers` (custom providers written into `models.json`)
 
 <Note>
@@ -139,6 +139,27 @@ for example `ollama/gemma4:26b`, `lmstudio/Gemma4-26b-a4-it-gguf`, or the
 exact provider/model shown by `openclaw models list --provider <provider>`.
 Bare local filenames or display names are not enough when the allowlist is
 active.
+
+If you want to limit providers without manually listing every model, add
+`provider/*` entries to `agents.defaults.models`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai-codex/*": {},
+        "vllm/*": {},
+      },
+    },
+  },
+}
+```
+
+With that policy, `/model`, `/models`, and model pickers show the discovered
+catalog for those providers only. New models from the selected providers can
+appear without editing the allowlist. Exact `provider/model` entries can be mixed
+with `provider/*` entries when you need one specific model from another provider.
 
 Example allowlist config:
 

@@ -10,11 +10,9 @@ import {
   logInboundDrop,
   matchesMentionWithExplicit,
   resolveEnvelopeFormatOptions,
-  resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelMessageSourceReplyDeliveryMode } from "openclaw/plugin-sdk/channel-message";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
-import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-gating";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
@@ -36,13 +34,12 @@ import { reactSlackMessage } from "../../actions.js";
 import { formatSlackFileReference } from "../../file-reference.js";
 import { hasSlackThreadParticipationWithPersistence } from "../../sent-thread-cache.js";
 import type { SlackMessageEvent } from "../../types.js";
+import { normalizeAllowListLower, normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import {
-  normalizeAllowListLower,
-  normalizeSlackAllowOwnerEntry,
-  resolveSlackAllowListMatch,
-  resolveSlackUserAllowed,
-} from "../allow-list.js";
-import { authorizeSlackBotRoomMessage, resolveSlackEffectiveAllowFrom } from "../auth.js";
+  authorizeSlackBotRoomMessage,
+  resolveSlackCommandIngress,
+  resolveSlackEffectiveAllowFrom,
+} from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import { stripSlackMentionsForCommandDetection } from "../commands.js";
 import {
@@ -214,7 +211,7 @@ async function authorizeSlackInboundMessage(params: {
     return null;
   }
 
-  const { allowFromLower } = await resolveSlackEffectiveAllowFrom(ctx, {
+  const allowFromLower = await resolveSlackEffectiveAllowFrom(ctx, {
     includePairingStore: isDirectMessage,
   });
 
@@ -431,15 +428,43 @@ export async function prepareSlackMessage(params: {
   };
   const senderNameForAuth = ctx.allowNameMatching ? await resolveSenderName() : undefined;
 
-  const channelUserAuthorized = isRoom
-    ? resolveSlackUserAllowed({
-        allowList: channelConfig?.users,
-        userId: senderId,
-        userName: senderNameForAuth,
-        allowNameMatching: ctx.allowNameMatching,
-      })
-    : true;
-  if (isRoom && !channelUserAuthorized) {
+  const allowTextCommands = shouldHandleTextCommands({
+    cfg,
+    surface: "slack",
+  });
+  const shouldRequireMention = isRoom
+    ? (channelConfig?.requireMention ?? ctx.defaultRequireMention)
+    : false;
+  const canDetectMention = Boolean(ctx.botUserId) || mentionRegexes.length > 0;
+  // Strip Slack mentions (<@U123>) before command detection so "@Labrador /new" is recognized
+  const textForCommandDetection = stripSlackMentionsForCommandDetection(message.text ?? "");
+  const hasControlCommandInMessage = hasControlCommand(textForCommandDetection, cfg);
+  const channelUsersAllowlistConfigured =
+    isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
+  const messageIngress = await resolveSlackCommandIngress({
+    ctx,
+    senderId,
+    senderName: senderNameForAuth,
+    channelType: conversation.resolvedChannelType ?? "channel",
+    channelId: message.channel,
+    ownerAllowFromLower: allowFromLower,
+    channelUsers: isRoom ? channelConfig?.users : undefined,
+    allowTextCommands,
+    hasControlCommand: hasControlCommandInMessage,
+    mentionFacts: {
+      canDetectMention,
+      wasMentioned,
+      hasAnyMention,
+      implicitMentionKinds,
+    },
+    activation: {
+      requireMention: shouldRequireMention,
+      allowTextCommands,
+      ...(ctx.threadRequireExplicitMention ? { allowedImplicitMentionKinds: [] } : {}),
+    },
+  });
+  const senderGate = messageIngress.senderAccess.gate;
+  if (isRoom && senderGate?.allowed === false) {
     logVerbose(`Blocked unauthorized slack sender ${senderId} (not in channel users)`);
     return null;
   }
@@ -459,22 +484,6 @@ export async function prepareSlackMessage(params: {
     return null;
   }
 
-  const allowTextCommands = shouldHandleTextCommands({
-    cfg,
-    surface: "slack",
-  });
-  // Strip Slack mentions (<@U123>) before command detection so "@Labrador /new" is recognized
-  const textForCommandDetection = stripSlackMentionsForCommandDetection(message.text ?? "");
-  const hasControlCommandInMessage = hasControlCommand(textForCommandDetection, cfg);
-
-  const ownerAuthorized = resolveSlackAllowListMatch({
-    allowList: allowFromLower,
-    id: senderId,
-    name: senderNameForAuth,
-    allowNameMatching: ctx.allowNameMatching,
-  }).allowed;
-  const channelUsersAllowlistConfigured =
-    isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
   const threadContextAllowFromLower = isRoom
     ? channelUsersAllowlistConfigured
       ? normalizeAllowListLower(channelConfig?.users)
@@ -487,30 +496,9 @@ export async function prepareSlackMessage(params: {
     channel: "slack",
     accountId: account.accountId,
   });
-  const channelCommandAuthorized =
-    isRoom && channelUsersAllowlistConfigured
-      ? resolveSlackUserAllowed({
-          allowList: channelConfig?.users,
-          userId: senderId,
-          userName: senderNameForAuth,
-          allowNameMatching: ctx.allowNameMatching,
-        })
-      : false;
-  const commandGate = resolveControlCommandGate({
-    useAccessGroups: ctx.useAccessGroups,
-    authorizers: [
-      { configured: allowFromLower.length > 0, allowed: ownerAuthorized },
-      {
-        configured: channelUsersAllowlistConfigured,
-        allowed: channelCommandAuthorized,
-      },
-    ],
-    allowTextCommands,
-    hasControlCommand: hasControlCommandInMessage,
-  });
-  const commandAuthorized = commandGate.commandAuthorized;
+  const commandAuthorized = messageIngress.commandAccess.authorized;
 
-  if (isRoomish && commandGate.shouldBlock) {
+  if (isRoomish && messageIngress.commandAccess.shouldBlockControlCommand) {
     logInboundDrop({
       log: logVerbose,
       channel: "slack",
@@ -520,30 +508,9 @@ export async function prepareSlackMessage(params: {
     return null;
   }
 
-  const shouldRequireMention = isRoom
-    ? (channelConfig?.requireMention ?? ctx.defaultRequireMention)
-    : false;
-
-  // Allow "control commands" to bypass mention gating if sender is authorized.
-  const canDetectMention = Boolean(ctx.botUserId) || mentionRegexes.length > 0;
-  const mentionDecision = resolveInboundMentionDecision({
-    facts: {
-      canDetectMention,
-      wasMentioned,
-      hasAnyMention,
-      implicitMentionKinds,
-    },
-    policy: {
-      isGroup: isRoom,
-      requireMention: shouldRequireMention,
-      allowedImplicitMentionKinds: ctx.threadRequireExplicitMention ? [] : undefined,
-      allowTextCommands,
-      hasControlCommand: hasControlCommandInMessage,
-      commandAuthorized,
-    },
-  });
-  const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
-  if (isRoom && shouldRequireMention && mentionDecision.shouldSkip) {
+  const effectiveWasMentioned = messageIngress.activationAccess.effectiveWasMentioned ?? false;
+  const shouldBypassMention = messageIngress.activationAccess.shouldBypassMention ?? false;
+  if (isRoom && shouldRequireMention && messageIngress.activationAccess.shouldSkip) {
     ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
     const pendingText = (message.text ?? "").trim();
     const fallbackFile = message.files?.length
@@ -609,14 +576,13 @@ export async function prepareSlackMessage(params: {
         requireMention: shouldRequireMention,
         canDetectMention,
         effectiveWasMentioned,
-        shouldBypassMention: mentionDecision.shouldBypassMention,
+        shouldBypassMention,
       }),
     );
 
   const ackReactionMessageTs = message.ts;
   const allowToolOnlyStatusReaction =
-    statusReactionsExplicitlyEnabled &&
-    (effectiveWasMentioned || mentionDecision.shouldBypassMention);
+    statusReactionsExplicitlyEnabled && (effectiveWasMentioned || shouldBypassMention);
   const shouldSendAckReaction =
     shouldAckReaction() && (!sourceRepliesAreToolOnly || allowToolOnlyStatusReaction);
   const statusReactionsWillHandle =

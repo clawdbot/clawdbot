@@ -151,7 +151,11 @@ Use `action: "list"` to inspect available providers and models at runtime:
   `outputFormat: "png"` or `"webp"` for transparency-capable providers.
 </ParamField>
 <ParamField path="count" type="number">Number of images to generate (1-4).</ParamField>
-<ParamField path="timeoutMs" type="number">Optional provider request timeout in milliseconds.</ParamField>
+<ParamField path="timeoutMs" type="number">
+  Optional provider request timeout in milliseconds. When Codex calls
+  `image_generate` through dynamic tools, this per-call value still overrides
+  the configured default and is capped at 600000 ms.
+</ParamField>
 <ParamField path="filename" type="string">Output filename hint.</ParamField>
 <ParamField path="openai" type="object">
   OpenAI-only hints: `background`, `moderation`, `outputCompression`, and `user`.
@@ -218,7 +222,8 @@ from each attempt.
   <Accordion title="Timeouts">
     Set `agents.defaults.imageGenerationModel.timeoutMs` for slow image
     backends. A per-call `timeoutMs` tool parameter overrides the configured
-    default.
+    default. Codex dynamic-tool calls honor the same timeout budget, bounded
+    by OpenClaw's 600000 ms dynamic-tool bridge maximum.
   </Accordion>
   <Accordion title="Inspect at runtime">
     Use `action: "list"` to inspect the currently registered providers,

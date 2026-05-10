@@ -87,11 +87,9 @@ describe("proxy stream wrappers", () => {
       {},
     );
 
-    expect(calls[0]?.headers).toMatchObject({
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Cache": "true",
-      "X-OpenRouter-Cache-TTL": "900",
-    });
+    expect(calls[0]?.headers?.["HTTP-Referer"]).toBe("https://openclaw.ai");
+    expect(calls[0]?.headers?.["X-OpenRouter-Cache"]).toBe("true");
+    expect(calls[0]?.headers?.["X-OpenRouter-Cache-TTL"]).toBe("900");
   });
 
   it("sends OpenRouter response cache disables for preset opt-outs", () => {
@@ -116,9 +114,7 @@ describe("proxy stream wrappers", () => {
       {},
     );
 
-    expect(calls[0]?.headers).toMatchObject({
-      "X-OpenRouter-Cache": "false",
-    });
+    expect(calls[0]?.headers?.["X-OpenRouter-Cache"]).toBe("false");
     expect(calls[0]?.headers).not.toHaveProperty("X-OpenRouter-Cache-TTL");
   });
 
@@ -144,11 +140,9 @@ describe("proxy stream wrappers", () => {
       {},
     );
 
-    expect(calls[0]?.headers).toMatchObject({
-      "X-OpenRouter-Cache": "true",
-      "X-OpenRouter-Cache-Clear": "true",
-      "X-OpenRouter-Cache-TTL": "86400",
-    });
+    expect(calls[0]?.headers?.["X-OpenRouter-Cache"]).toBe("true");
+    expect(calls[0]?.headers?.["X-OpenRouter-Cache-Clear"]).toBe("true");
+    expect(calls[0]?.headers?.["X-OpenRouter-Cache-TTL"]).toBe("86400");
   });
 
   it("does not add OpenRouter response caching headers to custom proxy routes", () => {

@@ -83,3 +83,18 @@ describe("createSlackMonitorContext shouldDropMismatchedSlackEvent", () => {
     ).toBe(false);
   });
 });
+
+describe("createSlackMonitorContext resolveSlackSystemEventSessionKey", () => {
+  it("routes threaded interaction events to the Slack thread session", () => {
+    const ctx = createTestContext();
+
+    expect(
+      ctx.resolveSlackSystemEventSessionKey({
+        channelId: "C_THREAD",
+        channelType: "channel",
+        senderId: "U_CLICKER",
+        threadTs: "1712345678.123456",
+      }),
+    ).toBe("agent:main:slack:channel:c_thread:thread:1712345678.123456");
+  });
+});

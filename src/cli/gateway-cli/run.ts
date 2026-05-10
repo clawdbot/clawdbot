@@ -34,6 +34,7 @@ import {
 } from "../../shared/string-coerce.js";
 import { formatCliCommand } from "../command-format.js";
 import { inheritOptionFromParent } from "../command-options.js";
+import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
 import { withProgress } from "../progress.js";
 import { parsePort } from "../shared/parse-port.js";
 import { installQaParentWatchdog } from "./qa-parent-watchdog.js";
@@ -477,7 +478,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     wsLogRaw !== "compact" &&
     wsLogRaw !== "full"
   ) {
-    defaultRuntime.error('Invalid --ws-log (use "auto", "full", "compact")');
+    defaultRuntime.error('Invalid --ws-log. Use "auto", "full", or "compact".');
     defaultRuntime.exit(1);
   }
   setGatewayWsLogStyle(wsLogStyle);
@@ -520,15 +521,15 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   });
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
-    defaultRuntime.error("Invalid --port. Use a positive port number, for example 3000.");
+    defaultRuntime.error(formatInvalidPortOption("--port"));
     defaultRuntime.exit(1);
+    return;
   }
   const port = portOverride ?? resolveGatewayPort(cfg);
-  if (!Number.isFinite(port) || port <= 0) {
-    defaultRuntime.error(
-      `Gateway port is invalid in config. Set it with ${formatCliCommand("openclaw config set gateway.port 3000")} or pass --port 3000.`,
-    );
+  if (!Number.isFinite(port) || port <= 0 || port > 65_535) {
+    defaultRuntime.error(formatInvalidConfigPort("gateway.port"));
     defaultRuntime.exit(1);
+    return;
   }
   const { formatFutureConfigActionBlock, resolveFutureConfigActionBlock } =
     await import("../../config/future-version-guard.js");
@@ -560,7 +561,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     toOptionString(opts.bind) ?? cfg.gateway?.bind,
   );
   if (bindExplicitRawStr !== undefined && !VALID_BIND_MODES.has(bindExplicitRawStr)) {
-    defaultRuntime.error('Invalid --bind (use "loopback", "lan", "tailnet", "auto", or "custom")');
+    defaultRuntime.error('Invalid --bind. Use "loopback", "lan", "tailnet", "auto", or "custom".');
     defaultRuntime.exit(1);
     return;
   }
@@ -786,19 +787,25 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   gatewayLog.info("starting...");
   startupTrace.mark("cli.gateway-loop");
   const healthHost = await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost);
+  let startupConfigSnapshotReadForNextStart = startupConfigSnapshotRead;
   const startLoop = async () =>
     await runGatewayLoop({
       runtime: defaultRuntime,
       lockPort: port,
       healthHost,
-      start: async ({ startupStartedAt } = {}) =>
-        await startGatewayServer(port, {
+      start: async ({ startupStartedAt } = {}) => {
+        const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
+        startupConfigSnapshotReadForNextStart = undefined;
+        return await startGatewayServer(port, {
           bind,
           auth: authOverride,
           tailscale: tailscaleOverride,
           startupStartedAt,
-          ...(startupConfigSnapshotRead ? { startupConfigSnapshotRead } : {}),
-        }),
+          ...(startupConfigSnapshotReadForThisStart
+            ? { startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart }
+            : {}),
+        });
+      },
     });
 
   const { detectRespawnSupervisor } = await import("../../infra/supervisor-markers.js");

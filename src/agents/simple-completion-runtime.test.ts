@@ -14,7 +14,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("@mariozechner/pi-ai", () => ({
-  complete: hoisted.completeMock,
+  completeSimple: hoisted.completeMock,
 }));
 
 vi.mock("./pi-embedded-runner/model.js", () => ({
@@ -467,6 +467,39 @@ describe("prepareSimpleCompletionModel", () => {
       },
     );
   });
+
+  it("passes static catalog fallback opt-in to skip-discovery model resolution", async () => {
+    hoisted.resolveModelAsyncMock.mockResolvedValueOnce({
+      model: {
+        provider: "mistral",
+        id: "mistral-medium-3-5",
+      },
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "mistral",
+      modelId: "mistral-medium-3-5",
+      allowBundledStaticCatalogFallback: true,
+      skipPiDiscovery: true,
+    });
+
+    expect(result).not.toHaveProperty("error");
+    expect(hoisted.resolveModelAsyncMock).toHaveBeenCalledWith(
+      "mistral",
+      "mistral-medium-3-5",
+      undefined,
+      undefined,
+      {
+        allowBundledStaticCatalogFallback: true,
+        skipPiDiscovery: true,
+      },
+    );
+  });
 });
 
 describe("completeWithPreparedSimpleCompletionModel", () => {
@@ -513,6 +546,87 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       },
       {
         apiKey: "ollama-local",
+      },
+    );
+  });
+
+  it("normalizes OpenClaw-only thinking levels before using pi-ai simple completion", async () => {
+    const model = {
+      provider: "openai",
+      id: "gpt-5.4",
+      name: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-responses">;
+
+    await completeWithPreparedSimpleCompletionModel({
+      model,
+      auth: {
+        apiKey: "sk-test",
+        source: "env:OPENAI_API_KEY",
+        mode: "api-key",
+      },
+      context: {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      options: {
+        reasoning: "max",
+      },
+    });
+
+    expect(hoisted.completeMock).toHaveBeenCalledWith(
+      model,
+      {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      {
+        reasoning: "xhigh",
+        apiKey: "sk-test",
+      },
+    );
+  });
+
+  it("omits reasoning for local simple completion when thinking is off", async () => {
+    const model = {
+      provider: "openai",
+      id: "gpt-5.4",
+      name: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-responses">;
+
+    await completeWithPreparedSimpleCompletionModel({
+      model,
+      auth: {
+        apiKey: "sk-test",
+        source: "env:OPENAI_API_KEY",
+        mode: "api-key",
+      },
+      context: {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      options: {
+        reasoning: "off",
+      },
+    });
+
+    expect(hoisted.completeMock).toHaveBeenCalledWith(
+      model,
+      {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      {
+        apiKey: "sk-test",
       },
     );
   });

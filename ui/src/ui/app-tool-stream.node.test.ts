@@ -83,6 +83,10 @@ function useToolStreamFakeTimers(): void {
 }
 
 describe("app-tool-stream fallback lifecycle handling", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeAll(() => {
     const globalWithWindow = globalThis as typeof globalThis & {
       window?: Window & typeof globalThis;
@@ -169,17 +173,15 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       },
     });
 
-    expect(host.fallbackStatus).toMatchObject({
-      phase: "active",
-      selected: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-      active: "deepinfra/moonshotai/Kimi-K2.5",
-    });
+    let fallbackStatus = requireFallbackStatus(host);
+    expect(fallbackStatus.phase).toBe("active");
+    expect(fallbackStatus.selected).toBe("fireworks/accounts/fireworks/routers/kimi-k2p5-turbo");
+    expect(fallbackStatus.active).toBe("deepinfra/moonshotai/Kimi-K2.5");
     vi.advanceTimersByTime(7_999);
-    expect(host.fallbackStatus).toMatchObject({
-      phase: "active",
-      selected: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-      active: "deepinfra/moonshotai/Kimi-K2.5",
-    });
+    fallbackStatus = requireFallbackStatus(host);
+    expect(fallbackStatus.phase).toBe("active");
+    expect(fallbackStatus.selected).toBe("fireworks/accounts/fireworks/routers/kimi-k2p5-turbo");
+    expect(fallbackStatus.active).toBe("deepinfra/moonshotai/Kimi-K2.5");
     vi.advanceTimersByTime(1);
     expect(host.fallbackStatus).toBeNull();
     vi.useRealTimers();

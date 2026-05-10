@@ -33,17 +33,18 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
         },
       ]);
 
-      expect(overlaid.profiles["openai-codex:default"]).toMatchObject({
-        access: "access-1",
-      });
+      const overlaidCodexProfile = overlaid.profiles["openai-codex:default"];
+      expect(overlaidCodexProfile?.type).toBe("oauth");
+      if (overlaidCodexProfile?.type !== "oauth") {
+        throw new Error("expected overlaid Codex OAuth profile");
+      }
+      expect(overlaidCodexProfile.access).toBe("access-1");
       expect(store.profiles["openai-codex:default"]).toBeUndefined();
 
       overlaid.profiles["openai:default"].provider = "mutated";
       overlaid.order!.openai.push("mutated");
 
-      expect(store.profiles["openai:default"]).toMatchObject({
-        provider: "openai",
-      });
+      expect(store.profiles["openai:default"]?.provider).toBe("openai");
       expect(store.order?.openai).toEqual(["openai:default"]);
       expect(structuredCloneSpy).not.toHaveBeenCalled();
     } finally {

@@ -96,20 +96,19 @@ async function runFastModeCase(params: {
 
   expect(result.status).toBe("ok");
   expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-  expect(runEmbeddedPiAgentMock.mock.calls[0][0]).toMatchObject({
-    provider: "openai",
-    model: EXPECTED_OPENAI_MODEL,
-    fastMode: params.expectedFastMode,
-    cleanupBundleMcpOnRunEnd: params.expectedCleanupBundleMcpOnRunEnd ?? true,
-    allowGatewaySubagentBinding: true,
-  });
+  const [embeddedRunParams] = runEmbeddedPiAgentMock.mock.calls[0];
+  expect(embeddedRunParams.provider).toBe("openai");
+  expect(embeddedRunParams.model).toBe(EXPECTED_OPENAI_MODEL);
+  expect(embeddedRunParams.fastMode).toBe(params.expectedFastMode);
+  expect(embeddedRunParams.cleanupBundleMcpOnRunEnd).toBe(
+    params.expectedCleanupBundleMcpOnRunEnd ?? true,
+  );
+  expect(embeddedRunParams.allowGatewaySubagentBinding).toBe(true);
   if (params.expectedRetiredSessionId) {
-    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: params.expectedRetiredSessionId,
-        reason: "cron-session-rollover",
-      }),
-    );
+    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledOnce();
+    const [retireParams] = retireSessionMcpRuntimeMock.mock.calls[0];
+    expect(retireParams.sessionId).toBe(params.expectedRetiredSessionId);
+    expect(retireParams.reason).toBe("cron-session-rollover");
     return;
   }
   expect(retireSessionMcpRuntimeMock).not.toHaveBeenCalled();

@@ -24,6 +24,41 @@ vi.mock("./tools/gateway.js", () => ({
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireApprovalRequestCall(label: string): {
+  timeoutParams: Record<string, unknown>;
+  request: Record<string, unknown>;
+  options: Record<string, unknown>;
+} {
+  const call = mockCallGatewayTool.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  expect(call[0]).toBe("plugin.approval.request");
+  return {
+    timeoutParams: requireRecord(call[1], `${label} timeout params`),
+    request: requireRecord(call[2], `${label} request`),
+    options: requireRecord(call[3], `${label} options`),
+  };
+}
+
+function requireBeforeToolCall(
+  mock: ReturnType<typeof vi.fn<HookRunner["runBeforeToolCall"]>>,
+  label: string,
+): Parameters<HookRunner["runBeforeToolCall"]> {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call;
+}
+
 describe("runBeforeToolCallHook — embedded mode approvals", () => {
   let hookRunner: Pick<HookRunner, "hasHooks" | "runBeforeToolCall">;
   let runBeforeToolCallMock: ReturnType<typeof vi.fn<HookRunner["runBeforeToolCall"]>>;
@@ -75,9 +110,23 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     });
     expect(mockCallGatewayTool).toHaveBeenCalledWith(
       "plugin.approval.request",
-      expect.any(Object),
-      expect.any(Object),
-      expect.any(Object),
+      {
+        timeoutMs: 130_000,
+      },
+      {
+        agentId: undefined,
+        allowedDecisions: undefined,
+        description: "Test approval request",
+        pluginId: "test-plugin",
+        sessionKey: undefined,
+        severity: "info",
+        timeoutMs: 120_000,
+        title: "Needs approval",
+        toolCallId: "call-1",
+        toolName: "exec",
+        twoPhase: true,
+      },
+      { expectFinal: false },
     );
     expect(onResolution).toHaveBeenCalledTimes(1);
     expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.CANCELLED);
@@ -133,12 +182,17 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(mockCallGatewayTool).toHaveBeenCalledWith(
-      "plugin.approval.request",
-      expect.any(Object),
-      expect.any(Object),
-      expect.any(Object),
-    );
+    const approvalCall = requireApprovalRequestCall("non-embedded approval request");
+    expect(approvalCall.timeoutParams.timeoutMs).toBe(15_000);
+    expect(approvalCall.request.pluginId).toBe("test-plugin");
+    expect(approvalCall.request.title).toBe("Needs approval");
+    expect(approvalCall.request.description).toBe("Test approval request");
+    expect(approvalCall.request.severity).toBe("info");
+    expect(approvalCall.request.toolName).toBe("exec");
+    expect(approvalCall.request.toolCallId).toBe("call-2");
+    expect(approvalCall.request.timeoutMs).toBe(5_000);
+    expect(approvalCall.request.twoPhase).toBe(true);
+    expect(approvalCall.options.expectFinal).toBe(false);
   });
 
   it("preserves hook params override after an approval allow decision", async () => {
@@ -210,15 +264,17 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     });
 
     expect(result).toEqual({ blocked: false, params: { command: "deploy" } });
-    expect(mockCallGatewayTool).toHaveBeenCalledWith(
-      "plugin.approval.request",
-      expect.any(Object),
-      expect.objectContaining({
-        pluginId: "trusted-policy",
-        title: "Policy approval",
-      }),
-      { expectFinal: false },
-    );
+    const approvalCall = requireApprovalRequestCall("trusted policy approval request");
+    expect(approvalCall.timeoutParams.timeoutMs).toBe(130_000);
+    expect(approvalCall.request.pluginId).toBe("trusted-policy");
+    expect(approvalCall.request.title).toBe("Policy approval");
+    expect(approvalCall.request.description).toBe("Policy requested approval");
+    expect(approvalCall.request.toolName).toBe("exec");
+    expect(approvalCall.request.toolCallId).toBe("call-policy");
+    expect(approvalCall.request.agentId).toBe("main");
+    expect(approvalCall.request.sessionKey).toBe("main");
+    expect(approvalCall.request.twoPhase).toBe(true);
+    expect(approvalCall.options.expectFinal).toBe(false);
     expect(runBeforeToolCallMock).not.toHaveBeenCalled();
   });
 
@@ -247,12 +303,14 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     });
 
     expect(result).toEqual({ blocked: false, params: { command: "patched" } });
-    expect(runBeforeToolCallMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: { command: "patched" },
-      }),
-      expect.any(Object),
+    const [hookParams, hookContext] = requireBeforeToolCall(
+      runBeforeToolCallMock,
+      "before_tool_call invocation",
     );
+    expect(hookParams.params).toEqual({ command: "patched" });
+    expect(hookParams.toolName).toBe("exec");
+    expect(hookParams.toolCallId).toBe("call-policy-params");
+    expect(typeof hookContext).toBe("object");
   });
 
   it("keeps original params after an approval allow decision without overrides", async () => {

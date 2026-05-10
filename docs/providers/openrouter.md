@@ -58,6 +58,7 @@ Bundled fallback examples:
 | --------------------------------- | ---------------------------- |
 | `openrouter/auto`                 | OpenRouter automatic routing |
 | `openrouter/moonshotai/kimi-k2.6` | Kimi K2.6 via MoonshotAI     |
+| `openrouter/moonshotai/kimi-k2.5` | Kimi K2.5 via MoonshotAI     |
 
 ## Image generation
 

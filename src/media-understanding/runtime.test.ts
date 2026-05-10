@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { MediaAttachment, MediaUnderstandingOutput } from "../media-understanding/types.js";
-import { describeImageFile, runMediaUnderstandingFile } from "./runtime.js";
+import {
+  describeImageFile,
+  describeImageFileWithModel,
+  runMediaUnderstandingFile,
+} from "./runtime.js";
 
 const mocks = vi.hoisted(() => {
   const cleanup = vi.fn(async () => {});
@@ -10,6 +14,8 @@ const mocks = vi.hoisted(() => {
     createMediaAttachmentCache: vi.fn(() => ({ cleanup })),
     normalizeMediaAttachments: vi.fn<() => MediaAttachment[]>(() => []),
     normalizeMediaProviderId: vi.fn((provider: string) => provider.trim().toLowerCase()),
+    readLocalFileSafely: vi.fn(async () => ({ buffer: Buffer.from("image") })),
+    describeImageWithModel: vi.fn(async () => ({ text: "generic image ok", model: "vision" })),
     runCapability: vi.fn(),
     cleanup,
   };
@@ -26,12 +32,24 @@ vi.mock("./provider-registry.js", () => ({
   normalizeMediaProviderId: mocks.normalizeMediaProviderId,
 }));
 
+vi.mock("../infra/fs-safe.js", () => ({
+  readLocalFileSafely: mocks.readLocalFileSafely,
+}));
+
+vi.mock("./image-runtime.js", () => ({
+  describeImageWithModel: mocks.describeImageWithModel,
+}));
+
 describe("media-understanding runtime", () => {
   afterEach(() => {
     mocks.buildProviderRegistry.mockReset();
     mocks.createMediaAttachmentCache.mockReset();
     mocks.normalizeMediaAttachments.mockReset();
     mocks.normalizeMediaProviderId.mockReset();
+    mocks.readLocalFileSafely.mockReset();
+    mocks.readLocalFileSafely.mockResolvedValue({ buffer: Buffer.from("image") });
+    mocks.describeImageWithModel.mockReset();
+    mocks.describeImageWithModel.mockResolvedValue({ text: "generic image ok", model: "vision" });
     mocks.runCapability.mockReset();
     mocks.cleanup.mockReset();
     mocks.cleanup.mockResolvedValue(undefined);
@@ -201,6 +219,37 @@ describe("media-understanding runtime", () => {
         timeoutSeconds: 90,
       },
       activeModel: undefined,
+    });
+  });
+
+  it("uses the generic model-backed image runtime for explicit models without media hooks", async () => {
+    mocks.buildProviderRegistry.mockReturnValue(
+      new Map([["zai", { id: "zai", capabilities: ["image"] }]]),
+    );
+
+    await expect(
+      describeImageFileWithModel({
+        filePath: "/tmp/sample.jpg",
+        mime: "image/jpeg",
+        provider: "zai",
+        model: "glm-4.6v",
+        prompt: "Describe it",
+        cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/agent",
+      }),
+    ).resolves.toEqual({ text: "generic image ok", model: "vision" });
+
+    expect(mocks.describeImageWithModel).toHaveBeenCalledWith({
+      buffer: Buffer.from("image"),
+      fileName: "sample.jpg",
+      mime: "image/jpeg",
+      provider: "zai",
+      model: "glm-4.6v",
+      prompt: "Describe it",
+      maxTokens: undefined,
+      timeoutMs: 30_000,
+      cfg: {},
+      agentDir: "/tmp/agent",
     });
   });
 

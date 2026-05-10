@@ -360,6 +360,29 @@ function mockNoApprovalRouteRegistration() {
   });
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(
+  record: Record<string, unknown> | undefined,
+  expected: Record<string, unknown>,
+) {
+  if (!record) {
+    throw new Error("expected record");
+  }
+  for (const [key, value] of Object.entries(expected)) {
+    if (Array.isArray(value)) {
+      expect(record[key]).toEqual(value);
+    } else {
+      expect(record[key]).toBe(value);
+    }
+  }
+}
+
 describe("exec approvals", () => {
   let previousHome: string | undefined;
   let previousUserProfile: string | undefined;
@@ -463,17 +486,15 @@ describe("exec approvals", () => {
         interval: 1,
       })
       .toBe(approvalId);
-    expect(
-      (invokeParams as { params?: { suppressNotifyOnExit?: boolean } } | undefined)?.params,
-    ).toMatchObject({
-      suppressNotifyOnExit: true,
-    });
-    await expect
-      .poll(() => agentParams, { timeout: 2000, interval: 1 })
-      .toMatchObject({
-        message: expect.stringContaining(`id=${approvalId}`),
-        sessionKey: "agent:main:main",
-      });
+    const nodeInvokeParams = requireRecord(
+      requireRecord(invokeParams, "node invoke").params,
+      "node invoke params",
+    );
+    expect(nodeInvokeParams.suppressNotifyOnExit).toBe(true);
+    await expect.poll(() => agentParams !== undefined, { timeout: 2000, interval: 1 }).toBe(true);
+    const agent = requireRecord(agentParams, "agent followup params");
+    expect(String(agent.message)).toContain(`id=${approvalId}`);
+    expect(agent.sessionKey).toBe("agent:main:main");
   });
 
   it("skips approval when node allowlist is satisfied", async () => {
@@ -702,9 +723,10 @@ describe("exec approvals", () => {
     });
 
     expect(durable.details.status).toBe("approval-pending");
-    expect(durable.details).toMatchObject({
-      allowedDecisions: ["allow-once", "deny"],
-    });
+    expect(requireRecord(durable.details, "durable details").allowedDecisions).toEqual([
+      "allow-once",
+      "deny",
+    ]);
     expect(getResultText(durable)).toContain("Reply with: /approve ");
     expect(getResultText(durable)).toContain("allow-once|deny");
     expect(getResultText(durable)).not.toContain("allow-once|allow-always|deny");
@@ -824,9 +846,10 @@ describe("exec approvals", () => {
     });
 
     expect(result.details.status).toBe("approval-pending");
-    expect(result.details).toMatchObject({
-      allowedDecisions: ["allow-once", "deny"],
-    });
+    expect(requireRecord(result.details, "result details").allowedDecisions).toEqual([
+      "allow-once",
+      "deny",
+    ]);
     expect(calls).toContain("exec.approval.request");
   });
 
@@ -941,13 +964,11 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("approval-pending");
     await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
-    expect(agentCalls[0]).toEqual(
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        deliver: false,
-        idempotencyKey: expect.stringContaining("exec-approval-followup:"),
-      }),
-    );
+    expectRecordFields(agentCalls[0], {
+      sessionKey: "agent:main:main",
+      deliver: false,
+    });
+    expect(String(agentCalls[0]?.idempotencyKey)).toContain("exec-approval-followup:");
     expect(typeof agentCalls[0]?.message).toBe("string");
     expect(agentCalls[0]?.message).toContain(
       "An async command the user already approved has completed.",
@@ -982,18 +1003,16 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("approval-pending");
     await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
-    expect(agentCalls[0]).toEqual(
-      expect.objectContaining({
-        sessionKey: "agent:main:discord:channel:123",
-        deliver: true,
-        bestEffortDeliver: true,
-        channel: "discord",
-        to: "123",
-        accountId: "default",
-        threadId: "456",
-        idempotencyKey: expect.stringContaining("exec-approval-followup:"),
-      }),
-    );
+    expectRecordFields(agentCalls[0], {
+      sessionKey: "agent:main:discord:channel:123",
+      deliver: true,
+      bestEffortDeliver: true,
+      channel: "discord",
+      to: "123",
+      accountId: "default",
+      threadId: "456",
+    });
+    expect(String(agentCalls[0]?.idempotencyKey)).toContain("exec-approval-followup:");
     expect(typeof agentCalls[0]?.message).toBe("string");
     expect(agentCalls[0]?.message).toContain(
       "If the task requires more steps, continue from this result before replying to the user.",
@@ -1045,17 +1064,15 @@ describe("exec approvals", () => {
     resolveDecision?.({ decision: "allow-once" });
 
     await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
-    expect(agentCalls[0]).toEqual(
-      expect.objectContaining({
-        sessionKey: "agent:main:discord:channel:123",
-        deliver: true,
-        bestEffortDeliver: true,
-        channel: "discord",
-        to: "123",
-        accountId: "default",
-        threadId: "456",
-      }),
-    );
+    expectRecordFields(agentCalls[0], {
+      sessionKey: "agent:main:discord:channel:123",
+      deliver: true,
+      bestEffortDeliver: true,
+      channel: "discord",
+      to: "123",
+      accountId: "default",
+      threadId: "456",
+    });
     expect(typeof agentCalls[0]?.message).toBe("string");
     expect(agentCalls[0]?.message).toContain(
       "If the task requires more steps, continue from this result before replying to the user.",
@@ -1089,12 +1106,10 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("approval-pending");
 
     await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
-    expect(agentCalls[0]).toEqual(
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        deliver: false,
-      }),
-    );
+    expectRecordFields(agentCalls[0], {
+      sessionKey: "agent:main:main",
+      deliver: false,
+    });
     expect(agentCalls[0]?.message).toContain("webchat-ok");
   });
 
@@ -1375,11 +1390,11 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("completed");
     expect(getResultText(result)).toContain("cron-ok");
 
-    expect(vi.mocked(callGatewayTool)).toHaveBeenCalledWith(
-      "exec.approval.request",
-      expect.anything(),
-      expect.anything(),
-      expect.objectContaining({ expectFinal: false }),
+    const approvalRequestCall = vi
+      .mocked(callGatewayTool)
+      .mock.calls.find(([method]) => method === "exec.approval.request");
+    expect(requireRecord(approvalRequestCall?.[3], "approval request options").expectFinal).toBe(
+      false,
     );
     expect(
       vi
@@ -1448,17 +1463,13 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("completed");
     expect(getResultText(result)).toContain("cron-node-ok");
-    expect(systemRunInvoke).toMatchObject({
-      command: "system.run",
-      params: {
-        approved: true,
-        approvalDecision: "allow-once",
-        systemRunPlan: preparedPlan,
-      },
-    });
-    expect((systemRunInvoke as { params?: { runId?: string } }).params?.runId).toEqual(
-      expect.any(String),
-    );
+    const systemRun = requireRecord(systemRunInvoke, "system.run invoke");
+    expect(systemRun.command).toBe("system.run");
+    const params = requireRecord(systemRun.params, "system.run params");
+    expect(params.approved).toBe(true);
+    expect(params.approvalDecision).toBe("allow-once");
+    expect(params.systemRunPlan).toStrictEqual(preparedPlan);
+    expect(params.runId).toBeTypeOf("string");
   });
 
   it("explains cron no-route denials with a host-policy fix hint", async () => {

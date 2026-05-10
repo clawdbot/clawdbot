@@ -121,10 +121,8 @@ describe("trajectory runtime", () => {
 
     expect(writes).toHaveLength(1);
     const parsed = JSON.parse(writes[0]);
-    expect(parsed.data.prompt).toMatchObject({
-      truncated: true,
-      reason: "trajectory-field-size-limit",
-    });
+    expect(parsed.data.prompt.truncated).toBe(true);
+    expect(parsed.data.prompt.reason).toBe("trajectory-field-size-limit");
     expect(Buffer.byteLength(writes[0], "utf8")).toBeLessThanOrEqual(
       TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1,
     );
@@ -162,10 +160,8 @@ describe("trajectory runtime", () => {
     const parsed = writes.map((line) => JSON.parse(line));
     expect(parsed.map((event) => event.type)).toContain("trace.truncated");
     const truncated = parsed.find((event) => event.type === "trace.truncated");
-    expect(truncated?.data).toMatchObject({
-      reason: "trajectory-runtime-file-size-limit",
-      limitBytes: 900,
-    });
+    expect(truncated?.data.reason).toBe("trajectory-runtime-file-size-limit");
+    expect(truncated?.data.limitBytes).toBe(900);
     expect(truncated?.data.droppedEvents).toBeGreaterThan(0);
   });
 

@@ -29,6 +29,20 @@ const {
   formatProviderAuthProfileApiKeyWithPluginMock,
 } = getOAuthProviderRuntimeMocks();
 
+function expectOAuthProfileFields(
+  store: AuthProfileStore,
+  profileId: string,
+  params: { access: string; accountId: string },
+) {
+  const credential = store.profiles[profileId];
+  expect(credential?.type).toBe("oauth");
+  if (credential?.type !== "oauth") {
+    throw new Error(`Expected OAuth credential for ${profileId}`);
+  }
+  expect(credential.access).toBe(params.access);
+  expect(credential.accountId).toBe(params.accountId);
+}
+
 // Cross-account-leak defense-in-depth: each adopt site in oauth.ts calls the
 // shared identity copy gate before copying main-store credentials into the
 // sub-agent store. Unit tests cover policy variants; this suite proves each
@@ -124,7 +138,7 @@ describe("OAuth credential adoption is identity-gated", () => {
     const subRaw = JSON.parse(
       await fs.readFile(path.join(subAgentDir, "auth-profiles.json"), "utf8"),
     ) as AuthProfileStore;
-    expect(subRaw.profiles[profileId]).toMatchObject({
+    expectOAuthProfileFields(subRaw, profileId, {
       access: "sub-own-access",
       accountId: "acct-sub",
     });
@@ -196,7 +210,7 @@ describe("OAuth credential adoption is identity-gated", () => {
     const mainRaw = JSON.parse(
       await fs.readFile(path.join(mainAgentDir, "auth-profiles.json"), "utf8"),
     ) as AuthProfileStore;
-    expect(mainRaw.profiles[profileId]).toMatchObject({
+    expectOAuthProfileFields(mainRaw, profileId, {
       access: "main-foreign-access",
       accountId: "acct-other",
     });
@@ -272,7 +286,7 @@ describe("OAuth credential adoption is identity-gated", () => {
     const subRaw = JSON.parse(
       await fs.readFile(path.join(subAgentDir, "auth-profiles.json"), "utf8"),
     ) as AuthProfileStore;
-    expect(subRaw.profiles[profileId]).toMatchObject({
+    expectOAuthProfileFields(subRaw, profileId, {
       access: "sub-stale",
       accountId: "acct-sub",
     });

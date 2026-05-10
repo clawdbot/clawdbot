@@ -96,12 +96,24 @@ describe("plugin npm package manifest staging", () => {
       packageDir,
     });
     expect(resolved.changed).toBe(true);
-    expect(resolved.manifest).toMatchObject({
+    expect(resolved.manifest).toEqual({
+      id: "twitch",
+      channels: ["twitch"],
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
       channelConfigs: {
         twitch: {
+          description: "Twitch chat integration",
           label: "Twitch",
           schema: {
+            type: "object",
             required: ["channelName"],
+            properties: {
+              channelName: { type: "string" },
+            },
           },
         },
       },
@@ -128,7 +140,10 @@ describe("plugin npm package manifest staging", () => {
       packageDir,
     });
     expect(resolved.changed).toBe(true);
-    expect(resolved.packageJson).toMatchObject({
+    expect(resolved.packageJson).toEqual({
+      name: "@openclaw/diffs",
+      version: "2026.5.3",
+      type: "module",
       files: ["dist/**", "openclaw.plugin.json", "README.md", "SKILL.md", "skills/**"],
       peerDependencies: {
         openclaw: ">=2026.4.30",
@@ -139,6 +154,14 @@ describe("plugin npm package manifest staging", () => {
         },
       },
       openclaw: {
+        extensions: ["./index.ts"],
+        setupEntry: "./setup-entry.ts",
+        compat: {
+          pluginApi: ">=2026.4.30",
+        },
+        release: {
+          publishToNpm: true,
+        },
         runtimeExtensions: ["./dist/index.js"],
         runtimeSetupEntry: "./dist/setup-entry.js",
       },

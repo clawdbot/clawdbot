@@ -1,7 +1,4 @@
-import {
-  resolvePluginInteractiveNamespaceMatch,
-  type InteractiveRegistrationResult,
-} from "./interactive-registry.js";
+import { resolvePluginInteractiveNamespaceMatch } from "./interactive-registry.js";
 import {
   claimPluginInteractiveCallbackDedupe,
   commitPluginInteractiveCallbackDedupe,

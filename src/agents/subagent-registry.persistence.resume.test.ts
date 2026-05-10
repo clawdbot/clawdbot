@@ -205,18 +205,14 @@ describe("subagent registry persistence resume", () => {
           outcome?: { status?: string };
         }
       | undefined;
-    expect(announce).toMatchObject({
-      childRunId: "run-1",
-      childSessionKey: "agent:main:subagent:test",
-      requesterSessionKey: "agent:main:main",
-      requesterOrigin: {
-        channel: "whatsapp",
-        accountId: "acct-main",
-      },
-      task: "do the thing",
-      cleanup: "keep",
-      outcome: { status: "ok" },
-    });
+    expect(announce?.childRunId).toBe("run-1");
+    expect(announce?.childSessionKey).toBe("agent:main:subagent:test");
+    expect(announce?.requesterSessionKey).toBe("agent:main:main");
+    expect(announce?.requesterOrigin?.channel).toBe("whatsapp");
+    expect(announce?.requesterOrigin?.accountId).toBe("acct-main");
+    expect(announce?.task).toBe("do the thing");
+    expect(announce?.cleanup).toBe("keep");
+    expect(announce?.outcome?.status).toBe("ok");
 
     const restored = mod.listSubagentRunsForRequester("agent:main:main")[0];
     expect(restored?.childSessionKey).toBe("agent:main:subagent:test");

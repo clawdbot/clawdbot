@@ -101,6 +101,27 @@ export function formatErrorMessage(err: unknown): string {
   return redactSensitiveText(formatted);
 }
 
+/**
+ * Render a non-Error `cause` value (string, number, plain object, etc.) for inclusion in
+ * a flattened error chain. Returns `[object Object]`-free text without throwing.
+ */
+export function stringifyNonErrorCause(value: unknown): string {
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value) ?? Object.prototype.toString.call(value);
+  } catch {
+    return Object.prototype.toString.call(value);
+  }
+}
+
 export function formatUncaughtError(err: unknown): string {
   if (extractErrorCode(err) === "INVALID_CONFIG") {
     return formatErrorMessage(err);

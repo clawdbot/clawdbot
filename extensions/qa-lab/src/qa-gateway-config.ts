@@ -8,7 +8,7 @@ import {
 } from "./model-selection.js";
 import { getQaProvider } from "./providers/index.js";
 import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
-import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-thinking.js";
+import type { QaThinkingLevel } from "./qa-thinking.js";
 import type { QaTransportGatewayConfig } from "./qa-transport.js";
 
 export { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-thinking.js";

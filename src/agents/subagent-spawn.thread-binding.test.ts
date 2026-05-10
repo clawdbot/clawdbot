@@ -150,32 +150,29 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     );
 
     expect(result.status).toBe("accepted");
-    expect(hookRequester).toMatchObject({
-      channel: "matrix",
-      accountId: "bot-alpha",
-      to: `room:${boundRoom}`,
-    });
+    expect(hookRequester?.channel).toBe("matrix");
+    expect(hookRequester?.accountId).toBe("bot-alpha");
+    expect(hookRequester?.to).toBe(`room:${boundRoom}`);
     const agentCall = hoisted.callGatewayMock.mock.calls.find(
       ([call]) => (call as { method?: string }).method === "agent",
     )?.[0] as { params?: Record<string, unknown> } | undefined;
-    expect(agentCall?.params).toMatchObject({
-      channel: "matrix",
-      accountId: "bot-alpha",
-      to: `room:${boundRoom}`,
-      threadId: "$thread-root",
-      deliver: true,
-    });
-    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requesterOrigin: {
-          channel: "matrix",
-          accountId: "bot-beta",
-          to: `room:${boundRoom}`,
-        },
-        expectsCompletionMessage: false,
-        spawnMode: "session",
-      }),
-    );
+    expect(agentCall?.params?.channel).toBe("matrix");
+    expect(agentCall?.params?.accountId).toBe("bot-alpha");
+    expect(agentCall?.params?.to).toBe(`room:${boundRoom}`);
+    expect(agentCall?.params?.threadId).toBe("$thread-root");
+    expect(agentCall?.params?.deliver).toBe(true);
+    const registeredRun = hoisted.registerSubagentRunMock.mock.calls[0]?.[0] as
+      | {
+          requesterOrigin?: { channel?: string; accountId?: string; to?: string };
+          expectsCompletionMessage?: boolean;
+          spawnMode?: string;
+        }
+      | undefined;
+    expect(registeredRun?.requesterOrigin?.channel).toBe("matrix");
+    expect(registeredRun?.requesterOrigin?.accountId).toBe("bot-beta");
+    expect(registeredRun?.requesterOrigin?.to).toBe(`room:${boundRoom}`);
+    expect(registeredRun?.expectsCompletionMessage).toBe(false);
+    expect(registeredRun?.spawnMode).toBe("session");
   });
 
   it("keeps completion announcements when only a generic binding is available", async () => {
@@ -221,21 +218,19 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     const agentCall = hoisted.callGatewayMock.mock.calls.find(
       ([call]) => (call as { method?: string }).method === "agent",
     )?.[0] as { params?: Record<string, unknown> } | undefined;
-    expect(agentCall?.params).toMatchObject({
-      channel: "matrix",
-      accountId: "sut",
-      to: "room:!parent:example",
-      deliver: false,
-    });
-    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expectsCompletionMessage: true,
-        requesterOrigin: {
-          channel: "matrix",
-          accountId: "sut",
-          to: "room:!parent:example",
-        },
-      }),
-    );
+    expect(agentCall?.params?.channel).toBe("matrix");
+    expect(agentCall?.params?.accountId).toBe("sut");
+    expect(agentCall?.params?.to).toBe("room:!parent:example");
+    expect(agentCall?.params?.deliver).toBe(false);
+    const registeredRun = hoisted.registerSubagentRunMock.mock.calls[0]?.[0] as
+      | {
+          requesterOrigin?: { channel?: string; accountId?: string; to?: string };
+          expectsCompletionMessage?: boolean;
+        }
+      | undefined;
+    expect(registeredRun?.expectsCompletionMessage).toBe(true);
+    expect(registeredRun?.requesterOrigin?.channel).toBe("matrix");
+    expect(registeredRun?.requesterOrigin?.accountId).toBe("sut");
+    expect(registeredRun?.requesterOrigin?.to).toBe("room:!parent:example");
   });
 });

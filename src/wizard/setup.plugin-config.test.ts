@@ -87,8 +87,9 @@ describe("discoverConfigurablePlugins", () => {
     // sensitive fields are still included in uiHints for discovery —
     // they are skipped at prompt time, not at discovery time
     const plugin = requireFirst(result, "configurable plugin");
-    expect(plugin.uiHints.endpoint).toMatchObject({ label: "Endpoint" });
-    expect(plugin.uiHints.apiKey).toMatchObject({ label: "API Key", sensitive: true });
+    expect(plugin.uiHints.endpoint?.label).toBe("Endpoint");
+    expect(plugin.uiHints.apiKey?.label).toBe("API Key");
+    expect(plugin.uiHints.apiKey?.sensitive).toBe(true);
   });
 
   it("excludes plugins where all fields are advanced", () => {

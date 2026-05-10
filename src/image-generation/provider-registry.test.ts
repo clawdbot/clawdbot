@@ -64,7 +64,7 @@ describe("image-generation provider registry", () => {
 
     const provider = getImageGenerationProvider("custom-image");
 
-    expect(provider).toMatchObject({ id: "custom-image" });
+    expect(provider?.id).toBe("custom-image");
     expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
       key: "imageGenerationProviders",
       cfg: undefined,
@@ -80,6 +80,6 @@ describe("image-generation provider registry", () => {
     expect(listImageGenerationProviders().map((provider) => provider.id)).toEqual(["safe-image"]);
     expect(getImageGenerationProvider("__proto__")).toBeUndefined();
     expect(getImageGenerationProvider("constructor")).toBeUndefined();
-    expect(requireImageProvider("safe-alias")).toMatchObject({ id: "safe-image" });
+    expect(requireImageProvider("safe-alias").id).toBe("safe-image");
   });
 });

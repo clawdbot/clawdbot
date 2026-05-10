@@ -288,12 +288,26 @@ code:
 import {
   interactiveReplyToPresentation,
   normalizeMessagePresentation,
+  presentationToInteractiveControlsReply,
   presentationToInteractiveReply,
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
 ```
 
 New code should accept or produce `MessagePresentation` directly.
+
+`presentationToInteractiveReply(...)` preserves visible presentation text by
+mapping the title, text, context, buttons, and selects into the older
+`InteractiveReply` shape. Component renderers that already draw title, text,
+context, and divider blocks natively should use
+`presentationToInteractiveControlsReply(...)` instead, then append only the
+button and select controls.
+
+`renderMessagePresentationFallbackText(...)` returns an empty string for
+presentation blocks that have no text fallback, such as a divider-only
+presentation. Transports that require a non-empty send body can pass
+`emptyFallback` to opt into a minimal body without changing the default fallback
+contract.
 
 ## Delivery pin
 

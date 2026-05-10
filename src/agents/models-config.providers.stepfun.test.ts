@@ -115,16 +115,12 @@ describe("StepFun provider catalog", () => {
       throw new Error("expected StepFun providers");
     }
 
-    expect(standardProvider).toMatchObject({
-      baseUrl: "https://api.stepfun.ai/v1",
-      api: "openai-completions",
-      apiKey: "STEPFUN_API_KEY",
-    });
-    expect(planProvider).toMatchObject({
-      baseUrl: "https://api.stepfun.ai/step_plan/v1",
-      api: "openai-completions",
-      apiKey: "STEPFUN_API_KEY",
-    });
+    expect(standardProvider.baseUrl).toBe("https://api.stepfun.ai/v1");
+    expect(standardProvider.api).toBe("openai-completions");
+    expect(standardProvider.apiKey).toBe("STEPFUN_API_KEY");
+    expect(planProvider.baseUrl).toBe("https://api.stepfun.ai/step_plan/v1");
+    expect(planProvider.api).toBe("openai-completions");
+    expect(planProvider.apiKey).toBe("STEPFUN_API_KEY");
     expect(standardProvider.models?.map((model) => model.id)).toEqual(EXPECTED_STANDARD_MODELS);
     expect(planProvider.models?.map((model) => model.id)).toEqual(EXPECTED_PLAN_MODELS);
   });

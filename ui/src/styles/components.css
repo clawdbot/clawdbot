@@ -2425,8 +2425,10 @@
 
 .session-key-cell .session-link,
 .session-key-display-name {
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-key-display-name {
@@ -2496,7 +2498,11 @@
 }
 
 .sessions-table {
-  min-width: 1240px;
+  min-width: 1340px;
+}
+
+.sessions-table tbody tr.session-data-row > td {
+  white-space: nowrap;
 }
 
 .data-table th {
@@ -2605,6 +2611,7 @@
   font-weight: 600;
   border-radius: var(--radius-full);
   letter-spacing: 0.02em;
+  white-space: nowrap;
 }
 
 .data-table-badge--direct {
@@ -2630,6 +2637,101 @@
 .data-table-badge--unknown {
   color: var(--muted);
   background: var(--bg-hover);
+}
+
+.session-status-col {
+  width: 118px;
+  min-width: 108px;
+}
+
+.session-status-badge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 116px;
+  gap: 6px;
+  box-sizing: border-box;
+  padding: 3px 8px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--bg-hover) 76%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.session-status-badge__dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.68;
+}
+
+.session-status-badge__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-status-badge--live {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 11%, var(--card));
+  border-color: color-mix(in srgb, var(--success) 36%, var(--border));
+}
+
+.session-status-badge--live .session-status-badge__dot {
+  opacity: 1;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent);
+  animation: session-live-pulse 1.8s ease-in-out infinite;
+}
+
+.session-status-badge--idle,
+.session-status-badge--done {
+  color: color-mix(in srgb, var(--text) 78%, var(--muted));
+}
+
+.session-status-badge--failed {
+  color: var(--danger);
+  background: var(--danger-subtle);
+  border-color: color-mix(in srgb, var(--danger) 26%, var(--border));
+}
+
+.session-status-badge--muted {
+  color: var(--muted);
+}
+
+.session-runtime-cell {
+  width: 170px;
+  max-width: 170px;
+}
+
+.session-runtime-cell .mono {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+@keyframes session-live-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.24);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-status-badge--live .session-status-badge__dot {
+    animation: none;
+  }
 }
 
 .session-token-cell {
@@ -2710,6 +2812,14 @@
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--card) 90%, transparent);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.session-details-panel__badges {
+  display: inline-flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .session-details-panel__eyebrow {

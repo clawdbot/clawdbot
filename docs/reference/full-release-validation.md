@@ -80,15 +80,15 @@ or Docker-facing stages need it.
 The Docker release-path stage runs these chunks when `live_suite_filter` is
 empty:
 
-| Chunk                                                           | Coverage                                                                |
-| --------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `core`                                                          | Core Docker release-path smoke lanes.                                   |
-| `package-update-openai`                                         | OpenAI package install and update behavior.                             |
-| `package-update-anthropic`                                      | Anthropic package install and update behavior.                          |
-| `package-update-core`                                           | Provider-neutral package and update behavior.                           |
-| `plugins-runtime-plugins`                                       | Plugin runtime lanes that exercise plugin behavior.                     |
-| `plugins-runtime-services`                                      | Service-backed plugin runtime lanes; includes OpenWebUI when requested. |
-| `plugins-runtime-install-a` through `plugins-runtime-install-h` | Plugin install/runtime batches split for parallel release validation.   |
+| Chunk                                                           | Coverage                                                                         |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `core`                                                          | Core Docker release-path smoke lanes.                                            |
+| `package-update-openai`                                         | OpenAI package install/update behavior, including Codex on-demand install.       |
+| `package-update-anthropic`                                      | Anthropic package install and update behavior.                                   |
+| `package-update-core`                                           | Provider-neutral package and update behavior.                                    |
+| `plugins-runtime-plugins`                                       | Plugin runtime lanes that exercise plugin behavior.                              |
+| `plugins-runtime-services`                                      | Service-backed and live plugin runtime lanes; includes OpenWebUI when requested. |
+| `plugins-runtime-install-a` through `plugins-runtime-install-h` | Plugin install/runtime batches split for parallel release validation.            |
 
 Use targeted `docker_lanes=<lane[,lane]>` on the reusable live/E2E workflow when
 only one Docker lane failed. The release artifacts include per-lane rerun

@@ -174,19 +174,21 @@ describe("createOAuthManager", () => {
       isRefreshTokenReusedError: () => false,
     });
 
-    await expect(
-      manager.resolveOAuthAccess({
-        store: {
-          version: 1,
-          profiles: {
-            [profileId]: credential,
-          },
+    const result = await manager.resolveOAuthAccess({
+      store: {
+        version: 1,
+        profiles: {
+          [profileId]: credential,
         },
-        profileId,
-        credential,
-        cfg,
-      }),
-    ).resolves.toMatchObject({ apiKey: "access-token" });
+      },
+      profileId,
+      credential,
+      cfg,
+    });
+    if (!result) {
+      throw new Error("Expected OAuth access result");
+    }
+    expect(result.apiKey).toBe("access-token");
 
     expect(buildApiKey).toHaveBeenCalledWith("openai-codex", credential, {
       cfg,
@@ -273,13 +275,12 @@ describe("createOAuthManager", () => {
     });
 
     expect(refreshCredential).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({
-      apiKey: "rotated-main-access",
-      credential: expect.objectContaining({
-        access: "rotated-main-access",
-        refresh: "rotated-main-refresh",
-      }),
-    });
+    if (!result) {
+      throw new Error("Expected refreshed main-store OAuth result");
+    }
+    expect(result.apiKey).toBe("rotated-main-access");
+    expect(result.credential.access).toBe("rotated-main-access");
+    expect(result.credential.refresh).toBe("rotated-main-refresh");
   });
 
   it("refreshes with the adopted external oauth credential", async () => {
@@ -337,13 +338,12 @@ describe("createOAuthManager", () => {
       agentDir,
     });
 
-    expect(result).toEqual({
-      apiKey: "rotated-access",
-      credential: expect.objectContaining({
-        provider: "minimax-portal",
-        access: "rotated-access",
-        refresh: "rotated-refresh",
-      }),
-    });
+    if (!result) {
+      throw new Error("Expected refreshed external OAuth result");
+    }
+    expect(result.apiKey).toBe("rotated-access");
+    expect(result.credential.provider).toBe("minimax-portal");
+    expect(result.credential.access).toBe("rotated-access");
+    expect(result.credential.refresh).toBe("rotated-refresh");
   });
 });

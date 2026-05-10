@@ -25,6 +25,10 @@ export type OpenClawPluginToolContext = {
   };
   messageChannel?: string;
   agentAccountId?: string;
+  /** Trusted provider auth availability from the active auth profile store. */
+  hasAuthForProvider?: (providerId: string) => boolean;
+  /** Resolves an API key from the active auth profile store when available. */
+  resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
   /** Trusted ambient delivery route for the active agent/session. */
   deliveryContext?: DeliveryContext;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */

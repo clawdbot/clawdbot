@@ -213,14 +213,17 @@ describe("exportTrajectoryBundle", () => {
     writeSimpleSessionFile(sessionFile);
     fs.mkdirSync(outputDir);
 
-    await expect(
-      exportTrajectoryBundle({
+    try {
+      await exportTrajectoryBundle({
         outputDir,
         sessionFile,
         sessionId: "session-1",
         workspaceDir: tmpDir,
-      }),
-    ).rejects.toMatchObject({ code: "EEXIST" });
+      });
+      throw new Error("expected trajectory export to reject an existing output directory");
+    } catch (error) {
+      expect((error as NodeJS.ErrnoException).code).toBe("EEXIST");
+    }
   });
 
   it("does not synthesize prompt files from export-time fallbacks", async () => {
@@ -748,9 +751,10 @@ describe("exportTrajectoryBundle", () => {
       .trim()
       .split(/\r?\n/u)
       .map((line) => JSON.parse(line) as TrajectoryEvent);
-    expect(eventTypes(exportedEvents)).toEqual(
-      expect.arrayContaining(["tool.call", "tool.result", "context.compiled"]),
-    );
+    const types = eventTypes(exportedEvents);
+    expect(types).toContain("tool.call");
+    expect(types).toContain("tool.result");
+    expect(types).toContain("context.compiled");
     expect(JSON.stringify(exportedEvents)).toContain("$WORKSPACE_DIR/inside.txt");
     expect(JSON.stringify(exportedEvents)).not.toContain("$WORKSPACE_DIR2");
 
@@ -777,10 +781,8 @@ describe("exportTrajectoryBundle", () => {
     const metadata = JSON.parse(fs.readFileSync(path.join(outputDir, "metadata.json"), "utf8")) as {
       skills?: { entries?: Array<{ id?: string; invoked?: boolean }> };
     };
-    expect(metadata.skills?.entries?.[0]).toMatchObject({
-      id: "weather",
-      invoked: true,
-    });
+    expect(metadata.skills?.entries?.[0]?.id).toBe("weather");
+    expect(metadata.skills?.entries?.[0]?.invoked).toBe(true);
     const prompts = fs.readFileSync(path.join(outputDir, "prompts.json"), "utf8");
     const artifacts = fs.readFileSync(path.join(outputDir, "artifacts.json"), "utf8");
     const systemPrompt = fs.readFileSync(path.join(outputDir, "system-prompt.txt"), "utf8");

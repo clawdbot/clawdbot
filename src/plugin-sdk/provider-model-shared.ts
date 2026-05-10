@@ -3,7 +3,6 @@
 // Keep provider-owned exports out of this subpath so plugin loaders can import it
 // without recursing through provider-specific facades.
 
-import type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.models.js";
 import {
   buildAnthropicReplayPolicyForModel,
   buildGoogleGeminiReplayPolicy,

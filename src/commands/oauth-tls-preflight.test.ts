@@ -26,11 +26,12 @@ describe("runOpenAIOAuthTlsPreflight", () => {
       throw new TypeError("fetch failed", { cause });
     }) as unknown as typeof fetch;
     const result = await runOpenAIOAuthTlsPreflight({ fetchImpl: tlsFetchImpl, timeoutMs: 20 });
-    expect(result).toMatchObject({
-      ok: false,
-      kind: "tls-cert",
-      code: "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
-    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected TLS certificate preflight failure");
+    }
+    expect(result.kind).toBe("tls-cert");
+    expect(result.code).toBe("UNABLE_TO_GET_ISSUER_CERT_LOCALLY");
   });
 
   it("keeps generic TLS transport failures in network classification", async () => {
@@ -45,10 +46,11 @@ describe("runOpenAIOAuthTlsPreflight", () => {
       fetchImpl: networkFetchImpl,
       timeoutMs: 20,
     });
-    expect(result).toMatchObject({
-      ok: false,
-      kind: "network",
-    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected network preflight failure");
+    }
+    expect(result.kind).toBe("network");
   });
 });
 

@@ -75,6 +75,8 @@ export async function createPtyAdapter(params: {
   let waitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | number | null }> | null =
     null;
   let forceKillWaitFallbackTimer: NodeJS.Timeout | null = null;
+  let stdinDestroyed = false;
+  let stdinEnded = false;
 
   const clearForceKillWaitFallback = () => {
     if (!forceKillWaitFallbackTimer) {
@@ -89,6 +91,8 @@ export async function createPtyAdapter(params: {
       return;
     }
     clearForceKillWaitFallback();
+    stdinDestroyed = true;
+    stdinEnded = true;
     waitResult = value;
     if (resolveWait) {
       const resolve = resolveWait;
@@ -114,7 +118,18 @@ export async function createPtyAdapter(params: {
     }) ?? null;
 
   const stdin: ManagedRunStdin = {
-    destroyed: false,
+    get destroyed() {
+      return stdinDestroyed;
+    },
+    get writable() {
+      return !stdinDestroyed && !stdinEnded;
+    },
+    get writableEnded() {
+      return stdinEnded;
+    },
+    get writableFinished() {
+      return stdinEnded;
+    },
     write: (data, cb) => {
       try {
         pty.write(data);
@@ -125,11 +140,16 @@ export async function createPtyAdapter(params: {
     },
     end: () => {
       try {
+        stdinEnded = true;
         const eof = process.platform === "win32" ? "\x1a" : "\x04";
         pty.write(eof);
       } catch {
         // ignore EOF errors
       }
+    },
+    destroy: () => {
+      stdinDestroyed = true;
+      stdinEnded = true;
     },
   };
 
@@ -182,6 +202,8 @@ export async function createPtyAdapter(params: {
   };
 
   const dispose = () => {
+    stdinDestroyed = true;
+    stdinEnded = true;
     try {
       dataListener?.dispose();
     } catch {

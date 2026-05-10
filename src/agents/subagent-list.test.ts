@@ -78,6 +78,35 @@ describe("buildSubagentList", () => {
     expect(list.active[0]?.line).not.toContain("after a short hard cutoff.");
   });
 
+  it("shows taskName in list lines and structured views", () => {
+    const run = {
+      runId: "run-task-name",
+      childSessionKey: "agent:main:subagent:task-name",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "review the subagent orchestration code",
+      taskName: "review_subagents",
+      cleanup: "keep",
+      label: "Review worker",
+      createdAt: 1000,
+      startedAt: 1000,
+    } satisfies SubagentRunRecord;
+    addSubagentRunForTests(run);
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+
+    const list = buildSubagentList({
+      cfg,
+      runs: [run],
+      recentMinutes: 30,
+    });
+
+    expect(list.active[0]?.taskName).toBe("review_subagents");
+    expect(list.active[0]?.line).toContain("review_subagents: Review worker");
+  });
+
   it("keeps ended orchestrators active while descendants remain pending", () => {
     const now = Date.now();
     const orchestratorRun = {

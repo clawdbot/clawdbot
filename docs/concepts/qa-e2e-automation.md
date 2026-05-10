@@ -288,6 +288,7 @@ Scenarios (`extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime
 - `telegram-tools-compact-command`
 - `telegram-whoami-command`
 - `telegram-status-command`
+- `telegram-repeated-command-authorization`
 - `telegram-other-bot-command-gating`
 - `telegram-context-command`
 - `telegram-current-session-status-tool`

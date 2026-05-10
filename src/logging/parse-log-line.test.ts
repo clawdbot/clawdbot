@@ -15,13 +15,11 @@ describe("parseLogLine", () => {
 
     const parsed = parseLogLine(line);
 
-    expect(parsed).toMatchObject({
-      time: "2026-01-09T01:38:41.523Z",
-      level: "info",
-      subsystem: "gateway/channels/demo-channel",
-      message: '{"subsystem":"gateway/channels/demo-channel"} connected',
-      raw: line,
-    });
+    expect(parsed?.time).toBe("2026-01-09T01:38:41.523Z");
+    expect(parsed?.level).toBe("info");
+    expect(parsed?.subsystem).toBe("gateway/channels/demo-channel");
+    expect(parsed?.message).toBe('{"subsystem":"gateway/channels/demo-channel"} connected');
+    expect(parsed?.raw).toBe(line);
   });
 
   it("falls back to meta timestamp when top-level time is missing", () => {

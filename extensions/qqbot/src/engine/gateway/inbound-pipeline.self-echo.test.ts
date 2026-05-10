@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { QQBotInboundAccess } from "../adapter/index.js";
 import type { RefIndexEntry } from "../ref/types.js";
 import type { InboundPipelineDeps } from "./inbound-context.js";
 import { buildInboundContext } from "./inbound-pipeline.js";
@@ -45,6 +46,28 @@ const account: GatewayAccount = {
   clientSecret: "secret",
   markdownSupport: false,
   config: {},
+};
+
+const emptyAllowlist: QQBotInboundAccess["state"]["allowlists"]["dm"] = {
+  rawEntryCount: 0,
+  normalizedEntries: [],
+  invalidEntries: [],
+  disabledEntries: [],
+  matchedEntryIds: [],
+  hasConfiguredEntries: false,
+  hasMatchableEntries: false,
+  hasWildcard: false,
+  accessGroups: {
+    referenced: [],
+    matched: [],
+    missing: [],
+    unsupported: [],
+    failed: [],
+  },
+  match: {
+    matched: false,
+    matchedEntryIds: [],
+  },
 };
 
 function makeRuntime(): GatewayPluginRuntime {
@@ -130,6 +153,63 @@ function makeDeps(overrides: Partial<InboundPipelineDeps> = {}): InboundPipeline
           shouldBypassMention: false,
           implicitMention: false,
         })),
+      },
+      access: {
+        resolveInboundAccess: vi.fn(
+          (input): QQBotInboundAccess => ({
+            state: {
+              channelId: "qqbot",
+              accountId: "qq-main",
+              conversationKind: input.isGroup ? "group" : "direct",
+              event: {
+                kind: "message",
+                authMode: "inbound",
+                mayPair: true,
+                hasOriginSubject: false,
+                originSubjectMatched: false,
+              },
+              routeFacts: [],
+              allowlists: {
+                dm: emptyAllowlist,
+                pairingStore: emptyAllowlist,
+                group: emptyAllowlist,
+                commandOwner: emptyAllowlist,
+                commandGroup: emptyAllowlist,
+              },
+            },
+            ingress: {
+              admission: "dispatch",
+              decision: "allow",
+              decisiveGateId: "activation",
+              reasonCode: "activation_allowed",
+              graph: { gates: [] },
+            },
+            senderAccess: {
+              allowed: true,
+              decision: "allow",
+              reasonCode: input.isGroup ? "group_policy_allowed" : "dm_policy_open",
+              effectiveAllowFrom: [],
+              effectiveGroupAllowFrom: [],
+              providerMissingFallbackApplied: false,
+            },
+            commandAccess: {
+              requested: true,
+              authorized: true,
+              shouldBlockControlCommand: false,
+              reasonCode: "command_authorized",
+            },
+            routeAccess: {
+              allowed: true,
+            },
+            activationAccess: {
+              ran: false,
+              allowed: true,
+              shouldSkip: false,
+              reasonCode: "activation_allowed",
+            },
+          }),
+        ),
+        resolveSlashCommandAuthorization: vi.fn(() => true),
       },
       audioConvert: {
         convertSilkToWav: vi.fn(async () => null),

@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-constants.js";
 
 const ANTHROPIC_PROVIDER_API = "anthropic-messages";
+const ANTHROPIC_API_KEY_DEFAULT_ALLOWLIST_REFS = ["anthropic/claude-haiku-4-5"] as const;
 
 function normalizeLowercaseStringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -264,6 +265,19 @@ export function applyAnthropicConfigDefaults(params: {
           };
           modelsMutated = true;
         }
+      }
+    }
+
+    const hasAnthropicApiKeyModel = Object.keys(nextModels).some((key) =>
+      isAnthropicCacheRetentionTarget(parseProviderModelRef(key, "anthropic")),
+    );
+    if (hasAnthropicApiKeyModel) {
+      for (const ref of ANTHROPIC_API_KEY_DEFAULT_ALLOWLIST_REFS) {
+        if (ref in nextModels) {
+          continue;
+        }
+        nextModels[ref] = { params: { cacheRetention: "short" } };
+        modelsMutated = true;
       }
     }
 

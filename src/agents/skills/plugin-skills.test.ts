@@ -49,6 +49,16 @@ let resolvePluginSkillDirs: typeof import("./plugin-skills.js").resolvePluginSki
 
 const tempDirs = createTrackedTempDirs();
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.lstat(targetPath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`Expected path to be missing: ${targetPath}`);
+}
+
 function buildRegistry(params: { acpxRoot: string; helperRoot: string }): PluginManifestRegistry {
   return {
     diagnostics: [],
@@ -301,9 +311,7 @@ describe("resolvePluginSkillDirs", () => {
     });
 
     expect(dirs).toStrictEqual([]);
-    await expect(fs.lstat(path.join(pluginSkillsDir, "stale-skill"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(pluginSkillsDir, "stale-skill"));
   });
 
   it("cleans up generated plugin skill links when no workspace is active", async () => {
@@ -320,9 +328,7 @@ describe("resolvePluginSkillDirs", () => {
     });
 
     expect(dirs).toStrictEqual([]);
-    await expect(fs.lstat(path.join(pluginSkillsDir, "stale-skill"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(pluginSkillsDir, "stale-skill"));
   });
 
   it("resolves Claude bundle command roots through the normal plugin skill path", async () => {

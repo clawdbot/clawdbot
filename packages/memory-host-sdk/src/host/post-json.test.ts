@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { postJson } from "./post-json.js";
+import { withRemoteHttpResponse } from "./remote-http.js";
 
 vi.mock("./remote-http.js", () => ({
   withRemoteHttpResponse: vi.fn(),
 }));
 
-const { postJson } = await import("./post-json.js");
-const { withRemoteHttpResponse } = await import("./remote-http.js");
 const remoteHttpMock = vi.mocked(withRemoteHttpResponse);
 
 function jsonResponse(payload: unknown, status = 200): Response {
@@ -52,18 +52,22 @@ describe("postJson", () => {
       return await params.onResponse(textResponse("bad gateway", 502));
     });
 
-    await expect(
-      postJson({
+    let error: unknown;
+    try {
+      await postJson({
         url: "https://memory.example/v1/post",
         headers: {},
         body: {},
         errorPrefix: "post failed",
         attachStatus: true,
         parse: () => ({}),
-      }),
-    ).rejects.toMatchObject({
-      message: expect.stringContaining("post failed: 502 bad gateway"),
-      status: 502,
-    });
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("post failed: 502 bad gateway");
+    expect((error as { status?: unknown }).status).toBe(502);
   });
 });

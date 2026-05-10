@@ -45,6 +45,51 @@ const executeDeps = {
   requestHeartbeat: requestHeartbeatImpl,
 };
 
+const CLI_RUNNER_OUTPUT_TAIL_BYTES = 64 * 1024;
+const CLI_RUNNER_OUTPUT_PARSE_BYTES = 1024 * 1024;
+
+function appendCliOutputTail(tail: Buffer, chunk: string): Buffer {
+  if (!chunk) {
+    return tail;
+  }
+  const chunkBuffer = Buffer.from(chunk);
+  if (chunkBuffer.byteLength >= CLI_RUNNER_OUTPUT_TAIL_BYTES) {
+    return Buffer.from(chunkBuffer.subarray(chunkBuffer.byteLength - CLI_RUNNER_OUTPUT_TAIL_BYTES));
+  }
+  const next = Buffer.concat([tail, chunkBuffer], tail.byteLength + chunkBuffer.byteLength);
+  if (next.byteLength <= CLI_RUNNER_OUTPUT_TAIL_BYTES) {
+    return next;
+  }
+  return Buffer.from(next.subarray(next.byteLength - CLI_RUNNER_OUTPUT_TAIL_BYTES));
+}
+
+function appendCliOutputParseBuffer(
+  buffer: Buffer,
+  chunk: string,
+): { buffer: Buffer; exceeded: boolean } {
+  if (!chunk) {
+    return { buffer, exceeded: false };
+  }
+  const chunkBuffer = Buffer.from(chunk);
+  if (buffer.byteLength + chunkBuffer.byteLength > CLI_RUNNER_OUTPUT_PARSE_BYTES) {
+    const remainingBytes = CLI_RUNNER_OUTPUT_PARSE_BYTES - buffer.byteLength;
+    if (remainingBytes <= 0) {
+      return { buffer, exceeded: true };
+    }
+    return {
+      buffer: Buffer.concat(
+        [buffer, chunkBuffer.subarray(0, remainingBytes)],
+        CLI_RUNNER_OUTPUT_PARSE_BYTES,
+      ),
+      exceeded: true,
+    };
+  }
+  return {
+    buffer: Buffer.concat([buffer, chunkBuffer], buffer.byteLength + chunkBuffer.byteLength),
+    exceeded: false,
+  };
+}
+
 export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDeps>): void {
   Object.assign(executeDeps, overrides);
 }
@@ -397,11 +442,18 @@ export async function executePreparedCliRun(
           useResume,
           trigger: params.trigger,
         });
-        const hasJsonlOutput = backend.output === "jsonl";
+        const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
+        const hasJsonlOutput = outputMode === "jsonl";
         if (shouldUseClaudeLiveSession(context)) {
           if (!hasJsonlOutput) {
             throw new Error("Claude live session requires JSONL streaming parser");
           }
+          params.onExecutionPhase?.({
+            phase: "model_call_started",
+            provider: params.provider,
+            model: context.modelId,
+            firstModelCallStarted: true,
+          });
           claudeSkillsPluginCleanupOwned = true;
           const ownedPreparedBackendCleanup = context.preparedBackend.cleanup;
           context.preparedBackend.cleanup = undefined;
@@ -476,7 +528,19 @@ export async function executePreparedCliRun(
           backendId: context.backendResolved.id,
           cliSessionId: useResume ? resolvedSessionId : undefined,
         });
+        let stdoutTail: Buffer = Buffer.alloc(0);
+        let stdoutParseBuffer: Buffer = Buffer.alloc(0);
+        let stdoutParseExceeded = false;
+        let stderrTail: Buffer = Buffer.alloc(0);
+        let stderrParseBuffer: Buffer = Buffer.alloc(0);
+        let stderrParseExceeded = false;
 
+        params.onExecutionPhase?.({
+          phase: "model_call_started",
+          provider: params.provider,
+          model: context.modelId,
+          firstModelCallStarted: true,
+        });
         const managedRun = await supervisor.spawn({
           sessionId: params.sessionId,
           backendId: context.backendResolved.id,
@@ -489,7 +553,24 @@ export async function executePreparedCliRun(
           cwd: context.workspaceDir,
           env,
           input: stdinPayload,
-          onStdout: streamingParser ? (chunk: string) => streamingParser.push(chunk) : undefined,
+          captureOutput: false,
+          onStdout: (chunk: string) => {
+            stdoutTail = appendCliOutputTail(stdoutTail, chunk);
+            if (!stdoutParseExceeded) {
+              const nextStdoutParse = appendCliOutputParseBuffer(stdoutParseBuffer, chunk);
+              stdoutParseBuffer = nextStdoutParse.buffer;
+              stdoutParseExceeded = nextStdoutParse.exceeded;
+            }
+            streamingParser?.push(chunk);
+          },
+          onStderr: (chunk: string) => {
+            stderrTail = appendCliOutputTail(stderrTail, chunk);
+            if (!stderrParseExceeded) {
+              const nextStderrParse = appendCliOutputParseBuffer(stderrParseBuffer, chunk);
+              stderrParseBuffer = nextStderrParse.buffer;
+              stderrParseExceeded = nextStderrParse.exceeded;
+            }
+          },
         });
         let replyBackendCompleted = false;
         const replyBackendHandle = params.replyOperation
@@ -526,22 +607,24 @@ export async function executePreparedCliRun(
           throw createCliAbortError();
         }
 
-        const stdout = result.stdout.trim();
-        const stderr = result.stderr.trim();
+        const stdout = stdoutParseBuffer.toString("utf8").trim();
+        const stdoutDiagnostic = stdoutTail.toString("utf8").trim();
+        const stderr = stderrParseBuffer.toString("utf8").trim();
+        const stderrDiagnostic = stderrTail.toString("utf8").trim();
         if (logOutputText) {
-          if (stdout) {
-            cliBackendLog.info(`cli stdout:\n${stdout}`);
+          if (stdoutDiagnostic) {
+            cliBackendLog.info(`cli stdout:\n${stdoutDiagnostic}`);
           }
-          if (stderr) {
-            cliBackendLog.info(`cli stderr:\n${stderr}`);
+          if (stderrDiagnostic) {
+            cliBackendLog.info(`cli stderr:\n${stderrDiagnostic}`);
           }
         }
         if (shouldLogVerbose()) {
-          if (stdout) {
-            cliBackendLog.debug(`cli stdout:\n${stdout}`);
+          if (stdoutDiagnostic) {
+            cliBackendLog.debug(`cli stdout:\n${stdoutDiagnostic}`);
           }
-          if (stderr) {
-            cliBackendLog.debug(`cli stderr:\n${stderr}`);
+          if (stderrDiagnostic) {
+            cliBackendLog.debug(`cli stderr:\n${stderrDiagnostic}`);
           }
         }
 
@@ -586,12 +669,27 @@ export async function executePreparedCliRun(
               status: resolveFailoverStatus("timeout"),
             });
           }
-          const primaryErrorText = stderr || stdout;
+          const errorCandidates = [stderr, stdout, stderrDiagnostic, stdoutDiagnostic].filter(
+            (candidate) => candidate.length > 0,
+          );
           const structuredError =
-            extractCliErrorMessage(primaryErrorText) ??
-            (stderr ? extractCliErrorMessage(stdout) : null);
-          const err = structuredError || primaryErrorText || "CLI failed.";
-          const reason = classifyFailoverReason(err, { provider: params.provider }) ?? "unknown";
+            errorCandidates.map((candidate) => extractCliErrorMessage(candidate)).find(Boolean) ??
+            null;
+          let classifiedErrorText = structuredError;
+          let reason = structuredError
+            ? classifyFailoverReason(structuredError, { provider: params.provider })
+            : null;
+          if (!reason) {
+            for (const candidate of errorCandidates) {
+              reason = classifyFailoverReason(candidate, { provider: params.provider });
+              if (reason) {
+                classifiedErrorText = candidate;
+                break;
+              }
+            }
+          }
+          const err = structuredError || classifiedErrorText || errorCandidates[0] || "CLI failed.";
+          reason = reason ?? "unknown";
           const status = resolveFailoverStatus(reason);
           throw new FailoverError(err, {
             reason,
@@ -603,13 +701,32 @@ export async function executePreparedCliRun(
           });
         }
 
-        const parsed = parseCliOutput({
-          raw: stdout,
-          backend,
-          providerId: context.backendResolved.id,
-          outputMode: useResume ? (backend.resumeOutput ?? backend.output) : backend.output,
-          fallbackSessionId: resolvedSessionId,
-        });
+        const streamedJsonlOutput =
+          outputMode === "jsonl" ? (streamingParser?.getOutput() ?? null) : null;
+
+        if (stdoutParseExceeded && !streamedJsonlOutput) {
+          throw new FailoverError(
+            `CLI stdout exceeded ${CLI_RUNNER_OUTPUT_PARSE_BYTES} bytes; refusing to parse truncated output.`,
+            {
+              reason: "format",
+              provider: params.provider,
+              model: context.modelId,
+              sessionId: params.sessionId,
+              lane: params.lane,
+              status: resolveFailoverStatus("format"),
+            },
+          );
+        }
+
+        const parsed =
+          streamedJsonlOutput ??
+          parseCliOutput({
+            raw: stdout,
+            backend,
+            providerId: context.backendResolved.id,
+            outputMode,
+            fallbackSessionId: resolvedSessionId,
+          });
         const rawText = parsed.text;
         return {
           ...parsed,

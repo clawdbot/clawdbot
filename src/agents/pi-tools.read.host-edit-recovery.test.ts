@@ -86,6 +86,23 @@ describe("edit tool recovery hardening", () => {
     });
   }
 
+  function expectRecoveredText(result: Awaited<ReturnType<AnyAgentTool["execute"]>>, text: string) {
+    expect((result as { isError?: unknown }).isError).toBe(false);
+    const first = result.content[0];
+    expect(first?.type).toBe("text");
+    expect(first?.type === "text" ? first.text : undefined).toBe(text);
+  }
+
+  async function expectPathMissing(targetPath: string) {
+    try {
+      await fs.access(targetPath);
+      throw new Error(`expected ${targetPath} to be missing`);
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+      expect(code).toBe("ENOENT");
+    }
+  }
+
   it("adds current file contents to exact-match mismatch errors", async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
     const filePath = path.join(tmpDir, "demo.txt");
@@ -136,11 +153,7 @@ describe("edit tool recovery hardening", () => {
       undefined,
     );
 
-    expect(result).toMatchObject({ isError: false });
-    expect(result.content[0]).toMatchObject({
-      type: "text",
-      text: `Successfully replaced text in ${filePath}.`,
-    });
+    expectRecoveredText(result, `Successfully replaced text in ${filePath}.`);
   });
 
   it("does not recover false success when the file never changed", async () => {
@@ -186,11 +199,7 @@ describe("edit tool recovery hardening", () => {
       undefined,
     );
 
-    expect(result).toMatchObject({ isError: false });
-    expect(result.content[0]).toMatchObject({
-      type: "text",
-      text: `Successfully replaced text in ${filePath}.`,
-    });
+    expectRecoveredText(result, `Successfully replaced text in ${filePath}.`);
   });
 
   it("recovers multi-edit payloads after a post-write throw", async () => {
@@ -218,11 +227,7 @@ describe("edit tool recovery hardening", () => {
       undefined,
     );
 
-    expect(result).toMatchObject({ isError: false });
-    expect(result.content[0]).toMatchObject({
-      type: "text",
-      text: `Successfully replaced 2 block(s) in ${filePath}.`,
-    });
+    expectRecoveredText(result, `Successfully replaced 2 block(s) in ${filePath}.`);
   });
 
   it("recovers tilde paths against the OS home even when OPENCLAW_HOME differs", async () => {
@@ -257,14 +262,8 @@ describe("edit tool recovery hardening", () => {
         undefined,
       );
 
-      expect(result).toMatchObject({ isError: false });
-      expect(result.content[0]).toMatchObject({
-        type: "text",
-        text: "Successfully replaced text in ~/demo.txt.",
-      });
-      await expect(fs.access(path.join(openclawHome, "demo.txt"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      expectRecoveredText(result, "Successfully replaced text in ~/demo.txt.");
+      await expectPathMissing(path.join(openclawHome, "demo.txt"));
     } finally {
       if (previousHome === undefined) {
         delete process.env.HOME;
@@ -305,10 +304,6 @@ describe("edit tool recovery hardening", () => {
       undefined,
     );
 
-    expect(result).toMatchObject({ isError: false });
-    expect(result.content[0]).toMatchObject({
-      type: "text",
-      text: `Successfully replaced text in ${filePath}.`,
-    });
+    expectRecoveredText(result, `Successfully replaced text in ${filePath}.`);
   });
 });

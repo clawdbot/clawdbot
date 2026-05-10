@@ -548,6 +548,160 @@ describe("runMessageAction media behavior", () => {
     });
   });
 
+  describe("reply hydration", () => {
+    // The reply action accepts attachments via the same media/path/filePath
+    // params as send. Before openclaw#79864 the runner only hydrated
+    // sendAttachment/setGroupIcon/upload-file, so a channel plugin's reply
+    // handler saw the raw path and could forward it directly to its CLI —
+    // bypassing localRoots, sandbox, and size checks. These tests pin the
+    // wiring at the runner level: paths must arrive at the plugin handler
+    // as a hydrated buffer, paths outside the resolver's policy must
+    // reject before the handler runs, and reply must not inherit the
+    // sendAttachment caption-fallback that would synthesize a bogus
+    // caption from the agent's reply text.
+    const cfg = {
+      channels: {
+        replychat: {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+    const handleActionMock = vi.fn();
+    const replyPlugin: ChannelPlugin = {
+      id: "replychat",
+      meta: {
+        id: "replychat",
+        label: "ReplyChat",
+        selectionLabel: "ReplyChat",
+        docsPath: "/channels/replychat",
+        blurb: "ReplyChat test plugin.",
+      },
+      capabilities: { chatTypes: ["direct", "group"], media: true },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["reply"] }),
+        supportsAction: ({ action }) => action === "reply",
+        handleAction: async ({ params }) => {
+          handleActionMock(params);
+          return jsonResult({
+            ok: true,
+            buffer: params.buffer,
+            filename: params.filename,
+            caption: params.caption,
+            contentType: params.contentType,
+            text: params.text,
+            message: params.message,
+          });
+        },
+      },
+    };
+
+    beforeEach(() => {
+      handleActionMock.mockReset();
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "replychat",
+            source: "test",
+            plugin: replyPlugin,
+          },
+        ]),
+      );
+      vi.mocked(loadWebMedia).mockResolvedValue({
+        buffer: Buffer.from("hello"),
+        contentType: "image/png",
+        kind: "image",
+        fileName: "pic.png",
+      });
+    });
+
+    afterEach(() => {
+      setActivePluginRegistry(createTestRegistry([]));
+      vi.clearAllMocks();
+    });
+
+    it("hydrates buffer and filename from a remote URL before the reply handler runs", async () => {
+      const result = await runMessageAction({
+        cfg,
+        action: "reply",
+        params: {
+          channel: "replychat",
+          target: "+15551234567",
+          messageId: "parent-id",
+          text: "look at this",
+          media: "https://example.com/pic.png",
+        },
+      });
+
+      expect(result.kind).toBe("action");
+      expect(handleActionMock).toHaveBeenCalledTimes(1);
+      const handlerParams = handleActionMock.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(handlerParams.buffer).toBe(Buffer.from("hello").toString("base64"));
+      expect(handlerParams.filename).toBe("pic.png");
+      expect(handlerParams.contentType).toBe("image/png");
+    });
+
+    it("rejects host paths outside mediaLocalRoots before invoking the reply handler", async () => {
+      // Use the real loader so its localRoots/workspaceOnly enforcement runs.
+      const actual = await vi.importActual<typeof import("../../media/web-media.js")>(
+        "../../media/web-media.js",
+      );
+      vi.mocked(loadWebMedia).mockImplementation(actual.loadWebMedia);
+
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-reply-bypass-"));
+      try {
+        const outsidePath = path.join(tempDir, "secret.txt");
+        await fs.writeFile(outsidePath, "secret", "utf8");
+
+        await expect(
+          runMessageAction({
+            cfg: {
+              ...cfg,
+              tools: { fs: { workspaceOnly: true } },
+            },
+            action: "reply",
+            params: {
+              channel: "replychat",
+              target: "+15551234567",
+              messageId: "parent-id",
+              text: "look at this",
+              path: outsidePath,
+            },
+          }),
+        ).rejects.toThrow(/allowed directory|path-not-allowed|workspace/i);
+        expect(handleActionMock).not.toHaveBeenCalled();
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not synthesize a caption from message on reply", async () => {
+      // sendAttachment falls back caption -> message when caption is missing.
+      // Reply has its own text/message body, so caption fallback would
+      // invent a bogus caption param the channel handler shouldn't see.
+      await runMessageAction({
+        cfg,
+        action: "reply",
+        params: {
+          channel: "replychat",
+          target: "+15551234567",
+          messageId: "parent-id",
+          message: "look at this",
+          media: "https://example.com/pic.png",
+        },
+      });
+
+      expect(handleActionMock).toHaveBeenCalledTimes(1);
+      const handlerParams = handleActionMock.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(handlerParams.caption).toBeUndefined();
+      expect(handlerParams.message).toBe("look at this");
+    });
+  });
+
   describe("plugin-owned media-source discovery routing", () => {
     const profilePlugin: ChannelPlugin = {
       ...createChannelTestPluginBase({

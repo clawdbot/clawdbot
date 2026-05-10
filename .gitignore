@@ -117,6 +117,7 @@ USER.md
 !.agents/skills/crabbox/**
 !.agents/skills/gitcrawl/
 !.agents/skills/gitcrawl/**
+!.agents/skills/openclaw-docs/**
 !.agents/skills/openclaw-ghsa-maintainer/
 !.agents/skills/openclaw-ghsa-maintainer/**
 !.agents/skills/openclaw-parallels-smoke/

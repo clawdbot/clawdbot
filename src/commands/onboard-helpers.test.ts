@@ -104,7 +104,7 @@ describe("openUrl", () => {
     expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(1);
     const [argv, options] = mocks.runCommandWithTimeout.mock.calls[0] ?? [];
     expect(argv).toEqual([rundll32, "url.dll,FileProtocolHandler", url]);
-    expect(options).toMatchObject({ timeoutMs: 5_000 });
+    expect(options?.timeoutMs).toBe(5_000);
     expect(options?.windowsVerbatimArguments).toBeUndefined();
 
     platformSpy.mockRestore();

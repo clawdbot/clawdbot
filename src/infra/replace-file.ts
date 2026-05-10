@@ -3,15 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   movePathWithCopyFallback as movePathWithCopyFallbackBase,
-  replaceDirectoryAtomic,
-  replaceFileAtomic,
-  replaceFileAtomicSync,
+  replaceFileAtomic as replaceFileAtomicBase,
   type MovePathWithCopyFallbackOptions as BaseMovePathWithCopyFallbackOptions,
 } from "@openclaw/fs-safe/atomic";
 
 export {
   replaceDirectoryAtomic,
-  replaceFileAtomic,
   replaceFileAtomicSync,
   type ReplaceDirectoryAtomicOptions,
   type ReplaceFileAtomicFileSystem,
@@ -20,6 +17,8 @@ export {
   type ReplaceFileAtomicSyncFileSystem,
   type ReplaceFileAtomicSyncOptions,
 } from "@openclaw/fs-safe/atomic";
+
+export const replaceFileAtomic = replaceFileAtomicBase;
 
 export type MovePathWithCopyFallbackOptions = BaseMovePathWithCopyFallbackOptions & {
   sourceHardlinks?: "allow" | "reject";

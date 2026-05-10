@@ -43,15 +43,17 @@ describe("image-generation runtime", () => {
     const authStore = { version: 1, profiles: {} } as const;
     let seenAuthStore: unknown;
     let seenTimeoutMs: number | undefined;
+    let seenSsrfPolicy: unknown;
     const provider: ImageGenerationProvider = {
       id: "image-plugin",
       capabilities: {
         generate: {},
         edit: { enabled: false },
       },
-      async generateImage(req: { authStore?: unknown; timeoutMs?: number }) {
+      async generateImage(req: { authStore?: unknown; timeoutMs?: number; ssrfPolicy?: unknown }) {
         seenAuthStore = req.authStore;
         seenTimeoutMs = req.timeoutMs;
+        seenSsrfPolicy = req.ssrfPolicy;
         return {
           images: [
             {
@@ -78,6 +80,7 @@ describe("image-generation runtime", () => {
       agentDir: "/tmp/agent",
       authStore,
       timeoutMs: 12_345,
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
 
     expect(result.provider).toBe("image-plugin");
@@ -85,6 +88,7 @@ describe("image-generation runtime", () => {
     expect(result.attempts).toStrictEqual([]);
     expect(seenAuthStore).toEqual(authStore);
     expect(seenTimeoutMs).toBe(12_345);
+    expect(seenSsrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
     expect(result.images).toEqual([
       {
         buffer: Buffer.from("png-bytes"),
@@ -484,17 +488,14 @@ describe("image-generation runtime", () => {
       resolution: undefined,
     });
     expect(result.ignoredOverrides).toStrictEqual([]);
-    expect(result.normalization).toMatchObject({
-      aspectRatio: {
-        applied: "16:9",
-        derivedFrom: "size",
-      },
-    });
-    expect(result.metadata).toMatchObject({
-      requestedSize: "1280x720",
-      normalizedAspectRatio: "16:9",
-      aspectRatioDerivedFromSize: "16:9",
-    });
+    if (!result.normalization || !result.metadata) {
+      throw new Error("Expected image-generation normalization metadata");
+    }
+    expect(result.normalization.aspectRatio?.applied).toBe("16:9");
+    expect(result.normalization.aspectRatio?.derivedFrom).toBe("size");
+    expect(result.metadata.requestedSize).toBe("1280x720");
+    expect(result.metadata.normalizedAspectRatio).toBe("16:9");
+    expect(result.metadata.aspectRatioDerivedFromSize).toBe("16:9");
   });
 
   it("lists runtime image-generation providers through the provider registry", () => {

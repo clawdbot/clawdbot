@@ -9,7 +9,7 @@ import type {
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
-} from "./types.channels.js";
+} from "./types.channel-health.js";
 import type { DmConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
@@ -194,9 +194,3 @@ export type MSTeamsConfig = {
   /** Bot Framework OAuth SSO (signin/tokenExchange + signin/verifyState) settings. */
   sso?: MSTeamsSsoConfig;
 };
-
-declare module "./types.channels.js" {
-  interface ChannelsConfig {
-    msteams?: MSTeamsConfig;
-  }
-}

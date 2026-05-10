@@ -25,10 +25,8 @@ describe("toModelRow", () => {
       tags: [],
     });
 
-    expect(row).toMatchObject({
-      contextWindow: 400_000,
-      contextTokens: 272_000,
-    });
+    expect(row.contextWindow).toBe(400_000);
+    expect(row.contextTokens).toBe(272_000);
   });
 
   it("marks models available from auth profiles without loading model discovery", () => {

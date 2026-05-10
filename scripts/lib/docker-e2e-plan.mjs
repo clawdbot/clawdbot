@@ -25,6 +25,7 @@ export const DEFAULT_RESOURCE_LIMITS = {
   "live:droid": 4,
   "live:gemini": 4,
   "live:opencode": 4,
+  "live:openai": 1,
   npm: 10,
   service: 7,
 };
@@ -331,7 +332,8 @@ function laneCredentialRequirements(poolLane) {
   if (
     poolLane.name === "openwebui" ||
     poolLane.name === "openai-web-search-minimal" ||
-    poolLane.name === "live-codex-npm-plugin"
+    poolLane.name === "live-codex-npm-plugin" ||
+    poolLane.name === "live-plugin-tool"
   ) {
     credentials.push("openai");
   }

@@ -263,5 +263,38 @@ describe("createMSTeamsReactionHandler", () => {
 
       expect(enqueue).toHaveBeenCalledOnce();
     });
+
+    it("allows reaction from static access group DM sender", async () => {
+      const mockRuntime = buildMockRuntime();
+      setMSTeamsRuntime(mockRuntime);
+      const cfg: OpenClawConfig = {
+        accessGroups: {
+          operators: {
+            type: "message.senders",
+            members: { msteams: ["allowed-aad"] },
+          },
+        },
+        channels: {
+          msteams: {
+            dmPolicy: "allowlist",
+            allowFrom: ["accessGroup:operators"],
+          },
+        },
+      } as OpenClawConfig;
+      const handler = createMSTeamsReactionHandler(buildDeps(cfg, mockRuntime));
+      const enqueue = mockRuntime.system.enqueueSystemEvent as ReturnType<typeof vi.fn>;
+
+      await invokeReactionEvent(
+        handler,
+        {
+          reactionsAdded: [{ type: "like" }],
+          from: { id: "good-user", aadObjectId: "allowed-aad", name: "Alice" },
+          replyToId: "msg-7",
+        },
+        "added",
+      );
+
+      expect(enqueue).toHaveBeenCalledOnce();
+    });
   });
 });

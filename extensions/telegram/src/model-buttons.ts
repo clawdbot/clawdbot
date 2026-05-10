@@ -217,7 +217,8 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
     }
 
     const isCurrentModel = isCurrentModelSelection({ currentModel, provider, model });
-    const displayLabel = modelNames?.get(`${provider}/${model}`) ?? model;
+    const fallbackLabel = model.includes("/") ? `${provider}/${model}` : model;
+    const displayLabel = modelNames?.get(`${provider}/${model}`) ?? fallbackLabel;
     const displayText = truncateModelId(displayLabel, 38);
     const text = isCurrentModel ? `${displayText} ✓` : displayText;
 

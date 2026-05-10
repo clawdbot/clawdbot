@@ -19,15 +19,10 @@ import {
 } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import {
-  listAgentEntries,
   listAgentIds,
   resolveAgentConfig,
-  resolveAgentContextLimits,
-  resolveAgentDir,
-  resolveDefaultAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
-  type ResolvedAgentConfig,
 } from "./agent-scope-config.js";
 import { resolveEffectiveAgentSkillFilter } from "./skills/agent-filter.js";
 export {

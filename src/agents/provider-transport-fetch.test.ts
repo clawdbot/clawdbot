@@ -1,6 +1,7 @@
 import type { Model } from "@mariozechner/pi-ai";
 import { Stream } from "openai/streaming";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 
 const {
   buildProviderRequestDispatcherPolicyMock,
@@ -42,6 +43,22 @@ vi.mock("./provider-request-config.js", () => ({
   resolveProviderRequestPolicyConfig: resolveProviderRequestPolicyConfigMock,
 }));
 
+function latestGuardedFetchParams(): Record<string, unknown> {
+  const params = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
+  if (!params || typeof params !== "object") {
+    throw new Error("Expected guarded fetch call");
+  }
+  return params;
+}
+
+function latestTrustedEnvProxyParams(): Record<string, unknown> {
+  const params = withTrustedEnvProxyGuardedFetchModeMock.mock.calls.at(-1)?.[0];
+  if (!params || typeof params !== "object") {
+    throw new Error("Expected trusted env proxy call");
+  }
+  return params;
+}
+
 describe("buildGuardedModelFetch", () => {
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockReset().mockResolvedValue({
@@ -66,7 +83,6 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("pushes provider capture metadata into the shared guarded fetch seam", async () => {
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "gpt-5.4",
       provider: "openai",
@@ -81,22 +97,18 @@ describe("buildGuardedModelFetch", () => {
       body: '{"input":"hello"}',
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/responses",
-        capture: {
-          meta: {
-            provider: "openai",
-            api: "openai-responses",
-            model: "gpt-5.4",
-          },
-        },
-      }),
-    );
+    const params = latestGuardedFetchParams();
+    expect(params.url).toBe("https://api.openai.com/v1/responses");
+    expect(params.capture).toEqual({
+      meta: {
+        provider: "openai",
+        api: "openai-responses",
+        model: "gpt-5.4",
+      },
+    });
   });
 
   it("scopes fake-IP DNS exemptions to the configured provider host", async () => {
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "gpt-5.4",
       provider: "openai",
@@ -119,7 +131,6 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("does not apply fake-IP exemptions to non-provider hosts", async () => {
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "gpt-5.4",
       provider: "openai",
@@ -136,7 +147,6 @@ describe("buildGuardedModelFetch", () => {
 
   it("merges explicit private-network opt-in into the provider-host fake-IP policy", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({ allowPrivateNetwork: true });
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "qwen3:32b",
       provider: "ollama",
@@ -158,7 +168,6 @@ describe("buildGuardedModelFetch", () => {
 
   it("uses trusted env-proxy mode for provider calls when no explicit dispatcher policy is configured", async () => {
     shouldUseEnvHttpProxyForUrlMock.mockReturnValueOnce(true);
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "gpt-5.4",
       provider: "openai",
@@ -172,29 +181,23 @@ describe("buildGuardedModelFetch", () => {
     expect(shouldUseEnvHttpProxyForUrlMock).toHaveBeenCalledWith(
       "https://api.openai.com/v1/responses",
     );
-    expect(withTrustedEnvProxyGuardedFetchModeMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/responses",
-        dispatcherPolicy: undefined,
-        policy: {
-          allowRfc2544BenchmarkRange: true,
-          allowIpv6UniqueLocalRange: true,
-          hostnameAllowlist: ["api.openai.com"],
-        },
-      }),
-    );
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/responses",
-        mode: "trusted_env_proxy",
-      }),
-    );
+    const trustedParams = latestTrustedEnvProxyParams();
+    expect(trustedParams.url).toBe("https://api.openai.com/v1/responses");
+    expect(trustedParams.dispatcherPolicy).toBeUndefined();
+    expect(trustedParams.policy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+      hostnameAllowlist: ["api.openai.com"],
+    });
+
+    const guardedParams = latestGuardedFetchParams();
+    expect(guardedParams.url).toBe("https://api.openai.com/v1/responses");
+    expect(guardedParams.mode).toBe("trusted_env_proxy");
   });
 
   it("keeps explicit provider dispatcher policies in strict guarded-fetch mode", async () => {
     shouldUseEnvHttpProxyForUrlMock.mockReturnValueOnce(true);
     buildProviderRequestDispatcherPolicyMock.mockReturnValueOnce({ mode: "direct" });
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "gpt-5.4",
       provider: "openai",
@@ -206,15 +209,10 @@ describe("buildGuardedModelFetch", () => {
     await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
 
     expect(withTrustedEnvProxyGuardedFetchModeMock).not.toHaveBeenCalled();
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        dispatcherPolicy: { mode: "direct" },
-      }),
-    );
+    expect(latestGuardedFetchParams().dispatcherPolicy).toEqual({ mode: "direct" });
   });
 
   it("threads explicit transport timeouts into the shared guarded fetch seam", async () => {
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "gpt-5.4",
       provider: "openai",
@@ -225,15 +223,10 @@ describe("buildGuardedModelFetch", () => {
     const fetcher = buildGuardedModelFetch(model, 123_456);
     await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeoutMs: 123_456,
-      }),
-    );
+    expect(latestGuardedFetchParams().timeoutMs).toBe(123_456);
   });
 
   it("threads resolved provider timeout metadata into the shared guarded fetch seam", async () => {
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "qwen3:32b",
       provider: "ollama",
@@ -245,18 +238,12 @@ describe("buildGuardedModelFetch", () => {
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("http://127.0.0.1:11434/api/chat", { method: "POST" });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeoutMs: 300_000,
-      }),
-    );
+    expect(latestGuardedFetchParams().timeoutMs).toBe(300_000);
   });
 
   it("does not force explicit debug proxy overrides onto plain HTTP model transports", async () => {
     process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
     process.env.OPENCLAW_DEBUG_PROXY_URL = "http://127.0.0.1:7799";
-
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "kimi-k2.5:cloud",
       provider: "ollama",
@@ -292,8 +279,6 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://api.openai.com/v1/responses",
       release: vi.fn(async () => undefined),
     });
-
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "gpt-5.4",
       provider: "openai",
@@ -320,8 +305,6 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://api.openai.com/v1/chat/completions",
       release: vi.fn(async () => undefined),
     });
-
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "gpt-5.4",
       provider: "openai",
@@ -341,6 +324,66 @@ describe("buildGuardedModelFetch", () => {
     expect(items).toEqual([{ ok: true }]);
   });
 
+  it("synthesizes SSE frames for JSON bodies returned to streaming OpenAI SDK requests", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response('  {"ok": true}  ', {
+        headers: { "content-type": "application/json; charset=utf-8" },
+      }),
+      finalUrl: "https://api.openai.com/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "moonshotai/kimi-k2.6",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "moonshotai/kimi-k2.6", stream: true }),
+      },
+    );
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    expect(items).toEqual([{ ok: true }]);
+  });
+
+  it("preserves JSON bodies when the request is not streaming", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response('{"ok": true}', {
+        headers: { "content-type": "application/json" },
+      }),
+      finalUrl: "https://api.openai.com/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "gpt-5.4",
+      provider: "openai",
+      api: "openai-completions",
+      baseUrl: "https://api.openai.com/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.4", stream: false }),
+      },
+    );
+
+    expect(response.headers.get("content-type")).toBe("application/json");
+    await expect(response.json()).resolves.toEqual({ ok: true });
+  });
+
   it("preserves non-OK SSE bodies for provider HTTP error parsing", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(
@@ -358,8 +401,6 @@ describe("buildGuardedModelFetch", () => {
         "https://generativelanguage.googleapis.com/v1beta/models/gemini:streamGenerateContent",
       release: vi.fn(async () => undefined),
     });
-
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "gemini-3.1-pro-preview",
       provider: "google",
@@ -396,8 +437,6 @@ describe("buildGuardedModelFetch", () => {
       release: vi.fn(async () => undefined),
       refreshTimeout,
     });
-
-    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
     const model = {
       id: "gpt-5.4",
       provider: "openai",
@@ -442,8 +481,6 @@ describe("buildGuardedModelFetch", () => {
         finalUrl: "https://api.anthropic.com/v1/messages",
         release: vi.fn(async () => undefined),
       });
-
-      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
       const response = await buildGuardedModelFetch(anthropicModel)(
         "https://api.anthropic.com/v1/messages",
         { method: "POST" },
@@ -463,8 +500,6 @@ describe("buildGuardedModelFetch", () => {
         finalUrl: "https://api.openai.com/v1/responses",
         release: vi.fn(async () => undefined),
       });
-
-      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
       const response = await buildGuardedModelFetch(openaiModel)(
         "https://api.openai.com/v1/responses",
         { method: "POST" },
@@ -483,8 +518,6 @@ describe("buildGuardedModelFetch", () => {
         finalUrl: "https://api.anthropic.com/v1/messages",
         release: vi.fn(async () => undefined),
       });
-
-      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
       const response = await buildGuardedModelFetch(anthropicModel)(
         "https://api.anthropic.com/v1/messages",
         { method: "POST" },
@@ -503,8 +536,6 @@ describe("buildGuardedModelFetch", () => {
         finalUrl: "https://api.anthropic.com/v1/messages",
         release: vi.fn(async () => undefined),
       });
-
-      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
       const response = await buildGuardedModelFetch(anthropicModel)(
         "https://api.anthropic.com/v1/messages",
         { method: "POST" },
@@ -522,8 +553,6 @@ describe("buildGuardedModelFetch", () => {
         finalUrl: "https://api.individual.githubcopilot.com/responses",
         release: vi.fn(async () => undefined),
       });
-
-      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
       const response = await buildGuardedModelFetch(openaiModel)(
         "https://api.individual.githubcopilot.com/responses",
         { method: "POST" },
@@ -543,8 +572,6 @@ describe("buildGuardedModelFetch", () => {
         finalUrl: "https://api.anthropic.com/v1/messages",
         release: vi.fn(async () => undefined),
       });
-
-      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
       const response = await buildGuardedModelFetch(anthropicModel)(
         "https://api.anthropic.com/v1/messages",
         { method: "POST" },
@@ -563,8 +590,6 @@ describe("buildGuardedModelFetch", () => {
         finalUrl: "https://api.anthropic.com/v1/messages",
         release: vi.fn(async () => undefined),
       });
-
-      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
       const response = await buildGuardedModelFetch(anthropicModel)(
         "https://api.anthropic.com/v1/messages",
         { method: "POST" },
@@ -582,8 +607,6 @@ describe("buildGuardedModelFetch", () => {
         finalUrl: "https://api.anthropic.com/v1/messages",
         release: vi.fn(async () => undefined),
       });
-
-      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
       const response = await buildGuardedModelFetch(anthropicModel)(
         "https://api.anthropic.com/v1/messages",
         { method: "POST" },
@@ -601,8 +624,6 @@ describe("buildGuardedModelFetch", () => {
         finalUrl: "https://api.anthropic.com/v1/messages",
         release: vi.fn(async () => undefined),
       });
-
-      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
       const response = await buildGuardedModelFetch(anthropicModel)(
         "https://api.anthropic.com/v1/messages",
         { method: "POST" },
@@ -620,8 +641,6 @@ describe("buildGuardedModelFetch", () => {
         finalUrl: "https://api.anthropic.com/v1/messages",
         release: vi.fn(async () => undefined),
       });
-
-      const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
       const response = await buildGuardedModelFetch(anthropicModel)(
         "https://api.anthropic.com/v1/messages",
         { method: "POST" },

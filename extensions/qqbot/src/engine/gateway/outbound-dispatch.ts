@@ -94,7 +94,7 @@ export async function dispatchOutbound(
   const sendErrorMessage = (errorText: string) => sendErrorToTarget(replyCtx, errorText);
 
   // ---- Build ctxPayload ----
-  const ctxPayload = buildCtxPayload(inbound, runtime);
+  const ctxPayload = buildCtxPayload(inbound, runtime, cfg);
 
   // ---- Deliver state ----
   let hasResponse = false;
@@ -512,11 +512,25 @@ export async function dispatchOutbound(
 
 // ============ ctxPayload builder ============
 
+function resolveCommandSource(
+  inbound: InboundContext,
+  runtime: GatewayPluginRuntime,
+  cfg: unknown,
+): "text" | undefined {
+  const commandBody = inbound.event.content;
+  if (!runtime.channel.commands?.isControlCommandMessage?.(commandBody, cfg)) {
+    return undefined;
+  }
+  return "text";
+}
+
 function buildCtxPayload(
   inbound: InboundContext,
   runtime: GatewayPluginRuntime,
+  cfg: unknown,
 ): FinalizedMsgContext {
   const { event } = inbound;
+  const commandSource = resolveCommandSource(inbound, runtime, cfg);
   return runtime.channel.reply.finalizeInboundContext({
     Body: inbound.body,
     BodyForAgent: inbound.agentBody,
@@ -546,6 +560,7 @@ function buildCtxPayload(
     QQVoiceAsrReferTexts: inbound.uniqueVoiceAsrReferTexts,
     QQVoiceInputStrategy: "prefer_audio_stt_then_asr_fallback",
     CommandAuthorized: inbound.commandAuthorized,
+    ...(commandSource ? { CommandSource: commandSource } : {}),
     ...(inbound.voiceMediaTypes.length > 0
       ? {
           MediaTypes: inbound.voiceMediaTypes,

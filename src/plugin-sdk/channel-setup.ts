@@ -1,6 +1,5 @@
 import type { ChannelSetupWizard } from "../channels/plugins/setup-wizard-types.js";
 import type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
-import type { ChannelSetupInput } from "../channels/plugins/types.core.js";
 import {
   createOptionalChannelSetupAdapter,
   createOptionalChannelSetupWizard,

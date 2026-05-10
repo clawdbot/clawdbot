@@ -70,9 +70,7 @@ describe("computeFilteredUsage", () => {
     ];
     const result = computeFilteredUsage(baseUsage, points, 1000, 2000);
     const filtered = expectFilteredUsage(result);
-    expect(filtered).toMatchObject({
-      totalTokens: 300, // 100 + 200
-    });
+    expect(filtered.totalTokens).toBe(300); // 100 + 200
     expect(filtered.totalCost).toBeCloseTo(0.3); // 0.1 + 0.2
   });
 
@@ -82,7 +80,7 @@ describe("computeFilteredUsage", () => {
       makePoint({ timestamp: 2000, totalTokens: 75 }),
     ];
     const result = computeFilteredUsage(baseUsage, points, 2000, 1000);
-    expect(result).toMatchObject({ totalTokens: 125 });
+    expect(expectFilteredUsage(result).totalTokens).toBe(125);
   });
 
   it("counts message types based on input/output presence", () => {
@@ -92,13 +90,13 @@ describe("computeFilteredUsage", () => {
       makePoint({ timestamp: 3000, input: 5, output: 15 }),
     ];
     const result = expectFilteredUsage(computeFilteredUsage(baseUsage, points, 1000, 3000));
-    expect(result).toMatchObject({
-      messageCounts: {
-        user: 2, // points with input > 0
-        assistant: 2, // points with output > 0
-        total: 3,
-      },
-    });
+    const counts = result.messageCounts;
+    if (!counts) {
+      throw new Error("expected filtered usage to include message counts");
+    }
+    expect(counts.user).toBe(2); // points with input > 0
+    expect(counts.assistant).toBe(2); // points with output > 0
+    expect(counts.total).toBe(3);
   });
 
   it("computes duration from first to last filtered point", () => {

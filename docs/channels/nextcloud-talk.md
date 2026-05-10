@@ -157,6 +157,7 @@ Provider options:
 - `channels.nextcloud-talk.groupPolicy`: `allowlist | open | disabled`.
 - `channels.nextcloud-talk.groupAllowFrom`: group allowlist (user IDs).
 - `channels.nextcloud-talk.rooms`: per-room settings and allowlist.
+- Static sender access groups can be referenced from `allowFrom` and `groupAllowFrom` with `accessGroup:<name>`.
 - `channels.nextcloud-talk.historyLimit`: group history limit (0 disables).
 - `channels.nextcloud-talk.dmHistoryLimit`: DM history limit (0 disables).
 - `channels.nextcloud-talk.dms`: per-DM overrides (historyLimit).

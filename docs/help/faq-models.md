@@ -195,9 +195,9 @@ troubleshooting, see the main [FAQ](/help/faq).
     Add it with: openclaw config set agents.defaults.models '{"provider/model":{}}' --strict-json --merge
     ```
 
-    That error is returned **instead of** a normal reply. Fix: add the model to
-    `agents.defaults.models`, remove the allowlist, or pick a model from `/model list`.
-    If the command also included `--runtime codex`, add the model first and then retry
+    That error is returned **instead of** a normal reply. Fix: add the exact model to
+    `agents.defaults.models`, add a provider wildcard such as `"provider/*": {}` for dynamic provider catalogs, remove the allowlist, or pick a model from `/model list`.
+    If the command also included `--runtime codex`, update the allowlist first and then retry
     the same `/model provider/model --runtime codex` command.
 
   </Accordion>

@@ -167,7 +167,7 @@ describe("web tools defaults", () => {
     const result = await tool?.execute?.("call-runtime-provider", {});
 
     expect(tool?.description).toContain("Search the web");
-    expect(result?.details).toMatchObject({ ok: true });
+    expect((result?.details as { ok?: boolean } | undefined)?.ok).toBe(true);
   });
 
   it("keeps runtime provider discovery enabled when runtime web_search metadata is missing", async () => {
@@ -211,7 +211,7 @@ describe("web tools defaults", () => {
 
     const result = await tool?.execute?.("call-runtime-provider-without-metadata", {});
 
-    expect(result?.details).toMatchObject({ provider: "custom" });
+    expect((result?.details as { provider?: string } | undefined)?.provider).toBe("custom");
     expect(runWebSearchCalls).toHaveLength(1);
     expect(runWebSearchCalls[0]?.preferRuntimeProviders).toBe(true);
   });
@@ -299,11 +299,12 @@ describe("web tools defaults", () => {
 
     const result = await tool?.execute?.("call-runtime-provider", {});
 
-    expect(result?.details).toMatchObject({ provider: "fresh" });
+    expect((result?.details as { provider?: string } | undefined)?.provider).toBe("fresh");
     expect(runWebSearchCalls).toHaveLength(1);
     expect(runWebSearchCalls[0]?.config).toBe(runtimeConfig);
-    expect(runWebSearchCalls[0]?.runtimeWebSearch).toMatchObject({
-      selectedProvider: "fresh",
-    });
+    expect(
+      (runWebSearchCalls[0]?.runtimeWebSearch as { selectedProvider?: string } | undefined)
+        ?.selectedProvider,
+    ).toBe("fresh");
   });
 });

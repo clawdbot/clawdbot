@@ -37,6 +37,38 @@ describe("gateway ws log helpers", () => {
     expect(formatForLog(input)).toBe(expected);
   });
 
+  test("formatForLog walks cause chain so the underlying error is not hidden (openclaw-4a8)", () => {
+    const root = Object.assign(new Error('"Method not found": nes/close (-32601)'), {
+      name: "RequestError",
+    });
+    const wrapped = new Error("Agent does not support session/close (oneshot:abc)", {
+      cause: root,
+    });
+    const top = Object.assign(new Error("ACP turn failed before completion.", { cause: wrapped }), {
+      name: "AcpRuntimeError",
+      code: "ACP_TURN_FAILED",
+    });
+
+    const out = formatForLog(top);
+
+    expect(out).toMatch(/AcpRuntimeError/);
+    expect(out).toMatch(/ACP_TURN_FAILED/);
+    expect(out).toMatch(/Agent does not support session\/close/);
+    expect(out).toMatch(/Method not found/);
+    expect(out).toMatch(/nes\/close/);
+    expect(out).toMatch(/-32601/);
+  });
+
+  test("formatForLog caps cause-chain depth so a self-referential cause cannot loop", () => {
+    const e: Error & { cause?: unknown } = new Error("loop");
+    e.cause = e;
+
+    const out = formatForLog(e);
+
+    expect(out).toMatch(/loop/);
+    expect(out.length).toBeLessThan(2000);
+  });
+
   test("formatForLog redacts obvious secrets", () => {
     const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
     const out = formatForLog({ token });

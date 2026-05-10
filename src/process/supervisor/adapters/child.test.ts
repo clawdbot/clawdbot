@@ -186,6 +186,60 @@ describe("createChildAdapter", () => {
     expect(killMock).toHaveBeenCalledWith("SIGTERM");
   });
 
+  it("preserves inherited stdin when no input pipe is requested", async () => {
+    const { child } = createStubChild(5656);
+    child.stdin = null;
+    spawnWithFallbackMock.mockResolvedValue({
+      child,
+      usedFallback: false,
+    });
+
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+    });
+
+    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
+      options?: { stdio?: Array<string> };
+    };
+    expect(spawnArgs.options?.stdio?.[0]).toBe("inherit");
+    expect(adapter.stdin).toBeUndefined();
+  });
+
+  it("reports stdin as non-writable after end or destroy", async () => {
+    const { adapter } = await createAdapterHarness({ pid: 6767 });
+
+    expect(adapter.stdin?.writable).toBe(true);
+    expect(adapter.stdin?.writableEnded).toBe(false);
+
+    adapter.stdin?.end();
+    expect(adapter.stdin?.writable).toBe(false);
+    expect(adapter.stdin?.writableEnded).toBe(true);
+
+    const writeCallback = vi.fn();
+    adapter.stdin?.write("late", writeCallback);
+    expect(writeCallback.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+
+    adapter.stdin?.destroy?.();
+    expect(adapter.stdin?.destroyed).toBe(true);
+    expect(adapter.stdin?.writable).toBe(false);
+  });
+
+  it("reports pipe-closed stdin as ended", async () => {
+    const { child } = createStubChild(3434);
+    spawnWithFallbackMock.mockResolvedValue({
+      child,
+      usedFallback: false,
+    });
+
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "process.exit(0)"],
+      stdinMode: "pipe-closed",
+    });
+
+    expect(adapter.stdin?.writable).toBe(false);
+    expect(adapter.stdin?.writableEnded).toBe(true);
+  });
+
   it("wait does not settle immediately on SIGKILL", async () => {
     vi.useFakeTimers();
     const { adapter } = await createAdapterHarness({ pid: 4567 });

@@ -6,12 +6,11 @@ function requireAttackSurfaceSummary(
   findings: ReturnType<typeof collectAttackSurfaceSummaryFindings>,
 ) {
   const summary = findings.find((f) => f.checkId === "summary.attack_surface");
-  expect(summary).toEqual(
-    expect.objectContaining({ checkId: "summary.attack_surface", severity: "info" }),
-  );
   if (!summary) {
     throw new Error("Expected attack surface summary finding");
   }
+  expect(summary.checkId).toBe("summary.attack_surface");
+  expect(summary.severity).toBe("info");
   return summary;
 }
 

@@ -77,12 +77,11 @@ describe("channelsLogsCommand", () => {
     await channelsLogsCommand({ channel: "external-chat", json: true }, runtime);
 
     expect(pluginRegistryMocks.loadPluginRegistrySnapshot).toHaveBeenCalledOnce();
-    expect(pluginRegistryMocks.listPluginContributionIds).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contribution: "channels",
-        includeDisabled: true,
-      }),
-    );
+    expect(pluginRegistryMocks.listPluginContributionIds).toHaveBeenCalledOnce();
+    const [contributionOptions] = pluginRegistryMocks.listPluginContributionIds.mock
+      .calls[0] as unknown as [{ contribution?: string; includeDisabled?: boolean }];
+    expect(contributionOptions?.contribution).toBe("channels");
+    expect(contributionOptions?.includeDisabled).toBe(true);
     const payload = readJsonPayload();
     expect(payload.channel).toBe("external-chat");
     expect(payload.lines.map((line) => line.message)).toEqual(["external sent"]);

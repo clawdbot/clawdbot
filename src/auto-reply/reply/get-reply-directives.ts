@@ -14,7 +14,13 @@ import {
 } from "../../shared/string-coerce.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import {
+  normalizeThinkLevel,
+  type ElevatedLevel,
+  type ReasoningLevel,
+  type ThinkLevel,
+  type VerboseLevel,
+} from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands-context.js";
@@ -160,6 +166,8 @@ export async function resolveReplyDirectives(params: {
   commandAuthorized: boolean;
   defaultProvider: string;
   defaultModel: string;
+  primaryProvider?: string;
+  primaryModel?: string;
   aliasIndex: ModelAliasIndex;
   provider: string;
   model: string;
@@ -188,6 +196,8 @@ export async function resolveReplyDirectives(params: {
     commandAuthorized,
     defaultProvider,
     defaultModel,
+    primaryProvider,
+    primaryModel,
     provider: initialProvider,
     model: initialModel,
     hasResolvedHeartbeatModelOverride,
@@ -328,8 +338,10 @@ export async function resolveReplyDirectives(params: {
     : {
         ...parsedDirectives,
         hasThinkDirective: false,
+        clearThinkLevel: false,
         hasVerboseDirective: false,
         hasFastDirective: false,
+        clearFastMode: false,
         hasReasoningDirective: false,
         reasoningLevel: undefined,
         rawReasoningLevel: undefined,
@@ -416,16 +428,20 @@ export async function resolveReplyDirectives(params: {
     groupResolution,
   });
   const defaultActivation = defaultGroupActivation(requireMention);
+  const sessionThinkLevel = directives.clearThinkLevel
+    ? undefined
+    : (targetSessionEntry?.thinkingLevel as ThinkLevel | undefined);
   const resolvedThinkLevel =
-    directives.thinkLevel ?? (targetSessionEntry?.thinkingLevel as ThinkLevel | undefined);
+    normalizeThinkLevel(opts?.thinkingLevelOverride) ?? directives.thinkLevel ?? sessionThinkLevel;
   const resolvedFastMode =
+    opts?.fastModeOverride ??
     directives.fastMode ??
     resolveFastModeState({
       cfg,
       provider,
       model,
       agentId,
-      sessionEntry: targetSessionEntry,
+      sessionEntry: directives.clearFastMode ? undefined : targetSessionEntry,
     }).enabled;
 
   const resolvedVerboseLevel =
@@ -514,10 +530,13 @@ export async function resolveReplyDirectives(params: {
         storePath,
         defaultProvider,
         defaultModel,
+        primaryProvider,
+        primaryModel,
         provider,
         model,
         hasModelDirective: directives.hasModelDirective,
         hasResolvedHeartbeatModelOverride,
+        isHeartbeat: opts?.isHeartbeat === true,
       });
   provider = modelState.provider;
   model = modelState.model;
@@ -528,7 +547,7 @@ export async function resolveReplyDirectives(params: {
 
   const thinkingExplicitlySet =
     directives.thinkLevel !== undefined ||
-    targetSessionEntry?.thinkingLevel !== undefined ||
+    sessionThinkLevel !== undefined ||
     agentCfg?.thinkingDefault !== undefined;
 
   // When neither directive nor session nor agent set reasoning, default to model capability

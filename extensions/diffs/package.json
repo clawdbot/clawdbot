@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/diffs",
-  "version": "2026.5.8",
+  "version": "2026.5.10-beta.1",
   "description": "OpenClaw diff viewer plugin",
   "repository": {
     "type": "git",
@@ -11,10 +11,10 @@
     "build:viewer": "bun build src/viewer-client.ts --target browser --format esm --minify --outfile assets/viewer-runtime.js"
   },
   "dependencies": {
-    "@pierre/diffs": "1.1.20",
+    "@pierre/diffs": "1.1.21",
     "@pierre/theme": "0.0.29",
     "playwright-core": "1.59.1",
-    "typebox": "1.1.37"
+    "typebox": "1.1.38"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -30,10 +30,10 @@
       "minHostVersion": ">=2026.4.30"
     },
     "compat": {
-      "pluginApi": ">=2026.5.8"
+      "pluginApi": ">=2026.5.10-beta.1"
     },
     "build": {
-      "openclawVersion": "2026.5.8",
+      "openclawVersion": "2026.5.10-beta.1",
       "staticAssets": [
         {
           "source": "./assets/viewer-runtime.js",

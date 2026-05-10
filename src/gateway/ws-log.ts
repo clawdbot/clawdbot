@@ -1,6 +1,7 @@
 import chalk from "chalk";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { isVerbose } from "../globals.js";
+import { stringifyNonErrorCause } from "../infra/errors.js";
 import { shouldLogSubsystemToConsole } from "../logging/console.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -104,25 +105,12 @@ export function shortId(value: string): string {
 export function formatForLog(value: unknown): string {
   try {
     if (value instanceof Error) {
-      const parts: string[] = [];
-      if (value.name) {
-        parts.push(value.name);
-      }
-      if (value.message) {
-        parts.push(value.message);
-      }
-      const code =
-        "code" in value && (typeof value.code === "string" || typeof value.code === "number")
-          ? String(value.code)
-          : "";
-      if (code) {
-        parts.push(`code=${code}`);
-      }
-      const combined = parts.filter(Boolean).join(": ").trim();
+      const combined = renderErrorChainForLog(value);
       if (combined) {
-        return combined.length > LOG_VALUE_LIMIT
-          ? `${combined.slice(0, LOG_VALUE_LIMIT)}...`
-          : combined;
+        const redacted = redactSensitiveText(combined, WS_LOG_REDACT_OPTIONS);
+        return redacted.length > LOG_VALUE_LIMIT
+          ? `${redacted.slice(0, LOG_VALUE_LIMIT)}...`
+          : redacted;
       }
     }
     if (value && typeof value === "object") {
@@ -135,7 +123,7 @@ export function formatForLog(value: unknown): string {
         if (code) {
           parts.push(`code=${code}`);
         }
-        const combined = parts.join(": ").trim();
+        const combined = redactSensitiveText(parts.join(": ").trim(), WS_LOG_REDACT_OPTIONS);
         return combined.length > LOG_VALUE_LIMIT
           ? `${combined.slice(0, LOG_VALUE_LIMIT)}...`
           : combined;
@@ -155,6 +143,40 @@ export function formatForLog(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function renderSingleErrorForLog(error: Error): string {
+  const parts: string[] = [];
+  if (error.name) {
+    parts.push(error.name);
+  }
+  if (error.message) {
+    parts.push(error.message);
+  }
+  const codeValue = (error as unknown as { code?: unknown }).code;
+  const code =
+    typeof codeValue === "string" || typeof codeValue === "number" ? String(codeValue) : "";
+  if (code) {
+    parts.push(`code=${code}`);
+  }
+  return parts.filter(Boolean).join(": ").trim();
+}
+
+function renderErrorChainForLog(error: Error): string {
+  const segments: string[] = [renderSingleErrorForLog(error)];
+  let current: unknown = (error as unknown as { cause?: unknown }).cause;
+  let depth = 0;
+  while (current !== undefined && current !== null && depth < 8) {
+    if (current instanceof Error) {
+      segments.push(renderSingleErrorForLog(current));
+      current = (current as unknown as { cause?: unknown }).cause;
+    } else {
+      segments.push(stringifyNonErrorCause(current));
+      current = undefined;
+    }
+    depth += 1;
+  }
+  return segments.filter(Boolean).join(" <- ");
 }
 
 function compactPreview(input: string, maxLen = 160): string {

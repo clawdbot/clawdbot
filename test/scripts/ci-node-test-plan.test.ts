@@ -335,7 +335,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       (shard) => shard.shardName === "agentic-plugins",
     );
 
-    expect(pluginsShard).toMatchObject({
+    expect(pluginsShard).toEqual({
       checkName: "checks-node-agentic-plugins",
       configs: ["test/vitest/vitest.plugins.config.ts"],
       requiresDist: false,
@@ -354,13 +354,9 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     const shardNames = shards.map((shard) => shard.shardName);
 
     expect(shardNames).not.toContain("agentic-plugins");
-    expect(shardNames).toEqual(
-      expect.arrayContaining([
-        "agentic-gateway-core",
-        "agentic-gateway-methods",
-        "agentic-plugin-sdk",
-      ]),
-    );
+    expect(shardNames).toContain("agentic-gateway-core");
+    expect(shardNames).toContain("agentic-gateway-methods");
+    expect(shardNames).toContain("agentic-plugin-sdk");
   });
 
   it("splits auto-reply into balanced core/top-level and reply subtree shards", () => {

@@ -16,38 +16,55 @@ function row(source: ModelCatalogSource, name: string): NormalizedModelCatalogRo
   };
 }
 
+function expectSelectedRow(
+  rows: NormalizedModelCatalogRow[],
+  expected: { name: string; source: ModelCatalogSource },
+) {
+  expect(rows).toHaveLength(1);
+  const [selected] = rows;
+  if (!selected) {
+    throw new Error("missing selected catalog row");
+  }
+  expect(selected.name).toBe(expected.name);
+  expect(selected.source).toBe(expected.source);
+}
+
 describe("model catalog authority", () => {
   it("keeps user config above manifest, cache, and provider-index preview rows", () => {
-    expect(
+    expectSelectedRow(
       mergeModelCatalogRowsByAuthority([
         row("provider-index", "Preview"),
         row("cache", "Cached"),
         row("manifest", "Manifest"),
         row("config", "Configured"),
       ]),
-    ).toEqual([expect.objectContaining({ name: "Configured", source: "config" })]);
+      { name: "Configured", source: "config" },
+    );
   });
 
   it("keeps installed manifest rows above cache and provider-index preview rows", () => {
-    expect(
+    expectSelectedRow(
       mergeModelCatalogRowsByAuthority([
         row("provider-index", "Preview"),
         row("runtime-refresh", "Refreshed"),
         row("cache", "Cached"),
         row("manifest", "Manifest"),
       ]),
-    ).toEqual([expect.objectContaining({ name: "Manifest", source: "manifest" })]);
+      { name: "Manifest", source: "manifest" },
+    );
   });
 
   it("uses cache rows above provider-index preview rows", () => {
-    expect(
+    expectSelectedRow(
       mergeModelCatalogRowsByAuthority([row("provider-index", "Preview"), row("cache", "Cached")]),
-    ).toEqual([expect.objectContaining({ name: "Cached", source: "cache" })]);
+      { name: "Cached", source: "cache" },
+    );
   });
 
   it("uses provider-index preview rows when no higher-authority row exists", () => {
-    expect(mergeModelCatalogRowsByAuthority([row("provider-index", "Preview")])).toEqual([
-      expect.objectContaining({ name: "Preview", source: "provider-index" }),
-    ]);
+    expectSelectedRow(mergeModelCatalogRowsByAuthority([row("provider-index", "Preview")]), {
+      name: "Preview",
+      source: "provider-index",
+    });
   });
 });

@@ -1,6 +1,4 @@
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { resolvePluginStateSqlitePath } from "./plugin-state-store.paths.js";
-import { closePluginStateSqliteStore, probePluginStateStore } from "./plugin-state-store.sqlite.js";
+import { seedPluginStateSqliteEntriesForTests } from "./plugin-state-store.sqlite.js";
 
 export type PluginStateSeedEntry = {
   pluginId: string;
@@ -16,52 +14,20 @@ export function seedPluginStateEntriesForTests(entries: PluginStateSeedEntry[]):
     return;
   }
 
-  probePluginStateStore();
-  closePluginStateSqliteStore();
-
-  const { DatabaseSync } = requireNodeSqlite();
-  const db = new DatabaseSync(resolvePluginStateSqlitePath());
-  const insertEntry = db.prepare(`
-    INSERT INTO plugin_state_entries (
-      plugin_id,
-      namespace,
-      entry_key,
-      value_json,
-      created_at,
-      expires_at
-    ) VALUES (
-      @plugin_id,
-      @namespace,
-      @entry_key,
-      @value_json,
-      @created_at,
-      @expires_at
-    )
-  `);
-  const now = Date.now();
-
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    for (let index = 0; index < entries.length; index += 1) {
-      const entry = entries[index];
+  seedPluginStateSqliteEntriesForTests(
+    entries.map((entry) => {
       const valueJson = JSON.stringify(entry.value);
       if (valueJson == null) {
         throw new Error("plugin state seed value must be JSON serializable");
       }
-      insertEntry.run({
-        plugin_id: entry.pluginId,
+      return {
+        pluginId: entry.pluginId,
         namespace: entry.namespace,
-        entry_key: entry.key,
-        value_json: valueJson,
-        created_at: entry.createdAt ?? now + index,
-        expires_at: entry.expiresAt ?? null,
-      });
-    }
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  } finally {
-    db.close();
-  }
+        key: entry.key,
+        valueJson,
+        ...(entry.createdAt != null ? { createdAt: entry.createdAt } : {}),
+        ...(entry.expiresAt !== undefined ? { expiresAt: entry.expiresAt } : {}),
+      };
+    }),
+  );
 }

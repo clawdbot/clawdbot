@@ -532,6 +532,7 @@ export async function startGatewayServer(
   });
   const startupTrace = createGatewayStartupTrace();
   const startupConfigModulePromise = import("./server-startup-config.js");
+  const reloadHandlersModulePromise = import("./server-reload-handlers.js");
   let startupPluginsModulePromise: Promise<typeof import("./server-startup-plugins.js")> | null =
     null;
   const loadStartupPluginsModule = () => {
@@ -1446,7 +1447,7 @@ export async function startGatewayServer(
     postAttachRuntimeReturned = true;
     activateScheduledServicesWhenReady();
 
-    const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
+    const { startManagedGatewayConfigReloader } = await reloadHandlersModulePromise;
     runtimeState.configReloader = startManagedGatewayConfigReloader({
       minimalTestGateway,
       initialConfig: cfgAtStart,

@@ -593,9 +593,9 @@ jobs:
       source: ${{ needs.resolve_target.outputs.package_acceptance_package_spec != '' && 'npm' || 'artifact' }}
       package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || 'openclaw@beta' }}
       artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
-      package_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
+      package_sha256: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.package_sha256 || '' }}
       suite_profile: custom
-      docker_lanes: doctor-switch update-channel-switch update-corrupt-plugin upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update
+      docker_lanes: doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update
       published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}
       telegram_mode: mock-openai
@@ -693,6 +693,8 @@ jobs:
           install-bun: "true"
 
       - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Run parity lane
@@ -770,6 +772,8 @@ jobs:
           merge-multiple: true
 
       - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Generate parity report
@@ -821,6 +825,8 @@ jobs:
           install-bun: "true"
 
       - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Run Matrix live lane
@@ -918,6 +924,8 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
 
       - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Run Telegram live lane
@@ -1012,6 +1020,8 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
 
       - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Run Discord live lane
@@ -1106,6 +1116,8 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
 
       - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Run WhatsApp live lane
@@ -1200,6 +1212,8 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
 
       - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Run Slack live lane

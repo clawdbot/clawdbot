@@ -243,6 +243,13 @@ export async function processMessage(params: {
         ctx: {
           MediaPaths: [params.msg.mediaPath],
           MediaTypes: params.msg.mediaType ? [params.msg.mediaType] : undefined,
+          From: params.msg.from,
+          To: params.msg.to,
+          Provider: "whatsapp",
+          Surface: "whatsapp",
+          OriginatingChannel: "whatsapp",
+          OriginatingTo: conversationId,
+          AccountId: params.route.accountId,
         },
         cfg: params.cfg,
       });

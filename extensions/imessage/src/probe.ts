@@ -10,7 +10,6 @@ import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import {
   clearCachedIMessagePrivateApiStatus,
   getCachedIMessagePrivateApiStatus,
-  imessageRpcSupportsMethod,
   setCachedIMessagePrivateApiStatus,
   type IMessagePrivateApiStatus,
 } from "./private-api-status.js";
@@ -151,6 +150,28 @@ function rpcMethodsFromPayload(payload: Record<string, unknown>): string[] {
   return raw.filter((entry): entry is string => typeof entry === "string");
 }
 
+// Probe whether the installed imsg CLI accepts `--file` on the `send-rich`
+// subcommand (added by openclaw/imsg#114, which lets a single bridge call
+// combine `--reply-to` and an attachment). We grep the help output rather
+// than trying a real send so the probe is side-effect-free, and we resolve
+// to `false` on any failure (timeout, non-zero exit, missing binary) so
+// callers fall back to the legacy throw rather than silently dropping.
+async function probeSendRichSupportsAttachment(
+  cliPath: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  try {
+    const result = await runCommandWithTimeout([cliPath, "send-rich", "--help"], { timeoutMs });
+    if (result.code !== 0) {
+      return false;
+    }
+    const combined = `${result.stdout}\n${result.stderr}`;
+    return /(?:^|\s)--file\b/m.test(combined);
+  } catch {
+    return false;
+  }
+}
+
 export function clearIMessagePrivateApiCache(cliPath?: string): void {
   if (cliPath) {
     const key = cliPath.trim() || "imsg";
@@ -182,11 +203,19 @@ export async function probeIMessagePrivateApi(
     const rpcMethods = payload ? rpcMethodsFromPayload(payload) : [];
     const advancedFeatures = payload?.advanced_features === true;
     const v2Ready = payload?.v2_ready === true;
+    // Probe `imsg send-rich --help` for the `--file` flag added by
+    // openclaw/imsg#114. We do this even when the bridge is unavailable
+    // because the help output ships with the CLI binary itself, and the
+    // result is what gates whether reply-with-attachment can route through
+    // the threaded send path. Treat any failure as "not supported" so
+    // callers fall back to the legacy throw rather than silently dropping.
+    const sendRichSupportsAttachment = await probeSendRichSupportsAttachment(key, timeoutMs);
     const status: NonNullable<IMessageProbe["privateApi"]> = {
       available: result.code === 0 && advancedFeatures && v2Ready,
       v2Ready,
       selectors,
       rpcMethods,
+      cliCapabilities: { sendRichSupportsAttachment },
       ...(result.code === 0
         ? !payload && firstLineSnippet
           ? {
@@ -209,6 +238,7 @@ export async function probeIMessagePrivateApi(
       v2Ready: false,
       selectors: {},
       rpcMethods: [],
+      cliCapabilities: { sendRichSupportsAttachment: false },
       error: String(err),
     };
     setCachedIMessagePrivateApiStatus(key, status, Date.now() + PRIVATE_API_NEGATIVE_TTL_MS);

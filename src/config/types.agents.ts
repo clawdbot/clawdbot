@@ -4,6 +4,7 @@ import type {
   AgentDefaultsConfig,
   AgentModelEntryConfig,
   EmbeddedPiExecutionContract,
+  SubagentDelegationMode,
 } from "./types.agent-defaults.js";
 import type {
   AgentEmbeddedHarnessConfig,
@@ -116,6 +117,8 @@ export type AgentConfig = {
   identity?: IdentityConfig;
   groupChat?: GroupChatConfig;
   subagents?: {
+    /** Prompt-only guidance for how strongly this agent should delegate work. */
+    delegationMode?: SubagentDelegationMode;
     /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */

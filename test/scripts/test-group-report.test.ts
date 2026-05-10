@@ -62,8 +62,9 @@ describe("scripts/test-group-report aggregation", () => {
       ["src/commands", 600],
       ["extensions/discord", 250],
     ]);
-    expect(report.configs).toMatchObject([
+    expect(report.configs).toStrictEqual([
       {
+        configs: ["commands"],
         key: "commands",
         durationMs: 850,
         fileCount: 2,
@@ -144,18 +145,17 @@ describe("scripts/test-group-report comparison", () => {
     });
 
     expect(comparison.totals.delta).toEqual({ durationMs: -100, fileCount: 0, testCount: 1 });
-    expect(comparison.groups.find((group) => group.key === "src/commands")).toMatchObject({
-      delta: { durationMs: 200, fileCount: 1, testCount: 3 },
-    });
-    expect(
-      comparison.files.find((file) => file.file === "extensions/discord/src/send.test.ts"),
-    ).toMatchObject({
-      status: "removed",
-      delta: { durationMs: -300, testCount: -2 },
-    });
-    expect(comparison.runs[0]).toMatchObject({
-      key: "commands",
-      delta: { elapsedMs: -200, maxRssBytes: -1024 * 1024 * 20 },
+    const commandsGroup = comparison.groups.find((group) => group.key === "src/commands");
+    expect(commandsGroup?.delta).toStrictEqual({ durationMs: 200, fileCount: 1, testCount: 3 });
+    const removedDiscordFile = comparison.files.find(
+      (file) => file.file === "extensions/discord/src/send.test.ts",
+    );
+    expect(removedDiscordFile?.status).toBe("removed");
+    expect(removedDiscordFile?.delta).toStrictEqual({ durationMs: -300, testCount: -2 });
+    expect(comparison.runs[0]?.key).toBe("commands");
+    expect(comparison.runs[0]?.delta).toStrictEqual({
+      elapsedMs: -200,
+      maxRssBytes: -1024 * 1024 * 20,
     });
 
     expect(renderGroupedTestComparison(comparison, { limit: 2, topFiles: 2 })).toContain(
@@ -178,10 +178,17 @@ describe("scripts/test-group-report arg parsing", () => {
         "--",
         "--maxWorkers=1",
       ]),
-    ).toMatchObject({
+    ).toStrictEqual({
       allowFailures: true,
+      compare: null,
       configs: ["a.ts", "b.ts"],
+      fullSuite: false,
       groupBy: "folder",
+      limit: 25,
+      output: null,
+      reports: [],
+      rss: process.platform === "darwin",
+      topFiles: 25,
       vitestArgs: ["--maxWorkers=1"],
     });
   });
@@ -197,10 +204,18 @@ describe("scripts/test-group-report arg parsing", () => {
         "--top-files",
         "3",
       ]),
-    ).toMatchObject({
+    ).toStrictEqual({
+      allowFailures: false,
       compare: { before: "before.json", after: "after.json" },
+      configs: [],
+      fullSuite: false,
+      groupBy: "area",
       limit: 5,
+      output: null,
+      reports: [],
+      rss: process.platform === "darwin",
       topFiles: 3,
+      vitestArgs: [],
     });
   });
 });

@@ -16,6 +16,18 @@ vi.mock("node:child_process", async () => {
 
 let killProcessTree: typeof import("./kill-tree.js").killProcessTree;
 
+function expectTaskkillCall(index: number, args: string[]) {
+  expect(spawnMock.mock.calls[index]).toStrictEqual([
+    "taskkill",
+    args,
+    {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    },
+  ]);
+}
+
 async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T> | T): Promise<T> {
   const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
   Object.defineProperty(process, "platform", { value: platform, configurable: true });
@@ -59,12 +71,7 @@ describe("killProcessTree", () => {
       killProcessTree(4242, { graceMs: 25 });
 
       expect(spawnMock).toHaveBeenCalledTimes(1);
-      expect(spawnMock).toHaveBeenNthCalledWith(
-        1,
-        "taskkill",
-        ["/T", "/PID", "4242"],
-        expect.objectContaining({ detached: true, stdio: "ignore" }),
-      );
+      expectTaskkillCall(0, ["/T", "/PID", "4242"]);
 
       await vi.advanceTimersByTimeAsync(25);
       expect(spawnMock).toHaveBeenCalledTimes(1);
@@ -85,18 +92,8 @@ describe("killProcessTree", () => {
       await vi.advanceTimersByTimeAsync(10);
 
       expect(spawnMock).toHaveBeenCalledTimes(2);
-      expect(spawnMock).toHaveBeenNthCalledWith(
-        1,
-        "taskkill",
-        ["/T", "/PID", "5252"],
-        expect.objectContaining({ detached: true, stdio: "ignore" }),
-      );
-      expect(spawnMock).toHaveBeenNthCalledWith(
-        2,
-        "taskkill",
-        ["/F", "/T", "/PID", "5252"],
-        expect.objectContaining({ detached: true, stdio: "ignore" }),
-      );
+      expectTaskkillCall(0, ["/T", "/PID", "5252"]);
+      expectTaskkillCall(1, ["/F", "/T", "/PID", "5252"]);
     });
   });
 

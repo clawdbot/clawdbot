@@ -1,4 +1,5 @@
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { isModelKeyAllowedBySet } from "../../agents/model-selection-shared.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -89,7 +90,7 @@ function buildSelectionFromExplicit(params: {
     return undefined;
   }
   const key = modelKey(resolved.ref.provider, resolved.ref.model);
-  if (params.allowedModelKeys.size > 0 && !params.allowedModelKeys.has(key)) {
+  if (params.allowedModelKeys.size > 0 && !isModelKeyAllowedBySet(params.allowedModelKeys, key)) {
     return undefined;
   }
   const isDefault =

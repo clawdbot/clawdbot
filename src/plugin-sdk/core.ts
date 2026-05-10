@@ -12,7 +12,7 @@ import type {
   ChannelPairingAdapter,
   ChannelSecurityAdapter,
 } from "../channels/plugins/types.adapters.js";
-import type { ChannelConfigSchema, ChannelConfigUiHint } from "../channels/plugins/types.config.js";
+import type { ChannelConfigSchema } from "../channels/plugins/types.config.js";
 import type {
   ChannelMessagingAdapter,
   ChannelOutboundSessionRoute,
@@ -27,7 +27,6 @@ import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { normalizeOutboundThreadId } from "../infra/outbound/thread-id.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
-import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";

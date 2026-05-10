@@ -34,11 +34,9 @@ describe("web fetch readability", () => {
       extractMode: "text",
       config: {},
     });
-    expect(result).toMatchObject({
-      extractor: "readability",
-      text: "extracted text",
-      title: "Extracted",
-    });
+    expect(result?.extractor).toBe("readability");
+    expect(result?.text).toBe("extracted text");
+    expect(result?.title).toBe("Extracted");
   });
 
   it("reuses extractor resolution for repeated calls with the same config object", async () => {
@@ -114,10 +112,8 @@ describe("web fetch readability", () => {
       extractMode: "text",
       config: {},
     });
-    expect(result).toMatchObject({
-      extractor: "readability",
-      text: "fallback text",
-    });
+    expect(result?.extractor).toBe("readability");
+    expect(result?.text).toBe("fallback text");
   });
 
   it("returns null when extractor loading throws", async () => {

@@ -143,6 +143,23 @@ function expectPrimaryProbeSuccess(
   });
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordWithFields(
+  records: Array<Record<string, unknown>>,
+  expected: Record<string, unknown>,
+) {
+  const matching = records.find((record) =>
+    Object.entries(expected).every(([key, value]) => record[key] === value),
+  );
+  expect(matching, `expected matching record for ${JSON.stringify(expected)}`).toBeDefined();
+}
+
 async function expectProbeFailureFallsBack({
   reason,
   probeError,
@@ -398,77 +415,73 @@ describe("runWithModelFallback – probe logic", () => {
 
     const decisionPayloads = logCapture.records
       .filter((record) => record.message === "model fallback decision")
-      .map((record) => record.attributes ?? {});
+      .map((record) => requireRecord(record.attributes, "decision payload"));
 
-    expect(decisionPayloads).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          event: "model_fallback_decision",
-          decision: "probe_cooldown_candidate",
-          candidateProvider: "openai",
-          candidateModel: "gpt-4.1-mini",
-          allowTransientCooldownProbe: true,
-        }),
-        expect.objectContaining({
-          event: "model_fallback_decision",
-          decision: "candidate_succeeded",
-          candidateProvider: "openai",
-          candidateModel: "gpt-4.1-mini",
-          isPrimary: true,
-          requestedModelMatched: true,
-        }),
-        expect.objectContaining({
-          event: "model_fallback_decision",
-          decision: "candidate_failed",
-          candidateProvider: "openai",
-          candidateModel: "gpt-4.1-mini",
-          isPrimary: true,
-          requestedModelMatched: true,
-          nextCandidateProvider: "anthropic",
-          nextCandidateModel: "claude-haiku-3-5",
-          fallbackStepType: "fallback_step",
-          fallbackStepFromModel: "openai/gpt-4.1-mini",
-          fallbackStepToModel: "anthropic/claude-haiku-3-5",
-          fallbackStepFromFailureReason: "rate_limit",
-          fallbackStepChainPosition: 1,
-          fallbackStepFinalOutcome: "next_fallback",
-        }),
-        expect.objectContaining({
-          event: "model_fallback_decision",
-          decision: "candidate_succeeded",
-          candidateProvider: "anthropic",
-          candidateModel: "claude-haiku-3-5",
-          isPrimary: false,
-          requestedModelMatched: false,
-          fallbackStepType: "fallback_step",
-          fallbackStepFromModel: "openai/gpt-4.1-mini",
-          fallbackStepToModel: "anthropic/claude-haiku-3-5",
-          fallbackStepFromFailureReason: "rate_limit",
-          fallbackStepChainPosition: 2,
-          fallbackStepFinalOutcome: "succeeded",
-        }),
-      ]),
+    expectRecordWithFields(decisionPayloads, {
+      event: "model_fallback_decision",
+      decision: "probe_cooldown_candidate",
+      candidateProvider: "openai",
+      candidateModel: "gpt-4.1-mini",
+      allowTransientCooldownProbe: true,
+    });
+    expectRecordWithFields(decisionPayloads, {
+      event: "model_fallback_decision",
+      decision: "candidate_succeeded",
+      candidateProvider: "openai",
+      candidateModel: "gpt-4.1-mini",
+      isPrimary: true,
+      requestedModelMatched: true,
+    });
+    expectRecordWithFields(decisionPayloads, {
+      event: "model_fallback_decision",
+      decision: "candidate_failed",
+      candidateProvider: "openai",
+      candidateModel: "gpt-4.1-mini",
+      isPrimary: true,
+      requestedModelMatched: true,
+      nextCandidateProvider: "anthropic",
+      nextCandidateModel: "claude-haiku-3-5",
+      fallbackStepType: "fallback_step",
+      fallbackStepFromModel: "openai/gpt-4.1-mini",
+      fallbackStepToModel: "anthropic/claude-haiku-3-5",
+      fallbackStepFromFailureReason: "rate_limit",
+      fallbackStepChainPosition: 1,
+      fallbackStepFinalOutcome: "next_fallback",
+    });
+    expectRecordWithFields(decisionPayloads, {
+      event: "model_fallback_decision",
+      decision: "candidate_succeeded",
+      candidateProvider: "anthropic",
+      candidateModel: "claude-haiku-3-5",
+      isPrimary: false,
+      requestedModelMatched: false,
+      fallbackStepType: "fallback_step",
+      fallbackStepFromModel: "openai/gpt-4.1-mini",
+      fallbackStepToModel: "anthropic/claude-haiku-3-5",
+      fallbackStepFromFailureReason: "rate_limit",
+      fallbackStepChainPosition: 2,
+      fallbackStepFinalOutcome: "succeeded",
+    });
+
+    const fallbackSteps = onFallbackStep.mock.calls.map(([step]) =>
+      requireRecord(step, "fallback step"),
     );
-    expect(onFallbackStep).toHaveBeenCalledWith(
-      expect.objectContaining({
-        fallbackStepType: "fallback_step",
-        fallbackStepFromModel: "openai/gpt-4.1-mini",
-        fallbackStepToModel: "anthropic/claude-haiku-3-5",
-        fallbackStepFromFailureReason: "rate_limit",
-        fallbackStepChainPosition: 1,
-        fallbackStepFinalOutcome: "next_fallback",
-      }),
-    );
-    expect(onFallbackStep).toHaveBeenCalledWith(
-      expect.objectContaining({
-        fallbackStepType: "fallback_step",
-        fallbackStepFromModel: "openai/gpt-4.1-mini",
-        fallbackStepToModel: "anthropic/claude-haiku-3-5",
-        fallbackStepFromFailureReason: "rate_limit",
-        fallbackStepChainPosition: 2,
-        fallbackStepFinalOutcome: "succeeded",
-      }),
-    );
+    expectRecordWithFields(fallbackSteps, {
+      fallbackStepType: "fallback_step",
+      fallbackStepFromModel: "openai/gpt-4.1-mini",
+      fallbackStepToModel: "anthropic/claude-haiku-3-5",
+      fallbackStepFromFailureReason: "rate_limit",
+      fallbackStepChainPosition: 1,
+      fallbackStepFinalOutcome: "next_fallback",
+    });
+    expectRecordWithFields(fallbackSteps, {
+      fallbackStepType: "fallback_step",
+      fallbackStepFromModel: "openai/gpt-4.1-mini",
+      fallbackStepToModel: "anthropic/claude-haiku-3-5",
+      fallbackStepFromFailureReason: "rate_limit",
+      fallbackStepChainPosition: 2,
+      fallbackStepFinalOutcome: "succeeded",
+    });
   });
 
   it.each([

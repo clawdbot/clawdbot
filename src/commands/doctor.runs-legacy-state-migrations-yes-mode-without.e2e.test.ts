@@ -175,10 +175,11 @@ describe("doctor command", () => {
     }
     const profiles = (written.auth as { profiles: Record<string, unknown> }).profiles;
     expect(profiles).toHaveProperty("anthropic:me@example.com");
-    expect(profiles["anthropic:me@example.com"]).toMatchObject({
-      provider: "anthropic",
-      mode: "oauth",
-    });
+    const migratedProfile = profiles["anthropic:me@example.com"] as
+      | { provider?: unknown; mode?: unknown }
+      | undefined;
+    expect(migratedProfile?.provider).toBe("anthropic");
+    expect(migratedProfile?.mode).toBe("oauth");
     expect(profiles["anthropic:default"]).toBeUndefined();
   }, 30_000);
 });

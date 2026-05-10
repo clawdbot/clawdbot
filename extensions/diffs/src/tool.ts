@@ -175,7 +175,7 @@ export function createDiffsTool(params: {
       const theme = normalizeTheme(toolParams.theme, params.defaults.theme);
       const layout = normalizeLayout(toolParams.layout, params.defaults.layout);
       const expandUnchanged = toolParams.expandUnchanged === true;
-      const ttlMs = normalizeTtlMs(toolParams.ttlSeconds);
+      const ttlMs = normalizeTtlMs(toolParams.ttlSeconds ?? params.defaults.ttlSeconds);
       const image = resolveDiffImageRenderOptions({
         defaults: params.defaults,
         fileFormat: normalizeOutputFormat(

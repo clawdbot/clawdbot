@@ -24,9 +24,6 @@ export async function cleanupEmbeddedAttemptResources(params: {
   }) => Promise<void>;
   session?: { agent?: unknown; dispose(): void };
   sessionManager: unknown;
-  releaseWsSession: (sessionId: string, options?: { allowPool?: boolean }) => void;
-  allowWsSessionPool?: boolean;
-  sessionId: string;
   bundleMcpRuntime?: { dispose(): Promise<void> | void };
   bundleLspRuntime?: { dispose(): Promise<void> | void };
   sessionLock: { release(): Promise<void> | void };
@@ -53,11 +50,6 @@ export async function cleanupEmbeddedAttemptResources(params: {
     }
     try {
       params.session?.dispose();
-    } catch {
-      /* best-effort */
-    }
-    try {
-      params.releaseWsSession(params.sessionId, { allowPool: params.allowWsSessionPool === true });
     } catch {
       /* best-effort */
     }

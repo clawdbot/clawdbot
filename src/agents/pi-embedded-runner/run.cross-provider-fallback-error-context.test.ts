@@ -17,11 +17,6 @@ import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 const DEEPSEEK_ERROR_MESSAGE = "429 deepseek rate limit";
-const DEEPSEEK_ASSISTANT_MATCHER = expect.objectContaining({
-  provider: "deepseek",
-  model: "deepseek-chat",
-  errorMessage: DEEPSEEK_ERROR_MESSAGE,
-});
 
 function isCurrentAttemptAssistant(
   value: unknown,
@@ -58,6 +53,15 @@ function captureFormattedAssistant() {
   return () => lastFormattedAssistant;
 }
 
+function expectDeepseekAssistant(value: unknown) {
+  if (!isCurrentAttemptAssistant(value)) {
+    throw new Error(`Expected DeepSeek assistant, got ${String(value)}`);
+  }
+  expect(value.provider).toBe("deepseek");
+  expect(value.model).toBe("deepseek-chat");
+  expect(value.errorMessage).toBe(DEEPSEEK_ERROR_MESSAGE);
+}
+
 function makeCrossProviderFallbackConfig() {
   return makeModelFallbackCfg({
     agents: {
@@ -77,8 +81,10 @@ async function expectDeepseekFallbackError(
 ) {
   await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
   await expect(promise).rejects.toThrow(`deepseek/deepseek-chat: ${DEEPSEEK_ERROR_MESSAGE}`);
-  expect(mockedIsRateLimitAssistantError).toHaveBeenCalledWith(DEEPSEEK_ASSISTANT_MATCHER);
-  expect(getLastFormattedAssistant()).toEqual(DEEPSEEK_ASSISTANT_MATCHER);
+  expect(mockedIsRateLimitAssistantError).toHaveBeenCalled();
+  const rateLimitCalls = mockedIsRateLimitAssistantError.mock.calls as unknown[][];
+  expectDeepseekAssistant(rateLimitCalls.at(-1)?.[0]);
+  expectDeepseekAssistant(getLastFormattedAssistant());
 }
 
 describe("runEmbeddedPiAgent cross-provider fallback error handling", () => {

@@ -85,7 +85,7 @@ describe("buildPeakErrorHours", () => {
     // but we can verify error rates and sub info.
     const highestRate = result[0];
     // hour 0: 5/10 = 50%, hour 23: 4/8 = 50%, hour 9: 3/15 = 20%, hour 1: 2/20 = 10%
-    expect(highestRate).toMatchObject({ value: expect.stringMatching(/50\.00%/) });
+    expect(highestRate?.value).toMatch(/50\.00%/);
   });
 
   it("aggregates multiple quarter-hour buckets into the same hour in UTC mode", () => {

@@ -23,8 +23,11 @@ const ROOT_COMMANDS_HINT =
 
 const EXAMPLES = [
   ["openclaw onboard", "Run guided setup for a local Gateway, workspace, auth, and channels."],
+  ["openclaw setup", "Create the baseline config, workspace, and session folders."],
+  ["openclaw configure", "Change models, Gateway, channels, plugins, skills, and health checks."],
   ["openclaw status", "Check Gateway, channel, model, and recent-session status."],
   ["openclaw doctor --fix", "Repair common config, service, plugin, and channel problems."],
+  ["openclaw channels add", "Add or update a chat channel account with guided prompts."],
   ["openclaw channels status", "See connected messaging accounts and login state."],
   ["openclaw --dev gateway", "Run a dev Gateway (isolated state/config) on ws://127.0.0.1:19001."],
   ["openclaw gateway run --force", "Start the Gateway and replace anything bound to its port."],
@@ -122,7 +125,7 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
       return "";
     }
     const rich = isRich();
-    const line = formatCliBannerLine(ctx.programVersion, { richTty: rich });
+    const line = formatCliBannerLine(ctx.programVersion, { richTty: rich, mode: "default" });
     return `\n${line}\n`;
   });
 

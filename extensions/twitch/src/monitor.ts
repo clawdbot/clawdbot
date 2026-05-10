@@ -268,34 +268,34 @@ export async function monitorTwitchProvider(
       return;
     }
 
-    // Access control check
-    const botUsername = normalizeLowercaseStringOrEmpty(account.username);
-    if (normalizeLowercaseStringOrEmpty(message.username) === botUsername) {
-      return; // Ignore own messages
-    }
+    void (async () => {
+      const botUsername = normalizeLowercaseStringOrEmpty(account.username);
+      if (normalizeLowercaseStringOrEmpty(message.username) === botUsername) {
+        return;
+      }
 
-    const access = checkTwitchAccessControl({
-      message,
-      account,
-      botUsername,
-    });
+      const access = await checkTwitchAccessControl({
+        message,
+        account,
+        botUsername,
+      });
 
-    if (!access.allowed) {
-      return;
-    }
+      if (stopped || !access.allowed) {
+        return;
+      }
 
-    statusSink?.({ lastInboundAt: Date.now() });
+      statusSink?.({ lastInboundAt: Date.now() });
 
-    // Fire-and-forget: process message without blocking
-    void processTwitchMessage({
-      message,
-      account,
-      accountId,
-      config,
-      runtime,
-      core,
-      statusSink,
-    }).catch((err) => {
+      await processTwitchMessage({
+        message,
+        account,
+        accountId,
+        config,
+        runtime,
+        core,
+        statusSink,
+      });
+    })().catch((err) => {
       runtime.error?.(`Message processing failed: ${String(err)}`);
     });
   });

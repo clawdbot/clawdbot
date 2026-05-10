@@ -9,62 +9,20 @@ const pluginMetadataSnapshotMocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
 }));
 
-vi.mock("../infra/boundary-file-read.js", async () => {
-  const fs = await import("node:fs");
-  return {
-    openRootFileSync: ({ absolutePath }: { absolutePath: string }) => ({
-      ok: true,
-      fd: fs.openSync(absolutePath, "r"),
-    }),
-  };
-});
-
-vi.mock("../plugins/manifest-registry-installed.js", async () => {
-  const fs = await import("node:fs");
-  const path = await import("node:path");
-  return {
-    loadPluginManifestRegistryForInstalledIndex: (params: { workspaceDir?: string }) => {
-      const rootDir = path.join(
-        params.workspaceDir ?? "",
-        ".openclaw",
-        "extensions",
-        "claude-bundle",
-      );
-      if (!fs.existsSync(path.join(rootDir, ".claude-plugin", "plugin.json"))) {
-        return { plugins: [], diagnostics: [] };
-      }
-      const resolvedRootDir = fs.realpathSync(rootDir);
-      return {
-        diagnostics: [],
-        plugins: [
-          {
-            id: "claude-bundle",
-            origin: "workspace",
-            format: "bundle",
-            bundleFormat: "claude",
-            settingsFiles: ["settings.json"],
-            rootDir: resolvedRootDir,
-          },
-        ],
-      };
-    },
-  };
-});
-
-vi.mock("../plugins/plugin-registry.js", async () => {
-  const fs = await import("node:fs");
-  const path = await import("node:path");
-  const loadRegistry = (params: { workspaceDir?: string }) => {
-    const rootDir = path.join(
+const bundleTestDeps = await vi.hoisted(async () => {
+  const fsSync = await import("node:fs");
+  const pathModule = await import("node:path");
+  const loadBundleRegistry = (params: { workspaceDir?: string }) => {
+    const rootDir = pathModule.join(
       params.workspaceDir ?? "",
       ".openclaw",
       "extensions",
       "claude-bundle",
     );
-    if (!fs.existsSync(path.join(rootDir, ".claude-plugin", "plugin.json"))) {
+    if (!fsSync.existsSync(pathModule.join(rootDir, ".claude-plugin", "plugin.json"))) {
       return { plugins: [], diagnostics: [] };
     }
-    const resolvedRootDir = fs.realpathSync(rootDir);
+    const resolvedRootDir = fsSync.realpathSync(rootDir);
     return {
       diagnostics: [],
       plugins: [
@@ -79,48 +37,74 @@ vi.mock("../plugins/plugin-registry.js", async () => {
       ],
     };
   };
+  const loadEmbeddedPiMcpConfig = (params: {
+    workspaceDir: string;
+    cfg?: { mcp?: { servers?: Record<string, unknown> } };
+  }) => {
+    const pluginRoot = pathModule.join(
+      params.workspaceDir,
+      ".openclaw",
+      "extensions",
+      "claude-bundle",
+    );
+    const mcpPath = pathModule.join(pluginRoot, ".mcp.json");
+    let bundleServers: Record<string, unknown> = {};
+    if (fsSync.existsSync(mcpPath)) {
+      const raw = JSON.parse(fsSync.readFileSync(mcpPath, "utf-8")) as {
+        mcpServers?: Record<string, { args?: string[]; command?: string }>;
+      };
+      const resolvedRoot = fsSync.realpathSync(pluginRoot);
+      bundleServers = Object.fromEntries(
+        Object.entries(raw.mcpServers ?? {}).map(([id, server]) => [
+          id,
+          {
+            ...server,
+            args: server.args?.map((arg) =>
+              arg.startsWith("./") ? pathModule.join(resolvedRoot, arg) : arg,
+            ),
+            cwd: resolvedRoot,
+          },
+        ]),
+      );
+    }
+    return {
+      diagnostics: [],
+      mcpServers: {
+        ...bundleServers,
+        ...params.cfg?.mcp?.servers,
+      },
+    };
+  };
+  return { fsSync, loadBundleRegistry, loadEmbeddedPiMcpConfig };
+});
+
+vi.mock("../infra/boundary-file-read.js", () => {
   return {
-    loadPluginManifestRegistryForPluginRegistry: loadRegistry,
-    loadPluginRegistrySnapshot: () => ({ plugins: [] }),
+    openRootFileSync: ({ absolutePath }: { absolutePath: string }) => ({
+      ok: true,
+      fd: bundleTestDeps.fsSync.openSync(absolutePath, "r"),
+    }),
   };
 });
+
+vi.mock("../plugins/manifest-registry-installed.js", () => ({
+  loadPluginManifestRegistryForInstalledIndex: bundleTestDeps.loadBundleRegistry,
+}));
+
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: bundleTestDeps.loadBundleRegistry,
+  loadPluginRegistrySnapshot: () => ({ plugins: [] }),
+}));
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot,
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", async () => {
-  const fs = await import("node:fs");
-  const path = await import("node:path");
-  const loadRegistry = (params: { workspaceDir?: string }) => {
-    const rootDir = path.join(
-      params.workspaceDir ?? "",
-      ".openclaw",
-      "extensions",
-      "claude-bundle",
-    );
-    if (!fs.existsSync(path.join(rootDir, ".claude-plugin", "plugin.json"))) {
-      return { plugins: [], diagnostics: [] };
-    }
-    const resolvedRootDir = fs.realpathSync(rootDir);
-    return {
-      diagnostics: [],
-      plugins: [
-        {
-          id: "claude-bundle",
-          origin: "workspace",
-          format: "bundle",
-          bundleFormat: "claude",
-          settingsFiles: ["settings.json"],
-          rootDir: resolvedRootDir,
-        },
-      ],
-    };
-  };
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => {
   pluginMetadataSnapshotMocks.isPluginMetadataSnapshotCompatible.mockImplementation(() => false);
   pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockImplementation(
     (params: { workspaceDir?: string }) => ({
-      manifestRegistry: loadRegistry(params),
+      manifestRegistry: bundleTestDeps.loadBundleRegistry(params),
       normalizePluginId: (id: string) => id.trim(),
     }),
   );
@@ -131,45 +115,9 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async () => {
   };
 });
 
-vi.mock("./embedded-pi-mcp.js", async () => {
-  const fs = await import("node:fs");
-  const path = await import("node:path");
-  return {
-    loadEmbeddedPiMcpConfig: (params: {
-      workspaceDir: string;
-      cfg?: { mcp?: { servers?: Record<string, unknown> } };
-    }) => {
-      const pluginRoot = path.join(params.workspaceDir, ".openclaw", "extensions", "claude-bundle");
-      const mcpPath = path.join(pluginRoot, ".mcp.json");
-      let bundleServers: Record<string, unknown> = {};
-      if (fs.existsSync(mcpPath)) {
-        const raw = JSON.parse(fs.readFileSync(mcpPath, "utf-8")) as {
-          mcpServers?: Record<string, { args?: string[]; command?: string }>;
-        };
-        const resolvedRoot = fs.realpathSync(pluginRoot);
-        bundleServers = Object.fromEntries(
-          Object.entries(raw.mcpServers ?? {}).map(([id, server]) => [
-            id,
-            {
-              ...server,
-              args: server.args?.map((arg) =>
-                arg.startsWith("./") ? path.join(resolvedRoot, arg) : arg,
-              ),
-              cwd: resolvedRoot,
-            },
-          ]),
-        );
-      }
-      return {
-        diagnostics: [],
-        mcpServers: {
-          ...bundleServers,
-          ...params.cfg?.mcp?.servers,
-        },
-      };
-    },
-  };
-});
+vi.mock("./embedded-pi-mcp.js", () => ({
+  loadEmbeddedPiMcpConfig: bundleTestDeps.loadEmbeddedPiMcpConfig,
+}));
 
 const { loadEnabledBundlePiSettingsSnapshot } = await import("./pi-project-settings-snapshot.js");
 
@@ -351,15 +299,13 @@ describe("loadEnabledBundlePiSettingsSnapshot", () => {
 
     expect(snapshot.hideThinkingBlock).toBe(true);
     expect(pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledOnce();
-    expect(pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
-      config: expect.objectContaining({
-        plugins: expect.objectContaining({
-          load: { paths: ["/tmp/changed-plugin-root"] },
-        }),
-      }),
-      env: process.env,
-      workspaceDir,
+    const [snapshotLookup] =
+      pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot.mock.calls[0] ?? [];
+    expect(snapshotLookup?.config?.plugins?.load).toEqual({
+      paths: ["/tmp/changed-plugin-root"],
     });
+    expect(snapshotLookup?.env).toBe(process.env);
+    expect(snapshotLookup?.workspaceDir).toBe(workspaceDir);
     expect(pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
   });
 

@@ -125,7 +125,26 @@ Access groups are available in shared message-channel authorization paths, inclu
 - channel-specific per-room sender allowlists that use the same sender matching rules
 - command authorization paths that reuse message-channel sender allowlists
 
-Channel support depends on whether that channel is wired through the shared OpenClaw sender-authorization helpers. Current bundled support includes Discord, Google Chat, Nostr, WhatsApp, Zalo, and Zalo Personal. Static `message.senders` groups are designed to be channel-agnostic, so new message channels should support them by using the shared plugin SDK helpers instead of custom allowlist expansion.
+Channel support depends on whether that channel is wired through the shared OpenClaw sender-authorization helpers. Current bundled support includes Discord, Feishu, Google Chat, iMessage, LINE, Mattermost, Microsoft Teams, Nextcloud Talk, Nostr, QQBot, Signal, WhatsApp, Zalo, and Zalo Personal. Static `message.senders` groups are designed to be channel-agnostic, so new message channels should support them by using the shared plugin SDK helpers instead of custom allowlist expansion.
+
+## Plugin diagnostics
+
+Plugin authors can inspect structured access-group state without expanding it back into a flat allowlist:
+
+```typescript
+import { resolveAccessGroupAllowFromState } from "openclaw/plugin-sdk/security-runtime";
+
+const state = await resolveAccessGroupAllowFromState({
+  accessGroups: cfg.accessGroups,
+  allowFrom: channelConfig.allowFrom,
+  channel: "my-channel",
+  accountId: "default",
+  senderId,
+  isSenderAllowed,
+});
+```
+
+The result reports referenced, matched, missing, unsupported, and failed groups. Use this when you need diagnostics or conformance tests. Use `expandAllowFromWithAccessGroups(...)` only for compatibility paths that still expect a flat `allowFrom` array.
 
 ## Discord channel audiences
 

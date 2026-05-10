@@ -48,8 +48,10 @@ export function createEmptyInlineDirectives(): InlineDirectives {
   return {
     cleaned: "",
     hasThinkDirective: false,
+    clearThinkLevel: false,
     hasVerboseDirective: false,
     hasFastDirective: false,
+    clearFastMode: false,
     hasReasoningDirective: false,
     hasTraceDirective: false,
     hasElevatedDirective: false,

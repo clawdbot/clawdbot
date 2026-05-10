@@ -117,6 +117,13 @@ tool descriptor during discovery and caches it by plugin source and contract, so
 later tool planning can skip plugin runtime loading. Tool execution still loads
 the owning plugin and calls the live registered implementation.
 
+[Tool Search](/tools/tool-search) is the compact surface
+for large catalogs. Instead of putting every OpenClaw, MCP, or client tool
+schema into the prompt, OpenClaw can give the model an isolated Node runtime
+with `openclaw.tools.search`, `openclaw.tools.describe`, and
+`openclaw.tools.call`. Calls still flow back through the Gateway, so tool
+policy, approvals, hooks, and session logs remain authoritative.
+
 ## Tool configuration
 
 ### Allow and deny lists

@@ -163,10 +163,10 @@ describe("resolveBuildAllSteps", () => {
   });
 
   it("writes the runtime postbuild stamp after the build stamp", () => {
-    expect(resolveBuildAllSteps("full").map((step) => step.label)).toEqual(
-      expect.arrayContaining(["runtime-postbuild", "build-stamp", "runtime-postbuild-stamp"]),
-    );
     const labels = resolveBuildAllSteps("full").map((step) => step.label);
+    expect(labels).toContain("runtime-postbuild");
+    expect(labels).toContain("build-stamp");
+    expect(labels).toContain("runtime-postbuild-stamp");
     expect(labels.indexOf("runtime-postbuild-stamp")).toBeGreaterThan(
       labels.indexOf("build-stamp"),
     );
@@ -193,12 +193,35 @@ describe("resolveBuildAllStepCacheState", () => {
       const cacheState = resolveBuildAllStepCacheState(step, { rootDir });
       writeBuildAllStepCacheStamp(step, cacheState, { rootDir });
 
-      expect(resolveBuildAllStepCacheState(step, { rootDir })).toMatchObject({
+      const fresh = resolveBuildAllStepCacheState(step, { rootDir });
+      expect(fresh.cacheable).toBe(true);
+      expect(fresh.fresh).toBe(true);
+      expect(fresh.reason).toBe("fresh");
+      expect(fresh.inputFiles).toBe(1);
+      expect(fresh.outputFiles).toBe(1);
+      expect(fresh.restorable).toBe(false);
+      expect(fresh.relativeOutputFiles).toEqual(["dist/output.js"]);
+      expect(fresh.stampedOutputs).toEqual(["dist/output.js"]);
+      expect(typeof fresh.signature).toBe("string");
+      expect(fresh.signature).toHaveLength(64);
+      expect(fresh.outputRoot).toBe(
+        path.join(rootDir, ".artifacts/build-all-cache/cached/outputs"),
+      );
+      expect(fresh.stampPath).toBe(
+        path.join(rootDir, ".artifacts/build-all-cache/cached/stamp.json"),
+      );
+      expect(fresh).toEqual({
         cacheable: true,
         fresh: true,
-        reason: "fresh",
         inputFiles: 1,
         outputFiles: 1,
+        outputRoot: fresh.outputRoot,
+        reason: "fresh",
+        relativeOutputFiles: ["dist/output.js"],
+        restorable: false,
+        signature: fresh.signature,
+        stampedOutputs: ["dist/output.js"],
+        stampPath: fresh.stampPath,
       });
     });
   });
@@ -209,10 +232,35 @@ describe("resolveBuildAllStepCacheState", () => {
       writeBuildAllStepCacheStamp(step, cacheState, { rootDir });
       fs.writeFileSync(inputPath, "changed");
 
-      expect(resolveBuildAllStepCacheState(step, { rootDir })).toMatchObject({
+      const stale = resolveBuildAllStepCacheState(step, { rootDir });
+      expect(stale.cacheable).toBe(true);
+      expect(stale.fresh).toBe(false);
+      expect(stale.reason).toBe("stale");
+      expect(stale.inputFiles).toBe(1);
+      expect(stale.outputFiles).toBe(1);
+      expect(stale.restorable).toBe(false);
+      expect(stale.relativeOutputFiles).toEqual(["dist/output.js"]);
+      expect(stale.stampedOutputs).toEqual(["dist/output.js"]);
+      expect(typeof stale.signature).toBe("string");
+      expect(stale.signature).toHaveLength(64);
+      expect(stale.outputRoot).toBe(
+        path.join(rootDir, ".artifacts/build-all-cache/cached/outputs"),
+      );
+      expect(stale.stampPath).toBe(
+        path.join(rootDir, ".artifacts/build-all-cache/cached/stamp.json"),
+      );
+      expect(stale).toEqual({
         cacheable: true,
         fresh: false,
+        inputFiles: 1,
+        outputFiles: 1,
+        outputRoot: stale.outputRoot,
         reason: "stale",
+        relativeOutputFiles: ["dist/output.js"],
+        restorable: false,
+        signature: stale.signature,
+        stampedOutputs: ["dist/output.js"],
+        stampPath: stale.stampPath,
       });
     });
   });
@@ -224,11 +272,34 @@ describe("resolveBuildAllStepCacheState", () => {
       fs.rmSync(path.join(rootDir, "dist"), { force: true, recursive: true });
 
       const restorable = resolveBuildAllStepCacheState(step, { rootDir });
-      expect(restorable).toMatchObject({
+      expect(restorable.cacheable).toBe(true);
+      expect(restorable.fresh).toBe(true);
+      expect(restorable.reason).toBe("fresh-cache");
+      expect(restorable.inputFiles).toBe(1);
+      expect(restorable.outputFiles).toBe(0);
+      expect(restorable.restorable).toBe(true);
+      expect(restorable.relativeOutputFiles).toEqual([]);
+      expect(restorable.stampedOutputs).toEqual(["dist/output.js"]);
+      expect(typeof restorable.signature).toBe("string");
+      expect(restorable.signature).toHaveLength(64);
+      expect(restorable.outputRoot).toBe(
+        path.join(rootDir, ".artifacts/build-all-cache/cached/outputs"),
+      );
+      expect(restorable.stampPath).toBe(
+        path.join(rootDir, ".artifacts/build-all-cache/cached/stamp.json"),
+      );
+      expect(restorable).toEqual({
         cacheable: true,
         fresh: true,
+        inputFiles: 1,
+        outputFiles: 0,
+        outputRoot: restorable.outputRoot,
         reason: "fresh-cache",
+        relativeOutputFiles: [],
         restorable: true,
+        signature: restorable.signature,
+        stampedOutputs: ["dist/output.js"],
+        stampPath: restorable.stampPath,
       });
       expect(restoreBuildAllStepCacheOutputs(restorable, { rootDir })).toBe(true);
       expect(fs.readFileSync(outputPath, "utf8")).toBe("output");

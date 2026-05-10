@@ -16,6 +16,7 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { formatCliCommand } from "./command-format.js";
+import { formatUnsupportedChannelActionMessage } from "./error-format.js";
 import { commitConfigWithPendingPluginInstalls } from "./plugins-install-record-commit.js";
 
 type ChannelAuthOptions = {
@@ -118,7 +119,11 @@ async function resolveChannelPluginForMode(
   const plugin = resolved.plugin;
   if (!plugin || !supportsChannelAuthMode(plugin, mode)) {
     throw new Error(
-      `Channel "${channelId}" does not support ${mode}. Run ${formatCliCommand("openclaw channels status --channel " + channelId)} for its supported actions.`,
+      formatUnsupportedChannelActionMessage({
+        channel: channelId,
+        action: mode,
+        inspectCommand: "openclaw channels status --channel " + channelId,
+      }),
     );
   }
   return {
@@ -227,7 +232,13 @@ export async function runChannelLogin(
   }
   const login = plugin.auth?.login;
   if (!login) {
-    throw new Error(`Channel "${channelInput}" does not support login.`);
+    throw new Error(
+      formatUnsupportedChannelActionMessage({
+        channel: channelInput,
+        action: "login",
+        inspectCommand: "openclaw channels status --channel " + channelInput,
+      }),
+    );
   }
   // Auth-only flow: do not mutate channel config here.
   setVerbose(Boolean(opts.verbose));
@@ -270,7 +281,13 @@ export async function runChannelLogout(
   }
   const logoutAccount = plugin.gateway?.logoutAccount;
   if (!logoutAccount) {
-    throw new Error(`Channel "${channelInput}" does not support logout.`);
+    throw new Error(
+      formatUnsupportedChannelActionMessage({
+        channel: channelInput,
+        action: "logout",
+        inspectCommand: "openclaw channels status --channel " + channelInput,
+      }),
+    );
   }
   // Prefer the live gateway so logout also stops any active channel runtime.
   const { accountId } = resolveAccountContext(plugin, opts, cfg);

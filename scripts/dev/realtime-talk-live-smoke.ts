@@ -476,8 +476,8 @@ try {
     const statusNames = new Set((result.statuses ?? []).map((entry) => entry.status));
     const transcriptTexts = new Set((result.transcripts ?? []).map((entry) => entry.text));
     const expectedMethods = [
-      "talk.session.appendAudio",
       "talk.client.toolCall",
+      "talk.session.appendAudio",
       "talk.session.submitToolResult",
       "talk.session.close",
     ];

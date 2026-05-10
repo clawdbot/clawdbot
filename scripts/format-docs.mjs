@@ -16,7 +16,10 @@ function docsFiles() {
     cwd: ROOT,
     encoding: "utf8",
   });
-  return output.split("\n").filter(Boolean);
+  return output
+    .split("\n")
+    .filter(Boolean)
+    .filter((relativePath) => fs.existsSync(path.join(ROOT, relativePath)));
 }
 
 function runOxfmt(files) {

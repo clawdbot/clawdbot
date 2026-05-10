@@ -137,14 +137,18 @@ describe("sandbox/tool-policy", () => {
     };
 
     const sandbox = resolveSandboxConfigForAgent(cfg, "tavern");
-    expect(sandbox.tools.allow).toEqual(expect.arrayContaining(["browser", "message", "tts"]));
+    expect(sandbox.tools.allow).toContain("browser");
+    expect(sandbox.tools.allow).toContain("message");
+    expect(sandbox.tools.allow).toContain("tts");
     expect(sandbox.tools.deny).not.toContain("browser");
 
     const runtime = resolveSandboxRuntimeStatus({
       cfg,
       sessionKey: "agent:tavern:main",
     });
-    expect(runtime.toolPolicy.allow).toEqual(expect.arrayContaining(["browser", "message", "tts"]));
+    expect(runtime.toolPolicy.allow).toContain("browser");
+    expect(runtime.toolPolicy.allow).toContain("message");
+    expect(runtime.toolPolicy.allow).toContain("tts");
     expect(runtime.toolPolicy.deny).not.toContain("browser");
   });
 

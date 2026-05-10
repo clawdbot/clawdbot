@@ -70,6 +70,19 @@ function requireZalouserMediaSender(
   return media;
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireSendOptions(
+  mockedSend: ReturnType<typeof vi.mocked<(typeof import("./send.js"))["sendMessageZalouser"]>>,
+): Record<string, unknown> {
+  return requireRecord(mockedSend.mock.calls[0]?.[2], "Zalouser send options");
+}
+
 describe("zalouserPlugin outbound sendPayload", () => {
   let mockedSend: ReturnType<typeof vi.mocked<(typeof import("./send.js"))["sendMessageZalouser"]>>;
 
@@ -95,12 +108,14 @@ describe("zalouserPlugin outbound sendPayload", () => {
       to: "group:1471383327500481391",
     });
 
-    expect(mockedSend).toHaveBeenCalledWith(
-      "1471383327500481391",
-      "hello group",
-      expect.objectContaining({ isGroup: true, textMode: "markdown" }),
-    );
-    expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-g1" });
+    expect(mockedSend).toHaveBeenCalledOnce();
+    expect(mockedSend.mock.calls[0]?.[0]).toBe("1471383327500481391");
+    expect(mockedSend.mock.calls[0]?.[1]).toBe("hello group");
+    const options = requireSendOptions(mockedSend);
+    expect(options.isGroup).toBe(true);
+    expect(options.textMode).toBe("markdown");
+    expect(result.channel).toBe("zalouser");
+    expect(result.messageId).toBe("zlu-g1");
   });
 
   it("treats bare numeric targets as direct chats for backward compatibility", async () => {
@@ -112,12 +127,14 @@ describe("zalouserPlugin outbound sendPayload", () => {
       to: "987654321",
     });
 
-    expect(mockedSend).toHaveBeenCalledWith(
-      "987654321",
-      "hello",
-      expect.objectContaining({ isGroup: false, textMode: "markdown" }),
-    );
-    expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-d1" });
+    expect(mockedSend).toHaveBeenCalledOnce();
+    expect(mockedSend.mock.calls[0]?.[0]).toBe("987654321");
+    expect(mockedSend.mock.calls[0]?.[1]).toBe("hello");
+    const options = requireSendOptions(mockedSend);
+    expect(options.isGroup).toBe(false);
+    expect(options.textMode).toBe("markdown");
+    expect(result.channel).toBe("zalouser");
+    expect(result.messageId).toBe("zlu-d1");
   });
 
   it("preserves provider-native group ids when sending to raw g- targets", async () => {
@@ -129,12 +146,14 @@ describe("zalouserPlugin outbound sendPayload", () => {
       to: "g-1471383327500481391",
     });
 
-    expect(mockedSend).toHaveBeenCalledWith(
-      "g-1471383327500481391",
-      "hello native group",
-      expect.objectContaining({ isGroup: true, textMode: "markdown" }),
-    );
-    expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-g-native" });
+    expect(mockedSend).toHaveBeenCalledOnce();
+    expect(mockedSend.mock.calls[0]?.[0]).toBe("g-1471383327500481391");
+    expect(mockedSend.mock.calls[0]?.[1]).toBe("hello native group");
+    const options = requireSendOptions(mockedSend);
+    expect(options.isGroup).toBe(true);
+    expect(options.textMode).toBe("markdown");
+    expect(result.channel).toBe("zalouser");
+    expect(result.messageId).toBe("zlu-g-native");
   });
 
   it("passes long markdown through once so formatting happens before chunking", async () => {
@@ -148,17 +167,15 @@ describe("zalouserPlugin outbound sendPayload", () => {
     });
 
     expect(mockedSend).toHaveBeenCalledTimes(1);
-    expect(mockedSend).toHaveBeenCalledWith(
-      "987654321",
-      text,
-      expect.objectContaining({
-        isGroup: false,
-        textMode: "markdown",
-        textChunkMode: "length",
-        textChunkLimit: 1200,
-      }),
-    );
-    expect(result).toMatchObject({ channel: "zalouser", messageId: "zlu-code" });
+    expect(mockedSend.mock.calls[0]?.[0]).toBe("987654321");
+    expect(mockedSend.mock.calls[0]?.[1]).toBe(text);
+    const options = requireSendOptions(mockedSend);
+    expect(options.isGroup).toBe(false);
+    expect(options.textMode).toBe("markdown");
+    expect(options.textChunkMode).toBe("length");
+    expect(options.textChunkLimit).toBe(1200);
+    expect(result.channel).toBe("zalouser");
+    expect(result.messageId).toBe("zlu-code");
   });
 
   it("declares message adapter durable text and media with receipt proofs", async () => {
@@ -185,40 +202,38 @@ describe("zalouserPlugin outbound sendPayload", () => {
     const sendText = requireZalouserTextSender(adapter);
     const sendMedia = requireZalouserMediaSender(adapter);
 
-    await expect(
-      verifyChannelMessageAdapterCapabilityProofs({
-        adapterName: "zalouser",
-        adapter,
-        proofs: {
-          text: async () => {
-            const result = await sendText({
-              cfg: {},
-              to: "user:987654321",
-              text: "hello",
-            });
-            expect(result.receipt.platformMessageIds).toEqual(["zlu-text-1"]);
-          },
-          media: async () => {
-            const result = await sendMedia({
-              cfg: {},
-              to: "user:987654321",
-              text: "image",
-              mediaUrl: "https://example.com/image.png",
-            });
-            expect(result.receipt.platformMessageIds).toEqual(["zlu-media-1"]);
-          },
-          messageSendingHooks: () => {
-            expect(adapter.durableFinal?.capabilities?.messageSendingHooks).toBe(true);
-          },
+    const proofs = await verifyChannelMessageAdapterCapabilityProofs({
+      adapterName: "zalouser",
+      adapter,
+      proofs: {
+        text: async () => {
+          const result = await sendText({
+            cfg: {},
+            to: "user:987654321",
+            text: "hello",
+          });
+          expect(result.receipt.platformMessageIds).toEqual(["zlu-text-1"]);
         },
-      }),
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        { capability: "text", status: "verified" },
-        { capability: "media", status: "verified" },
-        { capability: "messageSendingHooks", status: "verified" },
-      ]),
+        media: async () => {
+          const result = await sendMedia({
+            cfg: {},
+            to: "user:987654321",
+            text: "image",
+            mediaUrl: "https://example.com/image.png",
+          });
+          expect(result.receipt.platformMessageIds).toEqual(["zlu-media-1"]);
+        },
+        messageSendingHooks: () => {
+          expect(adapter.durableFinal?.capabilities?.messageSendingHooks).toBe(true);
+        },
+      },
+    });
+    const proofStatusByCapability = new Map(
+      proofs.map((proof) => [proof.capability, proof.status] as const),
     );
+    expect(proofStatusByCapability.get("text")).toBe("verified");
+    expect(proofStatusByCapability.get("media")).toBe("verified");
+    expect(proofStatusByCapability.get("messageSendingHooks")).toBe("verified");
   });
 });
 

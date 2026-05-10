@@ -57,7 +57,7 @@ Tune queue and model capacity around the business value of each lane:
   agents: {
     defaults: {
       maxConcurrent: 4,
-      subagents: { maxConcurrent: 8 },
+      subagents: { maxConcurrent: 8, delegationMode: "prefer" },
     },
   },
   messages: {

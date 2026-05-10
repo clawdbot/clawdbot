@@ -13,6 +13,7 @@ const OPENAI_WEB_SEARCH_MINIMAL_SCENARIO_PATH =
   "scripts/e2e/lib/openai-web-search-minimal/scenario.sh";
 const OPENAI_WEB_SEARCH_MINIMAL_CLIENT_PATH =
   "scripts/e2e/lib/openai-web-search-minimal/client.mjs";
+const OPENWEBUI_DOCKER_E2E_PATH = "scripts/e2e/openwebui-docker.sh";
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_PATH =
   "scripts/e2e/bundled-plugin-install-uninstall-docker.sh";
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SWEEP_PATH =
@@ -116,13 +117,21 @@ describe("docker build helper", () => {
 
   it("runs release installer E2E against the npm beta tag", () => {
     const scenarios = readFileSync(DOCKER_E2E_SCENARIOS_PATH, "utf8");
+    const openWebUiRunner = readFileSync(OPENWEBUI_DOCKER_E2E_PATH, "utf8");
 
     expect(scenarios).toContain(
-      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local pnpm test:install:e2e"',
+      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=1500 OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=300 pnpm test:install:e2e"',
     );
     expect(scenarios).toContain(
       '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local pnpm test:install:e2e"',
     );
+    expect(scenarios).toContain(
+      '"OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENWEBUI_SMOKE_MODE=models OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui"',
+    );
+    expect(openWebUiRunner).toContain(
+      'SMOKE_MODE="${OPENWEBUI_SMOKE_MODE:-${OPENCLAW_OPENWEBUI_SMOKE_MODE:-chat}}"',
+    );
+    expect(openWebUiRunner).toContain('-e "OPENWEBUI_SMOKE_MODE=$SMOKE_MODE"');
   });
 
   it("times and parallelizes release installer E2E agent turns after gateway startup", () => {
@@ -140,6 +149,10 @@ describe("docker build helper", () => {
     expect(runner).toContain('run_agent_turn_bg "image write"');
     expect(runner).toContain('run_agent_turn_logged "read proof copy"');
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL");
+    expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_OPENAI_MODEL");
+    expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS");
+    expect(runner).toContain("OPENCLAW_INSTALL_E2E_OPENAI_MODEL");
+    expect(runner).toContain("OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS");
   });
 
   it("keeps package acceptance plugin coverage offline-capable", () => {

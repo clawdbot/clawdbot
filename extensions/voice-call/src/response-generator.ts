@@ -41,6 +41,34 @@ type VoiceResponsePayload = {
   isReasoning?: boolean;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readExplicitToolsAllow(value: unknown): string[] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const allow = value.allow;
+  if (!Array.isArray(allow)) {
+    return undefined;
+  }
+
+  return allow.filter((entry): entry is string => typeof entry === "string");
+}
+
+function resolveVoiceAgentToolsAllow(config: CoreConfig, agentId: string): string[] | undefined {
+  const agents = isRecord(config.agents) ? config.agents : undefined;
+  const list = Array.isArray(agents?.list) ? agents.list : [];
+  const agent = list.find((entry) => isRecord(entry) && entry.id === agentId);
+  if (!isRecord(agent)) {
+    return undefined;
+  }
+
+  return readExplicitToolsAllow(isRecord(agent.tools) ? agent.tools : undefined);
+}
+
 const VOICE_SPOKEN_OUTPUT_CONTRACT = [
   "Output format requirements:",
   '- Return only valid JSON in this exact shape: {"spoken":"..."}',
@@ -212,6 +240,7 @@ export async function generateVoiceResponse(
     explicitSessionKey: sessionKey,
   });
   const agentId = voiceConfig.agentId ?? "main";
+  const toolsAllow = resolveVoiceAgentToolsAllow(cfg, agentId);
 
   // Resolve paths
   const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, { agentId });
@@ -302,6 +331,7 @@ export async function generateVoiceResponse(
       lane: "voice",
       extraSystemPrompt,
       agentDir,
+      toolsAllow,
     });
 
     const text = extractSpokenTextFromPayloads((result.payloads ?? []) as VoiceResponsePayload[]);

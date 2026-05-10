@@ -139,6 +139,7 @@ Allowlists and policies:
 - `channels.line.groupPolicy`: `allowlist | open | disabled`
 - `channels.line.groupAllowFrom`: allowlisted LINE user IDs for groups
 - Per-group overrides: `channels.line.groups.<groupId>.allowFrom`
+- Static sender access groups can be referenced from `allowFrom`, `groupAllowFrom`, and per-group `allowFrom` with `accessGroup:<name>`.
 - Runtime note: if `channels.line` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
 LINE IDs are case-sensitive. Valid IDs look like:

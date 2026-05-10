@@ -7,7 +7,7 @@ import {
   resolveCodexAppServerRuntimeOptions,
 } from "./src/app-server/config.js";
 import type { CodexPluginConfig } from "./src/app-server/config.js";
-import { applyCodexDynamicToolProfile } from "./src/app-server/dynamic-tool-profile.js";
+import { filterCodexDynamicTools } from "./src/app-server/dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./src/app-server/dynamic-tools.js";
 import type { CodexDynamicToolSpec, JsonObject } from "./src/app-server/protocol.js";
 import {
@@ -70,15 +70,12 @@ export function buildCodexHarnessPromptSnapshot(params: {
 
 export function createCodexDynamicToolSpecsForPromptSnapshot(params: {
   tools: AnyAgentTool[];
-  pluginConfig?: Pick<
-    CodexPluginConfig,
-    "codexDynamicToolsProfile" | "codexDynamicToolsLoading" | "codexDynamicToolsExclude"
-  >;
+  pluginConfig?: Pick<CodexPluginConfig, "codexDynamicToolsLoading" | "codexDynamicToolsExclude">;
   directToolNames?: Iterable<string>;
 }): CodexDynamicToolSpec[] {
-  const profiledTools = applyCodexDynamicToolProfile(params.tools, params.pluginConfig ?? {});
+  const filteredTools = filterCodexDynamicTools(params.tools, params.pluginConfig ?? {});
   return createCodexDynamicToolBridge({
-    tools: profiledTools,
+    tools: filteredTools,
     signal: new AbortController().signal,
     loading: params.pluginConfig?.codexDynamicToolsLoading ?? "searchable",
     directToolNames: params.directToolNames,

@@ -3,6 +3,12 @@ export type IMessagePrivateApiStatus = {
   v2Ready: boolean;
   selectors: Record<string, boolean>;
   rpcMethods: string[];
+  // CLI-flag-level capabilities probed from `imsg <cmd> --help`. Only fields
+  // we actively branch on are listed; missing entries mean "not yet probed"
+  // and callers should treat them as unsupported.
+  cliCapabilities?: {
+    sendRichSupportsAttachment?: boolean;
+  };
   error?: string;
 };
 

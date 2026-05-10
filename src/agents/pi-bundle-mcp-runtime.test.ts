@@ -322,8 +322,13 @@ describe("session MCP runtime", () => {
     );
 
     expect(runtimeA).not.toBe(runtimeB);
-    expect(resultA.content[0]).toMatchObject({ type: "text", text: "FROM-CONFIG-A" });
-    expect(resultB.content[0]).toMatchObject({ type: "text", text: "FROM-CONFIG-B" });
+    const contentA = resultA.content[0];
+    const contentB = resultB.content[0];
+    if (contentA?.type !== "text" || contentB?.type !== "text") {
+      throw new Error("Expected configured bundle MCP probe calls to return text content");
+    }
+    expect(contentA.text).toBe("FROM-CONFIG-A");
+    expect(contentB.text).toBe("FROM-CONFIG-B");
   });
 
   it("disposes catalog startup in-flight without leaving cached runtimes", async () => {

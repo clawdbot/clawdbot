@@ -182,7 +182,7 @@ describe("createSessionVisibilityGuard", () => {
       a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
     });
 
-    expect(guard.check("agent:codex:acp:child-1")).toMatchObject({ allowed: false });
+    expect(guard.check("agent:codex:acp:child-1").allowed).toBe(false);
     expect(callGateway).not.toHaveBeenCalled();
 
     sessionsResolutionTesting.setDepsForTest();

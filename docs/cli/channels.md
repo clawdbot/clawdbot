@@ -80,7 +80,7 @@ When you run `openclaw channels add` without flags, the interactive wizard can p
 
 - account ids per selected channel
 - optional display names for those accounts
-- `Bind configured channel accounts to agents now?`
+- `Route these channel accounts to agents now?`
 
 If you confirm bind now, the wizard asks which agent should own each configured channel account and writes account-scoped routing bindings.
 

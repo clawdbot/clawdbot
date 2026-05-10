@@ -407,6 +407,50 @@ describe("message action media helpers", () => {
 
     expect(args.filename).toBe("attachment");
   });
+
+  it("hydrates reply attachments through the resolver so threaded sends don't bypass mediaLocalRoots", async () => {
+    // Locks in coverage for the reply-with-attachment path: when an agent
+    // calls message(action: "reply") with a `path`/`media`/etc., the
+    // resolver — not the channel runtime — must run. Pre-PR this was
+    // gated only on sendAttachment/setGroupIcon/upload-file, letting
+    // imessage reply forward an arbitrary host path to imsg.
+    const args: Record<string, unknown> = {
+      mediaUrl: "https://example.com/cute.png",
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "imessage",
+      args,
+      action: "reply",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+
+    expect(args.filename).toBe("cute.png");
+  });
+
+  it("does not fall back caption->message on reply (reply has its own text field)", async () => {
+    // sendAttachment uses caption as the body text and falls back from
+    // message -> caption when the agent only supplied `message`. Reply has
+    // its own `text`/`message` field, so caption fallback would invent a
+    // bogus caption param on the reply payload.
+    const args: Record<string, unknown> = {
+      mediaUrl: "https://example.com/cute.png",
+      message: "🦞",
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "imessage",
+      args,
+      action: "reply",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+
+    expect(args.caption).toBeUndefined();
+  });
 });
 
 describe("message action sandbox media hydration", () => {

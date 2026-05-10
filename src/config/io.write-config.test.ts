@@ -1351,6 +1351,74 @@ describe("config io write", () => {
     });
   });
 
+  it("persists explicit default-valued paths through the exported write wrapper", async () => {
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "demo",
+          origin: "bundled",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          rootDir: "/tmp/openclaw-test-demo",
+          source: "/tmp/openclaw-test-demo/index.ts",
+          manifestPath: "/tmp/openclaw-test-demo/openclaw.plugin.json",
+          configSchema: {
+            type: "object",
+            properties: {
+              mode: { type: "string", default: "auto" },
+            },
+            additionalProperties: true,
+          },
+        },
+      ],
+    } satisfies PluginManifestRegistry);
+
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const sourceConfig = {
+        gateway: { mode: "local" },
+        plugins: { entries: { demo: { enabled: true, config: {} } } },
+      } satisfies ConfigFileSnapshot["sourceConfig"];
+      await fs.writeFile(configPath, `${JSON.stringify(sourceConfig, null, 2)}\n`, "utf-8");
+      const runtimeConfig = {
+        ...structuredClone(sourceConfig),
+        plugins: {
+          entries: {
+            demo: { enabled: true, config: { mode: "auto" } },
+          },
+        },
+      } satisfies ConfigFileSnapshot["config"];
+
+      try {
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+        await writeConfigFile(runtimeConfig, {
+          explicitSetPaths: [["plugins", "entries", "demo", "config"]],
+        });
+
+        const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
+        expect(persisted.plugins?.entries?.demo?.config).toStrictEqual({ mode: "auto" });
+      } finally {
+        mockLoadPluginManifestRegistry.mockReturnValue({
+          diagnostics: [],
+          plugins: [],
+        } satisfies PluginManifestRegistry);
+        if (previousConfigPath === undefined) {
+          delete process.env.OPENCLAW_CONFIG_PATH;
+        } else {
+          process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+        }
+      }
+    });
+  });
+
   it("skipPluginValidation bypasses plugin schema rejection on writeConfigFile (#76800)", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");

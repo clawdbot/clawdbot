@@ -234,6 +234,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
               timeoutMs,
               fetchFn: fetch,
               allowPrivateNetwork: resolvedAllowPrivateNetwork,
+              ssrfPolicy: req.ssrfPolicy,
               dispatcherPolicy,
             })
           : postJsonRequest({
@@ -247,6 +248,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
               timeoutMs,
               fetchFn: fetch,
               allowPrivateNetwork: resolvedAllowPrivateNetwork,
+              ssrfPolicy: req.ssrfPolicy,
               dispatcherPolicy,
             });
 

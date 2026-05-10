@@ -60,6 +60,7 @@ function runXaiToolPayloadWrapper(params: {
       id:
         params.modelId ??
         (api === "openai-completions" ? "grok-4-1-fast-reasoning" : "grok-4-fast"),
+      reasoning: params.modelId ? !params.modelId.includes("non-reasoning") : true,
       ...(params.input ? { input: params.input } : {}),
     } as Model<XaiStreamApi>,
     { messages: [] } as Context,
@@ -158,7 +159,11 @@ describe("xai stream wrappers", () => {
         },
       ],
     };
-    runXaiToolPayloadWrapper({ payload, api: "openai-completions" });
+    runXaiToolPayloadWrapper({
+      payload,
+      api: "openai-completions",
+      modelId: "grok-4-fast-non-reasoning",
+    });
 
     expect(payload).not.toHaveProperty("reasoning");
     expect(payload).not.toHaveProperty("reasoningEffort");
@@ -166,24 +171,37 @@ describe("xai stream wrappers", () => {
     expect(payload.tools[0]?.function).not.toHaveProperty("strict");
   });
 
-  it("strips unsupported reasoning controls from xai payloads", () => {
+  it("strips unsupported reasoning controls from non-reasoning xai payloads", () => {
     const payload: Record<string, unknown> = {
       reasoning: { effort: "high" },
       reasoningEffort: "high",
       reasoning_effort: "high",
     };
-    runXaiToolPayloadWrapper({ payload });
+    runXaiToolPayloadWrapper({ payload, modelId: "grok-4-fast-non-reasoning" });
 
     expect(payload).not.toHaveProperty("reasoning");
     expect(payload).not.toHaveProperty("reasoningEffort");
     expect(payload).not.toHaveProperty("reasoning_effort");
   });
 
-  it("marks native xAI Responses thinking efforts unsupported before pi-ai builds payloads", async () => {
+  it("passes reasoning controls through for reasoning-capable xai payloads", () => {
+    const payload: Record<string, unknown> = {
+      reasoning: { effort: "high" },
+      reasoningEffort: "high",
+      reasoning_effort: "high",
+    };
+    runXaiToolPayloadWrapper({ payload, modelId: "grok-4.3" });
+
+    expect(payload.reasoning).toEqual({ effort: "high" });
+    expect(payload.reasoningEffort).toBe("high");
+    expect(payload.reasoning_effort).toBe("high");
+  });
+
+  it("keeps native xAI Responses thinking efforts before pi-ai dispatches payloads", async () => {
     const payload = await captureXaiResponsesPayloadWithThinking();
 
-    expect(payload).not.toHaveProperty("reasoning");
-    expect(payload).not.toHaveProperty("include");
+    expect(payload.reasoning).toEqual({ effort: "low", summary: "auto" });
+    expect(payload.include).toEqual(["reasoning.encrypted_content"]);
   });
 
   it("moves image-bearing tool results out of function_call_output payloads", () => {

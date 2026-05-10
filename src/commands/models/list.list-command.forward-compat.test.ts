@@ -549,6 +549,75 @@ describe("modelsListCommand forward-compat", () => {
       ]);
     });
 
+    it("includes configured provider and auth-backed catalog rows in configured-mode lists", async () => {
+      const config = {
+        agents: { defaults: { model: { primary: "xiaomi/mimo-v2.5-pro" } } },
+        models: {
+          providers: {
+            xiaomi: {
+              api: "openai-completions",
+              apiKey: "tp-fixture",
+              baseUrl: "https://api.xiaomi.example/v1",
+              models: [
+                { id: "mimo-v2.5-pro", name: "MiMo V2.5 Pro", input: ["text"] },
+                { id: "mimo-v2.5", name: "MiMo V2.5", input: ["text", "image"] },
+              ],
+            },
+          },
+        },
+      };
+      mocks.loadModelsConfigWithSource.mockResolvedValueOnce({
+        sourceConfig: config,
+        resolvedConfig: config,
+        diagnostics: [],
+      });
+      mocks.ensureAuthProfileStore.mockReturnValueOnce({
+        version: 1,
+        profiles: {
+          "google:default": {
+            type: "api_key",
+            provider: "google",
+            key: "google-fixture",
+          },
+        },
+        order: {},
+      });
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({
+        entries: [
+          {
+            key: "xiaomi/mimo-v2.5-pro",
+            ref: { provider: "xiaomi", model: "mimo-v2.5-pro" },
+            tags: new Set(["default"]),
+            aliases: [],
+          },
+        ],
+      });
+      mocks.loadModelCatalog.mockResolvedValueOnce([
+        {
+          provider: "google",
+          id: "gemini-3.1-flash-lite-preview",
+          name: "Gemini 3.1 Flash Lite Preview",
+          input: ["text"],
+          contextWindow: 1_000_000,
+        },
+      ]);
+      const runtime = createRuntime();
+
+      await modelsListCommand({ json: true }, runtime as never);
+
+      expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
+      const rows = lastPrintedRows<{ key: string; name: string; available: boolean }>();
+      expect(rows).toEqual([
+        expect.objectContaining({ key: "xiaomi/mimo-v2.5-pro", name: "MiMo V2.5 Pro" }),
+        expect.objectContaining({ key: "xiaomi/mimo-v2.5", name: "MiMo V2.5" }),
+        expect.objectContaining({
+          key: "google/gemini-3.1-flash-lite-preview",
+          name: "Gemini 3.1 Flash Lite Preview",
+          available: true,
+        }),
+      ]);
+    });
+
     it("does not mark configured codex model as missing when forward-compat can build a fallback", async () => {
       const runtime = createRuntime();
 

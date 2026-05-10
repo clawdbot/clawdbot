@@ -312,7 +312,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.channels?.whatsapp?.allowFrom).toBeUndefined();
     expect(res.config.channels?.whatsapp?.groupPolicy).toBeUndefined();
     expect(res.config.channels?.whatsapp?.groupAllowFrom).toBeUndefined();
-    expect(res.config.channels?.whatsapp?.accounts?.default).toMatchObject({
+    expect(res.config.channels?.whatsapp?.accounts?.default).toEqual({
       dmPolicy: "allowlist",
       allowFrom: ["+15550001111"],
       groupPolicy: "open",
@@ -466,10 +466,9 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     } as unknown as OpenClawConfig);
 
-    expect(res.config.models?.providers?.["openai-codex"]?.models?.[0]).toMatchObject({
-      id: "gpt-5.5",
-      metadataSource: "models-add",
-    });
+    const codexModel = res.config.models?.providers?.["openai-codex"]?.models?.[0];
+    expect(codexModel?.id).toBe("gpt-5.5");
+    expect(codexModel?.metadataSource).toBe("models-add");
     expect(res.changes).toContain(
       "Marked models.providers.openai-codex.models.gpt-5.5 as /models add metadata so official OpenAI Codex metadata can override it.",
     );
@@ -561,16 +560,18 @@ describe("normalizeCompatibilityConfigValues", () => {
       "codex/gpt-5.4-mini": {},
       "openai/gpt-5.4-mini": {},
     });
-    expect(res.config.agents?.list?.[0]).toMatchObject({
+    expect(res.config.agents?.list?.[0]).toEqual({
       id: "reviewer",
       model: "openai/gpt-5.4-mini",
     });
-    expect(res.changes).toEqual(
-      expect.arrayContaining([
-        "Moved agents.defaults.model legacy runtime primary refs to canonical provider refs and selected codex runtime.",
-        "Moved agents.defaults.models legacy runtime keys to canonical provider keys.",
-        "Moved agents.list.reviewer.model legacy runtime primary refs to canonical provider refs and selected codex runtime.",
-      ]),
+    expect(res.changes).toContain(
+      "Moved agents.defaults.model legacy runtime primary refs to canonical provider refs and selected codex runtime.",
+    );
+    expect(res.changes).toContain(
+      "Moved agents.defaults.models legacy runtime keys to canonical provider keys.",
+    );
+    expect(res.changes).toContain(
+      "Moved agents.list.reviewer.model legacy runtime primary refs to canonical provider refs and selected codex runtime.",
     );
   });
 
@@ -1117,15 +1118,14 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
 
-    expect(res.config.models?.providers?.mistral?.models).toEqual([
-      expect.objectContaining({
-        id: "mistral-large-latest",
-        maxTokens: 16384,
-      }),
-      expect.objectContaining({
-        id: "magistral-small",
-        maxTokens: 40000,
-      }),
+    expect(
+      res.config.models?.providers?.mistral?.models?.map((model) => ({
+        id: model.id,
+        maxTokens: model.maxTokens,
+      })),
+    ).toEqual([
+      { id: "mistral-large-latest", maxTokens: 16384 },
+      { id: "magistral-small", maxTokens: 40000 },
     ]);
     expect(res.changes).toEqual([
       "Normalized models.providers.mistral.models[0].maxTokens (262144 → 16384) to avoid Mistral context-window rejects.",

@@ -137,6 +137,16 @@ const STATIC_ASSET_EXTENSIONS = new Set([
   ".webmanifest",
 ]);
 
+const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
+const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
+  "apple-touch-icon.png",
+  "favicon-32.png",
+  "favicon.ico",
+  "favicon.svg",
+  "manifest.webmanifest",
+  "sw.js",
+]);
+
 export type ControlUiAvatarResolution =
   | { kind: "none"; reason: string; source?: string | null }
   | { kind: "local"; filePath: string; source?: string | null }
@@ -924,6 +934,12 @@ export async function handleControlUiHttpRequest(
   const rel = (() => {
     if (uiPath === ROOT_PREFIX) {
       return "";
+    }
+    if (uiPath.startsWith(CONTROL_UI_NAMESPACE_PREFIX)) {
+      const namespacedRel = uiPath.slice(CONTROL_UI_NAMESPACE_PREFIX.length);
+      if (CONTROL_UI_ROOT_PUBLIC_ASSETS.has(namespacedRel)) {
+        return namespacedRel;
+      }
     }
     const assetsIndex = uiPath.indexOf("/assets/");
     if (assetsIndex >= 0) {

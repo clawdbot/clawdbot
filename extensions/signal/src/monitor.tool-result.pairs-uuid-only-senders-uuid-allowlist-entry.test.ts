@@ -2,7 +2,6 @@ import { Buffer } from "node:buffer";
 import { describe, expect, it, vi } from "vitest";
 import {
   config,
-  flush,
   getSignalToolResultTestMocks,
   installSignalToolResultTestHooks,
   setSignalToolResultTestConfig,
@@ -61,8 +60,6 @@ describe("monitorSignalProvider tool results", () => {
       baseUrl: "http://127.0.0.1:8080",
       abortSignal: abortController.signal,
     });
-
-    await flush();
 
     expect(replyMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalledWith(
@@ -149,8 +146,6 @@ describe("monitorSignalProvider tool results", () => {
       mediaMaxMb: 2,
       abortSignal: abortController.signal,
     });
-
-    await flush();
 
     expect(signalRpcRequestMock).toHaveBeenCalledWith(
       "getAttachment",

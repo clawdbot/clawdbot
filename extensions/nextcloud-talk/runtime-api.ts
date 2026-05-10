@@ -5,10 +5,6 @@ export type { AllowlistMatch } from "openclaw/plugin-sdk/allow-from";
 export type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";
 export { logInboundDrop } from "openclaw/plugin-sdk/channel-logging";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export {
-  readStoreAllowFromForDmPolicy,
-  resolveDmGroupAccessWithCommandGate,
-} from "openclaw/plugin-sdk/channel-policy";
 export type {
   BlockStreamingCoalesceConfig,
   DmConfig,

@@ -11,10 +11,11 @@ const TOOL_NAME_MAX_TOTAL = 64;
 function sanitizeToolFragment(raw: string, fallback: string, maxChars?: number): string {
   const cleaned = raw.trim().replace(TOOL_NAME_SAFE_RE, "-");
   const normalized = cleaned || fallback;
+  const providerSafe = /^[A-Za-z]/.test(normalized) ? normalized : `${fallback}-${normalized}`;
   if (!maxChars) {
-    return normalized;
+    return providerSafe;
   }
-  return normalized.length > maxChars ? normalized.slice(0, maxChars) : normalized;
+  return providerSafe.length > maxChars ? providerSafe.slice(0, maxChars) : providerSafe;
 }
 
 export function sanitizeServerName(raw: string, usedNames: Set<string>): string {

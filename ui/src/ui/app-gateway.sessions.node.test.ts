@@ -4,9 +4,11 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 const loadSessionsMock = vi.fn();
 const loadChatHistoryMock = vi.fn();
 const applySessionsChangedEventMock = vi.fn();
+const handleChatEventMock = vi.fn(() => "idle");
 
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 10,
+  clearPendingQueueItemsForRun: vi.fn(),
   flushChatQueueForEvent: vi.fn(),
   refreshChatAvatar: vi.fn(),
 }));
@@ -29,7 +31,7 @@ vi.mock("./controllers/assistant-identity.ts", () => ({
 }));
 vi.mock("./controllers/chat.ts", () => ({
   loadChatHistory: loadChatHistoryMock,
-  handleChatEvent: vi.fn(() => "idle"),
+  handleChatEvent: handleChatEventMock,
 }));
 vi.mock("./controllers/devices.ts", () => ({
   loadDevices: vi.fn(),
@@ -121,6 +123,7 @@ function createHost() {
     serverVersion: null,
     sessionKey: "main",
     chatRunId: null,
+    toolStreamOrder: [],
     refreshSessionsAfterChat: new Set<string>(),
     execApprovalQueue: [],
     execApprovalError: null,
@@ -129,8 +132,29 @@ function createHost() {
 }
 
 describe("handleGatewayEvent sessions.changed", () => {
+  it("scopes post-chat final session refreshes to the run's agent", () => {
+    loadSessionsMock.mockReset();
+    handleChatEventMock.mockReset().mockReturnValue("final");
+    const host = createHost();
+    host.sessionKey = "agent:ops:main";
+    host.refreshSessionsAfterChat.add("run-1");
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "chat",
+      payload: { state: "final", runId: "run-1", sessionKey: "agent:ops:main" },
+      seq: 1,
+    });
+
+    expect(loadSessionsMock).toHaveBeenCalledWith(host, {
+      activeMinutes: 10,
+      agentId: "ops",
+    });
+  });
+
   it("applies reliable session change snapshots without refetching the list", () => {
     loadSessionsMock.mockReset();
+    handleChatEventMock.mockReset().mockReturnValue("idle");
     applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: true, change: "updated" });
     const host = createHost();
     const payload = {

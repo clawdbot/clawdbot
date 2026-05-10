@@ -59,29 +59,11 @@ function makeInbound(overrides: Partial<InboundContext> = {}): InboundContext {
     peerId: "user-openid",
     qualifiedTarget: "qqbot:c2c:user-openid",
     fromAddress: "qqbot:c2c:user-openid",
-    parsedContent: "voice",
-    userContent: "voice",
-    quotePart: "",
-    dynamicCtx: "",
-    userMessage: "voice",
     agentBody: "voice",
     body: "voice",
-    systemPrompts: [],
-    attachments: {
-      attachmentInfo: "",
-      imageUrls: [],
-      imageMediaTypes: [],
-      voiceAttachmentPaths: [],
-      voiceAttachmentUrls: [],
-      voiceAsrReferTexts: [],
-      voiceTranscripts: [],
-      voiceTranscriptSources: [],
-      attachmentLocalPaths: [],
-    },
     localMediaPaths: [],
     localMediaTypes: [],
     remoteMediaUrls: [],
-    remoteMediaTypes: [],
     uniqueVoicePaths: [],
     uniqueVoiceUrls: [],
     uniqueVoiceAsrReferTexts: [],
@@ -98,6 +80,7 @@ function makeInbound(overrides: Partial<InboundContext> = {}): InboundContext {
 
 function makeRuntime(params: {
   onFinalize?: (ctx: Record<string, unknown>) => void;
+  isControlCommandMessage?: (text?: string, cfg?: unknown) => boolean;
   onDeliver?: (
     deliver: (
       payload: { text?: string; audioAsVoice?: boolean },
@@ -164,6 +147,9 @@ function makeRuntime(params: {
       text: {
         chunkMarkdownText: (text: string) => [text],
       },
+      commands: {
+        isControlCommandMessage: params.isControlCommandMessage ?? (() => false),
+      },
     },
     tts: {
       textToSpeech: vi.fn(async () => ({
@@ -227,5 +213,38 @@ describe("dispatchOutbound", () => {
       }),
     );
     expect(sendTextMock).not.toHaveBeenCalled();
+  });
+
+  it("marks recognized C2C framework slash commands as text commands", async () => {
+    let finalized: Record<string, unknown> | undefined;
+    const runtime = makeRuntime({
+      isControlCommandMessage: (text) => text === "/models",
+      onFinalize: (ctx) => (finalized = ctx),
+    });
+
+    await dispatchOutbound(
+      makeInbound({
+        event: {
+          type: "c2c",
+          senderId: "user-openid",
+          messageId: "msg-models",
+          content: "/models",
+          timestamp: "2026-04-25T00:00:00.000Z",
+        },
+        agentBody: "/models",
+        body: "/models",
+        commandAuthorized: true,
+      }),
+      { runtime, cfg: { commands: { text: true } }, account },
+    );
+
+    expect(finalized).toMatchObject({
+      CommandBody: "/models",
+      CommandAuthorized: true,
+      CommandSource: "text",
+      Provider: "qqbot",
+      Surface: "qqbot",
+      ChatType: "direct",
+    });
   });
 });

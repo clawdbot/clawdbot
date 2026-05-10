@@ -3,7 +3,7 @@ import type { ChannelDirectoryAdapter, ChannelOutboundAdapter } from "./types.ad
 type MaybePromise<T> = T | Promise<T>;
 
 type DirectoryMethod = "self" | "listPeersLive" | "listGroupsLive" | "listGroupMembers";
-type OutboundMethod = "sendText" | "sendMedia" | "sendPoll";
+type OutboundMethod = "renderPresentation" | "sendPayload" | "sendText" | "sendMedia" | "sendPoll";
 
 type DirectorySelfParams = Parameters<NonNullable<ChannelDirectoryAdapter["self"]>>[0];
 type DirectoryListParams = Parameters<NonNullable<ChannelDirectoryAdapter["listPeersLive"]>>[0];
@@ -13,6 +13,10 @@ type DirectoryGroupMembersParams = Parameters<
 type SendTextParams = Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0];
 type SendMediaParams = Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0];
 type SendPollParams = Parameters<NonNullable<ChannelOutboundAdapter["sendPoll"]>>[0];
+type RenderPresentationParams = Parameters<
+  NonNullable<ChannelOutboundAdapter["renderPresentation"]>
+>[0];
+type SendPayloadParams = Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0];
 
 async function resolveForwardedMethod<Runtime, Fn>(params: {
   getRuntime: () => MaybePromise<Runtime>;
@@ -80,6 +84,14 @@ export function createRuntimeDirectoryLiveAdapter<Runtime>(params: {
 
 export function createRuntimeOutboundDelegates<Runtime>(params: {
   getRuntime: () => MaybePromise<Runtime>;
+  renderPresentation?: {
+    resolve: (runtime: Runtime) => ChannelOutboundAdapter["renderPresentation"] | null | undefined;
+    unavailableMessage?: string;
+  };
+  sendPayload?: {
+    resolve: (runtime: Runtime) => ChannelOutboundAdapter["sendPayload"] | null | undefined;
+    unavailableMessage?: string;
+  };
   sendText?: {
     resolve: (runtime: Runtime) => ChannelOutboundAdapter["sendText"] | null | undefined;
     unavailableMessage?: string;
@@ -94,6 +106,26 @@ export function createRuntimeOutboundDelegates<Runtime>(params: {
   };
 }): Pick<ChannelOutboundAdapter, OutboundMethod> {
   return {
+    renderPresentation: params.renderPresentation
+      ? async (ctx: RenderPresentationParams) =>
+          await (
+            await resolveForwardedMethod({
+              getRuntime: params.getRuntime,
+              resolve: params.renderPresentation!.resolve,
+              unavailableMessage: params.renderPresentation!.unavailableMessage,
+            })
+          )(ctx)
+      : undefined,
+    sendPayload: params.sendPayload
+      ? async (ctx: SendPayloadParams) =>
+          await (
+            await resolveForwardedMethod({
+              getRuntime: params.getRuntime,
+              resolve: params.sendPayload!.resolve,
+              unavailableMessage: params.sendPayload!.unavailableMessage,
+            })
+          )(ctx)
+      : undefined,
     sendText: params.sendText
       ? async (ctx: SendTextParams) =>
           await (

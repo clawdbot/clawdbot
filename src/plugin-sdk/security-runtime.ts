@@ -8,13 +8,16 @@ export * from "../secrets/shared.js";
 export type * from "../secrets/target-registry-types.js";
 export * from "../security/channel-metadata.js";
 export * from "../security/context-visibility.js";
-export * from "../security/dm-policy-shared.js";
+export * from "./channel-access-compat.js";
 export {
   ACCESS_GROUP_ALLOW_FROM_PREFIX,
   expandAllowFromWithAccessGroups,
   parseAccessGroupAllowFromEntry,
   resolveAccessGroupAllowFromMatches,
+  resolveAccessGroupAllowFromState,
   type AccessGroupMembershipResolver,
+  type AccessGroupMembershipLookup,
+  type ResolvedAccessGroupAllowFromState,
 } from "./access-groups.js";
 export * from "../security/external-content.js";
 export * from "../security/safe-regex.js";

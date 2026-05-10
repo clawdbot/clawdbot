@@ -384,9 +384,14 @@ export async function hydrateAttachmentParamsForAction(params: {
   mediaPolicy: AttachmentMediaPolicy;
 }): Promise<void> {
   const shouldHydrateUploadFile = params.action === "upload-file";
+  // Reply gets the same hydration as sendAttachment so threaded sends with
+  // an attachment go through the resolver's localRoots/sandbox/size checks
+  // instead of forwarding raw paths to the channel runtime. Reply has its
+  // own `text`/`message` field, so don't fall back caption -> message.
   if (
     params.action !== "sendAttachment" &&
     params.action !== "setGroupIcon" &&
+    params.action !== "reply" &&
     !shouldHydrateUploadFile
   ) {
     return;

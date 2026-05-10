@@ -21,12 +21,7 @@ import {
   listRuntimeVideoGenerationProviders,
 } from "../../video-generation/runtime.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
-import {
-  gatewaySubagentState,
-  setGatewayNodesRuntime,
-  setGatewaySubagentRuntime,
-  clearGatewaySubagentRuntime,
-} from "./gateway-bindings.js";
+import { gatewaySubagentState } from "./gateway-bindings.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeChannel } from "./runtime-channel.js";

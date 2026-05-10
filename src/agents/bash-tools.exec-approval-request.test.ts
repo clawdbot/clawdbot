@@ -36,6 +36,10 @@ let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
 let requestExecApprovalDecision: typeof import("./bash-tools.exec-approval-request.js").requestExecApprovalDecision;
 let registerExecApprovalRequestForHost: typeof import("./bash-tools.exec-approval-request.js").registerExecApprovalRequestForHost;
 
+type ApprovalRequestPayload = {
+  commandSpans?: Array<{ startIndex: number; endIndex: number }>;
+};
+
 describe("requestExecApprovalDecision", () => {
   beforeAll(async () => {
     ({ callGatewayTool } = await import("./tools/gateway.js"));
@@ -219,18 +223,12 @@ describe("requestExecApprovalDecision", () => {
       ask: "always",
     });
 
-    expect(callGatewayTool).toHaveBeenCalledWith(
-      "exec.approval.request",
-      expect.anything(),
-      expect.objectContaining({
-        commandSpans: expect.arrayContaining([
-          { startIndex: 0, endIndex: 2 },
-          { startIndex: 5, endIndex: 9 },
-          { startIndex: 20, endIndex: 26 },
-        ]),
-      }),
-      expect.anything(),
-    );
+    const payload = vi.mocked(callGatewayTool).mock.calls[0]?.[2] as
+      | ApprovalRequestPayload
+      | undefined;
+    expect(payload?.commandSpans).toContainEqual({ startIndex: 0, endIndex: 2 });
+    expect(payload?.commandSpans).toContainEqual({ startIndex: 5, endIndex: 9 });
+    expect(payload?.commandSpans).toContainEqual({ startIndex: 20, endIndex: 26 });
   });
 
   it("uses system run plan command text for host approval explanations", async () => {
@@ -251,14 +249,10 @@ describe("requestExecApprovalDecision", () => {
       ask: "always",
     });
 
-    expect(callGatewayTool).toHaveBeenCalledWith(
-      "exec.approval.request",
-      expect.anything(),
-      expect.objectContaining({
-        commandSpans: expect.arrayContaining([{ startIndex: 0, endIndex: 4 }]),
-      }),
-      expect.anything(),
-    );
+    const payload = vi.mocked(callGatewayTool).mock.calls[0]?.[2] as
+      | ApprovalRequestPayload
+      | undefined;
+    expect(payload?.commandSpans).toContainEqual({ startIndex: 0, endIndex: 4 });
   });
 
   it("keeps explicit command spans", async () => {
@@ -274,11 +268,9 @@ describe("requestExecApprovalDecision", () => {
       ask: "always",
     });
 
-    expect(callGatewayTool).toHaveBeenCalledWith(
-      "exec.approval.request",
-      expect.anything(),
-      expect.objectContaining({ commandSpans: [{ startIndex: 0, endIndex: 4 }] }),
-      expect.anything(),
-    );
+    const payload = vi.mocked(callGatewayTool).mock.calls[0]?.[2] as
+      | ApprovalRequestPayload
+      | undefined;
+    expect(payload?.commandSpans).toEqual([{ startIndex: 0, endIndex: 4 }]);
   });
 });

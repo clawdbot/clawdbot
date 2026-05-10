@@ -10,7 +10,7 @@ import type {
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
-} from "./types.channels.js";
+} from "./types.channel-health.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
@@ -129,7 +129,7 @@ export type DiscordVoiceAutoJoinConfig = {
   channelId: string;
 };
 
-export type DiscordVoiceMode = "stt-tts" | "talk-buffer" | "bidi";
+export type DiscordVoiceMode = "stt-tts" | "agent-proxy" | "bidi";
 
 export type DiscordVoiceRealtimeConsultPolicy = "auto" | "always";
 
@@ -150,6 +150,8 @@ export type DiscordVoiceRealtimeConfig = {
   consultPolicy?: DiscordVoiceRealtimeConsultPolicy;
   /** Allow Discord speaker-start events to interrupt active realtime playback. */
   bargeIn?: boolean;
+  /** Minimum assistant playback duration before a barge-in truncates audio. Default: 250ms; set 0 for immediate interruption. */
+  minBargeInAudioEndMs?: number;
   /** Debounce window before buffered transcripts are sent to the OpenClaw agent. */
   debounceMs?: number;
   /** Provider-specific realtime voice config keyed by provider id. */
@@ -166,13 +168,13 @@ export type DiscordVoiceAgentSessionConfig = {
 export type DiscordVoiceConfig = {
   /** Enable Discord voice channel conversations (default: true). */
   enabled?: boolean;
-  /** Voice conversation mode. Default: stt-tts. */
+  /** Voice conversation mode. Default: agent-proxy. */
   mode?: DiscordVoiceMode;
   /** Route voice turns through an existing OpenClaw Discord conversation. */
   agentSession?: DiscordVoiceAgentSessionConfig;
   /** Optional LLM model override for Discord voice channel responses. */
   model?: string;
-  /** Realtime provider settings for talk-buffer or bidi modes. */
+  /** Realtime provider settings for agent-proxy or bidi modes. */
   realtime?: DiscordVoiceRealtimeConfig;
   /** Voice channels to auto-join on startup. */
   autoJoin?: DiscordVoiceAutoJoinConfig[];
@@ -438,9 +440,3 @@ export type DiscordConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & DiscordAccountConfig;
-
-declare module "./types.channels.js" {
-  interface ChannelsConfig {
-    discord?: DiscordConfig;
-  }
-}

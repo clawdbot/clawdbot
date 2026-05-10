@@ -9,6 +9,7 @@
 
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type {
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderPlugin,
@@ -31,6 +32,8 @@ export interface MediaStreamConfig {
   transcriptionProvider: RealtimeTranscriptionProviderPlugin;
   /** Provider-owned config blob passed into the transcription session. */
   providerConfig: RealtimeTranscriptionProviderConfig;
+  /** Full runtime config, used by providers that can resolve OAuth profiles. */
+  cfg?: OpenClawConfig;
   /** Close sockets that never send a valid `start` frame within this window. */
   preStartTimeoutMs?: number;
   /** Max concurrent pre-start sockets. */
@@ -314,6 +317,7 @@ export class MediaStreamHandler {
     }
 
     const sttSession = this.config.transcriptionProvider.createSession({
+      cfg: this.config.cfg,
       providerConfig: this.config.providerConfig,
       onPartial: (partial) => {
         const session = this.sessions.get(streamSid);

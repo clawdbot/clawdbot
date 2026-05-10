@@ -127,6 +127,7 @@ describe("realtime voice agent consult runtime", () => {
       provider: "openai",
       model: "gpt-5.4",
       thinkLevel: "high",
+      fastMode: true,
       timeoutMs: 10_000,
     });
 
@@ -149,6 +150,7 @@ describe("realtime voice agent consult runtime", () => {
     expect(call.provider).toBe("openai");
     expect(call.model).toBe("gpt-5.4");
     expect(call.thinkLevel).toBe("high");
+    expect(call.fastMode).toBe(true);
     expect(call.timeoutMs).toBe(10_000);
     expect(call.prompt).toContain("Caller: Can you check this?");
     expect(call.extraSystemPrompt).toContain("delegated requests");

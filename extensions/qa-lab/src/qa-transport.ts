@@ -136,7 +136,12 @@ export function createFailureAwareTransportWaitForCondition(state: QaTransportSt
           sinceIndex,
           cursorSpace: "all",
         });
-        return await check();
+        const value = await check();
+        assertNoFailureReplies(state, {
+          sinceIndex,
+          cursorSpace: "all",
+        });
+        return value;
       },
       timeoutMs,
       intervalMs,

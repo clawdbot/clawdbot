@@ -29,10 +29,9 @@ describe("ensureCustomApiRegistered", () => {
     expect(ensureCustomApiRegistered("test-custom-api", streamFn)).toBe(true);
     expect(ensureCustomApiRegistered("test-custom-api", streamFn)).toBe(false);
 
-    expect(getRegisteredTestProvider()).toMatchObject({
-      stream: expect.any(Function),
-      streamSimple: expect.any(Function),
-    });
+    const provider = getRegisteredTestProvider();
+    expect(typeof provider.stream).toBe("function");
+    expect(typeof provider.streamSimple).toBe("function");
   });
 
   it("delegates both stream entrypoints to the provided stream function", () => {

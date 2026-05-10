@@ -658,6 +658,7 @@ export function handleToolExecutionStart(
     const toolCallId = evt.toolCallId;
     const args = evt.args;
     const runId = ctx.params.runId;
+    ctx.state.toolExecutionSinceLastBlockReply = true;
 
     // Track start time and args for after_tool_call hook.
     const startedAt = Date.now();

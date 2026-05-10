@@ -28,6 +28,46 @@ type GuardedFetchCall = {
   auditContext?: string;
 };
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).toBeTypeOf("object");
+  expect(value, label).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+function requireHeaders(value: unknown): Record<string, string> {
+  return requireRecord(value, "request headers") as Record<string, string>;
+}
+
+function expectToolCallContent(
+  value: unknown,
+  expected: { name: string; arguments: Record<string, unknown> },
+) {
+  const content = requireRecord(value, "tool call content");
+  expect(content.type).toBe("toolCall");
+  expect(content.name).toBe(expected.name);
+  expect(content.arguments).toEqual(expected.arguments);
+}
+
+function expectIteratorEvent(
+  value: unknown,
+  expected: { type?: string; delta?: string; content?: string; done: boolean },
+) {
+  const result = requireRecord(value, "iterator result");
+  expect(result.done).toBe(expected.done);
+  if (expected.type !== undefined) {
+    const event = requireRecord(result.value, "iterator result value");
+    expect(event.type).toBe(expected.type);
+    if (expected.delta !== undefined) {
+      expect(event.delta).toBe(expected.delta);
+    }
+    if (expected.content !== undefined) {
+      expect(event.content).toBe(expected.content);
+    }
+  } else {
+    expect(result.value).toBeUndefined();
+  }
+}
+
 afterEach(() => {
   fetchWithSsrFGuardMock.mockReset();
 });
@@ -49,38 +89,29 @@ describe("buildOllamaChatRequest", () => {
   });
 
   it("strips the ollama/ prefix from chat model ids", () => {
-    expect(
-      buildOllamaChatRequest({
-        modelId: "ollama/qwen3:14b-q8_0",
-        messages: [{ role: "user", content: "hello" }],
-      }),
-    ).toMatchObject({
-      model: "qwen3:14b-q8_0",
+    const request = buildOllamaChatRequest({
+      modelId: "ollama/qwen3:14b-q8_0",
+      messages: [{ role: "user", content: "hello" }],
     });
+    expect(request.model).toBe("qwen3:14b-q8_0");
   });
 
   it("strips the active custom provider prefix from chat model ids", () => {
-    expect(
-      buildOllamaChatRequest({
-        modelId: "ollama-spark/qwen3:32b",
-        providerId: "ollama-spark",
-        messages: [{ role: "user", content: "hello" }],
-      }),
-    ).toMatchObject({
-      model: "qwen3:32b",
+    const request = buildOllamaChatRequest({
+      modelId: "ollama-spark/qwen3:32b",
+      providerId: "ollama-spark",
+      messages: [{ role: "user", content: "hello" }],
     });
+    expect(request.model).toBe("qwen3:32b");
   });
 
   it("keeps unrelated slash-containing Ollama model ids intact", () => {
-    expect(
-      buildOllamaChatRequest({
-        modelId: "library/qwen3:32b",
-        providerId: "ollama-spark",
-        messages: [{ role: "user", content: "hello" }],
-      }),
-    ).toMatchObject({
-      model: "library/qwen3:32b",
+    const request = buildOllamaChatRequest({
+      modelId: "library/qwen3:32b",
+      providerId: "ollama-spark",
+      messages: [{ role: "user", content: "hello" }],
     });
+    expect(request.model).toBe("library/qwen3:32b");
   });
 });
 
@@ -118,10 +149,9 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
       } as never,
     );
 
-    expect(patchedPayload).toMatchObject({
-      thinking: { type: "enabled" },
-      options: { num_ctx: 65536 },
-    });
+    const payload = requireRecord(patchedPayload, "patched payload");
+    expect(payload.thinking).toEqual({ type: "enabled" });
+    expect(payload.options).toEqual({ num_ctx: 65536 });
   });
 
   it("falls back to contextWindow when configured num_ctx is invalid", async () => {
@@ -155,9 +185,8 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
       } as never,
     );
 
-    expect(patchedPayload).toMatchObject({
-      options: { num_ctx: 131072 },
-    });
+    const payload = requireRecord(patchedPayload, "patched payload");
+    expect(payload.options).toEqual({ num_ctx: 131072 });
   });
 
   it("forwards think=false on native Ollama chat requests when thinking is off", async () => {
@@ -208,7 +237,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
         };
         expect(requestBody.think).toBe(false);
         expect(requestBody.options?.think).toBeUndefined();
-        expect(requestBody.options?.num_ctx).toBe(131072);
+        expect(requestBody.options?.num_ctx).toBeUndefined();
       },
     );
   });
@@ -310,7 +339,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
         };
         expect(requestBody.think).toBe("low");
         expect(requestBody.options?.think).toBeUndefined();
-        expect(requestBody.options?.num_ctx).toBe(131072);
+        expect(requestBody.options?.num_ctx).toBeUndefined();
       },
     );
   });
@@ -405,7 +434,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
         };
         expect(requestBody.think).toBe("high");
         expect(requestBody.options?.think).toBeUndefined();
-        expect(requestBody.options?.num_ctx).toBe(131072);
+        expect(requestBody.options?.num_ctx).toBeUndefined();
       },
     );
   });
@@ -859,14 +888,9 @@ describe("buildAssistantMessage", () => {
       done: true,
     };
     const result = buildAssistantMessage(response, modelInfo);
-    expect(result.content).toEqual([
-      expect.objectContaining({ type: "toolCall", name: "exec", arguments: { command: "pwd" } }),
-      expect.objectContaining({
-        type: "toolCall",
-        name: "read",
-        arguments: { path: "README.md" },
-      }),
-    ]);
+    expect(result.content).toHaveLength(2);
+    expectToolCallContent(result.content[0], { name: "exec", arguments: { command: "pwd" } });
+    expectToolCallContent(result.content[1], { name: "read", arguments: { path: "README.md" } });
   });
 
   it("preserves exact allowlisted tool-prefix names in Ollama responses", () => {
@@ -887,19 +911,13 @@ describe("buildAssistantMessage", () => {
     const result = buildAssistantMessage(response, modelInfo, undefined, {
       availableToolNames: new Set(["tool_a", "tools_invoke_test", "function-run"]),
     });
-    expect(result.content).toEqual([
-      expect.objectContaining({ type: "toolCall", name: "tool_a", arguments: { value: 1 } }),
-      expect.objectContaining({
-        type: "toolCall",
-        name: "tools_invoke_test",
-        arguments: { value: 2 },
-      }),
-      expect.objectContaining({
-        type: "toolCall",
-        name: "function-run",
-        arguments: { value: 3 },
-      }),
-    ]);
+    expect(result.content).toHaveLength(3);
+    expectToolCallContent(result.content[0], { name: "tool_a", arguments: { value: 1 } });
+    expectToolCallContent(result.content[1], {
+      name: "tools_invoke_test",
+      arguments: { value: 2 },
+    });
+    expectToolCallContent(result.content[2], { name: "function-run", arguments: { value: 3 } });
   });
 
   it("keeps non-prefixed Ollama response tool names intact", () => {
@@ -919,12 +937,11 @@ describe("buildAssistantMessage", () => {
       done: true,
     };
     const result = buildAssistantMessage(response, modelInfo);
-    expect(result.content).toEqual([
-      expect.objectContaining({ type: "toolCall", name: "functionshell", arguments: {} }),
-      expect.objectContaining({ type: "toolCall", name: "tooling", arguments: {} }),
-      expect.objectContaining({ type: "toolCall", name: "tools", arguments: {} }),
-      expect.objectContaining({ type: "toolCall", name: "tool_a", arguments: {} }),
-    ]);
+    expect(result.content).toHaveLength(4);
+    expectToolCallContent(result.content[0], { name: "functionshell", arguments: {} });
+    expectToolCallContent(result.content[1], { name: "tooling", arguments: {} });
+    expectToolCallContent(result.content[2], { name: "tools", arguments: {} });
+    expectToolCallContent(result.content[3], { name: "tool_a", arguments: {} });
   });
 
   it("parses stringified tool call arguments from Ollama responses", () => {
@@ -939,8 +956,7 @@ describe("buildAssistantMessage", () => {
       done: true,
     };
     const result = buildAssistantMessage(response, modelInfo);
-    expect(result.content[0]).toMatchObject({
-      type: "toolCall",
+    expectToolCallContent(result.content[0], {
       name: "bash",
       arguments: { command: "ls", path: "/tmp" },
     });
@@ -965,8 +981,7 @@ describe("buildAssistantMessage", () => {
       done: true,
     };
     const result = buildAssistantMessage(response, modelInfo);
-    expect(result.content[0]).toMatchObject({
-      type: "toolCall",
+    expectToolCallContent(result.content[0], {
       name: "send",
       arguments: {
         target: "9223372036854775807",
@@ -987,11 +1002,7 @@ describe("buildAssistantMessage", () => {
       done: true,
     };
     const result = buildAssistantMessage(response, modelInfo);
-    expect(result.content[0]).toMatchObject({
-      type: "toolCall",
-      name: "bash",
-      arguments: {},
-    });
+    expectToolCallContent(result.content[0], { name: "bash", arguments: {} });
   });
 
   it("sets all costs to zero for local models", () => {
@@ -1276,12 +1287,15 @@ describe("createOllamaStreamFn streaming events", () => {
 
         // text_delta events carry incremental deltas
         const deltas = events.filter((e) => e.type === "text_delta");
-        expect(deltas[0]).toMatchObject({ contentIndex: 0, delta: "Hello" });
-        expect(deltas[1]).toMatchObject({ contentIndex: 0, delta: " world" });
+        expect(deltas[0]?.contentIndex).toBe(0);
+        expect(deltas[0]?.delta).toBe("Hello");
+        expect(deltas[1]?.contentIndex).toBe(0);
+        expect(deltas[1]?.delta).toBe(" world");
 
         // text_end carries the full accumulated content
         const textEnd = events.find((e) => e.type === "text_end");
-        expect(textEnd).toMatchObject({ contentIndex: 0, content: "Hello world" });
+        expect(textEnd?.contentIndex).toBe(0);
+        expect(textEnd?.content).toBe("Hello world");
 
         // start/text_start carry empty partials (before any content accumulates)
         const startEvent = events.find((e) => e.type === "start");
@@ -1423,10 +1437,11 @@ describe("createOllamaStreamFn streaming events", () => {
       expect(startEvent).not.toBe("timeout");
       expect(textStartEvent).not.toBe("timeout");
       expect(textDeltaEvent).not.toBe("timeout");
-      expect(startEvent).toMatchObject({ value: { type: "start" }, done: false });
-      expect(textStartEvent).toMatchObject({ value: { type: "text_start" }, done: false });
-      expect(textDeltaEvent).toMatchObject({
-        value: { type: "text_delta", delta: "Let me check." },
+      expectIteratorEvent(startEvent, { type: "start", done: false });
+      expectIteratorEvent(textStartEvent, { type: "text_start", done: false });
+      expectIteratorEvent(textDeltaEvent, {
+        type: "text_delta",
+        delta: "Let me check.",
         done: false,
       });
 
@@ -1436,17 +1451,18 @@ describe("createOllamaStreamFn streaming events", () => {
 
       const textEndEvent = await nextEventWithin(iterator);
       expect(textEndEvent).not.toBe("timeout");
-      expect(textEndEvent).toMatchObject({
-        value: {
-          type: "text_end",
-          contentIndex: 0,
-          content: "Let me check.",
-          partial: {
-            content: [{ type: "text", text: "Let me check." }],
-          },
-        },
+      expectIteratorEvent(textEndEvent, {
+        type: "text_end",
+        content: "Let me check.",
         done: false,
       });
+      if (textEndEvent !== "timeout") {
+        const textEndValue = requireRecord(textEndEvent.value, "text_end value");
+        expect(textEndValue.contentIndex).toBe(0);
+        expect(requireRecord(textEndValue.partial, "text_end partial").content).toEqual([
+          { type: "text", text: "Let me check." },
+        ]);
+      }
 
       controlledFetch.pushLine(
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":10,"eval_count":5}',
@@ -1456,16 +1472,14 @@ describe("createOllamaStreamFn streaming events", () => {
       const doneEvent = await nextEventWithin(iterator);
       expect(doneEvent).not.toBe("timeout");
       if (doneEvent !== "timeout" && doneEvent.done === false) {
-        expect(doneEvent).toMatchObject({
-          value: { type: "done", reason: "toolUse" },
-          done: false,
-        });
+        expectIteratorEvent(doneEvent, { type: "done", done: false });
+        expect(requireRecord(doneEvent.value, "done value").reason).toBe("toolUse");
 
         const streamEnd = await nextEventWithin(iterator);
         expect(streamEnd).not.toBe("timeout");
-        expect(streamEnd).toMatchObject({ value: undefined, done: true });
+        expectIteratorEvent(streamEnd, { done: true });
       } else {
-        expect(doneEvent).toMatchObject({ value: undefined, done: true });
+        expectIteratorEvent(doneEvent, { done: true });
       }
     } finally {
       fetchWithSsrFGuardMock.mockReset();
@@ -1516,12 +1530,10 @@ describe("createOllamaStreamFn streaming events", () => {
         const types = events.map((e) => e.type);
         expect(types).toEqual(["start", "text_start", "text_delta", "error"]);
         const errorEvent = events.at(-1);
-        expect(errorEvent).toMatchObject({
-          type: "error",
-          error: expect.objectContaining({
-            errorMessage: expect.stringContaining("garbled visible text"),
-          }),
-        });
+        expect(errorEvent?.type).toBe("error");
+        if (errorEvent?.type === "error") {
+          expect(errorEvent.error.errorMessage).toContain("garbled visible text");
+        }
       },
     );
   });
@@ -1569,7 +1581,7 @@ describe("createOllamaStreamFn streaming events", () => {
         expect(types).toEqual(["start", "text_start", "text_delta", "text_end", "done"]);
 
         const delta = events.find((e) => e.type === "text_delta");
-        expect(delta).toMatchObject({ delta: "one shot" });
+        expect(delta?.delta).toBe("one shot");
       },
     );
   });
@@ -1609,9 +1621,7 @@ describe("createOllamaStreamFn", () => {
         if (!requestBody.options) {
           throw new Error("Expected Ollama request options");
         }
-        // Catalog `contextWindow` flows through as `num_ctx` so the request
-        // does not silently truncate to Ollama's small Modelfile default.
-        expect(requestBody.options?.num_ctx).toBe(131072);
+        expect(requestBody.options?.num_ctx).toBeUndefined();
         expect(requestBody.options.num_predict).toBe(123);
       },
     );
@@ -1694,7 +1704,7 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
-  it("falls back to catalog contextWindow as num_ctx when params.num_ctx is unset", async () => {
+  it("does not fall back to catalog contextWindow as native Ollama num_ctx", async () => {
     await withMockNdjsonFetch(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
@@ -1715,12 +1725,12 @@ describe("createOllamaStreamFn", () => {
         const requestBody = JSON.parse(requestInit.body) as {
           options?: { num_ctx?: number };
         };
-        expect(requestBody.options?.num_ctx).toBe(32768);
+        expect(requestBody.options?.num_ctx).toBeUndefined();
       },
     );
   });
 
-  it("falls back to catalog maxTokens as num_ctx when contextWindow is absent", async () => {
+  it("does not fall back to catalog maxTokens as native Ollama num_ctx", async () => {
     await withMockNdjsonFetch(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
@@ -1744,7 +1754,7 @@ describe("createOllamaStreamFn", () => {
         const requestBody = JSON.parse(requestInit.body) as {
           options?: { num_ctx?: number };
         };
-        expect(requestBody.options?.num_ctx).toBe(65536);
+        expect(requestBody.options?.num_ctx).toBeUndefined();
       },
     );
   });
@@ -1792,10 +1802,9 @@ describe("createOllamaStreamFn", () => {
 
         const request = getGuardedFetchCall(fetchMock);
         expect(request.url).toBe("http://127.0.0.1:11434/api/chat");
-        expect(request.policy).toMatchObject({
-          hostnameAllowlist: ["127.0.0.1"],
-          allowPrivateNetwork: true,
-        });
+        const policy = requireRecord(request.policy, "ssrf policy");
+        expect(policy.hostnameAllowlist).toEqual(["127.0.0.1"]);
+        expect(policy.allowPrivateNetwork).toBe(true);
       },
     );
   });
@@ -1825,12 +1834,11 @@ describe("createOllamaStreamFn", () => {
         expect(events.at(-1)?.type).toBe("done");
 
         const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
-        expect(requestInit.headers).toMatchObject({
-          "Content-Type": "application/json",
-          "X-OLLAMA-KEY": "provider-secret",
-          "X-Trace": "request",
-          "X-Request-Only": "1",
-        });
+        const headers = requireHeaders(requestInit.headers);
+        expect(headers["Content-Type"]).toBe("application/json");
+        expect(headers["X-OLLAMA-KEY"]).toBe("provider-secret");
+        expect(headers["X-Trace"]).toBe("request");
+        expect(headers["X-Request-Only"]).toBe("1");
       },
     );
   });
@@ -1857,9 +1865,7 @@ describe("createOllamaStreamFn", () => {
 
         await collectStreamEvents(stream);
         const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
-        expect(requestInit.headers).toMatchObject({
-          Authorization: "Bearer proxy-token",
-        });
+        expect(requireHeaders(requestInit.headers).Authorization).toBe("Bearer proxy-token");
       },
     );
   });
@@ -1893,9 +1899,7 @@ describe("createOllamaStreamFn", () => {
 
         await collectStreamEvents(stream);
         const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
-        expect(requestInit.headers).toMatchObject({
-          Authorization: "Bearer real-token",
-        });
+        expect(requireHeaders(requestInit.headers).Authorization).toBe("Bearer real-token");
       },
     );
   });
@@ -2037,9 +2041,7 @@ describe("createConfiguredOllamaStreamFn", () => {
         const request = getGuardedFetchCall(fetchMock);
         expect(request.url).toBe("http://provider-host:11434/api/chat");
         const requestInit = request.init ?? {};
-        expect(requestInit.headers).toMatchObject({
-          Authorization: "Bearer proxy-token",
-        });
+        expect(requireHeaders(requestInit.headers).Authorization).toBe("Bearer proxy-token");
       },
     );
   });

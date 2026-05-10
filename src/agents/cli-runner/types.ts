@@ -55,6 +55,12 @@ export type RunCliAgentParams = {
   disableTools?: boolean;
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
+  onExecutionPhase?: (info: {
+    phase: "model_call_started";
+    provider?: string;
+    model?: string;
+    firstModelCallStarted?: boolean;
+  }) => void;
   replyOperation?: ReplyOperation;
   /**
    * Close any long-lived CLI live session created for this run after the run

@@ -40,25 +40,21 @@ describe("runEmbeddedAttempt memory flush tool forwarding", () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-memory-flush-"));
 
     try {
-      expect(buildEmbeddedAttemptToolRunContext(createAttemptParams(workspaceDir))).toMatchObject({
-        trigger: "memory",
-        memoryFlushWritePath: MEMORY_RELATIVE_PATH,
-      });
+      const context = buildEmbeddedAttemptToolRunContext(createAttemptParams(workspaceDir));
+      expect(context.trigger).toBe("memory");
+      expect(context.memoryFlushWritePath).toBe(MEMORY_RELATIVE_PATH);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
 
   it("forwards cron job id into tool creation so self-removal can be scoped", () => {
-    expect(
-      buildEmbeddedAttemptToolRunContext({
-        trigger: "cron",
-        jobId: "job-current",
-      }),
-    ).toMatchObject({
+    const context = buildEmbeddedAttemptToolRunContext({
       trigger: "cron",
       jobId: "job-current",
     });
+    expect(context.trigger).toBe("cron");
+    expect(context.jobId).toBe("job-current");
   });
 
   it("activates the memory flush append-only write wrapper", async () => {
@@ -85,17 +81,16 @@ describe("runEmbeddedAttempt memory flush tool forwarding", () => {
         relativePath: MEMORY_RELATIVE_PATH,
       });
 
-      await expect(
-        wrapped.execute("call-memory-flush-append", {
-          path: MEMORY_RELATIVE_PATH,
-          content: "new durable note",
-        }),
-      ).resolves.toMatchObject({
-        content: [{ type: "text", text: `Appended content to ${MEMORY_RELATIVE_PATH}.` }],
-        details: {
-          path: MEMORY_RELATIVE_PATH,
-          appendOnly: true,
-        },
+      const result = await wrapped.execute("call-memory-flush-append", {
+        path: MEMORY_RELATIVE_PATH,
+        content: "new durable note",
+      });
+      expect(result.content).toEqual([
+        { type: "text", text: `Appended content to ${MEMORY_RELATIVE_PATH}.` },
+      ]);
+      expect(result.details).toEqual({
+        path: MEMORY_RELATIVE_PATH,
+        appendOnly: true,
       });
       await expect(fs.readFile(memoryFile, "utf-8")).resolves.toBe("seed\nnew durable note");
       await expect(

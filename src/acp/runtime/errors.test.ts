@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { AcpRuntimeError, isAcpRuntimeError, withAcpRuntimeErrorBoundary } from "./errors.js";
+import {
+  AcpRuntimeError,
+  formatAcpErrorChain,
+  isAcpRuntimeError,
+  withAcpRuntimeErrorBoundary,
+} from "./errors.js";
 
 describe("withAcpRuntimeErrorBoundary", () => {
   it("wraps generic errors with fallback code and source message", async () => {
@@ -54,5 +59,28 @@ describe("withAcpRuntimeErrorBoundary", () => {
     });
 
     expect(isAcpRuntimeError(foreignError)).toBe(true);
+  });
+});
+
+describe("formatAcpErrorChain redaction", () => {
+  it("redacts secret-shaped tokens that arrive as top-level non-Error values", () => {
+    const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
+
+    const out = formatAcpErrorChain(`upstream rejected token=${token}`);
+
+    expect(out).toMatch(/upstream rejected/);
+    expect(out).not.toContain(token);
+  });
+
+  it("redacts secret-shaped tokens that arrive in nested cause messages", () => {
+    const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
+    const inner = new Error(`upstream rejected token=${token}`);
+    const acp = new AcpRuntimeError("ACP_TURN_FAILED", "ACP turn failed", { cause: inner });
+
+    const out = formatAcpErrorChain(acp);
+
+    expect(out).toMatch(/ACP_TURN_FAILED/);
+    expect(out).toMatch(/upstream rejected/);
+    expect(out).not.toContain(token);
   });
 });

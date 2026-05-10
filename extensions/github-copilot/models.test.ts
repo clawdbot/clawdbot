@@ -359,6 +359,7 @@ describe("github-copilot token", () => {
       token: "cached;proxy-ep=proxy.example.com;",
       expiresAt: now + 60 * 60 * 1000,
       updatedAt: now,
+      integrationId: "vscode-chat",
     });
 
     const fetchImpl = vi.fn();

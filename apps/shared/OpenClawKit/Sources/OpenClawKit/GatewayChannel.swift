@@ -124,6 +124,24 @@ public enum GatewayAuthSource: String, Sendable {
 /// Avoid ambiguity with the app's own AnyCodable type.
 private typealias ProtoAnyCodable = OpenClawProtocol.AnyCodable
 
+private func gatewayErrorDetails(_ error: ErrorShape?) -> [String: ProtoAnyCodable] {
+    var details: [String: ProtoAnyCodable] = [:]
+    if let nested = error?.details?.value as? [String: ProtoAnyCodable] {
+        details.merge(nested) { _, nestedValue in nestedValue }
+    }
+    if let error {
+        details["code"] = ProtoAnyCodable(error.code)
+        details["message"] = ProtoAnyCodable(error.message)
+        if let retryable = error.retryable {
+            details["retryable"] = ProtoAnyCodable(retryable)
+        }
+        if let retryAfterMs = error.retryafterms {
+            details["retryAfterMs"] = ProtoAnyCodable(retryAfterMs)
+        }
+    }
+    return details
+}
+
 private enum ConnectChallengeError: Error {
     case timeout
 }
@@ -623,21 +641,22 @@ public actor GatewayChannelActor {
         role: String) async throws
     {
         if res.ok == false {
-            let msg = (res.error?["message"]?.value as? String) ?? "gateway connect failed"
-            let details = res.error?["details"]?.value as? [String: ProtoAnyCodable]
-            let detailCode = details?["code"]?.value as? String
-            let canRetryWithDeviceToken = details?["canRetryWithDeviceToken"]?.value as? Bool ?? false
-            let recommendedNextStep = details?["recommendedNextStep"]?.value as? String
-            let requestId = details?["requestId"]?.value as? String
-            let reason = details?["reason"]?.value as? String
-            let owner = details?["owner"]?.value as? String
-            let title = details?["title"]?.value as? String
-            let userMessage = details?["userMessage"]?.value as? String
-            let actionLabel = details?["actionLabel"]?.value as? String
-            let actionCommand = details?["actionCommand"]?.value as? String
-            let docsURLString = details?["docsUrl"]?.value as? String
-            let retryableOverride = details?["retryable"]?.value as? Bool
-            let pauseReconnectOverride = details?["pauseReconnect"]?.value as? Bool
+            let error = res.error
+            let msg = error?.message ?? "gateway connect failed"
+            let details = gatewayErrorDetails(error)
+            let detailCode = details["code"]?.value as? String
+            let canRetryWithDeviceToken = details["canRetryWithDeviceToken"]?.value as? Bool ?? false
+            let recommendedNextStep = details["recommendedNextStep"]?.value as? String
+            let requestId = details["requestId"]?.value as? String
+            let reason = details["reason"]?.value as? String
+            let owner = details["owner"]?.value as? String
+            let title = details["title"]?.value as? String
+            let userMessage = details["userMessage"]?.value as? String
+            let actionLabel = details["actionLabel"]?.value as? String
+            let actionCommand = details["actionCommand"]?.value as? String
+            let docsURLString = details["docsUrl"]?.value as? String
+            let retryableOverride = details["retryable"]?.value as? Bool
+            let pauseReconnectOverride = details["pauseReconnect"]?.value as? Bool
             throw GatewayConnectAuthError(
                 message: msg,
                 detailCodeRaw: detailCode,
@@ -974,11 +993,9 @@ public actor GatewayChannelActor {
             throw NSError(domain: "Gateway", code: 2, userInfo: [NSLocalizedDescriptionKey: "unexpected frame"])
         }
         if res.ok == false {
-            let code = res.error?["code"]?.value as? String
-            let msg = res.error?["message"]?.value as? String
-            let details: [String: AnyCodable] = (res.error ?? [:]).reduce(into: [:]) { acc, pair in
-                acc[pair.key] = AnyCodable(pair.value.value)
-            }
+            let code = res.error?.code
+            let msg = res.error?.message
+            let details = gatewayErrorDetails(res.error)
             throw GatewayResponseError(method: method, code: code, message: msg, details: details)
         }
         if let payload = res.payload {
@@ -1013,7 +1030,11 @@ public actor GatewayChannelActor {
 
     /// Wrap low-level URLSession/WebSocket errors with context so UI can surface them.
     private func wrap(_ error: Error, context: String) -> Error {
-        if error is GatewayConnectAuthError || error is GatewayResponseError || error is GatewayDecodingError || error is GatewayTLSValidationError {
+        if error is GatewayConnectAuthError ||
+            error is GatewayResponseError ||
+            error is GatewayDecodingError ||
+            error is GatewayTLSValidationError
+        {
             return error
         }
         if let urlError = error as? URLError {

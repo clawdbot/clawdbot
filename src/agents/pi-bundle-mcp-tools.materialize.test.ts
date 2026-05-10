@@ -7,6 +7,12 @@ import {
 import type { McpCatalogTool } from "./pi-bundle-mcp-types.js";
 import type { SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
 
+function expectTextContentBlock(block: unknown, text: string) {
+  const content = block as { type?: string; text?: string } | undefined;
+  expect(content?.type).toBe("text");
+  expect(content?.text).toBe(text);
+}
+
 function makeToolRuntime(
   params: {
     tools?: McpCatalogTool[];
@@ -61,10 +67,7 @@ describe("createBundleMcpToolRuntime", () => {
     expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
     expect(getPluginToolMeta(runtime.tools[0])?.pluginId).toBe("bundle-mcp");
     const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
-    expect(result.content[0]).toMatchObject({
-      type: "text",
-      text: "FROM-BUNDLE",
-    });
+    expectTextContentBlock(result.content[0], "FROM-BUNDLE");
     expect(result.details).toEqual({
       mcpServer: "bundleProbe",
       mcpTool: "bundle_probe",
@@ -111,10 +114,8 @@ describe("createBundleMcpToolRuntime", () => {
     expect(created).toHaveLength(1);
     expect(created[0].sessionId).toMatch(/^bundle-mcp:/);
     expect(created[0].workspaceDir).toBe("/workspace");
-    expect(created[0].cfg?.mcp?.servers?.configuredProbe).toMatchObject({
-      command: "node",
-      args: ["configured-probe.mjs"],
-    });
+    expect(created[0].cfg?.mcp?.servers?.configuredProbe?.command).toBe("node");
+    expect(created[0].cfg?.mcp?.servers?.configuredProbe?.args).toEqual(["configured-probe.mjs"]);
 
     expect(runtime.tools.map((tool) => tool.name)).toEqual(["configuredProbe__bundle_probe"]);
     const result = await runtime.tools[0].execute(
@@ -123,10 +124,7 @@ describe("createBundleMcpToolRuntime", () => {
       undefined,
       undefined,
     );
-    expect(result.content[0]).toMatchObject({
-      type: "text",
-      text: "FROM-CONFIG",
-    });
+    expectTextContentBlock(result.content[0], "FROM-CONFIG");
     expect(result.details).toEqual({
       mcpServer: "configuredProbe",
       mcpTool: "bundle_probe",

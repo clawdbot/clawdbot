@@ -10,6 +10,7 @@ const TELEGRAM_MAX_COMMANDS = 100;
 export const TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET = 5700;
 const TELEGRAM_COMMAND_RETRY_RATIO = 0.8;
 const TELEGRAM_MIN_COMMAND_DESCRIPTION_LENGTH = 1;
+const TELEGRAM_MENU_RESULT_CACHE_MAX = 128;
 
 type TelegramMenuCommand = {
   command: string;
@@ -30,22 +31,40 @@ const TELEGRAM_COMMAND_MENU_SCOPES: readonly TelegramCommandMenuScope[] = [
   { label: "all_group_chats", options: { scope: { type: "all_group_chats" } } },
 ];
 
+const cappedTelegramMenuCache = new Map<
+  string,
+  ReturnType<typeof buildUncachedCappedTelegramMenuCommands>
+>();
+
 function countTelegramCommandText(value: string): number {
-  return Array.from(value).length;
+  let count = 0;
+  for (let index = 0; index < value.length; ) {
+    const codePoint = value.codePointAt(index);
+    index += codePoint && codePoint > 0xffff ? 2 : 1;
+    count += 1;
+  }
+  return count;
 }
 
 function truncateTelegramCommandText(value: string, maxLength: number): string {
   if (maxLength <= 0) {
     return "";
   }
-  const chars = Array.from(value);
-  if (chars.length <= maxLength) {
-    return value;
+
+  const suffix = maxLength > 1 ? "…" : "";
+  const prefixLimit = maxLength - countTelegramCommandText(suffix);
+  let count = 0;
+  let prefixEnd = 0;
+  for (const char of value) {
+    count += 1;
+    if (count <= prefixLimit) {
+      prefixEnd += char.length;
+    }
+    if (count > maxLength) {
+      return `${value.slice(0, prefixEnd)}${suffix}`;
+    }
   }
-  if (maxLength === 1) {
-    return chars[0] ?? "";
-  }
-  return `${chars.slice(0, maxLength - 1).join("")}…`;
+  return value;
 }
 
 function fitTelegramCommandsWithinTextBudget(
@@ -184,6 +203,31 @@ export function buildCappedTelegramMenuCommands(params: {
   allCommands: TelegramMenuCommand[];
   maxCommands?: number;
   maxTotalChars?: number;
+}): ReturnType<typeof buildUncachedCappedTelegramMenuCommands> {
+  const maxCommands = params.maxCommands ?? TELEGRAM_MAX_COMMANDS;
+  const maxTotalChars = params.maxTotalChars ?? TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET;
+  const cacheKey = buildTelegramMenuResultCacheKey({
+    allCommands: params.allCommands,
+    maxCommands,
+    maxTotalChars,
+  });
+  const cached = cappedTelegramMenuCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const result = buildUncachedCappedTelegramMenuCommands({
+    allCommands: params.allCommands,
+    maxCommands,
+    maxTotalChars,
+  });
+  rememberCappedTelegramMenuResult(cacheKey, result);
+  return result;
+}
+
+function buildUncachedCappedTelegramMenuCommands(params: {
+  allCommands: TelegramMenuCommand[];
+  maxCommands: number;
+  maxTotalChars: number;
 }): {
   commandsToRegister: TelegramMenuCommand[];
   totalCommands: number;
@@ -194,8 +238,7 @@ export function buildCappedTelegramMenuCommands(params: {
   textBudgetDropCount: number;
 } {
   const { allCommands } = params;
-  const maxCommands = params.maxCommands ?? TELEGRAM_MAX_COMMANDS;
-  const maxTotalChars = params.maxTotalChars ?? TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET;
+  const { maxCommands, maxTotalChars } = params;
   const totalCommands = allCommands.length;
   const overflowCount = Math.max(0, totalCommands - maxCommands);
   const {
@@ -214,7 +257,44 @@ export function buildCappedTelegramMenuCommands(params: {
   };
 }
 
-/** Compute a stable hash of the command list for change detection. */
+function buildTelegramMenuResultCacheKey(params: {
+  allCommands: TelegramMenuCommand[];
+  maxCommands: number;
+  maxTotalChars: number;
+}): string {
+  const digest = createHash("sha256");
+  updateTelegramCommandDigestField(digest, String(params.maxCommands));
+  updateTelegramCommandDigestField(digest, String(params.maxTotalChars));
+  for (const command of params.allCommands) {
+    updateTelegramCommandDigestField(digest, command.command);
+    updateTelegramCommandDigestField(digest, command.description);
+  }
+  return digest.digest("hex").slice(0, 16);
+}
+
+function updateTelegramCommandDigestField(
+  digest: ReturnType<typeof createHash>,
+  value: string,
+): void {
+  digest.update(String(value.length));
+  digest.update(":");
+  digest.update(value);
+}
+
+function rememberCappedTelegramMenuResult(
+  key: string,
+  result: ReturnType<typeof buildUncachedCappedTelegramMenuCommands>,
+): void {
+  cappedTelegramMenuCache.set(key, result);
+  if (cappedTelegramMenuCache.size <= TELEGRAM_MENU_RESULT_CACHE_MAX) {
+    return;
+  }
+  const oldestKey = cappedTelegramMenuCache.keys().next().value;
+  if (oldestKey) {
+    cappedTelegramMenuCache.delete(oldestKey);
+  }
+}
+
 export function hashCommandList(commands: TelegramMenuCommand[]): string {
   const sorted = [...commands].toSorted((a, b) => a.command.localeCompare(b.command));
   return createHash("sha256").update(JSON.stringify(sorted)).digest("hex").slice(0, 16);

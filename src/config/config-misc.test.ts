@@ -888,37 +888,40 @@ describe("broadcast", () => {
 });
 
 describe("model compat config schema", () => {
-  it("accepts full openai-completions compat fields", () => {
-    const res = OpenClawSchema.safeParse({
-      models: {
-        providers: {
-          local: {
-            baseUrl: "http://127.0.0.1:1234/v1",
-            api: "openai-completions",
-            models: [
-              {
-                id: "qwen3-32b",
-                name: "Qwen3 32B",
-                compat: {
-                  supportsUsageInStreaming: true,
-                  supportsStrictMode: false,
-                  requiresStringContent: true,
-                  thinkingFormat: "zai",
-                  requiresToolResultName: true,
-                  requiresAssistantAfterToolResult: false,
-                  requiresThinkingAsText: false,
-                  requiresMistralToolIds: false,
-                  requiresOpenAiAnthropicToolPayload: true,
+  it.each(["zai", "qwen", "qwen-chat-template"] as const)(
+    "accepts full openai-completions compat fields with %s thinking format",
+    (thinkingFormat) => {
+      const res = OpenClawSchema.safeParse({
+        models: {
+          providers: {
+            local: {
+              baseUrl: "http://127.0.0.1:1234/v1",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "qwen3-32b",
+                  name: "Qwen3 32B",
+                  compat: {
+                    supportsUsageInStreaming: true,
+                    supportsStrictMode: false,
+                    requiresStringContent: true,
+                    thinkingFormat,
+                    requiresToolResultName: true,
+                    requiresAssistantAfterToolResult: false,
+                    requiresThinkingAsText: false,
+                    requiresMistralToolIds: false,
+                    requiresOpenAiAnthropicToolPayload: true,
+                  },
                 },
-              },
-            ],
+              ],
+            },
           },
         },
-      },
-    });
+      });
 
-    expect(res.success).toBe(true);
-  });
+      expect(res.success).toBe(true);
+    },
+  );
 });
 
 describe("config paths", () => {

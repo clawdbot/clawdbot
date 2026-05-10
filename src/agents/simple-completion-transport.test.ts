@@ -80,17 +80,19 @@ describe("prepareModelForSimpleCompletion", () => {
       cfg,
     });
 
-    expect(resolveProviderStreamFn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "ollama",
-        config: cfg,
-        context: expect.objectContaining({
-          provider: "ollama",
-          modelId: "llama3",
-          model,
-        }),
-      }),
-    );
+    expect(resolveProviderStreamFn).toHaveBeenCalledTimes(1);
+    const [request] = resolveProviderStreamFn.mock.calls[0] as [
+      {
+        provider?: unknown;
+        config?: unknown;
+        context?: { provider?: unknown; modelId?: unknown; model?: unknown };
+      },
+    ];
+    expect(request.provider).toBe("ollama");
+    expect(request.config).toBe(cfg);
+    expect(request.context?.provider).toBe("ollama");
+    expect(request.context?.modelId).toBe("llama3");
+    expect(request.context?.model).toBe(model);
     expect(ensureCustomApiRegistered).toHaveBeenCalledWith("ollama", "ollama-stream");
     expect(result).toBe(model);
   });

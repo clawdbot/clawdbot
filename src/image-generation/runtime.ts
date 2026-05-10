@@ -118,6 +118,7 @@ export async function generateImage(
         inputImages: params.inputImages,
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         providerOptions: params.providerOptions,
+        ssrfPolicy: params.ssrfPolicy,
       });
       if (!Array.isArray(result.images) || result.images.length === 0) {
         throw new Error("Image generation provider returned no images.");

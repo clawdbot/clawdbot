@@ -70,14 +70,13 @@ describe("buildProviderStatusIndex", () => {
     );
     expect(resolveAccount).not.toHaveBeenCalled();
     expect(inspectAccount).toHaveBeenCalledWith({}, "work");
-    expect(map.get("workchat:work")).toMatchObject({
-      provider: "workchat",
-      accountId: "work",
-      state: "linked",
-      configured: true,
-      enabled: true,
-      name: "Work",
-    });
+    const status = map.get("workchat:work");
+    expect(status?.provider).toBe("workchat");
+    expect(status?.accountId).toBe("work");
+    expect(status?.state).toBe("linked");
+    expect(status?.configured).toBe(true);
+    expect(status?.enabled).toBe(true);
+    expect(status?.name).toBe("Work");
   });
 
   it("records accounts that throw during read-only resolution as not configured", async () => {

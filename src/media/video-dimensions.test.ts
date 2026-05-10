@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { parseFfprobeVideoDimensions, probeVideoDimensions } from "./video-dimensions.js";
 
 const { runFfprobe } = vi.hoisted(() => ({
   runFfprobe: vi.fn(),
@@ -7,8 +8,6 @@ const { runFfprobe } = vi.hoisted(() => ({
 vi.mock("./ffmpeg-exec.js", () => ({
   runFfprobe,
 }));
-
-const { parseFfprobeVideoDimensions, probeVideoDimensions } = await import("./video-dimensions.js");
 
 describe("parseFfprobeVideoDimensions", () => {
   it("returns positive integer dimensions from ffprobe JSON", () => {

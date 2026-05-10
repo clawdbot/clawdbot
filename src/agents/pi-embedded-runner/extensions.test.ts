@@ -41,7 +41,10 @@ function expectSafeguardRuntime(
   const { factories, sessionManager } = buildSafeguardFactories(cfg);
 
   expect(factories).toContain(compactionSafeguardExtension);
-  expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject(expectedRuntime);
+  const runtime = getCompactionSafeguardRuntime(sessionManager);
+  expect(runtime?.contextWindowTokens).toBe(200_000);
+  expect(runtime?.qualityGuardEnabled).toBe(expectedRuntime.qualityGuardEnabled);
+  expect(runtime?.qualityGuardMaxRetries).toBe(expectedRuntime.qualityGuardMaxRetries);
 }
 
 describe("buildEmbeddedExtensionFactories", () => {

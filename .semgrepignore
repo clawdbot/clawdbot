@@ -93,3 +93,12 @@ scripts/run-tests*
 scripts/lib/test-*
 scripts/lib/extension-test-*
 scripts/lib/vitest-*
+
+# ----------------------------------------------------------------------------
+# Sibling symlinks for scoped guides
+# ----------------------------------------------------------------------------
+# Every `AGENTS.md` has a sibling `CLAUDE.md` symlink pointing at it (see
+# root AGENTS.md: "New AGENTS.md: add sibling CLAUDE.md symlink"). Scanning
+# the symlinks is redundant with scanning the underlying AGENTS.md and
+# breaks opengrep's PR-diff scan when a new CLAUDE.md symlink is added.
+CLAUDE.md

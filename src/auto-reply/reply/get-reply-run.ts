@@ -348,36 +348,6 @@ type RunPreparedReplyParams = {
   abortedLastRun: boolean;
 };
 
-function resolveCurrentTurnPromptContext(
-  ctx: TemplateContext,
-): CurrentTurnPromptContext | undefined {
-  const replyChain = Array.isArray(ctx.ReplyChain)
-    ? ctx.ReplyChain.filter(
-        (entry) =>
-          entry.body?.trim() ||
-          entry.mediaType?.trim() ||
-          entry.mediaPath?.trim() ||
-          entry.mediaRef?.trim(),
-      )
-    : undefined;
-  if (replyChain && replyChain.length > 0) {
-    return { replyChain };
-  }
-  const replyBody = normalizeOptionalString(ctx.ReplyToBody);
-  if (!replyBody) {
-    return undefined;
-  }
-  return {
-    reply: {
-      body: replyBody,
-      ...(normalizeOptionalString(ctx.ReplyToSender)
-        ? { senderLabel: normalizeOptionalString(ctx.ReplyToSender) }
-        : {}),
-      ...(ctx.ReplyToIsQuote === true ? { isQuote: true } : {}),
-    },
-  };
-}
-
 export async function runPreparedReply(
   params: RunPreparedReplyParams,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
@@ -781,7 +751,8 @@ export async function runPreparedReply(
     "reply.build_prompt_bodies",
     () => rebuildPromptBodies(),
   );
-  const currentTurnContext = resolveCurrentTurnPromptContext(sessionCtx);
+  const currentTurnContext: CurrentTurnPromptContext | undefined =
+    !isBareSessionReset && inboundUserContext.trim() ? { text: inboundUserContext } : undefined;
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }

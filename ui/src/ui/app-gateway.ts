@@ -641,6 +641,7 @@ function handleTerminalChatEvent(
     if (state === "final") {
       void loadSessions(host as unknown as SessionsState, {
         activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+        agentId: resolveChatEventSessionListAgentId(host, payload),
       });
     }
   }
@@ -667,6 +668,21 @@ function isEventForDifferentActiveRun(
   activeRunId: string | null,
 ): boolean {
   return Boolean(activeRunId && payload && payload.runId !== activeRunId);
+}
+
+function resolveChatEventSessionListAgentId(
+  host: GatewayHost,
+  payload: ChatEventPayload | undefined,
+): string {
+  const sessionKey = payload?.sessionKey?.trim() || host.sessionKey;
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (parsed?.agentId) {
+    return parsed.agentId;
+  }
+  const snapshot = host.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshot }
+    | undefined;
+  return normalizeAgentId(snapshot?.sessionDefaults?.defaultAgentId);
 }
 
 function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | undefined) {

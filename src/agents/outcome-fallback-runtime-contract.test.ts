@@ -22,21 +22,21 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
   it.each(fallbackClassificationCases)(
     "maps harness classification %s to a format fallback code",
     (classification, code) => {
-      expect(
-        classifyEmbeddedPiRunResultForModelFallback({
-          provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
-          model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
-          result: createContractRunResult({
-            meta: {
-              durationMs: 1,
-              agentHarnessResultClassification: classification,
-            },
-          }),
+      const fallback = classifyEmbeddedPiRunResultForModelFallback({
+        provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
+        model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+        result: createContractRunResult({
+          meta: {
+            durationMs: 1,
+            agentHarnessResultClassification: classification,
+          },
         }),
-      ).toMatchObject({
-        reason: "format",
-        code,
       });
+      if (!fallback || !("reason" in fallback)) {
+        throw new Error(`Expected format fallback detail for ${classification}`);
+      }
+      expect(fallback?.reason).toBe("format");
+      expect(fallback?.code).toBe(code);
     },
   );
 
@@ -72,12 +72,10 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
       OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider,
       OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel,
     ]);
-    expect(result.attempts[0]).toMatchObject({
-      provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
-      model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
-      reason: "format",
-      code: "empty_result",
-    });
+    expect(result.attempts[0]?.provider).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider);
+    expect(result.attempts[0]?.model).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel);
+    expect(result.attempts[0]?.reason).toBe("format");
+    expect(result.attempts[0]?.code).toBe("empty_result");
   });
 
   const nonFallbackCases = [

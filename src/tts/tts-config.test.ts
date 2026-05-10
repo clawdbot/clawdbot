@@ -160,16 +160,10 @@ describe("shouldAttemptTtsPayload", () => {
       accountId: "englishbot",
     });
 
-    expect(resolved).toMatchObject({
-      auto: "always",
-      mode: "all",
-      provider: "openai",
-      providers: {
-        openai: {
-          model: "gpt-4o-mini-tts",
-          voice: "shimmer",
-        },
-      },
-    });
+    expect(resolved.auto).toBe("always");
+    expect(resolved.mode).toBe("all");
+    expect(resolved.provider).toBe("openai");
+    expect(resolved.providers?.openai?.model).toBe("gpt-4o-mini-tts");
+    expect(resolved.providers?.openai?.voice).toBe("shimmer");
   });
 });

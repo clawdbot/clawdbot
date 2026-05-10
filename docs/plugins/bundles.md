@@ -165,6 +165,8 @@ OpenClaw registers bundle MCP tools with provider-safe names in the form
 `memory_search` tool registers as `vigil-harbor__memory_search`.
 
 - characters outside `A-Za-z0-9_-` are replaced with `-`
+- fragments that would start with a non-letter get a letter prefix, so numeric
+  server keys such as `12306` become provider-safe tool prefixes
 - server prefixes are capped at 30 characters
 - full tool names are capped at 64 characters
 - empty server names fall back to `mcp`

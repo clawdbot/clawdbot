@@ -9,6 +9,7 @@ import {
   getPreauthHandshakeTimeoutMsFromEnv,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
+  MIN_PROBE_PROTOCOL_VERSION,
   NODE_CLIENT,
   onceMessage,
   openWs,
@@ -420,6 +421,37 @@ export function registerDefaultAuthTokenSuite(): void {
         const res = await connectReq(ws, {
           minProtocol: PROTOCOL_VERSION + 1,
           maxProtocol: PROTOCOL_VERSION + 2,
+        });
+        expect(res.ok).toBe(false);
+      } catch {
+        // If the server closed before we saw the frame, that's acceptable.
+      }
+      ws.close();
+    });
+
+    test("allows previous protocol for restart health probes", async () => {
+      const ws = await openWs(port);
+      const res = await connectReq(ws, {
+        minProtocol: MIN_PROBE_PROTOCOL_VERSION,
+        maxProtocol: MIN_PROBE_PROTOCOL_VERSION,
+        client: {
+          id: GATEWAY_CLIENT_NAMES.PROBE,
+          version: "2026.5.7",
+          platform: "cli",
+          mode: GATEWAY_CLIENT_MODES.PROBE,
+        },
+      });
+      expect(res.ok).toBe(true);
+      expect((res.payload as { type?: unknown } | undefined)?.type).toBe("hello-ok");
+      ws.close();
+    });
+
+    test("keeps previous protocol rejected for non-probe clients", async () => {
+      const ws = await openWs(port);
+      try {
+        const res = await connectReq(ws, {
+          minProtocol: MIN_PROBE_PROTOCOL_VERSION,
+          maxProtocol: MIN_PROBE_PROTOCOL_VERSION,
         });
         expect(res.ok).toBe(false);
       } catch {

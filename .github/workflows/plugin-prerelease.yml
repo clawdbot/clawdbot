@@ -270,7 +270,7 @@ jobs:
 
       - name: Run release-only plugin Node shard
         env:
-          NODE_OPTIONS: --max-old-space-size=6144
+          NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
@@ -340,7 +340,7 @@ jobs:
 
       - name: Run extension shard
         env:
-          NODE_OPTIONS: --max-old-space-size=6144
+          NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
           OPENCLAW_VITEST_MAX_WORKERS: 1
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}

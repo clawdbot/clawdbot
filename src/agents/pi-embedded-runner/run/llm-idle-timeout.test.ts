@@ -119,6 +119,27 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(0);
   });
 
+  it("keeps the default idle watchdog for Ollama cloud models routed through local Ollama", () => {
+    expect(
+      resolveLlmIdleTimeoutMs({
+        model: {
+          provider: "ollama",
+          id: "glm-5.1:cloud",
+          baseUrl: "http://127.0.0.1:11434",
+        },
+      }),
+    ).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+    expect(
+      resolveLlmIdleTimeoutMs({
+        model: {
+          provider: "ollama2",
+          id: "ollama2/kimi-k2.5:cloud",
+          baseUrl: "http://localhost:11434",
+        },
+      }),
+    ).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
+
   it.each([
     "http://172.32.0.1:11434",
     "http://192.169.1.1:11434",

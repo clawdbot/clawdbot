@@ -1,4 +1,3 @@
-import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import type { User } from "../internal/discord.js";
@@ -32,7 +31,6 @@ export async function resolveDiscordDmPreflightAccess(params: {
   dmPolicy: DiscordDmPolicy;
   resolvedAccountId: string;
   allowNameMatching: boolean;
-  useAccessGroups: boolean;
 }): Promise<{ commandAuthorized: boolean } | null> {
   if (params.dmPolicy === "disabled") {
     logVerbose("discord: drop dm (dmPolicy: disabled)");
@@ -61,13 +59,14 @@ export async function resolveDiscordDmPreflightAccess(params: {
       tag: params.sender.tag,
     },
     allowNameMatching: params.allowNameMatching,
-    useAccessGroups: params.useAccessGroups,
     cfg: params.preflight.cfg,
     token: params.preflight.token,
     rest: params.preflight.client.rest,
   });
-  const commandAuthorized = dmAccess.commandAuthorized || directBindingRecord != null;
-  if (dmAccess.decision === "allow") {
+  const commandAuthorized =
+    (dmAccess.senderAccess.allowed && dmAccess.commandAccess.authorized) ||
+    directBindingRecord != null;
+  if (dmAccess.senderAccess.decision === "allow") {
     return { commandAuthorized };
   }
   if (directBindingRecord) {
@@ -77,11 +76,8 @@ export async function resolveDiscordDmPreflightAccess(params: {
     return { commandAuthorized };
   }
 
-  const allowMatchMeta = formatAllowlistMatchMeta(
-    dmAccess.allowMatch.allowed ? dmAccess.allowMatch : undefined,
-  );
   await handleDiscordDmCommandDecision({
-    dmAccess,
+    senderAccess: dmAccess.senderAccess,
     accountId: params.resolvedAccountId,
     sender: {
       id: params.author.id,
@@ -90,7 +86,7 @@ export async function resolveDiscordDmPreflightAccess(params: {
     },
     onPairingCreated: async (code) => {
       logVerbose(
-        `discord pairing request sender=${params.author.id} tag=${formatDiscordUserTag(params.author)} (${allowMatchMeta})`,
+        `discord pairing request sender=${params.author.id} tag=${formatDiscordUserTag(params.author)} reason=${dmAccess.senderAccess.reasonCode}`,
       );
       try {
         const conversationRuntime = await loadConversationRuntime();
@@ -115,7 +111,7 @@ export async function resolveDiscordDmPreflightAccess(params: {
     },
     onUnauthorized: async () => {
       logVerbose(
-        `Blocked unauthorized discord sender ${params.sender.id} (dmPolicy=${params.dmPolicy}, ${allowMatchMeta})`,
+        `Blocked unauthorized discord sender ${params.sender.id} (dmPolicy=${params.dmPolicy}, reason=${dmAccess.senderAccess.reasonCode})`,
       );
     },
   });

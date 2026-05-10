@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  applyBaileysEncryptedStreamFinishHotfix,
   collectLegacyPluginRuntimeDepsStateRoots,
   isSourceCheckoutRoot,
   isDirectPostinstallInvocation,
@@ -30,6 +31,10 @@ async function expectPathExists(filePath: string) {
   await expect(fs.access(filePath)).resolves.toBeUndefined();
 }
 
+async function expectPathMissing(filePath: string) {
+  await expect(fs.access(filePath)).rejects.toHaveProperty("code", "ENOENT");
+}
+
 async function writePluginPackage(
   extensionsDir: string,
   pluginId: string,
@@ -52,6 +57,21 @@ async function writePluginPackage(
       throw error;
     }
   }
+}
+
+async function writeBaileysMediaFile(packageRoot: string, text: string) {
+  const mediaFile = path.join(
+    packageRoot,
+    "node_modules",
+    "@whiskeysockets",
+    "baileys",
+    "lib",
+    "Utils",
+    "messages-media.js",
+  );
+  await fs.mkdir(path.dirname(mediaFile), { recursive: true });
+  await fs.writeFile(mediaFile, text);
+  return mediaFile;
 }
 
 describe("bundled plugin postinstall", () => {
@@ -202,6 +222,83 @@ describe("bundled plugin postinstall", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("patches the Baileys rc10 upload helper dispatcher guard", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-baileys-postinstall-");
+    const mediaFile = await writeBaileysMediaFile(
+      packageRoot,
+      [
+        "import { once } from 'events';",
+        "const encryptedStream = async () => {",
+        "        encFileWriteStream.write(mac);",
+        "        const encFinishPromise = once(encFileWriteStream, 'finish');",
+        "        const originalFinishPromise = originalFileStream ? once(originalFileStream, 'finish') : Promise.resolve();",
+        "        encFileWriteStream.end();",
+        "        originalFileStream?.end?.();",
+        "        stream.destroy();",
+        "        await encFinishPromise;",
+        "        await originalFinishPromise;",
+        "        logger?.debug('encrypted data successfully');",
+        "};",
+        "const uploadWithFetch = async ({ url, filePath, headers, timeoutMs, agent }) => {",
+        "    const nodeStream = createReadStream(filePath);",
+        "    const webStream = Readable.toWeb(nodeStream);",
+        "    const response = await fetch(url, {",
+        "        dispatcher: agent,",
+        "        method: 'POST',",
+        "        body: webStream,",
+        "        headers,",
+        "        duplex: 'half',",
+        "        signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined",
+        "    });",
+        "};",
+        "",
+      ].join("\n"),
+    );
+
+    expect(applyBaileysEncryptedStreamFinishHotfix({ packageRoot })).toMatchObject({
+      applied: true,
+      reason: "patched",
+    });
+    const patchedText = await fs.readFile(mediaFile, "utf8");
+    expect(patchedText).toContain(
+      "...(typeof agent?.dispatch === 'function' ? { dispatcher: agent } : {}),",
+    );
+    expect(patchedText).not.toContain("        dispatcher: agent,");
+  });
+
+  it("recognizes already patched Baileys rc10 upload helpers", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-baileys-postinstall-");
+    await writeBaileysMediaFile(
+      packageRoot,
+      [
+        "import { once } from 'events';",
+        "const encryptedStream = async () => {",
+        "        encFileWriteStream.write(mac);",
+        "        const encFinishPromise = once(encFileWriteStream, 'finish');",
+        "        const originalFinishPromise = originalFileStream ? once(originalFileStream, 'finish') : Promise.resolve();",
+        "        encFileWriteStream.end();",
+        "        originalFileStream?.end?.();",
+        "        stream.destroy();",
+        "        await encFinishPromise;",
+        "        await originalFinishPromise;",
+        "        logger?.debug('encrypted data successfully');",
+        "};",
+        "const uploadWithFetch = async ({ url, filePath, headers, timeoutMs, agent }) => {",
+        "    const response = await fetch(url, {",
+        "        ...(typeof agent?.dispatch === 'function' ? { dispatcher: agent } : {}),",
+        "        method: 'POST',",
+        "    });",
+        "};",
+        "",
+      ].join("\n"),
+    );
+
+    expect(applyBaileysEncryptedStreamFinishHotfix({ packageRoot })).toMatchObject({
+      applied: false,
+      reason: "already_patched",
+    });
+  });
+
   it("does not classify published packages with source files as source checkouts", () => {
     const packageRoot = "/pkg";
     const existingPaths = new Set([
@@ -242,9 +339,7 @@ describe("bundled plugin postinstall", () => {
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    await expect(fs.stat(path.join(extensionsDir, "acpx", "node_modules"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(extensionsDir, "acpx", "node_modules"));
   });
 
   it("keeps source-checkout prune non-fatal", async () => {
@@ -340,7 +435,16 @@ describe("bundled plugin postinstall", () => {
       log,
     });
 
-    expect(result).toMatchObject({ status: "migrated" });
+    expect(result).toEqual({
+      current: {
+        plugins: [{ pluginId: "demo" }],
+      },
+      migrated: true,
+      preflight: {
+        deprecationWarnings: [],
+      },
+      status: "migrated",
+    });
     expect(migratePluginRegistryForInstall).toHaveBeenCalledWith({
       env: { OPENCLAW_HOME: "/tmp/home" },
       packageRoot,
@@ -401,7 +505,7 @@ describe("bundled plugin postinstall", () => {
         importModule,
         log: { log: vi.fn(), warn: vi.fn() },
       }),
-    ).resolves.toMatchObject({
+    ).resolves.toEqual({
       status: "disabled",
       migrated: false,
       reason: "disabled-env",
@@ -425,9 +529,10 @@ describe("bundled plugin postinstall", () => {
         importModule,
         log: { log: vi.fn(), warn: vi.fn() },
       }),
-    ).resolves.toMatchObject({
+    ).resolves.toEqual({
       status: "skip-existing",
       migrated: false,
+      preflight: {},
     });
     expect(importModule).toHaveBeenCalledOnce();
     expect(migratePluginRegistryForInstall).toHaveBeenCalledWith({
@@ -453,7 +558,7 @@ describe("bundled plugin postinstall", () => {
     ).toEqual(["dist/channel-CJUAgRQR.js"]);
 
     await expectPathExists(currentFile);
-    await expect(fs.stat(staleFile)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(staleFile);
   });
 
   it("prunes legacy plugin runtime deps state during packaged postinstall", async () => {
@@ -514,11 +619,11 @@ describe("bundled plugin postinstall", () => {
       log,
     });
 
-    await expect(fs.stat(defaultLegacyRoot)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(oldBrandLegacyRoot)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(overrideLegacyRoot)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(systemLegacyRoot)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.lstat(legacySymlink)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(defaultLegacyRoot);
+    await expectPathMissing(oldBrandLegacyRoot);
+    await expectPathMissing(overrideLegacyRoot);
+    await expectPathMissing(systemLegacyRoot);
+    await expectPathMissing(legacySymlink);
     await expectPathExists(thirdPartyNodeModules);
     expect(log.warn).not.toHaveBeenCalled();
     expect(log.log).toHaveBeenCalledWith(
@@ -555,8 +660,8 @@ describe("bundled plugin postinstall", () => {
       log,
     });
 
-    await expect(fs.lstat(slackLink)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(legacyRuntimeRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(slackLink);
+    await expectPathMissing(legacyRuntimeRoot);
     expect(log.warn).not.toHaveBeenCalled();
     expect(log.log).toHaveBeenCalledWith(
       expect.stringContaining("[postinstall] pruned legacy plugin runtime deps symlinks:"),
@@ -625,7 +730,7 @@ describe("bundled plugin postinstall", () => {
     ).toEqual(["dist/memory-state-old.js"]);
 
     await expectPathExists(importedChunk);
-    await expect(fs.stat(staleFile)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(staleFile);
   });
 
   it("does not abort dist pruning when a listed chunk disappears before import expansion", async () => {
@@ -653,7 +758,7 @@ describe("bundled plugin postinstall", () => {
       }),
     ).toEqual(["dist/stale.js"]);
 
-    await expect(fs.stat(staleFile)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(staleFile);
   });
 
   it("prunes stale private QA files without restoring compat sidecars", async () => {
@@ -678,20 +783,20 @@ describe("bundled plugin postinstall", () => {
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    await expect(fs.stat(stalePackage)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(staleManifest)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-channel", "runtime-api.js")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-channel", "package.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-channel", "openclaw.plugin.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-lab", "runtime-api.js")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(stalePackage);
+    await expectPathMissing(staleManifest);
+    await expectPathMissing(
+      path.join(packageRoot, "dist", "extensions", "qa-channel", "runtime-api.js"),
+    );
+    await expectPathMissing(
+      path.join(packageRoot, "dist", "extensions", "qa-channel", "package.json"),
+    );
+    await expectPathMissing(
+      path.join(packageRoot, "dist", "extensions", "qa-channel", "openclaw.plugin.json"),
+    );
+    await expectPathMissing(
+      path.join(packageRoot, "dist", "extensions", "qa-lab", "runtime-api.js"),
+    );
   });
 
   it("keeps packaged postinstall non-fatal when the dist inventory is missing", async () => {
@@ -842,15 +947,9 @@ describe("bundled plugin postinstall", () => {
         log: { log: vi.fn(), warn: vi.fn() },
       }),
     ).toEqual(["dist/stale-runtime.js"]);
-    await expect(
-      fs.stat(path.join(packageRoot, "dist", "extensions", "slack", "node_modules")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(path.dirname(installStageFile))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await expect(fs.stat(path.dirname(retryInstallStageFile))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(packageRoot, "dist", "extensions", "slack", "node_modules"));
+    await expectPathMissing(path.dirname(installStageFile));
+    await expectPathMissing(path.dirname(retryInstallStageFile));
   });
 
   it("unlinks stale files instead of recursive pruning them", () => {
@@ -899,9 +998,7 @@ describe("bundled plugin postinstall", () => {
 
     pruneBundledPluginSourceNodeModules({ extensionsDir });
 
-    await expect(fs.stat(path.join(extensionsDir, "acpx", "node_modules"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(extensionsDir, "acpx", "node_modules"));
     await expectPathExists(path.join(extensionsDir, "fixtures", "node_modules"));
   });
 

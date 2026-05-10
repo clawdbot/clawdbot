@@ -1,5 +1,9 @@
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
-import { cleanStaleLockFiles, type SessionLockInspection } from "../agents/session-write-lock.js";
+import {
+  cleanStaleLockFiles,
+  type SessionLockInspection,
+  type SessionLockOwnerProcessArgsReader,
+} from "../agents/session-write-lock.js";
 import { resolveStateDir } from "../config/paths.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
@@ -35,7 +39,11 @@ function formatLockLine(lock: SessionLockInspection): string {
   return `- ${shortenHomePath(lock.lockPath)} ${pidStatus} ${ageStatus} ${staleStatus}${removedStatus}`;
 }
 
-export async function noteSessionLockHealth(params?: { shouldRepair?: boolean; staleMs?: number }) {
+export async function noteSessionLockHealth(params?: {
+  shouldRepair?: boolean;
+  staleMs?: number;
+  readOwnerProcessArgs?: SessionLockOwnerProcessArgsReader;
+}) {
   const shouldRepair = params?.shouldRepair === true;
   const staleMs = params?.staleMs ?? DEFAULT_STALE_MS;
   let sessionDirs: string[] = [];
@@ -56,6 +64,7 @@ export async function noteSessionLockHealth(params?: { shouldRepair?: boolean; s
       sessionsDir,
       staleMs,
       removeStale: shouldRepair,
+      readOwnerProcessArgs: params?.readOwnerProcessArgs,
     });
     allLocks.push(...result.locks);
   }

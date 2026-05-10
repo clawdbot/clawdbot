@@ -35,7 +35,7 @@ describe("command-registration-policy", () => {
         primary: "voicecall",
         hasBuiltinPrimary: false,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldSkipPluginCommandRegistration({
         argv: ["node", "openclaw", "help", "--help"],

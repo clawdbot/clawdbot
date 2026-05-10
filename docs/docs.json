@@ -1066,6 +1066,7 @@
                   "channels/imessage-from-bluebubbles",
                   "channels/matrix",
                   "channels/matrix-migration",
+                  "channels/matrix-presentation",
                   "channels/matrix-push-rules"
                 ]
               },
@@ -1194,6 +1195,7 @@
                   "plugins/reference",
                   "plugins/bundles",
                   "plugins/dependency-resolution",
+                  "plugins/install-overrides",
                   "plugins/codex-harness",
                   "plugins/codex-computer-use",
                   "plugins/google-meet",
@@ -1278,6 +1280,7 @@
                   "tools/reactions",
                   "tools/thinking",
                   "tools/tokenjuice",
+                  "tools/tool-search",
                   "tools/loop-detection",
                   "tools/trajectory",
                   "tools/tts",
@@ -1703,6 +1706,14 @@
                   "concepts/openclaw-sdk",
                   "reference/openclaw-sdk-api-design",
                   "reference/device-models"
+                ]
+              },
+              {
+                "group": "Codex harness",
+                "pages": [
+                  "plugins/codex-harness-reference",
+                  "plugins/codex-harness-runtime",
+                  "plugins/codex-native-plugins"
                 ]
               },
               {

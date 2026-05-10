@@ -19,11 +19,12 @@ describe("root package override guardrails", () => {
   it("pins the Bedrock runtime below the Windows ARM Node 24 npm resolver failure", () => {
     const manifest = readRootManifest();
     const packageName = "@aws-sdk/client-bedrock-runtime";
+    const dependencyVersion = manifest.dependencies?.[packageName];
     const npmOverride = manifest.overrides?.[packageName];
     const pnpmOverride = manifest.pnpm?.overrides?.["@aws-sdk/client-bedrock-runtime"];
 
-    expect(pnpmOverride).toBe("3.1024.0");
     expect(manifest.dependencies).toHaveProperty(packageName);
+    expect(pnpmOverride).toBe(dependencyVersion);
     expect(npmOverride).toBe(`$${packageName}`);
   });
 

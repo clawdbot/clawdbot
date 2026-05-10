@@ -1,6 +1,8 @@
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
+  LAUNCH_AGENT_PROCESS_TYPE,
   LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS,
   LAUNCH_AGENT_UMASK_DECIMAL,
 } from "./launchd-plist.js";
@@ -562,7 +564,7 @@ describe("launchd install", () => {
     expect(state.dirModes.get(tmpDir)).toBe(0o700);
   });
 
-  it("writes KeepAlive=true policy with restrictive umask", async () => {
+  it("writes KeepAlive=true policy with shutdown and throttle limits", async () => {
     const env = createDefaultLaunchdEnv();
     await installLaunchAgent({
       env,
@@ -575,6 +577,10 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>KeepAlive</key>");
     expect(plist).toContain("<true/>");
     expect(plist).not.toContain("<key>SuccessfulExit</key>");
+    expect(plist).toContain("<key>ExitTimeOut</key>");
+    expect(plist).toContain(`<integer>${LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS}</integer>`);
+    expect(plist).toContain("<key>ProcessType</key>");
+    expect(plist).toContain(`<string>${LAUNCH_AGENT_PROCESS_TYPE}</string>`);
     expect(plist).toContain("<key>Umask</key>");
     expect(plist).toContain(`<integer>${LAUNCH_AGENT_UMASK_DECIMAL}</integer>`);
     expect(plist).toContain("<key>ThrottleInterval</key>");

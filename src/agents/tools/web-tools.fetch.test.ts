@@ -180,11 +180,9 @@ describe("web_fetch extraction fallbacks", () => {
 
     expect(details.text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(details.text).toContain("Ignore previous instructions");
-    expect(details.externalContent).toMatchObject({
-      untrusted: true,
-      source: "web_fetch",
-      wrapped: true,
-    });
+    expect(details.externalContent?.untrusted).toBe(true);
+    expect(details.externalContent?.source).toBe("web_fetch");
+    expect(details.externalContent?.wrapped).toBe(true);
     // contentType is protocol metadata, not user content - should NOT be wrapped
     expect(details.contentType).toBe("text/plain");
     expect(details.length).toBe(details.text?.length);

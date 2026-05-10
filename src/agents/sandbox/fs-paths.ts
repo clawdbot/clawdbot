@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
@@ -151,13 +152,39 @@ export function resolveSandboxFsPathWithMounts(params: {
     };
   }
 
-  // Preserve legacy error wording for out-of-sandbox paths.
-  resolveSandboxPath({
-    filePath: input,
-    cwd: params.cwd,
-    root: params.defaultWorkspaceRoot,
+  const escapeMessage = formatSandboxRootEscapeMessage({
+    input,
+    defaultWorkspaceRoot: params.defaultWorkspaceRoot,
+    defaultContainerRoot: params.defaultContainerRoot,
   });
-  throw new Error(`Path escapes sandbox root (${params.defaultWorkspaceRoot}): ${input}`);
+  try {
+    resolveSandboxPath({
+      filePath: input,
+      cwd: params.cwd,
+      root: params.defaultWorkspaceRoot,
+    });
+  } catch {
+    throw new Error(escapeMessage);
+  }
+  throw new Error(escapeMessage);
+}
+
+function formatSandboxRootEscapeMessage(params: {
+  input: string;
+  defaultWorkspaceRoot: string;
+  defaultContainerRoot: string;
+}): string {
+  const containerRoot = normalizeContainerPath(params.defaultContainerRoot);
+  const workspaceRoot = shortenHomePath(path.resolve(params.defaultWorkspaceRoot));
+  return `Path escapes sandbox root (${workspaceRoot}; container root ${containerRoot}): ${params.input}. Use a path under ${containerRoot}/ instead.`;
+}
+
+function shortenHomePath(value: string): string {
+  const home = os.homedir();
+  if (value === home || value.startsWith(`${home}${path.sep}`)) {
+    return `~${value.slice(home.length)}`;
+  }
+  return value;
 }
 
 function compareMountsByContainerPath(a: SandboxFsMount, b: SandboxFsMount): number {

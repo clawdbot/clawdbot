@@ -249,6 +249,7 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
         timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         fetchFn: fetch,
         allowPrivateNetwork,
+        ssrfPolicy: req.ssrfPolicy,
         dispatcherPolicy,
       });
 

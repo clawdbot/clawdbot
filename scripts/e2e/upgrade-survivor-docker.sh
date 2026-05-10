@@ -289,7 +289,7 @@ if [ "$UPDATE_RESTART_MODE" != "auto-auth" ]; then
   update_args+=(--no-restart)
 fi
 set +e
-env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw "${update_args[@]}" >/tmp/openclaw-upgrade-survivor-update.json 2>/tmp/openclaw-upgrade-survivor-update.err
+env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD OPENCLAW_ALLOW_ROOT=1 openclaw "${update_args[@]}" >/tmp/openclaw-upgrade-survivor-update.json 2>/tmp/openclaw-upgrade-survivor-update.err
 update_status=$?
 set -e
 if [ "$update_status" -ne 0 ]; then

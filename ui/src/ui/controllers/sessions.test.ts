@@ -409,6 +409,37 @@ describe("loadSessions", () => {
     });
   });
 
+  it("forwards scoped agent refreshes to sessions.list", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      };
+    });
+    const state = createState(request);
+
+    await loadSessions(state, {
+      activeMinutes: 0,
+      limit: 0,
+      includeGlobal: true,
+      includeUnknown: true,
+      agentId: "ops",
+    });
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      agentId: "ops",
+    });
+  });
+
   it("coalesces overlapping refreshes instead of dropping the latest request", async () => {
     let resolveFirst: () => void = () => undefined;
     const firstBlocker = new Promise<void>((resolve) => {

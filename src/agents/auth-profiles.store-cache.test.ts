@@ -106,8 +106,12 @@ describe("auth profile store cache", () => {
       const first = ensureAuthProfileStore(agentDir);
       const second = ensureAuthProfileStore(agentDir);
 
-      expect(first.profiles["openai-codex:default"]).toMatchObject({ access: "access-1" });
-      expect(second.profiles["openai-codex:default"]).toMatchObject({ access: "access-2" });
+      expect((first.profiles["openai-codex:default"] as OAuthCredential | undefined)?.access).toBe(
+        "access-1",
+      );
+      expect((second.profiles["openai-codex:default"] as OAuthCredential | undefined)?.access).toBe(
+        "access-2",
+      );
       expect(mocks.resolveExternalCliAuthProfiles).toHaveBeenCalledTimes(2);
     });
   });
@@ -124,9 +128,9 @@ describe("auth profile store cache", () => {
 
       const reloaded = ensureAuthProfileStore(agentDir);
 
-      expect(reloaded.profiles["openai:default"]).toMatchObject({
-        key: "sk-test-2",
-      });
+      expect((reloaded.profiles["openai:default"] as { key?: string } | undefined)?.key).toBe(
+        "sk-test-2",
+      );
     });
   });
 
@@ -147,9 +151,9 @@ describe("auth profile store cache", () => {
       };
 
       const second = ensureAuthProfileStore(agentDir);
-      expect(second.profiles["openai:default"]).toMatchObject({
-        key: "sk-test",
-      });
+      expect((second.profiles["openai:default"] as { key?: string } | undefined)?.key).toBe(
+        "sk-test",
+      );
       expect(second.profiles["anthropic:default"]).toBeUndefined();
       expect(structuredCloneSpy).not.toHaveBeenCalled();
     });
@@ -162,7 +166,9 @@ describe("auth profile store cache", () => {
     await withAgentDirEnv("openclaw-auth-store-missing-", (agentDir) => {
       const store = ensureAuthProfileStore(agentDir);
 
-      expect(store.profiles["openai-codex:default"]).toMatchObject({ access: "access-1" });
+      expect((store.profiles["openai-codex:default"] as OAuthCredential | undefined)?.access).toBe(
+        "access-1",
+      );
       expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
     });
   });

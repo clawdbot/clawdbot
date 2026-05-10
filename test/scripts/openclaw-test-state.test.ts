@@ -37,10 +37,8 @@ describe("scripts/lib/openclaw-test-state", () => {
         "--json",
       ]);
       const payload = JSON.parse(stdout);
-      expect(payload).toMatchObject({
-        label: "script-test",
-        scenario: "update-stable",
-      });
+      expect(payload.label).toBe("script-test");
+      expect(payload.scenario).toBe("update-stable");
       for (const field of ["root", "home", "stateDir", "configPath", "workspaceDir"] as const) {
         expect(typeof payload[field]).toBe("string");
         expect(payload[field].length).toBeGreaterThan(0);
@@ -151,33 +149,22 @@ describe("scripts/lib/openclaw-test-state", () => {
     const payload = JSON.parse(stdout);
     try {
       expect(payload.scenario).toBe("upgrade-survivor");
-      expect(payload.config).toMatchObject({
-        update: {
-          channel: "stable",
-        },
-        gateway: {
-          auth: {
-            token: {
-              id: "GATEWAY_AUTH_TOKEN_REF",
-              source: "env",
-            },
-          },
-        },
-        channels: {
-          discord: {
-            enabled: true,
-            dm: {
-              policy: "allowlist",
-            },
-          },
-          telegram: {
-            enabled: true,
-          },
-          whatsapp: {
-            enabled: true,
-          },
+      expect(payload.config.update).toStrictEqual({ channel: "stable" });
+      expect(payload.config.gateway.auth).toStrictEqual({
+        mode: "token",
+        token: {
+          id: "GATEWAY_AUTH_TOKEN_REF",
+          provider: "default",
+          source: "env",
         },
       });
+      expect(payload.config.channels.discord.enabled).toBe(true);
+      expect(payload.config.channels.discord.dm).toStrictEqual({
+        allowFrom: ["111111111111111111"],
+        policy: "allowlist",
+      });
+      expect(payload.config.channels.telegram.enabled).toBe(true);
+      expect(payload.config.channels.whatsapp.enabled).toBe(true);
     } finally {
       await fs.rm(payload.root, { recursive: true, force: true });
     }

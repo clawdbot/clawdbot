@@ -78,10 +78,6 @@ describe("runNodeHost", () => {
     ).rejects.toThrow("event loop readiness timeout");
 
     expect(mocks.capturedGatewayClientOptions).toHaveLength(1);
-    expect(mocks.capturedGatewayClientOptions[0]).toEqual(
-      expect.objectContaining({
-        url: "ws://127.0.0.1:18789",
-      }),
-    );
+    expect(mocks.capturedGatewayClientOptions[0]?.url).toBe("ws://127.0.0.1:18789");
   });
 });

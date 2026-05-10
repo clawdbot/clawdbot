@@ -107,6 +107,23 @@ function hasFinding(
   );
 }
 
+function expectFindingCode(report: Awaited<ReturnType<typeof runSecretsAudit>>, code: string) {
+  expect(hasFinding(report, (entry) => entry.code === code)).toBe(true);
+}
+
+function expectFindingFile(report: Awaited<ReturnType<typeof runSecretsAudit>>, filePath: string) {
+  expect(hasFinding(report, (entry) => entry.file === filePath)).toBe(true);
+}
+
+async function expectPathMissing(filePath: string): Promise<void> {
+  try {
+    await fs.stat(filePath);
+    throw new Error(`Expected ${filePath} to be missing`);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+  }
+}
+
 async function createAuditFixture(): Promise<AuditFixture> {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-audit-"));
   const stateDir = path.join(rootDir, ".openclaw");
@@ -230,12 +247,8 @@ describe("secrets audit", () => {
     expect(report.status).toBe("findings");
     expect(report.summary.plaintextCount).toBeGreaterThan(0);
     expect(report.summary.shadowedRefCount).toBeGreaterThan(0);
-    expect(report.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ code: "REF_SHADOWED" }),
-        expect.objectContaining({ code: "PLAINTEXT_FOUND" }),
-      ]),
-    );
+    expectFindingCode(report, "REF_SHADOWED");
+    expectFindingCode(report, "PLAINTEXT_FOUND");
   });
 
   it("does not mutate legacy auth.json during audit", async () => {
@@ -248,12 +261,10 @@ describe("secrets audit", () => {
     });
 
     const report = await runSecretsAudit({ env: fixture.env });
-    expect(report.findings).toEqual(
-      expect.arrayContaining([expect.objectContaining({ code: "LEGACY_RESIDUE" })]),
-    );
+    expectFindingCode(report, "LEGACY_RESIDUE");
     const authJsonStat = await fs.stat(fixture.authJsonPath);
     expect(authJsonStat.isFile()).toBe(true);
-    await expect(fs.stat(fixture.authStorePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(fixture.authStorePath);
   });
 
   it("reports malformed sidecar JSON as findings instead of crashing", async () => {
@@ -261,13 +272,9 @@ describe("secrets audit", () => {
     await fs.writeFile(fixture.authJsonPath, "{invalid-json", "utf8");
 
     const report = await runSecretsAudit({ env: fixture.env });
-    expect(report.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ file: fixture.authStorePath }),
-        expect.objectContaining({ file: fixture.authJsonPath }),
-        expect.objectContaining({ code: "REF_UNRESOLVED" }),
-      ]),
-    );
+    expectFindingFile(report, fixture.authStorePath);
+    expectFindingFile(report, fixture.authJsonPath);
+    expectFindingCode(report, "REF_UNRESOLVED");
   });
 
   it("skips exec ref resolution during audit unless explicitly allowed", async () => {
@@ -302,7 +309,7 @@ describe("secrets audit", () => {
     expect(report.resolution.resolvabilityComplete).toBe(false);
     expect(report.resolution.skippedExecRefs).toBe(1);
     expect(report.summary.unresolvedRefCount).toBe(0);
-    await expect(fs.stat(execLogPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(execLogPath);
   });
 
   it("batches ref resolution per provider during audit when --allow-exec is enabled", async () => {

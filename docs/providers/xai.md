@@ -33,8 +33,9 @@ OpenClaw ships a bundled `xai` provider plugin for Grok models.
 
 <Note>
 OpenClaw uses the xAI Responses API as the bundled xAI transport. The same
-`XAI_API_KEY` can also power Grok-backed `web_search`, first-class `x_search`,
-and remote `code_execution`.
+API key from `openclaw onboard --auth-choice xai-api-key` can also power
+first-class `x_search` and remote `code_execution`; `XAI_API_KEY` or plugin
+web-search config can power Grok-backed `web_search` too.
 If you store an xAI key under `plugins.entries.xai.config.webSearch.apiKey`,
 the bundled xAI model provider reuses that key as a fallback too.
 Set `plugins.entries.xai.config.webSearch.baseUrl` to route Grok `web_search`
@@ -122,7 +123,8 @@ Legacy aliases still normalize to the canonical bundled ids:
 
 <AccordionGroup>
   <Accordion title="Web search">
-    The bundled `grok` web-search provider uses `XAI_API_KEY` too:
+    The bundled `grok` web-search provider can use `XAI_API_KEY` or a plugin
+    web-search key:
 
     ```bash
     openclaw config set tools.web.search.provider grok
@@ -409,8 +411,9 @@ Legacy aliases still normalize to the canonical bundled ids:
   </Accordion>
 
   <Accordion title="Known limits">
-    - Auth is API-key only today. There is no xAI OAuth or device-code flow in
-      OpenClaw yet.
+    - Auth is API-key only today. The API key may be stored in an xAI auth
+      profile, environment variable, or plugin config; there is no xAI OAuth or
+      device-code flow in OpenClaw yet.
     - `grok-4.20-multi-agent-experimental-beta-0304` is not supported on the
       normal xAI provider path because it requires a different upstream API
       surface than the standard OpenClaw xAI transport.

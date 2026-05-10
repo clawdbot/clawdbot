@@ -1144,7 +1144,20 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.transcriptPrompt).not.toContain("System: [t] Initial event.");
   });
 
-  it("threads reply context as explicit current-turn context without changing transcript text", async () => {
+  it("threads inbound context as current-turn context without changing transcript text", async () => {
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
+      [
+        "Reply target of current user message (untrusted, for context):",
+        "```json",
+        JSON.stringify(
+          { sender_label: "Jake", body: "quoted status body", is_quote: true },
+          null,
+          2,
+        ),
+        "```",
+      ].join("\n"),
+    );
+
     await runPreparedReply(
       baseParams({
         ctx: {
@@ -1172,13 +1185,11 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.commandBody).toContain("what does this mean?");
     expect(call?.transcriptCommandBody).toBe("what does this mean?");
     expect(call?.followupRun.transcriptPrompt).toBe("what does this mean?");
-    expect(call?.followupRun.currentTurnContext).toEqual({
-      reply: {
-        senderLabel: "Jake",
-        body: "quoted status body",
-        isQuote: true,
-      },
-    });
+    expect(call?.followupRun.currentTurnContext?.text).toContain(
+      "Reply target of current user message",
+    );
+    expect(call?.followupRun.currentTurnContext?.text).toContain('"sender_label": "Jake"');
+    expect(call?.followupRun.currentTurnContext?.text).toContain('"body": "quoted status body"');
   });
 
   it("keeps heartbeat prompts out of visible transcript prompt", async () => {

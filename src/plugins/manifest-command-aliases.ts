@@ -115,15 +115,15 @@ export function resolveManifestCommandAliasOwnerInRegistry(params: {
   const commandIsPluginId = params.registry.plugins.some(
     (plugin) => normalizeOptionalLowercaseString(plugin.id) === normalizedCommand,
   );
-  if (commandIsPluginId) {
-    return undefined;
-  }
 
   for (const plugin of params.registry.plugins) {
     const alias = plugin.commandAliases?.find(
       (entry) => normalizeOptionalLowercaseString(entry.name) === normalizedCommand,
     );
     if (alias) {
+      if (commandIsPluginId && normalizeOptionalLowercaseString(plugin.id) !== normalizedCommand) {
+        continue;
+      }
       return {
         ...alias,
         pluginId: plugin.id,

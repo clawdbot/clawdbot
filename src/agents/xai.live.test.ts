@@ -6,12 +6,16 @@ import {
   extractNonEmptyAssistantText,
   isLiveTestEnabled,
 } from "./live-test-helpers.js";
-import { isBillingErrorMessage } from "./pi-embedded-helpers/failover-matches.js";
+import {
+  isBillingErrorMessage,
+  isOverloadedErrorMessage,
+} from "./pi-embedded-helpers/failover-matches.js";
 import { applyExtraParamsToAgent } from "./pi-embedded-runner.js";
 import { createWebSearchTool } from "./tools/web-search.js";
 
 const XAI_KEY = process.env.XAI_API_KEY ?? "";
 const LIVE = isLiveTestEnabled(["XAI_LIVE_TEST"]);
+const XAI_COMPLETE_LIVE_TIMEOUT_MS = 90_000;
 const XAI_WEB_SEARCH_LIVE_TIMEOUT_SECONDS = 60;
 
 const describeLive = LIVE && XAI_KEY ? describe : describe.skip;
@@ -47,6 +51,10 @@ async function runXaiLiveCase(label: string, run: () => Promise<void>): Promise<
       console.warn(`[xai:live] skip ${label}: billing drift: ${message}`);
       return;
     }
+    if (isOverloadedErrorMessage(message)) {
+      console.warn(`[xai:live] skip ${label}: temporary provider capacity: ${message}`);
+      return;
+    }
     if (message.includes("web_search is disabled or no provider is available")) {
       console.warn(`[xai:live] skip ${label}: web_search unavailable in this environment`);
       return;
@@ -68,23 +76,27 @@ async function collectDoneMessage(
 }
 
 describeLive("xai live", () => {
-  it("returns assistant text for Grok 4.3", async () => {
-    await runXaiLiveCase("complete", async () => {
-      const model = requireLiveValue(resolveLiveXaiModel(), "xAI model");
-      const res = await completeSimple(
-        model,
-        {
-          messages: createSingleUserPromptMessage(),
-        },
-        {
-          apiKey: XAI_KEY,
-          maxTokens: 64,
-        },
-      );
+  it(
+    "returns assistant text for Grok 4.3",
+    async () => {
+      await runXaiLiveCase("complete", async () => {
+        const model = requireLiveValue(resolveLiveXaiModel(), "xAI model");
+        const res = await completeSimple(
+          model,
+          {
+            messages: createSingleUserPromptMessage(),
+          },
+          {
+            apiKey: XAI_KEY,
+            maxTokens: 64,
+          },
+        );
 
-      expect(extractNonEmptyAssistantText(res.content).length).toBeGreaterThan(0);
-    });
-  }, 30_000);
+        expect(extractNonEmptyAssistantText(res.content).length).toBeGreaterThan(0);
+      });
+    },
+    XAI_COMPLETE_LIVE_TIMEOUT_MS,
+  );
 
   it("sends wrapped xAI tool payloads live", async () => {
     await runXaiLiveCase("tool-call", async () => {

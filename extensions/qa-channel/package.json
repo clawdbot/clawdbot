@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/qa-channel",
-  "version": "2026.5.8",
+  "version": "2026.5.10-beta.1",
   "private": true,
   "description": "OpenClaw QA synthetic channel plugin",
   "type": "module",
@@ -11,14 +11,14 @@
     "./test-api.js": "./test-api.ts"
   },
   "dependencies": {
-    "typebox": "1.1.37"
+    "typebox": "1.1.38"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.5.8"
+    "openclaw": ">=2026.5.10-beta.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {

@@ -198,6 +198,47 @@ describe("cron tool", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("allows scoped isolated cron runs to read the current job run history", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      entries: [{ jobId: "job-current", status: "ok" }],
+      total: 1,
+      offset: 0,
+      limit: 50,
+      hasMore: false,
+      nextOffset: null,
+    });
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    const result = await tool.execute("call-self-runs", {
+      action: "runs",
+      jobId: "job-current",
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.runs");
+    expect(params).toEqual({ id: "job-current" });
+    expect(result.details).toEqual({
+      entries: [{ jobId: "job-current", status: "ok" }],
+      total: 1,
+      offset: 0,
+      limit: 50,
+      hasMore: false,
+      nextOffset: null,
+    });
+  });
+
+  it.each([
+    ["another job", { action: "runs", jobId: "job-other" }],
+    ["missing job id", { action: "runs" }],
+  ])("denies scoped isolated cron runs from reading %s run history", async (_label, args) => {
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    await expect(tool.execute("call-runs-denied", args)).rejects.toThrow(
+      "Cron tool is restricted to removing the current cron job.",
+    );
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("allows scoped isolated cron runs to read cron scheduler status", async () => {
     callGatewayMock.mockResolvedValueOnce({
       enabled: true,
@@ -320,7 +361,6 @@ describe("cron tool", () => {
     ["add", { action: "add", job: buildReminderAgentTurnJob() }],
     ["update", { action: "update", jobId: "job-current", patch: { enabled: false } }],
     ["run", { action: "run", jobId: "job-current" }],
-    ["runs", { action: "runs", jobId: "job-current" }],
     ["wake", { action: "wake", text: "wake up" }],
   ])("denies scoped isolated cron runs from using %s", async (_action, args) => {
     const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });

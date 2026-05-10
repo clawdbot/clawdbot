@@ -130,6 +130,72 @@ describe("matrix channel message adapter", () => {
     });
   });
 
+  it("forwards presentation payload hooks through the registered outbound adapter", async () => {
+    const outbound = matrixPlugin.outbound;
+    expect(outbound?.presentationCapabilities).toMatchObject({
+      supported: true,
+      buttons: true,
+      selects: true,
+      context: true,
+      divider: true,
+    });
+    if (!outbound?.renderPresentation || !outbound.sendPayload) {
+      throw new Error("Expected Matrix outbound presentation payload hooks.");
+    }
+
+    const presentation = {
+      title: "Select thinking level",
+      tone: "info" as const,
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [{ label: "Low", value: "/think low" }],
+        },
+      ],
+    };
+    const rendered = await outbound.renderPresentation({
+      payload: { text: "fallback", presentation },
+      presentation,
+      ctx: {} as never,
+    });
+
+    expect(rendered?.channelData?.matrix).toMatchObject({
+      extraContent: {
+        "com.openclaw.presentation": {
+          ...presentation,
+          version: 1,
+          type: "message.presentation",
+        },
+      },
+    });
+
+    await outbound.sendPayload({
+      cfg,
+      to: "room:!room:example",
+      text: rendered?.text ?? "",
+      payload: rendered!,
+      accountId: "default",
+      threadId: "$thread",
+    });
+
+    expect(mocks.sendMessageMatrix).toHaveBeenLastCalledWith(
+      "room:!room:example",
+      rendered?.text,
+      expect.objectContaining({
+        cfg,
+        accountId: "default",
+        threadId: "$thread",
+        extraContent: {
+          "com.openclaw.presentation": {
+            ...presentation,
+            version: 1,
+            type: "message.presentation",
+          },
+        },
+      }),
+    );
+  });
+
   it("backs declared live preview finalizer capabilities with adapter proofs", async () => {
     const adapter = matrixPlugin.message;
 

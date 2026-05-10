@@ -43,11 +43,16 @@ export function resolvePiCredentialsForDiscovery(
           ? loadAuthProfileStoreForRuntime(agentDir, { readOnly: true, ...storeOptions })
           : loadAuthProfileStoreForSecretsRuntime(agentDir)
         : ensureAuthProfileStore(agentDir, storeOptions);
-  const credentials = addEnvBackedPiCredentials(resolvePiCredentialMapFromStore(store), {
-    config: options?.config,
-    workspaceDir: options?.workspaceDir,
-    env: options?.env,
-  });
+  const credentials = addEnvBackedPiCredentials(
+    resolvePiCredentialMapFromStore(store, {
+      includeSecretRefPlaceholders: options?.readOnly === true,
+    }),
+    {
+      config: options?.config,
+      workspaceDir: options?.workspaceDir,
+      env: options?.env,
+    },
+  );
   const syntheticAuthProviderRefs =
     options?.syntheticAuthProviderRefs ?? resolveRuntimeSyntheticAuthProviderRefs();
   for (const provider of syntheticAuthProviderRefs) {

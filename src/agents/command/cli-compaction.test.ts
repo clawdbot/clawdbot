@@ -145,23 +145,30 @@ describe("runCliTurnCompactionLifecycle", () => {
     });
 
     expect(compactCalls).toHaveLength(1);
-    expect(compactCalls[0]).toMatchObject({
-      sessionId,
-      sessionKey,
-      sessionFile,
-      tokenBudget: 1_000,
-      currentTokenCount: 950,
-      force: true,
-      compactionTarget: "budget",
-    });
-    expect(maintenance).toHaveBeenCalledWith(
-      expect.objectContaining({
-        reason: "compaction",
-        sessionId,
-        sessionKey,
-        sessionFile,
-      }),
-    );
+    const compactCall = compactCalls[0];
+    expect(compactCall?.sessionId).toBe(sessionId);
+    expect(compactCall?.sessionKey).toBe(sessionKey);
+    expect(compactCall?.sessionFile).toBe(sessionFile);
+    expect(compactCall?.tokenBudget).toBe(1_000);
+    expect(compactCall?.currentTokenCount).toBe(950);
+    expect(compactCall?.force).toBe(true);
+    expect(compactCall?.compactionTarget).toBe("budget");
+    expect(maintenance).toHaveBeenCalledTimes(1);
+    const maintenanceCalls = maintenance.mock.calls as unknown as Array<
+      [
+        {
+          reason?: string;
+          sessionId?: string;
+          sessionKey?: string;
+          sessionFile?: string;
+        },
+      ]
+    >;
+    const maintenanceCall = maintenanceCalls[0]?.[0];
+    expect(maintenanceCall?.reason).toBe("compaction");
+    expect(maintenanceCall?.sessionId).toBe(sessionId);
+    expect(maintenanceCall?.sessionKey).toBe(sessionKey);
+    expect(maintenanceCall?.sessionFile).toBe(sessionFile);
     expect(updatedEntry?.compactionCount).toBe(1);
     expect(updatedEntry?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
     expect(updatedEntry?.cliSessionIds?.["claude-cli"]).toBeUndefined();

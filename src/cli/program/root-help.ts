@@ -14,6 +14,7 @@ import { getSubCliEntries } from "./subcli-descriptors.js";
 export type RootHelpRenderOptions = Pick<PluginLoadOptions, "pluginSdkResolution"> & {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  includePluginDescriptors?: boolean;
 };
 
 async function buildRootHelpProgram(renderOptions?: RootHelpRenderOptions): Promise<Command> {
@@ -25,14 +26,19 @@ async function buildRootHelpProgram(renderOptions?: RootHelpRenderOptions): Prom
     agentChannelOptions: "",
   });
 
+  const pluginDescriptors =
+    renderOptions?.includePluginDescriptors === true || renderOptions?.config
+      ? await getPluginCliCommandDescriptors(renderOptions.config, renderOptions.env, {
+          pluginSdkResolution: renderOptions.pluginSdkResolution,
+        })
+      : [];
+
   addCommandDescriptorsToProgram(
     program,
     collectUniqueCommandDescriptors([
       getCoreCliCommandDescriptors(),
       getSubCliEntries(),
-      await getPluginCliCommandDescriptors(renderOptions?.config, renderOptions?.env, {
-        pluginSdkResolution: renderOptions?.pluginSdkResolution,
-      }),
+      pluginDescriptors,
     ]),
   );
 

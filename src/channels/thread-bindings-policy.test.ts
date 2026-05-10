@@ -75,11 +75,9 @@ describe("thread binding spawn policy helpers", () => {
       kind: "subagent",
     });
 
-    expect(policy).toMatchObject({
-      enabled: true,
-      spawnEnabled: true,
-      defaultSpawnContext: "fork",
-    });
+    expect(policy.enabled).toBe(true);
+    expect(policy.spawnEnabled).toBe(true);
+    expect(policy.defaultSpawnContext).toBe("fork");
   });
 
   it("uses spawnSessions for both subagent and ACP spawn policy", () => {

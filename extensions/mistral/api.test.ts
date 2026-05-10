@@ -1,10 +1,13 @@
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import {
   applyMistralModelCompat,
+  MISTRAL_MEDIUM_3_5_ID,
   MISTRAL_MODEL_TRANSPORT_PATCH,
   MISTRAL_SMALL_LATEST_ID,
   resolveMistralCompatPatch,
 } from "./api.js";
+import mistralPlugin from "./index.js";
 import { contributeMistralResolvedModelCompat } from "./provider-compat.js";
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe provider compat shape.
@@ -39,6 +42,15 @@ describe("resolveMistralCompatPatch", () => {
     });
   });
 
+  it("enables reasoning_effort mapping for mistral-medium-3-5", () => {
+    expect(resolveMistralCompatPatch({ id: MISTRAL_MEDIUM_3_5_ID })).toMatchObject({
+      supportsStore: false,
+      supportsReasoningEffort: true,
+      maxTokensField: "max_tokens",
+      reasoningEffortMap: expect.objectContaining({ high: "high", off: "none" }),
+    });
+  });
+
   it("disables reasoning_effort for other Mistral model ids", () => {
     expect(resolveMistralCompatPatch({ id: "mistral-large-latest" })).toEqual({
       ...MISTRAL_MODEL_TRANSPORT_PATCH,
@@ -58,6 +70,13 @@ describe("applyMistralModelCompat", () => {
 
   it("applies reasoning compat for mistral-small-latest", () => {
     const normalized = applyMistralModelCompat({ id: MISTRAL_SMALL_LATEST_ID });
+    expect(supportsReasoningEffort(normalized)).toBe(true);
+    expect(reasoningEffortMap(normalized)?.high).toBe("high");
+    expect(reasoningEffortMap(normalized)?.off).toBe("none");
+  });
+
+  it("applies reasoning compat for mistral-medium-3-5", () => {
+    const normalized = applyMistralModelCompat({ id: MISTRAL_MEDIUM_3_5_ID });
     expect(supportsReasoningEffort(normalized)).toBe(true);
     expect(reasoningEffortMap(normalized)?.high).toBe("high");
     expect(reasoningEffortMap(normalized)?.off).toBe("none");
@@ -107,6 +126,25 @@ describe("applyMistralModelCompat", () => {
       compat: resolveMistralCompatPatch({ id: MISTRAL_SMALL_LATEST_ID }),
     };
     expect(applyMistralModelCompat(model)).toBe(model);
+  });
+
+  it("returns the same object when mistral-medium-3-5 compat is fully normalized", () => {
+    const model = {
+      id: MISTRAL_MEDIUM_3_5_ID,
+      compat: resolveMistralCompatPatch({ id: MISTRAL_MEDIUM_3_5_ID }),
+    };
+    expect(applyMistralModelCompat(model)).toBe(model);
+  });
+
+  it("exposes thinking profile levels for mistral-medium-3-5", async () => {
+    const provider = await registerSingleProviderPlugin(mistralPlugin);
+
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "mistral",
+        modelId: MISTRAL_MEDIUM_3_5_ID,
+      }),
+    ).toEqual({ levels: [{ id: "off" }, { id: "high" }], defaultLevel: "off" });
   });
 
   it("contributes Mistral transport compat for native, provider-family, and hinted custom routes", () => {

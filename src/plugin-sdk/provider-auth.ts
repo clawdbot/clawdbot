@@ -98,12 +98,14 @@ export const COPILOT_EDITOR_VERSION = "vscode/1.96.2";
 export const COPILOT_USER_AGENT = "GitHubCopilotChat/0.26.7";
 export const COPILOT_EDITOR_PLUGIN_VERSION = "copilot-chat/0.35.0";
 export const COPILOT_GITHUB_API_VERSION = "2025-04-01";
+export const COPILOT_INTEGRATION_ID = "vscode-chat";
 export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilot.com";
 
 export type CachedCopilotToken = {
   token: string;
   expiresAt: number;
   updatedAt: number;
+  integrationId?: string;
 };
 
 export function buildCopilotIdeHeaders(
@@ -124,7 +126,7 @@ function resolveCopilotTokenCachePath(env: NodeJS.ProcessEnv = process.env) {
 }
 
 function isCopilotTokenUsable(cache: CachedCopilotToken, now = Date.now()): boolean {
-  return cache.expiresAt - now > 5 * 60 * 1000;
+  return cache.integrationId === COPILOT_INTEGRATION_ID && cache.expiresAt - now > 5 * 60 * 1000;
 }
 
 function parseCopilotTokenResponse(value: unknown): {
@@ -232,6 +234,7 @@ export async function resolveCopilotApiToken(params: {
     headers: {
       Accept: "application/json",
       Authorization: `Bearer ${params.githubToken}`,
+      "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
       ...buildCopilotIdeHeaders({ includeApiVersion: true }),
     },
   });
@@ -245,6 +248,7 @@ export async function resolveCopilotApiToken(params: {
     token: json.token,
     expiresAt: json.expiresAt,
     updatedAt: Date.now(),
+    integrationId: COPILOT_INTEGRATION_ID,
   };
   saveJsonFileFn(cachePath, payload);
 

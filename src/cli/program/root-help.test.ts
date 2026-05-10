@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderRootHelpText } from "./root-help.js";
 
 const getPluginCliCommandDescriptorsMock = vi.fn(
@@ -53,6 +53,10 @@ vi.mock("../../plugins/cli.js", () => ({
 }));
 
 describe("root help", () => {
+  beforeEach(() => {
+    getPluginCliCommandDescriptorsMock.mockClear();
+  });
+
   it("passes isolated config and env through to plugin CLI descriptor loading", async () => {
     const config = {
       agents: {
@@ -71,11 +75,17 @@ describe("root help", () => {
   });
 
   it("includes plugin CLI descriptors alongside core and sub-CLI commands", async () => {
-    const text = await renderRootHelpText();
+    const text = await renderRootHelpText({ includePluginDescriptors: true });
 
     expect(text).toContain("status");
     expect(text).toContain("config");
     expect(text).toContain("matrix");
     expect(text).toContain("Matrix channel utilities");
+  });
+
+  it("does not load plugin CLI descriptors by default", async () => {
+    await renderRootHelpText();
+
+    expect(getPluginCliCommandDescriptorsMock).not.toHaveBeenCalled();
   });
 });

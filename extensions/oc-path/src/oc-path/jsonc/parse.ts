@@ -1,6 +1,5 @@
 import {
   ParseErrorCode,
-  type Node as JsoncParserNode,
   type ParseError,
   parseTree,
   printParseErrorCode,
@@ -35,6 +34,14 @@ type LineMap = {
   lineForOffset(offset: number): number;
 };
 
+type JsoncParserNode = {
+  readonly type: "array" | "boolean" | "null" | "number" | "object" | "property" | "string";
+  readonly offset: number;
+  readonly length: number;
+  readonly value?: unknown;
+  readonly children?: readonly JsoncParserNode[];
+};
+
 export function parseJsonc(raw: string): JsoncParseResult {
   if (raw.trim().length === 0) {
     return { ast: { kind: "jsonc", raw, root: null }, diagnostics: [] };
@@ -64,7 +71,7 @@ export function parseJsonc(raw: string): JsoncParseResult {
     allowTrailingComma: true,
     disallowComments: false,
     allowEmptyContent: true,
-  });
+  }) as JsoncParserNode | undefined;
   const lineMap = createLineMap(raw);
   const diagnostics = errors.map((error) => toDiagnostic(error, lineMap, tree));
   let root: JsoncValue | null = null;

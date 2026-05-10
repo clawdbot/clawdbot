@@ -54,8 +54,15 @@ const MAX_INSTALLED_ROOT_DIST_JS_BYTES = 4 * 1024 * 1024;
 const MAX_INSTALLED_ROOT_DIST_JS_FILES = 5000;
 const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
 const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
+  // Optional A2UI markdown renderer. The Canvas host bundle catches the missing
+  // package and falls back when the optional renderer is unavailable.
+  "@a2ui/markdown-it",
   "@discordjs/opus",
   "@lancedb/lancedb",
+  // Feishu/Lark remains a bundled plugin package. Root dist can retain orphaned
+  // lazy chunks from the plugin build even though dist/extensions/feishu is
+  // externalized from the root package scan.
+  "@larksuiteoapi/node-sdk",
   "@matrix-org/matrix-sdk-crypto-nodejs",
   "link-preview-js",
   "matrix-js-sdk",

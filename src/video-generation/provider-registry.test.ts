@@ -58,7 +58,7 @@ describe("video-generation provider registry", () => {
 
     const provider = getVideoGenerationProvider("custom-video");
 
-    expect(provider).toMatchObject({ id: "custom-video" });
+    expect(provider?.id).toBe("custom-video");
     expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
       key: "videoGenerationProviders",
       cfg: undefined,
@@ -74,6 +74,6 @@ describe("video-generation provider registry", () => {
     expect(listVideoGenerationProviders().map((provider) => provider.id)).toEqual(["safe-video"]);
     expect(getVideoGenerationProvider("__proto__")).toBeUndefined();
     expect(getVideoGenerationProvider("constructor")).toBeUndefined();
-    expect(requireVideoProvider("safe-alias")).toMatchObject({ id: "safe-video" });
+    expect(requireVideoProvider("safe-alias").id).toBe("safe-video");
   });
 });

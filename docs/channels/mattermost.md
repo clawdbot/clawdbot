@@ -189,11 +189,13 @@ Notes:
   - `openclaw pairing list mattermost`
   - `openclaw pairing approve mattermost <CODE>`
 - Public DMs: `channels.mattermost.dmPolicy="open"` plus `channels.mattermost.allowFrom=["*"]`.
+- `channels.mattermost.allowFrom` accepts `accessGroup:<name>` entries. See [Access groups](/channels/access-groups).
 
 ## Channels (groups)
 
 - Default: `channels.mattermost.groupPolicy = "allowlist"` (mention-gated).
 - Allowlist senders with `channels.mattermost.groupAllowFrom` (user IDs recommended).
+- `channels.mattermost.groupAllowFrom` accepts `accessGroup:<name>` entries. See [Access groups](/channels/access-groups).
 - Per-channel mention overrides live under `channels.mattermost.groups.<channelId>.requireMention` or `channels.mattermost.groups["*"].requireMention` for a default.
 - `@username` matching is mutable and only enabled when `channels.mattermost.dangerouslyAllowNameMatching: true`.
 - Open channels: `channels.mattermost.groupPolicy="open"` (mention-gated).

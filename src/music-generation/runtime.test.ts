@@ -365,15 +365,14 @@ describe("music-generation runtime", () => {
       durationSeconds: 30,
     });
     expect(result.ignoredOverrides).toStrictEqual([]);
-    expect(result.normalization).toMatchObject({
-      durationSeconds: {
-        requested: 45,
-        applied: 30,
-      },
-    });
-    expect(result.metadata).toMatchObject({
-      requestedDurationSeconds: 45,
-      normalizedDurationSeconds: 30,
-    });
+    expect(result.normalization).toBeDefined();
+    expect(result.metadata).toBeDefined();
+    if (!result.normalization || !result.metadata) {
+      throw new Error("Expected normalization and metadata");
+    }
+    expect(result.normalization.durationSeconds?.requested).toBe(45);
+    expect(result.normalization.durationSeconds?.applied).toBe(30);
+    expect(result.metadata.requestedDurationSeconds).toBe(45);
+    expect(result.metadata.normalizedDurationSeconds).toBe(30);
   });
 });

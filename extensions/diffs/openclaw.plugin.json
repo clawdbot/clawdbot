@@ -1,7 +1,7 @@
 {
   "id": "diffs",
   "activation": {
-    "onStartup": false
+    "onStartup": true
   },
   "name": "Diffs",
   "description": "Read-only diff viewer and file renderer for agents.",
@@ -74,6 +74,10 @@
     "defaults.mode": {
       "label": "Default Output Mode",
       "help": "Tool default when mode is omitted. Use view for canvas/gateway viewer, file for PNG/PDF, or both."
+    },
+    "defaults.ttlSeconds": {
+      "label": "Default Artifact TTL",
+      "help": "Default lifetime in seconds for diff viewer and file artifacts. Maximum: 21600."
     },
     "security.allowRemoteViewer": {
       "label": "Allow Remote Viewer",
@@ -190,6 +194,12 @@
             "type": "string",
             "enum": ["view", "image", "file", "both"],
             "default": "both"
+          },
+          "ttlSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 21600,
+            "default": 1800
           }
         }
       },

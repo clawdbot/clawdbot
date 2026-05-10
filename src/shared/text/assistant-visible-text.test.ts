@@ -163,7 +163,7 @@ describe("stripAssistantInternalScaffolding", () => {
           "[END_TOOL_REQUEST]",
           "Done.",
         ].join("\n"),
-        "Let me check.\n\nDone.",
+        "Let me check.\nDone.",
       );
     });
 
@@ -176,7 +176,7 @@ describe("stripAssistantInternalScaffolding", () => {
           "[/mempalace_mempalace_search]",
           "After",
         ].join("\n"),
-        "Before\n\nAfter",
+        "Before\nAfter",
       );
     });
 

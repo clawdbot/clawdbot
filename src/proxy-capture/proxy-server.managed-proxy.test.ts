@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { Socket, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -19,12 +19,16 @@ async function cleanupTestDirs(): Promise<void> {
 
 async function makeSettings() {
   testRoot = await mkdtemp(join(tmpdir(), "openclaw-debug-proxy-managed-proxy-"));
+  const certDir = join(testRoot, "certs");
+  await mkdir(certDir, { recursive: true });
+  await writeFile(join(certDir, "root-ca.pem"), "test root cert\n", "utf8");
+  await writeFile(join(certDir, "root-ca-key.pem"), "test root key\n", "utf8");
   return {
     enabled: true,
     required: false,
     dbPath: ":memory:",
     blobDir: join(testRoot, "blobs"),
-    certDir: join(testRoot, "certs"),
+    certDir,
     sessionId: "debug-proxy-managed-proxy-test",
     sourceProcess: "test",
   };

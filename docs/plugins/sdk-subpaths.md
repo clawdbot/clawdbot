@@ -56,6 +56,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/account-id` | `DEFAULT_ACCOUNT_ID`, account-id normalization helpers |
     | `plugin-sdk/account-resolution` | Account lookup + default-fallback helpers |
     | `plugin-sdk/account-helpers` | Narrow account-list/account-action helpers |
+    | `plugin-sdk/access-groups` | Access-group allowlist parsing and redacted group diagnostics helpers |
     | `plugin-sdk/channel-pairing` | `createChannelPairingController` |
     | `plugin-sdk/channel-reply-pipeline` | Legacy reply pipeline helpers. New channel reply pipeline code should use `createChannelMessageReplyPipeline` and `resolveChannelMessageSourceReplyDeliveryMode` from `plugin-sdk/channel-message`. |
     | `plugin-sdk/channel-config-helpers` | `createHybridChannelConfigAdapter`, `resolveChannelDmAccess`, `resolveChannelDmAllowFrom`, `resolveChannelDmPolicy`, `normalizeChannelDmPolicy`, `normalizeLegacyDmAliases` |
@@ -65,6 +66,8 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/telegram-command-config` | Telegram custom-command normalization/validation helpers with bundled-contract fallback |
     | `plugin-sdk/command-gating` | Narrow command authorization gate helpers |
     | `plugin-sdk/channel-policy` | `resolveChannelGroupRequireMention` |
+    | `plugin-sdk/channel-ingress` | Deprecated low-level channel ingress compatibility facade. New receive paths should use `plugin-sdk/channel-ingress-runtime`. |
+    | `plugin-sdk/channel-ingress-runtime` | Experimental high-level channel ingress runtime resolver and route fact builders for migrated channel receive paths. Prefer this over assembling effective allowlists, command allowlists, and legacy projections in each plugin. See [Channel ingress API](/plugins/sdk-channel-ingress). |
     | `plugin-sdk/channel-lifecycle` | `createAccountStatusSink`, `createChannelRunQueue`, and legacy draft stream lifecycle helpers. New preview finalization code should use `plugin-sdk/channel-message`. |
     | `plugin-sdk/channel-message` | Cheap message lifecycle contract helpers such as `defineChannelMessageAdapter`, `createChannelMessageAdapterFromOutbound`, `createChannelMessageReplyPipeline`, `createReplyPrefixContext`, `resolveChannelMessageSourceReplyDeliveryMode`, durable-final capability derivation, capability proof helpers for send/receipt/side-effect capabilities, `MessageReceiveContext`, receive ack policy proofs, `defineFinalizableLivePreviewAdapter`, `deliverWithFinalizableLivePreviewAdapter`, live-preview and live-finalizer capability proofs, durable recovery state, `RenderedMessageBatch`, message receipt types, and receipt id helpers. See [Channel message API](/plugins/sdk-channel-message). Legacy reply-dispatch facades are deprecated compatibility only. |
     | `plugin-sdk/channel-message-runtime` | Runtime delivery helpers that may load outbound delivery, including `deliverInboundReplyWithMessageSendContext`, `sendDurableMessageBatch`, and `withDurableMessageSendContext`. Deprecated reply-dispatch bridges remain importable for compatibility dispatchers only. Use from monitor/send runtime modules, not hot plugin bootstrap files. |
@@ -238,7 +241,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/dedupe-runtime` | In-memory dedupe cache helpers |
     | `plugin-sdk/delivery-queue-runtime` | Outbound pending-delivery drain helper |
     | `plugin-sdk/file-access-runtime` | Safe local-file and media-source path helpers |
-    | `plugin-sdk/heartbeat-runtime` | Heartbeat event and visibility helpers |
+    | `plugin-sdk/heartbeat-runtime` | Heartbeat wake, event, and visibility helpers |
     | `plugin-sdk/number-runtime` | Numeric coercion helper |
     | `plugin-sdk/secure-random-runtime` | Secure token/UUID helpers |
     | `plugin-sdk/system-event-runtime` | System event queue helpers |

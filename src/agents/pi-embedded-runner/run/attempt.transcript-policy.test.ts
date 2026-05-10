@@ -76,18 +76,33 @@ describe("resolveAttemptTranscriptPolicy", () => {
       env,
     });
 
-    expect(policy).toMatchObject({
-      sanitizeMode: "images-only",
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      repairToolUseResultPairing: true,
-      allowSyntheticToolResults: false,
-    });
+    expect(policy.sanitizeMode).toBe("images-only");
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+    expect(policy.repairToolUseResultPairing).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(false);
+    expect(policy.allowSyntheticToolResults).toBe(false);
     expect(resolveProviderRuntimePluginMock).toHaveBeenCalledWith({
       provider: "custom-openai-compatible",
       config: undefined,
       workspaceDir: "/tmp/openclaw-transcript-policy",
       env,
     });
+  });
+
+  it("inherits Claude-family OpenAI Responses turn validation from legacy fallback", () => {
+    const policy = resolveAttemptTranscriptPolicy({
+      runtimePlanModelContext: {
+        workspaceDir: "/tmp/openclaw-transcript-policy",
+        modelApi: "openai-responses",
+      },
+      provider: "anthropic-foundry",
+      modelId: "anthropic-foundry/claude-opus-4-7",
+    });
+
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+    expect(policy.validateAnthropicTurns).toBe(true);
+    expect(policy.validateGeminiTurns).toBe(false);
   });
 });

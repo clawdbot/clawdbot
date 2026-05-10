@@ -1,25 +1,25 @@
-import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
-import { expandAllowFromWithAccessGroups } from "openclaw/plugin-sdk/security-runtime";
+import {
+  channelIngressRoutes,
+  createChannelIngressResolver,
+  defineStableChannelIngressIdentity,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  normalizeStringEntries,
 } from "openclaw/plugin-sdk/text-runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   createChannelPairingController,
-  evaluateGroupRouteAccessForPolicy,
   isDangerousNameMatchingEnabled,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
-  resolveDmGroupAccessWithLists,
-  resolveSenderScopedGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
   type OpenClawConfig,
 } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { sendGoogleChatMessage } from "./api.js";
 import type { GoogleChatCoreRuntime } from "./monitor-types.js";
-import { isSenderAllowed } from "./sender-allow.js";
 import type { GoogleChatAnnotation, GoogleChatMessage, GoogleChatSpace } from "./types.js";
 
 function normalizeUserId(raw?: string | null): string {
@@ -30,7 +30,57 @@ function normalizeUserId(raw?: string | null): string {
   return normalizeLowercaseStringOrEmpty(trimmed.replace(/^users\//i, ""));
 }
 
-export { isSenderAllowed } from "./sender-allow.js";
+type GoogleChatDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
+type GoogleChatGroupPolicy = "open" | "allowlist" | "disabled";
+
+const GOOGLECHAT_EMAIL_KIND = "plugin:googlechat-email" as const;
+
+function normalizeEntryValue(raw?: string | null): string {
+  return normalizeLowercaseStringOrEmpty(raw ?? "");
+}
+
+function normalizeGoogleChatStableEntry(entry: string): string | null {
+  const withoutProvider = normalizeEntryValue(entry).replace(
+    /^(googlechat|google-chat|gchat):/i,
+    "",
+  );
+  if (!withoutProvider) {
+    return null;
+  }
+  return withoutProvider.startsWith("users/") ? normalizeUserId(withoutProvider) : withoutProvider;
+}
+
+function normalizeGoogleChatEmailEntry(entry: string): string | null {
+  const withoutProvider = normalizeEntryValue(entry).replace(
+    /^(googlechat|google-chat|gchat):/i,
+    "",
+  );
+  if (withoutProvider.startsWith("users/")) {
+    return null;
+  }
+  const stable = normalizeGoogleChatStableEntry(entry);
+  return stable?.includes("@") ? stable : null;
+}
+
+const googleChatIngressIdentity = defineStableChannelIngressIdentity({
+  key: "sender-id",
+  normalizeEntry: normalizeGoogleChatStableEntry,
+  normalizeSubject: normalizeUserId,
+  aliases: [
+    {
+      key: "email",
+      kind: GOOGLECHAT_EMAIL_KIND,
+      normalizeEntry: normalizeGoogleChatEmailEntry,
+      normalizeSubject: normalizeEntryValue,
+      dangerous: true,
+    },
+  ],
+  isWildcardEntry: (entry) => normalizeEntryValue(entry) === "*",
+  resolveEntryId: ({ entryIndex, fieldKey }) =>
+    fieldKey === "stableId"
+      ? `entry-${entryIndex + 1}:user`
+      : `entry-${entryIndex + 1}:${fieldKey}`,
+});
 
 type GoogleChatGroupEntry = {
   requireMention?: boolean;
@@ -205,151 +255,160 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   });
   const groupEntry = groupConfigResolved.entry;
   const groupUsers = groupEntry?.users ?? account.config.groupAllowFrom ?? [];
-  const isGoogleChatSenderAllowed = (_senderId: string, allowFrom: string[]) =>
-    isSenderAllowed(senderId, senderEmail, allowFrom, allowNameMatching);
-  const expandedGroupUsers = await expandAllowFromWithAccessGroups({
-    cfg: config,
-    allowFrom: groupUsers,
-    channel: "googlechat",
-    accountId: account.accountId,
-    senderId,
-    isSenderAllowed: isGoogleChatSenderAllowed,
-  });
   let effectiveWasMentioned: boolean | undefined;
+  const dmPolicy = account.config.dm?.policy ?? "pairing";
+  const rawConfigAllowFrom = normalizeStringEntries(account.config.dm?.allowFrom);
+  const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
+  const groupActivation = (() => {
+    if (!isGroup) {
+      return undefined;
+    }
+    const requireMention = groupEntry?.requireMention ?? account.config.requireMention ?? true;
+    const mentionInfo = extractMentionInfo(message.annotations ?? [], account.config.botUser);
+    return {
+      requireMention,
+      allowTextCommands: core.channel.commands.shouldHandleTextCommands({
+        cfg: config,
+        surface: "googlechat",
+      }),
+      hasControlCommand: core.channel.text.hasControlCommand(rawBody, config),
+      wasMentioned: mentionInfo.wasMentioned,
+      hasAnyMention: mentionInfo.hasAnyMention,
+    };
+  })();
+  const command = {
+    hasControlCommand: groupActivation?.hasControlCommand ?? shouldComputeAuth,
+    groupOwnerAllowFrom: "none" as const,
+  };
+  const groupAllowFrom = normalizeStringEntries(groupUsers);
+  const senderGroupPolicy =
+    groupConfigResolved.allowlistConfigured && groupAllowFrom.length === 0
+      ? groupPolicy
+      : groupPolicy === "disabled"
+        ? "disabled"
+        : groupAllowFrom.length > 0
+          ? "allowlist"
+          : "open";
+  const route = channelIngressRoutes(
+    isGroup &&
+      groupPolicy !== "disabled" &&
+      groupEntry?.enabled === false && {
+        id: "googlechat:space",
+        enabled: false,
+        matched: true,
+        matchId: "googlechat-space",
+        blockReason: "route_disabled",
+      },
+    isGroup &&
+      groupPolicy === "allowlist" &&
+      groupEntry?.enabled !== false &&
+      !groupConfigResolved.allowlistConfigured && {
+        id: "googlechat:space",
+        allowed: false,
+        blockReason: "empty_allowlist",
+      },
+    isGroup &&
+      groupPolicy === "allowlist" &&
+      groupEntry?.enabled !== false &&
+      groupConfigResolved.allowlistConfigured && {
+        id: "googlechat:space",
+        senderPolicy: "deny-when-empty" as const,
+        ...(groupEntry ? { senderAllowFromSource: "effective-group" as const } : {}),
+        allowed: Boolean(groupEntry),
+        matchId: "googlechat-space",
+        blockReason: groupEntry ? "sender_empty_allowlist" : "route_not_allowlisted",
+      },
+  );
+  const resolvedAccess = await createChannelIngressResolver({
+    channelId: "googlechat",
+    accountId: account.accountId,
+    identity: googleChatIngressIdentity,
+    cfg: config,
+    readStoreAllowFrom: pairing.readAllowFromStore,
+  }).message({
+    subject: {
+      stableId: senderId,
+      aliases: { email: senderEmail },
+    },
+    conversation: {
+      kind: isGroup ? "group" : "direct",
+      id: spaceId,
+    },
+    route,
+    allowFrom: rawConfigAllowFrom,
+    groupAllowFrom,
+    dmPolicy,
+    groupPolicy: senderGroupPolicy,
+    policy: {
+      groupAllowFromFallbackToAllowFrom: false,
+      mutableIdentifierMatching: allowNameMatching ? "enabled" : "disabled",
+      ...(groupActivation
+        ? {
+            activation: {
+              requireMention: groupActivation.requireMention,
+              allowTextCommands: groupActivation.allowTextCommands,
+            },
+          }
+        : {}),
+    },
+    ...(groupActivation == null
+      ? {}
+      : {
+          mentionFacts: {
+            canDetectMention: true,
+            wasMentioned: groupActivation.wasMentioned,
+            hasAnyMention: groupActivation.hasAnyMention,
+            implicitMentionKinds: [],
+          },
+        }),
+    command,
+  });
+  const senderAccess = resolvedAccess.senderAccess;
+  const commandAuthorized = resolvedAccess.commandAccess.requested
+    ? resolvedAccess.commandAccess.authorized
+    : undefined;
 
   if (isGroup) {
     if (groupConfigResolved.deprecatedNameMatch) {
       logVerbose(`drop group message (deprecated mutable group key matched, space=${spaceId})`);
       return { ok: false };
     }
-    const groupAllowlistConfigured = groupConfigResolved.allowlistConfigured;
-    const routeAccess = evaluateGroupRouteAccessForPolicy({
-      groupPolicy,
-      routeAllowlistConfigured: groupAllowlistConfigured,
-      routeMatched: Boolean(groupEntry),
-      routeEnabled: groupEntry?.enabled !== false,
-    });
-    if (!routeAccess.allowed) {
-      if (routeAccess.reason === "disabled") {
-        logVerbose(`drop group message (groupPolicy=disabled, space=${spaceId})`);
-      } else if (routeAccess.reason === "empty_allowlist") {
+    const routeBlockReason = resolvedAccess.routeAccess.reason;
+    if (routeBlockReason && routeBlockReason !== "sender_empty_allowlist") {
+      if (routeBlockReason === "empty_allowlist") {
         logVerbose(`drop group message (groupPolicy=allowlist, no allowlist, space=${spaceId})`);
-      } else if (routeAccess.reason === "route_not_allowlisted") {
+      } else if (routeBlockReason === "route_not_allowlisted") {
         logVerbose(`drop group message (not allowlisted, space=${spaceId})`);
-      } else if (routeAccess.reason === "route_disabled") {
+      } else if (routeBlockReason === "route_disabled") {
         logVerbose(`drop group message (space disabled, space=${spaceId})`);
       }
       return { ok: false };
     }
 
-    if (expandedGroupUsers.length > 0) {
-      warnDeprecatedUsersEmailEntries(logVerbose, expandedGroupUsers);
-      const ok = isSenderAllowed(senderId, senderEmail, expandedGroupUsers, allowNameMatching);
-      if (!ok) {
-        logVerbose(`drop group message (sender not allowed, ${senderId})`);
-        return { ok: false };
-      }
+    if (senderAccess.effectiveGroupAllowFrom.length > 0 && senderAccess.decision !== "allow") {
+      warnDeprecatedUsersEmailEntries(logVerbose, senderAccess.effectiveGroupAllowFrom);
+      logVerbose(`drop group message (sender not allowed, ${senderId})`);
+      return { ok: false };
     }
   }
 
-  const dmPolicy = account.config.dm?.policy ?? "pairing";
-  const rawConfigAllowFrom = (account.config.dm?.allowFrom ?? []).map((v) => String(v));
-  const normalizedGroupUsers = expandedGroupUsers;
-  const senderGroupPolicy =
-    groupConfigResolved.allowlistConfigured && normalizedGroupUsers.length === 0
-      ? groupPolicy
-      : resolveSenderScopedGroupPolicy({
-          groupPolicy,
-          groupAllowFrom: normalizedGroupUsers,
-        });
-  const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
-  const storeAllowFrom =
-    !isGroup && dmPolicy !== "allowlist" && dmPolicy !== "open"
-      ? await pairing.readAllowFromStore().catch(() => [])
-      : [];
-  const [configAllowFrom, effectiveStoreAllowFrom] = await Promise.all([
-    expandAllowFromWithAccessGroups({
-      cfg: config,
-      allowFrom: rawConfigAllowFrom,
-      channel: "googlechat",
-      accountId: account.accountId,
-      senderId,
-      isSenderAllowed: isGoogleChatSenderAllowed,
-    }),
-    expandAllowFromWithAccessGroups({
-      cfg: config,
-      allowFrom: storeAllowFrom,
-      channel: "googlechat",
-      accountId: account.accountId,
-      senderId,
-      isSenderAllowed: isGoogleChatSenderAllowed,
-    }),
-  ]);
-  const access = resolveDmGroupAccessWithLists({
-    isGroup,
-    dmPolicy,
-    groupPolicy: senderGroupPolicy,
-    allowFrom: configAllowFrom,
-    groupAllowFrom: normalizedGroupUsers,
-    storeAllowFrom: effectiveStoreAllowFrom,
-    groupAllowFromFallbackToAllowFrom: false,
-    isSenderAllowed: (allowFrom) =>
-      isSenderAllowed(senderId, senderEmail, allowFrom, allowNameMatching),
-  });
-  const effectiveAllowFrom = access.effectiveAllowFrom;
-  const effectiveGroupAllowFrom = access.effectiveGroupAllowFrom;
+  const effectiveAllowFrom = senderAccess.effectiveAllowFrom;
   warnDeprecatedUsersEmailEntries(logVerbose, effectiveAllowFrom);
-  const commandAllowFrom = isGroup ? effectiveGroupAllowFrom : effectiveAllowFrom;
-  const useAccessGroups = config.commands?.useAccessGroups !== false;
-  const senderAllowedForCommands = isSenderAllowed(
-    senderId,
-    senderEmail,
-    commandAllowFrom,
-    allowNameMatching,
-  );
-  const commandAuthorized = shouldComputeAuth
-    ? core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
-        useAccessGroups,
-        authorizers: [
-          { configured: commandAllowFrom.length > 0, allowed: senderAllowedForCommands },
-        ],
-      })
-    : undefined;
 
-  if (isGroup) {
-    const requireMention = groupEntry?.requireMention ?? account.config.requireMention ?? true;
-    const annotations = message.annotations ?? [];
-    const mentionInfo = extractMentionInfo(annotations, account.config.botUser);
-    const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
-      cfg: config,
-      surface: "googlechat",
-    });
-    const mentionDecision = resolveInboundMentionDecision({
-      facts: {
-        canDetectMention: true,
-        wasMentioned: mentionInfo.wasMentioned,
-        hasAnyMention: mentionInfo.hasAnyMention,
-        implicitMentionKinds: [],
-      },
-      policy: {
-        isGroup: true,
-        requireMention,
-        allowTextCommands,
-        hasControlCommand: core.channel.text.hasControlCommand(rawBody, config),
-        commandAuthorized: commandAuthorized === true,
-      },
-    });
-    effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
-    if (mentionDecision.shouldSkip) {
+  if (isGroup && resolvedAccess.activationAccess.ran) {
+    effectiveWasMentioned = resolvedAccess.activationAccess.effectiveWasMentioned;
+    if (resolvedAccess.activationAccess.shouldSkip) {
       logVerbose(`drop group message (mention required, space=${spaceId})`);
       return { ok: false };
     }
   }
 
-  if (isGroup && access.decision !== "allow") {
-    logVerbose(
-      `drop group message (sender policy blocked, reason=${access.reason}, space=${spaceId})`,
-    );
+  if (isGroup && senderAccess.decision !== "allow") {
+    const reason =
+      resolvedAccess.ingress.reasonCode === "route_sender_empty"
+        ? "groupPolicy=allowlist (empty allowlist)"
+        : senderAccess.reasonCode;
+    logVerbose(`drop group message (sender policy blocked, reason=${reason}, space=${spaceId})`);
     return { ok: false };
   }
 
@@ -359,8 +418,8 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
       return { ok: false };
     }
 
-    if (access.decision !== "allow") {
-      if (access.decision === "pairing") {
+    if (senderAccess.decision !== "allow") {
+      if (senderAccess.decision === "pairing") {
         await pairing.issueChallenge({
           senderId,
           senderIdLine: `Your Google Chat user id: ${senderId}`,

@@ -146,12 +146,13 @@ describe("OpenClaw dual-published plugin metadata", () => {
         };
       };
 
-      expect(packageJson.openclaw?.install).toMatchObject({
+      expect(packageJson.openclaw?.install).toEqual({
         clawhubSpec: `clawhub:${plugin.packageName}`,
         defaultChoice: "npm",
+        minHostVersion: ">=2026.4.25",
         npmSpec: plugin.packageName,
       });
-      expect(packageJson.openclaw?.release).toMatchObject({
+      expect(packageJson.openclaw?.release).toEqual({
         publishToClawHub: true,
         publishToNpm: true,
       });
@@ -324,8 +325,13 @@ describe("collectPluginClawHubReleasePlan", () => {
 
     expect(plan.candidates).toStrictEqual([]);
     expect(plan.skippedPublished).toHaveLength(1);
-    expect(plan.skippedPublished[0]).toMatchObject({
+    expect(plan.skippedPublished[0]).toEqual({
+      alreadyPublished: true,
+      channel: "stable",
+      extensionId: "demo-plugin",
+      packageDir: "extensions/demo-plugin",
       packageName: "@openclaw/demo-plugin",
+      publishTag: "latest",
       version: "2026.4.1",
     });
   });

@@ -1,7 +1,6 @@
 import type {
   ChannelAccountSnapshot,
   ChannelGroupContext,
-  ChannelMessageActionAdapter,
   ChannelStatusIssue,
 } from "./channel-contract.js";
 import type { ChannelPlugin } from "./channel-core.js";

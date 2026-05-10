@@ -70,6 +70,14 @@ function shouldResolveWhenPluginsAreGloballyDisabled(key: CapabilityProviderRegi
   return key === "speechProviders";
 }
 
+function shouldMergeManifestProvidersWhenActive(key: CapabilityProviderRegistryKey): boolean {
+  return (
+    key === "imageGenerationProviders" ||
+    key === "videoGenerationProviders" ||
+    key === "musicGenerationProviders"
+  );
+}
+
 function shouldSkipCapabilityResolution(params: {
   key: CapabilityProviderRegistryKey;
   cfg?: OpenClawConfig;
@@ -546,12 +554,14 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
       ? collectRequestedCapabilityProviderIds({ key: params.key, cfg: params.cfg })
       : undefined;
   if (activeProviders.length > 0 && params.key !== "memoryEmbeddingProviders") {
-    if (!missingRequestedProviders) {
+    if (!missingRequestedProviders && !shouldMergeManifestProvidersWhenActive(params.key)) {
       return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
     }
-    removeActiveProviderIds(missingRequestedProviders, activeProviders);
-    if (missingRequestedProviders.size === 0) {
-      return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
+    if (missingRequestedProviders) {
+      removeActiveProviderIds(missingRequestedProviders, activeProviders);
+      if (missingRequestedProviders.size === 0) {
+        return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
+      }
     }
   }
   let requestedProviders: Set<string> | undefined;
@@ -590,10 +600,10 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   });
   if (params.key !== "memoryEmbeddingProviders") {
     const mergeLoadedProviders =
-      activeProviders.length > 0
+      activeProviders.length > 0 && missingRequestedProviders
         ? filterLoadedProvidersForRequestedConfig({
             key: params.key,
-            requested: missingRequestedProviders ?? new Set(),
+            requested: missingRequestedProviders,
             entries: loadedProviders,
           })
         : loadedProviders;

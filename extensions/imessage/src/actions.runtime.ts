@@ -395,6 +395,15 @@ export const imessageActionsRuntime = {
     effectId?: string;
     replyToMessageId?: string;
     partIndex?: number;
+    // Optional attachment as an in-memory buffer that we stage to a temp
+    // file before invoking imsg. The buffer must already have been loaded
+    // by the outbound media resolver (mediaLocalRoots/sandbox/size limits)
+    // — this runtime intentionally does not accept a raw filesystem path,
+    // because that would let an attacker-controlled path bypass the
+    // resolver and let imsg send any host-readable file. Requires an imsg
+    // build that accepts `send-rich --file` (openclaw/imsg#114); callers
+    // must feature-detect via the cached private-api status first.
+    attachment?: { kind: "buffer"; buffer: Uint8Array; filename: string };
     options: IMessageBridgeActionOptions;
   }): Promise<IMessageBridgeSendResult> {
     // Extract markdown bold/italic/underline/strikethrough into typed-run
@@ -403,21 +412,31 @@ export const imessageActionsRuntime = {
     // any caller that hits the bridge via `imsg send-rich` benefits without
     // needing to pre-format the text themselves.
     const formatted = extractMarkdownFormatRuns(params.text);
-    const result = await runIMessageCliJson(
-      [
-        "send-rich",
-        "--chat",
-        params.chatGuid,
-        "--text",
-        formatted.text,
-        "--part",
-        String(params.partIndex ?? 0),
-        ...(params.effectId ? ["--effect", params.effectId] : []),
-        ...(params.replyToMessageId ? ["--reply-to", params.replyToMessageId] : []),
-        ...(formatted.ranges.length > 0 ? ["--format", JSON.stringify(formatted.ranges)] : []),
-      ],
-      params.options,
-    );
+    const buildArgs = (filePath?: string): string[] => [
+      "send-rich",
+      "--chat",
+      params.chatGuid,
+      "--text",
+      formatted.text,
+      "--part",
+      String(params.partIndex ?? 0),
+      ...(params.effectId ? ["--effect", params.effectId] : []),
+      ...(params.replyToMessageId ? ["--reply-to", params.replyToMessageId] : []),
+      ...(formatted.ranges.length > 0 ? ["--format", JSON.stringify(formatted.ranges)] : []),
+      ...(filePath ? ["--file", filePath] : []),
+    ];
+
+    if (params.attachment) {
+      return await withTempFile(
+        { buffer: params.attachment.buffer, filename: params.attachment.filename },
+        async (filePath) => {
+          const result = await runIMessageCliJson(buildArgs(filePath), params.options);
+          return { messageId: resolveMessageId(result) };
+        },
+      );
+    }
+
+    const result = await runIMessageCliJson(buildArgs(), params.options);
     return { messageId: resolveMessageId(result) };
   },
 

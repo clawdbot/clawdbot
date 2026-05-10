@@ -263,7 +263,7 @@ describe("registerTelegramNativeCommands", () => {
     const { bot, commandHandlers, sendMessage } = createCommandBot();
 
     registerTelegramNativeCommands({
-      ...createNativeCommandTestParams({}, { bot }),
+      ...createNativeCommandTestParams({}, { bot, allowFrom: [200] }),
     });
 
     const handler = commandHandlers.get("fast");
@@ -277,8 +277,14 @@ describe("registerTelegramNativeCommands", () => {
       | undefined;
     const callbackData = collectCallbackData(replyMarkup);
 
-    expect(callbackData).toEqual(["tgcmd:/fast status", "tgcmd:/fast on", "tgcmd:/fast off"]);
+    expect(callbackData).toEqual([
+      "tgcmd:/fast status",
+      "tgcmd:/fast on",
+      "tgcmd:/fast off",
+      "tgcmd:/fast default",
+    ]);
     expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast status")).toBe("/fast status");
+    expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast default")).toBe("/fast default");
     expect(parseTelegramNativeCommandCallbackData("tgcmd:fast status")).toBeNull();
   });
 

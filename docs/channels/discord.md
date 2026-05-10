@@ -352,7 +352,7 @@ By default, components are single use. Set `components.reusable=true` to allow b
 
 To restrict who can click a button, set `allowedUsers` on that button (Discord user IDs, tags, or `*`). When configured, unmatched users receive an ephemeral denial.
 
-The `/model` and `/models` slash commands open an interactive model picker with provider, model, and compatible runtime dropdowns plus a Submit step. `/models add` is deprecated and now returns a deprecation message instead of registering models from chat. The picker reply is ephemeral and only the invoking user can use it.
+The `/model` and `/models` slash commands open an interactive model picker with provider, model, and compatible runtime dropdowns plus a Submit step. `/models add` is deprecated and now returns a deprecation message instead of registering models from chat. The picker reply is ephemeral and only the invoking user can use it. Discord select menus are limited to 25 options, so add `provider/*` entries to `agents.defaults.models` when you want the picker to show dynamically discovered models only for selected providers such as `openai-codex` or `vllm`.
 
 File attachments:
 
@@ -451,8 +451,8 @@ Example:
 
   </Tab>
 
-  <Tab title="DM access groups">
-    Discord DMs can use dynamic `accessGroup:<name>` entries in `channels.discord.allowFrom`.
+  <Tab title="Access groups">
+    Discord DMs and text command authorization can use dynamic `accessGroup:<name>` entries in `channels.discord.allowFrom`.
 
     Access group names are shared across message channels. Use `type: "message.senders"` for a static group whose members are expressed in each channel's normal `allowFrom` syntax, or `type: "discord.channelAudience"` when a Discord channel's current `ViewChannel` audience should define membership dynamically. Shared access-group behavior is documented here: [Access groups](/channels/access-groups).
 
@@ -1172,8 +1172,7 @@ Auto-join example:
     discord: {
       voice: {
         enabled: true,
-        mode: "stt-tts",
-        model: "openai/gpt-5.4-mini",
+        model: "openai-codex/gpt-5.5",
         autoJoin: [
           {
             guildId: "123456789012345678",
@@ -1184,12 +1183,10 @@ Auto-join example:
         decryptionFailureTolerance: 24,
         connectTimeoutMs: 30000,
         reconnectGraceMs: 15000,
-        tts: {
+        realtime: {
           provider: "openai",
-          openai: {
-            model: "gpt-4o-mini-tts",
-            voice: "cedar",
-          },
+          model: "gpt-realtime-2",
+          voice: "cedar",
         },
       },
     },
@@ -1199,13 +1196,16 @@ Auto-join example:
 
 Notes:
 
-- `voice.tts` overrides `messages.tts` for voice playback only.
-- `voice.mode` controls the conversation path: `stt-tts` keeps the existing batch STT plus TTS flow, `talk-buffer` uses a realtime voice shell for turn timing/transcription/playback while the OpenClaw agent produces the answer, and `bidi` lets the realtime model converse directly while exposing `openclaw_agent_consult` for the OpenClaw brain.
+- `voice.tts` overrides `messages.tts` for `stt-tts` voice playback only. Realtime modes use `voice.realtime.voice`.
+- `voice.mode` controls the conversation path. The default is `agent-proxy`: a realtime voice front end handles turn timing, interruption, and playback, delegates substantive work to the routed OpenClaw agent through `openclaw_agent_consult`, and treats the result like a typed Discord prompt from that speaker. `stt-tts` keeps the older batch STT plus TTS flow. `bidi` lets the realtime model converse directly while exposing `openclaw_agent_consult` for the OpenClaw brain.
 - `voice.agentSession` controls which OpenClaw conversation receives voice turns. Leave it unset for the voice channel's own session, or set `{ mode: "target", target: "channel:<text-channel-id>" }` to make the voice channel act as the microphone/speaker extension of an existing Discord text channel session such as `#maintainers`.
 - `voice.model` overrides the OpenClaw agent brain for Discord voice responses and realtime consults. Leave it unset to inherit the routed agent model. It is separate from `voice.realtime.model`.
+- `agent-proxy` routes speech through `discord-voice`, which preserves normal owner/tool authorization for the speaker and target session but hides the agent `tts` tool because Discord voice owns playback. By default, `agent-proxy` gives the consult full owner-equivalent tool access for owner speakers (`voice.realtime.toolPolicy: "owner"`) and strongly prefers consulting the OpenClaw agent before substantive answers (`voice.realtime.consultPolicy: "always"`). In that default `always` mode, the realtime layer does not auto-speak filler before the consult answer; it captures and transcribes speech, then speaks the routed OpenClaw answer. If multiple forced consult answers finish while Discord is still playing the first answer, later exact-speech answers are queued until playback idles instead of replacing speech mid-sentence.
 - In `stt-tts` mode, STT uses `tools.media.audio`; `voice.model` does not affect transcription.
 - In realtime modes, `voice.realtime.provider`, `voice.realtime.model`, and `voice.realtime.voice` configure the realtime audio session. For OpenAI Realtime 2 plus the Codex brain, use `voice.realtime.model: "gpt-realtime-2"` and `voice.model: "openai-codex/gpt-5.5"`.
+- The OpenAI realtime provider accepts current Realtime 2 event names and legacy Codex-compatible aliases for output audio and transcript events, so compatible provider snapshots can drift without dropping assistant audio.
 - `voice.realtime.bargeIn` controls whether Discord speaker-start events interrupt active realtime playback. If unset, it follows the realtime provider's input-audio interruption setting.
+- `voice.realtime.minBargeInAudioEndMs` controls the minimum assistant playback duration before an OpenAI realtime barge-in truncates audio. Default: `250`. Set `0` for immediate interruption in low-echo rooms, or raise it for echo-heavy speaker setups.
 - For an OpenAI voice on Discord playback, set `voice.tts.provider: "openai"` and choose a Text-to-speech voice under `voice.tts.openai.voice` or `voice.tts.providers.openai.voice`. `cedar` is a good masculine-sounding choice on the current OpenAI TTS model.
 - Per-channel Discord `systemPrompt` overrides apply to voice transcript turns for that voice channel.
 - Voice transcript turns derive owner status from Discord `allowFrom` (or `dm.allowFrom`); non-owner speakers cannot access owner-only tools (for example `gateway` and `cron`).
@@ -1214,16 +1214,35 @@ Notes:
 - If `voice.autoJoin` has multiple entries for the same guild, OpenClaw joins the last configured channel for that guild.
 - `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options.
 - `@discordjs/voice` defaults are `daveEncryption=true` and `decryptionFailureTolerance=24` if unset.
+- OpenClaw defaults to the pure-JS `opusscript` decoder for Discord voice receive. The optional native `@discordjs/opus` package is ignored by the repo pnpm install policy so normal installs, Docker lanes, and unrelated tests do not compile a native addon. Dedicated voice-performance hosts can opt in with `OPENCLAW_DISCORD_OPUS_DECODER=native` after installing the native addon.
 - `voice.connectTimeoutMs` controls the initial `@discordjs/voice` Ready wait for `/vc join` and auto-join attempts. Default: `30000`.
 - `voice.reconnectGraceMs` controls how long OpenClaw waits for a disconnected voice session to begin reconnecting before destroying it. Default: `15000`.
 - In `stt-tts` mode, voice playback does not stop just because another user starts speaking. To avoid feedback loops, OpenClaw ignores new voice capture while TTS is playing; speak after playback finishes for the next turn. Realtime modes forward speaker starts as barge-in signals to the realtime provider.
-- In realtime modes, echo from speakers into an open mic can look like barge-in and interrupt playback. For echo-heavy Discord rooms, set `voice.realtime.providers.openai.interruptResponseOnInputAudio: false` to keep OpenAI from auto-interrupting on input audio. Add `voice.realtime.bargeIn: true` if you still want Discord speaker-start events to interrupt active playback.
+- In realtime modes, echo from speakers into an open mic can look like barge-in and interrupt playback. For echo-heavy Discord rooms, set `voice.realtime.providers.openai.interruptResponseOnInputAudio: false` to keep OpenAI from auto-interrupting on input audio. Add `voice.realtime.bargeIn: true` if you still want Discord speaker-start events to interrupt active playback. The OpenAI realtime bridge ignores playback truncations shorter than `voice.realtime.minBargeInAudioEndMs` as likely echo/noise and logs them as skipped instead of clearing Discord playback.
 - `voice.captureSilenceGraceMs` controls how long OpenClaw waits after Discord reports a speaker has stopped before finalizing that audio segment for STT. Default: `2500`; raise this if Discord splits normal pauses into choppy partial transcripts.
 - When ElevenLabs is the selected TTS provider, Discord voice playback uses streaming TTS and starts from the provider response stream. Providers without streaming support fall back to the synthesized temp-file path.
 - OpenClaw also watches receive decrypt failures and auto-recovers by leaving/rejoining the voice channel after repeated failures in a short window.
 - If receive logs repeatedly show `DecryptionFailed(UnencryptedWhenPassthroughDisabled)` after updating, collect a dependency report and logs. The bundled `@discordjs/voice` line includes the upstream padding fix from discord.js PR #11449, which closed discord.js issue #11419.
 - `The operation was aborted` receive events are expected when OpenClaw finalizes a captured speaker segment; they are verbose diagnostics, not warnings.
 - Verbose Discord voice logs include a bounded one-line STT transcript preview for each accepted speaker segment, so debugging shows both the user side and the agent reply side without dumping unbounded transcript text.
+- In `agent-proxy` mode, forced consult fallback skips likely incomplete transcript fragments such as text ending in `...` or a trailing connector like `and`, plus obvious non-actionable closings like “be right back” or “bye”. Logs show `forced agent consult skipped reason=...` when this prevents a stale queued answer.
+
+Native opus setup for source checkouts:
+
+```bash
+pnpm install
+mise exec node@22 -- pnpm discord:opus:install
+```
+
+Use Node 22 for the gateway when you want the upstream macOS arm64 prebuilt native addon. If you use another Node runtime, the opt-in installer may need a local `node-gyp` source-build toolchain.
+
+After installing the native addon, start the Gateway with:
+
+```bash
+OPENCLAW_DISCORD_OPUS_DECODER=native pnpm gateway:watch
+```
+
+Verbose voice logs should show `discord voice: opus decoder: @discordjs/opus`. Without the env opt-in, or if the native addon is missing or cannot load on the host, OpenClaw logs `discord voice: opus decoder: opusscript` and keeps receiving voice through the pure-JS fallback.
 
 STT plus TTS pipeline:
 
@@ -1233,7 +1252,29 @@ STT plus TTS pipeline:
 - `voice.model`, when set, overrides only the response LLM for this voice-channel turn.
 - `voice.tts` is merged over `messages.tts`; streaming-capable providers feed the player directly, otherwise the resulting audio file is played in the joined channel.
 
-Default voice-channel session example:
+Default agent-proxy voice-channel session example:
+
+```json5
+{
+  channels: {
+    discord: {
+      voice: {
+        enabled: true,
+        model: "openai-codex/gpt-5.5",
+        realtime: {
+          provider: "openai",
+          model: "gpt-realtime-2",
+          voice: "cedar",
+        },
+      },
+    },
+  },
+}
+```
+
+With no `voice.agentSession` block, each voice channel gets its own routed OpenClaw session. For example, `/vc join channel:234567890123456789` talks to the session for that Discord voice channel. The realtime model is only the voice front end; substantive requests are handed to the configured OpenClaw agent. If the realtime model produces a final transcript without calling the consult tool, OpenClaw forces the consult as a fallback so the default still behaves like talking to the agent.
+
+Legacy STT plus TTS example:
 
 ```json5
 {
@@ -1243,28 +1284,12 @@ Default voice-channel session example:
         enabled: true,
         mode: "stt-tts",
         model: "openai/gpt-5.4-mini",
-      },
-    },
-  },
-}
-```
-
-With no `voice.agentSession` block, each voice channel gets its own routed OpenClaw session. For example, `/vc join channel:234567890123456789` talks to the session for that Discord voice channel.
-
-Realtime talk-buffer example:
-
-```json5
-{
-  channels: {
-    discord: {
-      voice: {
-        enabled: true,
-        mode: "talk-buffer",
-        model: "openai-codex/gpt-5.5",
-        realtime: {
+        tts: {
           provider: "openai",
-          model: "gpt-realtime-2",
-          voice: "cedar",
+          openai: {
+            model: "gpt-4o-mini-tts",
+            voice: "cedar",
+          },
         },
       },
     },
@@ -1303,7 +1328,7 @@ Voice as an extension of an existing Discord channel session:
     discord: {
       voice: {
         enabled: true,
-        mode: "bidi",
+        mode: "agent-proxy",
         model: "openai-codex/gpt-5.5",
         agentSession: {
           mode: "target",
@@ -1313,8 +1338,6 @@ Voice as an extension of an existing Discord channel session:
           provider: "openai",
           model: "gpt-realtime-2",
           voice: "cedar",
-          toolPolicy: "safe-read-only",
-          consultPolicy: "always",
         },
       },
     },
@@ -1322,7 +1345,7 @@ Voice as an extension of an existing Discord channel session:
 }
 ```
 
-In this mode the bot joins the configured voice channel, but OpenClaw agent turns use the target channel's normal routed session and agent. The realtime voice session speaks the returned result back into the voice channel. The supervisor agent can still use normal message tools according to its tool policy, including sending a separate Discord message if that is the right action.
+In `agent-proxy` mode the bot joins the configured voice channel, but OpenClaw agent turns use the target channel's normal routed session and agent. The realtime voice session speaks the returned result back into the voice channel. The supervisor agent can still use normal message tools according to its tool policy, including sending a separate Discord message if that is the right action.
 
 Useful target forms:
 
@@ -1345,6 +1368,7 @@ Echo-heavy OpenAI Realtime example:
           model: "gpt-realtime-2",
           voice: "cedar",
           bargeIn: true,
+          minBargeInAudioEndMs: 500,
           consultPolicy: "always",
           providers: {
             openai: {
@@ -1358,17 +1382,52 @@ Echo-heavy OpenAI Realtime example:
 }
 ```
 
-Use this when the model hears its own Discord playback through an open mic, but you still want to interrupt it by speaking. OpenClaw keeps OpenAI from auto-interrupting on raw input audio, while `bargeIn: true` lets Discord speaker-start events and already-active speaker audio cancel active realtime responses before the next captured turn reaches OpenAI.
+Use this when the model hears its own Discord playback through an open mic, but you still want to interrupt it by speaking. OpenClaw keeps OpenAI from auto-interrupting on raw input audio, while `bargeIn: true` lets Discord speaker-start events and already-active speaker audio cancel active realtime responses before the next captured turn reaches OpenAI. Very early barge-in signals with `audioEndMs` below `minBargeInAudioEndMs` are treated as likely echo/noise and ignored so the model does not cut off at the first playback frame.
 
 Expected voice logs:
 
 - On join: `discord voice: joining ... voiceSession=... supervisorSession=... agentSessionMode=... voiceModel=... realtimeModel=...`
-- On realtime start: `discord voice: realtime bridge starting ... interruptResponse=false bargeIn=true`
+- On realtime start: `discord voice: realtime bridge starting ... autoRespond=false interruptResponse=false bargeIn=false minBargeInAudioEndMs=...`
+- On speaker audio: `discord voice: realtime speaker turn opened ...`, `discord voice: realtime input audio started ... outputAudioMs=... outputActive=...`, and `discord voice: realtime speaker turn closed ... chunks=... discordBytes=... realtimeBytes=... interruptedPlayback=...`
+- On skipped stale speech: `discord voice: realtime forced agent consult skipped reason=incomplete-transcript ...` or `reason=non-actionable-closing ...`
+- On realtime response completion: `discord voice: realtime audio playback finishing reason=response.done ... audioMs=... chunks=...`
+- On playback stop/reset: `discord voice: realtime audio playback stopped reason=... audioMs=... elapsedMs=... chunks=...`
 - On realtime consult: `discord voice: realtime consult requested ... voiceSession=... supervisorSession=... question=...`
 - On agent answer: `discord voice: agent turn answer ...`
-- On same-speaker interruption: `discord voice: realtime barge-in from active speaker audio ...`
+- On queued exact speech: `discord voice: realtime exact speech queued ... queued=... outputAudioMs=... outputActive=...`, followed by `discord voice: realtime exact speech dequeued reason=player-idle ...`
+- On barge-in detection: `discord voice: realtime barge-in detected source=speaker-start ...` or `discord voice: realtime barge-in detected source=active-speaker-audio ...`, followed by `discord voice: realtime barge-in requested reason=... outputAudioMs=... outputActive=...`
 - On realtime interruption: `discord voice: realtime model interrupt requested client:response.cancel reason=barge-in`, followed by either `discord voice: realtime model audio truncated client:conversation.item.truncate reason=barge-in audioEndMs=...` or `discord voice: realtime model interrupt confirmed server:response.done status=cancelled ...`
+- On ignored echo/noise: `discord voice: realtime model interrupt ignored client:conversation.item.truncate.skipped reason=barge-in audioEndMs=0 minAudioEndMs=250`
 - On disabled barge-in: `discord voice: realtime capture ignored during playback (barge-in disabled) ...`
+- On idle playback: `discord voice: realtime barge-in ignored reason=... outputActive=false ... playbackChunks=0`
+
+To debug cut-off audio, read the realtime voice logs as a timeline:
+
+1. `realtime audio playback started` means Discord has begun playing assistant audio. The bridge starts counting assistant output chunks, Discord PCM bytes, provider realtime bytes, and synthesized audio duration from this point.
+2. `realtime speaker turn opened` marks a Discord speaker becoming active. If playback is already active and `bargeIn` is enabled, this can be followed by `barge-in detected source=speaker-start`.
+3. `realtime input audio started` marks the first actual audio frame received for that speaker turn. `outputActive=true` or a nonzero `outputAudioMs` here means the mic is sending input while assistant playback is still active.
+4. `barge-in detected source=active-speaker-audio` means OpenClaw saw live speaker audio while assistant playback was active. This is useful for distinguishing a real interruption from a Discord speaker-start event with no useful audio.
+5. `barge-in requested reason=...` means OpenClaw asked the realtime provider to cancel or truncate the active response. It includes `outputAudioMs`, `outputActive`, and `playbackChunks` so you can see how much assistant audio had actually played before the interruption.
+6. `realtime audio playback stopped reason=...` is the local Discord playback reset point. The reason says who stopped playback: `barge-in`, `player-idle`, `provider-clear-audio`, `forced-agent-consult`, `stream-close`, or `session-close`.
+7. `realtime speaker turn closed` summarizes the captured input turn. `chunks=0` or `hasAudio=false` means the speaker turn opened but no usable audio reached the realtime bridge. `interruptedPlayback=true` means that input turn overlapped assistant output and triggered barge-in logic.
+
+Useful fields:
+
+- `outputAudioMs`: assistant audio duration generated by the realtime provider before the log line.
+- `audioMs`: assistant audio duration that OpenClaw counted before playback stopped.
+- `elapsedMs`: wall-clock time between opening and closing the playback stream or speaker turn.
+- `discordBytes`: 48 kHz stereo PCM bytes sent to or received from Discord voice.
+- `realtimeBytes`: provider-format PCM bytes sent to or received from the realtime provider.
+- `playbackChunks`: assistant audio chunks forwarded to Discord for the active response.
+- `sinceLastAudioMs`: gap between the last captured speaker audio frame and the speaker turn closing.
+
+Common patterns:
+
+- Immediate cut-off with `source=active-speaker-audio`, small `outputAudioMs`, and the same user nearby usually points to speaker echo entering the mic. Raise `voice.realtime.minBargeInAudioEndMs`, lower speaker volume, use headphones, or set `voice.realtime.providers.openai.interruptResponseOnInputAudio: false`.
+- `source=speaker-start` followed by `speaker turn closed ... hasAudio=false` means Discord reported a speaker start but no audio reached OpenClaw. That can be a transient Discord voice event, noise gate behavior, or a client briefly keying the mic.
+- `audio playback stopped reason=stream-close` without a nearby barge-in or `provider-clear-audio` means the local Discord playback stream ended unexpectedly. Check the preceding provider and Discord player logs.
+- `capture ignored during playback (barge-in disabled)` means OpenClaw intentionally dropped input while assistant audio was active. Enable `voice.realtime.bargeIn` if you want speech to interrupt playback.
+- `barge-in ignored ... outputActive=false` means Discord or provider VAD reported speech, but OpenClaw had no active playback to interrupt. This should not cut off audio.
 
 Credentials are resolved per component: LLM route auth for `voice.model`, STT auth for `tools.media.audio`, TTS auth for `messages.tts`/`voice.tts`, and realtime provider auth for `voice.realtime.providers` or the provider's normal auth config.
 

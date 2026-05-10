@@ -81,6 +81,14 @@ function normalizeVerboseLevel(raw?: string | null): "off" | "on" | "full" | und
   return undefined;
 }
 
+function isSessionDefaultDirectiveValue(raw?: string | null): boolean {
+  const key = normalizeOptionalLowercaseString(raw);
+  if (!key) {
+    return false;
+  }
+  return ["default", "inherit", "inherited", "clear", "reset", "unpin"].includes(key);
+}
+
 export async function executeSlashCommand(
   client: GatewayBrowserClient,
   sessionKey: string,
@@ -259,11 +267,23 @@ async function executeThink(
       return {
         content: formatDirectiveOptions(
           `Current thinking level: ${resolveCurrentThinkingLevel(session, defaults, models)}.`,
-          formatThinkingOptionsForSession(session, defaults),
+          formatThinkingCommandOptionsForSession(session, defaults),
         ),
       };
     } catch (err) {
       return { content: `Failed to get thinking level: ${String(err)}` };
+    }
+  }
+
+  if (isSessionDefaultDirectiveValue(rawLevel)) {
+    try {
+      await client.request("sessions.patch", { key: sessionKey, thinkingLevel: null });
+      return {
+        content: "Thinking level reset to default.",
+        action: "refresh",
+      };
+    } catch (err) {
+      return { content: `Failed to reset thinking level: ${String(err)}` };
     }
   }
 
@@ -272,12 +292,12 @@ async function executeThink(
     const level = resolveThinkingLevelInput(rawLevel, session, defaults);
     if (!level) {
       return {
-        content: `Unrecognized thinking level "${rawLevel}". Valid levels: ${formatThinkingOptionsForSession(session, defaults)}.`,
+        content: `Unrecognized thinking level "${rawLevel}". Valid levels: ${formatThinkingCommandOptionsForSession(session, defaults)}.`,
       };
     }
     if (!isThinkingLevelOptionForSession(session, defaults, level)) {
       return {
-        content: `Unsupported thinking level "${rawLevel}" for this model. Valid levels: ${formatThinkingOptionsForSession(session, defaults)}.`,
+        content: `Unsupported thinking level "${rawLevel}" for this model. Valid levels: ${formatThinkingCommandOptionsForSession(session, defaults)}.`,
       };
     }
     await client.request("sessions.patch", { key: sessionKey, thinkingLevel: level });
@@ -342,7 +362,7 @@ async function executeFast(
       return {
         content: formatDirectiveOptions(
           `Current fast mode: ${resolveCurrentFastMode(session)}.`,
-          "status, on, off",
+          "status, on, off, default",
         ),
       };
     } catch (err) {
@@ -350,9 +370,21 @@ async function executeFast(
     }
   }
 
+  if (isSessionDefaultDirectiveValue(rawMode)) {
+    try {
+      await client.request("sessions.patch", { key: sessionKey, fastMode: null });
+      return {
+        content: "Fast mode reset to default.",
+        action: "refresh",
+      };
+    } catch (err) {
+      return { content: `Failed to reset fast mode: ${String(err)}` };
+    }
+  }
+
   if (rawMode !== "on" && rawMode !== "off") {
     return {
-      content: `Unrecognized fast mode "${args.trim()}". Valid levels: status, on, off.`,
+      content: `Unrecognized fast mode "${args.trim()}". Valid levels: status, on, off, default.`,
     };
   }
 
@@ -617,6 +649,14 @@ function formatThinkingOptionsForSession(
   return resolveThinkingLevelOptionsForSession(session, defaults)
     .map((level) => level.label)
     .join(separator);
+}
+
+function formatThinkingCommandOptionsForSession(
+  session: GatewaySessionRow | undefined,
+  defaults?: SessionsListResult["defaults"],
+): string {
+  const options = formatThinkingOptionsForSession(session, defaults);
+  return options.split(", ").includes("default") ? options : `default, ${options}`;
 }
 
 function resolveThinkingLevelInput(

@@ -105,15 +105,13 @@ describe("bundle LSP runtime", () => {
 
     const runtime = await createBundleLspToolRuntime({ workspaceDir: "/tmp/workspace" });
 
-    expect(spawnMock).toHaveBeenCalledWith(
-      "typescript-language-server",
-      ["--stdio"],
-      expect.objectContaining({
-        detached: process.platform !== "win32",
-        stdio: ["pipe", "pipe", "pipe"],
-        windowsHide: process.platform === "win32",
-      }),
-    );
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const [command, args, options] = spawnMock.mock.calls[0] ?? [];
+    expect(command).toBe("typescript-language-server");
+    expect(args).toEqual(["--stdio"]);
+    expect(options?.detached).toBe(process.platform !== "win32");
+    expect(options?.stdio).toEqual(["pipe", "pipe", "pipe"]);
+    expect(options?.windowsHide).toBe(process.platform === "win32");
     expect(runtime.tools.map((tool) => tool.name)).toContain("lsp_hover_typescript");
 
     await runtime.dispose();

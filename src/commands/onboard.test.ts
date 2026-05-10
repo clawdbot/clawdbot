@@ -35,6 +35,21 @@ function makeRuntime(): RuntimeEnv {
   };
 }
 
+function expectResetCall(params: { scope: string; runtime: RuntimeEnv; workspace?: string }): void {
+  const calls = mocks.handleReset.mock.calls as unknown as Array<[string, string, RuntimeEnv]>;
+  const call = calls[0];
+  if (!call) {
+    throw new Error("expected handleReset call");
+  }
+  expect(call[0]).toBe(params.scope);
+  if (params.workspace) {
+    expect(call[1]).toBe(params.workspace);
+  } else {
+    expect(typeof call[1]).toBe("string");
+  }
+  expect(call[2]).toBe(params.runtime);
+}
+
 describe("setupWizardCommand", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -90,11 +105,7 @@ describe("setupWizardCommand", () => {
       runtime,
     );
 
-    expect(mocks.handleReset).toHaveBeenCalledWith(
-      "config+creds+sessions",
-      expect.any(String),
-      runtime,
-    );
+    expectResetCall({ scope: "config+creds+sessions", runtime });
   });
 
   it("uses configured default workspace for --reset when --workspace is not provided", async () => {
@@ -136,7 +147,7 @@ describe("setupWizardCommand", () => {
       runtime,
     );
 
-    expect(mocks.handleReset).toHaveBeenCalledWith("full", expect.any(String), runtime);
+    expectResetCall({ scope: "full", runtime });
   });
 
   it("fails fast for invalid --reset-scope", async () => {

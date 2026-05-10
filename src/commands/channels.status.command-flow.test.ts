@@ -224,15 +224,11 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
 
     await channelsStatusCommand({ probe: false }, runtime as never);
 
-    expect(errors).toEqual(
-      expect.arrayContaining([expect.stringContaining("Gateway not reachable")]),
-    );
-    expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledWith(
-      expect.objectContaining({
-        commandName: "channels status",
-        mode: "read_only_status",
-      }),
-    );
+    expect(errors.join("\n")).toContain("Gateway not reachable");
+    expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledOnce();
+    const configResolutionRequest = mocks.resolveCommandConfigWithSecrets.mock.calls[0]?.[0];
+    expect(configResolutionRequest?.commandName).toBe("channels status");
+    expect(configResolutionRequest?.mode).toBe("read_only_status");
     expect(
       logs.some((line) =>
         line.includes("[secrets] channels status: channels.discord.token is unavailable"),
@@ -307,12 +303,13 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     await channelsStatusCommand({ json: true, probe: false }, runtime as never);
 
     expect(mocks.listChannelPlugins).not.toHaveBeenCalled();
-    expect(mocks.listConfiguredChannelIdsForReadOnlyScope).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({ secretResolved: true }),
-        includePersistedAuthState: false,
-      }),
-    );
+    expect(mocks.listConfiguredChannelIdsForReadOnlyScope).toHaveBeenCalledOnce();
+    const readOnlyScopeRequest = mocks.listConfiguredChannelIdsForReadOnlyScope.mock
+      .calls[0]?.[0] as
+      | { config?: { secretResolved?: unknown }; includePersistedAuthState?: unknown }
+      | undefined;
+    expect(readOnlyScopeRequest?.config?.secretResolved).toBe(true);
+    expect(readOnlyScopeRequest?.includePersistedAuthState).toBe(false);
     const payload = JSON.parse(logs.at(-1) ?? "{}");
     expect(errors.join("\n")).not.toContain("user:pass");
     expect(errors.join("\n")).not.toContain("secret-token");
@@ -323,12 +320,8 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(payload.error).not.toContain("secret-token");
     expect(payload.error).not.toContain("fallback-user:fallback-pass");
     expect(payload.error).not.toContain("fallback-secret");
-    expect(payload).toEqual(
-      expect.objectContaining({
-        gatewayReachable: false,
-        configOnly: true,
-        configuredChannels: ["discord"],
-      }),
-    );
+    expect(payload.gatewayReachable).toBe(false);
+    expect(payload.configOnly).toBe(true);
+    expect(payload.configuredChannels).toStrictEqual(["discord"]);
   });
 });

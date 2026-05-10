@@ -63,8 +63,9 @@ export function resolveDiscordNativeCommandAllowlistAccess(params: {
   return { configured: true, allowed: match.allowed } as const;
 }
 
-export function resolveDiscordGuildNativeCommandAuthorized(params: {
+export async function resolveDiscordGuildNativeCommandAuthorized(params: {
   cfg: OpenClawConfig;
+  accountId: string;
   discordConfig: DiscordConfig;
   useAccessGroups: boolean;
   commandsAllowFromAccess: ReturnType<typeof resolveDiscordNativeCommandAllowlistAccess>;
@@ -270,11 +271,10 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
         tag: sender.tag,
       },
       allowNameMatching,
-      useAccessGroups,
       cfg,
       rest: interaction.client.rest,
     });
-    if (dmAccess.decision !== "allow") {
+    if (dmAccess.senderAccess.decision !== "allow") {
       return false;
     }
   }
@@ -292,6 +292,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
   if (!isDirectMessage) {
     return resolveDiscordGuildNativeCommandAuthorized({
       cfg,
+      accountId,
       discordConfig,
       useAccessGroups,
       commandsAllowFromAccess,

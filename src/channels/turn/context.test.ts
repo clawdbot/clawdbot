@@ -125,54 +125,91 @@ describe("buildChannelTurnContext", () => {
       },
     });
 
-    expect(ctx).toEqual(
-      expect.objectContaining({
-        Body: "[User One] hello",
-        BodyForAgent: "hello",
-        RawBody: "hello",
-        CommandBody: "/status",
-        BodyForCommands: "/status",
-        From: "test:user:u1",
-        To: "test:room:room-1",
-        SessionKey: "agent:main:test:group:room-1",
-        AccountId: "acct",
-        ParentSessionKey: "agent:main:test:group",
-        ModelParentSessionKey: "agent:main:test:model",
-        MessageSid: "msg-1",
-        ReplyToId: "root-1",
-        ReplyToBody: "quoted",
-        ReplyToSender: "Quoted User",
-        MediaPath: "/tmp/image.png",
-        MediaUrl: "/tmp/image.png",
-        MediaType: "image/png",
-        MediaPaths: ["/tmp/image.png"],
-        MediaUrls: ["/tmp/image.png", "https://example.test/audio.mp3"],
-        MediaTypes: ["image/png", "audio/mpeg"],
-        MediaTranscribedIndexes: [1],
-        ChatType: "group",
-        ConversationLabel: "Room One",
-        GroupSubject: "Room One",
-        GroupSpace: "workspace",
-        GroupSystemPrompt: "group prompt",
-        SenderName: "User One",
-        SenderId: "u1",
-        SenderUsername: "userone",
-        SenderTag: "User#0001",
-        MemberRoleIds: ["admin"],
-        Timestamp: 123,
-        Provider: "test-provider",
-        Surface: "test-surface",
-        WasMentioned: true,
-        CommandAuthorized: true,
-        MessageThreadId: "thread-1",
-        NativeChannelId: "native-room-1",
-        OriginatingChannel: "test",
-        OriginatingTo: "test:room:room-1",
-        ThreadStarterBody: "thread starter",
-        ThreadHistoryBody: "thread history",
-        ThreadLabel: "thread label",
+    const expectedFields = {
+      Body: "[User One] hello",
+      BodyForAgent: "hello",
+      RawBody: "hello",
+      CommandBody: "/status",
+      BodyForCommands: "/status",
+      From: "test:user:u1",
+      To: "test:room:room-1",
+      SessionKey: "agent:main:test:group:room-1",
+      AccountId: "acct",
+      ParentSessionKey: "agent:main:test:group",
+      ModelParentSessionKey: "agent:main:test:model",
+      MessageSid: "msg-1",
+      ReplyToId: "root-1",
+      ReplyToBody: "quoted",
+      ReplyToSender: "Quoted User",
+      MediaPath: "/tmp/image.png",
+      MediaUrl: "/tmp/image.png",
+      MediaType: "image/png",
+      MediaPaths: ["/tmp/image.png"],
+      MediaUrls: ["/tmp/image.png", "https://example.test/audio.mp3"],
+      MediaTypes: ["image/png", "audio/mpeg"],
+      MediaTranscribedIndexes: [1],
+      ChatType: "group",
+      ConversationLabel: "Room One",
+      GroupSubject: "Room One",
+      GroupSpace: "workspace",
+      GroupSystemPrompt: "group prompt",
+      SenderName: "User One",
+      SenderId: "u1",
+      SenderUsername: "userone",
+      SenderTag: "User#0001",
+      MemberRoleIds: ["admin"],
+      Timestamp: 123,
+      Provider: "test-provider",
+      Surface: "test-surface",
+      WasMentioned: true,
+      CommandAuthorized: true,
+      MessageThreadId: "thread-1",
+      NativeChannelId: "native-room-1",
+      OriginatingChannel: "test",
+      OriginatingTo: "test:room:room-1",
+      ThreadStarterBody: "thread starter",
+      ThreadHistoryBody: "thread history",
+      ThreadLabel: "thread label",
+    } as const;
+
+    for (const [key, value] of Object.entries(expectedFields)) {
+      expect(ctx[key as keyof typeof ctx]).toEqual(value);
+    }
+  });
+
+  it("uses resolved command authorization instead of recomputing authorizers", () => {
+    const ctx = buildChannelTurnContext(
+      createBaseContextParams({
+        access: {
+          commands: {
+            authorized: false,
+            shouldBlockControlCommand: true,
+            reasonCode: "control_command_unauthorized",
+            allowTextCommands: true,
+            useAccessGroups: true,
+            authorizers: [{ configured: true, allowed: true }],
+          },
+        },
       }),
     );
+
+    expect(ctx.CommandAuthorized).toBe(false);
+  });
+
+  it("keeps legacy command authorization fallback for authorizer arrays", () => {
+    const ctx = buildChannelTurnContext(
+      createBaseContextParams({
+        access: {
+          commands: {
+            allowTextCommands: true,
+            useAccessGroups: true,
+            authorizers: [{ configured: true, allowed: true }],
+          },
+        },
+      }),
+    );
+
+    expect(ctx.CommandAuthorized).toBe(true);
   });
 
   it("filters supplemental context with channel visibility policy", () => {

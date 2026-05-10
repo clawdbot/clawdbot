@@ -69,7 +69,7 @@ That makes the common Codex debugging loop short: notice the bad behavior in
 Telegram, Discord, or another channel, run `/diagnostics`, approve once, share
 the report with support, then run the printed `codex resume <thread-id>` command
 locally if you want to inspect the native Codex thread yourself. See
-[Codex harness](/plugins/codex-harness#inspect-a-codex-thread-from-the-cli) for
+[Codex harness](/plugins/codex-harness#inspect-codex-threads-locally) for
 that inspection workflow.
 
 ## What the export contains

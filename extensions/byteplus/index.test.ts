@@ -13,26 +13,22 @@ describe("byteplus plugin", () => {
       entries: [],
     } as never);
 
-    expect(entries).toContainEqual(
-      expect.objectContaining({
-        provider: "byteplus",
-        id: BYTEPLUS_MODEL_CATALOG[0].id,
-        name: BYTEPLUS_MODEL_CATALOG[0].name,
-        reasoning: BYTEPLUS_MODEL_CATALOG[0].reasoning,
-        input: [...BYTEPLUS_MODEL_CATALOG[0].input],
-        contextWindow: BYTEPLUS_MODEL_CATALOG[0].contextWindow,
-      }),
+    const standardEntry = entries?.find(
+      (entry) => entry.provider === "byteplus" && entry.id === BYTEPLUS_MODEL_CATALOG[0].id,
     );
-    expect(entries).toContainEqual(
-      expect.objectContaining({
-        provider: "byteplus-plan",
-        id: BYTEPLUS_CODING_MODEL_CATALOG[0].id,
-        name: BYTEPLUS_CODING_MODEL_CATALOG[0].name,
-        reasoning: BYTEPLUS_CODING_MODEL_CATALOG[0].reasoning,
-        input: [...BYTEPLUS_CODING_MODEL_CATALOG[0].input],
-        contextWindow: BYTEPLUS_CODING_MODEL_CATALOG[0].contextWindow,
-      }),
+    expect(standardEntry?.name).toBe(BYTEPLUS_MODEL_CATALOG[0].name);
+    expect(standardEntry?.reasoning).toBe(BYTEPLUS_MODEL_CATALOG[0].reasoning);
+    expect(standardEntry?.input).toEqual([...BYTEPLUS_MODEL_CATALOG[0].input]);
+    expect(standardEntry?.contextWindow).toBe(BYTEPLUS_MODEL_CATALOG[0].contextWindow);
+
+    const planEntry = entries?.find(
+      (entry) =>
+        entry.provider === "byteplus-plan" && entry.id === BYTEPLUS_CODING_MODEL_CATALOG[0].id,
     );
+    expect(planEntry?.name).toBe(BYTEPLUS_CODING_MODEL_CATALOG[0].name);
+    expect(planEntry?.reasoning).toBe(BYTEPLUS_CODING_MODEL_CATALOG[0].reasoning);
+    expect(planEntry?.input).toEqual([...BYTEPLUS_CODING_MODEL_CATALOG[0].input]);
+    expect(planEntry?.contextWindow).toBe(BYTEPLUS_CODING_MODEL_CATALOG[0].contextWindow);
   });
 
   it("declares its coding provider auth alias in the manifest", () => {
@@ -53,18 +49,12 @@ describe("byteplus plugin", () => {
     );
 
     for (const entry of [standardKimi, planKimi, thinkingKimi]) {
-      expect(entry).toEqual(
-        expect.objectContaining({
-          reasoning: true,
-          maxTokens: 32768,
-          cost: expect.objectContaining({
-            input: 0.6,
-            output: 2.5,
-            cacheRead: 0.12,
-            cacheWrite: 0,
-          }),
-        }),
-      );
+      expect(entry?.reasoning).toBe(true);
+      expect(entry?.maxTokens).toBe(32768);
+      expect(entry?.cost?.input).toBe(0.6);
+      expect(entry?.cost?.output).toBe(2.5);
+      expect(entry?.cost?.cacheRead).toBe(0.12);
+      expect(entry?.cost?.cacheWrite).toBe(0);
     }
   });
 });

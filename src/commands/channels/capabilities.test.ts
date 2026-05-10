@@ -215,23 +215,20 @@ describe("channelsCapabilitiesCommand", () => {
 
     await channelsCapabilitiesCommand({ channel: "whatsapp" }, runtime);
 
-    expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledWith(
-      expect.objectContaining({
-        rawChannel: "whatsapp",
-        allowInstall: true,
-      }),
-    );
-    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
-      nextConfig: expect.objectContaining({
-        plugins: { entries: { whatsapp: { enabled: true } } },
-      }),
-      baseHash: "config-1",
+    const resolveParams = mocks.resolveInstallableChannelPlugin.mock.calls[0]?.[0];
+    expect(resolveParams?.rawChannel).toBe("whatsapp");
+    expect(resolveParams?.allowInstall).toBe(true);
+
+    const replaceParams = mocks.replaceConfigFile.mock.calls[0]?.[0];
+    expect(replaceParams?.nextConfig.plugins).toStrictEqual({
+      entries: { whatsapp: { enabled: true } },
     });
-    expect(mocks.refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledWith(
-      expect.objectContaining({
-        reason: "source-changed",
-      }),
-    );
+    expect(replaceParams?.baseHash).toBe("config-1");
+
+    const refreshCalls = mocks.refreshPluginRegistryAfterConfigMutation.mock
+      .calls as unknown as Array<[{ reason?: string }]>;
+    const refreshParams = refreshCalls[0]?.[0];
+    expect(refreshParams?.reason).toBe("source-changed");
     expect(logs.join("\n")).toContain("Probe: linked");
   });
 });

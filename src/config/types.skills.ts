@@ -13,6 +13,11 @@ export type SkillsLoadConfig = {
    * Each directory should contain skill subfolders with `SKILL.md`.
    */
   extraDirs?: string[];
+  /**
+   * Real target directories that skill symlinks may resolve into even when they
+   * sit outside the configured source root.
+   */
+  allowSymlinkTargets?: string[];
   /** Watch skill folders for changes and refresh the skills snapshot. */
   watch?: boolean;
   /** Debounce for the skills watcher (ms). */
@@ -22,6 +27,8 @@ export type SkillsLoadConfig = {
 export type SkillsInstallConfig = {
   preferBrew?: boolean;
   nodeManager?: "npm" | "pnpm" | "yarn" | "bun";
+  /** Allow gateway clients to install zip archives staged through skills.upload.*. */
+  allowUploadedArchives?: boolean;
 };
 
 export type SkillsLimitsConfig = {

@@ -3,18 +3,7 @@ import {
   createLazyFacadeObjectValue,
   loadActivatedBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
-import type {
-  ResolvedTtsConfig,
-  ResolvedTtsModelOverrides,
-  TtsDirectiveOverrides,
-  TtsDirectiveParseResult,
-  TtsResult,
-  TtsRuntimeFacade,
-  TtsSynthesisResult,
-  TtsSynthesisStreamResult,
-  TtsStreamResult,
-  TtsTelephonyResult,
-} from "./tts-runtime.types.js";
+import type { TtsRuntimeFacade } from "./tts-runtime.types.js";
 export {
   TtsAutoSchema,
   TtsConfigSchema,

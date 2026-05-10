@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRunningTaskRun } from "./task-executor.js";
-import { listTaskFlowAuditFindings } from "./task-flow-registry.audit.js";
+import {
+  listTaskFlowAuditFindings,
+  type TaskFlowAuditCode,
+  type TaskFlowAuditFinding,
+} from "./task-flow-registry.audit.js";
 import {
   createManagedTaskFlow,
   resetTaskFlowRegistryForTests,
@@ -14,6 +18,21 @@ import {
 } from "./task-registry.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+
+function requireFinding(
+  findings: TaskFlowAuditFinding[],
+  code: TaskFlowAuditCode,
+  flowId?: string,
+): TaskFlowAuditFinding {
+  const finding = findings.find(
+    (candidate) =>
+      candidate.code === code && (flowId === undefined || candidate.flow?.flowId === flowId),
+  );
+  if (!finding) {
+    throw new Error(`Expected ${code} finding${flowId ? ` for ${flowId}` : ""}`);
+  }
+  return finding;
+}
 
 async function withTaskFlowAuditStateDir(run: (root: string) => Promise<void>): Promise<void> {
   await withOpenClawTestState(
@@ -58,13 +77,11 @@ describe("task-flow-registry audit", () => {
       },
     });
 
-    expect(listTaskFlowAuditFindings()).toEqual([
-      expect.objectContaining({
-        severity: "error",
-        code: "restore_failed",
-        detail: expect.stringContaining("boom"),
-      }),
-    ]);
+    const findings = listTaskFlowAuditFindings();
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.severity).toBe("error");
+    expect(findings[0]?.code).toBe("restore_failed");
+    expect(findings[0]?.detail).toContain("boom");
   });
 
   it("clears restore-failed findings after a clean reset and restore", () => {
@@ -77,11 +94,9 @@ describe("task-flow-registry audit", () => {
       },
     });
 
-    expect(listTaskFlowAuditFindings()).toEqual([
-      expect.objectContaining({
-        code: "restore_failed",
-      }),
-    ]);
+    const findings = listTaskFlowAuditFindings();
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.code).toBe("restore_failed");
 
     resetTaskFlowRegistryForTests({ persist: false });
     configureTaskFlowRegistryRuntime({
@@ -124,17 +139,11 @@ describe("task-flow-registry audit", () => {
       });
 
       const findings = listTaskFlowAuditFindings({ now: 31 * 60_000 });
-      expect(findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            code: "missing_linked_tasks",
-            flow: expect.objectContaining({ flowId: running.flowId }),
-          }),
-          expect.objectContaining({
-            code: "blocked_task_missing",
-            flow: expect.objectContaining({ flowId: blocked.flowId }),
-          }),
-        ]),
+      expect(requireFinding(findings, "missing_linked_tasks", running.flowId).flow?.flowId).toBe(
+        running.flowId,
+      );
+      expect(requireFinding(findings, "blocked_task_missing", blocked.flowId).flow?.flowId).toBe(
+        blocked.flowId,
       );
     });
   });
@@ -162,14 +171,13 @@ describe("task-flow-registry audit", () => {
         lastEventAt: 1,
       });
 
-      expect(listTaskFlowAuditFindings({ now: 31 * 60_000 })).not.toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            code: "missing_linked_tasks",
-            flow: expect.objectContaining({ flowId: flow.flowId }),
-          }),
-        ]),
-      );
+      const findings = listTaskFlowAuditFindings({ now: 31 * 60_000 });
+      expect(
+        findings.some(
+          (finding) =>
+            finding.code === "missing_linked_tasks" && finding.flow?.flowId === flow.flowId,
+        ),
+      ).toBe(false);
     });
   });
 
@@ -191,13 +199,9 @@ describe("task-flow-registry audit", () => {
         ),
       ).toBeUndefined();
 
-      expect(listTaskFlowAuditFindings({ now: now + 26 * 60_000 })).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            code: "missing_linked_tasks",
-            flow: expect.objectContaining({ flowId: flow.flowId }),
-          }),
-        ]),
+      const staleFindings = listTaskFlowAuditFindings({ now: now + 26 * 60_000 });
+      expect(requireFinding(staleFindings, "missing_linked_tasks", flow.flowId).flow?.flowId).toBe(
+        flow.flowId,
       );
     });
   });
@@ -214,14 +218,8 @@ describe("task-flow-registry audit", () => {
         updatedAt: 100,
       });
 
-      expect(listTaskFlowAuditFindings({ now: 6 * 60_000 })).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            code: "cancel_stuck",
-            flow: expect.objectContaining({ flowId: flow.flowId }),
-          }),
-        ]),
-      );
+      const findings = listTaskFlowAuditFindings({ now: 6 * 60_000 });
+      expect(requireFinding(findings, "cancel_stuck", flow.flowId).flow?.flowId).toBe(flow.flowId);
     });
   });
 });

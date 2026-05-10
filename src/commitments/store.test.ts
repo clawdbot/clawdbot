@@ -121,12 +121,10 @@ describe("commitment store delivery selection", () => {
     ).resolves.toStrictEqual([]);
 
     const store = await loadCommitmentStore();
-    expect(store.commitments[0]).toMatchObject({
-      id: "cm_interview",
-      status: "expired",
-      expiredAtMs: nowMs,
-      updatedAtMs: nowMs,
-    });
+    expect(store.commitments[0]?.id).toBe("cm_interview");
+    expect(store.commitments[0]?.status).toBe("expired");
+    expect(store.commitments[0]?.expiredAtMs).toBe(nowMs);
+    expect(store.commitments[0]?.updatedAtMs).toBe(nowMs);
   });
 
   it("rewrites legacy source text fields when due commitments are listed", async () => {
@@ -146,14 +144,14 @@ describe("commitment store delivery selection", () => {
       "utf8",
     );
 
-    await expect(
-      listDueCommitmentsForSession({
-        cfg: { commitments: { enabled: true } },
-        agentId: "main",
-        sessionKey,
-        nowMs,
-      }),
-    ).resolves.toEqual([expect.objectContaining({ id: "cm_interview" })]);
+    const dueCommitments = await listDueCommitmentsForSession({
+      cfg: { commitments: { enabled: true } },
+      agentId: "main",
+      sessionKey,
+      nowMs,
+    });
+    expect(dueCommitments).toHaveLength(1);
+    expect(dueCommitments[0]?.id).toBe("cm_interview");
 
     const store = await loadCommitmentStore();
     expect(store.commitments[0]).not.toHaveProperty("sourceUserText");
@@ -186,8 +184,9 @@ describe("commitment store delivery selection", () => {
       nowMs,
     });
 
-    await expect(listCommitments({ status: "expired" })).resolves.toEqual([
-      expect.objectContaining({ id: "cm_interview", status: "expired" }),
-    ]);
+    const expiredCommitments = await listCommitments({ status: "expired" });
+    expect(expiredCommitments).toHaveLength(1);
+    expect(expiredCommitments[0]?.id).toBe("cm_interview");
+    expect(expiredCommitments[0]?.status).toBe("expired");
   });
 });

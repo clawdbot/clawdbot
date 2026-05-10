@@ -76,6 +76,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
   switch (reason) {
     case "billing":
       return 402;
+    case "server_error":
+      return 500;
     case "rate_limit":
       return 429;
     case "overloaded":
@@ -274,13 +276,13 @@ function failoverReasonFromClassification(
   return classification?.kind === "reason" ? classification.reason : null;
 }
 
-function normalizeErrorSignal(err: unknown): FailoverSignal {
+function normalizeErrorSignal(err: unknown, providerHint?: string): FailoverSignal {
   const message = getErrorMessage(err);
   return {
     status: getStatusCode(err),
     code: getErrorCode(err),
     message: message || undefined,
-    provider: getProvider(err),
+    provider: getProvider(err) ?? providerHint,
   };
 }
 
@@ -340,6 +342,7 @@ function resolveFailoverClassificationFromErrorInternal(
   err: unknown,
   seen: Set<object>,
   depth: number,
+  providerHint?: string,
 ): FailoverClassification | null {
   if (depth > MAX_FAILOVER_CAUSE_DEPTH) {
     return null;
@@ -356,7 +359,7 @@ function resolveFailoverClassificationFromErrorInternal(
       reason: err.reason,
     };
   }
-  const signal = normalizeErrorSignal(err);
+  const signal = normalizeErrorSignal(err, providerHint);
   const codeReason = signal.code
     ? failoverReasonFromClassification(classifyFailoverSignal({ code: signal.code }))
     : null;
@@ -374,6 +377,7 @@ function resolveFailoverClassificationFromErrorInternal(
         candidate,
         seen,
         depth + 1,
+        providerHint,
       );
       if (nestedClassification) {
         if (hasSessionLock && !hasExplicitFailoverMetadata) {
@@ -421,12 +425,20 @@ function resolveFailoverClassificationFromErrorInternal(
   return null;
 }
 
-function resolveFailoverClassificationFromError(err: unknown): FailoverClassification | null {
-  return resolveFailoverClassificationFromErrorInternal(err, new Set<object>(), 0);
+function resolveFailoverClassificationFromError(
+  err: unknown,
+  providerHint?: string,
+): FailoverClassification | null {
+  return resolveFailoverClassificationFromErrorInternal(err, new Set<object>(), 0, providerHint);
 }
 
-export function resolveFailoverReasonFromError(err: unknown): FailoverReason | null {
-  return failoverReasonFromClassification(resolveFailoverClassificationFromError(err));
+export function resolveFailoverReasonFromError(
+  err: unknown,
+  providerHint?: string,
+): FailoverReason | null {
+  return failoverReasonFromClassification(
+    resolveFailoverClassificationFromError(err, providerHint),
+  );
 }
 
 export function describeFailoverError(err: unknown): {
@@ -479,7 +491,7 @@ export function coerceToFailoverError(
   if (isFailoverError(err)) {
     return err;
   }
-  const reason = resolveFailoverReasonFromError(err);
+  const reason = resolveFailoverReasonFromError(err, context?.provider);
   if (!reason) {
     return null;
   }

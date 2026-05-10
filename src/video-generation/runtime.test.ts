@@ -425,13 +425,9 @@ describe("video-generation runtime", () => {
     expect(seenCapabilityLookupTimeoutMs).toBe(5_000);
     expect(seenSupportedDurationHint).toEqual([5]);
     expect(result.ignoredOverrides).toContainEqual({ key: "audio", value: true });
-    expect(result.normalization).toMatchObject({
-      durationSeconds: {
-        requested: 6,
-        applied: 5,
-        supportedValues: [5],
-      },
-    });
+    expect(result.normalization?.durationSeconds?.requested).toBe(6);
+    expect(result.normalization?.durationSeconds?.applied).toBe(5);
+    expect(result.normalization?.durationSeconds?.supportedValues).toEqual([5]);
   });
 
   it("skips providers that cannot satisfy reference audio inputs and falls back", async () => {
@@ -816,18 +812,12 @@ describe("video-generation runtime", () => {
     });
 
     expect(seenDurationSeconds).toBe(6);
-    expect(result.normalization).toMatchObject({
-      durationSeconds: {
-        requested: 5,
-        applied: 6,
-        supportedValues: [4, 6, 8],
-      },
-    });
-    expect(result.metadata).toMatchObject({
-      requestedDurationSeconds: 5,
-      normalizedDurationSeconds: 6,
-      supportedDurationSeconds: [4, 6, 8],
-    });
+    expect(result.normalization?.durationSeconds?.requested).toBe(5);
+    expect(result.normalization?.durationSeconds?.applied).toBe(6);
+    expect(result.normalization?.durationSeconds?.supportedValues).toEqual([4, 6, 8]);
+    expect(result.metadata?.requestedDurationSeconds).toBe(5);
+    expect(result.metadata?.normalizedDurationSeconds).toBe(6);
+    expect(result.metadata?.supportedDurationSeconds).toEqual([4, 6, 8]);
     expect(result.ignoredOverrides).toStrictEqual([]);
   });
 
@@ -931,16 +921,10 @@ describe("video-generation runtime", () => {
 
     expect(seenResolution).toBe("768P");
     expect(result.ignoredOverrides).toStrictEqual([]);
-    expect(result.normalization).toMatchObject({
-      resolution: {
-        requested: "720P",
-        applied: "768P",
-      },
-    });
-    expect(result.metadata).toMatchObject({
-      requestedResolution: "720P",
-      normalizedResolution: "768P",
-    });
+    expect(result.normalization?.resolution?.requested).toBe("720P");
+    expect(result.normalization?.resolution?.applied).toBe("768P");
+    expect(result.metadata?.requestedResolution).toBe("720P");
+    expect(result.metadata?.normalizedResolution).toBe("768P");
   });
 
   it("ignores unparseable video resolutions instead of sending them to providers", async () => {
@@ -1037,17 +1021,11 @@ describe("video-generation runtime", () => {
       resolution: undefined,
     });
     expect(result.ignoredOverrides).toStrictEqual([]);
-    expect(result.normalization).toMatchObject({
-      aspectRatio: {
-        applied: "16:9",
-        derivedFrom: "size",
-      },
-    });
-    expect(result.metadata).toMatchObject({
-      requestedSize: "1280x720",
-      normalizedAspectRatio: "16:9",
-      aspectRatioDerivedFromSize: "16:9",
-    });
+    expect(result.normalization?.aspectRatio?.applied).toBe("16:9");
+    expect(result.normalization?.aspectRatio?.derivedFrom).toBe("size");
+    expect(result.metadata?.requestedSize).toBe("1280x720");
+    expect(result.metadata?.normalizedAspectRatio).toBe("16:9");
+    expect(result.metadata?.aspectRatioDerivedFromSize).toBe("16:9");
   });
 
   it("builds a generic config hint without hardcoded provider ids", async () => {

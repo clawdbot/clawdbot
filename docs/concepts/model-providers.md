@@ -92,9 +92,8 @@ OpenClaw ships with the pi-ai catalog. These providers require **no** `models.pr
 - Example models: `openai/gpt-5.5`, `openai/gpt-5.4-mini`
 - Verify account/model availability with `openclaw models list --provider openai` if a specific install or API key behaves differently.
 - CLI: `openclaw onboard --auth-choice openai-api-key`
-- Default transport is `auto` (WebSocket-first, SSE fallback)
+- Default transport is `auto`; OpenClaw passes the transport choice to pi-ai.
 - Override per model via `agents.defaults.models["openai/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
-- OpenAI Responses WebSocket warm-up defaults to enabled via `params.openaiWsWarmup` (`true`/`false`)
 - OpenAI priority processing can be enabled via `agents.defaults.models["openai/<model>"].params.serviceTier`
 - `/fast` and `params.fastMode` map direct `openai/*` Responses requests to `service_tier=priority` on `api.openai.com`
 - Use `params.serviceTier` when you want an explicit tier instead of the shared `/fast` toggle
@@ -302,7 +301,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 | Groq                    | `groq`                           | `GROQ_API_KEY`                                               | -                                             |
 | Hugging Face Inference  | `huggingface`                    | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`                        | `huggingface/deepseek-ai/DeepSeek-R1`         |
 | Kilo Gateway            | `kilocode`                       | `KILOCODE_API_KEY`                                           | `kilocode/kilo/auto`                          |
-| Kimi Coding             | `kimi`                           | `KIMI_API_KEY` or `KIMICODE_API_KEY`                         | `kimi/kimi-code`                              |
+| Kimi Coding             | `kimi`                           | `KIMI_API_KEY` or `KIMICODE_API_KEY`                         | `kimi/kimi-for-coding`                        |
 | MiniMax                 | `minimax` / `minimax-portal`     | `MINIMAX_API_KEY` / `MINIMAX_OAUTH_TOKEN`                    | `minimax/MiniMax-M2.7`                        |
 | Mistral                 | `mistral`                        | `MISTRAL_API_KEY`                                            | `mistral/mistral-large-latest`                |
 | Moonshot                | `moonshot`                       | `MOONSHOT_API_KEY`                                           | `moonshot/kimi-k2.6`                          |
@@ -348,6 +347,8 @@ Use `models.providers` (or `models.json`) to add **custom** providers or OpenAI/
 Many of the bundled provider plugins below already publish a default catalog. Use explicit `models.providers.<id>` entries only when you want to override the default base URL, headers, or model list.
 
 Gateway model capability checks also read explicit `models.providers.<id>.models[]` metadata. If a custom or proxy model accepts images, set `input: ["text", "image"]` on that model so WebChat and node-origin attachment paths pass images as native model inputs instead of text-only media refs.
+
+`agents.defaults.models["provider/model"]` only controls model visibility, aliases, and per-model metadata for agents. It does not register a new runtime model by itself. For custom provider models, also add `models.providers.<provider>.models[]` with at least the matching `id`.
 
 ### Moonshot AI (Kimi)
 
@@ -395,18 +396,18 @@ Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
 
 - Provider: `kimi`
 - Auth: `KIMI_API_KEY`
-- Example model: `kimi/kimi-code`
+- Example model: `kimi/kimi-for-coding`
 
 ```json5
 {
   env: { KIMI_API_KEY: "sk-..." },
   agents: {
-    defaults: { model: { primary: "kimi/kimi-code" } },
+    defaults: { model: { primary: "kimi/kimi-for-coding" } },
   },
 }
 ```
 
-Legacy `kimi/k2p5` remains accepted as a compatibility model id.
+Legacy `kimi/kimi-code` and `kimi/k2p5` remain accepted as compatibility model ids and normalize to Kimi's stable API model id.
 
 ### Volcano Engine (Doubao)
 

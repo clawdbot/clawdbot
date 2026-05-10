@@ -37,6 +37,7 @@ describe("talk transcription gateway relay", () => {
     };
     const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
     const context = {
+      getRuntimeConfig: () => ({}),
       broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
         events.push({ event, payload, connIds: [...connIds] });
       },
@@ -170,6 +171,7 @@ describe("talk transcription gateway relay", () => {
     };
     const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
     const context = {
+      getRuntimeConfig: () => ({}),
       broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
         events.push({ event, payload, connIds: [...connIds] });
       },

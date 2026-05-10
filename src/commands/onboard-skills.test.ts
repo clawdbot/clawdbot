@@ -184,6 +184,6 @@ describe("setupSkills", () => {
     await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
 
     const brewNote = notes.find((n) => n.title === "Homebrew recommended");
-    expect(brewNote).toMatchObject({ title: "Homebrew recommended" });
+    expect(brewNote?.title).toBe("Homebrew recommended");
   });
 });

@@ -61,6 +61,7 @@ function createTestContext(): {
       messagingToolSentTargets: [],
       successfulCronAdds: 0,
       deterministicApprovalPromptSent: false,
+      toolExecutionSinceLastBlockReply: false,
     },
     shouldEmitToolResult: () => false,
     shouldEmitToolOutput: () => false,

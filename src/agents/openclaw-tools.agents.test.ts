@@ -44,10 +44,9 @@ describe("agents_list", () => {
     };
     const tool = createTool();
     const result = await tool.execute("call1", {});
-    expect(result.details).toMatchObject({
-      requester: "main",
-      allowAny: false,
-    });
+    const details = result.details as { requester?: string; allowAny?: boolean };
+    expect(details.requester).toBe("main");
+    expect(details.allowAny).toBe(false);
     const agents = readAgentList(result);
     expect(agents?.map((agent) => agent.id)).toEqual(["main"]);
   });
@@ -121,9 +120,8 @@ describe("agents_list", () => {
 
     const tool = createTool();
     const result = await tool.execute("call3", {});
-    expect(result.details).toMatchObject({
-      allowAny: true,
-    });
+    const details = result.details as { allowAny?: boolean };
+    expect(details.allowAny).toBe(true);
     const agents = readAgentList(result);
     expect(agents?.map((agent) => agent.id)).toEqual(["main", "coder", "research"]);
   });

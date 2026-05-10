@@ -11,6 +11,7 @@ import type {
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import {
@@ -296,11 +297,7 @@ export async function channelsCapabilitiesCommand(
         })();
 
   if (!selected || selected.length === 0) {
-    runtime.error(
-      danger(
-        `Unknown channel "${rawChannel}". Run ${formatCliCommand("openclaw channels list")} to see installed channels.`,
-      ),
-    );
+    runtime.error(danger(formatUnknownChannelMessage({ channel: rawChannel })));
     runtime.exit(1);
     return;
   }

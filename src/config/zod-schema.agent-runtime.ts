@@ -551,6 +551,21 @@ const ToolLoopDetectionSchema = z
   })
   .optional();
 
+const ToolSearchSchema = z
+  .union([
+    z.boolean(),
+    z
+      .object({
+        enabled: z.boolean().optional(),
+        mode: z.enum(["code", "tools"]).optional(),
+        codeTimeoutMs: z.number().int().positive().optional(),
+        searchDefaultLimit: z.number().int().positive().optional(),
+        maxSearchLimit: z.number().int().positive().optional(),
+      })
+      .strict(),
+  ])
+  .optional();
+
 const SandboxSshSchema = z
   .object({
     target: z.string().min(1).optional(),
@@ -879,6 +894,7 @@ export const AgentEntrySchema = z
     groupChat: GroupChatSchema,
     subagents: z
       .object({
+        delegationMode: z.enum(["suggest", "prefer"]).optional(),
         allowAgents: z.array(z.string()).optional(),
         model: z
           .union([
@@ -922,6 +938,7 @@ export const ToolsSchema = z
       .strict()
       .optional(),
     loopDetection: ToolLoopDetectionSchema,
+    toolSearch: ToolSearchSchema,
     message: z
       .object({
         allowCrossContextSend: z.boolean().optional(),

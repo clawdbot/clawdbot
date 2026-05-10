@@ -408,6 +408,28 @@ describe("loadDotEnv", () => {
     });
   });
 
+  it("blocks plugin install override vars from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            "OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES=1",
+            'OPENCLAW_PLUGIN_INSTALL_OVERRIDES={"codex":"npm-pack:/tmp/codex.tgz"}',
+          ].join("\n"),
+        );
+
+        delete process.env.OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES;
+        delete process.env.OPENCLAW_PLUGIN_INSTALL_OVERRIDES;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES).toBeUndefined();
+        expect(process.env.OPENCLAW_PLUGIN_INSTALL_OVERRIDES).toBeUndefined();
+      });
+    });
+  });
+
   it("blocks pinned helper interpreter vars from workspace .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {

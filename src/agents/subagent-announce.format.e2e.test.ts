@@ -69,6 +69,50 @@ function visibleAgentResponse(runId = "run-main") {
   };
 }
 
+function expectInputProvenance(
+  params: Record<string, unknown> | undefined,
+  sourceSessionKey: string,
+) {
+  const inputProvenance = params?.inputProvenance;
+  expect(inputProvenance).toBeTruthy();
+  if (!inputProvenance || typeof inputProvenance !== "object") {
+    throw new Error("Expected input provenance");
+  }
+  const provenance = inputProvenance as Record<string, unknown>;
+  expect(provenance.kind).toBe("inter_session");
+  expect(provenance.sourceSessionKey).toBe(sourceSessionKey);
+  expect(provenance.sourceTool).toBe("subagent_announce");
+}
+
+function getAgentCall(index = 0): AgentCallRequest {
+  const call = agentSpy.mock.calls[index]?.[0];
+  expect(call).toBeDefined();
+  if (!call) {
+    throw new Error(`Expected agent call at index ${index}`);
+  }
+  return call;
+}
+
+function expectAgentCallFields(
+  call: AgentCallRequest,
+  expected: {
+    channel?: string;
+    deliver?: boolean;
+    sessionKey: string;
+    to?: string;
+  },
+) {
+  expect(call.method).toBe("agent");
+  expect(call.params?.sessionKey).toBe(expected.sessionKey);
+  expect(call.params?.deliver).toBe(expected.deliver);
+  if ("channel" in expected) {
+    expect(call.params?.channel).toBe(expected.channel);
+  }
+  if ("to" in expected) {
+    expect(call.params?.to).toBe(expected.to);
+  }
+}
+
 const agentSpy = vi.fn(async (_req: AgentCallRequest) => visibleAgentResponse());
 const sendSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "send-main", status: "ok" }));
 const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
@@ -695,11 +739,7 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.channel).toBe("discord");
     expect(call?.params?.to).toBe("channel:12345");
     expect(call?.params?.sessionKey).toBe("agent:main:main");
-    expect(call?.params?.inputProvenance).toMatchObject({
-      kind: "inter_session",
-      sourceSessionKey: "agent:main:subagent:test",
-      sourceTool: "subagent_announce",
-    });
+    expectInputProvenance(call?.params, "agent:main:subagent:test");
     expect(msg).toContain("final answer: 2");
     expect(msg).not.toContain("✅ Subagent");
   });
@@ -1171,9 +1211,8 @@ describe("subagent announce formatting", () => {
     const directTargets = agentSpy.mock.calls.map(
       (call) => (call?.[0] as { params?: { to?: string } })?.params?.to,
     );
-    expect(directTargets).toEqual(
-      expect.arrayContaining(["channel:thread-child-a", "channel:thread-child-b"]),
-    );
+    expect(directTargets).toContain("channel:thread-child-a");
+    expect(directTargets).toContain("channel:thread-child-b");
     expect(directTargets).not.toContain("channel:main-parent-channel");
   });
 
@@ -1859,12 +1898,9 @@ describe("subagent announce formatting", () => {
     expect(didAnnounce).toBe(true);
     expect(sendSpy).toHaveBeenCalledTimes(0);
     expect(agentSpy).toHaveBeenCalledTimes(1);
-    expect(agentSpy.mock.calls[0]?.[0]).toMatchObject({
-      method: "agent",
-      params: {
-        sessionKey: "agent:main:main",
-        deliver: false,
-      },
+    expectAgentCallFields(getAgentCall(), {
+      sessionKey: "agent:main:main",
+      deliver: false,
     });
   });
 
@@ -1888,14 +1924,11 @@ describe("subagent announce formatting", () => {
     expect(didAnnounce).toBe(true);
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
-    expect(agentSpy.mock.calls[0]?.[0]).toMatchObject({
-      method: "agent",
-      params: {
-        sessionKey: "agent:main:main",
-        channel: "discord",
-        to: "channel:12345",
-        deliver: true,
-      },
+    expectAgentCallFields(getAgentCall(), {
+      sessionKey: "agent:main:main",
+      channel: "discord",
+      to: "channel:12345",
+      deliver: true,
     });
   });
 
@@ -2118,7 +2151,8 @@ describe("subagent announce formatting", () => {
     const accountIds = agentSpy.mock.calls.map(
       (call) => (call?.[0] as { params?: { accountId?: string } })?.params?.accountId,
     );
-    expect(accountIds).toEqual(expect.arrayContaining(["acct-a", "acct-b"]));
+    expect(accountIds).toContain("acct-a");
+    expect(accountIds).toContain("acct-b");
   });
 
   it.each([
@@ -2206,11 +2240,7 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.channel).toBeUndefined();
     expect(call?.params?.to).toBeUndefined();
     expect((call?.params as { role?: unknown } | undefined)?.role).toBeUndefined();
-    expect(call?.params?.inputProvenance).toMatchObject({
-      kind: "inter_session",
-      sourceSessionKey: "agent:main:subagent:worker",
-      sourceTool: "subagent_announce",
-    });
+    expectInputProvenance(call?.params, "agent:main:subagent:worker");
   });
 
   it("keeps completion-mode announce internal for nested requester subagent sessions", async () => {
@@ -2234,11 +2264,7 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.deliver).toBe(false);
     expect(call?.params?.channel).toBeUndefined();
     expect(call?.params?.to).toBeUndefined();
-    expect(call?.params?.inputProvenance).toMatchObject({
-      kind: "inter_session",
-      sourceSessionKey: "agent:main:subagent:orchestrator:subagent:worker",
-      sourceTool: "subagent_announce",
-    });
+    expectInputProvenance(call?.params, "agent:main:subagent:orchestrator:subagent:worker");
     const message = typeof call?.params?.message === "string" ? call.params.message : "";
     expect(message).toContain(
       "Convert this completion into a concise internal orchestration update for your parent agent",

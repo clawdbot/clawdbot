@@ -4,6 +4,16 @@ import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-s
 const EMPTY_LOADABLE_PLUGIN_ORIGINS = new Map();
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
+function expectWarning(
+  snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>,
+  expected: { code: string; path: string },
+): void {
+  const warning = snapshot.warnings.find(
+    (entry) => entry.code === expected.code && entry.path === expected.path,
+  );
+  expect(warning).toBeDefined();
+}
+
 describe("secrets runtime snapshot", () => {
   it("resolves sandbox ssh secret refs for active ssh backends", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
@@ -40,11 +50,10 @@ describe("secrets runtime snapshot", () => {
       loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
     });
 
-    expect(snapshot.config.agents?.defaults?.sandbox?.ssh).toMatchObject({
-      identityData: "PRIVATE KEY",
-      certificateData: "SSH CERT",
-      knownHostsData: "example.com ssh-ed25519 AAAATEST",
-    });
+    const ssh = snapshot.config.agents?.defaults?.sandbox?.ssh;
+    expect(ssh?.identityData).toBe("PRIVATE KEY");
+    expect(ssh?.certificateData).toBe("SSH CERT");
+    expect(ssh?.knownHostsData).toBe("example.com ssh-ed25519 AAAATEST");
   });
 
   it("treats sandbox ssh secret refs as inactive when ssh backend is not selected", async () => {
@@ -72,14 +81,10 @@ describe("secrets runtime snapshot", () => {
       provider: "default",
       id: "SSH_IDENTITY_DATA",
     });
-    expect(snapshot.warnings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: "agents.defaults.sandbox.ssh.identityData",
-        }),
-      ]),
-    );
+    expectWarning(snapshot, {
+      code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+      path: "agents.defaults.sandbox.ssh.identityData",
+    });
   });
 
   it("fails when an active exec ref id contains traversal segments", async () => {

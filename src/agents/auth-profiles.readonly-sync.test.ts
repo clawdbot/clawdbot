@@ -59,18 +59,18 @@ describe("auth profiles read-only external auth overlay", () => {
       const loaded = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
 
       expect(resolveExternalAuthProfilesWithPluginsMock).toHaveBeenCalled();
-      expect(loaded.profiles["minimax-portal:default"]).toMatchObject({
-        type: "oauth",
-        provider: "minimax-portal",
-      });
+      expect(loaded.profiles["minimax-portal:default"]?.type).toBe("oauth");
+      expect(loaded.profiles["minimax-portal:default"]?.provider).toBe("minimax-portal");
 
       const persisted = JSON.parse(fs.readFileSync(authPath, "utf8")) as AuthProfileStore;
       expect(persisted.profiles["minimax-portal:default"]).toBeUndefined();
-      expect(persisted.profiles["openai:default"]).toMatchObject({
-        type: "api_key",
-        provider: "openai",
-        key: "sk-test",
-      });
+      const persistedOpenAiProfile = persisted.profiles["openai:default"];
+      expect(persistedOpenAiProfile?.type).toBe("api_key");
+      if (persistedOpenAiProfile?.type !== "api_key") {
+        throw new Error("expected persisted OpenAI API key profile");
+      }
+      expect(persistedOpenAiProfile.provider).toBe("openai");
+      expect(persistedOpenAiProfile.key).toBe("sk-test");
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
     }

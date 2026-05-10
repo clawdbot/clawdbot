@@ -2,7 +2,6 @@ import { postTrustedWebToolsJson, wrapWebContent } from "openclaw/plugin-sdk/pro
 import { normalizeXaiModelId } from "../model-id.js";
 import {
   buildXaiResponsesToolBody,
-  extractXaiWebSearchContent,
   resolveXaiResponseTextCitationsAndInline,
   resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";

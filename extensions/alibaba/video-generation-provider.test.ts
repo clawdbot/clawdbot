@@ -20,6 +20,13 @@ beforeAll(async () => {
 
 installProviderHttpMockCleanup();
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
+}
+
 describe("alibaba video generation provider", () => {
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildAlibabaVideoGenerationProvider());
@@ -40,23 +47,20 @@ describe("alibaba video generation provider", () => {
       watermark: false,
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
-        body: expect.objectContaining({
-          model: "wan2.6-r2v-flash",
-          input: expect.objectContaining({
-            prompt: "animate this shot",
-            img_url: "https://example.com/ref.png",
-          }),
-          parameters: expect.objectContaining({
-            duration: 6,
-            enable_audio: true,
-            watermark: false,
-          }),
-        }),
-      }),
+    expect(postJsonRequestMock).toHaveBeenCalledOnce();
+    const request = requireRecord(postJsonRequestMock.mock.calls[0]?.[0], "DashScope request");
+    expect(request.url).toBe(
+      "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
     );
+    const body = requireRecord(request.body, "DashScope request body");
+    expect(body.model).toBe("wan2.6-r2v-flash");
+    const input = requireRecord(body.input, "DashScope request input");
+    expect(input.prompt).toBe("animate this shot");
+    expect(input.img_url).toBe("https://example.com/ref.png");
+    const parameters = requireRecord(body.parameters, "DashScope request parameters");
+    expect(parameters.duration).toBe(6);
+    expect(parameters.enable_audio).toBe(true);
+    expect(parameters.watermark).toBe(false);
     expectDashscopeVideoTaskPoll(fetchWithTimeoutMock);
     expectSuccessfulDashscopeVideoResult(result);
   });

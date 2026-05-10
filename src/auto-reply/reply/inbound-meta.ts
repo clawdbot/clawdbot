@@ -11,6 +11,7 @@ import type { TemplateContext } from "../templating.js";
 
 const MAX_UNTRUSTED_JSON_STRING_CHARS = 2_000;
 const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
+const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
 
 function stripNullBytes(value: string): string {
   return value.replaceAll("\u0000", "");
@@ -59,6 +60,30 @@ function sanitizeUntrustedJsonValue(value: unknown): unknown {
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function truncateUntrustedTranscriptField(value: string): string {
+  if (value.length <= MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS) {
+    return value;
+  }
+  return `${truncateUtf16Safe(
+    value,
+    Math.max(0, MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS - 14),
+  ).trimEnd()}…[truncated]`;
+}
+
+function sanitizeTranscriptField(value: unknown): string | undefined {
+  const body = sanitizePromptBody(value);
+  if (!body) {
+    return undefined;
+  }
+  return neutralizeMarkdownFences(truncateUntrustedTranscriptField(body))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function formatUntrustedStructuredContextLabel(label: unknown): string {
   const normalized = normalizePromptMetadataString(label);
   return normalized
@@ -73,6 +98,67 @@ function formatUntrustedJsonBlock(label: string, payload: unknown): string {
     JSON.stringify(sanitizeUntrustedJsonValue(payload), null, 2),
     "```",
   ].join("\n");
+}
+
+function formatStructuredContextRelation(value: unknown): string | undefined {
+  const relation = sanitizeTranscriptField(value);
+  if (relation === "before_current_message") {
+    return "before current message";
+  }
+  if (relation === "around_reply_target") {
+    return "around replied-to message";
+  }
+  return relation?.replaceAll("_", " ");
+}
+
+function formatChatWindowMessage(
+  value: unknown,
+  envelope?: EnvelopeFormatOptions,
+): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const messageId = sanitizeTranscriptField(value["message_id"]);
+  const sender = sanitizeTranscriptField(value["sender"]) ?? "unknown sender";
+  const timestamp = formatConversationTimestamp(value["timestamp_ms"], envelope);
+  const replyToId = sanitizeTranscriptField(value["reply_to_id"]);
+  const mediaType = sanitizeTranscriptField(value["media_type"]);
+  const mediaRef = sanitizeTranscriptField(value["media_ref"]);
+  const body = sanitizeTranscriptField(value["body"]);
+  const details = [
+    messageId ? `#${messageId}` : undefined,
+    timestamp,
+    value["is_reply_target"] === true ? "[reply target]" : undefined,
+    replyToId ? `->#${replyToId}` : undefined,
+  ].filter(Boolean);
+  const media = mediaType ? `[${mediaType}${mediaRef ? ` ${mediaRef}` : ""}]` : undefined;
+  const content = [body, media].filter(Boolean).join(" ");
+  if (!content) {
+    return undefined;
+  }
+  return `${details.length > 0 ? `${details.join(" ")} ` : ""}${sender}: ${content}`;
+}
+
+function formatChatWindowStructuredContext(
+  entry: NonNullable<TemplateContext["UntrustedStructuredContext"]>[number],
+  envelope?: EnvelopeFormatOptions,
+): string | undefined {
+  if (normalizePromptMetadataString(entry.type) !== "chat_window" || !isRecord(entry.payload)) {
+    return undefined;
+  }
+  const messages = Array.isArray(entry.payload["messages"]) ? entry.payload["messages"] : [];
+  const lines = messages.flatMap((message) => {
+    const line = formatChatWindowMessage(message, envelope);
+    return line ? [line] : [];
+  });
+  if (lines.length === 0) {
+    return undefined;
+  }
+  const label = sanitizeTranscriptField(entry.label) ?? "Chat window";
+  const relation = formatStructuredContextRelation(entry.payload["relation"]);
+  const order = sanitizeTranscriptField(entry.payload["order"]);
+  const qualifiers = ["untrusted", order, relation].filter(Boolean).join(", ");
+  return [`${label} (${qualifiers}):`, ...lines].join("\n");
 }
 
 function buildLocationContextPayload(ctx: TemplateContext): Record<string, unknown> | undefined {
@@ -348,6 +434,11 @@ export function buildInboundUserContextPrefix(
     : [];
   for (const entry of structuredContext) {
     if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const chatWindow = formatChatWindowStructuredContext(entry, envelope);
+    if (chatWindow) {
+      blocks.push(chatWindow);
       continue;
     }
     blocks.push(

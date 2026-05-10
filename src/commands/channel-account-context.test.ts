@@ -76,9 +76,8 @@ describe("resolveDefaultChannelAccountContext", () => {
     expect(result.enabled).toBe(false);
     expect(result.configured).toBe(false);
     expect(result.degraded).toBe(true);
-    expect(result.diagnostics).toEqual(
-      expect.arrayContaining([expect.stringContaining("failed to resolve account")]),
-    );
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]).toContain("failed to resolve account");
   });
 
   it("prefers inspectAccount in read_only mode", async () => {

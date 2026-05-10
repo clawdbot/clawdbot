@@ -2,6 +2,7 @@ import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import {
   type ModelAliasIndex,
+  buildConfiguredModelCatalog,
   modelKey,
   normalizeProviderId,
   resolveConfiguredModelRef,
@@ -263,6 +264,46 @@ function buildModelPickerCatalog(params: {
   return out;
 }
 
+function filterMissingAuthNestedProviderDuplicates(params: {
+  cfg: OpenClawConfig;
+  entries: ModelPickerCatalogEntry[];
+  authByProvider: Map<string, string>;
+}): ModelPickerCatalogEntry[] {
+  const configuredKeys = new Set(
+    buildConfiguredModelCatalog({ cfg: params.cfg }).map((entry) =>
+      modelKey(entry.provider, entry.id),
+    ),
+  );
+  const wrapperKeys = new Set<string>();
+  for (const entry of params.entries) {
+    const id = normalizeOptionalString(entry.id) ?? "";
+    const slash = id.indexOf("/");
+    if (slash <= 0) {
+      continue;
+    }
+    const nestedProvider = normalizeProviderId(id.slice(0, slash));
+    const nestedModel = normalizeOptionalString(id.slice(slash + 1)) ?? "";
+    const wrapperProvider = normalizeProviderId(entry.provider);
+    if (!nestedProvider || !nestedModel || nestedProvider === wrapperProvider) {
+      continue;
+    }
+    wrapperKeys.add(modelKey(nestedProvider, nestedModel));
+  }
+  if (wrapperKeys.size === 0) {
+    return params.entries;
+  }
+
+  return params.entries.filter((entry) => {
+    const provider = normalizeProviderId(entry.provider);
+    const id = normalizeOptionalString(entry.id) ?? "";
+    const key = modelKey(provider, id);
+    if (configuredKeys.has(key)) {
+      return true;
+    }
+    return params.authByProvider.get(provider) !== "missing" || !wrapperKeys.has(key);
+  });
+}
+
 export async function maybeHandleModelDirectiveInfo(params: {
   directives: InlineDirectives;
   cfg: OpenClawConfig;
@@ -409,7 +450,12 @@ export async function maybeHandleModelDirectiveInfo(params: {
   }
 
   const byProvider = new Map<string, ModelPickerCatalogEntry[]>();
-  for (const entry of pickerCatalog) {
+  const statusCatalog = filterMissingAuthNestedProviderDuplicates({
+    cfg: params.cfg,
+    entries: pickerCatalog,
+    authByProvider,
+  });
+  for (const entry of statusCatalog) {
     const provider = normalizeProviderId(entry.provider);
     const models = byProvider.get(provider);
     if (models) {

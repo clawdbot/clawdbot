@@ -233,8 +233,8 @@ export async function runSetupWizard(
     );
   }
 
-  const quickstartHint = `Configure details later via ${formatCliCommand("openclaw configure")}.`;
-  const manualHint = "Configure port, network, Tailscale, and auth options.";
+  const quickstartHint = `Recommended local setup. Change details later with ${formatCliCommand("openclaw configure")}.`;
+  const manualHint = "Choose Gateway port, network exposure, Tailscale, and auth.";
   const migrationDetections = await detectSetupMigrationSources({ config: baseConfig, runtime });
   const firstMigrationDetection = migrationDetections[0];
   const importOption = firstMigrationDetection
@@ -252,7 +252,9 @@ export async function runSetupWizard(
     normalizedExplicitFlow !== "advanced" &&
     normalizedExplicitFlow !== "import"
   ) {
-    runtime.error("Invalid --flow (use quickstart, manual, advanced, or import).");
+    runtime.error(
+      "Invalid --flow. Use quickstart, manual, advanced, or import. Example: openclaw onboard --flow quickstart",
+    );
     runtime.exit(1);
     return;
   }
@@ -267,8 +269,8 @@ export async function runSetupWizard(
     (await prompter.select({
       message: "Setup mode",
       options: [
-        { value: "quickstart", label: "QuickStart", hint: quickstartHint },
-        { value: "advanced", label: "Manual", hint: manualHint },
+        { value: "quickstart", label: "QuickStart (recommended)", hint: quickstartHint },
+        { value: "advanced", label: "Manual setup", hint: manualHint },
         ...(importOption ? [importOption] : []),
       ],
       initialValue: "quickstart",
@@ -291,9 +293,9 @@ export async function runSetupWizard(
     const action = await prompter.select({
       message: "Config handling",
       options: [
-        { value: "keep", label: "Use existing values" },
-        { value: "modify", label: "Update values" },
-        { value: "reset", label: "Reset" },
+        { value: "keep", label: "Keep current values" },
+        { value: "modify", label: "Review and update" },
+        { value: "reset", label: "Reset before setup" },
       ],
     });
 

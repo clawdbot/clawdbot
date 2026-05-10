@@ -97,6 +97,11 @@ function writeOpenWebUiConfig([openaiApiKey]) {
       value: (process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").trim(),
     },
     { path: "models.providers.openai.models", value: [] },
+    {
+      path: "models.providers.openai.timeoutSeconds",
+      value: Number.parseInt(process.env.OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS ?? "900", 10),
+    },
+    { path: "models.providers.openai.agentRuntime", value: { id: "pi" } },
     { path: "gateway.controlUi.enabled", value: false },
     { path: "gateway.mode", value: "local" },
     { path: "gateway.bind", value: "lan" },

@@ -88,7 +88,7 @@ These are the standard files OpenClaw expects inside the workspace:
     Daily memory log (one file per day). Recommended to read today + yesterday on session start.
   </Accordion>
   <Accordion title="MEMORY.md - curated long-term memory (optional)">
-    Curated long-term memory. Only load in the main, private session (not shared/group contexts). See [Memory](/concepts/memory) for the workflow and automatic memory flush.
+    Curated long-term memory: durable facts, preferences, decisions, and short summaries. Keep detailed logs in `memory/YYYY-MM-DD.md` so memory tools can retrieve them on demand without injecting them into every prompt. Only load `MEMORY.md` in the main, private session (not shared/group contexts). See [Memory](/concepts/memory) for the workflow and automatic memory flush.
   </Accordion>
   <Accordion title="skills/ - workspace skills (optional)">
     Workspace-specific skills. Highest-precedence skill location for that workspace. Overrides project agent skills, personal agent skills, managed skills, bundled skills, and `skills.load.extraDirs` when names collide.

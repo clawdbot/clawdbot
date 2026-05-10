@@ -123,13 +123,11 @@ describe("healthCommand", () => {
       runtime as never,
     );
 
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "health",
-        token: "setup-token",
-        password: "setup-password",
-      }),
-    );
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+    const [gatewayRequest] = callGatewayMock.mock.calls[0] ?? [];
+    expect(gatewayRequest?.method).toBe("health");
+    expect(gatewayRequest?.token).toBe("setup-token");
+    expect(gatewayRequest?.password).toBe("setup-password");
   });
 
   it("formats per-account probe timings", () => {

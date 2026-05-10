@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
@@ -472,6 +473,28 @@ test("sessions.list configuredAgentsOnly hides disk-discovered unregistered agen
     "utf-8",
   );
 
+  const readFileSyncSpy = vi.spyOn(fsSync, "readFileSync");
+  const realDiskOnlyStorePath = await fs.realpath(diskOnlyStorePath);
+
+  try {
+    const configuredOnly = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
+      "sessions.list",
+      { includeGlobal: false, includeUnknown: false, configuredAgentsOnly: true },
+    );
+    expect(configuredOnly.ok).toBe(true);
+    expect(configuredOnly.payload?.sessions.map((session) => session.key)).toEqual([
+      "agent:main:main",
+    ]);
+    expect(
+      readFileSyncSpy.mock.calls.some(
+        ([file]) =>
+          typeof file === "string" && fsSync.realpathSync.native(file) === realDiskOnlyStorePath,
+      ),
+    ).toBe(false);
+  } finally {
+    readFileSyncSpy.mockRestore();
+  }
+
   const broad = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
     "sessions.list",
     { includeGlobal: false, includeUnknown: false },
@@ -480,14 +503,5 @@ test("sessions.list configuredAgentsOnly hides disk-discovered unregistered agen
   expect(broad.payload?.sessions.map((session) => session.key)).toEqual([
     "agent:main:main",
     "agent:local:main",
-  ]);
-
-  const configuredOnly = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
-    "sessions.list",
-    { includeGlobal: false, includeUnknown: false, configuredAgentsOnly: true },
-  );
-  expect(configuredOnly.ok).toBe(true);
-  expect(configuredOnly.payload?.sessions.map((session) => session.key)).toEqual([
-    "agent:main:main",
   ]);
 });

@@ -7,7 +7,7 @@ import {
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 export const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";

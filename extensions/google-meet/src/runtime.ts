@@ -674,6 +674,13 @@ export class GoogleMeetRuntime {
         "test_speech requires mode: agent or bidi; use join mode: transcribe for observe-only sessions.",
       );
     }
+    const requestedMode = request.mode ? resolveMode(request.mode, this.params.config) : undefined;
+    const mode =
+      requestedMode && isGoogleMeetTalkBackMode(requestedMode)
+        ? requestedMode
+        : isGoogleMeetTalkBackMode(this.params.config.defaultMode)
+          ? this.params.config.defaultMode
+          : "agent";
     const url = normalizeMeetUrl(request.url);
     const transport = resolveTransport(request.transport, this.params.config);
     const beforeSessions = this.list();
@@ -690,7 +697,7 @@ export class GoogleMeetRuntime {
       ...request,
       transport,
       url,
-      mode: "agent",
+      mode,
       message: request.message ?? "Say exactly: Google Meet speech test complete.",
     });
     let health = result.session.chrome?.health;
@@ -821,10 +828,6 @@ export class GoogleMeetRuntime {
 
   async #refreshStatusHealthForSession(session: GoogleMeetSession) {
     if (session.transport === "chrome" || session.transport === "chrome-node") {
-      if (session.chrome?.health?.manualActionRequired) {
-        this.#refreshSpeechReadiness(session);
-        return;
-      }
       await this.#refreshBrowserHealthForChromeSession(session, { force: true, readOnly: true });
       return;
     }

@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { installPackageDir } from "./install-package-dir.js";
 
@@ -58,6 +58,38 @@ function normalizeComparablePath(filePath: string): string {
 
 function createFsError(code: string, message = code): NodeJS.ErrnoException {
   return Object.assign(new Error(message), { code });
+}
+
+async function expectMissingPath(filePath: string): Promise<void> {
+  try {
+    await fs.stat(filePath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`Expected missing path: ${filePath}`);
+}
+
+function expectRunCommandCallForArgv(
+  expectedArgv: string[],
+  predicate?: (options: CommandOptions) => boolean,
+): CommandOptions {
+  const calls = vi.mocked(runCommandWithTimeout).mock.calls as [
+    string[],
+    number | CommandOptions,
+  ][];
+  for (const [argv, optionsOrTimeout] of calls.toReversed()) {
+    if (
+      JSON.stringify(argv) !== JSON.stringify(expectedArgv) ||
+      typeof optionsOrTimeout === "number"
+    ) {
+      continue;
+    }
+    if (!predicate || predicate(optionsOrTimeout)) {
+      return optionsOrTimeout;
+    }
+  }
+  throw new Error(`Expected runCommandWithTimeout call: ${expectedArgv.join(" ")}`);
 }
 
 async function rebindInstallBasePath(params: {
@@ -295,11 +327,7 @@ describe("installPackageDir", () => {
       },
     });
 
-    await expect(
-      fs.stat(path.join(outsideInstallRoot, "demo", "marker.txt")),
-    ).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectMissingPath(path.join(outsideInstallRoot, "demo", "marker.txt"));
     expect(warnings).toContain(
       "Install base directory changed during install; aborting staged publish.",
     );
@@ -345,11 +373,7 @@ describe("installPackageDir", () => {
     expect(warnings).toContain(
       "Install base directory changed before backup cleanup; leaving backup in place.",
     );
-    await expect(
-      fs.stat(path.join(outsideInstallRoot, "demo", "marker.txt")),
-    ).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectMissingPath(path.join(outsideInstallRoot, "demo", "marker.txt"));
     const backupRoot = path.join(preservedInstallRoot, ".openclaw-install-backups");
     await expect(fs.readdir(backupRoot)).resolves.toHaveLength(1);
   });
@@ -392,12 +416,14 @@ describe("installPackageDir", () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledWith(
-      ["npm", "install", "--omit=dev", "--loglevel=error", "--ignore-scripts"],
-      expect.objectContaining({
-        cwd: expect.stringContaining(".openclaw-install-stage-"),
-      }),
-    );
+    const installOptions = expectRunCommandCallForArgv([
+      "npm",
+      "install",
+      "--omit=dev",
+      "--loglevel=error",
+      "--ignore-scripts",
+    ]);
+    expect(installOptions.cwd).toContain(".openclaw-install-stage-");
   });
 
   it("hides the staged project .npmrc while npm install runs and restores it afterward", async () => {
@@ -425,9 +451,7 @@ describe("installPackageDir", () => {
       if (cwd === undefined) {
         throw new Error("expected package install cwd");
       }
-      await expect(fs.stat(path.join(cwd, ".npmrc"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectMissingPath(path.join(cwd, ".npmrc"));
       await expect(
         listMatchingEntries(cwd, ".openclaw-install-hidden-npmrc-"),
       ).resolves.toHaveLength(1);
@@ -502,28 +526,19 @@ describe("installPackageDir", () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledWith(
+    const installOptions = expectRunCommandCallForArgv(
       ["npm", "install", "--omit=dev", "--loglevel=error", "--ignore-scripts"],
-      expect.objectContaining({
-        env: expect.objectContaining({
-          npm_config_global: "false",
-          npm_config_location: "project",
-          npm_config_package_lock: "false",
-          npm_config_save: "false",
-        }),
-      }),
+      (options) => options.env?.npm_config_global === "false",
     );
-    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledWith(
-      expect.any(Array),
-      expect.objectContaining({
-        env: expect.not.objectContaining({
-          NPM_CONFIG_GLOBAL: expect.any(String),
-          NPM_CONFIG_LOCATION: expect.any(String),
-          NPM_CONFIG_PREFIX: expect.any(String),
-          npm_config_prefix: expect.any(String),
-        }),
-      }),
-    );
+    const env = installOptions.env ?? {};
+    expect(env.npm_config_global).toBe("false");
+    expect(env.npm_config_location).toBe("project");
+    expect(env.npm_config_package_lock).toBe("false");
+    expect(env.npm_config_save).toBe("false");
+    expect("NPM_CONFIG_GLOBAL" in env).toBe(false);
+    expect("NPM_CONFIG_LOCATION" in env).toBe(false);
+    expect("NPM_CONFIG_PREFIX" in env).toBe(false);
+    expect("npm_config_prefix" in env).toBe(false);
   });
 
   it("surfaces npm stderr when dependency install fails", async () => {

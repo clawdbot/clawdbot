@@ -1,0 +1,1 @@
+- Signal/container mode: add REST API support for bbernhard/signal-cli-rest-api containerized deployments via a unified adapter layer, with automatic mode detection and `channels.signal.apiMode` config. (#10240) Thanks @Hua688.

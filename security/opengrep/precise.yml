@@ -4072,7 +4072,7 @@ rules:
       detector-bucket: precise
       source-run: 2026-04-17T07-37-10Z
       source-rule-id: unresolved-discovery-routing-from-txt-hints
-  - id: ghsa-rwj8-p9vq-25gv.bluebubbles-media-read-without-root-allowlist
+  - id: ghsa-rwj8-p9vq-25gv.local-media-read-without-root-allowlist
     languages:
       - typescript
       - javascript
@@ -4086,7 +4086,7 @@ rules:
       advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-RWJ8-P9VQ-25GV
       detector-bucket: precise
       source-run: 2026-04-17T07-37-10Z
-      source-rule-id: bluebubbles-media-read-without-root-allowlist
+      source-rule-id: local-media-read-without-root-allowlist
     patterns:
       - pattern: |
           const $LOCAL = resolveLocalMediaPath(...);

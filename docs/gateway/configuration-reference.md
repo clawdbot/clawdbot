@@ -48,6 +48,8 @@ Moved to a dedicated page - see
 - `session.*` (session lifecycle, compaction, pruning)
 - `messages.*` (message delivery, TTS, markdown rendering)
 - `talk.*` (Talk mode)
+  - `talk.consultThinkingLevel`: thinking level override for the full OpenClaw agent run behind Control UI Talk realtime consults
+  - `talk.consultFastMode`: one-shot fast-mode override for Control UI Talk realtime consults
   - `talk.speechLocale`: optional BCP 47 locale id for Talk speech recognition on iOS/macOS
   - `talk.silenceTimeoutMs`: when unset, Talk keeps the platform default pause window before sending the transcript (`700 ms on macOS and Android, 900 ms on iOS`)
 
@@ -131,10 +133,12 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
     allowBundled: ["gemini", "peekaboo"],
     load: {
       extraDirs: ["~/Projects/agent-scripts/skills"],
+      allowSymlinkTargets: ["~/Projects/manager/skills"],
     },
     install: {
       preferBrew: true,
       nodeManager: "npm", // npm | pnpm | yarn | bun
+      allowUploadedArchives: false,
     },
     entries: {
       "image-lab": {
@@ -150,10 +154,16 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 
 - `allowBundled`: optional allowlist for bundled skills only (managed/workspace skills unaffected).
 - `load.extraDirs`: extra shared skill roots (lowest precedence).
+- `load.allowSymlinkTargets`: trusted real target roots that skill symlinks may
+  resolve into when the link lives outside its configured source root.
 - `install.preferBrew`: when true, prefer Homebrew installers when `brew` is
   available before falling back to other installer kinds.
 - `install.nodeManager`: node installer preference for `metadata.openclaw.install`
   specs (`npm` | `pnpm` | `yarn` | `bun`).
+- `install.allowUploadedArchives`: allow trusted `operator.admin` Gateway
+  clients to install private zip archives staged through `skills.upload.*`
+  (default: false). This only enables the uploaded-archive path; normal ClawHub
+  installs do not require it.
 - `entries.<skillKey>.enabled: false` disables a skill even if bundled/installed.
 - `entries.<skillKey>.apiKey`: convenience for skills declaring a primary env var (plaintext string or SecretRef object).
 
@@ -207,8 +217,9 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 ### Codex harness plugin config
 
 The bundled `codex` plugin owns native Codex app-server harness settings under
-`plugins.entries.codex.config`. See [Codex harness](/plugins/codex-harness) for
-the full runtime model.
+`plugins.entries.codex.config`. See
+[Codex harness reference](/plugins/codex-harness-reference) for the full config
+surface and [Codex harness](/plugins/codex-harness) for the runtime model.
 
 `codexPlugins` applies only to sessions that select the native Codex harness.
 It does not enable Codex plugins for Pi, normal OpenAI provider runs, ACP

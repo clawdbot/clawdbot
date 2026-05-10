@@ -69,12 +69,10 @@ describe("sessions tools visibility", () => {
     const denied = await tool.execute("call1", {
       sessionKey: "agent:main:quietchat:direct:someone-else",
     });
-    expect(denied.details).toMatchObject({ status: "forbidden" });
+    expect((denied.details as { status?: string }).status).toBe("forbidden");
 
     const allowed = await tool.execute("call2", { sessionKey: "subagent:child-1" });
-    expect(allowed.details).toMatchObject({
-      sessionKey: "subagent:child-1",
-    });
+    expect((allowed.details as { sessionKey?: string }).sessionKey).toBe("subagent:child-1");
   });
 
   it("allows broader access when tools.sessions.visibility=all", async () => {
@@ -88,9 +86,9 @@ describe("sessions tools visibility", () => {
     const result = await tool.execute("call3", {
       sessionKey: "agent:main:quietchat:direct:someone-else",
     });
-    expect(result.details).toMatchObject({
-      sessionKey: "agent:main:quietchat:direct:someone-else",
-    });
+    expect((result.details as { sessionKey?: string }).sessionKey).toBe(
+      "agent:main:quietchat:direct:someone-else",
+    );
   });
 
   it("clamps sandboxed sessions to tree when agents.defaults.sandbox.sessionToolsVisibility=spawned", async () => {
@@ -111,6 +109,6 @@ describe("sessions tools visibility", () => {
     const denied = await tool.execute("call4", {
       sessionKey: "agent:other:main",
     });
-    expect(denied.details).toMatchObject({ status: "forbidden" });
+    expect((denied.details as { status?: string }).status).toBe("forbidden");
   });
 });

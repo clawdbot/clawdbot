@@ -42,8 +42,14 @@ fi
 tool_dir="${OPENCLAW_RELEASE_TSX_TOOL_DIR:-${temp_root}/openclaw-release-tsx-${tsx_version}}"
 loader_path="${tool_dir}/node_modules/tsx/dist/loader.mjs"
 npm_tool_dir="${tool_dir}"
+npm_cli_arg="${npm_cli_js}"
+loader_arg="${loader_path}"
 if command -v cygpath >/dev/null 2>&1; then
   npm_tool_dir="$(cygpath -w "${tool_dir}")"
+  if [[ -n "${npm_cli_js}" ]]; then
+    npm_cli_arg="$(cygpath -w "${npm_cli_js}")"
+  fi
+  loader_arg="$(cygpath -w "${loader_path}")"
 fi
 
 command -v "${node_cmd}" >/dev/null 2>&1 || {
@@ -58,8 +64,8 @@ command -v "${npm_cmd}" >/dev/null 2>&1 || {
 if [[ ! -f "${loader_path}" ]]; then
   mkdir -p "${tool_dir}"
   if [[ -n "${npm_cli_js}" ]]; then
-    if ! "${node_cmd}" "${npm_cli_js}" install --prefix "${tool_dir}" --no-save --no-package-lock "tsx@${tsx_version}" >/dev/null; then
-      echo "failed to install cross-OS release-check loader with ${node_cmd} ${npm_cli_js}." >&2
+    if ! "${node_cmd}" "${npm_cli_arg}" install --prefix "${npm_tool_dir}" --no-save --no-package-lock "tsx@${tsx_version}" >/dev/null; then
+      echo "failed to install cross-OS release-check loader with ${node_cmd} ${npm_cli_arg}." >&2
       exit 127
     fi
   elif ! "${npm_cmd}" install --prefix "${npm_tool_dir}" --no-save --no-package-lock "tsx@${tsx_version}" >/dev/null; then
@@ -79,7 +85,7 @@ loader_url="$(
     const { resolve } = require("node:path");
     const { pathToFileURL } = require("node:url");
     process.stdout.write(pathToFileURL(resolve(process.argv[1])).href);
-  ' "${loader_path}"
+  ' "${loader_arg}"
 )"
 
 exec "${node_cmd}" --import "${loader_url}" "${script_path}" "$@"

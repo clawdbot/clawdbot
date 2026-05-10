@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildCopilotIdeHeaders } from "./copilot-dynamic-headers.js";
+import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "./copilot-dynamic-headers.js";
 import {
   deriveCopilotApiBaseUrlFromToken,
   resolveCopilotApiToken,
@@ -47,7 +47,7 @@ describe("resolveCopilotApiToken", () => {
     expect(result.expiresAt).toBe(12_345_678_901_000);
   });
 
-  it("sends IDE headers when exchanging the GitHub token", async () => {
+  it("sends IDE and integration headers when exchanging the GitHub token", async () => {
     const fetchImpl = vi.fn(async () => ({
       ok: true,
       json: async () => ({
@@ -64,16 +64,47 @@ describe("resolveCopilotApiToken", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
-    expect(fetchImpl).toHaveBeenCalledWith(
-      "https://api.github.com/copilot_internal/v2/token",
-      expect.objectContaining({
-        method: "GET",
-        headers: expect.objectContaining({
-          Accept: "application/json",
-          Authorization: "Bearer github-token",
-          ...buildCopilotIdeHeaders({ includeApiVersion: true }),
-        }),
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://api.github.com/copilot_internal/v2/token");
+    expect(init.method).toBe("GET");
+    expect(init.headers).toEqual({
+      Accept: "application/json",
+      Authorization: "Bearer github-token",
+      "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+      ...buildCopilotIdeHeaders({ includeApiVersion: true }),
+    });
+  });
+
+  it("refreshes legacy cached tokens without the vscode-chat integration identity", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        token: "fresh-copilot-token",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
       }),
-    );
+    }));
+    const saveJsonFileImpl = vi.fn();
+
+    const result = await resolveCopilotApiToken({
+      githubToken: "github-token",
+      cachePath: "/tmp/github-copilot-token-test.json",
+      loadJsonFileImpl: () => ({
+        token: "legacy-copilot-token",
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        updatedAt: Date.now(),
+      }),
+      saveJsonFileImpl,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    expect(result.token).toBe("fresh-copilot-token");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(saveJsonFileImpl).toHaveBeenCalledWith("/tmp/github-copilot-token-test.json", {
+      token: "fresh-copilot-token",
+      expiresAt: expect.any(Number),
+      updatedAt: expect.any(Number),
+      integrationId: COPILOT_INTEGRATION_ID,
+    });
   });
 });

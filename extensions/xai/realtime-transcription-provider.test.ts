@@ -193,8 +193,7 @@ describe("xai realtime transcription provider", () => {
 
   it("accepts xAI realtime aliases", () => {
     const provider = buildXaiRealtimeTranscriptionProvider();
-    expect(provider.aliases).toEqual(
-      expect.arrayContaining(["xai-realtime", "grok-stt-streaming"]),
-    );
+    expect(provider.aliases).toContain("xai-realtime");
+    expect(provider.aliases).toContain("grok-stt-streaming");
   });
 });

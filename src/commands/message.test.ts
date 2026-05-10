@@ -7,7 +7,22 @@ type RunMessageActionParams = {
   cfg?: unknown;
   action: string;
   params: Record<string, unknown>;
+  agentId?: string;
+  senderIsOwner?: boolean;
+  gateway?: {
+    clientName?: string;
+    mode?: string;
+  };
 };
+
+function readOnlyMessageActionCall(): RunMessageActionParams {
+  expect(runMessageActionMock).toHaveBeenCalledOnce();
+  const call = runMessageActionMock.mock.calls[0]?.[0];
+  if (!call) {
+    throw new Error("Expected message action call");
+  }
+  return call;
+}
 
 let testConfig: Record<string, unknown> = {};
 const applyPluginAutoEnable = vi.hoisted(() => vi.fn(({ config }) => ({ config, changes: [] })));
@@ -182,41 +197,34 @@ describe("messageCommand", () => {
 
     await runMessageCommand();
 
-    expect(runMessageActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: resolvedConfig,
-        action: "send",
-        params: expect.objectContaining({
-          channel: "telegram",
-          target: "123456",
-          message: "hi",
-        }),
-        agentId: "main",
-        senderIsOwner: true,
-        gateway: expect.objectContaining({
-          clientName: "cli",
-          mode: "cli",
-        }),
-      }),
-    );
-    expect(runMessageActionMock.mock.calls[0]?.[0]?.cfg).not.toBe(rawConfig);
-    expect(resolveCommandConfigWithSecrets).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: rawConfig,
-        commandName: "message",
-      }),
-    );
+    const actionCall = readOnlyMessageActionCall();
+    expect(actionCall.cfg).toBe(resolvedConfig);
+    expect(actionCall.action).toBe("send");
+    expect(actionCall.params.channel).toBe("telegram");
+    expect(actionCall.params.target).toBe("123456");
+    expect(actionCall.params.message).toBe("hi");
+    expect(actionCall.agentId).toBe("main");
+    expect(actionCall.senderIsOwner).toBe(true);
+    expect(actionCall.gateway?.clientName).toBe("cli");
+    expect(actionCall.gateway?.mode).toBe("cli");
+    expect(actionCall.cfg).not.toBe(rawConfig);
+    const configResolutionCall = resolveCommandConfigWithSecrets.mock.calls[0]?.[0] as {
+      commandName?: string;
+      config?: unknown;
+      targetIds?: Set<string>;
+    };
+    expect(configResolutionCall.config).toBe(rawConfig);
+    expect(configResolutionCall.commandName).toBe("message");
     expect(getScopedChannelsCommandSecretTargets).toHaveBeenCalledWith({
       config: rawConfig,
       channel: "telegram",
       accountId: undefined,
     });
-    const call = resolveCommandConfigWithSecrets.mock.calls[0]?.[0] as {
-      targetIds?: Set<string>;
-    };
-    expect(call.targetIds).toBeInstanceOf(Set);
+    expect(configResolutionCall.targetIds).toBeInstanceOf(Set);
     expect(
-      [...(call.targetIds ?? [])].filter((id) => !id.startsWith("channels.telegram.")),
+      [...(configResolutionCall.targetIds ?? [])].filter(
+        (id) => !id.startsWith("channels.telegram."),
+      ),
     ).toStrictEqual([]);
   });
 
@@ -237,15 +245,16 @@ describe("messageCommand", () => {
 
     await runMessageCommand();
 
-    expect(runMessageActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: locallyResolvedConfig,
-      }),
-    );
-    expect(runMessageActionMock.mock.calls[0]?.[0]?.cfg).not.toBe(rawConfig);
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("[secrets] gateway secrets.resolve unavailable"),
-    );
+    const actionCall = readOnlyMessageActionCall();
+    expect(actionCall.cfg).toBe(locallyResolvedConfig);
+    expect(actionCall.cfg).not.toBe(rawConfig);
+    expect(
+      vi
+        .mocked(runtime.log)
+        .mock.calls.some(([message]) =>
+          String(message).includes("[secrets] gateway secrets.resolve unavailable"),
+        ),
+    ).toBe(true);
   });
 
   it("uses auto-enabled effective config for message actions", async () => {
@@ -268,12 +277,9 @@ describe("messageCommand", () => {
       config: resolvedConfig,
       env: process.env,
     });
-    expect(runMessageActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: autoEnabledConfig,
-        params: expect.objectContaining({ target: "123456" }),
-      }),
-    );
+    const actionCall = readOnlyMessageActionCall();
+    expect(actionCall.cfg).toBe(autoEnabledConfig);
+    expect(actionCall.params.target).toBe("123456");
   });
 
   it("normalizes poll actions and sender ownership before dispatch", async () => {
@@ -286,17 +292,12 @@ describe("messageCommand", () => {
       senderIsOwner: false,
     });
 
-    expect(runMessageActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "poll",
-        senderIsOwner: false,
-        params: expect.objectContaining({
-          channel: "telegram",
-          target: "123456789",
-          pollQuestion: "Ship it?",
-        }),
-      }),
-    );
+    const actionCall = readOnlyMessageActionCall();
+    expect(actionCall.action).toBe("poll");
+    expect(actionCall.senderIsOwner).toBe(false);
+    expect(actionCall.params.channel).toBe("telegram");
+    expect(actionCall.params.target).toBe("123456789");
+    expect(actionCall.params.pollQuestion).toBe("Ship it?");
   });
 
   it("rejects unknown message actions before dispatch", async () => {

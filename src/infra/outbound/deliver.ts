@@ -79,7 +79,7 @@ import {
 } from "./payloads.js";
 import { createReplyToDeliveryPolicy } from "./reply-policy.js";
 import { stripInternalRuntimeScaffolding } from "./sanitize-text.js";
-import { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
+import { type OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 

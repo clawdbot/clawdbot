@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import {
   resolveManifestCommandAliasOwnerInRegistry,
   resolveManifestToolOwnerInRegistry,
@@ -32,6 +33,31 @@ export function resolveManifestCommandAliasOwner(params: {
     command: params.command,
     registry,
   });
+}
+
+export function resolveManifestCliCommandSurfaceOwner(params: {
+  command: string | undefined;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  registry?: PluginManifestCommandAliasRegistry;
+}): string | undefined {
+  const normalizedCommand = normalizeOptionalLowercaseString(params.command);
+  if (!normalizedCommand) {
+    return undefined;
+  }
+  if (params.registry) {
+    return resolveManifestCommandAliasOwnerInRegistry({
+      command: normalizedCommand,
+      registry: params.registry,
+    })?.pluginId;
+  }
+  return resolveManifestActivationPluginIds({
+    trigger: { kind: "command", command: normalizedCommand },
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  })[0];
 }
 
 /**

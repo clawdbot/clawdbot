@@ -182,9 +182,9 @@ describe("getStatusSummary", () => {
   it("does not trigger async context warmup while building status summaries", async () => {
     await getStatusSummary();
 
-    expect(vi.mocked(statusSummaryRuntime.resolveContextTokensForModel)).toHaveBeenCalledWith(
-      expect.objectContaining({ allowAsyncLoad: false }),
-    );
+    const contextCall = vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mock
+      .calls[0]?.[0];
+    expect(contextCall?.allowAsyncLoad).toBe(false);
   });
 
   it("includes the selected agent runtime on recent sessions", async () => {

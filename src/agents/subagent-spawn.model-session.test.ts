@@ -79,10 +79,8 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       },
     );
 
-    expect(result).toMatchObject({
-      status: "accepted",
-      modelApplied: true,
-    });
+    expect(result.status).toBe("accepted");
+    expect(result.modelApplied).toBe(true);
     expect(updateSessionStoreMock).toHaveBeenCalledTimes(3);
     expectPersistedRuntimeModel({
       persistedStore,

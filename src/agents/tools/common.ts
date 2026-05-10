@@ -121,6 +121,23 @@ export function readStringParam(
   return value;
 }
 
+/**
+ * Normalize tool model override input.
+ * - empty/whitespace => undefined
+ * - "default" (case-insensitive) => undefined (sentinel: reset/fallback)
+ * - otherwise returns trimmed explicit model string
+ */
+export function normalizeToolModelOverride(value: string | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.toLowerCase() === "default") {
+    return undefined;
+  }
+  return trimmed;
+}
+
 export function readStringOrNumberParam(
   params: Record<string, unknown>,
   key: string,

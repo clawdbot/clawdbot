@@ -20,13 +20,11 @@ import {
 } from "./auth-store.js";
 import {
   enqueueCredsSave,
-  waitForCredsSaveQueue,
   waitForCredsSaveQueueWithTimeout,
   writeCredsJsonAtomically,
-  type CredsQueueWaitResult,
 } from "./creds-persistence.js";
 import { renderQrTerminal } from "./qr-terminal.js";
-import { formatError, getStatusCode } from "./session-errors.js";
+import { getStatusCode } from "./session-errors.js";
 import {
   DisconnectReason,
   fetchLatestBaileysVersion,

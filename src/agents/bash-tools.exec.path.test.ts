@@ -250,12 +250,9 @@ describe("exec PATH login shell merge", () => {
 
       expect(entries).toEqual(["/usr/bin"]);
       expect(shellPathMock).toHaveBeenCalledTimes(1);
-      expect(shellPathMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          env: process.env,
-          timeoutMs: 1234,
-        }),
-      );
+      const shellPathCall = shellPathMock.mock.calls[0]?.[0];
+      expect(shellPathCall?.env).toBe(process.env);
+      expect(shellPathCall?.timeoutMs).toBe(1234);
     } finally {
       fs.rmSync(shellDir, { recursive: true, force: true });
     }

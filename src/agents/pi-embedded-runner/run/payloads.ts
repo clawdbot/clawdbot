@@ -24,10 +24,7 @@ import {
   normalizeTextForComparison,
 } from "../../pi-embedded-helpers.js";
 import type { ToolResultFormat } from "../../pi-embedded-subscribe.shared-types.js";
-import {
-  extractAssistantThinking,
-  extractAssistantVisibleText,
-} from "../../pi-embedded-utils.js";
+import { extractAssistantThinking, extractAssistantVisibleText } from "../../pi-embedded-utils.js";
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 
@@ -48,7 +45,7 @@ const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
 ] as const;
 
 const MUTATING_FAILURE_ACTION_PATTERN =
-  "(?:write|edit|update|save|create|delete|remove|modify|change|apply|patch|move|rename|send|reply|message|tool|action|operation)";
+  "(?:write|edit|update|save|create|delete|remove|modify|change|apply|patch|move|rename|send|reply|message|run|execute|execution|command|script|shell|bash|exec|tool|action|operation)";
 
 const MUTATING_FAILURE_INABILITY_PATTERN = new RegExp(
   `\\b(?:couldn't|could not|can't|cannot|unable to|am unable to|wasn't able to|was not able to|were unable to)\\b.{0,100}\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b`,
@@ -111,6 +108,10 @@ function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefin
   );
 }
 
+function normalizeReplyTextForComparison(text: string): string {
+  return normalizeTextForComparison(parseReplyDirectives(text).text ?? "");
+}
+
 function shouldIncludeToolErrorDetails(params: {
   lastToolError: ToolErrorSummary;
   isCronTrigger?: boolean;
@@ -143,9 +144,6 @@ function resolveToolErrorWarningPolicy(params: {
   if (params.suppressToolErrorWarnings) {
     return { showWarning: false, includeDetails };
   }
-  if (isExecLikeToolName(params.lastToolError.toolName) && !includeDetails) {
-    return { showWarning: false, includeDetails };
-  }
   // sessions_send timeouts and errors are transient inter-session communication
   // issues — the message may still have been delivered. Suppress warnings to
   // prevent raw error text from leaking into the chat surface (#23989).
@@ -159,6 +157,9 @@ function resolveToolErrorWarningPolicy(params: {
       showWarning: !params.hasUserFacingErrorReply && !params.hasUserFacingFailureAcknowledgement,
       includeDetails,
     };
+  }
+  if (isExecLikeToolName(params.lastToolError.toolName) && !includeDetails) {
+    return { showWarning: false, includeDetails };
   }
   if (params.suppressToolErrors) {
     return { showWarning: false, includeDetails };
@@ -360,16 +361,27 @@ export function buildEmbeddedRunPayloads(params: {
       (!assistantTextsHaveMedia &&
         normalizedAssistantTexts.length > 0 &&
         normalizedAssistantTexts === normalizedRawAnswerText));
+  const fallbackAnswerSourceText =
+    shouldPreferRawAnswerText && fallbackRawAnswerText ? fallbackRawAnswerText : fallbackAnswerText;
+  const normalizedFallbackAnswerSourceText = fallbackAnswerSourceText
+    ? normalizeReplyTextForComparison(fallbackAnswerSourceText)
+    : "";
+  const shouldUseCanonicalFinalAnswer =
+    nonEmptyAssistantTexts.length > 1 &&
+    fallbackAnswerSourceText.length > 0 &&
+    normalizedFallbackAnswerSourceText.length > 0;
   const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
   const answerTexts = suppressAssistantArtifacts
     ? []
-    : (shouldPreferRawAnswerText && fallbackRawAnswerText
-        ? [fallbackRawAnswerText]
-        : hasAssistantTextPayload
-          ? nonEmptyAssistantTexts
-          : fallbackAnswerText
-            ? [fallbackAnswerText]
-            : []
+    : (shouldUseCanonicalFinalAnswer
+        ? [fallbackAnswerSourceText]
+        : shouldPreferRawAnswerText && fallbackRawAnswerText
+          ? [fallbackRawAnswerText]
+          : hasAssistantTextPayload
+            ? nonEmptyAssistantTexts
+            : fallbackAnswerText
+              ? [fallbackAnswerText]
+              : []
       ).filter((text) => !shouldSuppressRawErrorText(text));
 
   let hasUserFacingAssistantReply = false;

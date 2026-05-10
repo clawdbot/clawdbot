@@ -584,7 +584,7 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "Current thinking level: low.\nOptions: off, minimal, low, medium, high.",
+      "Current thinking level: low.\nOptions: default, off, minimal, low, medium, high.",
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
     expect(request).toHaveBeenNthCalledWith(2, "models.list", { view: "configured" });
@@ -631,6 +631,29 @@ describe("executeSlashCommand directives", () => {
     expect(request).toHaveBeenNthCalledWith(4, "sessions.patch", {
       key: "agent:main:main",
       thinkingLevel: "xhigh",
+    });
+  });
+
+  it("clears thinking override for /think default", async () => {
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return { ok: true, ...((payload ?? {}) as object) };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "think",
+      "default",
+    );
+
+    expect(result.content).toBe("Thinking level reset to default.");
+    expect(result.action).toBe("refresh");
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "agent:main:main",
+      thinkingLevel: null,
     });
   });
 
@@ -709,7 +732,7 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(status.content).toBe(
-      "Current thinking level: adaptive.\nOptions: off, minimal, low, medium, adaptive, high, xhigh, maximum.",
+      "Current thinking level: adaptive.\nOptions: default, off, minimal, low, medium, adaptive, high, xhigh, maximum.",
     );
     expect(setXhigh.content).toBe("Thinking level set to **xhigh**.");
     expect(setMax.content).toBe("Thinking level set to **max**.");
@@ -788,7 +811,7 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(status.content).toBe(
-      "Current thinking level: off.\nOptions: off, minimal, low, medium, high, xhigh, max.",
+      "Current thinking level: off.\nOptions: default, off, minimal, low, medium, high, xhigh, max.",
     );
     expect(setMax.content).toBe("Thinking level set to **max**.");
   });
@@ -882,7 +905,7 @@ describe("executeSlashCommand directives", () => {
       "",
     );
 
-    expect(result.content).toBe("Current fast mode: on.\nOptions: status, on, off.");
+    expect(result.content).toBe("Current fast mode: on.\nOptions: status, on, off, default.");
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
   });
 
@@ -900,6 +923,29 @@ describe("executeSlashCommand directives", () => {
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "agent:main:main",
       fastMode: true,
+    });
+  });
+
+  it("clears fast mode override for /fast default", async () => {
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return { ok: true, ...((payload ?? {}) as object) };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "fast",
+      "default",
+    );
+
+    expect(result.content).toBe("Fast mode reset to default.");
+    expect(result.action).toBe("refresh");
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "agent:main:main",
+      fastMode: null,
     });
   });
 });

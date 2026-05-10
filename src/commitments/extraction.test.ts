@@ -85,10 +85,8 @@ describe("commitment extraction", () => {
     );
 
     expect(parsed.candidates).toHaveLength(1);
-    expect(parsed.candidates[0]).toMatchObject({
-      kind: "event_check_in",
-      suggestedText: "How did the interview go?",
-    });
+    expect(parsed.candidates[0]?.kind).toBe("event_check_in");
+    expect(parsed.candidates[0]?.suggestedText).toBe("How did the interview go?");
   });
 
   it("omits routing scope identifiers from extractor prompts", () => {
@@ -192,10 +190,8 @@ describe("commitment extraction", () => {
     expect(created).toHaveLength(1);
     expect(deduped).toHaveLength(0);
     expect(store.commitments).toHaveLength(1);
-    expect(store.commitments[0]).toMatchObject({
-      reason: "Updated reason",
-      confidence: 0.97,
-      status: "pending",
-    });
+    expect(store.commitments[0]?.reason).toBe("Updated reason");
+    expect(store.commitments[0]?.confidence).toBe(0.97);
+    expect(store.commitments[0]?.status).toBe("pending");
   });
 });

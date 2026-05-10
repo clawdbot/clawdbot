@@ -8,7 +8,6 @@ import { safeJsonStringify } from "../utils/safe-json.js";
 import {
   TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
-  TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
   resolveTrajectoryPointerOpenFlags,

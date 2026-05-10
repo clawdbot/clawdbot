@@ -42,6 +42,21 @@ const pluginInstallRecordCommitMocks = vi.hoisted(() => ({
   commitConfigWithPendingPluginInstalls: vi.fn(),
 }));
 
+const channelWizardMocks = vi.hoisted(() => {
+  const prompter = {
+    intro: vi.fn(async () => undefined),
+    outro: vi.fn(async () => undefined),
+    confirm: vi.fn(async () => false),
+    note: vi.fn(async () => undefined),
+    select: vi.fn(),
+    text: vi.fn(),
+  };
+  return {
+    prompter,
+    setupChannels: vi.fn(async (...args: unknown[]) => args[0] as OpenClawConfig),
+  };
+});
+
 const bundledMocks = vi.hoisted(() => ({
   getBundledChannelPlugin: vi.fn(() => undefined),
   getBundledChannelSetupPlugin: vi.fn(() => undefined),
@@ -72,6 +87,19 @@ vi.mock("./channel-setup/plugin-install.js", () => pluginInstallMocks);
 vi.mock("../cli/plugins-registry-refresh.js", () => registryRefreshMocks);
 
 vi.mock("../cli/plugins-install-record-commit.js", () => pluginInstallRecordCommitMocks);
+
+vi.mock("../wizard/clack-prompter.js", () => ({
+  createClackPrompter: () => channelWizardMocks.prompter,
+}));
+
+vi.mock("./onboard-channels.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./onboard-channels.js")>("./onboard-channels.js");
+  return {
+    ...actual,
+    setupChannels: (...args: unknown[]) => channelWizardMocks.setupChannels(...args),
+  };
+});
 
 const runtime = createTestRuntime();
 
@@ -309,7 +337,42 @@ describe("channelsAddCommand", () => {
       createTestRegistry(),
     );
     registryRefreshMocks.refreshPluginRegistryAfterConfigMutation.mockClear();
+    channelWizardMocks.prompter.intro.mockClear();
+    channelWizardMocks.prompter.outro.mockClear();
+    channelWizardMocks.prompter.confirm.mockClear();
+    channelWizardMocks.prompter.note.mockClear();
+    channelWizardMocks.prompter.select.mockClear();
+    channelWizardMocks.prompter.text.mockClear();
+    channelWizardMocks.setupChannels.mockClear();
+    channelWizardMocks.setupChannels.mockImplementation(
+      async (...args: unknown[]) => args[0] as OpenClawConfig,
+    );
     setMinimalChannelsAddRegistryForTests();
+  });
+
+  it("keeps guided channel setup lazy until the user selects a channel", async () => {
+    const config: OpenClawConfig = { channels: {} };
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      sourceConfig: config,
+      config,
+    });
+
+    await channelsAddCommand({}, runtime, { hasFlags: false });
+
+    expect(channelWizardMocks.prompter.intro).toHaveBeenCalledWith("Channel setup");
+    expect(channelWizardMocks.setupChannels).toHaveBeenCalledWith(
+      config,
+      runtime,
+      channelWizardMocks.prompter,
+      expect.objectContaining({
+        deferStatusUntilSelection: true,
+        skipStatusNote: true,
+        promptAccountIds: true,
+      }),
+    );
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(channelWizardMocks.prompter.outro).toHaveBeenCalledWith("No channel changes made.");
   });
 
   it("runs channel lifecycle hooks only when account config changes", async () => {
@@ -614,7 +677,9 @@ describe("channelsAddCommand", () => {
         }),
       }),
     );
-    expect(runtime.error).not.toHaveBeenCalledWith("Channel telegram does not support add.");
+    expect(runtime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("Channel telegram does not support non-interactive add"),
+    );
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
@@ -665,7 +730,9 @@ describe("channelsAddCommand", () => {
         }),
       }),
     );
-    expect(runtime.error).not.toHaveBeenCalledWith("Channel telegram does not support add.");
+    expect(runtime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("Channel telegram does not support non-interactive add"),
+    );
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 

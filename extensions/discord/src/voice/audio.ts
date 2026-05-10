@@ -21,6 +21,8 @@ type OpusDecoderFactory = {
   name: string;
 };
 
+type OpusDecoderPreference = "native" | "opusscript";
+
 let warnedOpusMissing = false;
 let cachedOpusDecoderFactory: OpusDecoderFactory | null | "unresolved" = "unresolved";
 
@@ -47,32 +49,34 @@ function buildWavBuffer(pcm: Buffer): Buffer {
 function resolveOpusDecoderFactory(params: {
   onWarn: (message: string) => void;
 }): OpusDecoderFactory | null {
-  const factories: OpusDecoderFactory[] = [
-    {
-      name: "@discordjs/opus",
-      load: () => {
-        const DiscordOpus = require("@discordjs/opus") as {
-          OpusEncoder: new (
-            sampleRate: number,
-            channels: number,
-          ) => {
-            decode: (buffer: Buffer) => Buffer;
-          };
+  const nativeFactory: OpusDecoderFactory = {
+    name: "@discordjs/opus",
+    load: () => {
+      const DiscordOpus = require("@discordjs/opus") as {
+        OpusEncoder: new (
+          sampleRate: number,
+          channels: number,
+        ) => {
+          decode: (buffer: Buffer) => Buffer;
         };
-        return new DiscordOpus.OpusEncoder(SAMPLE_RATE, CHANNELS);
-      },
+      };
+      return new DiscordOpus.OpusEncoder(SAMPLE_RATE, CHANNELS);
     },
-    {
-      name: "opusscript",
-      load: () => {
-        const OpusScript = require("opusscript") as {
-          new (sampleRate: number, channels: number, application: number): OpusDecoder;
-          Application: { AUDIO: number };
-        };
-        return new OpusScript(SAMPLE_RATE, CHANNELS, OpusScript.Application.AUDIO);
-      },
+  };
+  const opusscriptFactory: OpusDecoderFactory = {
+    name: "opusscript",
+    load: () => {
+      const OpusScript = require("opusscript") as {
+        new (sampleRate: number, channels: number, application: number): OpusDecoder;
+        Application: { AUDIO: number };
+      };
+      return new OpusScript(SAMPLE_RATE, CHANNELS, OpusScript.Application.AUDIO);
     },
-  ];
+  };
+  const factories: OpusDecoderFactory[] =
+    resolveOpusDecoderPreference() === "native"
+      ? [nativeFactory, opusscriptFactory]
+      : [opusscriptFactory, nativeFactory];
 
   const failures: string[] = [];
   for (const factory of factories) {
@@ -91,6 +95,16 @@ function resolveOpusDecoderFactory(params: {
     );
   }
   return null;
+}
+
+export function resolveOpusDecoderPreference(
+  value = process.env.OPENCLAW_DISCORD_OPUS_DECODER,
+): OpusDecoderPreference {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "native" || normalized === "@discordjs/opus") {
+    return "native";
+  }
+  return "opusscript";
 }
 
 function getOrCreateOpusDecoderFactory(params: {

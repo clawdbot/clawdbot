@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildFallbackNotice,
   resolveActiveFallbackState,
   resolveFallbackTransition,
   type FallbackNoticeState,
@@ -119,5 +120,38 @@ describe("fallback-state", () => {
     expect(resolved.nextState.selectedModel).toBeUndefined();
     expect(resolved.nextState.activeModel).toBeUndefined();
     expect(resolved.nextState.reason).toBeUndefined();
+  });
+
+  it("does not treat a CLI runtime alias as a model fallback", () => {
+    const resolved = resolveFallbackTransition({
+      selectedProvider: "anthropic",
+      selectedModel: "claude-opus-4-7",
+      activeProvider: "claude-cli",
+      activeModel: "claude-opus-4-7",
+      attempts: [],
+      state: {
+        fallbackNoticeSelectedModel: "anthropic/claude-opus-4-7",
+        fallbackNoticeActiveModel: "claude-cli/claude-opus-4-7",
+        fallbackNoticeReason: "selected model unavailable",
+      },
+    });
+
+    expect(resolved.fallbackActive).toBe(false);
+    expect(resolved.fallbackCleared).toBe(false);
+    expect(resolved.stateChanged).toBe(true);
+    expect(resolved.nextState.selectedModel).toBeUndefined();
+    expect(resolved.nextState.activeModel).toBeUndefined();
+  });
+
+  it("does not build a fallback notice for equivalent CLI runtime aliases", () => {
+    expect(
+      buildFallbackNotice({
+        selectedProvider: "anthropic",
+        selectedModel: "claude-opus-4-7",
+        activeProvider: "claude-cli",
+        activeModel: "claude-opus-4-7",
+        attempts: [],
+      }),
+    ).toBeNull();
   });
 });

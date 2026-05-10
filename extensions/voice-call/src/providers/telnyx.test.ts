@@ -27,6 +27,24 @@ function createCtx(params?: Partial<WebhookContext>): WebhookContext {
   };
 }
 
+function requireFetchRequest() {
+  const request = apiMocks.fetchWithSsrFGuard.mock.calls[0]?.[0] as
+    | {
+        url?: string;
+        auditContext?: string;
+        policy?: unknown;
+        init?: {
+          method?: string;
+          body?: unknown;
+        };
+      }
+    | undefined;
+  if (!request) {
+    throw new Error("expected Telnyx provider to call fetchWithSsrFGuard");
+  }
+  return request;
+}
+
 function decodeBase64Url(input: string): Buffer {
   const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
   const padLen = (4 - (normalized.length % 4)) % 4;
@@ -222,14 +240,11 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
     );
 
     expect(result.events).toHaveLength(1);
-    expect(result.events[0]).toEqual(
-      expect.objectContaining({
-        type: "call.initiated",
-        direction: "inbound",
-        from: "+15551111111",
-        to: "+15550000000",
-      }),
-    );
+    const event = result.events[0];
+    expect(event?.type).toBe("call.initiated");
+    expect(event?.direction).toBe("inbound");
+    expect(event?.from).toBe("+15551111111");
+    expect(event?.to).toBe("+15550000000");
   });
 
   it("reads transcription text from Telnyx transcription_data payloads", () => {
@@ -258,14 +273,14 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
     );
 
     expect(result.events).toHaveLength(1);
-    expect(result.events[0]).toEqual(
-      expect.objectContaining({
-        type: "call.speech",
-        transcript: "hello this is a test speech",
-        isFinal: false,
-        confidence: 0.977219,
-      }),
-    );
+    const event = result.events[0];
+    expect(event?.type).toBe("call.speech");
+    if (event?.type !== "call.speech") {
+      throw new Error("expected Telnyx transcription callback to produce a speech event");
+    }
+    expect(event?.transcript).toBe("hello this is a test speech");
+    expect(event?.isFinal).toBe(false);
+    expect(event?.confidence).toBe(0.977219);
   });
 });
 
@@ -287,17 +302,13 @@ describe("TelnyxProvider answer control", () => {
       providerCallId: "call-control-1",
     });
 
-    expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.telnyx.com/v2/calls/call-control-1/actions/answer",
-        auditContext: "voice-call.telnyx.api",
-        policy: { allowedHostnames: ["api.telnyx.com"] },
-        init: expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({ command_id: "openclaw-answer-call-1" }),
-        }),
-      }),
-    );
+    expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+    const request = requireFetchRequest();
+    expect(request.url).toBe("https://api.telnyx.com/v2/calls/call-control-1/actions/answer");
+    expect(request.auditContext).toBe("voice-call.telnyx.api");
+    expect(request.policy).toEqual({ allowedHostnames: ["api.telnyx.com"] });
+    expect(request.init?.method).toBe("POST");
+    expect(request.init?.body).toBe(JSON.stringify({ command_id: "openclaw-answer-call-1" }));
     expect(release).toHaveBeenCalledTimes(1);
   });
 });
@@ -322,19 +333,15 @@ describe("TelnyxProvider speak control", () => {
       voice: "Telnyx.Qwen3TTS.12345678-1234-1234-1234-123456789abc",
     });
 
-    expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.telnyx.com/v2/calls/call-control-1/actions/speak",
-        auditContext: "voice-call.telnyx.api",
-        policy: { allowedHostnames: ["api.telnyx.com"] },
-        init: expect.objectContaining({
-          method: "POST",
-          body: expect.stringContaining(
-            '"voice":"Telnyx.Qwen3TTS.12345678-1234-1234-1234-123456789abc"',
-          ),
-        }),
-      }),
-    );
+    expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+    const request = requireFetchRequest();
+    expect(request.url).toBe("https://api.telnyx.com/v2/calls/call-control-1/actions/speak");
+    expect(request.auditContext).toBe("voice-call.telnyx.api");
+    expect(request.policy).toEqual({ allowedHostnames: ["api.telnyx.com"] });
+    expect(request.init?.method).toBe("POST");
+    expect(typeof request.init?.body).toBe("string");
+    const body = JSON.parse(request.init?.body as string) as { voice?: string };
+    expect(body.voice).toBe("Telnyx.Qwen3TTS.12345678-1234-1234-1234-123456789abc");
     expect(release).toHaveBeenCalledTimes(1);
   });
 });

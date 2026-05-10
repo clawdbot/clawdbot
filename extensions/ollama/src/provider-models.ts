@@ -236,6 +236,11 @@ export function isReasoningModelHeuristic(modelId: string): boolean {
   return /r1|reasoning|think|reason/i.test(modelId);
 }
 
+function isKnownOllamaCloudReasoningModel(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase();
+  return /^deepseek-v4-(?:flash|pro):cloud$/.test(normalized);
+}
+
 export function buildOllamaModelDefinition(
   modelId: string,
   contextWindow?: number,
@@ -244,9 +249,10 @@ export function buildOllamaModelDefinition(
   const hasVision = capabilities?.includes("vision") ?? false;
   const input: ("text" | "image")[] = hasVision ? ["text", "image"] : ["text"];
   const reasoning =
-    capabilities === undefined
+    isKnownOllamaCloudReasoningModel(modelId) ||
+    (capabilities === undefined
       ? isReasoningModelHeuristic(modelId)
-      : capabilities.includes("thinking");
+      : capabilities.includes("thinking"));
   const compat =
     capabilities === undefined
       ? { supportsUsageInStreaming: true }

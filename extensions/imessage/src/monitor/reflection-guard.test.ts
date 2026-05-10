@@ -115,7 +115,7 @@ describe("detectReflectedContent", () => {
 
   it("detects reflected gateway auth failure replies", () => {
     const result = detectReflectedContent(
-      "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.5`, or set `OPENAI_API_KEY`, then try again.",
+      "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the Codex OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.",
     );
     expect(result.isReflection).toBe(true);
     expect(result.matchedLabels).toContain("gateway-missing-api-key");

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
+import { describeImageWithModel } from "./image-runtime.js";
 import { normalizeMediaProviderId } from "./provider-registry.js";
 import { findDecisionReason, normalizeDecisionReason } from "./runner.entries.js";
 import {
@@ -153,11 +154,9 @@ export async function describeImageFileWithModel(params: DescribeImageFileWithMo
   const timeoutMs = params.timeoutMs ?? 30_000;
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
-  if (!provider?.describeImage) {
-    throw new Error(`Provider does not support image analysis: ${params.provider}`);
-  }
   const buffer = (await readLocalFileSafely({ filePath: params.filePath })).buffer;
-  return await provider.describeImage({
+  const describeImage = provider?.describeImage ?? describeImageWithModel;
+  return await describeImage({
     buffer,
     fileName: path.basename(params.filePath),
     mime: params.mime,

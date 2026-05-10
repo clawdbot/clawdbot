@@ -317,6 +317,42 @@ describe("WhatsApp dmPolicy precedence", () => {
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
+  it("falls back from empty groupAllowFrom to allowFrom for group allowlists", async () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          groupPolicy: "allowlist",
+          allowFrom: ["+15550001111"],
+          groupAllowFrom: [],
+        },
+      },
+    };
+    setAccessControlTestConfig(cfg);
+
+    const result = await checkInboundAccessControl({
+      cfg: getAccessControlTestConfig() as never,
+      accountId: "default",
+      from: "120363401234567890@g.us",
+      selfE164: "+15550009999",
+      senderE164: "+15550001111",
+      group: true,
+      pushName: "Sam",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "120363401234567890@g.us",
+    });
+    const commandAuthorized = await checkCommandAuthorizedForGroup({
+      cfg,
+      accountId: "default",
+    });
+
+    expect(result.allowed).toBe(true);
+    expect(commandAuthorized).toBe(true);
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
   it("does not broaden self-chat mode to every paired DM when allowFrom is empty", async () => {
     const cfg = {
       channels: {

@@ -1,4 +1,5 @@
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
+import type { PartialReplyPayload } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -38,7 +39,7 @@ export type SubscribeEmbeddedPiSessionParams = {
   onBlockReplyFlush?: () => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
-  onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
+  onPartialReply?: (payload: PartialReplyPayload) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
   onAgentEvent?: (evt: {
     stream: string;

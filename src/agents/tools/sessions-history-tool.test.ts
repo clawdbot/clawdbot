@@ -66,7 +66,7 @@ describe("sessions_history redaction", () => {
 
     expect(serialized).not.toContain("sk-or-v1-abcdef0123456789");
     expect(serialized).toContain("OPENROUTER_API_KEY=");
-    expect(result.details).toMatchObject({ contentRedacted: true });
+    expect((result.details as { contentRedacted?: unknown }).contentRedacted).toBe(true);
   });
 
   it("applies custom redaction patterns to recalled session text", async () => {
@@ -81,6 +81,6 @@ describe("sessions_history redaction", () => {
 
     expect(serialized).not.toContain("internal-ticket-AbC12345");
     expect(serialized).toContain("intern");
-    expect(result.details).toMatchObject({ contentRedacted: true });
+    expect((result.details as { contentRedacted?: unknown }).contentRedacted).toBe(true);
   });
 });

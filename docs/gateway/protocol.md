@@ -377,7 +377,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `talk.session.appendAudio` appends base64 PCM input audio to Gateway-owned realtime relay and transcription sessions.
     - `talk.session.startTurn`, `talk.session.endTurn`, and `talk.session.cancelTurn` drive managed-room turn lifecycle with stale-turn rejection before state is cleared.
     - `talk.session.cancelOutput` stops assistant audio output, primarily for VAD-gated barge-in in Gateway relay sessions.
-    - `talk.session.submitToolResult` completes a provider tool call emitted by a Gateway-owned realtime relay session.
+    - `talk.session.submitToolResult` completes a provider tool call emitted by a Gateway-owned realtime relay session. Pass `options: { willContinue: true }` for interim tool output when a final result will follow, or `options: { suppressResponse: true }` when the tool result should satisfy the provider call without starting another realtime assistant response.
     - `talk.session.close` closes a Gateway-owned relay, transcription, or managed-room session and emits terminal Talk events.
     - `talk.mode` sets/broadcasts the current Talk mode state for WebChat/Control UI clients.
     - `talk.client.create` creates a client-owned realtime provider session using `webrtc` or `provider-websocket` while the Gateway owns config, credentials, instructions, and tool policy.
@@ -570,9 +570,28 @@ terminal summary, and sanitized error text.
     sanitized install options without exposing raw secret values.
 - Operators may call `skills.search` and `skills.detail` (`operator.read`) for
   ClawHub discovery metadata.
-- Operators may call `skills.install` (`operator.admin`) in two modes:
+- Operators may call `skills.upload.begin`, `skills.upload.chunk`, and
+  `skills.upload.commit` (`operator.admin`) to stage a private skill archive
+  before installing it. This is a separate admin upload path for trusted clients,
+  not the normal ClawHub skill install flow, and is disabled by default unless
+  `skills.install.allowUploadedArchives` is enabled.
+  - `skills.upload.begin({ kind: "skill-archive", slug, sizeBytes, sha256?, force?, idempotencyKey? })`
+    creates an upload bound to that slug and force value.
+  - `skills.upload.chunk({ uploadId, offset, dataBase64 })` appends bytes at
+    the exact decoded offset.
+  - `skills.upload.commit({ uploadId, sha256? })` verifies the final size and
+    SHA-256. Commit only finalizes the upload; it does not install the skill.
+  - Uploaded skill archives are zip archives containing a `SKILL.md` root. The
+    archive's internal directory name never selects the install target.
+- Operators may call `skills.install` (`operator.admin`) in three modes:
   - ClawHub mode: `{ source: "clawhub", slug, version?, force? }` installs a
     skill folder into the default agent workspace `skills/` directory.
+  - Upload mode: `{ source: "upload", uploadId, slug, force?, sha256?, timeoutMs? }`
+    installs a committed upload into the default agent workspace `skills/<slug>`
+    directory. The slug and force value must match the original
+    `skills.upload.begin` request. This mode is rejected unless
+    `skills.install.allowUploadedArchives` is enabled. The setting does not
+    affect ClawHub installs.
   - Gateway installer mode: `{ name, installId, dangerouslyForceUnsafeInstall?, timeoutMs? }`
     runs a declared `metadata.openclaw.install` action on the gateway host.
 - Operators may call `skills.update` (`operator.admin`) in two modes:
@@ -585,8 +604,8 @@ terminal summary, and sanitized error text.
 
 `models.list` accepts an optional `view` parameter:
 
-- Omitted or `"default"`: current runtime behavior. If `agents.defaults.models` is configured, the response is the allowed catalog; otherwise the response is the full Gateway catalog.
-- `"configured"`: picker-sized behavior. If `agents.defaults.models` is configured, it still wins. Otherwise the response uses explicit `models.providers.*.models` entries, falling back to the full catalog only when no configured model rows exist.
+- Omitted or `"default"`: current runtime behavior. If `agents.defaults.models` is configured, the response is the allowed catalog, including dynamically discovered models for `provider/*` entries. Otherwise the response is the full Gateway catalog.
+- `"configured"`: picker-sized behavior. If `agents.defaults.models` is configured, it still wins, including provider-scoped discovery for `provider/*` entries. Without an allowlist, the response uses explicit `models.providers.*.models` entries, falling back to the full catalog only when no configured model rows exist.
 - `"all"`: full Gateway catalog, bypassing `agents.defaults.models`. Use this for diagnostics and discovery UIs, not normal model pickers.
 
 ## Exec approvals

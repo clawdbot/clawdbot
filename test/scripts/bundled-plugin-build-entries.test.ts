@@ -15,6 +15,10 @@ function expectSomePrefixMatch(values: string[], prefix: string) {
   expect(values.some((value) => value.startsWith(prefix))).toBe(true);
 }
 
+function pickEntries(entries: Record<string, string>, keys: readonly string[]) {
+  return Object.fromEntries(keys.map((key) => [key, entries[key]]));
+}
+
 describe("bundled plugin build entries", () => {
   const bundledChannelEntrySources = ["index.ts", "channel-entry.ts", "setup-entry.ts"];
   const forEachBundledChannelEntry = (
@@ -41,8 +45,7 @@ describe("bundled plugin build entries", () => {
 
   it("includes manifest-less runtime core support packages in dist build entries", () => {
     const entries = listBundledPluginBuildEntries();
-
-    expect(entries).toMatchObject({
+    const expectedEntries = {
       "extensions/image-generation-core/api": "extensions/image-generation-core/api.ts",
       "extensions/image-generation-core/runtime-api":
         "extensions/image-generation-core/runtime-api.ts",
@@ -50,16 +53,19 @@ describe("bundled plugin build entries", () => {
         "extensions/media-understanding-core/runtime-api.ts",
       "extensions/speech-core/api": "extensions/speech-core/api.ts",
       "extensions/speech-core/runtime-api": "extensions/speech-core/runtime-api.ts",
-    });
+    };
+
+    expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
   });
 
   it("keeps the Matrix packaged runtime shim in bundled plugin build entries", () => {
     const entries = listBundledPluginBuildEntries();
-
-    expect(entries).toMatchObject({
+    const expectedEntries = {
       "extensions/matrix/plugin-entry.handlers.runtime":
         "extensions/matrix/plugin-entry.handlers.runtime.ts",
-    });
+    };
+
+    expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
   });
 
   it("packs runtime core support packages without requiring plugin manifests", () => {

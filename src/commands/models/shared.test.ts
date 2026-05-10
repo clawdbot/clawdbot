@@ -56,11 +56,9 @@ describe("models/shared", () => {
       update: { channel: "beta" },
     }));
 
-    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
-      nextConfig: expect.objectContaining({
-        update: { channel: "beta" },
-      }),
-      baseHash: "config-1",
-    });
+    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
+    expect(replaceParams?.nextConfig.update).toEqual({ channel: "beta" });
+    expect(replaceParams?.baseHash).toBe("config-1");
   });
 });

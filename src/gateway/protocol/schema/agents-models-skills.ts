@@ -227,6 +227,49 @@ export const SkillsBinsResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const Sha256String = Type.String({
+  minLength: 64,
+  maxLength: 64,
+  pattern: "^[a-fA-F0-9]{64}$",
+});
+const SkillUploadIdempotencyKeyString = Type.String({
+  minLength: 1,
+  maxLength: 2048,
+});
+const SkillUploadDataBase64String = Type.String({
+  minLength: 1,
+  maxLength: 5_592_408,
+});
+
+export const SkillsUploadBeginParamsSchema = Type.Object(
+  {
+    kind: Type.Literal("skill-archive"),
+    slug: NonEmptyString,
+    sizeBytes: Type.Integer({ minimum: 1 }),
+    sha256: Type.Optional(Sha256String),
+    force: Type.Optional(Type.Boolean()),
+    idempotencyKey: Type.Optional(SkillUploadIdempotencyKeyString),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsUploadChunkParamsSchema = Type.Object(
+  {
+    uploadId: NonEmptyString,
+    offset: Type.Integer({ minimum: 0 }),
+    dataBase64: SkillUploadDataBase64String,
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsUploadCommitParamsSchema = Type.Object(
+  {
+    uploadId: NonEmptyString,
+    sha256: Type.Optional(Sha256String),
+  },
+  { additionalProperties: false },
+);
+
 export const SkillsInstallParamsSchema = Type.Union([
   Type.Object(
     {
@@ -243,6 +286,17 @@ export const SkillsInstallParamsSchema = Type.Union([
       slug: NonEmptyString,
       version: Type.Optional(NonEmptyString),
       force: Type.Optional(Type.Boolean()),
+      timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      source: Type.Literal("upload"),
+      uploadId: NonEmptyString,
+      slug: NonEmptyString,
+      force: Type.Optional(Type.Boolean()),
+      sha256: Type.Optional(Sha256String),
       timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
     },
     { additionalProperties: false },

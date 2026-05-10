@@ -114,10 +114,14 @@ describe("subscribeEmbeddedPiSession", () => {
     const waitPromise = subscription.waitForCompactionRetry();
     subscription.unsubscribe();
 
-    await expect(waitPromise).rejects.toMatchObject({ name: "AbortError" });
-    await expect(subscription.waitForCompactionRetry()).rejects.toMatchObject({
-      name: "AbortError",
-    });
+    const firstAbort = await waitPromise.catch((error: unknown) => error);
+    expect(firstAbort).toBeInstanceOf(Error);
+    expect((firstAbort as Error).name).toBe("AbortError");
+    const secondAbort = await subscription
+      .waitForCompactionRetry()
+      .catch((error: unknown) => error);
+    expect(secondAbort).toBeInstanceOf(Error);
+    expect((secondAbort as Error).name).toBe("AbortError");
     expect(abortCompaction).toHaveBeenCalledTimes(1);
   });
 

@@ -77,13 +77,17 @@ describe("voice-call tunnels", () => {
 
     emitNgrokUrl(proc, "https://abc.ngrok.io");
 
-    await expect(result).resolves.toMatchObject({
-      publicUrl: "https://abc.ngrok.io/voice/webhook",
-      provider: "ngrok",
-    });
-    expect(mocks.spawn).toHaveBeenCalledWith("ngrok", expect.arrayContaining(["http", "3334"]), {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const tunnel = await result;
+    expect(tunnel.publicUrl).toBe("https://abc.ngrok.io/voice/webhook");
+    expect(tunnel.provider).toBe("ngrok");
+    expect(tunnel.stop).toBeTypeOf("function");
+    expect(mocks.spawn).toHaveBeenCalledWith(
+      "ngrok",
+      ["http", "3334", "--log", "stdout", "--log-format", "json"],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
   });
 
   it("sets ngrok auth token before starting the tunnel", async () => {
@@ -99,9 +103,9 @@ describe("voice-call tunnels", () => {
     await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalledTimes(2));
     emitNgrokUrl(tunnelProc, "https://auth.ngrok.io");
 
-    await expect(result).resolves.toMatchObject({
-      publicUrl: "https://auth.ngrok.io/hook",
-    });
+    const tunnel = await result;
+    expect(tunnel.publicUrl).toBe("https://auth.ngrok.io/hook");
+    expect(tunnel.provider).toBe("ngrok");
     expect(mocks.spawn).toHaveBeenNthCalledWith(1, "ngrok", ["config", "add-authtoken", "token"], {
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -128,13 +132,20 @@ describe("voice-call tunnels", () => {
     await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalled());
     proc.close(0);
 
-    await expect(result).resolves.toMatchObject({
-      publicUrl: "https://host.tailnet.ts.net/voice/webhook",
-      provider: "tailscale-serve",
-    });
+    const tunnel = await result;
+    expect(tunnel.publicUrl).toBe("https://host.tailnet.ts.net/voice/webhook");
+    expect(tunnel.provider).toBe("tailscale-serve");
+    expect(tunnel.stop).toBeTypeOf("function");
     expect(mocks.spawn).toHaveBeenCalledWith(
       "tailscale",
-      expect.arrayContaining(["serve", "--set-path", "/voice/webhook"]),
+      [
+        "serve",
+        "--bg",
+        "--yes",
+        "--set-path",
+        "/voice/webhook",
+        "http://127.0.0.1:3334/voice/webhook",
+      ],
       { stdio: ["ignore", "pipe", "pipe"] },
     );
   });
@@ -155,9 +166,8 @@ describe("voice-call tunnels", () => {
     const result = startTunnel({ provider: "ngrok", port: 3334, path: "/hook" });
     emitNgrokUrl(proc, "https://dispatch.ngrok.io");
 
-    await expect(result).resolves.toMatchObject({
-      publicUrl: "https://dispatch.ngrok.io/hook",
-      provider: "ngrok",
-    });
+    const tunnel = await result;
+    expect(tunnel?.publicUrl).toBe("https://dispatch.ngrok.io/hook");
+    expect(tunnel?.provider).toBe("ngrok");
   });
 });

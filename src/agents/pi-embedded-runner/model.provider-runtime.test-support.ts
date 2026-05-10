@@ -188,6 +188,9 @@ function buildDynamicModel(
         baseUrl: OPENROUTER_BASE_URL,
         reasoning: capabilities?.reasoning ?? false,
         input: capabilities?.input ?? (["text"] as const),
+        ...(capabilities?.supportsTools !== undefined
+          ? { compat: { supportsTools: capabilities.supportsTools } }
+          : {}),
         cost: capabilities?.cost ?? OPENROUTER_FALLBACK_COST,
         contextWindow: capabilities?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
         maxTokens: capabilities?.maxTokens ?? DEFAULT_MAX_TOKENS,

@@ -250,11 +250,9 @@ describe("createCacheTrace", () => {
     const firstMessage = ((event.messages as Array<Record<string, unknown>> | undefined) ?? [])[0];
     expect(firstMessage).not.toHaveProperty("token");
     expect(firstMessage).not.toHaveProperty("metadata.secretKey");
-    expect(firstMessage).toMatchObject({
-      role: "user",
-      metadata: {
-        label: "preserve-me",
-      },
+    expect(firstMessage?.role).toBe("user");
+    expect(firstMessage?.metadata).toEqual({
+      label: "preserve-me",
     });
     const source = (((firstMessage?.content as Array<Record<string, unknown>> | undefined) ?? [])[0]
       ?.source ?? {}) as Record<string, unknown>;

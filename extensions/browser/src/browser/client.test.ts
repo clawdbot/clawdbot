@@ -323,6 +323,12 @@ describe("browser client", () => {
         expect.stringMatching(/\/doctor\?profile=openclaw&deep=true$/),
       ]),
     );
+    const status = calls.find((c) => c.url.endsWith("/"));
+    expect(status?.init?.timeoutMs).toBe(7_500);
+    const doctor = calls.find((c) => c.url.endsWith("/doctor"));
+    expect(doctor?.init?.timeoutMs).toBe(7_500);
+    const deepDoctor = calls.find((c) => c.url.endsWith("/doctor?profile=openclaw&deep=true"));
+    expect(deepDoctor?.init?.timeoutMs).toBe(10_000);
     const open = calls.find((c) => c.url.endsWith("/tabs/open"));
     expect(open?.init?.method).toBe("POST");
 

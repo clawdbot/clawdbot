@@ -145,11 +145,13 @@ describe("agents bind/unbind commands", () => {
 
     await agentsBindCommand({ bind: ["telegram"] }, runtime);
 
-    expect(writeConfigFileMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bindings: [{ type: "route", agentId: "main", match: { channel: "telegram" } }],
-      }),
-    );
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
+    const writtenConfig = writeConfigFileMock.mock.calls[0]?.[0] as
+      | { bindings?: unknown }
+      | undefined;
+    expect(writtenConfig?.bindings).toStrictEqual([
+      { type: "route", agentId: "main", match: { channel: "telegram" } },
+    ]);
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
@@ -161,17 +163,17 @@ describe("agents bind/unbind commands", () => {
 
     await agentsBindCommand({ bind: ["external-chat:work"] }, runtime);
 
-    expect(writeConfigFileMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bindings: [
-          {
-            type: "route",
-            agentId: "main",
-            match: { channel: "external-chat", accountId: "work" },
-          },
-        ],
-      }),
-    );
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
+    const writtenConfig = writeConfigFileMock.mock.calls[0]?.[0] as
+      | { bindings?: unknown }
+      | undefined;
+    expect(writtenConfig?.bindings).toStrictEqual([
+      {
+        type: "route",
+        agentId: "main",
+        match: { channel: "external-chat", accountId: "work" },
+      },
+    ]);
     expect(pluginRegistryMocks.loadPluginRegistrySnapshot).toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
@@ -190,11 +192,13 @@ describe("agents bind/unbind commands", () => {
 
     await agentsUnbindCommand({ agent: "ops", all: true }, runtime);
 
-    expect(writeConfigFileMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bindings: [{ agentId: "main", match: { channel: "matrix" } }],
-      }),
-    );
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
+    const writtenConfig = writeConfigFileMock.mock.calls[0]?.[0] as
+      | { bindings?: unknown }
+      | undefined;
+    expect(writtenConfig?.bindings).toStrictEqual([
+      { agentId: "main", match: { channel: "matrix" } },
+    ]);
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 

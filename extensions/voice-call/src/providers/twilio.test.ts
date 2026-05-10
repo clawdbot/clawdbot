@@ -106,17 +106,17 @@ describe("TwilioProvider", () => {
     });
 
     expect(result).toEqual({ providerCallId: "CA123", status: "queued" });
-    expect(apiRequest).toHaveBeenCalledWith(
-      "/Calls.json",
-      expect.objectContaining({
-        To: "+14155550123",
-        From: "+14155550100",
-        Twiml: "<Response><Say>Hello</Say></Response>",
-        StatusCallback: "https://example.ngrok.app/voice/webhook?callId=call-1&type=status",
-        StatusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
-      }),
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+    const [endpoint, params] = apiRequest.mock.calls[0] ?? [];
+    expect(endpoint).toBe("/Calls.json");
+    expect(params?.To).toBe("+14155550123");
+    expect(params?.From).toBe("+14155550100");
+    expect(params?.Twiml).toBe("<Response><Say>Hello</Say></Response>");
+    expect(params?.StatusCallback).toBe(
+      "https://example.ngrok.app/voice/webhook?callId=call-1&type=status",
     );
-    expect(apiRequest.mock.calls[0]?.[1]).not.toHaveProperty("Url");
+    expect(params?.StatusCallbackEvent).toEqual(["initiated", "ringing", "answered", "completed"]);
+    expect(params).not.toHaveProperty("Url");
   });
 
   it("uses the webhook URL for conversation outbound calls", async () => {
@@ -135,14 +135,14 @@ describe("TwilioProvider", () => {
       webhookUrl: "https://example.ngrok.app/voice/webhook",
     });
 
-    expect(apiRequest).toHaveBeenCalledWith(
-      "/Calls.json",
-      expect.objectContaining({
-        Url: "https://example.ngrok.app/voice/webhook?callId=call-1",
-        StatusCallback: "https://example.ngrok.app/voice/webhook?callId=call-1&type=status",
-      }),
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+    const [endpoint, params] = apiRequest.mock.calls[0] ?? [];
+    expect(endpoint).toBe("/Calls.json");
+    expect(params?.Url).toBe("https://example.ngrok.app/voice/webhook?callId=call-1");
+    expect(params?.StatusCallback).toBe(
+      "https://example.ngrok.app/voice/webhook?callId=call-1&type=status",
     );
-    expect(apiRequest.mock.calls[0]?.[1]).not.toHaveProperty("Twiml");
+    expect(params).not.toHaveProperty("Twiml");
   });
 
   it("returns streaming TwiML for outbound conversation calls before in-progress", () => {

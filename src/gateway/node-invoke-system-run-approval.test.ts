@@ -102,6 +102,38 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expect(result.details?.code).toBe(code);
   }
 
+  function makeChatRecord(overrides: Partial<ExecApprovalRecord["request"]> = {}) {
+    const record = makeRecord("echo SAFE", ["echo", "SAFE"]);
+    record.requestedByConnId = "chat-agent-conn";
+    record.requestedByDeviceId = null;
+    record.requestedByClientId = "gateway-client";
+    record.requestedByDeviceTokenAuth = false;
+    record.request = {
+      ...record.request,
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:12345",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "telegram:12345",
+      turnSourceAccountId: "work",
+      turnSourceThreadId: "42",
+      systemRunPlan: {
+        argv: ["echo", "SAFE"],
+        cwd: null,
+        commandText: "echo SAFE",
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:12345",
+      },
+      systemRunBinding: buildSystemRunApprovalBinding({
+        argv: ["echo", "SAFE"],
+        cwd: null,
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:12345",
+      }).binding,
+      ...overrides,
+    };
+    return record;
+  }
+
   test("rejects cmd.exe /c trailing-arg mismatch against rawCommand", () => {
     const result = sanitizeSystemRunParamsForForwarding({
       rawParams: {
@@ -437,6 +469,29 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expectRejectedForwardingResult(result, "APPROVAL_NODE_MISMATCH", "not valid for this node");
   });
 
+  test("rejects approval ids replayed from a different device token binding", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client: {
+        ...client,
+        connect: {
+          ...client.connect,
+          device: { id: "dev-2" },
+        },
+      },
+      execApprovalManager: manager(makeRecord("echo SAFE")),
+      nowMs: now,
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_DEVICE_MISMATCH", "not valid for this device");
+  });
+
   test("accepts trusted backend replay for no-device approval after the request connection changes", () => {
     const record = makeRecord("echo SAFE", ["echo", "SAFE"]);
     record.requestedByConnId = "control-ui-conn";
@@ -516,6 +571,239 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
         },
       },
       execApprovalManager: manager(record),
+      nowMs: now,
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
+  });
+
+  test("accepts trusted backend chat replay when stable requester metadata matches", () => {
+    const record = makeChatRecord();
+
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:12345",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "telegram:12345",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: "42",
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client: trustedBackendClient,
+      execApprovalManager: manager(record),
+      nowMs: now,
+    });
+
+    expectAllowOnceForwardingResult(result);
+    if (!result.ok) {
+      throw new Error("unreachable");
+    }
+    const forwarded = result.params as Record<string, unknown>;
+    expect(forwarded).not.toHaveProperty("turnSourceChannel");
+    expect(forwarded).not.toHaveProperty("turnSourceTo");
+    expect(forwarded).not.toHaveProperty("turnSourceAccountId");
+    expect(forwarded).not.toHaveProperty("turnSourceThreadId");
+  });
+
+  test("accepts trusted backend chat replay from a non-bridgeable agent client when stable requester metadata matches", () => {
+    const record = makeChatRecord();
+    record.requestedByClientId = "chat-agent";
+
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:12345",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "telegram:12345",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: "42",
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client: trustedBackendClient,
+      execApprovalManager: manager(record),
+      nowMs: now,
+    });
+
+    expectAllowOnceForwardingResult(result);
+  });
+
+  test("accepts trusted backend WeCom replay when the approved chat agent connection changes", () => {
+    const sessionKey = "agent:main:wecom:conversation:corp-42";
+    const record = makeChatRecord({
+      sessionKey,
+      turnSourceChannel: "wecom",
+      turnSourceTo: "wecom:corp-42:conversation-7",
+      turnSourceAccountId: "corp-42",
+      turnSourceThreadId: "conversation-7",
+      systemRunPlan: {
+        argv: ["echo", "SAFE"],
+        cwd: null,
+        commandText: "echo SAFE",
+        agentId: "main",
+        sessionKey,
+      },
+      systemRunBinding: buildSystemRunApprovalBinding({
+        argv: ["echo", "SAFE"],
+        cwd: null,
+        agentId: "main",
+        sessionKey,
+      }).binding,
+    });
+
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+        agentId: "main",
+        sessionKey,
+        turnSourceChannel: "wecom",
+        turnSourceTo: "wecom:corp-42:conversation-7",
+        turnSourceAccountId: "corp-42",
+        turnSourceThreadId: "conversation-7",
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client: trustedBackendClient,
+      execApprovalManager: manager(record),
+      nowMs: now,
+    });
+
+    expectAllowOnceForwardingResult(result);
+  });
+
+  test("rejects trusted backend chat replay when session binding changes", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:99999",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "telegram:12345",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: "42",
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client: trustedBackendClient,
+      execApprovalManager: manager(makeChatRecord()),
+      nowMs: now,
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
+  });
+
+  test("rejects trusted backend chat replay when session binding casing changes", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+        agentId: "main",
+        sessionKey: "agent:MAIN:telegram:direct:12345",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "telegram:12345",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: "42",
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client: trustedBackendClient,
+      execApprovalManager: manager(makeChatRecord()),
+      nowMs: now,
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
+  });
+
+  test("rejects trusted backend chat replay when agent binding casing changes", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+        agentId: "Main",
+        sessionKey: "agent:main:telegram:direct:12345",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "telegram:12345",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: "42",
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client: trustedBackendClient,
+      execApprovalManager: manager(makeChatRecord()),
+      nowMs: now,
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
+  });
+
+  test("rejects trusted backend chat replay when channel target changes", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:12345",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "telegram:67890",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: "42",
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client: trustedBackendClient,
+      execApprovalManager: manager(makeChatRecord()),
+      nowMs: now,
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
+  });
+
+  test("rejects trusted backend chat replay without matching approval scope", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:12345",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "telegram:12345",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: "42",
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client: {
+        ...trustedBackendClient,
+        connect: {
+          ...trustedBackendClient.connect,
+          scopes: ["operator.write"],
+        },
+      },
+      execApprovalManager: manager(makeChatRecord()),
       nowMs: now,
     });
 

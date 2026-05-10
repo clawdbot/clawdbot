@@ -104,10 +104,9 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
       {},
     );
 
-    expect(calls[0]?.headers).toMatchObject({
-      "X-OpenRouter-Cache": "true",
-      "X-OpenRouter-Cache-TTL": "600",
-    });
+    const headers = calls[0]?.headers;
+    expect(headers?.["X-OpenRouter-Cache"]).toBe("true");
+    expect(headers?.["X-OpenRouter-Cache-TTL"]).toBe("600");
   });
 
   it("honors narrower camelCase response cache params over wider snake_case aliases", () => {
@@ -154,11 +153,10 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
       {},
     );
 
-    expect(calls[0]?.headers).toMatchObject({
-      "X-OpenRouter-Cache": "true",
-      "X-OpenRouter-Cache-Clear": "true",
-      "X-OpenRouter-Cache-TTL": "600",
-    });
+    const headers = calls[0]?.headers;
+    expect(headers?.["X-OpenRouter-Cache"]).toBe("true");
+    expect(headers?.["X-OpenRouter-Cache-Clear"]).toBe("true");
+    expect(headers?.["X-OpenRouter-Cache-TTL"]).toBe("600");
   });
 
   it("injects reasoning.effort when thinkingLevel is non-off for OpenRouter", () => {

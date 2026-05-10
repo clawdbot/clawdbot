@@ -22,7 +22,10 @@ export async function backupCreateCommand(
   runtime: RuntimeEnv,
   opts: BackupCreateOptions = {},
 ): Promise<BackupCreateResult> {
-  const result = await createBackupArchive(opts);
+  const result = await createBackupArchive({
+    ...opts,
+    log: opts.log ?? (opts.json ? undefined : (message: string) => runtime.log(message)),
+  });
   if (opts.verify && !opts.dryRun) {
     const { backupVerifyCommand } = await loadBackupVerifyRuntime();
     await backupVerifyCommand(

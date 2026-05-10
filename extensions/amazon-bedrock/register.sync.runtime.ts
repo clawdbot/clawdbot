@@ -1,7 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import type { OpenClawPluginApi, ProviderThinkingProfile } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
   normalizeProviderId,
@@ -14,6 +14,7 @@ import {
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 import { mergeImplicitBedrockProvider, resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
+import { isOpus47BedrockModelRef, resolveBedrockClaudeThinkingProfile } from "./thinking-policy.js";
 
 type GuardrailConfig = {
   guardrailIdentifier: string;
@@ -182,12 +183,6 @@ function resolvedModelSupportsCaching(modelArn: string): boolean {
   return matchesPiAiPromptCachingModelId(modelArn);
 }
 
-function isOpus47BedrockModelRef(modelRef: string): boolean {
-  return /(?:^|[/.:])(?:(?:us|eu|ap|apac|au|jp|global)\.)?anthropic\.claude-opus-4[.-]7(?:$|[-.:/])/i.test(
-    modelRef,
-  );
-}
-
 /**
  * Resolve the underlying foundation model for an application inference profile
  * via GetInferenceProfile. Results are cached so we only call the API once per
@@ -344,14 +339,6 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   // Keep registration-local constants inside the function so partial module
   // initialization during test bootstrap cannot trip TDZ reads.
   const providerId = "amazon-bedrock";
-  const claude46ModelRe = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
-  const baseClaudeThinkingLevels = [
-    { id: "off" },
-    { id: "minimal" },
-    { id: "low" },
-    { id: "medium" },
-    { id: "high" },
-  ] as const satisfies ProviderThinkingProfile["levels"];
   // Match region from bedrock-runtime (Converse API) URLs.
   // e.g. https://bedrock-runtime.us-east-1.amazonaws.com
   const bedrockRegionRe = /bedrock-runtime\.([a-z0-9-]+)\.amazonaws\./;
@@ -364,23 +351,6 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     /ValidationException[\s\S]*(?:invalid_request_error[\s\S]*)?temperature[\s\S]*deprecated|ValidationException[\s\S]*deprecated[\s\S]*temperature/i;
   const anthropicByModelReplayHooks = ANTHROPIC_BY_MODEL_REPLAY_HOOKS;
   const startupPluginConfig = (api.pluginConfig ?? {}) as AmazonBedrockPluginConfig;
-
-  function resolveBedrockClaudeThinkingProfile(modelId: string): ProviderThinkingProfile {
-    const trimmed = modelId.trim();
-    if (isOpus47BedrockModelRef(trimmed)) {
-      return {
-        levels: [...baseClaudeThinkingLevels, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
-        defaultLevel: "off",
-      };
-    }
-    if (claude46ModelRe.test(trimmed)) {
-      return {
-        levels: [...baseClaudeThinkingLevels, { id: "adaptive" }],
-        defaultLevel: "adaptive",
-      };
-    }
-    return { levels: baseClaudeThinkingLevels };
-  }
 
   function resolveCurrentPluginConfig(
     config: OpenClawConfig | undefined,

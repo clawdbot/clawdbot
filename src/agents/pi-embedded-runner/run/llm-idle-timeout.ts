@@ -91,6 +91,23 @@ function isLocalProviderBaseUrl(baseUrl: string): boolean {
   );
 }
 
+function isOllamaCloudModel(model: { id?: string; provider?: string } | undefined): boolean {
+  const rawModelId = model?.id;
+  if (typeof rawModelId !== "string") {
+    return false;
+  }
+
+  const provider = model?.provider?.trim().toLowerCase();
+  if (provider && !provider.startsWith("ollama")) {
+    return false;
+  }
+
+  const modelId = rawModelId.trim().toLowerCase();
+  const slashIndex = modelId.indexOf("/");
+  const bareModelId = slashIndex >= 0 ? modelId.slice(slashIndex + 1) : modelId;
+  return bareModelId.endsWith(":cloud");
+}
+
 /**
  * Resolves the LLM idle timeout from configuration.
  * @returns Idle timeout in milliseconds, or 0 to disable
@@ -100,7 +117,7 @@ export function resolveLlmIdleTimeoutMs(params?: {
   trigger?: EmbeddedRunTrigger;
   runTimeoutMs?: number;
   modelRequestTimeoutMs?: number;
-  model?: { baseUrl?: string };
+  model?: { baseUrl?: string; id?: string; provider?: string };
 }): number {
   const clampTimeoutMs = (valueMs: number) => Math.min(Math.floor(valueMs), MAX_SAFE_TIMEOUT_MS);
   const clampImplicitTimeoutMs = (valueMs: number) =>
@@ -156,9 +173,16 @@ export function resolveLlmIdleTimeoutMs(params?: {
   // Local providers can legitimately stream nothing for many minutes during
   // prompt evaluation or thinking, so falling back to the default would abort
   // valid local runs. Honor it only when the user has not opted out via the
-  // baseUrl pointing at loopback / private-network / `.local`.
+  // baseUrl pointing at loopback / private-network / `.local`. Ollama cloud
+  // models are still hosted remotely even when proxied through local Ollama, so
+  // keep the cloud watchdog for `*:cloud` model ids.
   const baseUrl = params?.model?.baseUrl;
-  if (typeof baseUrl === "string" && baseUrl.length > 0 && isLocalProviderBaseUrl(baseUrl)) {
+  if (
+    typeof baseUrl === "string" &&
+    baseUrl.length > 0 &&
+    isLocalProviderBaseUrl(baseUrl) &&
+    !isOllamaCloudModel(params?.model)
+  ) {
     return 0;
   }
 

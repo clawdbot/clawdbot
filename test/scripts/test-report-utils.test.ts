@@ -111,10 +111,10 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
         "--outputFile",
         reportPath,
       ],
-      expect.objectContaining({
+      {
         stdio: "inherit",
         env: process.env,
-      }),
+      },
     );
   });
 });

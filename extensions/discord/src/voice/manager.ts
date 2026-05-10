@@ -680,7 +680,10 @@ export class DiscordVoiceManager {
       logVoiceVerbose(
         `realtime barge-in: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
-      realtime.handleBargeIn();
+      logger.info(
+        `discord voice: realtime barge-in detected source=speaker-start guild=${entry.guildId} channel=${entry.channelId} user=${userId} playerStatus=${entry.player.state.status}`,
+      );
+      realtime.handleBargeIn("speaker-start");
     }
     this.enableDaveReceivePassthrough(
       entry,

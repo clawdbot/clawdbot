@@ -1,0 +1,28 @@
+diff --git a/lib/Utils/messages-media.js b/lib/Utils/messages-media.js
+index 95f8c63..612b7fb 100644
+--- a/lib/Utils/messages-media.js
++++ b/lib/Utils/messages-media.js
+@@ -596,7 +596,10 @@ const uploadWithFetch = async ({ url, filePath, headers, timeoutMs, agent }) =>
+     const nodeStream = createReadStream(filePath);
+     const webStream = Readable.toWeb(nodeStream);
+     const response = await fetch(url, {
+-        dispatcher: agent,
++        // Baileys may pass a generic agent in some runtimes. Undici's dispatcher
++        // option only accepts Dispatcher-compatible implementations, so only wire
++        // it through when the object actually implements dispatch.
++        ...(typeof agent?.dispatch === 'function' ? { dispatcher: agent } : {}),
+         method: 'POST',
+         body: webStream,
+         headers,
+diff --git a/lib/Utils/logger.d.ts b/lib/Utils/logger.d.ts
+index 4d78996..059f58f 100644
+--- a/lib/Utils/logger.d.ts
++++ b/lib/Utils/logger.d.ts
+@@ -7,6 +7,6 @@ export interface ILogger {
+     info(obj: unknown, msg?: string): void;
+     warn(obj: unknown, msg?: string): void;
+     error(obj: unknown, msg?: string): void;
+ }
+-declare const _default: import("pino").Logger<never, boolean>;
++declare const _default: ILogger;
+ export default _default;

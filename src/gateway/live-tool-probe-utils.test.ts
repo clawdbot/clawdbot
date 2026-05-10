@@ -53,6 +53,11 @@ describe("live tool probe utils", () => {
         expected: true,
       },
       {
+        name: "detects unavailable read tool refusals",
+        text: "tool probe missing nonce: I can’t: there is no `read`/`Read` tool available in this session, and I won’t output those nonce values without actually reading the file.",
+        expected: true,
+      },
+      {
         name: "ignores generic helper text",
         text: "I can help with that request.",
         expected: false,

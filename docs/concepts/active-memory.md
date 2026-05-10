@@ -327,7 +327,7 @@ The runtime shape is:
 flowchart LR
   U["User Message"] --> Q["Build Memory Query"]
   Q --> R["Active Memory Blocking Memory Sub-Agent"]
-  R -->|NONE or empty| M["Main Reply"]
+  R -->|NONE / no relevant memory| M["Main Reply"]
   R -->|relevant summary| I["Append Hidden active_memory_plugin System Context"]
   I --> M["Main Reply"]
 ```

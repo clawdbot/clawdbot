@@ -22,6 +22,22 @@ const { default: runBootChecklist } = await import("./handler.js");
 const { clearInternalHooks, createInternalHookEvent, registerInternalHook, triggerInternalHook } =
   await import("../../internal-hooks.js");
 
+function expectBootCall(
+  index: number,
+  expected: { cfg: OpenClawConfig; deps: CliDeps; workspaceDir: string; agentId: string },
+) {
+  const params = runBootOnce.mock.calls[index]?.[0] as
+    | { cfg?: unknown; deps?: unknown; workspaceDir?: unknown; agentId?: unknown }
+    | undefined;
+  if (!params) {
+    throw new Error(`missing boot call ${index}`);
+  }
+  expect(params.cfg).toBe(expected.cfg);
+  expect(params.deps).toBe(expected.deps);
+  expect(params.workspaceDir).toBe(expected.workspaceDir);
+  expect(params.agentId).toBe(expected.agentId);
+}
+
 describe("boot-md startup hook integration", () => {
   beforeEach(() => {
     runBootOnce.mockClear();
@@ -53,13 +69,7 @@ describe("boot-md startup hook integration", () => {
     const opsWorkspaceDir = resolveAgentWorkspaceDir(cfg, "ops");
 
     expect(runBootOnce).toHaveBeenCalledTimes(2);
-    expect(runBootOnce).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ cfg, deps, workspaceDir: mainWorkspaceDir, agentId: "main" }),
-    );
-    expect(runBootOnce).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ cfg, deps, workspaceDir: opsWorkspaceDir, agentId: "ops" }),
-    );
+    expectBootCall(0, { cfg, deps, workspaceDir: mainWorkspaceDir, agentId: "main" });
+    expectBootCall(1, { cfg, deps, workspaceDir: opsWorkspaceDir, agentId: "ops" });
   });
 });

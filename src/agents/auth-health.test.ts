@@ -11,6 +11,10 @@ vi.mock("./cli-credentials.js", () => ({
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: () => undefined,
 }));
+vi.mock("./provider-auth-aliases.js", () => ({
+  resolveProviderIdForAuth: (provider: string) =>
+    provider === "codex-cli" ? "openai-codex" : provider,
+}));
 
 import {
   buildAuthHealthSummary,
@@ -111,6 +115,84 @@ describe("buildAuthHealthSummary", () => {
 
     const provider = summary.providers.find((entry) => entry.provider === "anthropic");
     expect(provider?.status).toBe("expired");
+    expect(
+      provider?.profiles.find((profile) => profile.profileId === "anthropic:expired")?.status,
+    ).toBe("expired");
+  });
+
+  it("uses ordered usable profiles for provider health while keeping stale inventory visible", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const store = {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: "stale-access",
+          refresh: "stale-refresh",
+          expires: now - 10_000,
+        },
+        "openai-codex:named": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: "fresh-access",
+          refresh: "fresh-refresh",
+          expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
+        },
+      },
+      order: {
+        "openai-codex": ["openai-codex:named"],
+      },
+    };
+
+    const summary = buildAuthHealthSummary({
+      store,
+      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    });
+
+    expect(profileStatuses(summary)).toEqual({
+      "openai-codex:default": "expired",
+      "openai-codex:named": "ok",
+    });
+    const provider = summary.providers.find((entry) => entry.provider === "openai-codex");
+    expect(provider?.status).toBe("ok");
+    expect(provider?.expiresAt).toBe(now + DEFAULT_OAUTH_WARN_MS + 60_000);
+    expect(provider?.effectiveProfiles?.map((profile) => profile.profileId)).toEqual([
+      "openai-codex:named",
+    ]);
+    expect(provider?.profiles.map((profile) => profile.profileId)).toEqual([
+      "openai-codex:default",
+      "openai-codex:named",
+    ]);
+  });
+
+  it("honors canonical empty auth order for aliased stored profile providers", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const store = {
+      version: 1,
+      profiles: {
+        "codex-cli:legacy": {
+          type: "oauth" as const,
+          provider: "codex-cli",
+          access: "fresh-access",
+          refresh: "fresh-refresh",
+          expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
+        },
+      },
+      order: {
+        "openai-codex": [],
+      },
+    };
+
+    const summary = buildAuthHealthSummary({
+      store,
+      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    });
+
+    const provider = summary.providers.find((entry) => entry.provider === "codex-cli");
+    expect(provider?.status).toBe("missing");
+    expect(provider?.effectiveProfiles).toEqual([]);
+    expect(provider?.profiles.map((profile) => profile.profileId)).toEqual(["codex-cli:legacy"]);
   });
 
   it("reports expired for OAuth without a refresh token", () => {
@@ -325,6 +407,7 @@ describe("buildAuthHealthSummary", () => {
       {
         provider: "zai",
         status: "static",
+        effectiveProfiles: summary.profiles,
         profiles: summary.profiles,
       },
     ]);

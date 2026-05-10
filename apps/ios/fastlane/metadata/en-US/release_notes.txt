@@ -1,1 +1,1 @@
-Maintenance update for the current OpenClaw development release.
+Maintenance update for the current OpenClaw beta release.

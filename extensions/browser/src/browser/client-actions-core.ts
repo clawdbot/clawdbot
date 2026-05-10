@@ -4,7 +4,7 @@ import type {
   BrowserActionTabResult,
 } from "./client-actions-types.js";
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
-import type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
+import type { BrowserActRequest } from "./client-actions.types.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,

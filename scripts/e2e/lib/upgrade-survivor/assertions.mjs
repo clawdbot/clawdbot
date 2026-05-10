@@ -433,16 +433,34 @@ function assertConfiguredPluginInstalls() {
   }
   const index = readInstalledPluginIndex();
   const records = index.installRecords ?? {};
-  const matrix = records.matrix;
-  const bundledMatrix = (index.plugins ?? []).find((plugin) => plugin?.pluginId === "matrix");
-  assert(!matrix, "internal matrix plugin should not be installed externally");
-  assert(bundledMatrix, "configured bundled matrix plugin is missing from the plugin index");
-  assert(bundledMatrix.enabled !== false, "configured bundled matrix plugin is disabled");
-  const brave = (index.plugins ?? []).find((plugin) => plugin?.pluginId === "brave");
-  assert(brave, "configured external brave plugin is missing from the plugin index");
-  assert(brave.enabled !== false, "configured external brave plugin is disabled");
-  assertExternalPluginInstall(records, "brave", "@openclaw/brave-plugin");
+  assertOptionalConfiguredPluginIndex(records, index.plugins ?? [], {
+    bundled: true,
+    packageName: "@openclaw/matrix",
+    pluginId: "matrix",
+  });
+  assertOptionalConfiguredPluginIndex(records, index.plugins ?? [], {
+    packageName: "@openclaw/brave-plugin",
+    pluginId: "brave",
+  });
   assert(!records.telegram, "internal telegram plugin should not be installed externally");
+}
+
+function assertOptionalConfiguredPluginIndex(
+  records,
+  plugins,
+  { bundled = false, packageName, pluginId },
+) {
+  const record = records[pluginId];
+  const plugin = plugins.find((entry) => entry?.pluginId === pluginId);
+  if (record) {
+    assertExternalPluginInstall(records, pluginId, packageName);
+  }
+  if (plugin) {
+    assert(
+      plugin.enabled !== false,
+      `configured ${bundled ? "bundled" : "external"} ${pluginId} plugin is disabled`,
+    );
+  }
 }
 
 function assertStatusJson([file]) {

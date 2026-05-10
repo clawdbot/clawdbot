@@ -138,13 +138,13 @@ What you set:
   <Accordion title="OpenAI Code subscription (OAuth)">
     Browser flow; paste `code#state`.
 
-    Sets `agents.defaults.model` to `openai-codex/gpt-5.5` when model is unset or already OpenAI-family.
+    Sets `agents.defaults.model` to `openai/gpt-5.5` through the Codex runtime when model is unset or already OpenAI-family.
 
   </Accordion>
   <Accordion title="OpenAI Code subscription (device pairing)">
     Browser pairing flow with a short-lived device code.
 
-    Sets `agents.defaults.model` to `openai-codex/gpt-5.5` when model is unset or already OpenAI-family.
+    Sets `agents.defaults.model` to `openai/gpt-5.5` through the Codex runtime when model is unset or already OpenAI-family.
 
   </Accordion>
   <Accordion title="OpenAI API key">

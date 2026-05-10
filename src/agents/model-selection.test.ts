@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { migrateLegacyRuntimeModelRef } from "./model-runtime-aliases.js";
+import { isModelKeyAllowedBySet, providerWildcardModelKey } from "./model-selection-shared.js";
 import {
   buildAllowedModelSet,
   buildConfiguredModelCatalog,
@@ -24,6 +25,7 @@ import {
   resolveThinkingDefault,
   resolveModelRefFromString,
 } from "./model-selection.js";
+import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 
 const manifestNormalizationSnapshot = vi.hoisted(() => ({
   configFingerprint: "model-selection-test-normalizers",
@@ -222,6 +224,8 @@ describe("model-selection", () => {
       expect(normalizeProviderId("qwen")).toBe("qwen");
       expect(normalizeProviderId("kimi-code")).toBe("kimi");
       expect(normalizeProviderId("kimi-coding")).toBe("kimi");
+      expect(normalizeProviderId("MoonshotAI")).toBe("moonshot");
+      expect(normalizeProviderId("moonshot-ai")).toBe("moonshot");
       expect(normalizeProviderId("anthropic-cli")).toBe("claude-cli");
       expect(normalizeProviderId("bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("aws-bedrock")).toBe("amazon-bedrock");
@@ -768,13 +772,12 @@ describe("model-selection", () => {
         },
       } as unknown as OpenClawConfig;
 
-      expect(buildConfiguredModelCatalog({ cfg })).toContainEqual(
-        expect.objectContaining({
-          provider: "google",
-          id: "gemini-3.1-pro-preview",
-          name: "Gemini 3 Pro",
-        }),
+      const model = buildConfiguredModelCatalog({ cfg }).find(
+        (entry) => entry.provider === "google" && entry.id === "gemini-3.1-pro-preview",
       );
+      expect(model?.provider).toBe("google");
+      expect(model?.id).toBe("gemini-3.1-pro-preview");
+      expect(model?.name).toBe("Gemini 3 Pro");
     });
 
     it("emits canonical nested Google Gemini 3.1 ids from proxy provider catalog rows", () => {
@@ -793,13 +796,12 @@ describe("model-selection", () => {
         },
       } as unknown as OpenClawConfig;
 
-      expect(buildConfiguredModelCatalog({ cfg })).toContainEqual(
-        expect.objectContaining({
-          provider: "kilocode",
-          id: "google/gemini-3.1-pro-preview",
-          name: "Gemini 3 Pro",
-        }),
+      const model = buildConfiguredModelCatalog({ cfg }).find(
+        (entry) => entry.provider === "kilocode" && entry.id === "google/gemini-3.1-pro-preview",
       );
+      expect(model?.provider).toBe("kilocode");
+      expect(model?.id).toBe("google/gemini-3.1-pro-preview");
+      expect(model?.name).toBe("Gemini 3 Pro");
     });
   });
 
@@ -941,6 +943,203 @@ describe("model-selection", () => {
       expect(result.allowedKeys.has("ollama/glm-5.1:cloud")).toBe(true);
     });
 
+    it("allows every discovered catalog model for provider wildcard entries", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/*": {},
+              "vllm/*": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+          { provider: "openai-codex", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
+          { provider: "openai-codex", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+          { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
+          { provider: "vllm", id: "local-added-after-startup", name: "Local Added After Startup" },
+        ],
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result.allowAny).toBe(false);
+      expect(result.allowedCatalog).toEqual([
+        { provider: "openai-codex", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
+        { provider: "openai-codex", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+        { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
+        { provider: "vllm", id: "local-added-after-startup", name: "Local Added After Startup" },
+      ]);
+      expect(result.allowedKeys.has("openai-codex/gpt-5.4-codex")).toBe(true);
+      expect(result.allowedKeys.has("openai-codex/gpt-5.5-codex")).toBe(true);
+      expect(result.allowedKeys.has("vllm/local-added-after-startup")).toBe(true);
+      expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(false);
+    });
+
+    it("preserves provider wildcard intent when catalog rows are unavailable", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/*": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [],
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result.allowAny).toBe(false);
+      expect(result.allowedCatalog).toEqual([]);
+      expect(result.allowedKeys.has(providerWildcardModelKey("openai-codex"))).toBe(true);
+      expect(isModelKeyAllowedBySet(result.allowedKeys, "openai-codex/gpt-added-later")).toBe(true);
+      expect(isModelKeyAllowedBySet(result.allowedKeys, "anthropic/claude-sonnet-4-6")).toBe(false);
+    });
+
+    it("exposes wildcard allow and visible catalog behavior through one policy", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/*": {},
+              "anthropic/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const policy = createModelVisibilityPolicy({
+        cfg,
+        catalog: [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+          { provider: "openai-codex", id: "gpt-added-later", name: "GPT Added Later" },
+          { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
+        ],
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(policy.hasProviderWildcards).toBe(true);
+      expect(policy.allows({ provider: "openai-codex", model: "future-model" })).toBe(true);
+      expect(policy.allows({ provider: "vllm", model: "qwen-local" })).toBe(false);
+      expect(
+        policy.visibleCatalog({
+          catalog: [],
+          defaultVisibleCatalog: [
+            { provider: "openai-codex", id: "gpt-added-later", name: "GPT Added Later" },
+            { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
+          ],
+        }),
+      ).toEqual([
+        { provider: "openai-codex", id: "gpt-added-later", name: "GPT Added Later" },
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+      ]);
+    });
+
+    it("keeps exact same-provider entries visible beside wildcard catalog rows", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "vllm/*": {},
+              "vllm/manual": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const policy = createModelVisibilityPolicy({
+        cfg,
+        catalog: [{ provider: "vllm", id: "qwen-local", name: "Qwen Local" }],
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(
+        policy.visibleCatalog({
+          catalog: [],
+          defaultVisibleCatalog: [{ provider: "vllm", id: "qwen-local", name: "Qwen Local" }],
+        }),
+      ).toEqual([
+        { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
+        { provider: "vllm", id: "manual", name: "manual" },
+      ]);
+    });
+
+    it("does not re-add a default outside mixed wildcard and exact filters", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/*": {},
+              "google/gemini-test": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+          { provider: "openai-codex", id: "gpt-codex", name: "GPT Codex" },
+          { provider: "google", id: "gemini-test", name: "Gemini Test" },
+        ],
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result.allowedCatalog).toEqual([
+        { provider: "openai-codex", id: "gpt-codex", name: "GPT Codex" },
+        { provider: "google", id: "gemini-test", name: "Gemini Test" },
+      ]);
+      expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(false);
+      expect(result.allowedKeys.has(providerWildcardModelKey("openai-codex"))).toBe(true);
+    });
+
+    it("unions exact model entries with provider wildcard entries", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": {},
+              "openai-codex/*": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+          { provider: "openai-codex", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
+          { provider: "openai-codex", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+          { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
+        ],
+        defaultProvider: "anthropic",
+      });
+
+      expect(result.allowAny).toBe(false);
+      expect(result.allowedCatalog).toEqual([
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+        { provider: "openai-codex", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
+        { provider: "openai-codex", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+      ]);
+      expect(result.allowedKeys.has("openai-codex/gpt-5.5-codex")).toBe(true);
+      expect(result.allowedKeys.has("vllm/qwen-local")).toBe(false);
+    });
+
     it("matches allowlisted catalog entries with normalized provider and model ids", () => {
       const cfg: OpenClawConfig = {
         agents: {
@@ -965,13 +1164,11 @@ describe("model-selection", () => {
         defaultProvider: "anthropic",
       });
 
-      expect(result.allowedCatalog).toEqual([
-        expect.objectContaining({
-          provider: "modelscope",
-          id: "qwen/qwen3.5-35b-a3b",
-          input: ["text", "image"],
-        }),
-      ]);
+      expect(result.allowedCatalog).toHaveLength(1);
+      const allowed = result.allowedCatalog[0];
+      expect(allowed?.provider).toBe("modelscope");
+      expect(allowed?.id).toBe("qwen/qwen3.5-35b-a3b");
+      expect(allowed?.input).toEqual(["text", "image"]);
     });
 
     it("applies configured provider metadata and alias to synthetic allowlist entries", () => {
@@ -1866,11 +2063,6 @@ describe("model-selection", () => {
       const cfg = {} as OpenClawConfig;
 
       expect(resolveAnthropicOpusThinking(cfg)).toBe("adaptive");
-    });
-
-    it("falls back to medium when no provider thinking policy is active", () => {
-      const cfg = {} as OpenClawConfig;
-
       expect(
         resolveThinkingDefault({
           cfg,
@@ -1885,7 +2077,11 @@ describe("model-selection", () => {
             },
           ],
         }),
-      ).toBe("medium");
+      ).toBe("adaptive");
+    });
+
+    it("falls back to medium when no provider thinking policy is active", () => {
+      const cfg = {} as OpenClawConfig;
 
       expect(
         resolveThinkingDefault({

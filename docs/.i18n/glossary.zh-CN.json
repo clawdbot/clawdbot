@@ -60,6 +60,22 @@
     "target": "频道消息 API"
   },
   {
+    "source": "Channel ingress API",
+    "target": "频道入口 API"
+  },
+  {
+    "source": "Channel access cleanup",
+    "target": "频道访问清理"
+  },
+  {
+    "source": "Ingress core shrink plan",
+    "target": "入口核心精简计划"
+  },
+  {
+    "source": "Ingress core shrink",
+    "target": "入口核心精简"
+  },
+  {
     "source": "Talk mode",
     "target": "Talk 模式"
   },
@@ -110,6 +126,26 @@
   {
     "source": "Codex harness",
     "target": "Codex harness"
+  },
+  {
+    "source": "Codex harness reference",
+    "target": "Codex harness reference"
+  },
+  {
+    "source": "Codex harness runtime",
+    "target": "Codex harness runtime"
+  },
+  {
+    "source": "Native Codex plugins",
+    "target": "Native Codex plugins"
+  },
+  {
+    "source": "Codex Computer Use",
+    "target": "Codex Computer Use"
+  },
+  {
+    "source": "Diagnostics export",
+    "target": "诊断导出"
   },
   {
     "source": "Agent harness plugins",
@@ -692,6 +728,10 @@
     "target": "迁移"
   },
   {
+    "source": "Migrate CLI",
+    "target": "迁移 CLI"
+  },
+  {
     "source": "Migrating",
     "target": "迁移"
   },
@@ -768,6 +808,10 @@
     "target": "Matrix QA"
   },
   {
+    "source": "Matrix presentation metadata",
+    "target": "Matrix 呈现元数据"
+  },
+  {
     "source": "QA overview",
     "target": "QA overview"
   },
@@ -778,6 +822,10 @@
   {
     "source": "Rich Output Protocol",
     "target": "富输出协议"
+  },
+  {
+    "source": "Trajectory export",
+    "target": "轨迹导出"
   },
   {
     "source": "Tencent Cloud (TokenHub)",
@@ -814,5 +862,25 @@
   {
     "source": "fs-safe Cleanup Plan",
     "target": "fs-safe Cleanup Plan"
+  },
+  {
+    "source": "Tool Search",
+    "target": "工具搜索"
+  },
+  {
+    "source": "Tools and plugins",
+    "target": "工具和插件"
+  },
+  {
+    "source": "Multi-agent sandbox and tools",
+    "target": "多 Agent 沙盒和工具"
+  },
+  {
+    "source": "Exec tool",
+    "target": "Exec 工具"
+  },
+  {
+    "source": "ACP agents setup",
+    "target": "ACP Agents 设置"
   }
 ]

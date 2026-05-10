@@ -1,17 +1,3 @@
-/**
- * Core gateway entry point — thin shell that wires together:
- *
- * - GatewayConnection: WebSocket lifecycle, heartbeat, reconnect
- * - buildInboundContext: content building, attachments, quote resolution
- * - dispatchOutbound: AI dispatch, deliver callbacks, timeouts
- *
- * The only responsibilities of this file are:
- * 1. Initialize adapters from EngineAdapters
- * 2. Initialize API config + refIdx cache hook
- * 3. Create the message handler (inbound → outbound pipeline)
- * 4. Start GatewayConnection
- */
-
 import path from "node:path";
 import { initCommands } from "../commands/slash-commands-impl.js";
 import { createNodeSessionStoreReader } from "../group/activation.js";
@@ -42,27 +28,18 @@ import type {
 } from "./types.js";
 import { TypingKeepAlive, TYPING_INPUT_SECOND } from "./typing-keepalive.js";
 
-// Re-export context type for consumers.
 export type { CoreGatewayContext } from "./types.js";
 
-// ============ startGateway ============
-
-/**
- * Start the Gateway WebSocket connection with automatic reconnect support.
- */
 export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
   const { account, log, runtime, adapters } = ctx;
 
-  // ---- 1. Initialize adapters ----
   setOutboundAudioPort(adapters.outboundAudio);
   initCommands(adapters.commands);
 
-  // ---- 2. Validate ----
   if (!account.appId || !account.clientSecret) {
     throw new Error("QQBot not configured (missing appId or clientSecret)");
   }
 
-  // ---- 3. Diagnostics ----
   const diag = await runDiagnostics();
   if (diag.warnings.length > 0) {
     for (const w of diag.warnings) {
@@ -70,11 +47,9 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     }
   }
 
-  // ---- 4. API config ----
   initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
   log?.debug?.(`API config: markdownSupport=${account.markdownSupport}`);
 
-  // ---- 5. Outbound refIdx cache hook ----
   onMessageSent(account.appId, (refIdx, meta) => {
     log?.info(
       `onMessageSent called: refIdx=${refIdx}, mediaType=${meta.mediaType}, ttsText=${meta.ttsText?.slice(0, 30)}`,
@@ -105,7 +80,6 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     });
   });
 
-  // ---- 6. Group support (per-connection state) ----
   const groupOpts = {
     enabled: ctx.group?.enabled ?? true,
     allowTextCommands: ctx.group?.allowTextCommands,
@@ -121,7 +95,6 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     ? (groupOpts.sessionStoreReader ?? createNodeSessionStoreReader())
     : undefined;
 
-  // ---- 7. Message handler ----
   const handleMessage = async (event: QueuedMessage): Promise<void> => {
     log?.info(`Processing message from ${event.senderId}: ${event.content}`, {
       accountId: account.accountId,
@@ -161,9 +134,6 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       return;
     }
 
-    // Group gate decided to stop early (drop_other_mention, block, skip
-    // no-mention). History has already been recorded inside the
-    // pipeline; there is no outbound to dispatch.
     if (inbound.skipped) {
       log?.info(
         `Skipped group inbound: reason=${inbound.skipReason ?? "unknown"} group=${event.groupOpenid ?? ""}`,
@@ -192,9 +162,6 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       log?.error(`Message processing failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       inbound.typing.keepAlive?.stop();
-      // Reset the buffered non-@ chatter after every @-activation turn
-      // (success or failure), matching the standalone build. Guards
-      // against stale history leaking into the next reply.
       if (event.type === "group" && event.groupOpenid && inbound.group) {
         clearGroupPendingHistory({
           historyMap: groupHistories,
@@ -206,16 +173,15 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     }
   };
 
-  // ---- 8. Interaction handler ----
   const handleInteraction = createInteractionHandler(account, ctx.runtime, log);
 
-  // ---- 9. Start connection ----
   const connection = new GatewayConnection({
     account,
     abortSignal: ctx.abortSignal,
     cfg: ctx.cfg,
     log,
     runtime,
+    adapters,
     onReady: ctx.onReady,
     onResumed: ctx.onResumed,
     onError: ctx.onError,

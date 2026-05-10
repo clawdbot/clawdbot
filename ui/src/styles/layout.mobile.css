@@ -787,30 +787,30 @@
 
 /* nth-child is 1-based and includes the checkbox column (col 1). */
 
-/* ≤1400px: hide Verbose (col 10) and Reasoning (col 11) */
+/* ≤1400px: hide Verbose (col 12) and Reasoning (col 13) */
 @media (max-width: 1400px) {
   .data-table.sessions-table {
-    min-width: 1080px;
+    min-width: 1120px;
   }
 
-  .sessions-table th:nth-child(10),
-  .sessions-table td:nth-child(10),
-  .sessions-table th:nth-child(11),
-  .sessions-table td:nth-child(11) {
+  .sessions-table th:nth-child(12),
+  .sessions-table td:nth-child(12),
+  .sessions-table th:nth-child(13),
+  .sessions-table td:nth-child(13) {
     display: none;
   }
 }
 
-/* ≤1100px: also hide Fast (col 9) and Kind (col 4) */
+/* ≤1100px: also hide Fast (col 11) and Kind (col 4) */
 @media (max-width: 1100px) {
   .data-table.sessions-table {
-    min-width: 900px;
+    min-width: 930px;
   }
 
   .sessions-table th:nth-child(4),
   .sessions-table td:nth-child(4),
-  .sessions-table th:nth-child(9),
-  .sessions-table td:nth-child(9) {
+  .sessions-table th:nth-child(11),
+  .sessions-table td:nth-child(11) {
     display: none;
   }
 
@@ -820,28 +820,28 @@
   }
 }
 
-/* ≤900px: also hide Thinking (col 8) and Label (col 3) */
+/* ≤900px: also hide Thinking (col 10) and Label (col 3) */
 @media (max-width: 900px) {
   .data-table.sessions-table {
-    min-width: 690px;
+    min-width: 720px;
   }
 
   .sessions-table th:nth-child(3),
   .sessions-table td:nth-child(3),
-  .sessions-table th:nth-child(8),
-  .sessions-table td:nth-child(8) {
+  .sessions-table th:nth-child(10),
+  .sessions-table td:nth-child(10) {
     display: none;
   }
 }
 
-/* ≤768px: also hide Tokens (col 6); tighten padding; stack pagination */
+/* ≤768px: also hide Tokens (col 8); tighten padding; stack pagination */
 @media (max-width: 768px) {
   .data-table.sessions-table {
-    min-width: 540px;
+    min-width: 560px;
   }
 
-  .sessions-table th:nth-child(6),
-  .sessions-table td:nth-child(6) {
+  .sessions-table th:nth-child(8),
+  .sessions-table td:nth-child(8) {
     display: none;
   }
 
@@ -920,21 +920,40 @@
   }
 }
 
-/* ≤500px: tighten further, truncate key column */
+/* ≤500px: hide Runtime (col 6) and Updated (col 7); keep live status visible */
 @media (max-width: 500px) {
   .data-table.sessions-table {
-    min-width: 330px;
+    min-width: 340px;
   }
 
-  .sessions-table th:nth-child(5),
-  .sessions-table td:nth-child(5) {
+  .sessions-table th:nth-child(6),
+  .sessions-table td:nth-child(6),
+  .sessions-table th:nth-child(7),
+  .sessions-table td:nth-child(7) {
     display: none;
   }
 
   .data-table.sessions-table .data-table-key-col {
-    width: 144px;
-    min-width: 144px;
-    max-width: 144px;
+    width: 106px;
+    min-width: 106px;
+    max-width: 106px;
+  }
+
+  .sessions-table .session-status-col {
+    width: 76px;
+    min-width: 76px;
+    max-width: 76px;
+  }
+
+  .sessions-table .session-status-badge {
+    max-width: 72px;
+    gap: 5px;
+    padding: 2px 6px;
+  }
+
+  .sessions-table .session-compaction-col {
+    width: 84px;
+    min-width: 84px;
   }
 
   .data-table th,

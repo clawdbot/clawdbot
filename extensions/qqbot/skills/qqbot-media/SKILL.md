@@ -1,6 +1,6 @@
 ---
 name: qqbot-media
-description: QQBot 富媒体收发能力。使用 <qqmedia> 标签，系统根据文件扩展名自动识别类型（图片/语音/视频/文件）。
+description: QQBot rich media send and receive support. Use <qqmedia> tags to send image, voice, video, or file attachments, with the media type inferred from the file extension.
 metadata: { "openclaw": { "emoji": "📸", "requires": { "config": ["channels.qqbot"] } } }
 ---
 

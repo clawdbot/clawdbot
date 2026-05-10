@@ -10,7 +10,7 @@ import type {
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
-} from "./types.channels.js";
+} from "./types.channel-health.js";
 import type { DmConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
@@ -145,9 +145,3 @@ export type WhatsAppAccountConfig = WhatsAppConfigCore &
     /** Override auth directory (Baileys multi-file auth state). */
     authDir?: string;
   };
-
-declare module "./types.channels.js" {
-  interface ChannelsConfig {
-    whatsapp?: WhatsAppConfig;
-  }
-}

@@ -27,7 +27,6 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";

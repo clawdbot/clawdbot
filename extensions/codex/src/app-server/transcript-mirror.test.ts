@@ -16,7 +16,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import { attachCodexMirrorIdentity, mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 
-type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" }>;
+type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
 
 // Mirrors transcript-mirror.ts's fallback fingerprint exactly so test
 // expectations stay in sync without exposing the helper publicly.
@@ -57,7 +57,7 @@ function parseJsonLines<T>(raw: string): T[] {
 }
 
 describe("mirrorCodexAppServerTranscript", () => {
-  it("mirrors user and assistant messages into the Pi transcript", async () => {
+  it("mirrors user, assistant, and tool result messages into the Pi transcript", async () => {
     const sessionFile = await createTempSessionFile();
     const userMessage = makeAgentUserMessage({
       content: [{ type: "text", text: "hello" }],
@@ -67,11 +67,24 @@ describe("mirrorCodexAppServerTranscript", () => {
       content: [{ type: "text", text: "hi there" }],
       timestamp: Date.now() + 1,
     });
+    const toolResultMessage = castAgentMessage({
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "read",
+      content: [
+        {
+          type: "toolResult",
+          toolCallId: "call-1",
+          content: "read output",
+        },
+      ],
+      timestamp: Date.now() + 2,
+    }) as MirroredAgentMessage;
 
     await mirrorCodexAppServerTranscript({
       sessionFile,
       sessionKey: "session-1",
-      messages: [userMessage, assistantMessage],
+      messages: [userMessage, assistantMessage, toolResultMessage],
       idempotencyScope: "scope-1",
     });
 
@@ -80,9 +93,15 @@ describe("mirrorCodexAppServerTranscript", () => {
     expect(raw).toContain('"content":[{"type":"text","text":"hello"}]');
     expect(raw).toContain('"role":"assistant"');
     expect(raw).toContain('"content":[{"type":"text","text":"hi there"}]');
+    expect(raw).toContain('"role":"toolResult"');
+    expect(raw).toContain('"toolCallId":"call-1"');
+    expect(raw).toContain('"content":"read output"');
     expect(raw).toContain(`"idempotencyKey":"scope-1:user:${expectedFingerprint(userMessage)}"`);
     expect(raw).toContain(
       `"idempotencyKey":"scope-1:assistant:${expectedFingerprint(assistantMessage)}"`,
+    );
+    expect(raw).toContain(
+      `"idempotencyKey":"scope-1:toolResult:${expectedFingerprint(toolResultMessage)}"`,
     );
   });
 

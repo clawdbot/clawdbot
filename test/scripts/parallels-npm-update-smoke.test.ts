@@ -78,7 +78,9 @@ describe("parallels npm update smoke", () => {
     expect(script).toContain(
       "OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw gateway stop",
     );
-    expect(script).toContain("OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw gateway stop");
+    expect(script).toContain(
+      "OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 OPENCLAW_ALLOW_ROOT=1 openclaw gateway stop",
+    );
   });
 
   it("reenables bundled plugins before Windows post-update verification", () => {

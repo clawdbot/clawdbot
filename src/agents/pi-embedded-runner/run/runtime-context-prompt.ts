@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "../../../utils.js";
 import {
   OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
@@ -9,7 +8,6 @@ import type { CurrentTurnPromptContext } from "./params.js";
 export { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE };
 
 const OPENCLAW_RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
-const MAX_CURRENT_TURN_CONTEXT_STRING_CHARS = 2_000;
 
 type RuntimeContextSession = {
   sendCustomMessage: (
@@ -30,85 +28,10 @@ type RuntimeContextPromptParts = {
   runtimeSystemContext?: string;
 };
 
-function neutralizeMarkdownFences(value: string): string {
-  return value.replaceAll("```", "`\u200b``");
-}
-
-function truncateCurrentTurnContextString(value: string): string {
-  if (value.length <= MAX_CURRENT_TURN_CONTEXT_STRING_CHARS) {
-    return value;
-  }
-  return `${truncateUtf16Safe(value, Math.max(0, MAX_CURRENT_TURN_CONTEXT_STRING_CHARS - 14)).trimEnd()}…[truncated]`;
-}
-
-function sanitizeCurrentTurnContextString(value: string): string {
-  return neutralizeMarkdownFences(truncateCurrentTurnContextString(value.replaceAll("\0", "")));
-}
-
-export function buildCurrentTurnPromptContextSuffix(
+export function buildCurrentTurnPromptContextPrefix(
   context: CurrentTurnPromptContext | undefined,
 ): string {
-  const replyChain = context?.replyChain?.filter(
-    (entry) =>
-      entry.body?.trim() ||
-      entry.mediaType?.trim() ||
-      entry.mediaPath?.trim() ||
-      entry.mediaRef?.trim(),
-  );
-  if (replyChain && replyChain.length > 0) {
-    const payload = replyChain.map((entry) => ({
-      message_id: entry.messageId ? sanitizeCurrentTurnContextString(entry.messageId) : undefined,
-      thread_id: entry.threadId ? sanitizeCurrentTurnContextString(entry.threadId) : undefined,
-      sender: entry.sender ? sanitizeCurrentTurnContextString(entry.sender) : undefined,
-      sender_id: entry.senderId ? sanitizeCurrentTurnContextString(entry.senderId) : undefined,
-      sender_username: entry.senderUsername
-        ? sanitizeCurrentTurnContextString(entry.senderUsername)
-        : undefined,
-      timestamp: entry.timestamp,
-      body: entry.body ? sanitizeCurrentTurnContextString(entry.body) : undefined,
-      is_quote: entry.isQuote === true ? true : undefined,
-      media_type: entry.mediaType ? sanitizeCurrentTurnContextString(entry.mediaType) : undefined,
-      media_path: entry.mediaPath ? sanitizeCurrentTurnContextString(entry.mediaPath) : undefined,
-      media_ref: entry.mediaRef ? sanitizeCurrentTurnContextString(entry.mediaRef) : undefined,
-      reply_to_id: entry.replyToId ? sanitizeCurrentTurnContextString(entry.replyToId) : undefined,
-      forwarded_from: entry.forwardedFrom
-        ? sanitizeCurrentTurnContextString(entry.forwardedFrom)
-        : undefined,
-      forwarded_from_id: entry.forwardedFromId
-        ? sanitizeCurrentTurnContextString(entry.forwardedFromId)
-        : undefined,
-      forwarded_from_username: entry.forwardedFromUsername
-        ? sanitizeCurrentTurnContextString(entry.forwardedFromUsername)
-        : undefined,
-      forwarded_date: entry.forwardedDate,
-    }));
-    return [
-      "",
-      "Reply chain of current user message (untrusted, nearest first):",
-      "```json",
-      JSON.stringify(payload, null, 2),
-      "```",
-    ].join("\n");
-  }
-  const reply = context?.reply;
-  const replyBody = reply?.body?.trim();
-  if (!reply || !replyBody) {
-    return "";
-  }
-  const payload = {
-    sender_label: reply.senderLabel
-      ? sanitizeCurrentTurnContextString(reply.senderLabel)
-      : undefined,
-    is_quote: reply.isQuote === true ? true : undefined,
-    body: sanitizeCurrentTurnContextString(replyBody),
-  };
-  return [
-    "",
-    "Reply target of current user message (untrusted, for context):",
-    "```json",
-    JSON.stringify(payload, null, 2),
-    "```",
-  ].join("\n");
+  return context?.text.trim() ?? "";
 }
 
 function removeLastPromptOccurrence(text: string, prompt: string): string | null {

@@ -241,12 +241,9 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       throw new Error("expected recreated docker create call");
     }
     expect(createCall.args).toContain(`openclaw.configHash=${newHash}`);
-    expect(registryMocks.updateRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        containerName: "oc-test-shared",
-        configHash: newHash,
-      }),
-    );
+    const registryUpdate = registryMocks.updateRegistry.mock.calls.at(-1)?.[0];
+    expect(registryUpdate?.containerName).toBe("oc-test-shared");
+    expect(registryUpdate?.configHash).toBe(newHash);
   });
 
   it("applies custom binds after workspace mounts so overlapping binds can override", async () => {

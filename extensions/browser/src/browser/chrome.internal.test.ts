@@ -25,6 +25,10 @@ vi.mock("../infra/ports.js", () => ({
   ensurePortAvailable: ensurePortAvailableMock,
 }));
 
+vi.mock("../infra/tmp-openclaw-dir.js", () => ({
+  resolvePreferredOpenClawTmpDir: () => "/tmp/openclaw-browser-test",
+}));
+
 // Shrink long launch/bootstrap timeouts so tests don't wait 15s for
 // the CHROME_LAUNCH_READY_WINDOW_MS elapse-on-failure path.
 vi.mock("./cdp-timeouts.js", async () => {
@@ -452,6 +456,10 @@ describe("chrome.ts internal", () => {
           expect(spawnOptions.env?.HTTP_PROXY).toBeUndefined();
           expect(spawnOptions.env?.HTTPS_PROXY).toBeUndefined();
           expect(spawnOptions.env?.NO_PROXY).toBeUndefined();
+          if (process.platform === "linux") {
+            expect(spawnOptions.env?.XDG_CONFIG_HOME).toBeTruthy();
+            expect(spawnOptions.env?.XDG_CACHE_HOME).toBeTruthy();
+          }
           // Cleanup.
           running.proc.kill?.("SIGTERM");
         },

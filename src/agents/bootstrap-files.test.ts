@@ -170,8 +170,9 @@ describe("resolveBootstrapContextForRun", () => {
 
     const bootstrapFileNames = result.bootstrapFiles.map((file) => file.name);
     expect(bootstrapFileNames).toContain("BOOTSTRAP.md");
-    const contextFileNames = result.contextFiles.map((file) => path.basename(file.path));
-    expect(contextFileNames).toEqual(expect.arrayContaining(["BOOTSTRAP.md", "AGENTS.md"]));
+    const contextFileNames = new Set(result.contextFiles.map((file) => path.basename(file.path)));
+    expect(contextFileNames.has("BOOTSTRAP.md")).toBe(true);
+    expect(contextFileNames.has("AGENTS.md")).toBe(true);
   });
 
   it("uses heartbeat-only bootstrap files in lightweight heartbeat mode", async () => {

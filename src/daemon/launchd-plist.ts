@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
-// launchd applies ThrottleInterval to any rapid relaunch, including
-// intentional gateway restarts. Keep it low so CLI restarts and forced
-// reinstalls do not stall for a full minute.
-export const LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS = 1;
+// launchd defaults to a 10s spawn throttle. Keep that default explicitly so
+// crash loops back off instead of respawning every second while still allowing
+// explicit kickstart restarts to take effect.
+export const LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS = 10;
+export const LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS = 20;
 // launchd stores plist integer values in decimal; 0o077 renders as 63 (owner-only files).
 export const LAUNCH_AGENT_UMASK_DECIMAL = 0o077;
+export const LAUNCH_AGENT_PROCESS_TYPE = "Interactive";
 
 const plistEscape = (value: string): string =>
   value
@@ -178,5 +180,5 @@ export function buildLaunchAgentPlist({
     ? `\n    <key>Comment</key>\n    <string>${plistEscape(comment.trim())}</string>`
     : "";
   const envXml = renderEnvDict(environment);
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n  <dict>\n    <key>Label</key>\n    <string>${plistEscape(label)}</string>\n    ${commentXml}\n    <key>RunAtLoad</key>\n    <true/>\n    <key>KeepAlive</key>\n    <true/>\n    <key>ThrottleInterval</key>\n    <integer>${LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS}</integer>\n    <key>Umask</key>\n    <integer>${LAUNCH_AGENT_UMASK_DECIMAL}</integer>\n    <key>ProgramArguments</key>\n    <array>${argsXml}\n    </array>\n    ${workingDirXml}\n    <key>StandardOutPath</key>\n    <string>${plistEscape(stdoutPath)}</string>\n    <key>StandardErrorPath</key>\n    <string>${plistEscape(stderrPath)}</string>${envXml}\n  </dict>\n</plist>\n`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n  <dict>\n    <key>Label</key>\n    <string>${plistEscape(label)}</string>\n    ${commentXml}\n    <key>RunAtLoad</key>\n    <true/>\n    <key>KeepAlive</key>\n    <true/>\n    <key>ExitTimeOut</key>\n    <integer>${LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS}</integer>\n    <key>ProcessType</key>\n    <string>${LAUNCH_AGENT_PROCESS_TYPE}</string>\n    <key>ThrottleInterval</key>\n    <integer>${LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS}</integer>\n    <key>Umask</key>\n    <integer>${LAUNCH_AGENT_UMASK_DECIMAL}</integer>\n    <key>ProgramArguments</key>\n    <array>${argsXml}\n    </array>\n    ${workingDirXml}\n    <key>StandardOutPath</key>\n    <string>${plistEscape(stdoutPath)}</string>\n    <key>StandardErrorPath</key>\n    <string>${plistEscape(stderrPath)}</string>${envXml}\n  </dict>\n</plist>\n`;
 }

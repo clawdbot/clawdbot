@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSignalAccount } from "./accounts.js";
-import { signalRpcRequest } from "./client.js";
+import { signalRpcRequest } from "./client-adapter.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
 export type SignalReactionOpts = {
@@ -79,6 +79,7 @@ async function sendReactionSignalCore(params: {
   errors: SignalReactionErrorMessages;
 }): Promise<SignalReactionResult> {
   const cfg = requireRuntimeConfig(params.opts.cfg, "Signal reactions");
+  const apiMode = cfg.channels?.signal?.apiMode;
   const accountInfo = resolveSignalAccount({
     cfg,
     accountId: params.opts.accountId,
@@ -126,6 +127,7 @@ async function sendReactionSignalCore(params: {
   const result = await signalRpcRequest<{ timestamp?: number }>("sendReaction", requestParams, {
     baseUrl,
     timeoutMs: params.opts.timeoutMs,
+    apiMode,
   });
 
   return {

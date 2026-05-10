@@ -1,46 +1,31 @@
-/**
- * SDK adapter — binds engine port interfaces to the framework's shared
- * SDK implementations.
- *
- * This file lives in bridge/ (not engine/) because it imports from
- * `openclaw/plugin-sdk/*`. The engine layer stays zero-SDK-dependency;
- * only the bridge layer couples to the framework.
- */
-
 import {
-  implicitMentionKindWhen,
-  resolveInboundMentionDecision,
-} from "openclaw/plugin-sdk/channel-mention-gating";
+  createChannelIngressResolver,
+  defineStableChannelIngressIdentity,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-mention-gating";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry as SdkHistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
+import { resolveQQBotEffectivePolicies } from "../engine/access/resolve-policy.js";
+import { normalizeQQBotAllowFrom, normalizeQQBotSenderId } from "../engine/access/sender-match.js";
 import type { HistoryPort, HistoryEntryLike } from "../engine/adapter/history.port.js";
-import type {
-  MentionGatePort,
-  MentionGateDecision,
-  MentionFacts,
-  MentionPolicy,
-} from "../engine/adapter/mention-gate.port.js";
+import type { AccessPort } from "../engine/adapter/index.js";
+import type { MentionGatePort } from "../engine/adapter/mention-gate.port.js";
 
-// ============ History Adapter ============
+const qqbotIngressIdentity = defineStableChannelIngressIdentity({
+  key: "sender-id",
+  normalize: normalizeQQBotSenderId,
+  isWildcardEntry: (entry) => normalizeQQBotSenderId(entry) === "*",
+});
 
-// Helper: cast engine Map to SDK Map. TypeScript Map is invariant on its
-// value type, but the shapes are structurally identical (HistoryEntryLike
-// ⊇ SdkHistoryEntry). The `as unknown as` double-cast is safe here.
 function asSdkMap<T>(map: Map<string, T[]>): Map<string, SdkHistoryEntry[]> {
   return map as unknown as Map<string, SdkHistoryEntry[]>;
 }
 
-/**
- * History adapter backed by SDK `reply-history`.
- *
- * Delegates record/build/clear to the SDK's shared implementation so
- * the engine benefits from SDK improvements (e.g. future visibility
- * filtering) without code duplication.
- */
 export function createSdkHistoryAdapter(): HistoryPort {
   return {
     recordPendingHistoryEntry<T extends HistoryEntryLike>(params: {
@@ -48,7 +33,7 @@ export function createSdkHistoryAdapter(): HistoryPort {
       historyKey: string;
       entry?: T | null;
       limit: number;
-    }): T[] {
+    }) {
       return recordPendingHistoryEntryIfEnabled({
         historyMap: asSdkMap(params.historyMap),
         historyKey: params.historyKey,
@@ -57,14 +42,7 @@ export function createSdkHistoryAdapter(): HistoryPort {
       }) as T[];
     },
 
-    buildPendingHistoryContext(params: {
-      historyMap: Map<string, HistoryEntryLike[]>;
-      historyKey: string;
-      limit: number;
-      currentMessage: string;
-      formatEntry: (entry: HistoryEntryLike) => string;
-      lineBreak?: string;
-    }): string {
+    buildPendingHistoryContext(params) {
       return buildPendingHistoryContextFromMap({
         historyMap: asSdkMap(params.historyMap),
         historyKey: params.historyKey,
@@ -75,11 +53,7 @@ export function createSdkHistoryAdapter(): HistoryPort {
       });
     },
 
-    clearPendingHistory(params: {
-      historyMap: Map<string, HistoryEntryLike[]>;
-      historyKey: string;
-      limit: number;
-    }): void {
+    clearPendingHistory(params) {
       clearHistoryEntriesIfEnabled({
         historyMap: asSdkMap(params.historyMap),
         historyKey: params.historyKey,
@@ -89,43 +63,105 @@ export function createSdkHistoryAdapter(): HistoryPort {
   };
 }
 
-// ============ MentionGate Adapter ============
-
-/**
- * MentionGate adapter backed by SDK `channel-mention-gating`.
- *
- * Maps the engine's mention facts/policy to the SDK's
- * `resolveInboundMentionDecision` call, normalizing the implicit
- * mention boolean into the SDK's typed `ImplicitMentionKind[]`.
- */
 export function createSdkMentionGateAdapter(): MentionGatePort {
   return {
-    resolveInboundMentionDecision(params: {
-      facts: MentionFacts;
-      policy: MentionPolicy;
-    }): MentionGateDecision {
-      const result = resolveInboundMentionDecision({
-        facts: {
-          canDetectMention: params.facts.canDetectMention,
-          wasMentioned: params.facts.wasMentioned,
-          hasAnyMention: params.facts.hasAnyMention,
-          implicitMentionKinds:
-            params.facts.implicitMentionKinds ?? implicitMentionKindWhen("reply_to_bot", false),
-        },
-        policy: {
-          isGroup: params.policy.isGroup,
-          requireMention: params.policy.requireMention,
-          allowTextCommands: params.policy.allowTextCommands,
-          hasControlCommand: params.policy.hasControlCommand,
-          commandAuthorized: params.policy.commandAuthorized,
-        },
-      });
-      return {
-        effectiveWasMentioned: result.effectiveWasMentioned,
-        shouldSkip: result.shouldSkip,
-        shouldBypassMention: result.shouldBypassMention,
-        implicitMention: result.implicitMention,
-      };
+    resolveInboundMentionDecision(params) {
+      return resolveInboundMentionDecision(params);
     },
   };
+}
+
+export function createSdkAccessAdapter(): AccessPort {
+  return {
+    async resolveInboundAccess(input) {
+      const { dmPolicy, groupPolicy } = resolveQQBotEffectivePolicies(input);
+      const rawGroupAllowFrom =
+        input.groupAllowFrom && input.groupAllowFrom.length > 0
+          ? input.groupAllowFrom
+          : (input.allowFrom ?? []);
+      const normalizedAllowFrom = normalizeQQBotAllowFrom(input.allowFrom);
+      const dmAllowFromForIngress =
+        dmPolicy === "open" && normalizedAllowFrom.length === 0 ? ["*"] : (input.allowFrom ?? []);
+
+      const commandOwnerAllowFrom = input.isGroup
+        ? []
+        : input.allowFrom && input.allowFrom.length > 0
+          ? input.allowFrom
+          : ["*"];
+      const resolved = await createChannelIngressResolver({
+        channelId: "qqbot",
+        accountId: input.accountId,
+        identity: qqbotIngressIdentity,
+        cfg: input.cfg as OpenClawConfig,
+      }).message({
+        subject: { stableId: input.senderId },
+        conversation: {
+          kind: input.isGroup ? "group" : "direct",
+          id: input.conversationId,
+        },
+        event: {
+          mayPair: false,
+        },
+        dmPolicy,
+        groupPolicy,
+        policy: {
+          groupAllowFromFallbackToAllowFrom: false,
+        },
+        allowFrom: dmAllowFromForIngress,
+        groupAllowFrom: rawGroupAllowFrom,
+        command: {
+          commandOwnerAllowFrom,
+        },
+      });
+      return resolved;
+    },
+    async resolveSlashCommandAuthorization(input) {
+      return await resolveQQBotSlashCommandAuthorized(input);
+    },
+  };
+}
+
+async function resolveQQBotSlashCommandAuthorized(params: {
+  cfg: unknown;
+  accountId: string;
+  isGroup: boolean;
+  senderId: string;
+  conversationId: string;
+  allowFrom?: Array<string | number> | null;
+  groupAllowFrom?: Array<string | number> | null;
+  commandsAllowFrom?: Array<string | number> | null;
+}): Promise<boolean> {
+  const rawAllowFrom =
+    params.commandsAllowFrom ??
+    (params.isGroup && params.groupAllowFrom && params.groupAllowFrom.length > 0
+      ? params.groupAllowFrom
+      : params.allowFrom);
+  const explicitAllowFrom = normalizeQQBotAllowFrom(rawAllowFrom).filter((entry) => entry !== "*");
+  if (explicitAllowFrom.length === 0) {
+    return false;
+  }
+  const resolved = await createChannelIngressResolver({
+    channelId: "qqbot",
+    accountId: params.accountId,
+    identity: qqbotIngressIdentity,
+    cfg: params.cfg as OpenClawConfig,
+  }).message({
+    subject: { stableId: params.senderId },
+    conversation: {
+      kind: params.isGroup ? "group" : "direct",
+      id: params.conversationId,
+    },
+    event: {
+      kind: "slash-command",
+      authMode: "none",
+      mayPair: false,
+    },
+    dmPolicy: "allowlist",
+    groupPolicy: "open",
+    allowFrom: explicitAllowFrom,
+    command: {
+      modeWhenAccessGroupsOff: "configured",
+    },
+  });
+  return resolved.commandAccess.authorized;
 }

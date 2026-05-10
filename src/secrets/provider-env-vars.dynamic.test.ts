@@ -188,9 +188,8 @@ describe("provider env vars dynamic manifest metadata", () => {
         source: "external cloud credentials",
       },
     ]);
-    expect(requireLastMetadataSnapshotCall()[0]).toMatchObject({
-      preferPersisted: false,
-    });
+    const [snapshotOptions] = requireLastMetadataSnapshotCall() as [{ preferPersisted?: boolean }];
+    expect(snapshotOptions.preferPersisted).toBe(false);
   });
 
   it("reuses the current compatible metadata snapshot for workspace auth evidence", () => {

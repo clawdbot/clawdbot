@@ -21,31 +21,38 @@ describe("resolveCrestodianRescuePolicy", () => {
       crestodian: { rescue: { enabled: true } },
       agents: { defaults: { sandbox: { mode: "all" } } },
     });
-    expect(decision).toMatchObject({
-      allowed: false,
-      reason: "sandbox-active",
-    });
+    expect(decision.allowed).toBe(false);
+    if (decision.allowed) {
+      throw new Error("expected rescue to be denied");
+    }
+    expect(decision.reason).toBe("sandbox-active");
   });
 
   it("keeps auto rescue closed outside YOLO host posture", () => {
     const decision = decide({
       tools: { exec: { security: "allowlist", ask: "on-miss" } },
     });
-    expect(decision).toMatchObject({
-      allowed: false,
-      reason: "disabled",
-    });
+    expect(decision.allowed).toBe(false);
+    if (decision.allowed) {
+      throw new Error("expected rescue to be denied");
+    }
+    expect(decision.reason).toBe("disabled");
   });
 
   it("requires owner identity and direct messages by default", () => {
-    expect(decide({}, { senderIsOwner: false })).toMatchObject({
-      allowed: false,
-      reason: "not-owner",
-    });
-    expect(decide({}, { isDirectMessage: false })).toMatchObject({
-      allowed: false,
-      reason: "not-direct-message",
-    });
+    const notOwnerDecision = decide({}, { senderIsOwner: false });
+    expect(notOwnerDecision.allowed).toBe(false);
+    if (notOwnerDecision.allowed) {
+      throw new Error("expected non-owner rescue to be denied");
+    }
+    expect(notOwnerDecision.reason).toBe("not-owner");
+
+    const notDirectMessageDecision = decide({}, { isDirectMessage: false });
+    expect(notDirectMessageDecision.allowed).toBe(false);
+    if (notDirectMessageDecision.allowed) {
+      throw new Error("expected non-DM rescue to be denied");
+    }
+    expect(notDirectMessageDecision.reason).toBe("not-direct-message");
   });
 
   it("allows explicit group rescue when ownerDmOnly is disabled", () => {
