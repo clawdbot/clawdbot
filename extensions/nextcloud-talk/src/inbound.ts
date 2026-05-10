@@ -42,6 +42,117 @@ import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
 import type { CoreConfig, NextcloudTalkInboundMessage, NextcloudTalkRoomConfig } from "./types.js";
 
+export type NextcloudTalkMentionEntry = {
+  key: string;
+  type?: string;
+  id?: string;
+  mentionId?: string;
+  name?: string;
+};
+
+export type ParsedNextcloudTalkBody = {
+  /** Human-readable text with `{mentionN}` placeholders stripped or substituted. */
+  text: string;
+  /** True when the original message was structured JSON (as opposed to plain text). */
+  structured: boolean;
+  mentionEntries: NextcloudTalkMentionEntry[];
+};
+
+export function parseStructuredNextcloudTalkBody(
+  raw: string,
+  botIds?: ReadonlySet<string>,
+): ParsedNextcloudTalkBody {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("{")) {
+    return { text: raw, structured: false, mentionEntries: [] };
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as {
+      message?: unknown;
+      parameters?: Record<
+        string,
+        {
+          type?: unknown;
+          id?: unknown;
+          name?: unknown;
+          "mention-id"?: unknown;
+          mentionId?: unknown;
+        }
+      >;
+    };
+    const rawMessage = typeof parsed.message === "string" ? parsed.message : raw;
+    const parameters =
+      parsed.parameters && typeof parsed.parameters === "object" ? parsed.parameters : {};
+    const mentionEntries = Object.entries(parameters).map(([key, value]) => ({
+      key,
+      type: typeof value?.type === "string" ? value.type : undefined,
+      id: typeof value?.id === "string" ? value.id : undefined,
+      mentionId:
+        typeof value?.["mention-id"] === "string"
+          ? value["mention-id"]
+          : typeof value?.mentionId === "string"
+            ? value.mentionId
+            : undefined,
+      name: typeof value?.name === "string" ? value.name : undefined,
+    }));
+    // Strip the bot's own mention placeholder so command parsing and agent
+    // dispatch see clean text. Non-bot user mentions and non-user rich objects
+    // (calls, files, links) are substituted with their display name so the
+    // agent sees the content the user saw.
+    const text = mentionEntries
+      .reduce((acc, entry) => {
+        const isUser = (entry.type ?? "").toLowerCase() === "user";
+        const isBotMention =
+          isUser &&
+          botIds !== undefined &&
+          [entry.id, entry.mentionId]
+            .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+            .map((v) => v.trim().toLowerCase())
+            .some((v) => botIds.has(v));
+        const replacement = isBotMention ? "" : (entry.name ?? "");
+        return acc.replace(new RegExp(`\\{${entry.key}\\}`, "g"), replacement);
+      }, rawMessage)
+      .trim();
+    return { text, structured: true, mentionEntries };
+  } catch {
+    return { text: raw, structured: false, mentionEntries: [] };
+  }
+}
+
+function buildNextcloudTalkBotIds(account: ResolvedNextcloudTalkAccount): Set<string> {
+  const ids = new Set<string>();
+  const accountId = account.accountId.trim().toLowerCase();
+  if (accountId) {
+    ids.add(accountId);
+  }
+  const configuredApiUser = account.config.apiUser?.trim().toLowerCase();
+  if (configuredApiUser) {
+    ids.add(configuredApiUser);
+    const apiLocalPart = configuredApiUser.split("@")[0]?.trim();
+    if (apiLocalPart) {
+      ids.add(apiLocalPart.toLowerCase());
+    }
+  }
+  return ids;
+}
+
+export function resolveExplicitNextcloudTalkMention(params: {
+  mentionEntries: NextcloudTalkMentionEntry[];
+  account: ResolvedNextcloudTalkAccount;
+}): boolean {
+  const expectedIds = buildNextcloudTalkBotIds(params.account);
+  return params.mentionEntries.some((entry) => {
+    if ((entry.type ?? "").toLowerCase() !== "user") {
+      return false;
+    }
+    const candidates = [entry.id, entry.mentionId]
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .map((value) => value.trim().toLowerCase());
+    return candidates.some((candidate) => expectedIds.has(candidate));
+  });
+}
+
 const CHANNEL_ID = "nextcloud-talk" as const;
 
 type NextcloudTalkRoomMatch = ReturnType<typeof resolveNextcloudTalkRoomMatch>;
@@ -141,6 +252,13 @@ export async function handleNextcloudTalkInbound(params: {
   if (!rawBody) {
     return;
   }
+  const botIds = buildNextcloudTalkBotIds(account);
+  const parsedBody = parseStructuredNextcloudTalkBody(rawBody, botIds);
+  // For structured bodies use the stripped/substituted text; fall back to rawBody for plain text.
+  const effectiveBody = parsedBody.structured ? parsedBody.text : rawBody;
+  if (!effectiveBody) {
+    return;
+  }
 
   const roomKind = await resolveNextcloudTalkRoomKind({
     account,
@@ -164,7 +282,10 @@ export async function handleNextcloudTalkInbound(params: {
     cfg: config as OpenClawConfig,
     surface: CHANNEL_ID,
   });
-  const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config as OpenClawConfig);
+  const hasControlCommand = core.channel.text.hasControlCommand(
+    effectiveBody,
+    config as OpenClawConfig,
+  );
   const shouldRequireMention = isGroup
     ? resolveNextcloudTalkGroupRequireMention({
         cfg: config as OpenClawConfig,
@@ -299,10 +420,24 @@ export async function handleNextcloudTalkInbound(params: {
     return;
   }
 
+  // A structured message that is nothing but mention placeholders produces an empty
+  // effectiveBody after stripping. Treat it as a mention-only ping with no actionable
+  // content and drop it silently — the agent has nothing to respond to.
+  if (parsedBody.structured && effectiveBody === "") {
+    runtime.log?.(`nextcloud-talk: drop room ${roomToken} (mention-only, no message body)`);
+    return;
+  }
+
   const mentionRegexes = core.channel.mentions.buildMentionRegexes(config as OpenClawConfig);
-  const wasMentioned = mentionRegexes.length
-    ? core.channel.mentions.matchesMentionPatterns(rawBody, mentionRegexes)
-    : false;
+  const explicitMention = resolveExplicitNextcloudTalkMention({
+    mentionEntries: parsedBody.mentionEntries,
+    account,
+  });
+  const wasMentioned =
+    explicitMention ||
+    (mentionRegexes.length
+      ? core.channel.mentions.matchesMentionPatterns(effectiveBody, mentionRegexes)
+      : false);
   if (isGroup) {
     access = await resolveAccess(wasMentioned);
   }
@@ -326,7 +461,7 @@ export async function handleNextcloudTalkInbound(params: {
     channel: "Nextcloud Talk",
     from: fromLabel,
     timestamp: message.timestamp,
-    body: rawBody,
+    body: effectiveBody,
   });
 
   const groupSystemPrompt = normalizeOptionalString(roomConfig?.systemPrompt);
@@ -347,7 +482,12 @@ export async function handleNextcloudTalkInbound(params: {
       routeSessionKey: route.sessionKey,
     },
     reply: { to: `nextcloud-talk:${roomToken}`, originatingTo: `nextcloud-talk:${roomToken}` },
-    message: { body, bodyForAgent: rawBody, rawBody, commandBody: rawBody },
+    message: {
+      body,
+      bodyForAgent: effectiveBody,
+      rawBody: effectiveBody,
+      commandBody: effectiveBody,
+    },
     access: {
       commands: { authorized: commandAuthorized },
       mentions: { canDetectMention: isGroup, wasMentioned: isGroup && wasMentioned },
@@ -393,6 +533,11 @@ export async function handleNextcloudTalkInbound(params: {
       skillFilter: roomConfig?.skills,
       disableBlockStreaming:
         typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,
+      // Nextcloud Talk bots reply directly in the room — automatic delivery is
+      // always correct here. Without this, group chats fall back to
+      // "message_tool_only" mode which suppresses the reply when the message
+      // tool has no applicable actions for this channel.
+      sourceReplyDeliveryMode: "automatic",
     },
     record: {
       onRecordError: (err) => {
