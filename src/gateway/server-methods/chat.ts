@@ -878,8 +878,43 @@ function nextChatSeq(context: { agentRunSeq: Map<string, number> }, runId: strin
   return next;
 }
 
+/**
+ * Session-scoped chat broadcast using the GatewayRequestContext methods.
+ * External sessions (external-*) are strict: if no subscribers exist, the event
+ * is dropped rather than broadcast to all. Non-external sessions fall back to
+ * blind broadcast for backward compatibility.
+ */
+function broadcastChatToSessionFromContext(
+  context: Pick<
+    GatewayRequestContext,
+    "broadcast" | "broadcastToConnIds" | "getChatSessionConnIds"
+  >,
+  sessionKey: string,
+  event: string,
+  payload: unknown,
+  opts?: { dropIfSlow?: boolean },
+) {
+  const connIds = context.getChatSessionConnIds(sessionKey);
+  if (connIds && connIds.size > 0) {
+    context.broadcastToConnIds(event, payload, connIds, opts);
+    return;
+  }
+  // Strict mode for external-* sessions: never fall back to blind broadcast.
+  if (sessionKey.startsWith("external-")) {
+    return;
+  }
+  context.broadcast(event, payload, opts);
+}
+
 function broadcastChatFinal(params: {
-  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq">;
+  context: Pick<
+    GatewayRequestContext,
+    | "broadcast"
+    | "broadcastToConnIds"
+    | "nodeSendToSession"
+    | "agentRunSeq"
+    | "getChatSessionConnIds"
+  >;
   runId: string;
   sessionKey: string;
   message?: Record<string, unknown>;
@@ -895,13 +930,20 @@ function broadcastChatFinal(params: {
     state: "final" as const,
     message: stripInlineDirectiveTagsFromMessageForDisplay(strippedEnvelopeMessage),
   };
-  params.context.broadcast("chat", payload);
+  broadcastChatToSessionFromContext(params.context, params.sessionKey, "chat", payload);
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
   params.context.agentRunSeq.delete(params.runId);
 }
 
 function broadcastChatError(params: {
-  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq">;
+  context: Pick<
+    GatewayRequestContext,
+    | "broadcast"
+    | "broadcastToConnIds"
+    | "nodeSendToSession"
+    | "agentRunSeq"
+    | "getChatSessionConnIds"
+  >;
   runId: string;
   sessionKey: string;
   errorMessage?: string;
@@ -914,7 +956,7 @@ function broadcastChatError(params: {
     state: "error" as const,
     errorMessage: params.errorMessage,
   };
-  params.context.broadcast("chat", payload);
+  broadcastChatToSessionFromContext(params.context, params.sessionKey, "chat", payload);
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
   params.context.agentRunSeq.delete(params.runId);
 }
@@ -1329,6 +1371,13 @@ export const chatHandlers: GatewayRequestHandlers = {
                 }
               }
             }
+            // Auto-subscribe the calling connection to session-scoped chat
+            // events. This ensures the client receives chat deltas/finals for
+            // its session even if it hasn't sent an explicit chat.watch yet,
+            // eliminating a race condition on initial connect.
+            if (connId && p.sessionKey) {
+              context.subscribeChatSession(p.sessionKey, connId);
+            }
           },
           onModelSelected,
         },
@@ -1495,9 +1544,40 @@ export const chatHandlers: GatewayRequestHandlers = {
         stripEnvelopeFromMessage(appended.message) as Record<string, unknown>,
       ),
     };
-    context.broadcast("chat", chatPayload);
+    broadcastChatToSessionFromContext(context, rawSessionKey, "chat", chatPayload);
     context.nodeSendToSession(rawSessionKey, "chat", chatPayload);
 
     respond(true, { ok: true, messageId: appended.messageId });
+  },
+
+  /**
+   * Subscribe the calling WS connection to session-scoped chat events for the
+   * specified session key. After subscribing, the connection will only receive
+   * chat deltas/finals for this session rather than all sessions.
+   */
+  "chat.watch": ({ params, respond, context, client }) => {
+    const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey.trim() : "";
+    const connId = client?.connId;
+    if (!sessionKey || !connId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "sessionKey required"));
+      return;
+    }
+    context.subscribeChatSession(sessionKey, connId);
+    respond(true, { ok: true });
+  },
+
+  /**
+   * Unsubscribe the calling WS connection from session-scoped chat events for
+   * the specified session key.
+   */
+  "chat.unwatch": ({ params, respond, context, client }) => {
+    const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey.trim() : "";
+    const connId = client?.connId;
+    if (!sessionKey || !connId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "sessionKey required"));
+      return;
+    }
+    context.unsubscribeChatSession(sessionKey, connId);
+    respond(true, { ok: true });
   },
 };

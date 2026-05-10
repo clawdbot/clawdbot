@@ -250,6 +250,13 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           context.nodeUnsubscribeAll(nodeId);
         }
       }
+      // Clean up any chat session subscriptions for this connection.
+      // Runs for all client types since any client could have called
+      // chat.watch or triggered auto-subscribe via chat.send.
+      {
+        const context = buildRequestContext();
+        context.unsubscribeAllChatSessions(connId);
+      }
       logWs("out", "close", {
         connId,
         code,

@@ -20,6 +20,7 @@ import {
 import {
   type ChatRunEntry,
   createChatRunState,
+  createChatSessionSubscriptionRegistry,
   createToolEventRecipientRegistry,
 } from "./server-chat.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
@@ -90,6 +91,7 @@ export async function createGatewayRuntimeState(params: {
   ) => ChatRunEntry | undefined;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   toolEventRecipients: ReturnType<typeof createToolEventRecipientRegistry>;
+  chatSessionSubscriptions: ReturnType<typeof createChatSessionSubscriptionRegistry>;
 }> {
   let canvasHost: CanvasHostHandler | null = null;
   if (params.canvasHostEnabled) {
@@ -214,6 +216,7 @@ export async function createGatewayRuntimeState(params: {
   const removeChatRun = chatRunRegistry.remove;
   const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
   const toolEventRecipients = createToolEventRecipientRegistry();
+  const chatSessionSubscriptions = createChatSessionSubscriptionRegistry();
 
   return {
     canvasHost,
@@ -233,5 +236,6 @@ export async function createGatewayRuntimeState(params: {
     removeChatRun,
     chatAbortControllers,
     toolEventRecipients,
+    chatSessionSubscriptions,
   };
 }

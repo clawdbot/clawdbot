@@ -599,6 +599,7 @@ export async function startGatewayServer(
     removeChatRun,
     chatAbortControllers,
     toolEventRecipients,
+    chatSessionSubscriptions,
   } = await createGatewayRuntimeState({
     cfg: cfgAtStart,
     bindHost,
@@ -739,6 +740,7 @@ export async function startGatewayServer(
           resolveSessionKeyForRun,
           clearAgentRunContext,
           toolEventRecipients,
+          chatSessionSubscriptions,
         }),
       );
 
@@ -854,6 +856,10 @@ export async function startGatewayServer(
     addChatRun,
     removeChatRun,
     registerToolEventRecipient: toolEventRecipients.add,
+    subscribeChatSession: chatSessionSubscriptions.subscribe,
+    unsubscribeChatSession: chatSessionSubscriptions.unsubscribe,
+    unsubscribeAllChatSessions: chatSessionSubscriptions.unsubscribeAll,
+    getChatSessionConnIds: chatSessionSubscriptions.getConnIds,
     dedupe,
     wizardSessions,
     findRunningWizard,

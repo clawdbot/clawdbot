@@ -304,6 +304,88 @@ export function createToolEventRecipientRegistry(): ToolEventRecipientRegistry {
   return { add, get, markFinal };
 }
 
+/**
+ * Registry mapping session keys to the set of WS connection IDs subscribed to
+ * receive chat events for that session. Used for session-scoped chat delivery
+ * so that external interview participants only see their own session's messages.
+ */
+export type ChatSessionSubscriptionRegistry = {
+  subscribe: (sessionKey: string, connId: string) => void;
+  unsubscribe: (sessionKey: string, connId: string) => void;
+  unsubscribeAll: (connId: string) => void;
+  getConnIds: (sessionKey: string) => ReadonlySet<string> | undefined;
+  hasSubscribers: (sessionKey: string) => boolean;
+};
+
+export function createChatSessionSubscriptionRegistry(): ChatSessionSubscriptionRegistry {
+  // sessionKey → Set<connId>
+  const sessionToConnIds = new Map<string, Set<string>>();
+  // connId → Set<sessionKey> (reverse index for efficient unsubscribeAll on disconnect)
+  const connIdToSessions = new Map<string, Set<string>>();
+
+  const subscribe = (sessionKey: string, connId: string) => {
+    if (!sessionKey || !connId) {
+      return;
+    }
+    let connIds = sessionToConnIds.get(sessionKey);
+    if (!connIds) {
+      connIds = new Set();
+      sessionToConnIds.set(sessionKey, connIds);
+    }
+    connIds.add(connId);
+
+    let sessions = connIdToSessions.get(connId);
+    if (!sessions) {
+      sessions = new Set();
+      connIdToSessions.set(connId, sessions);
+    }
+    sessions.add(sessionKey);
+  };
+
+  const unsubscribe = (sessionKey: string, connId: string) => {
+    const connIds = sessionToConnIds.get(sessionKey);
+    if (connIds) {
+      connIds.delete(connId);
+      if (connIds.size === 0) {
+        sessionToConnIds.delete(sessionKey);
+      }
+    }
+    const sessions = connIdToSessions.get(connId);
+    if (sessions) {
+      sessions.delete(sessionKey);
+      if (sessions.size === 0) {
+        connIdToSessions.delete(connId);
+      }
+    }
+  };
+
+  const unsubscribeAll = (connId: string) => {
+    const sessions = connIdToSessions.get(connId);
+    if (!sessions) {
+      return;
+    }
+    for (const sessionKey of sessions) {
+      const connIds = sessionToConnIds.get(sessionKey);
+      if (connIds) {
+        connIds.delete(connId);
+        if (connIds.size === 0) {
+          sessionToConnIds.delete(sessionKey);
+        }
+      }
+    }
+    connIdToSessions.delete(connId);
+  };
+
+  const getConnIds = (sessionKey: string) => sessionToConnIds.get(sessionKey);
+
+  const hasSubscribers = (sessionKey: string) => {
+    const connIds = sessionToConnIds.get(sessionKey);
+    return Boolean(connIds && connIds.size > 0);
+  };
+
+  return { subscribe, unsubscribe, unsubscribeAll, getConnIds, hasSubscribers };
+}
+
 export type ChatEventBroadcast = (
   event: string,
   payload: unknown,
@@ -326,6 +408,7 @@ export type AgentEventHandlerOptions = {
   resolveSessionKeyForRun: (runId: string) => string | undefined;
   clearAgentRunContext: (runId: string) => void;
   toolEventRecipients: ToolEventRecipientRegistry;
+  chatSessionSubscriptions: ChatSessionSubscriptionRegistry;
 };
 
 export function createAgentEventHandler({
@@ -337,7 +420,39 @@ export function createAgentEventHandler({
   resolveSessionKeyForRun,
   clearAgentRunContext,
   toolEventRecipients,
+  chatSessionSubscriptions,
 }: AgentEventHandlerOptions) {
+  /**
+   * Session-scoped chat broadcast. When a session has explicit subscribers
+   * (registered via chat.watch or auto-subscribe on chat.send), only those
+   * connections receive the event. External sessions (external-*) are strict:
+   * if no subscribers exist, the event is dropped rather than broadcast to all.
+   * Non-external sessions fall back to blind broadcast for backward compat.
+   */
+  const broadcastChatToSession = (
+    sessionKey: string | undefined,
+    event: string,
+    payload: unknown,
+    opts?: { dropIfSlow?: boolean },
+  ) => {
+    if (!sessionKey) {
+      broadcast(event, payload, opts);
+      return;
+    }
+    const connIds = chatSessionSubscriptions.getConnIds(sessionKey);
+    if (connIds && connIds.size > 0) {
+      broadcastToConnIds(event, payload, connIds, opts);
+      return;
+    }
+    // Strict mode for external-* sessions: never fall back to blind broadcast.
+    // This prevents interview content from bleeding to other connected clients.
+    if (sessionKey.startsWith("external-")) {
+      return;
+    }
+    // Non-external sessions: fall back to broadcast for backward compatibility
+    // (native dashboard, macOS app, etc. don't send chat.watch).
+    broadcast(event, payload, opts);
+  };
   const emitChatDelta = (
     sessionKey: string,
     clientRunId: string,
@@ -386,7 +501,7 @@ export function createAgentEventHandler({
         timestamp: now,
       },
     };
-    broadcast("chat", payload, { dropIfSlow: true });
+    broadcastChatToSession(sessionKey, "chat", payload, { dropIfSlow: true });
     nodeSendToSession(sessionKey, "chat", payload);
   };
 
@@ -443,7 +558,7 @@ export function createAgentEventHandler({
         timestamp: now,
       },
     };
-    broadcast("chat", flushPayload, { dropIfSlow: true });
+    broadcastChatToSession(sessionKey, "chat", flushPayload, { dropIfSlow: true });
     nodeSendToSession(sessionKey, "chat", flushPayload);
     chatRunState.deltaLastBroadcastLen.set(clientRunId, text.length);
     chatRunState.deltaSentAt.set(clientRunId, now);
@@ -483,7 +598,7 @@ export function createAgentEventHandler({
               }
             : undefined,
       };
-      broadcast("chat", payload);
+      broadcastChatToSession(sessionKey, "chat", payload);
       nodeSendToSession(sessionKey, "chat", payload);
       return;
     }
@@ -494,7 +609,7 @@ export function createAgentEventHandler({
       state: "error" as const,
       errorMessage: error ? formatForLog(error) : undefined,
     };
-    broadcast("chat", payload);
+    broadcastChatToSession(sessionKey, "chat", payload);
     nodeSendToSession(sessionKey, "chat", payload);
   };
 
