@@ -10,7 +10,8 @@ export type TelegramButtonStyle = "danger" | "success" | "primary";
 
 type TelegramInlineButton = {
   text: string;
-  callback_data: string;
+  callback_data?: string;
+  url?: string;
   style?: TelegramButtonStyle;
 };
 
@@ -24,27 +25,34 @@ function toTelegramButtonStyle(
   return style === "danger" || style === "success" || style === "primary" ? style : undefined;
 }
 
+function toTelegramInlineButton(button: InteractiveReplyButton): TelegramInlineButton | undefined {
+  const style = toTelegramButtonStyle(button.style);
+  if (button.url) {
+    return {
+      text: button.label,
+      url: button.url,
+      style,
+    };
+  }
+  const callbackData = button.value ? sanitizeTelegramCallbackData(button.value) : undefined;
+  return callbackData
+    ? {
+        text: button.label,
+        callback_data: callbackData,
+        style,
+      }
+    : undefined;
+}
+
 function chunkInteractiveButtons(
   buttons: readonly InteractiveReplyButton[],
   rows: TelegramInlineButton[][],
 ) {
   for (let i = 0; i < buttons.length; i += TELEGRAM_INTERACTIVE_ROW_SIZE) {
-    const row = buttons.slice(i, i + TELEGRAM_INTERACTIVE_ROW_SIZE).flatMap((button) => {
-      if (!button.value) {
-        return [];
-      }
-      const callbackData = sanitizeTelegramCallbackData(button.value);
-      if (!callbackData) {
-        return [];
-      }
-      return [
-        {
-          text: button.label,
-          callback_data: callbackData,
-          style: toTelegramButtonStyle(button.style),
-        },
-      ];
-    });
+    const row = buttons
+      .slice(i, i + TELEGRAM_INTERACTIVE_ROW_SIZE)
+      .map(toTelegramInlineButton)
+      .filter((button): button is TelegramInlineButton => Boolean(button));
     if (row.length > 0) {
       rows.push(row);
     }

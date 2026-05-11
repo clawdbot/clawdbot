@@ -4,16 +4,22 @@ import {
   expectProviderOnboardPreservesPrimary,
 } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
+import { buildMinimaxApiModelDefinition } from "./model-definitions.js";
 import { applyMinimaxApiConfig, applyMinimaxApiProviderConfig } from "./onboard.js";
 
 describe("minimax onboard", () => {
   it("adds minimax provider with correct settings", () => {
     const cfg = applyMinimaxApiConfig({});
-    expect(cfg.models?.providers?.minimax).toMatchObject({
+    expect(cfg.models?.providers?.minimax).toEqual({
       baseUrl: "https://api.minimax.io/anthropic",
       api: "anthropic-messages",
       authHeader: true,
+      models: [buildMinimaxApiModelDefinition("MiniMax-M2.7")],
     });
+    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.7"]).toEqual({
+      alias: "Minimax",
+    });
+    expect(cfg.agents?.defaults?.model).toEqual({ primary: "minimax/MiniMax-M2.7" });
   });
 
   it("keeps reasoning enabled for MiniMax-M2.7", () => {
@@ -24,7 +30,15 @@ describe("minimax onboard", () => {
   it("keeps MiniMax chat models text-only so image tools use MiniMax-VL-01", () => {
     const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.7-highspeed");
     expect(cfg.models?.providers?.minimax?.models).toEqual([
-      expect.objectContaining({ id: "MiniMax-M2.7-highspeed", input: ["text"] }),
+      {
+        id: "MiniMax-M2.7-highspeed",
+        name: "MiniMax M2.7 Highspeed",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0.6, output: 2.4, cacheRead: 0.06, cacheWrite: 0.375 },
+        contextWindow: 204800,
+        maxTokens: 131072,
+      },
     ]);
   });
 
@@ -44,7 +58,7 @@ describe("minimax onboard", () => {
       },
       "MiniMax-M2.7",
     );
-    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.7"]).toMatchObject({
+    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.7"]).toEqual({
       alias: "Minimax",
       params: { custom: "value" },
     });

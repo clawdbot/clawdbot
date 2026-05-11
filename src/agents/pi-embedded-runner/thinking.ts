@@ -1,5 +1,5 @@
-import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { log } from "./logger.js";
 

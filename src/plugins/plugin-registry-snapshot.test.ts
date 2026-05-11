@@ -73,6 +73,36 @@ function createManifestlessClaudeBundleIndex(params: {
   });
 }
 
+function expectDiagnosticsContainCode(diagnostics: readonly { code?: unknown }[], code: string) {
+  expect(diagnostics.some((diagnostic) => diagnostic.code === code)).toBe(true);
+}
+
+function expectDiagnosticsContainSource(
+  diagnostics: readonly { source?: unknown }[],
+  source: string,
+) {
+  expect(diagnostics.some((diagnostic) => diagnostic.source === source)).toBe(true);
+}
+
+function expectDiagnosticsDoNotContainSource(
+  diagnostics: readonly { source?: unknown }[],
+  source: string,
+) {
+  expect(diagnostics.some((diagnostic) => diagnostic.source === source)).toBe(false);
+}
+
+function requirePluginRecord(
+  plugins: InstalledPluginIndex["plugins"],
+  pluginId: string,
+): InstalledPluginIndex["plugins"][number] {
+  const plugin = plugins.find((candidate) => candidate.pluginId === pluginId);
+  expect(plugin, `plugin ${pluginId}`).toBeDefined();
+  if (!plugin) {
+    throw new Error(`expected plugin ${pluginId}`);
+  }
+  return plugin;
+}
+
 describe("loadPluginRegistrySnapshotWithMetadata", () => {
   it("recovers managed npm plugins missing from a stale persisted registry", () => {
     const tempRoot = makeTempDir();
@@ -105,28 +135,18 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     });
 
     expect(result.source).toBe("derived");
-    expect(result.diagnostics).toContainEqual(
-      expect.objectContaining({ code: "persisted-registry-stale-source" }),
-    );
-    expect(result.snapshot.installRecords).toMatchObject({
-      whatsapp: {
-        source: "npm",
-        spec: "@openclaw/whatsapp@2026.5.2",
-        installPath: whatsappDir,
-        version: "2026.5.2",
-        resolvedName: "@openclaw/whatsapp",
-        resolvedVersion: "2026.5.2",
-        resolvedSpec: "@openclaw/whatsapp@2026.5.2",
-      },
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+    expect(result.snapshot.installRecords.whatsapp).toEqual({
+      source: "npm",
+      spec: "@openclaw/whatsapp@2026.5.2",
+      installPath: whatsappDir,
+      version: "2026.5.2",
+      resolvedName: "@openclaw/whatsapp",
+      resolvedVersion: "2026.5.2",
+      resolvedSpec: "@openclaw/whatsapp@2026.5.2",
     });
-    expect(result.snapshot.plugins).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          pluginId: "whatsapp",
-          origin: "global",
-        }),
-      ]),
-    );
+    const whatsappPlugin = requirePluginRecord(result.snapshot.plugins, "whatsapp");
+    expect(whatsappPlugin.origin).toBe("global");
   });
 
   it("keeps persisted manifestless Claude bundles on the fast path", () => {
@@ -169,15 +189,11 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     if (!record?.packageJson?.fileSignature || !record.manifestFile) {
       throw new Error("expected package plugin index record with file signatures");
     }
-    expect(record.manifestFile).toEqual(
-      expect.objectContaining({
-        size: fs.statSync(path.join(rootDir, "openclaw.plugin.json")).size,
-      }),
+    expect(record.manifestFile.size).toBe(
+      fs.statSync(path.join(rootDir, "openclaw.plugin.json")).size,
     );
-    expect(record.packageJson.fileSignature).toEqual(
-      expect.objectContaining({
-        size: fs.statSync(path.join(rootDir, "package.json")).size,
-      }),
+    expect(record.packageJson.fileSignature.size).toBe(
+      fs.statSync(path.join(rootDir, "package.json")).size,
     );
     writePersistedInstalledPluginIndexSync(index, { stateDir });
 
@@ -222,9 +238,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     });
 
     expect(result.source).toBe("derived");
-    expect(result.diagnostics).toContainEqual(
-      expect.objectContaining({ code: "persisted-registry-stale-source" }),
-    );
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
   });
 
   it("detects same-size same-mtime package.json replacements", () => {
@@ -253,9 +267,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     });
 
     expect(result.source).toBe("derived");
-    expect(result.diagnostics).toContainEqual(
-      expect.objectContaining({ code: "persisted-registry-stale-source" }),
-    );
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
   });
 
   it("detects package.json replacements even when stored stat fields still match", () => {
@@ -304,9 +316,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     });
 
     expect(result.source).toBe("derived");
-    expect(result.diagnostics).toContainEqual(
-      expect.objectContaining({ code: "persisted-registry-stale-source" }),
-    );
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
   });
 
   it("treats persisted registry as stale when a plugin diagnostic source path no longer exists", () => {
@@ -342,19 +352,13 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
 
     expect(result.source).toBe("derived");
-    expect(result.snapshot.diagnostics).not.toContainEqual(
-      expect.objectContaining({ source: ghostDir }),
+    expectDiagnosticsDoNotContainSource(result.snapshot.diagnostics, ghostDir);
+    const losslessPlugin = requirePluginRecord(result.snapshot.plugins, "lossless-claw");
+    expect(losslessPlugin.origin).toBe("global");
+    expect(losslessPlugin.source).toBe(
+      fs.realpathSync(path.join(npmPluginDir, "dist", "index.js")),
     );
-    expect(result.snapshot.plugins).toContainEqual(
-      expect.objectContaining({
-        pluginId: "lossless-claw",
-        origin: "global",
-        source: fs.realpathSync(path.join(npmPluginDir, "dist", "index.js")),
-      }),
-    );
-    expect(result.diagnostics).toContainEqual(
-      expect.objectContaining({ code: "persisted-registry-stale-source" }),
-    );
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
   });
 
   it("keeps persisted registry when a non-plugin diagnostic source path still does not exist", () => {
@@ -378,9 +382,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
 
     expect(result.source).toBe("persisted");
-    expect(result.snapshot.diagnostics).toContainEqual(
-      expect.objectContaining({ source: missingConfiguredPath }),
-    );
+    expectDiagnosticsContainSource(result.snapshot.diagnostics, missingConfiguredPath);
     expect(result.diagnostics).toStrictEqual([]);
   });
 });

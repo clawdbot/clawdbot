@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { streamSimple } from "@earendil-works/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
 import { resolveProviderRequestPolicy } from "../provider-attribution.js";
@@ -150,6 +150,7 @@ function normalizeProxyReasoningPayload(payload: unknown, thinkingLevel?: ThinkL
   }
 }
 
+/** @deprecated OpenRouter provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -181,6 +182,7 @@ export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | unde
   };
 }
 
+/** @deprecated OpenRouter provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenRouterWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel?: ThinkLevel,
@@ -214,12 +216,14 @@ export function createOpenRouterWrapper(
   };
 }
 
+/** @deprecated Proxy provider-owned stream helper; do not use from third-party plugins. */
 export function isProxyReasoningUnsupported(modelId: string): boolean {
   const trimmed = normalizeOptionalLowercaseString(modelId);
   const slashIndex = trimmed?.indexOf("/") ?? -1;
   return slashIndex > 0 && trimmed?.slice(0, slashIndex) === "x-ai";
 }
 
+/** @deprecated Kilocode provider-owned stream helper; do not use from third-party plugins. */
 export function createKilocodeWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel?: ThinkLevel,

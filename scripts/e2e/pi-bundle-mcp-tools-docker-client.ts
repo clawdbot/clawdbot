@@ -12,6 +12,7 @@ import {
   getOrCreateSessionMcpRuntime,
 } from "../../dist/agents/pi-bundle-mcp-runtime.js";
 import { applyFinalEffectiveToolPolicy } from "../../dist/agents/pi-embedded-runner/effective-tool-policy.js";
+import { splitSdkTools } from "../../dist/agents/pi-embedded-runner/tool-split.js";
 import type { OpenClawConfig } from "../../dist/config/types.openclaw.js";
 import { getPluginToolMeta } from "../../dist/plugins/tools.js";
 
@@ -136,6 +137,37 @@ async function main() {
     });
     assert(denied.tools.length === 0, "expected tools.deny bundle-mcp to filter MCP tools");
 
+    // The disputed boundary on #76063 is what reaches the SDK as `customTools`,
+    // since that is the exact value serialized to the outbound provider request.
+    // Prove the live stdio probe survives the materialize -> filter -> split chain
+    // through `splitSdkTools` for the same four profiles already asserted above.
+    const codingCustom = splitSdkTools({ tools: coding.tools, sandboxEnabled: false }).customTools;
+    const messagingCustom = splitSdkTools({
+      tools: messaging.tools,
+      sandboxEnabled: false,
+    }).customTools;
+    const minimalCustom = splitSdkTools({
+      tools: minimal.tools,
+      sandboxEnabled: false,
+    }).customTools;
+    const deniedCustom = splitSdkTools({ tools: denied.tools, sandboxEnabled: false }).customTools;
+    assert(
+      codingCustom.some((tool) => tool.name === probeTool.name),
+      "expected coding profile customTools to include bundle MCP tools",
+    );
+    assert(
+      messagingCustom.some((tool) => tool.name === probeTool.name),
+      "expected messaging profile customTools to include bundle MCP tools",
+    );
+    assert(
+      minimalCustom.length === 0,
+      "expected minimal profile customTools to exclude bundle MCP tools",
+    );
+    assert(
+      deniedCustom.length === 0,
+      "expected tools.deny bundle-mcp customTools to exclude bundle MCP tools",
+    );
+
     process.stdout.write(
       JSON.stringify(
         {
@@ -146,6 +178,18 @@ async function main() {
             messaging: messaging.tools.length,
             minimal: minimal.tools.length,
             denied: denied.tools.length,
+          },
+          customToolsCounts: {
+            coding: codingCustom.length,
+            messaging: messagingCustom.length,
+            minimal: minimalCustom.length,
+            denied: deniedCustom.length,
+          },
+          customToolNames: {
+            coding: codingCustom.map((tool) => tool.name),
+            messaging: messagingCustom.map((tool) => tool.name),
+            minimal: minimalCustom.map((tool) => tool.name),
+            denied: deniedCustom.map((tool) => tool.name),
           },
         },
         null,

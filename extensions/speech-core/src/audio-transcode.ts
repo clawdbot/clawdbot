@@ -82,7 +82,7 @@ function normalizeExt(ext: string): string | undefined {
   return /^[a-z0-9]{1,12}$/.test(trimmed) ? trimmed : undefined;
 }
 
-function pickAfconvertRecipe(source: string, target: string): string[] | undefined {
+function pickAfconvertRecipe(_source: string, target: string): string[] | undefined {
   // Currently only the MP3->CAF path used by native Messages voice memos.
   if (target === "caf") {
     // Opus-in-CAF, mono, 24 kHz. Validated against macOS 15.x Messages.app's

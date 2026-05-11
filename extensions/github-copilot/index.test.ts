@@ -449,10 +449,25 @@ describe("github-copilot plugin", () => {
     });
 
     expect(runtime.error).not.toHaveBeenCalled();
-    expect(resolveApiKey).toHaveBeenCalledWith(
-      expect.objectContaining({ envVar: "COPILOT_GITHUB_TOKEN" }),
-    );
-    expect(resolveApiKey).toHaveBeenCalledWith(expect.objectContaining({ envVar: "GH_TOKEN" }));
+    expect(resolveApiKey).toHaveBeenCalledTimes(2);
+    expect(resolveApiKey.mock.calls.map(([params]) => params)).toEqual([
+      {
+        provider: "github-copilot",
+        flagName: "--github-copilot-token",
+        envVar: "COPILOT_GITHUB_TOKEN",
+        envVarName: "COPILOT_GITHUB_TOKEN",
+        allowProfile: false,
+        required: false,
+      },
+      {
+        provider: "github-copilot",
+        flagName: "--github-copilot-token",
+        envVar: "GH_TOKEN",
+        envVarName: "GH_TOKEN",
+        allowProfile: false,
+        required: false,
+      },
+    ]);
     expect(result?.auth?.profiles?.["github-copilot:github"]).toEqual({
       provider: "github-copilot",
       mode: "token",

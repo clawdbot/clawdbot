@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,
@@ -29,14 +29,15 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
       },
     });
 
-    expect(resolved).toMatchObject({
+    expect(resolved).toEqual({
       apiKey: "dg-key",
+      baseUrl: undefined,
       model: "nova-3",
-      encoding: "mulaw",
+      language: "en-US",
       sampleRate: 8000,
+      encoding: "mulaw",
       interimResults: true,
       endpointingMs: 500,
-      language: "en-US",
     });
   });
 

@@ -2196,6 +2196,63 @@ describe("host-hook fixture plugin contract", () => {
     ]);
   });
 
+  it("does not invoke old scheduler cleanup for a preserved newer generation", async () => {
+    const cleanupEvents: string[] = [];
+    const previousFixture = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry: previousFixture.registry,
+      config: previousFixture.config,
+      record: createPluginRecord({
+        id: "scheduler-preserve",
+        name: "Scheduler Preserve",
+      }),
+      register(api) {
+        api.registerSessionSchedulerJob({
+          id: "shared-job",
+          sessionKey: "agent:main:main",
+          kind: "monitor",
+          cleanup: ({ reason, jobId }) => {
+            cleanupEvents.push(`${reason}:${jobId}`);
+          },
+        });
+      },
+    });
+
+    const replacementFixture = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry: replacementFixture.registry,
+      config: replacementFixture.config,
+      record: createPluginRecord({
+        id: "scheduler-preserve",
+        name: "Scheduler Preserve",
+      }),
+      register(api) {
+        api.registerSessionSchedulerJob({
+          id: "shared-job",
+          sessionKey: "agent:main:main",
+          kind: "monitor",
+        });
+      },
+    });
+
+    await expect(
+      cleanupReplacedPluginHostRegistry({
+        cfg: previousFixture.config,
+        previousRegistry: previousFixture.registry.registry,
+        nextRegistry: replacementFixture.registry.registry,
+      }),
+    ).resolves.toEqual({ cleanupCount: 0, failures: [] });
+    expect(cleanupEvents).toEqual([]);
+    expect(listPluginSessionSchedulerJobs("scheduler-preserve")).toEqual([
+      {
+        id: "shared-job",
+        pluginId: "scheduler-preserve",
+        sessionKey: "agent:main:main",
+        kind: "monitor",
+      },
+    ]);
+  });
+
   it("does not let stale scheduler cleanup delete a newer job generation", async () => {
     let releaseCleanup: (() => void) | undefined;
     let markCleanupStarted: (() => void) | undefined;

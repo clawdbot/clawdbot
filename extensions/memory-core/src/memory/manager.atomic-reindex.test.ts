@@ -10,7 +10,17 @@ import {
 } from "./manager-atomic-reindex.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  await expectRejectCode(fs.access(targetPath), "ENOENT");
+}
+
+async function expectRejectCode(promise: Promise<unknown>, code: string): Promise<void> {
+  try {
+    await promise;
+  } catch (error) {
+    expect((error as { code?: unknown }).code).toBe(code);
+    return;
+  }
+  throw new Error(`Expected rejection with code ${code}`);
 }
 
 describe("memory manager atomic reindex", () => {
@@ -88,13 +98,14 @@ describe("memory manager atomic reindex", () => {
     const rename = vi.fn().mockRejectedValue(Object.assign(new Error("busy"), { code: "EBUSY" }));
     const wait = vi.fn().mockResolvedValue(undefined);
 
-    await expect(
+    await expectRejectCode(
       moveMemoryIndexFiles("index.sqlite.tmp", "index.sqlite", {
         fileOps: { rename, rm: fs.rm, wait },
         maxRenameAttempts: 3,
         renameRetryDelayMs: 10,
       }),
-    ).rejects.toMatchObject({ code: "EBUSY" });
+      "EBUSY",
+    );
 
     expect(rename).toHaveBeenCalledTimes(3);
     expect(wait).toHaveBeenCalledTimes(2);
@@ -126,13 +137,14 @@ describe("memory manager atomic reindex", () => {
       .mockRejectedValue(Object.assign(new Error("invalid"), { code: "EINVAL" }));
     const wait = vi.fn().mockResolvedValue(undefined);
 
-    await expect(
+    await expectRejectCode(
       moveMemoryIndexFiles("index.sqlite.tmp", "index.sqlite", {
         fileOps: { rename, rm: fs.rm, wait },
         maxRenameAttempts: 3,
         renameRetryDelayMs: 10,
       }),
-    ).rejects.toMatchObject({ code: "EINVAL" });
+      "EINVAL",
+    );
 
     expect(rename).toHaveBeenCalledTimes(1);
     expect(wait).not.toHaveBeenCalled();
@@ -171,13 +183,14 @@ describe("memory manager atomic reindex", () => {
     const rm = vi.fn().mockRejectedValue(Object.assign(new Error("busy"), { code: "EBUSY" }));
     const wait = vi.fn().mockResolvedValue(undefined);
 
-    await expect(
+    await expectRejectCode(
       removeMemoryIndexFiles("index.sqlite.tmp", {
         fileOps: { rename: fs.rename, rm, wait },
         maxRemoveAttempts: 3,
         removeRetryDelayMs: 10,
       }),
-    ).rejects.toMatchObject({ code: "EBUSY" });
+      "EBUSY",
+    );
 
     expect(rm).toHaveBeenCalledTimes(3);
     expect(wait).toHaveBeenCalledTimes(2);
@@ -189,13 +202,14 @@ describe("memory manager atomic reindex", () => {
     const rm = vi.fn().mockRejectedValue(Object.assign(new Error("invalid"), { code: "EINVAL" }));
     const wait = vi.fn().mockResolvedValue(undefined);
 
-    await expect(
+    await expectRejectCode(
       removeMemoryIndexFiles("index.sqlite.tmp", {
         fileOps: { rename: fs.rename, rm, wait },
         maxRemoveAttempts: 3,
         removeRetryDelayMs: 10,
       }),
-    ).rejects.toMatchObject({ code: "EINVAL" });
+      "EINVAL",
+    );
 
     expect(rm).toHaveBeenCalledTimes(1);
     expect(wait).not.toHaveBeenCalled();

@@ -37,6 +37,7 @@ const STANDARD_MESSAGE_ACTION_PARAM_KEYS = new Set([
   "targets",
   "text",
   "threadId",
+  "topLevel",
   "to",
 ]);
 

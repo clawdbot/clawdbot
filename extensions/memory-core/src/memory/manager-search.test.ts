@@ -410,9 +410,14 @@ describe("searchKeyword FTS MATCH fallback", () => {
         bm25RankToScore: bm25RankToScore,
       });
 
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("FTS5 MATCH failed, falling back to LIKE"),
-      );
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const [warning] = warnSpy.mock.calls[0] ?? [];
+      expect(typeof warning).toBe("string");
+      expect(
+        (warning as string | undefined)?.startsWith(
+          "memory search: FTS5 MATCH failed, falling back to LIKE: ",
+        ),
+      ).toBe(true);
     } finally {
       warnSpy.mockRestore();
       db.close();

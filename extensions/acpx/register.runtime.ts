@@ -11,6 +11,7 @@ import type { OpenClawPluginService, OpenClawPluginServiceContext } from "opencl
 
 const ACPX_BACKEND_ID = "acpx";
 const ENABLE_STARTUP_PROBE_ENV = "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE";
+const SKIP_RUNTIME_PROBE_ENV = "OPENCLAW_SKIP_ACPX_RUNTIME_PROBE";
 
 type RealAcpxServiceModule = typeof import("./src/service.js");
 type CreateAcpxRuntimeServiceParams = NonNullable<
@@ -39,7 +40,7 @@ function loadServiceModule(): Promise<RealAcpxServiceModule> {
 }
 
 function shouldRunStartupProbe(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env[ENABLE_STARTUP_PROBE_ENV] === "1";
+  return env[ENABLE_STARTUP_PROBE_ENV] !== "0" && env[SKIP_RUNTIME_PROBE_ENV] !== "1";
 }
 
 async function startRealService(state: DeferredServiceState): Promise<AcpxRuntimeLike> {

@@ -4,7 +4,7 @@ import type {
 } from "openclaw/plugin-sdk/core";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCopilotTransportApi, resolveStaticCopilotModelOverride } from "./model-metadata.js";
 
 export const PROVIDER_ID = "github-copilot";

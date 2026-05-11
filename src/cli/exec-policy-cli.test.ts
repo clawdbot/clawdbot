@@ -29,6 +29,32 @@ function mockRollbackApprovalSnapshots(originalSnapshot: ExecApprovalsSnapshot) 
     .mockImplementationOnce(() => createCurrentApprovalsSnapshot(originalSnapshot.path));
 }
 
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  expect(value).toBeTypeOf("object");
+  expect(value).not.toBeNull();
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
+function readLastJsonWrite(): Record<string, unknown> {
+  const [payload, space] = mocks.defaultRuntime.writeJson.mock.calls.at(-1) ?? [];
+  expect(space).toBe(0);
+  expect(payload).toBeTypeOf("object");
+  expect(payload).not.toBeNull();
+  return payload as Record<string, unknown>;
+}
+
+function readFirstPolicyScope(payload: Record<string, unknown>): Record<string, unknown> {
+  const effectivePolicy = payload.effectivePolicy as { scopes?: unknown[] } | undefined;
+  expect(Array.isArray(effectivePolicy?.scopes)).toBe(true);
+  const scope = effectivePolicy?.scopes?.[0];
+  expect(scope).toBeTypeOf("object");
+  expect(scope).not.toBeNull();
+  return scope as Record<string, unknown>;
+}
+
 const mocks = vi.hoisted(() => {
   const runtimeErrors: string[] = [];
   const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
@@ -235,30 +261,24 @@ describe("exec-policy CLI", () => {
   it("shows the local merged exec policy as json", async () => {
     await runExecPolicyCommand(["exec-policy", "show", "--json"]);
 
-    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        configPath: "/tmp/openclaw.json",
-        approvalsPath: "/tmp/exec-approvals.json",
-        effectivePolicy: expect.objectContaining({
-          scopes: [
-            expect.objectContaining({
-              scopeLabel: "tools.exec",
-              security: expect.objectContaining({
-                requested: "allowlist",
-                host: "allowlist",
-                effective: "allowlist",
-              }),
-              ask: expect.objectContaining({
-                requested: "on-miss",
-                host: "on-miss",
-                effective: "on-miss",
-              }),
-            }),
-          ],
-        }),
-      }),
-      0,
-    );
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+    const payload = readLastJsonWrite();
+    expectFields(payload, {
+      configPath: "/tmp/openclaw.json",
+      approvalsPath: "/tmp/exec-approvals.json",
+    });
+    const scope = readFirstPolicyScope(payload);
+    expectFields(scope, { scopeLabel: "tools.exec" });
+    expectFields(scope.security, {
+      requested: "allowlist",
+      host: "allowlist",
+      effective: "allowlist",
+    });
+    expectFields(scope.ask, {
+      requested: "on-miss",
+      host: "on-miss",
+      effective: "on-miss",
+    });
   });
 
   it("marks host=node scopes as node-managed in show output", async () => {
@@ -274,43 +294,32 @@ describe("exec-policy CLI", () => {
 
     await runExecPolicyCommand(["exec-policy", "show", "--json"]);
 
-    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        effectivePolicy: expect.objectContaining({
-          note: expect.stringContaining("host=node"),
-          scopes: [
-            expect.objectContaining({
-              scopeLabel: "tools.exec",
-              runtimeApprovalsSource: "node-runtime",
-              security: expect.objectContaining({
-                requested: "allowlist",
-                host: "unknown",
-                effective: "unknown",
-                hostSource: "node runtime approvals",
-              }),
-              ask: expect.objectContaining({
-                requested: "on-miss",
-                host: "unknown",
-                effective: "unknown",
-                hostSource: "node runtime approvals",
-              }),
-              askFallback: expect.objectContaining({
-                effective: "unknown",
-                source: "node runtime approvals",
-              }),
-            }),
-          ],
-        }),
-      }),
-      0,
-    );
-    const [{ effectivePolicy }] = mocks.defaultRuntime.writeJson.mock.calls.at(-1) as [
-      Record<string, unknown>,
-      number,
-    ];
-    expect((effectivePolicy as { scopes: Record<string, unknown>[] }).scopes[0]).not.toHaveProperty(
-      "allowedDecisions",
-    );
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+    const payload = readLastJsonWrite();
+    const effectivePolicy = payload.effectivePolicy as { note?: unknown } | undefined;
+    expect(String(effectivePolicy?.note)).toContain("host=node");
+    const scope = readFirstPolicyScope(payload);
+    expectFields(scope, {
+      scopeLabel: "tools.exec",
+      runtimeApprovalsSource: "node-runtime",
+    });
+    expectFields(scope.security, {
+      requested: "allowlist",
+      host: "unknown",
+      effective: "unknown",
+      hostSource: "node runtime approvals",
+    });
+    expectFields(scope.ask, {
+      requested: "on-miss",
+      host: "unknown",
+      effective: "unknown",
+      hostSource: "node runtime approvals",
+    });
+    expectFields(scope.askFallback, {
+      effective: "unknown",
+      source: "node runtime approvals",
+    });
+    expect(scope).not.toHaveProperty("allowedDecisions");
   });
 
   it("applies the yolo preset to both config and approvals", async () => {
@@ -326,11 +335,8 @@ describe("exec-policy CLI", () => {
       ask: "off",
       askFallback: "full",
     });
-    expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baseHash: "config-hash-1",
-      }),
-    );
+    const [replaceConfigArg] = mocks.replaceConfigFile.mock.calls[0] ?? [];
+    expectFields(replaceConfigArg, { baseHash: "config-hash-1" });
     expect(mocks.saveExecApprovals).toHaveBeenCalledTimes(1);
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
   });

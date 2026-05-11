@@ -1,6 +1,6 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
-import { streamSimple } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { streamSimple } from "@earendil-works/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
@@ -8,7 +8,10 @@ import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
 } from "../codex-native-web-search-core.js";
-import { flattenCompletionMessagesToStringContent } from "../openai-completions-string-content.js";
+import {
+  flattenCompletionMessagesToStringContent,
+  stripCompletionMessagesToRoleContent,
+} from "../openai-completions-string-content.js";
 import { resolveOpenAIReasoningEffortForModel } from "../openai-reasoning-effort.js";
 import {
   applyOpenAIResponsesPayloadPolicy,
@@ -108,6 +111,17 @@ function shouldStripOpenAICompletionTools(model: { api?: unknown; compat?: unkno
   return model.api === "openai-completions" && compat?.supportsTools === false;
 }
 
+function shouldStripOpenAICompletionMessageKeys(model: {
+  api?: unknown;
+  compat?: unknown;
+}): boolean {
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as { strictMessageKeys?: unknown })
+      : undefined;
+  return model.api === "openai-completions" && compat?.strictMessageKeys === true;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -184,6 +198,7 @@ function normalizeOpenAIServiceTier(value: unknown): OpenAIServiceTier | undefin
   return undefined;
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function resolveOpenAIServiceTier(
   extraParams: Record<string, unknown> | undefined,
 ): OpenAIServiceTier | undefined {
@@ -225,6 +240,7 @@ function normalizeOpenAIFastMode(value: unknown): boolean | undefined {
   return undefined;
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function resolveOpenAIFastMode(
   extraParams: Record<string, unknown> | undefined,
 ): boolean | undefined {
@@ -246,6 +262,7 @@ function applyOpenAIFastModePayloadOverrides(params: {
   }
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAIResponsesContextManagementWrapper(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
@@ -281,6 +298,7 @@ export function createOpenAIResponsesContextManagementWrapper(
   };
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAIReasoningCompatibilityWrapper(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn {
@@ -298,6 +316,7 @@ export function createOpenAIReasoningCompatibilityWrapper(
   };
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAIStringContentWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -313,6 +332,25 @@ export function createOpenAIStringContentWrapper(baseStreamFn: StreamFn | undefi
   };
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
+export function createOpenAICompletionsStrictMessageKeysWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (!shouldStripOpenAICompletionMessageKeys(model)) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      if (!Array.isArray(payloadObj.messages)) {
+        return;
+      }
+      payloadObj.messages = stripCompletionMessagesToRoleContent(payloadObj.messages);
+    });
+  };
+}
+
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAICompletionsToolsCompatWrapper(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn {
@@ -329,6 +367,7 @@ export function createOpenAICompletionsToolsCompatWrapper(
   };
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAIThinkingLevelWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel?: ThinkLevel,
@@ -376,6 +415,7 @@ export function createOpenAIThinkingLevelWrapper(
   };
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAIFastModeWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -403,6 +443,7 @@ export function createOpenAIFastModeWrapper(baseStreamFn: StreamFn | undefined):
   };
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAIServiceTierWrapper(
   baseStreamFn: StreamFn | undefined,
   serviceTier: OpenAIServiceTier,
@@ -420,6 +461,7 @@ export function createOpenAIServiceTierWrapper(
   };
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAITextVerbosityWrapper(
   baseStreamFn: StreamFn | undefined,
   verbosity: OpenAITextVerbosity,
@@ -451,6 +493,7 @@ export function createOpenAITextVerbosityWrapper(
     });
   };
 }
+/** @deprecated OpenAI Codex provider-owned stream helper; do not use from third-party plugins. */
 export function createCodexNativeWebSearchWrapper(
   baseStreamFn: StreamFn | undefined,
   params: { config?: OpenClawConfig; agentDir?: string },
@@ -503,6 +546,7 @@ export function createCodexNativeWebSearchWrapper(
     });
   };
 }
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -514,6 +558,7 @@ export function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | und
   };
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAIAttributionHeadersWrapper(
   baseStreamFn: StreamFn | undefined,
   opts?: { codexNativeTransportStreamFn?: StreamFn },

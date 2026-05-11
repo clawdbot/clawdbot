@@ -67,12 +67,8 @@ describe("preflightCronModelProvider", () => {
     });
 
     expect(result).toEqual({ status: "available" });
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://127.0.0.1:8000/v1/models",
-        timeoutMs: 2500,
-      }),
-    );
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.url).toBe("http://127.0.0.1:8000/v1/models");
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.timeoutMs).toBe(2500);
   });
 
   it("marks unreachable local Ollama endpoints unavailable and caches the result", async () => {
@@ -102,26 +98,26 @@ describe("preflightCronModelProvider", () => {
       nowMs: 2000,
     });
 
-    expect(first).toMatchObject({
-      status: "unavailable",
-      provider: "ollama",
-      model: "qwen3:32b",
-      baseUrl: "http://localhost:11434",
-      retryAfterMs: 300000,
-    });
-    expect(second).toMatchObject({
-      status: "unavailable",
-      provider: "ollama",
-      model: "llama3.3:70b",
-      baseUrl: "http://localhost:11434",
-      retryAfterMs: 300000,
-    });
+    expect(first.status).toBe("unavailable");
+    if (first.status !== "unavailable") {
+      throw new Error(`expected first preflight unavailable, got ${first.status}`);
+    }
+    expect(first.provider).toBe("ollama");
+    expect(first.model).toBe("qwen3:32b");
+    expect(first.baseUrl).toBe("http://localhost:11434");
+    expect(first.retryAfterMs).toBe(300000);
+    expect(second.status).toBe("unavailable");
+    if (second.status !== "unavailable") {
+      throw new Error(`expected second preflight unavailable, got ${second.status}`);
+    }
+    expect(second.provider).toBe("ollama");
+    expect(second.model).toBe("llama3.3:70b");
+    expect(second.baseUrl).toBe("http://localhost:11434");
+    expect(second.retryAfterMs).toBe(300000);
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://localhost:11434/api/tags",
-        auditContext: "cron-model-provider-preflight",
-      }),
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.url).toBe("http://localhost:11434/api/tags");
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.auditContext).toBe(
+      "cron-model-provider-preflight",
     );
   });
 

@@ -19,6 +19,9 @@ plugins.
 
 ## Test utilities
 
+These test-helper subpaths are repo-local source entrypoints for OpenClaw's own
+bundled plugin tests. They are not package exports for third-party plugins.
+
 **Plugin API mock import:** `openclaw/plugin-sdk/plugin-test-api`
 
 **Agent runtime contract import:** `openclaw/plugin-sdk/agent-runtime-test-contracts`
@@ -47,7 +50,7 @@ Prefer the focused subpaths below for new plugin tests. The broad
 `openclaw/plugin-sdk/testing` barrel is legacy compatibility only.
 Repo guardrails reject new real imports from `plugin-sdk/testing` and
 `plugin-sdk/test-utils`; those names remain only as deprecated compatibility
-surfaces for external plugins and compatibility-record tests.
+surfaces for compatibility-record tests.
 
 ```typescript
 import {
@@ -162,7 +165,7 @@ import type {
   ChannelAccountSnapshot,
   ChannelGatewayContext,
 } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MockFn, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 ```
 

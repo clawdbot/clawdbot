@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import { expect, vi } from "vitest";
 

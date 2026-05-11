@@ -162,6 +162,21 @@ function optionalPositiveInteger(body: Record<string, unknown>, key: string) {
   return raw;
 }
 
+function optionalNonnegativeInteger(body: Record<string, unknown>, key: string) {
+  if (!(key in body) || body[key] === undefined || body[key] === null) {
+    return undefined;
+  }
+  const raw = body[key];
+  if (typeof raw !== "number" || !Number.isFinite(raw) || !Number.isInteger(raw) || raw < 0) {
+    throw new BrokerHttpError(
+      400,
+      "INVALID_BODY",
+      `Expected "${key}" to be a non-negative integer.`,
+    );
+  }
+  return raw;
+}
+
 function optionalBoolean(body: Record<string, unknown>, key: string) {
   if (!(key in body) || body[key] === undefined || body[key] === null) {
     return undefined;
@@ -307,6 +322,35 @@ http.route({
         ) as Id<"credential_sets">,
         leaseToken: requireString(body, "leaseToken"),
         leaseTtlMs: optionalPositiveInteger(body, "leaseTtlMs"),
+      });
+
+      return jsonResponse(200, result);
+    } catch (error) {
+      const normalized = normalizeError(error);
+      return jsonResponse(normalized.httpStatus, normalized.payload);
+    }
+  }),
+});
+
+http.route({
+  path: "/qa-credentials/v1/payload-chunk",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    try {
+      const tokenRole = resolveAuthRole(parseBearerToken(request));
+      const body = await parseJsonObject(request);
+      const actorRole = parseActorRole(body);
+      assertRoleAllowed(tokenRole, actorRole);
+
+      const result = await ctx.runQuery(internal.credentials.getPayloadChunk, {
+        kind: requireString(body, "kind"),
+        ownerId: requireString(body, "ownerId"),
+        actorRole,
+        credentialId: normalizeCredentialId(
+          requireString(body, "credentialId"),
+        ) as Id<"credential_sets">,
+        leaseToken: requireString(body, "leaseToken"),
+        index: optionalNonnegativeInteger(body, "index") ?? 0,
       });
 
       return jsonResponse(200, result);

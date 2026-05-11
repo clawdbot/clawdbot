@@ -1,5 +1,5 @@
-import { runAgentLoop, type AgentEvent, type StreamFn } from "@mariozechner/pi-agent-core";
-import { createAssistantMessageEventStream, validateToolArguments } from "@mariozechner/pi-ai";
+import { runAgentLoop, type AgentEvent, type StreamFn } from "@earendil-works/pi-agent-core";
+import { createAssistantMessageEventStream, validateToolArguments } from "@earendil-works/pi-ai";
 import { Type, type TSchema } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";

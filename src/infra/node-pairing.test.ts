@@ -38,6 +38,23 @@ async function withNodePairingDir<T>(run: (baseDir: string) => Promise<T>): Prom
   return await run(await tempDirs.make("case"));
 }
 
+function requireRecord(value: unknown): Record<string, unknown> {
+  expect(value).toBeTruthy();
+  expect(typeof value).toBe("object");
+  expect(Array.isArray(value)).toBe(false);
+  return value as Record<string, unknown>;
+}
+
+function findRecordByField<T extends Record<string, unknown>>(
+  records: T[],
+  field: string,
+  value: unknown,
+): T {
+  const record = records.find((entry) => entry[field] === value);
+  expect(record).toBeTruthy();
+  return record as T;
+}
+
 describe("node pairing tokens", () => {
   beforeAll(async () => {
     await tempDirs.setup();
@@ -116,16 +133,11 @@ describe("node pairing tokens", () => {
         baseDir,
       );
 
-      await expect(listNodePairing(baseDir)).resolves.toEqual({
-        pending: expect.arrayContaining([
-          expect.objectContaining({
-            nodeId: "node-3",
-            commands: ["canvas.present"],
-            requiredApproveScopes: ["operator.pairing", "operator.write"],
-          }),
-        ]),
-        paired: [],
-      });
+      const pairing = await listNodePairing(baseDir);
+      const pendingNode = findRecordByField(pairing.pending, "nodeId", "node-3");
+      expect(pendingNode.commands).toEqual(["canvas.present"]);
+      expect(pendingNode.requiredApproveScopes).toEqual(["operator.pairing", "operator.write"]);
+      expect(pairing.paired).toEqual([]);
     });
   });
 
@@ -150,17 +162,13 @@ describe("node pairing tokens", () => {
         baseDir,
       );
 
-      expect(approved).toEqual(
-        expect.objectContaining({
-          node: expect.objectContaining({ nodeId: "node-array-state" }),
-        }),
-      );
+      const approvedRecord = requireRecord(approved);
+      const approvedNode = requireRecord(approvedRecord.node);
+      expect(approvedNode.nodeId).toBe("node-array-state");
       expect(Array.isArray(JSON.parse(await fs.readFile(paths.pendingPath, "utf8")))).toBe(false);
-      expect(JSON.parse(await fs.readFile(paths.pairedPath, "utf8"))).toEqual(
-        expect.objectContaining({
-          "node-array-state": expect.objectContaining({ nodeId: "node-array-state" }),
-        }),
-      );
+      const pairedState = requireRecord(JSON.parse(await fs.readFile(paths.pairedPath, "utf8")));
+      const pairedNode = requireRecord(pairedState["node-array-state"]);
+      expect(pairedNode.nodeId).toBe("node-array-state");
     });
   });
 
@@ -170,10 +178,9 @@ describe("node pairing tokens", () => {
 
       expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
       expect(Buffer.from(token, "base64url")).toHaveLength(32);
-      await expect(verifyNodeToken("node-1", token, baseDir)).resolves.toEqual({
-        ok: true,
-        node: expect.objectContaining({ nodeId: "node-1" }),
-      });
+      const verified = await verifyNodeToken("node-1", token, baseDir);
+      expect(verified.ok).toBe(true);
+      expect(verified.node?.nodeId).toBe("node-1");
       await expect(verifyNodeToken("node-1", "x".repeat(token.length), baseDir)).resolves.toEqual({
         ok: false,
       });
@@ -201,15 +208,11 @@ describe("node pairing tokens", () => {
       await expect(removePairedNode("node-1", baseDir)).resolves.toEqual({ nodeId: "node-1" });
       await expect(removePairedNode("node-1", baseDir)).resolves.toBeNull();
       await expect(getPairedNode("node-1", baseDir)).resolves.toBeNull();
-      await expect(listNodePairing(baseDir)).resolves.toEqual({
-        pending: [
-          expect.objectContaining({
-            requestId: pending.request.requestId,
-            nodeId: "node-2",
-          }),
-        ],
-        paired: [],
-      });
+      const pairing = await listNodePairing(baseDir);
+      expect(pairing.pending).toHaveLength(1);
+      expect(pairing.pending[0]?.requestId).toBe(pending.request.requestId);
+      expect(pairing.pending[0]?.nodeId).toBe("node-2");
+      expect(pairing.paired).toEqual([]);
     });
   });
 
@@ -250,19 +253,16 @@ describe("node pairing tokens", () => {
         status: "forbidden",
         missingScope: "operator.pairing",
       });
-      await expect(
-        approveNodePairing(
-          commandlessRequest.request.requestId,
-          { callerScopes: ["operator.pairing"] },
-          baseDir,
-        ),
-      ).resolves.toEqual({
-        requestId: commandlessRequest.request.requestId,
-        node: expect.objectContaining({
-          nodeId: "node-2",
-          commands: undefined,
-        }),
-      });
+      const approved = await approveNodePairing(
+        commandlessRequest.request.requestId,
+        { callerScopes: ["operator.pairing"] },
+        baseDir,
+      );
+      const approvedRecord = requireRecord(approved);
+      const approvedNode = requireRecord(approvedRecord.node);
+      expect(approvedRecord.requestId).toBe(commandlessRequest.request.requestId);
+      expect(approvedNode.nodeId).toBe("node-2");
+      expect(approvedNode.commands).toBeUndefined();
     });
   });
 
@@ -303,12 +303,9 @@ describe("node pairing tokens", () => {
         false,
       );
 
-      await expect(getPairedNode("node-1", baseDir)).resolves.toEqual(
-        expect.objectContaining({
-          lastSeenAtMs: 1234,
-          lastSeenReason: "silent_push",
-        }),
-      );
+      const pairedNode = await getPairedNode("node-1", baseDir);
+      expect(pairedNode?.lastSeenAtMs).toBe(1234);
+      expect(pairedNode?.lastSeenReason).toBe("silent_push");
     });
   });
 });

@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { resolveMatrixMigrationAccountTarget } from "./migration-config.js";
@@ -22,10 +22,10 @@ function resolveOpsTarget(cfg: OpenClawConfig, env = process.env) {
 type MatrixMigrationTarget = NonNullable<ReturnType<typeof resolveOpsTarget>>;
 
 function expectMigrationTarget(target: ReturnType<typeof resolveOpsTarget>): MatrixMigrationTarget {
-  expect(target).toEqual(expect.objectContaining({ homeserver: expect.any(String) }));
   if (target === null) {
     throw new Error("Expected Matrix migration account target");
   }
+  expect(typeof target.homeserver).toBe("string");
   return target;
 }
 

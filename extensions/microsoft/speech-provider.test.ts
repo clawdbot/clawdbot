@@ -1,7 +1,7 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   finalizeDebugProxyCapture,
   getDebugProxyCaptureStore,
@@ -207,14 +207,27 @@ describe("buildMicrosoftSpeechProvider", () => {
       target: "audio-file",
     });
 
-    expect(edgeSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          voice: "zh-CN-XiaoxiaoNeural",
-          lang: "zh-CN",
-        }),
-      }),
-    );
+    expect(edgeSpy).toHaveBeenCalledOnce();
+    const edgeCall = edgeSpy.mock.calls[0]?.[0];
+    if (!edgeCall) {
+      throw new Error("expected Microsoft Edge TTS call");
+    }
+    expect(edgeCall.text).toBe("你好，这是一个测试 hello");
+    expect(path.basename(edgeCall.outputPath)).toBe("speech.mp3");
+    expect(edgeCall.timeoutMs).toBe(1000);
+    expect(edgeCall.config).toEqual({
+      enabled: true,
+      voice: "zh-CN-XiaoxiaoNeural",
+      lang: "zh-CN",
+      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+      outputFormatConfigured: true,
+      pitch: undefined,
+      rate: undefined,
+      volume: undefined,
+      saveSubtitles: false,
+      proxy: undefined,
+      timeoutMs: undefined,
+    });
   });
 
   it("preserves an explicitly configured English voice for CJK text", async () => {
@@ -239,13 +252,26 @@ describe("buildMicrosoftSpeechProvider", () => {
       target: "audio-file",
     });
 
-    expect(edgeSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          voice: "en-US-AvaNeural",
-          lang: "en-US",
-        }),
-      }),
-    );
+    expect(edgeSpy).toHaveBeenCalledOnce();
+    const edgeCall = edgeSpy.mock.calls[0]?.[0];
+    if (!edgeCall) {
+      throw new Error("expected Microsoft Edge TTS call");
+    }
+    expect(edgeCall.text).toBe("你好，这是一个测试 hello");
+    expect(path.basename(edgeCall.outputPath)).toBe("speech.mp3");
+    expect(edgeCall.timeoutMs).toBe(1000);
+    expect(edgeCall.config).toEqual({
+      enabled: true,
+      voice: "en-US-AvaNeural",
+      lang: "en-US",
+      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+      outputFormatConfigured: true,
+      pitch: undefined,
+      rate: undefined,
+      volume: undefined,
+      saveSubtitles: false,
+      proxy: undefined,
+      timeoutMs: undefined,
+    });
   });
 });

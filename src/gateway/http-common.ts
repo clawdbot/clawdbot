@@ -74,6 +74,20 @@ export function sendInvalidRequest(res: ServerResponse, message: string) {
   });
 }
 
+export function buildMissingScopeForbiddenBody(missingScope: string | undefined) {
+  return {
+    ok: false,
+    error: {
+      type: "forbidden",
+      message: `missing scope: ${missingScope}`,
+    },
+  };
+}
+
+export function sendMissingScopeForbidden(res: ServerResponse, missingScope: string | undefined) {
+  sendJson(res, 403, buildMissingScopeForbiddenBody(missingScope));
+}
+
 export async function readJsonBodyOrError(
   req: IncomingMessage,
   res: ServerResponse,

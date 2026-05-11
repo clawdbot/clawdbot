@@ -1,6 +1,8 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "tsBuildInfoFile": ".artifacts/tsgo-cache/core.tsbuildinfo"
   },
   "include": ["src/**/*", "ui/**/*", "packages/**/*"],

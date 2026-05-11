@@ -112,6 +112,26 @@ function runCatalog(
   });
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).toBeTypeOf("object");
+  expect(value, label).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+function expectProviderFields(result: unknown, fields: Record<string, unknown>) {
+  const provider = requireRecord(requireRecord(result, "catalog result").provider, "provider");
+  for (const [key, expected] of Object.entries(fields)) {
+    expect(provider[key]).toEqual(expected);
+  }
+  return provider;
+}
+
+function providerModelIds(provider: Record<string, unknown>): Array<unknown> {
+  const models = provider.models;
+  expect(Array.isArray(models), "provider models").toBe(true);
+  return (models as Array<{ id?: unknown }>).map((model) => model.id);
+}
+
 function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContractOptions) {
   beforeAll(async () => {
     vi.resetModules();
@@ -295,12 +315,13 @@ export function describeGithubCopilotProviderDiscoveryContract(params: {
           models: [],
         },
       });
-      expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
-        githubToken: "github-env-token",
-        env: expect.objectContaining({
-          GITHUB_TOKEN: "github-env-token",
-        }),
-      });
+      const copilotCall = requireRecord(
+        resolveCopilotApiTokenMock.mock.calls[0]?.[0],
+        "copilot token params",
+      );
+      expect(copilotCall.githubToken).toBe("github-env-token");
+      const env = requireRecord(copilotCall.env, "copilot token env");
+      expect(env.GITHUB_TOKEN).toBe("github-env-token");
     });
   });
 }
@@ -420,33 +441,29 @@ export function describeMinimaxProviderDiscoveryContract(
     installDiscoveryHooks(state, { providerIds: ["minimax"], loadMinimax: load });
 
     it("keeps API catalog provider-owned", async () => {
-      await expect(
-        state.runProviderCatalog({
-          provider: state.minimaxProvider!,
-          config: {},
-          env: {
-            MINIMAX_API_KEY: "minimax-key",
-          } as NodeJS.ProcessEnv,
-          resolveProviderApiKey: () => ({ apiKey: "minimax-key" }),
-          resolveProviderAuth: () => ({
-            apiKey: "minimax-key",
-            discoveryApiKey: undefined,
-            mode: "api_key",
-            source: "env",
-          }),
-        }),
-      ).resolves.toMatchObject({
-        provider: {
-          baseUrl: "https://api.minimax.io/anthropic",
-          api: "anthropic-messages",
-          authHeader: true,
+      const result = await state.runProviderCatalog({
+        provider: state.minimaxProvider!,
+        config: {},
+        env: {
+          MINIMAX_API_KEY: "minimax-key",
+        } as NodeJS.ProcessEnv,
+        resolveProviderApiKey: () => ({ apiKey: "minimax-key" }),
+        resolveProviderAuth: () => ({
           apiKey: "minimax-key",
-          models: expect.arrayContaining([
-            expect.objectContaining({ id: "MiniMax-M2.7" }),
-            expect.objectContaining({ id: "MiniMax-M2.7-highspeed" }),
-          ]),
-        },
+          discoveryApiKey: undefined,
+          mode: "api_key",
+          source: "env",
+        }),
       });
+      const provider = expectProviderFields(result, {
+        baseUrl: "https://api.minimax.io/anthropic",
+        api: "anthropic-messages",
+        authHeader: true,
+        apiKey: "minimax-key",
+      });
+      const ids = providerModelIds(provider);
+      expect(ids).toContain("MiniMax-M2.7");
+      expect(ids).toContain("MiniMax-M2.7-highspeed");
     });
 
     it("keeps portal oauth marker fallback provider-owned", async () => {
@@ -463,60 +480,54 @@ export function describeMinimaxProviderDiscoveryContract(
         },
       });
 
-      await expect(
-        runCatalog(state, {
-          provider: state.minimaxPortalProvider!,
-          config: {},
-          env: {} as NodeJS.ProcessEnv,
-          resolveProviderApiKey: () => ({ apiKey: undefined }),
-          resolveProviderAuth: () => ({
-            apiKey: "minimax-oauth",
-            discoveryApiKey: "access-token",
-            mode: "oauth",
-            source: "profile",
-            profileId: "minimax-portal:default",
-          }),
-        }),
-      ).resolves.toMatchObject({
-        provider: {
-          baseUrl: "https://api.minimax.io/anthropic",
-          api: "anthropic-messages",
-          authHeader: true,
+      const result = await runCatalog(state, {
+        provider: state.minimaxPortalProvider!,
+        config: {},
+        env: {} as NodeJS.ProcessEnv,
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({
           apiKey: "minimax-oauth",
-          models: expect.arrayContaining([expect.objectContaining({ id: "MiniMax-M2.7" })]),
-        },
+          discoveryApiKey: "access-token",
+          mode: "oauth",
+          source: "profile",
+          profileId: "minimax-portal:default",
+        }),
       });
+      const provider = expectProviderFields(result, {
+        baseUrl: "https://api.minimax.io/anthropic",
+        api: "anthropic-messages",
+        authHeader: true,
+        apiKey: "minimax-oauth",
+      });
+      expect(providerModelIds(provider)).toContain("MiniMax-M2.7");
     });
 
     it("keeps portal explicit base URL override provider-owned", async () => {
-      await expect(
-        state.runProviderCatalog({
-          provider: state.minimaxPortalProvider!,
-          config: {
-            models: {
-              providers: {
-                "minimax-portal": {
-                  baseUrl: "https://portal-proxy.example.com/anthropic",
-                  apiKey: "explicit-key",
-                  models: [],
-                },
+      const result = await state.runProviderCatalog({
+        provider: state.minimaxPortalProvider!,
+        config: {
+          models: {
+            providers: {
+              "minimax-portal": {
+                baseUrl: "https://portal-proxy.example.com/anthropic",
+                apiKey: "explicit-key",
+                models: [],
               },
             },
           },
-          env: {} as NodeJS.ProcessEnv,
-          resolveProviderApiKey: () => ({ apiKey: undefined }),
-          resolveProviderAuth: () => ({
-            apiKey: undefined,
-            discoveryApiKey: undefined,
-            mode: "none",
-            source: "none",
-          }),
-        }),
-      ).resolves.toMatchObject({
-        provider: {
-          baseUrl: "https://portal-proxy.example.com/anthropic",
-          apiKey: "explicit-key",
         },
+        env: {} as NodeJS.ProcessEnv,
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({
+          apiKey: undefined,
+          discoveryApiKey: undefined,
+          mode: "none",
+          source: "none",
+        }),
+      });
+      expectProviderFields(result, {
+        baseUrl: "https://portal-proxy.example.com/anthropic",
+        apiKey: "explicit-key",
       });
     });
   });
@@ -531,42 +542,38 @@ export function describeModelStudioProviderDiscoveryContract(
     installDiscoveryHooks(state, { providerIds: ["modelstudio"], loadModelStudio: load });
 
     it("keeps catalog provider-owned", async () => {
-      await expect(
-        state.runProviderCatalog({
-          provider: state.modelStudioProvider!,
-          config: {
-            models: {
-              providers: {
-                modelstudio: {
-                  baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
-                  models: [],
-                },
+      const result = await state.runProviderCatalog({
+        provider: state.modelStudioProvider!,
+        config: {
+          models: {
+            providers: {
+              modelstudio: {
+                baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+                models: [],
               },
             },
           },
-          env: {
-            MODELSTUDIO_API_KEY: "modelstudio-key",
-          } as NodeJS.ProcessEnv,
-          resolveProviderApiKey: () => ({ apiKey: "modelstudio-key" }),
-          resolveProviderAuth: () => ({
-            apiKey: "modelstudio-key",
-            discoveryApiKey: undefined,
-            mode: "api_key",
-            source: "env",
-          }),
-        }),
-      ).resolves.toMatchObject({
-        provider: {
-          baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
-          api: "openai-completions",
-          apiKey: "modelstudio-key",
-          models: expect.arrayContaining([
-            expect.objectContaining({ id: "qwen3.5-plus" }),
-            expect.objectContaining({ id: "qwen3-max-2026-01-23" }),
-            expect.objectContaining({ id: "MiniMax-M2.5" }),
-          ]),
         },
+        env: {
+          MODELSTUDIO_API_KEY: "modelstudio-key",
+        } as NodeJS.ProcessEnv,
+        resolveProviderApiKey: () => ({ apiKey: "modelstudio-key" }),
+        resolveProviderAuth: () => ({
+          apiKey: "modelstudio-key",
+          discoveryApiKey: undefined,
+          mode: "api_key",
+          source: "env",
+        }),
       });
+      const provider = expectProviderFields(result, {
+        baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+        api: "openai-completions",
+        apiKey: "modelstudio-key",
+      });
+      const ids = providerModelIds(provider);
+      expect(ids).toContain("qwen3.5-plus");
+      expect(ids).toContain("qwen3-max-2026-01-23");
+      expect(ids).toContain("MiniMax-M2.5");
     });
   });
 }
@@ -619,29 +626,26 @@ export function describeCloudflareAiGatewayProviderDiscoveryContract(
         },
       });
 
-      await expect(
-        runCatalog(state, {
-          provider: state.cloudflareAiGatewayProvider!,
-          config: {},
-          env: {
-            CLOUDFLARE_AI_GATEWAY_API_KEY: "secret-value",
-          } as NodeJS.ProcessEnv,
-          resolveProviderApiKey: () => ({ apiKey: undefined }),
-          resolveProviderAuth: () => ({
-            apiKey: undefined,
-            discoveryApiKey: undefined,
-            mode: "none",
-            source: "none",
-          }),
+      const result = await runCatalog(state, {
+        provider: state.cloudflareAiGatewayProvider!,
+        config: {},
+        env: {
+          CLOUDFLARE_AI_GATEWAY_API_KEY: "secret-value",
+        } as NodeJS.ProcessEnv,
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({
+          apiKey: undefined,
+          discoveryApiKey: undefined,
+          mode: "none",
+          source: "none",
         }),
-      ).resolves.toEqual({
-        provider: {
-          baseUrl: "https://gateway.ai.cloudflare.com/v1/acc-123/gw-456/anthropic",
-          api: "anthropic-messages",
-          apiKey: "CLOUDFLARE_AI_GATEWAY_API_KEY",
-          models: [expect.objectContaining({ id: "claude-sonnet-4-6" })],
-        },
       });
+      const provider = expectProviderFields(result, {
+        baseUrl: "https://gateway.ai.cloudflare.com/v1/acc-123/gw-456/anthropic",
+        api: "anthropic-messages",
+        apiKey: "CLOUDFLARE_AI_GATEWAY_API_KEY",
+      });
+      expect(providerModelIds(provider)).toEqual(["claude-sonnet-4-6"]);
     });
   });
 }

@@ -94,13 +94,20 @@ export {
 
 const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
 
+/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export const COPILOT_EDITOR_VERSION = "vscode/1.96.2";
+/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export const COPILOT_USER_AGENT = "GitHubCopilotChat/0.26.7";
+/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export const COPILOT_EDITOR_PLUGIN_VERSION = "copilot-chat/0.35.0";
+/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export const COPILOT_GITHUB_API_VERSION = "2025-04-01";
+/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export const COPILOT_INTEGRATION_ID = "vscode-chat";
+/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilot.com";
 
+/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export type CachedCopilotToken = {
   token: string;
   expiresAt: number;
@@ -108,6 +115,7 @@ export type CachedCopilotToken = {
   integrationId?: string;
 };
 
+/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export function buildCopilotIdeHeaders(
   params: {
     includeApiVersion?: boolean;
@@ -177,6 +185,7 @@ function resolveCopilotProxyHost(proxyEp: string): string | null {
   }
 }
 
+/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export function deriveCopilotApiBaseUrlFromToken(token: string): string | null {
   const trimmed = token.trim();
   if (!trimmed) {
@@ -199,6 +208,7 @@ export function deriveCopilotApiBaseUrlFromToken(token: string): string | null {
   return resolveProviderEndpoint(baseUrl).endpointClass === "invalid" ? null : baseUrl;
 }
 
+/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export async function resolveCopilotApiToken(params: {
   githubToken: string;
   env?: NodeJS.ProcessEnv;

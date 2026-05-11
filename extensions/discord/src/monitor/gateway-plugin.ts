@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Agent as HttpsAgent } from "node:https";
 import * as httpsProxyAgent from "https-proxy-agent";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-types";
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   captureWsEvent,
   resolveEffectiveDebugProxyUrl,
@@ -70,7 +70,7 @@ function hasGatewaySocketStarted(plugin: discordGateway.GatewayPlugin): boolean 
 }
 
 type ResolveDiscordGatewayIntentsParams = {
-  intentsConfig?: import("openclaw/plugin-sdk/config-types").DiscordIntentsConfig;
+  intentsConfig?: import("openclaw/plugin-sdk/config-contracts").DiscordIntentsConfig;
   voiceEnabled?: boolean;
 };
 

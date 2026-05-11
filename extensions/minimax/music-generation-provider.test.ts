@@ -40,6 +40,14 @@ function mockMusicGenerationResponse(json: Record<string, unknown>): void {
   });
 }
 
+function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): Record<string, unknown> {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected mock call ${index}`);
+  }
+  return call[0] as Record<string, unknown>;
+}
+
 describe("minimax music generation provider", () => {
   it("declares explicit mode capabilities", () => {
     expectExplicitMusicGenerationCapabilities(buildMinimaxMusicGenerationProvider());
@@ -63,33 +71,24 @@ describe("minimax music generation provider", () => {
       durationSeconds: 45,
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.minimax.io/v1/music_generation",
-        body: expect.objectContaining({
-          model: "music-2.6",
-          lyrics: "our city wakes",
-          output_format: "url",
-          audio_setting: {
-            sample_rate: 44100,
-            bitrate: 256000,
-            format: "mp3",
-          },
-        }),
-      }),
-    );
-    const request = postJsonRequestMock.mock.calls[0]?.[0];
+    const request = mockCallArg(postJsonRequestMock);
+    expect(request.url).toBe("https://api.minimax.io/v1/music_generation");
+    const body = request.body as Record<string, unknown>;
+    expect(body.model).toBe("music-2.6");
+    expect(body.lyrics).toBe("our city wakes");
+    expect(body.output_format).toBe("url");
+    expect(body.audio_setting).toEqual({
+      sample_rate: 44100,
+      bitrate: 256000,
+      format: "mp3",
+    });
     expect(request?.headers).toBeInstanceOf(Headers);
     const headers = request?.headers as Headers | undefined;
     expect(headers?.get("content-type")).toBe("application/json");
     expect(result.tracks).toHaveLength(1);
     expect(result.lyrics).toEqual(["our city wakes"]);
-    expect(result.metadata).toEqual(
-      expect.objectContaining({
-        taskId: "task-123",
-        audioUrl: "https://example.com/out.mp3",
-      }),
-    );
+    expect(result.metadata?.taskId).toBe("task-123");
+    expect(result.metadata?.audioUrl).toBe("https://example.com/out.mp3");
   });
 
   it("downloads tracks when url output is returned in data.audio", async () => {
@@ -148,14 +147,10 @@ describe("minimax music generation provider", () => {
       cfg: {},
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.objectContaining({
-          model: "music-2.6",
-          lyrics_optimizer: true,
-        }),
-      }),
-    );
+    const request = mockCallArg(postJsonRequestMock);
+    const body = request.body as Record<string, unknown>;
+    expect(body.model).toBe("music-2.6");
+    expect(body.lyrics_optimizer).toBe(true);
   });
 
   it("routes portal music generation through minimax-portal auth and HTTP config", async () => {
@@ -186,23 +181,14 @@ describe("minimax music generation provider", () => {
       },
     });
 
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "minimax-portal",
-      }),
-    );
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baseUrl: "https://api.minimaxi.com",
-        provider: "minimax-portal",
-        capability: "audio",
-        transport: "http",
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.minimaxi.com/v1/music_generation",
-      }),
+    expect(mockCallArg(resolveApiKeyForProviderMock).provider).toBe("minimax-portal");
+    const httpConfigParams = mockCallArg(resolveProviderHttpRequestConfigMock);
+    expect(httpConfigParams.baseUrl).toBe("https://api.minimaxi.com");
+    expect(httpConfigParams.provider).toBe("minimax-portal");
+    expect(httpConfigParams.capability).toBe("audio");
+    expect(httpConfigParams.transport).toBe("http");
+    expect(mockCallArg(postJsonRequestMock).url).toBe(
+      "https://api.minimaxi.com/v1/music_generation",
     );
   });
 });

@@ -107,6 +107,21 @@ function getSecondRequestInit(fetchImpl: ReturnType<typeof vi.fn>): RequestInit 
   return secondInit;
 }
 
+function expectAgentConstructorOptions(params: { bodyTimeout: number; headersTimeout: number }) {
+  const options = agentCtor.mock.calls[0]?.[0] as
+    | {
+        connect?: { lookup?: unknown };
+        allowH2?: boolean;
+        bodyTimeout?: number;
+        headersTimeout?: number;
+      }
+    | undefined;
+  expect(typeof options?.connect?.lookup).toBe("function");
+  expect(options?.allowH2).toBe(false);
+  expect(options?.bodyTimeout).toBe(params.bodyTimeout);
+  expect(options?.headersTimeout).toBe(params.headersTimeout);
+}
+
 async function expectRedirectFailure(params: {
   url: string;
   responses: Response[];
@@ -572,12 +587,12 @@ describe("fetchWithSsrFGuard hardening", () => {
         servername: "public.example",
       },
     });
-    expect(fetchImpl).toHaveBeenCalledWith(
-      "https://public.example/resource",
-      expect.objectContaining({
-        dispatcher: expect.any(Object),
-      }),
-    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const fetchCall = fetchImpl.mock.calls[0] as unknown as
+      | [string, { dispatcher?: unknown }]
+      | undefined;
+    expect(fetchCall?.[0]).toBe("https://public.example/resource");
+    expect(fetchCall?.[1].dispatcher).toBeTruthy();
     await result.release();
   });
 
@@ -1184,14 +1199,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(agentCtor).toHaveBeenCalledWith({
-      connect: expect.objectContaining({
-        lookup: expect.any(Function),
-      }),
-      allowH2: false,
-      bodyTimeout: 123_456,
-      headersTimeout: 123_456,
-    });
+    expectAgentConstructorOptions({ bodyTimeout: 123_456, headersTimeout: 123_456 });
     await result.release();
   });
 
@@ -1251,14 +1259,7 @@ describe("fetchWithSsrFGuard hardening", () => {
       });
 
       expect(fetchImpl).toHaveBeenCalledTimes(1);
-      expect(agentCtor).toHaveBeenCalledWith({
-        connect: expect.objectContaining({
-          lookup: expect.any(Function),
-        }),
-        allowH2: false,
-        bodyTimeout: 1_900_000,
-        headersTimeout: 1_900_000,
-      });
+      expectAgentConstructorOptions({ bodyTimeout: 1_900_000, headersTimeout: 1_900_000 });
       await result.release();
     } finally {
       resetGlobalUndiciStreamTimeoutsForTests();

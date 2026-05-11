@@ -153,15 +153,14 @@ describe("loadSettings default gateway URL derivation", () => {
     setControlUiBasePath(undefined);
     const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
 
-    expect(loadSettings()).toMatchObject({
-      gatewayUrl: expectedGatewayUrl(""),
-      token: "",
-    });
-    expect(warningSpy).not.toHaveBeenCalledWith(
-      "`--localstorage-file` was provided without a valid path",
-      expect.anything(),
-      expect.anything(),
-    );
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe(expectedGatewayUrl(""));
+    expect(settings.token).toBe("");
+    expect(
+      warningSpy.mock.calls.some(
+        ([message]) => message === "`--localstorage-file` was provided without a valid path",
+      ),
+    ).toBe(false);
   });
 
   it("ignores and scrubs legacy persisted tokens", () => {
@@ -180,11 +179,10 @@ describe("loadSettings default gateway URL derivation", () => {
       }),
     );
 
-    expect(loadSettings()).toMatchObject({
-      gatewayUrl: "wss://gateway.example:8443/openclaw",
-      token: "",
-      sessionKey: "agent",
-    });
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe("wss://gateway.example:8443/openclaw");
+    expect(settings.token).toBe("");
+    expect(settings.sessionKey).toBe("agent");
     const scopedKey = "openclaw.control.settings.v1:wss://gateway.example:8443/openclaw";
     expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).toEqual({
       gatewayUrl: "wss://gateway.example:8443/openclaw",
@@ -233,10 +231,9 @@ describe("loadSettings default gateway URL derivation", () => {
       borderRadius: 50,
     });
 
-    expect(loadSettings()).toMatchObject({
-      gatewayUrl: gwUrl,
-      token: "session-token",
-    });
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe(gwUrl);
+    expect(settings.token).toBe("session-token");
   });
 
   it("does not reuse a session token for a different gatewayUrl", () => {
@@ -282,10 +279,9 @@ describe("loadSettings default gateway URL derivation", () => {
       borderRadius: 50,
     });
 
-    expect(loadSettings()).toMatchObject({
-      gatewayUrl: gwUrl,
-      token: "gateway-a-token",
-    });
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe(gwUrl);
+    expect(settings.token).toBe("gateway-a-token");
   });
 
   it("does not persist gateway tokens when saving settings", () => {
@@ -312,10 +308,9 @@ describe("loadSettings default gateway URL derivation", () => {
       navGroupsCollapsed: {},
       borderRadius: 50,
     });
-    expect(loadSettings()).toMatchObject({
-      gatewayUrl: gwUrl,
-      token: "memory-only-token",
-    });
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe(gwUrl);
+    expect(settings.token).toBe("memory-only-token");
 
     const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
     expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).toEqual({
@@ -411,11 +406,13 @@ describe("loadSettings default gateway URL derivation", () => {
     });
 
     const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
-    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).toMatchObject({
-      theme: "dash",
-      themeMode: "light",
-      navWidth: 320,
-    });
+    const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    expect(persisted.theme).toBe("dash");
+    expect(persisted.themeMode).toBe("light");
+    expect(persisted.navWidth).toBe(320);
   });
 
   it("persists the browser-local custom theme payload when present", () => {
@@ -445,13 +442,10 @@ describe("loadSettings default gateway URL derivation", () => {
       customTheme,
     });
 
-    expect(loadSettings()).toMatchObject({
-      theme: "custom",
-      customTheme: {
-        label: "Light Green",
-        themeId: "cmlhfpjhw000004l4f4ax3m7z",
-      },
-    });
+    const settings = loadSettings();
+    expect(settings.theme).toBe("custom");
+    expect(settings.customTheme?.label).toBe("Light Green");
+    expect(settings.customTheme?.themeId).toBe("cmlhfpjhw000004l4f4ax3m7z");
   });
 
   it("falls back to claw when persisted custom theme data is invalid", () => {
@@ -493,10 +487,9 @@ describe("loadSettings default gateway URL derivation", () => {
       }),
     );
 
-    expect(loadSettings()).toMatchObject({
-      theme: "claw",
-      themeMode: "dark",
-    });
+    const settings = loadSettings();
+    expect(settings.theme).toBe("claw");
+    expect(settings.themeMode).toBe("dark");
   });
 
   it("scopes persisted session selection per gateway", () => {
@@ -524,11 +517,10 @@ describe("loadSettings default gateway URL derivation", () => {
       borderRadius: 50,
     });
 
-    expect(loadSettings()).toMatchObject({
-      gatewayUrl: gwUrl,
-      sessionKey: "agent:test_old:main",
-      lastActiveSessionKey: "agent:test_old:main",
-    });
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe(gwUrl);
+    expect(settings.sessionKey).toBe("agent:test_old:main");
+    expect(settings.lastActiveSessionKey).toBe("agent:test_old:main");
   });
 
   it("caps persisted session scopes to the most recent gateways", () => {
@@ -571,16 +563,14 @@ describe("loadSettings default gateway URL derivation", () => {
 
     const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}");
 
-    const sessionsByGateway = persisted.sessionsByGateway as unknown;
-    expect(sessionsByGateway).toEqual(
-      expect.objectContaining({
-        "wss://gateway.example:8443": {
-          sessionKey: "agent:current:main",
-          lastActiveSessionKey: "agent:current:main",
-        },
-      }),
-    );
-    const scopedSessions = sessionsByGateway as Record<string, unknown>;
+    const scopedSessions = persisted.sessionsByGateway as Record<
+      string,
+      { sessionKey: string; lastActiveSessionKey: string }
+    >;
+    expect(scopedSessions["wss://gateway.example:8443"]).toEqual({
+      sessionKey: "agent:current:main",
+      lastActiveSessionKey: "agent:current:main",
+    });
     const scopes = Object.keys(scopedSessions);
     expect(scopes).toHaveLength(10);
     // oldest stale entries should be evicted

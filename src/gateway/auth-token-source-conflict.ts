@@ -3,6 +3,7 @@ import { normalizeSecretInputString, resolveSecretInputRef } from "../config/typ
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const GATEWAY_ENV_TOKEN = "OPENCLAW_GATEWAY_TOKEN";
+const GATEWAY_SERVICE_KIND = "gateway";
 
 export type GatewayAuthTokenSourceConflict = {
   checkId: "gateway.env_token_overrides_config";
@@ -19,6 +20,10 @@ export function resolveGatewayAuthTokenSourceConflict(params: {
 }): GatewayAuthTokenSourceConflict | null {
   const envToken = normalizeOptionalString(params.env.OPENCLAW_GATEWAY_TOKEN);
   if (!envToken) {
+    return null;
+  }
+
+  if (params.env.OPENCLAW_SERVICE_KIND?.trim() === GATEWAY_SERVICE_KIND) {
     return null;
   }
 
@@ -48,14 +53,15 @@ export function resolveGatewayAuthTokenSourceConflict(params: {
     return null;
   }
 
-  const title = `${GATEWAY_ENV_TOKEN} overrides gateway.auth.token for CLI commands`;
+  const title = `${GATEWAY_ENV_TOKEN} conflicts with gateway.auth.token`;
   const detail =
     `${GATEWAY_ENV_TOKEN} is set while gateway.auth.token uses a different configured source. ` +
-    "CLI commands use env-first precedence, but the gateway server uses config-first precedence. " +
-    "If the values differ, CLI commands can fail to authenticate with the running gateway.";
+    "Direct local Gateway clients commonly prefer the env token, while the managed gateway service " +
+    "prefers gateway.auth.token. If the values differ, CLI/RPC calls can fail to authenticate " +
+    "with the running gateway.";
   const remediation =
-    `Remove ${GATEWAY_ENV_TOKEN} from the shell if gateway.auth.token is intended, ` +
-    "or point gateway.auth.token at the same env source if the env var should be canonical.";
+    `Remove ${GATEWAY_ENV_TOKEN} from the shell, ~/.openclaw/.env, or launchctl env if gateway.auth.token is intended, ` +
+    `or point gateway.auth.token at \${${GATEWAY_ENV_TOKEN}} if the env var should be canonical.`;
 
   return {
     checkId: "gateway.env_token_overrides_config",

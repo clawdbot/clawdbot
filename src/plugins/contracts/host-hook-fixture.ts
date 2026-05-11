@@ -1,7 +1,7 @@
 import type { OpenClawPluginApi } from "../types.js";
 
 export function registerHostHookFixture(api: OpenClawPluginApi) {
-  api.registerSessionExtension({
+  api.session.state.registerSessionExtension({
     namespace: "workflow",
     description: "Generic approval-workflow state projection",
   });
@@ -12,18 +12,18 @@ export function registerHostHookFixture(api: OpenClawPluginApi) {
     risk: "medium",
     tags: ["fixture", "approval"],
   });
-  api.registerControlUiDescriptor({
+  api.session.controls.registerControlUiDescriptor({
     id: "workflow-card",
     surface: "session",
     label: "Workflow Card",
     description: "Generic Control UI descriptor for workflow state",
     placement: "session-sidebar",
   });
-  api.registerRuntimeLifecycle({
+  api.lifecycle.registerRuntimeLifecycle({
     id: "workflow-cleanup",
     description: "Generic cleanup hook for plugin-owned workflow state",
   });
-  api.registerAgentEventSubscription({
+  api.agent.events.registerAgentEventSubscription({
     id: "workflow-events",
     description: "Generic sanitized agent-event subscription for workflow plugins",
     streams: ["lifecycle", "tool"],
@@ -36,7 +36,7 @@ export function registerHostHookFixture(api: OpenClawPluginApi) {
       }
     },
   });
-  api.registerSessionSchedulerJob({
+  api.session.workflow.registerSessionSchedulerJob({
     id: "workflow-nudge",
     sessionKey: "agent:main:main",
     kind: "nudge",

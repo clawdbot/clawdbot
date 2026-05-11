@@ -135,10 +135,8 @@ describe("browser cli snapshot defaults", () => {
     if (expectMode === undefined) {
       expect((params?.query as { mode?: unknown } | undefined)?.mode).toBeUndefined();
     } else {
-      expect(params?.query).toMatchObject({
-        format: "ai",
-        mode: expectMode,
-      });
+      expect(params?.query?.format).toBe("ai");
+      expect(params?.query?.mode).toBe(expectMode);
     }
   });
 
@@ -151,36 +149,30 @@ describe("browser cli snapshot defaults", () => {
   it("applies explicit efficient mode without config defaults", async () => {
     configMocks.loadConfig.mockReturnValue({ browser: {} });
     const params = await runSnapshot(["--efficient"]);
-    expect(params?.query).toMatchObject({
-      format: "ai",
-      mode: "efficient",
-    });
+    expect(params?.query?.format).toBe("ai");
+    expect(params?.query?.mode).toBe("efficient");
   });
 
   it("passes URL expansion for snapshots", async () => {
     const params = await runSnapshot(["--urls"]);
-    expect(params?.query).toMatchObject({
-      format: "ai",
-      urls: true,
-    });
+    expect(params?.query?.format).toBe("ai");
+    expect(params?.query?.urls).toBe(true);
   });
 
   it("sends screenshot request with trimmed target id and jpeg type", async () => {
     const params = await runBrowserInspect(["screenshot", " tab-1 ", "--type", "jpeg"], true);
     expect(params?.path).toBe("/screenshot");
-    expect((params as { body?: Record<string, unknown> } | undefined)?.body).toMatchObject({
-      targetId: "tab-1",
-      type: "jpeg",
-      fullPage: false,
-    });
+    const body = (params as { body?: Record<string, unknown> } | undefined)?.body;
+    expect(body?.targetId).toBe("tab-1");
+    expect(body?.type).toBe("jpeg");
+    expect(body?.fullPage).toBe(false);
   });
 
   it("passes screenshot labels", async () => {
     const params = await runBrowserInspect(["screenshot", "tab-1", "--labels"], true);
     expect(params?.path).toBe("/screenshot");
-    expect((params as { body?: Record<string, unknown> } | undefined)?.body).toMatchObject({
-      targetId: "tab-1",
-      labels: true,
-    });
+    const body = (params as { body?: Record<string, unknown> } | undefined)?.body;
+    expect(body?.targetId).toBe("tab-1");
+    expect(body?.labels).toBe(true);
   });
 });

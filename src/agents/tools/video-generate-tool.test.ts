@@ -147,6 +147,18 @@ function mockSavedVideoResult(fileName = "out.mp4") {
   return generateSpy;
 }
 
+function resultDetails(result: { details?: unknown }): Record<string, unknown> {
+  expect(result.details).toBeDefined();
+  expect(typeof result.details).toBe("object");
+  return result.details as Record<string, unknown>;
+}
+
+function firstMockCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
+  const firstCall = mock.mock.calls[0];
+  expect(firstCall).toBeDefined();
+  return firstCall[0];
+}
+
 function resetVideoGenerateMocks() {
   vi.restoreAllMocks();
   for (const key of VIDEO_GENERATION_PROVIDER_AUTH_ENV_VARS) {
@@ -336,16 +348,15 @@ describe("createVideoGenerateTool", () => {
     );
     expect(text).toContain("Generated 1 video with qwen/wan2.6-t2v.");
     expect(text).toContain("MEDIA:/tmp/generated-lobster.mp4");
-    expect(result.details).toMatchObject({
-      provider: "qwen",
-      model: "wan2.6-t2v",
-      count: 1,
-      media: {
-        mediaUrls: ["/tmp/generated-lobster.mp4"],
-      },
-      paths: ["/tmp/generated-lobster.mp4"],
-      metadata: { taskId: "task-1" },
-    });
+    const details = resultDetails(result);
+    expect(details.provider).toBe("qwen");
+    expect(details.model).toBe("wan2.6-t2v");
+    expect(details.count).toBe(1);
+    expect((details.media as { mediaUrls?: string[] }).mediaUrls).toEqual([
+      "/tmp/generated-lobster.mp4",
+    ]);
+    expect(details.paths).toEqual(["/tmp/generated-lobster.mp4"]);
+    expect(details.metadata).toEqual({ taskId: "task-1" });
     expect(taskExecutorMocks.createRunningTaskRun).not.toHaveBeenCalled();
     expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalled();
   });
@@ -431,16 +442,15 @@ describe("createVideoGenerateTool", () => {
     expect(saveSpy).not.toHaveBeenCalled();
     expect(text).toContain("Generated 1 video with vydra/veo3.");
     expect(text).toContain("MEDIA:https://example.com/generated-lobster.mp4");
-    expect(result.details).toMatchObject({
-      provider: "vydra",
-      model: "veo3",
-      count: 1,
-      media: {
-        mediaUrls: ["https://example.com/generated-lobster.mp4"],
-      },
-      paths: ["https://example.com/generated-lobster.mp4"],
-      metadata: { taskId: "task-1" },
-    });
+    const details = resultDetails(result);
+    expect(details.provider).toBe("vydra");
+    expect(details.model).toBe("veo3");
+    expect(details.count).toBe(1);
+    expect((details.media as { mediaUrls?: string[] }).mediaUrls).toEqual([
+      "https://example.com/generated-lobster.mp4",
+    ]);
+    expect(details.paths).toEqual(["https://example.com/generated-lobster.mp4"]);
+    expect(details.metadata).toEqual({ taskId: "task-1" });
   });
 
   it("falls back to the provider URL when generated video persistence exceeds the media cap", async () => {
@@ -482,15 +492,14 @@ describe("createVideoGenerateTool", () => {
 
     expect(text).toContain("Generated 1 video with fal/fal-ai/minimax/video-01-live.");
     expect(text).toContain("MEDIA:https://fal.run/files/generated-lobster.mp4");
-    expect(result.details).toMatchObject({
-      provider: "fal",
-      model: "fal-ai/minimax/video-01-live",
-      count: 1,
-      media: {
-        mediaUrls: ["https://fal.run/files/generated-lobster.mp4"],
-      },
-      paths: ["https://fal.run/files/generated-lobster.mp4"],
-    });
+    const details = resultDetails(result);
+    expect(details.provider).toBe("fal");
+    expect(details.model).toBe("fal-ai/minimax/video-01-live");
+    expect(details.count).toBe(1);
+    expect((details.media as { mediaUrls?: string[] }).mediaUrls).toEqual([
+      "https://fal.run/files/generated-lobster.mp4",
+    ]);
+    expect(details.paths).toEqual(["https://fal.run/files/generated-lobster.mp4"]);
   });
 
   it("starts background generation and wakes the session with url-only MEDIA lines", async () => {
@@ -552,39 +561,35 @@ describe("createVideoGenerateTool", () => {
 
     expect(text).toContain("Background task started for video generation (task-123).");
     expect(text).toContain("Do not call video_generate again for this request.");
-    expect(result.details).toMatchObject({
-      async: true,
-      status: "started",
-      task: {
-        taskId: "task-123",
-      },
-    });
+    const details = resultDetails(result);
+    expect(details.async).toBe(true);
+    expect(details.status).toBe("started");
+    expect((details.task as { taskId?: string }).taskId).toBe("task-123");
     if (!scheduledWork) {
       throw new Error("expected scheduled video generation work");
     }
     await scheduledWork();
     expect(saveSpy).not.toHaveBeenCalled();
-    expect(taskExecutorMocks.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: expect.stringMatching(/^tool:video_generate:/),
-        progressSummary: "Generating video",
-      }),
-    );
-    expect(taskExecutorMocks.completeTaskRunByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: expect.stringMatching(/^tool:video_generate:/),
-      }),
-    );
-    expect(wakeSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        handle: expect.objectContaining({
-          taskId: "task-123",
-        }),
-        status: "ok",
-        mediaUrls: ["https://example.com/generated-lobster.mp4"],
-        result: expect.stringContaining("MEDIA:https://example.com/generated-lobster.mp4"),
-      }),
-    );
+    const progress = firstMockCallArg(taskExecutorMocks.recordTaskRunProgressByRunId) as {
+      runId: string;
+      progressSummary: string;
+    };
+    expect(progress.runId).toMatch(/^tool:video_generate:/);
+    expect(progress.progressSummary).toBe("Generating video");
+    const completion = firstMockCallArg(taskExecutorMocks.completeTaskRunByRunId) as {
+      runId: string;
+    };
+    expect(completion.runId).toMatch(/^tool:video_generate:/);
+    const wake = firstMockCallArg(wakeSpy) as {
+      handle: { taskId?: string };
+      status: string;
+      mediaUrls: string[];
+      result: string;
+    };
+    expect(wake.handle.taskId).toBe("task-123");
+    expect(wake.status).toBe("ok");
+    expect(wake.mediaUrls).toEqual(["https://example.com/generated-lobster.mp4"]);
+    expect(wake.result).toContain("MEDIA:https://example.com/generated-lobster.mp4");
   });
 
   it("surfaces provider generation failures inline when there is no detached session", async () => {
@@ -663,17 +668,20 @@ describe("createVideoGenerateTool", () => {
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
     expect(text).toContain("Duration normalized: requested 5s; used 6s.");
-    expect(result.details).toMatchObject({
-      durationSeconds: 6,
-      requestedDurationSeconds: 5,
-      supportedDurationSeconds: [4, 6, 8],
-      normalization: {
-        durationSeconds: {
-          requested: 5,
-          applied: 6,
-          supportedValues: [4, 6, 8],
-        },
-      },
+    const details = resultDetails(result);
+    expect(details.durationSeconds).toBe(6);
+    expect(details.requestedDurationSeconds).toBe(5);
+    expect(details.supportedDurationSeconds).toEqual([4, 6, 8]);
+    expect(
+      (
+        details.normalization as {
+          durationSeconds?: { requested?: number; applied?: number; supportedValues?: number[] };
+        }
+      ).durationSeconds,
+    ).toEqual({
+      requested: 5,
+      applied: 6,
+      supportedValues: [4, 6, 8],
     });
   });
 
@@ -726,20 +734,20 @@ describe("createVideoGenerateTool", () => {
       size: "1280x720",
     });
 
-    expect(result.details).toMatchObject({
-      aspectRatio: "16:9",
-      normalization: {
-        aspectRatio: {
-          applied: "16:9",
-          derivedFrom: "size",
-        },
-      },
-      metadata: {
-        requestedSize: "1280x720",
-        normalizedAspectRatio: "16:9",
-      },
+    const details = resultDetails(result);
+    expect(details.aspectRatio).toBe("16:9");
+    expect(
+      (details.normalization as { aspectRatio?: { applied?: string; derivedFrom?: string } })
+        .aspectRatio,
+    ).toEqual({
+      applied: "16:9",
+      derivedFrom: "size",
     });
-    expect(result.details).not.toHaveProperty("size");
+    expect(details.metadata).toEqual({
+      requestedSize: "1280x720",
+      normalizedAspectRatio: "16:9",
+    });
+    expect(details).not.toHaveProperty("size");
   });
 
   it("lists supported provider durations when advertised", async () => {
@@ -783,14 +791,13 @@ describe("createVideoGenerateTool", () => {
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
     expect(text).toContain("modes=generate/imageToVideo");
     expect(text).toContain("supportedDurationSeconds=4/6/8");
-    expect(result.details).toMatchObject({
-      providers: [
-        expect.objectContaining({
-          id: "google",
-          modes: ["generate", "imageToVideo"],
-        }),
-      ],
-    });
+    const providers = resultDetails(result).providers as Array<{
+      id?: string;
+      modes?: string[];
+    }>;
+    expect(providers).toHaveLength(1);
+    expect(providers[0]?.id).toBe("google");
+    expect(providers[0]?.modes).toEqual(["generate", "imageToVideo"]);
   });
 
   it("rejects image-to-video when the provider disables that mode", async () => {
@@ -899,21 +906,19 @@ describe("createVideoGenerateTool", () => {
     expect(text).toContain(
       "Warning: Ignored unsupported overrides for openai/sora-2: resolution=720P, audio=false, watermark=false.",
     );
-    expect(result).toMatchObject({
-      details: {
-        size: "1280x720",
-        warning:
-          "Ignored unsupported overrides for openai/sora-2: resolution=720P, audio=false, watermark=false.",
-        ignoredOverrides: [
-          { key: "resolution", value: "720P" },
-          { key: "audio", value: false },
-          { key: "watermark", value: false },
-        ],
-      },
-    });
-    expect(result.details).not.toHaveProperty("resolution");
-    expect(result.details).not.toHaveProperty("audio");
-    expect(result.details).not.toHaveProperty("watermark");
+    const details = resultDetails(result);
+    expect(details.size).toBe("1280x720");
+    expect(details.warning).toBe(
+      "Ignored unsupported overrides for openai/sora-2: resolution=720P, audio=false, watermark=false.",
+    );
+    expect(details.ignoredOverrides).toEqual([
+      { key: "resolution", value: "720P" },
+      { key: "audio", value: false },
+      { key: "watermark", value: false },
+    ]);
+    expect(details).not.toHaveProperty("resolution");
+    expect(details).not.toHaveProperty("audio");
+    expect(details).not.toHaveProperty("watermark");
   });
 
   it("rejects providerOptions that is not a plain JSON object", async () => {
@@ -955,12 +960,12 @@ describe("createVideoGenerateTool", () => {
       providerOptions: { seed: 42, draft: true },
     });
 
-    expect(generateSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        autoProviderFallback: false,
-        providerOptions: { seed: 42, draft: true },
-      }),
-    );
+    const input = firstMockCallArg(generateSpy) as {
+      autoProviderFallback?: boolean;
+      providerOptions?: unknown;
+    };
+    expect(input.autoProviderFallback).toBe(false);
+    expect(input.providerOptions).toEqual({ seed: 42, draft: true });
   });
 
   it("rejects *Roles arrays that are longer than the asset list", async () => {
@@ -1048,12 +1053,10 @@ describe("createVideoGenerateTool", () => {
       image: "/tmp/reference.png",
     });
 
-    expect(webMedia.loadWebMedia).toHaveBeenCalledWith(
-      "/tmp/reference.png",
-      expect.objectContaining({
-        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
-      }),
-    );
+    const loadCall = vi.mocked(webMedia.loadWebMedia).mock.calls[0];
+    expect(loadCall?.[0]).toBe("/tmp/reference.png");
+    const loadOptions = loadCall?.[1] as { ssrfPolicy?: unknown } | undefined;
+    expect(loadOptions?.ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
   });
 
   it("rejects audio data: URLs via the templated rejection branch", async () => {
@@ -1082,7 +1085,9 @@ describe("createVideoGenerateTool", () => {
       aspectRatio: "adaptive",
     });
 
-    expect(generateSpy).toHaveBeenCalledWith(expect.objectContaining({ aspectRatio: "adaptive" }));
+    expect((firstMockCallArg(generateSpy) as { aspectRatio?: string }).aspectRatio).toBe(
+      "adaptive",
+    );
   });
 
   it("accepts provider-specific aspectRatio and resolution values and forwards them to the runtime", async () => {
@@ -1096,11 +1101,8 @@ describe("createVideoGenerateTool", () => {
       resolution: "draft-large",
     });
 
-    expect(generateSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        aspectRatio: "17:9",
-        resolution: "draft-large",
-      }),
-    );
+    const input = firstMockCallArg(generateSpy) as { aspectRatio?: string; resolution?: string };
+    expect(input.aspectRatio).toBe("17:9");
+    expect(input.resolution).toBe("draft-large");
   });
 });

@@ -6,6 +6,7 @@ export const matrixSingleAccountKeysToMove = [
   "initialSyncLimit",
   "encryption",
   "allowlistOnly",
+  "dangerouslyAllowNameMatching",
   "allowBots",
   "blockStreaming",
   "replyToMode",

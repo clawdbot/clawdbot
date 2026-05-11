@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 
@@ -274,11 +274,8 @@ function createAnthropicFastModeWrapper(baseStreamFn: StreamFn | undefined, fast
   return createAnthropicServiceTierWrapper(baseStreamFn, fastMode ? "auto" : "standard_only");
 }
 
+import { isAnthropicBedrockModel } from "./pi-embedded-runner/anthropic-family-cache-semantics.js";
 import { createAnthropicToolPayloadCompatibilityWrapper } from "./pi-embedded-runner/anthropic-family-tool-payload-compat.js";
-import {
-  createBedrockNoCacheWrapper,
-  isAnthropicBedrockModel,
-} from "./pi-embedded-runner/bedrock-stream-wrappers.js";
 import {
   applyExtraParamsToAgent,
   resolveAgentTransportOverride,
@@ -291,6 +288,7 @@ import { createMinimaxFastModeWrapper } from "./pi-embedded-runner/minimax-strea
 import {
   createCodexNativeWebSearchWrapper,
   createOpenAIAttributionHeadersWrapper,
+  createOpenAICompletionsStrictMessageKeysWrapper,
   createOpenAIDefaultTransportWrapper,
   createOpenAIFastModeWrapper,
   createOpenAIReasoningCompatibilityWrapper,
@@ -337,7 +335,7 @@ function installFullProviderRuntimeDepsForTest() {
       if (params.provider === "amazon-bedrock") {
         return isAnthropicBedrockModel(params.context.modelId)
           ? params.context.streamFn
-          : createBedrockNoCacheWrapper(params.context.streamFn);
+          : createTestBedrockNoCacheWrapper(params.context.streamFn);
       }
       if (params.provider === "google") {
         return createGoogleThinkingPayloadWrapper(
@@ -395,6 +393,15 @@ function installFullProviderRuntimeDepsForTest() {
   });
 }
 
+function createTestBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? (() => ({}) as ReturnType<StreamFn>);
+  return (model, context, options) =>
+    underlying(model, context, {
+      ...options,
+      cacheRetention: "none",
+    });
+}
+
 function withMinimalProviderRuntimeDepsForTest<T>(run: () => T): T {
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: () => undefined,
@@ -437,6 +444,7 @@ function createTestOpenAIProviderWrapper(
     agentDir: params.context.agentDir,
   });
   streamFn = createOpenAIStringContentWrapper(streamFn);
+  streamFn = createOpenAICompletionsStrictMessageKeysWrapper(streamFn);
   return createOpenAIResponsesContextManagementWrapper(
     createOpenAIReasoningCompatibilityWrapper(
       createOpenAIThinkingLevelWrapper(streamFn, params.context.thinkingLevel),
@@ -1121,6 +1129,55 @@ describe("applyExtraParamsToAgent", () => {
       {
         role: "user",
         content: "Line one\nLine two",
+      },
+    ]);
+  });
+
+  it("strips extra OpenAI completions message keys for strict-key compat models", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "infomaniak",
+      applyModelId: "mistral3",
+      model: {
+        api: "openai-completions",
+        provider: "infomaniak",
+        id: "mistral3",
+        name: "mistral3",
+        baseUrl: "https://api.infomaniak.com/1/ai/example/openai",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32768,
+        maxTokens: 4096,
+        compat: {
+          strictMessageKeys: true,
+        } as Record<string, unknown>,
+      } as unknown as Model<"openai-completions">,
+      payload: {
+        messages: [
+          {
+            role: "assistant",
+            content: "calling tool",
+            name: "agent",
+            tool_calls: [{ id: "call_1", type: "function", function: { name: "noop" } }],
+            cache_control: { type: "ephemeral" },
+          },
+          {
+            role: "tool",
+            content: "tool result",
+            tool_call_id: "call_1",
+          },
+        ],
+      },
+    });
+
+    expect(payload.messages).toEqual([
+      {
+        role: "assistant",
+        content: "calling tool",
+      },
+      {
+        role: "tool",
+        content: "tool result",
       },
     ]);
   });

@@ -73,6 +73,10 @@ vi.mock("./status.gather.js", () => ({
 }));
 
 describe("printDaemonStatus", () => {
+  function expectMockLineContains(mock: typeof runtime.log, expected: string) {
+    expect(mock.mock.calls.some(([line]) => line.includes(expected))).toBe(true);
+  }
+
   beforeEach(() => {
     runtime.log.mockReset();
     runtime.error.mockReset();
@@ -117,12 +121,8 @@ describe("printDaemonStatus", () => {
       { json: false },
     );
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Gateway runtime PID does not own the listening port"),
-    );
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining(formatCliCommand("openclaw gateway restart")),
-    );
+    expectMockLineContains(runtime.error, "Gateway runtime PID does not own the listening port");
+    expectMockLineContains(runtime.error, formatCliCommand("openclaw gateway restart"));
   });
 
   it("prints probe kind and capability separately", () => {
@@ -153,8 +153,8 @@ describe("printDaemonStatus", () => {
       { json: false },
     );
 
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Connectivity probe: ok"));
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Capability: write-capable"));
+    expectMockLineContains(runtime.log, "Connectivity probe: ok");
+    expectMockLineContains(runtime.log, "Capability: write-capable");
   });
 
   it("prints CLI and gateway versions with readable guidance when they differ", () => {
@@ -190,17 +190,12 @@ describe("printDaemonStatus", () => {
       { json: false },
     );
 
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("CLI version: 2026.4.23 (/usr/local/bin/openclaw)"),
-    );
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Gateway version: 2026.5.6"));
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("this OpenClaw command is version 2026.4.23"),
-    );
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "if this mismatch is unexpected, update PATH so `openclaw` points to the version you want",
-      ),
+    expectMockLineContains(runtime.log, "CLI version: 2026.4.23 (/usr/local/bin/openclaw)");
+    expectMockLineContains(runtime.log, "Gateway version: 2026.5.6");
+    expectMockLineContains(runtime.error, "this OpenClaw command is version 2026.4.23");
+    expectMockLineContains(
+      runtime.error,
+      "if this mismatch is unexpected, update PATH so `openclaw` points to the version you want",
     );
   });
 
@@ -231,12 +226,8 @@ describe("printDaemonStatus", () => {
       { json: false },
     );
 
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Recent restart handoff: full-process via launchd"),
-    );
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("reason=plugin source changed"),
-    );
+    expectMockLineContains(runtime.log, "Recent restart handoff: full-process via launchd");
+    expectMockLineContains(runtime.log, "reason=plugin source changed");
   });
 
   it("passes daemon TLS state to dashboard link rendering", () => {
@@ -289,5 +280,39 @@ describe("printDaemonStatus", () => {
       basePath: "/ui",
       tlsEnabled: true,
     });
+  });
+
+  it("prints deep config warnings", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        config: {
+          cli: {
+            path: "/tmp/openclaw-cli/openclaw.json",
+            exists: true,
+            valid: true,
+            warnings: [
+              {
+                path: "plugins.entries.test-bad-plugin",
+                message:
+                  "plugin test-bad-plugin: channel plugin manifest declares test-bad-plugin without channelConfigs metadata",
+              },
+            ],
+          },
+          mismatch: false,
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.error, "Config warnings:");
+    expectMockLineContains(runtime.error, "without channelConfigs metadata");
   });
 });

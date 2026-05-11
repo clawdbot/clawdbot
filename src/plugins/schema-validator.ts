@@ -16,7 +16,7 @@ type AjvLike = {
           validate: (value: string) => boolean;
         },
   ) => AjvLike;
-  compile: (schema: JsonSchemaObject) => ValidateFunction;
+  compile: (schema: JsonSchemaValue) => ValidateFunction;
 };
 const ajvSingletons = new Map<"default" | "defaults", AjvLike>();
 
@@ -56,13 +56,15 @@ function getAjv(mode: "default" | "defaults"): AjvLike {
 type CachedValidator = {
   hasDefaults: boolean;
   validate: ValidateFunction;
-  schema: JsonSchemaObject;
+  schema: JsonSchemaValue;
   schemaFingerprint: string;
 };
 
+export type JsonSchemaValue = JsonSchemaObject | boolean;
+
 const schemaCache = new PluginLruCache<CachedValidator>(512);
 
-function fingerprintSchema(schema: JsonSchemaObject): string {
+function fingerprintSchema(schema: JsonSchemaValue): string {
   return JSON.stringify(schema);
 }
 
@@ -198,7 +200,7 @@ function formatAjvErrors(errors: ErrorObject[] | null | undefined): JsonSchemaVa
 }
 
 export function validateJsonSchemaValue(params: {
-  schema: JsonSchemaObject;
+  schema: JsonSchemaValue;
   cacheKey: string;
   value: unknown;
   applyDefaults?: boolean;

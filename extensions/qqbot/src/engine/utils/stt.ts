@@ -2,7 +2,7 @@
  * OpenAI-compatible STT (Speech-to-Text) configuration and transcription.
  *
  * Migrated from `src/stt.ts` — uses core/utils/string-normalize instead
- * of openclaw/plugin-sdk/text-runtime.
+ * of broad SDK text barrels.
  */
 
 import * as fs from "node:fs";

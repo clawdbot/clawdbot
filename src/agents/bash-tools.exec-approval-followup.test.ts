@@ -43,6 +43,7 @@ function expectGatewayAgentFollowup(expected: Record<string, unknown>) {
     expect(params[key]).toBe(value);
   }
   expect(call[3]).toEqual({ expectFinal: true });
+  return params;
 }
 
 function expectDirectSend(expected: Record<string, unknown>) {
@@ -293,18 +294,12 @@ describe("exec approval followup", () => {
       idempotencyKey: "exec-approval-followup:req-elevated-75832:nonce:nonce-75832",
     });
 
-    expect(callGatewayTool).toHaveBeenCalledWith(
-      "agent",
-      expect.any(Object),
-      expect.objectContaining({
-        sessionKey: "agent:main:telegram:direct:123",
-        channel: "telegram",
-        idempotencyKey: "exec-approval-followup:req-elevated-75832:nonce:nonce-75832",
-        internalRuntimeHandoffId: "handoff-75832",
-      }),
-      { expectFinal: true },
-    );
-    const [, , agentArgs] = vi.mocked(callGatewayTool).mock.calls[0] ?? [];
+    const agentArgs = expectGatewayAgentFollowup({
+      sessionKey: "agent:main:telegram:direct:123",
+      channel: "telegram",
+      idempotencyKey: "exec-approval-followup:req-elevated-75832:nonce:nonce-75832",
+      internalRuntimeHandoffId: "handoff-75832",
+    });
     expect(agentArgs).not.toHaveProperty("bashElevated");
     expect(agentArgs).not.toHaveProperty("execApprovalFollowupToken");
   });

@@ -111,6 +111,25 @@ function createEditClient(originalContent: Record<string, unknown>) {
   return { client, sendMessage };
 }
 
+function expectRecordFields(value: unknown, expected: Record<string, unknown>) {
+  expect(value).toBeDefined();
+  expect(typeof value).toBe("object");
+  expect(value).not.toBeNull();
+  const actual = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(expectedValue);
+  }
+  return actual;
+}
+
+function mockCallArg(
+  mockFn: { mock: { calls: unknown[][] } },
+  callIndex: number,
+  argIndex: number,
+) {
+  return mockFn.mock.calls[callIndex]?.[argIndex];
+}
+
 describe("matrix message actions", () => {
   it("forwards timeoutMs to the shared Matrix edit helper", async () => {
     const editSpy = vi.spyOn(sendModule, "editMessageMatrix").mockResolvedValue("evt-edit");
@@ -149,15 +168,13 @@ describe("matrix message actions", () => {
     );
 
     expect(result).toEqual({ eventId: "evt-edit" });
-    expect(sendMessage).toHaveBeenCalledWith(
-      "!room:example.org",
-      expect.objectContaining({
-        "m.mentions": { user_ids: ["@bob:example.org"] },
-        "m.new_content": expect.objectContaining({
-          "m.mentions": { user_ids: ["@alice:example.org", "@bob:example.org"] },
-        }),
-      }),
-    );
+    expect(sendMessage.mock.calls[0]?.[0]).toBe("!room:example.org");
+    const content = expectRecordFields(sendMessage.mock.calls[0]?.[1], {
+      "m.mentions": { user_ids: ["@bob:example.org"] },
+    });
+    expectRecordFields(content["m.new_content"], {
+      "m.mentions": { user_ids: ["@alice:example.org", "@bob:example.org"] },
+    });
   });
 
   it("does not re-notify legacy mentions when action edits target pre-m.mentions messages", async () => {
@@ -174,16 +191,14 @@ describe("matrix message actions", () => {
     );
 
     expect(result).toEqual({ eventId: "evt-edit" });
-    expect(sendMessage).toHaveBeenCalledWith(
-      "!room:example.org",
-      expect.objectContaining({
-        "m.mentions": {},
-        "m.new_content": expect.objectContaining({
-          body: "hello again @alice:example.org",
-          "m.mentions": { user_ids: ["@alice:example.org"] },
-        }),
-      }),
-    );
+    expect(sendMessage.mock.calls[0]?.[0]).toBe("!room:example.org");
+    const content = expectRecordFields(sendMessage.mock.calls[0]?.[1], {
+      "m.mentions": {},
+    });
+    expectRecordFields(content["m.new_content"], {
+      body: "hello again @alice:example.org",
+      "m.mentions": { user_ids: ["@alice:example.org"] },
+    });
   });
 
   it("includes poll snapshots when reading message history", async () => {
@@ -214,11 +229,9 @@ describe("matrix message actions", () => {
 
     const result = await readMatrixMessages("room:!room:example.org", { client, limit: 2.9 });
 
-    expect(doRequest).toHaveBeenCalledWith(
-      "GET",
-      expect.stringContaining("/rooms/!room%3Aexample.org/messages"),
-      expect.objectContaining({ limit: 2 }),
-    );
+    expect(mockCallArg(doRequest, 0, 0)).toBe("GET");
+    expect(String(mockCallArg(doRequest, 0, 1))).toContain("/rooms/!room%3Aexample.org/messages");
+    expectRecordFields(mockCallArg(doRequest, 0, 2), { limit: 2 });
     expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$poll");
     expect(getRelations).toHaveBeenCalledWith(
       "!room:example.org",
@@ -229,17 +242,16 @@ describe("matrix message actions", () => {
         from: undefined,
       },
     );
-    expect(result.messages).toEqual([
-      expect.objectContaining({
-        eventId: "$poll",
-        body: expect.stringContaining("1. Apple (1 vote)"),
-        msgtype: "m.text",
-      }),
-      expect.objectContaining({
-        eventId: "$msg",
-        body: "hello",
-      }),
-    ]);
+    expect(result.messages).toHaveLength(2);
+    expectRecordFields(result.messages[0], {
+      eventId: "$poll",
+      msgtype: "m.text",
+    });
+    expect(result.messages[0]?.body).toContain("1. Apple (1 vote)");
+    expectRecordFields(result.messages[1], {
+      eventId: "$msg",
+      body: "hello",
+    });
   });
 
   it("dedupes multiple poll events for the same poll within one read page", async () => {
@@ -252,12 +264,8 @@ describe("matrix message actions", () => {
     const result = await readMatrixMessages("room:!room:example.org", { client });
 
     expect(result.messages).toHaveLength(1);
-    expect(result.messages[0]).toEqual(
-      expect.objectContaining({
-        eventId: "$poll",
-        body: expect.stringContaining("[Poll]"),
-      }),
-    );
+    expectRecordFields(result.messages[0], { eventId: "$poll" });
+    expect(result.messages[0]?.body).toContain("[Poll]");
     expect(getEvent).toHaveBeenCalledTimes(1);
   });
 
@@ -279,10 +287,12 @@ describe("matrix message actions", () => {
 
     const result = await readMatrixMessages("room:!room:example.org", { client });
 
-    expect(hydrateEvents).toHaveBeenCalledWith(
-      "!room:example.org",
-      expect.arrayContaining([expect.objectContaining({ event_id: "$enc" })]),
-    );
+    expect(hydrateEvents.mock.calls[0]?.[0]).toBe("!room:example.org");
+    expect(
+      (hydrateEvents.mock.calls[0]?.[1] as Array<Record<string, unknown>> | undefined)?.some(
+        (event) => event.event_id === "$enc",
+      ),
+    ).toBe(true);
     expect(result.messages).toHaveLength(1);
     expect(result.messages[0]?.eventId).toBe("$poll");
   });

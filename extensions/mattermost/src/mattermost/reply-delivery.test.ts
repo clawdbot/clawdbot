@@ -123,11 +123,11 @@ describe("deliverMattermostReplyPayload", () => {
     expect(sendMessage).toHaveBeenCalledWith(
       "channel:town-square",
       "Intro line\nReasoning: appears in content but is not a prefix",
-      expect.objectContaining({
+      {
         cfg,
         accountId: "default",
         replyToId: "root-post",
-      }),
+      },
     );
   });
 
@@ -158,17 +158,20 @@ describe("deliverMattermostReplyPayload", () => {
       });
 
       expect(sendMessage).toHaveBeenCalledTimes(1);
-      expect(sendMessage).toHaveBeenCalledWith(
-        "channel:town-square",
-        "caption",
-        expect.objectContaining({
-          cfg,
-          accountId: "default",
-          mediaUrl,
-          replyToId: "root-post",
-          mediaLocalRoots: expect.arrayContaining([path.join(stateDir, `workspace-${agentId}`)]),
-        }),
-      );
+      expect(sendMessage).toHaveBeenCalledWith("channel:town-square", "caption", {
+        cfg,
+        accountId: "default",
+        mediaUrl,
+        replyToId: "root-post",
+        mediaLocalRoots: [
+          path.join(os.tmpdir(), "openclaw"),
+          path.join(stateDir, "media"),
+          path.join(stateDir, "canvas"),
+          path.join(stateDir, "workspace"),
+          path.join(stateDir, "sandboxes"),
+          path.join(stateDir, `workspace-${agentId}`),
+        ],
+      });
     } finally {
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
@@ -199,14 +202,10 @@ describe("deliverMattermostReplyPayload", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith(
-      "channel:town-square",
-      "hello",
-      expect.objectContaining({
-        cfg,
-        accountId: "default",
-        replyToId: "root-post",
-      }),
-    );
+    expect(sendMessage).toHaveBeenCalledWith("channel:town-square", "hello", {
+      cfg,
+      accountId: "default",
+      replyToId: "root-post",
+    });
   });
 });

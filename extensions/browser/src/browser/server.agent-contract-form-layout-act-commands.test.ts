@@ -112,6 +112,44 @@ async function withSymlinkPathEscape<T>(params: {
   }
 }
 
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value;
+}
+
+function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
+  const record = requireRecord(value, label);
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key]).toEqual(expectedValue);
+  }
+}
+
+function requireMockArg(mock: MockWithCalls, callIndex = 0, argIndex = 0) {
+  return requireRecord(mock.mock.calls[callIndex]?.[argIndex], "mock call argument");
+}
+
+function expectBrowserCallFields(
+  mock: MockWithCalls,
+  expected: Record<string, unknown>,
+  callIndex = 0,
+) {
+  const arg = requireMockArg(mock, callIndex);
+  expect(typeof arg.cdpUrl).toBe("string");
+  expectRecordFields(arg, "browser call argument", expected);
+}
+
+function expectOkResult(result: unknown) {
+  expect(requireRecord(result, "response").ok).toBe(true);
+}
+
 describe("browser control server", () => {
   installAgentContractHooks();
 
@@ -128,14 +166,11 @@ describe("browser control server", () => {
         values: ["a", "b"],
       });
       expect(select.ok).toBe(true);
-      expect(pwMocks.selectOptionViaPlaywright).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cdpUrl: expect.any(String),
-          targetId: "abcd1234",
-          ref: "5",
-          values: ["a", "b"],
-        }),
-      );
+      expectBrowserCallFields(pwMocks.selectOptionViaPlaywright, {
+        targetId: "abcd1234",
+        ref: "5",
+        values: ["a", "b"],
+      });
 
       const fillCases: Array<{
         input: Record<string, unknown>;
@@ -160,12 +195,13 @@ describe("browser control server", () => {
           fields: [input],
         });
         expect(fill.ok).toBe(true);
-        expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith(
-          expect.objectContaining({
-            cdpUrl: expect.any(String),
+        expectBrowserCallFields(
+          pwMocks.fillFormViaPlaywright,
+          {
             targetId: "abcd1234",
             fields: [expected],
-          }),
+          },
+          pwMocks.fillFormViaPlaywright.mock.calls.length - 1,
         );
       }
 
@@ -175,14 +211,11 @@ describe("browser control server", () => {
         height: 600,
       });
       expect(resize.ok).toBe(true);
-      expect(pwMocks.resizeViewportViaPlaywright).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cdpUrl: expect.any(String),
-          targetId: "abcd1234",
-          width: 800,
-          height: 600,
-        }),
-      );
+      expectBrowserCallFields(pwMocks.resizeViewportViaPlaywright, {
+        targetId: "abcd1234",
+        width: 800,
+        height: 600,
+      });
 
       const resizeZero = await postJson<{ error?: string; code?: string }>(`${base}/act`, {
         kind: "resize",
@@ -207,13 +240,11 @@ describe("browser control server", () => {
         timeMs: 5,
       });
       expect(wait.ok).toBe(true);
-      expect(pwMocks.waitForViaPlaywright).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cdpUrl: state.cdpBaseUrl,
-          targetId: "abcd1234",
-          timeMs: 5,
-        }),
-      );
+      expectBrowserCallFields(pwMocks.waitForViaPlaywright, {
+        cdpUrl: state.cdpBaseUrl,
+        targetId: "abcd1234",
+        timeMs: 5,
+      });
 
       const evalRes = await postJson<{ ok: boolean; result?: string }>(`${base}/act`, {
         kind: "evaluate",
@@ -221,15 +252,14 @@ describe("browser control server", () => {
       });
       expect(evalRes.ok).toBe(true);
       expect(evalRes.result).toBe("ok");
-      expect(pwMocks.evaluateViaPlaywright).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cdpUrl: state.cdpBaseUrl,
-          targetId: "abcd1234",
-          fn: "() => 1",
-          ref: undefined,
-          signal: expect.any(AbortSignal),
-        }),
-      );
+      const evalCall = requireMockArg(pwMocks.evaluateViaPlaywright);
+      expectRecordFields(evalCall, "evaluate call", {
+        cdpUrl: state.cdpBaseUrl,
+        targetId: "abcd1234",
+        fn: "() => 1",
+        ref: undefined,
+      });
+      expect(evalCall.signal).toBeInstanceOf(AbortSignal);
     },
     slowTimeoutMs,
   );
@@ -252,26 +282,23 @@ describe("browser control server", () => {
       );
 
       expect(batchRes.ok).toBe(true);
-      expect(pwMocks.batchViaPlaywright).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cdpUrl: expect.any(String),
-          targetId: "abcd1234",
-          stopOnError: false,
-          evaluateEnabled: true,
-          actions: [
-            {
-              kind: "click",
-              selector: "button.save",
-              doubleClick: true,
-              delayMs: 25,
-            },
-            {
-              kind: "wait",
-              fn: "() => window.ready === true",
-            },
-          ],
-        }),
-      );
+      expectBrowserCallFields(pwMocks.batchViaPlaywright, {
+        targetId: "abcd1234",
+        stopOnError: false,
+        evaluateEnabled: true,
+        actions: [
+          {
+            kind: "click",
+            selector: "button.save",
+            doubleClick: true,
+            delayMs: 25,
+          },
+          {
+            kind: "wait",
+            fn: "() => window.ready === true",
+          },
+        ],
+      });
     },
     slowTimeoutMs,
   );
@@ -290,22 +317,20 @@ describe("browser control server", () => {
       });
 
       expect(batchRes.ok).toBe(true);
-      expect(pwMocks.batchViaPlaywright).toHaveBeenCalledWith(
-        expect.objectContaining({
-          actions: [
-            {
-              kind: "type",
-              selector: "input.name",
-              text: "  padded  ",
-            },
-            {
-              kind: "type",
-              selector: "input.clearable",
-              text: "",
-            },
-          ],
-        }),
-      );
+      expectRecordFields(requireMockArg(pwMocks.batchViaPlaywright), "batch call", {
+        actions: [
+          {
+            kind: "type",
+            selector: "input.name",
+            text: "  padded  ",
+          },
+          {
+            kind: "type",
+            selector: "input.clearable",
+            text: "",
+          },
+        ],
+      });
     },
     slowTimeoutMs,
   );
@@ -383,59 +408,56 @@ describe("browser control server", () => {
       paths: ["a.txt"],
       timeoutMs: 1234,
     });
-    expect(upload).toMatchObject({ ok: true });
-    expect(pwMocks.armFileUploadViaPlaywright).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cdpUrl: expect.any(String),
-        targetId: "abcd1234",
-        // The server resolves paths (which adds a drive letter on Windows for `\\tmp\\...` style roots).
-        paths: [path.resolve(DEFAULT_UPLOAD_DIR, "a.txt")],
-        timeoutMs: 1234,
-      }),
-    );
+    expectOkResult(upload);
+    expectBrowserCallFields(pwMocks.armFileUploadViaPlaywright, {
+      targetId: "abcd1234",
+      // The server resolves paths (which adds a drive letter on Windows for `\\tmp\\...` style roots).
+      paths: [path.resolve(DEFAULT_UPLOAD_DIR, "a.txt")],
+      timeoutMs: 1234,
+    });
 
     const uploadWithRef = await postJson(`${base}/hooks/file-chooser`, {
       paths: ["b.txt"],
       ref: "e12",
     });
-    expect(uploadWithRef).toMatchObject({ ok: true });
+    expectOkResult(uploadWithRef);
 
     const uploadWithInputRef = await postJson(`${base}/hooks/file-chooser`, {
       paths: ["c.txt"],
       inputRef: "e99",
     });
-    expect(uploadWithInputRef).toMatchObject({ ok: true });
+    expectOkResult(uploadWithInputRef);
 
     const uploadWithElement = await postJson(`${base}/hooks/file-chooser`, {
       paths: ["d.txt"],
       element: "input[type=file]",
     });
-    expect(uploadWithElement).toMatchObject({ ok: true });
+    expectOkResult(uploadWithElement);
 
     const dialog = await postJson(`${base}/hooks/dialog`, {
       accept: true,
       timeoutMs: 5678,
     });
-    expect(dialog).toMatchObject({ ok: true });
+    expectOkResult(dialog);
 
     const waitDownload = await postJson(`${base}/wait/download`, {
       path: "report.pdf",
       timeoutMs: 1111,
     });
-    expect(waitDownload).toMatchObject({ ok: true });
+    expectOkResult(waitDownload);
 
     const download = await postJson(`${base}/download`, {
       ref: "e12",
       path: "report.pdf",
     });
-    expect(download).toMatchObject({ ok: true });
+    expectOkResult(download);
 
     const responseBody = await postJson(`${base}/response/body`, {
       url: "**/api/data",
       timeoutMs: 2222,
       maxChars: 10,
     });
-    expect(responseBody).toMatchObject({ ok: true });
+    expectOkResult(responseBody);
 
     const consoleRes = (await realFetch(`${base}/console?level=error`).then((r) => r.json())) as {
       ok: boolean;
@@ -455,13 +477,11 @@ describe("browser control server", () => {
     });
     expect(shot.ok).toBe(true);
     expect(typeof shot.path).toBe("string");
-    expect(pwMocks.takeScreenshotViaPlaywright).toHaveBeenCalledWith(
-      expect.objectContaining({
-        element: "body",
-        type: "jpeg",
-        timeoutMs: 3333,
-      }),
-    );
+    expectRecordFields(requireMockArg(pwMocks.takeScreenshotViaPlaywright), "screenshot call", {
+      element: "body",
+      type: "jpeg",
+      timeoutMs: 3333,
+    });
   });
 
   it("blocks file chooser traversal / absolute paths outside uploads dir", async () => {
@@ -507,13 +527,12 @@ describe("browser control server", () => {
     });
     expect(res.ok).toBe(true);
     expect(res.path).toContain("safe-trace.zip");
-    expect(pwMocks.traceStopViaPlaywright).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cdpUrl: expect.any(String),
-        targetId: "abcd1234",
-        path: expect.stringContaining("safe-trace.zip"),
-      }),
-    );
+    const traceCall = requireMockArg(pwMocks.traceStopViaPlaywright);
+    expect(typeof traceCall.cdpUrl).toBe("string");
+    expectRecordFields(traceCall, "trace stop call", {
+      targetId: "abcd1234",
+    });
+    expect(String(traceCall.path)).toContain("safe-trace.zip");
   });
 
   it.each(guardedCurrentTabRouteCases)(
@@ -615,13 +634,12 @@ describe("browser control server", () => {
       },
     );
     expect(res.ok).toBe(true);
-    expect(pwMocks.waitForDownloadViaPlaywright).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cdpUrl: expect.any(String),
-        targetId: "abcd1234",
-        path: expect.stringContaining("safe-wait.pdf"),
-      }),
-    );
+    const waitCall = requireMockArg(pwMocks.waitForDownloadViaPlaywright);
+    expect(typeof waitCall.cdpUrl).toBe("string");
+    expectRecordFields(waitCall, "wait download call", {
+      targetId: "abcd1234",
+    });
+    expect(String(waitCall.path)).toContain("safe-wait.pdf");
   });
 
   it("download accepts in-root relative output path", async () => {
@@ -631,13 +649,12 @@ describe("browser control server", () => {
       path: "safe-download.pdf",
     });
     expect(res.ok).toBe(true);
-    expect(pwMocks.downloadViaPlaywright).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cdpUrl: expect.any(String),
-        targetId: "abcd1234",
-        ref: "e12",
-        path: expect.stringContaining("safe-download.pdf"),
-      }),
-    );
+    const downloadCall = requireMockArg(pwMocks.downloadViaPlaywright);
+    expect(typeof downloadCall.cdpUrl).toBe("string");
+    expectRecordFields(downloadCall, "download call", {
+      targetId: "abcd1234",
+      ref: "e12",
+    });
+    expect(String(downloadCall.path)).toContain("safe-download.pdf");
   });
 });

@@ -53,16 +53,17 @@ describe("Google Meet OAuth", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(
-      refreshGoogleMeetAccessToken({
-        clientId: "client-id",
-        clientSecret: "client-secret",
-        refreshToken: "refresh-token",
-      }),
-    ).resolves.toMatchObject({
-      accessToken: "new-access-token",
-      tokenType: "Bearer",
+    const tokens = await refreshGoogleMeetAccessToken({
+      clientId: "client-id",
+      clientSecret: "client-secret",
+      refreshToken: "refresh-token",
     });
+    expect(tokens.accessToken).toBe("new-access-token");
+    expect(tokens.refreshToken).toBeUndefined();
+    expect(tokens.scope).toBeUndefined();
+    expect(tokens.tokenType).toBe("Bearer");
+    expect(Number.isFinite(tokens.expiresAt)).toBe(true);
+    expect(tokens.expiresAt).toBeGreaterThan(Date.now());
     const body = fetchMock.mock.calls[0]?.[1]?.body;
     expect(body).toBeInstanceOf(URLSearchParams);
     const params = body as URLSearchParams;

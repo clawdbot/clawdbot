@@ -4,14 +4,13 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  applyXaiModelCompat,
   findUnsupportedSchemaKeywords,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
-  XAI_UNSUPPORTED_SCHEMA_KEYWORDS,
 } from "../plugin-sdk/provider-tools.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
+import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
@@ -25,6 +24,14 @@ const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
   "base64",
 );
+const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
+  "minLength",
+  "maxLength",
+  "minItems",
+  "maxItems",
+  "minContains",
+  "maxContains",
+]);
 
 function collectActionValues(schema: unknown, values: Set<string>): void {
   if (!schema || typeof schema !== "object") {
@@ -411,6 +418,40 @@ describe("createOpenClawCodingTools", () => {
     });
 
     expect(createOpenClawToolsMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards active model metadata to plugin-only tool construction", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const resolvePluginToolsSpy = vi
+      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
+      .mockReturnValue([]);
+
+    try {
+      createOpenClawCodingTools({
+        config: testConfig,
+        includeCoreTools: false,
+        runtimeToolAllowlist: ["memory_search"],
+        modelProvider: "openrouter",
+        modelId: "openrouter/auto",
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
+      });
+
+      expect(createOpenClawToolsMock).not.toHaveBeenCalled();
+      expect(resolvePluginToolsSpy).toHaveBeenCalledTimes(1);
+      expect(resolvePluginToolsSpy.mock.calls[0]?.[0].options).toMatchObject({
+        modelProvider: "openrouter",
+        modelId: "openrouter/auto",
+      });
+    } finally {
+      resolvePluginToolsSpy.mockRestore();
+    }
   });
 
   it("uses tools.alsoAllow for optional plugin discovery without widening to all plugins", () => {
@@ -952,7 +993,12 @@ describe("createOpenClawCodingTools", () => {
   it("applies xai model compat for direct Grok tool cleanup", () => {
     const xaiTools = createOpenClawCodingTools({
       modelProvider: "xai",
-      modelCompat: applyXaiModelCompat({ compat: {} }).compat,
+      modelCompat: {
+        toolSchemaProfile: "xai",
+        unsupportedToolSchemaKeywords: Array.from(XAI_UNSUPPORTED_SCHEMA_KEYWORDS),
+        nativeWebSearchTool: true,
+        toolCallArgumentsEncoding: "html-entities",
+      },
       senderIsOwner: true,
     });
 

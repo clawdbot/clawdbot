@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { Stream } from "openai/streaming";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
@@ -6,6 +6,7 @@ import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 const {
   buildProviderRequestDispatcherPolicyMock,
   fetchWithSsrFGuardMock,
+  ensureModelProviderLocalServiceMock,
   mergeModelProviderRequestOverridesMock,
   resolveProviderRequestPolicyConfigMock,
   shouldUseEnvHttpProxyForUrlMock,
@@ -15,6 +16,7 @@ const {
     (_request?: unknown) => { mode: "direct" } | undefined
   >(() => undefined),
   fetchWithSsrFGuardMock: vi.fn(),
+  ensureModelProviderLocalServiceMock: vi.fn(),
   mergeModelProviderRequestOverridesMock: vi.fn((current, overrides) => ({
     ...current,
     ...overrides,
@@ -34,6 +36,10 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 
 vi.mock("../infra/net/proxy-env.js", () => ({
   shouldUseEnvHttpProxyForUrl: shouldUseEnvHttpProxyForUrlMock,
+}));
+
+vi.mock("./provider-local-service.js", () => ({
+  ensureModelProviderLocalService: ensureModelProviderLocalServiceMock,
 }));
 
 vi.mock("./provider-request-config.js", () => ({
@@ -66,6 +72,7 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://api.openai.com/v1/responses",
       release: vi.fn(async () => undefined),
     });
+    ensureModelProviderLocalServiceMock.mockReset().mockResolvedValue(undefined);
     buildProviderRequestDispatcherPolicyMock.mockClear().mockReturnValue(undefined);
     mergeModelProviderRequestOverridesMock.mockClear();
     resolveProviderRequestPolicyConfigMock
@@ -106,6 +113,91 @@ describe("buildGuardedModelFetch", () => {
         model: "gpt-5.4",
       },
     });
+  });
+
+  it("ensures configured local services before the model request", async () => {
+    const release = vi.fn();
+    ensureModelProviderLocalServiceMock.mockResolvedValue({ release });
+    const model = {
+      id: "deepseek-v4-flash",
+      provider: "ds4",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:18000/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    const response = await fetcher("http://127.0.0.1:18000/v1/chat/completions", {
+      method: "POST",
+    });
+    await response.text();
+
+    expect(ensureModelProviderLocalServiceMock).toHaveBeenCalledWith(model, undefined, undefined);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+  });
+
+  it("passes model request headers to local service health probes", async () => {
+    const model = {
+      id: "deepseek-v4-flash",
+      provider: "ds4",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:18000/v1",
+    } as unknown as Model<"openai-completions">;
+    const headers = {
+      Authorization: "Bearer health-secret",
+      "X-Tenant": "acme",
+    };
+
+    const fetcher = buildGuardedModelFetch(model);
+    const response = await fetcher("http://127.0.0.1:18000/v1/chat/completions", {
+      method: "POST",
+      headers,
+    });
+    await response.text();
+
+    expect(ensureModelProviderLocalServiceMock).toHaveBeenCalledWith(model, headers, undefined);
+  });
+
+  it("passes model request abort signals to local service startup", async () => {
+    const model = {
+      id: "deepseek-v4-flash",
+      provider: "ds4",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:18000/v1",
+    } as unknown as Model<"openai-completions">;
+    const controller = new AbortController();
+
+    const fetcher = buildGuardedModelFetch(model);
+    const response = await fetcher("http://127.0.0.1:18000/v1/chat/completions", {
+      method: "POST",
+      signal: controller.signal,
+    });
+    await response.text();
+
+    expect(ensureModelProviderLocalServiceMock).toHaveBeenCalledWith(
+      model,
+      undefined,
+      controller.signal,
+    );
+  });
+
+  it("releases local service leases when guarded fetch fails", async () => {
+    const release = vi.fn();
+    ensureModelProviderLocalServiceMock.mockResolvedValue({ release });
+    fetchWithSsrFGuardMock.mockRejectedValue(new Error("network down"));
+    const model = {
+      id: "deepseek-v4-flash",
+      provider: "ds4",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:18000/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const fetcher = buildGuardedModelFetch(model);
+
+    await expect(
+      fetcher("http://127.0.0.1:18000/v1/chat/completions", { method: "POST" }),
+    ).rejects.toThrow("network down");
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("scopes fake-IP DNS exemptions to the configured provider host", async () => {

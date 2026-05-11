@@ -57,6 +57,10 @@ describe("matrix doctor", () => {
     });
   }
 
+  function expectChangeContaining(changes: readonly string[], fragment: string): void {
+    expect(changes.some((change) => change.includes(fragment))).toBe(true);
+  }
+
   it("formats state and crypto previews", () => {
     expect(
       formatMatrixLegacyStatePreview({
@@ -203,11 +207,11 @@ describe("matrix doctor", () => {
     expect(workAccount?.rooms?.["!legacy:example.org"]).toEqual({
       enabled: false,
     });
-    expect(result.changes).toEqual(
-      expect.arrayContaining([
-        "Moved channels.matrix.groups.!ops:example.org.allow → channels.matrix.groups.!ops:example.org.enabled (true).",
-        "Moved channels.matrix.accounts.work.rooms.!legacy:example.org.allow → channels.matrix.accounts.work.rooms.!legacy:example.org.enabled (false).",
-      ]),
+    expect(result.changes).toContain(
+      "Moved channels.matrix.groups.!ops:example.org.allow → channels.matrix.groups.!ops:example.org.enabled (true).",
+    );
+    expect(result.changes).toContain(
+      "Moved channels.matrix.accounts.work.rooms.!legacy:example.org.allow → channels.matrix.accounts.work.rooms.!legacy:example.org.enabled (false).",
     );
   });
 
@@ -245,11 +249,11 @@ describe("matrix doctor", () => {
     expect(workAccount?.network).toEqual({
       dangerouslyAllowPrivateNetwork: false,
     });
-    expect(result.changes).toEqual(
-      expect.arrayContaining([
-        "Moved channels.matrix.allowPrivateNetwork → channels.matrix.network.dangerouslyAllowPrivateNetwork (true).",
-        "Moved channels.matrix.accounts.work.allowPrivateNetwork → channels.matrix.accounts.work.network.dangerouslyAllowPrivateNetwork (false).",
-      ]),
+    expect(result.changes).toContain(
+      "Moved channels.matrix.allowPrivateNetwork → channels.matrix.network.dangerouslyAllowPrivateNetwork (true).",
+    );
+    expect(result.changes).toContain(
+      "Moved channels.matrix.accounts.work.allowPrivateNetwork → channels.matrix.accounts.work.network.dangerouslyAllowPrivateNetwork (false).",
     );
   });
 
@@ -274,12 +278,11 @@ describe("matrix doctor", () => {
 
     expect(matrixDm?.policy).toBe("allowlist");
     expect(matrixDm?.allowFrom).toEqual(["@alice:example.org", "@bob:example.org"]);
-    expect(result.changes).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining('Migrated channels.matrix.dm.policy "trusted" → "allowlist"'),
-        expect.stringContaining("preserved 2 channels.matrix.dm.allowFrom entries"),
-      ]),
+    expectChangeContaining(
+      result.changes,
+      'Migrated channels.matrix.dm.policy "trusted" → "allowlist"',
     );
+    expectChangeContaining(result.changes, "preserved 2 channels.matrix.dm.allowFrom entries");
   });
 
   it("migrates legacy 'trusted' policy with whitespace-only allowFrom entries to 'pairing'", () => {
@@ -295,10 +298,9 @@ describe("matrix doctor", () => {
 
     const matrixDm = (result.config.channels?.matrix as { dm?: { policy?: string } })?.dm;
     expect(matrixDm?.policy).toBe("pairing");
-    expect(result.changes).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining('Migrated channels.matrix.dm.policy "trusted" → "pairing"'),
-      ]),
+    expectChangeContaining(
+      result.changes,
+      'Migrated channels.matrix.dm.policy "trusted" → "pairing"',
     );
   });
 
@@ -310,10 +312,9 @@ describe("matrix doctor", () => {
 
     const matrixDm = (result.config.channels?.matrix as { dm?: { policy?: string } })?.dm;
     expect(matrixDm?.policy).toBe("pairing");
-    expect(result.changes).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining('Migrated channels.matrix.dm.policy "trusted" → "pairing"'),
-      ]),
+    expectChangeContaining(
+      result.changes,
+      'Migrated channels.matrix.dm.policy "trusted" → "pairing"',
     );
   });
 
@@ -351,15 +352,13 @@ describe("matrix doctor", () => {
     expect(accounts?.work?.dm?.policy).toBe("allowlist");
     expect(accounts?.work?.dm?.allowFrom).toEqual(["@boss:example.org"]);
     expect(accounts?.personal?.dm?.policy).toBe("pairing");
-    expect(result.changes).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining(
-          'Migrated channels.matrix.accounts.work.dm.policy "trusted" → "allowlist"',
-        ),
-        expect.stringContaining(
-          'Migrated channels.matrix.accounts.personal.dm.policy "trusted" → "pairing"',
-        ),
-      ]),
+    expectChangeContaining(
+      result.changes,
+      'Migrated channels.matrix.accounts.work.dm.policy "trusted" → "allowlist"',
+    );
+    expectChangeContaining(
+      result.changes,
+      'Migrated channels.matrix.accounts.personal.dm.policy "trusted" → "pairing"',
     );
   });
 

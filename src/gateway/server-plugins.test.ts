@@ -194,6 +194,33 @@ function createTestContext(label: string): GatewayRequestContext {
   return { label } as unknown as GatewayRequestContext;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`Expected ${label} to be an object`);
+  }
+  return value;
+}
+
+function readRecordField(record: Record<string, unknown>, key: string, label: string) {
+  const value = record[key];
+  if (!isRecord(value)) {
+    throw new Error(`Expected ${label} to be an object`);
+  }
+  return value;
+}
+
+function getLastPluginLoadOptions(): Record<string, unknown> {
+  return requireRecord(loadOpenClawPlugins.mock.calls.at(-1)?.[0], "plugin load options");
+}
+
+function getLastPluginLoadOption(key: string) {
+  return getLastPluginLoadOptions()[key];
+}
+
 function getLastDispatchedContext(): GatewayRequestContext | undefined {
   const call = handleGatewayRequest.mock.calls.at(-1)?.[0];
   return call?.context;
@@ -202,6 +229,10 @@ function getLastDispatchedContext(): GatewayRequestContext | undefined {
 function getLastDispatchedParams(): Record<string, unknown> | undefined {
   const call = handleGatewayRequest.mock.calls.at(-1)?.[0];
   return call?.req?.params as Record<string, unknown> | undefined;
+}
+
+function getRequiredLastDispatchedParams(): Record<string, unknown> {
+  return requireRecord(getLastDispatchedParams(), "dispatched params");
 }
 
 function getLastDispatchedClientScopes(): string[] {
@@ -386,12 +417,8 @@ describe("loadGatewayPlugins", () => {
       workspaceDir: "/tmp",
       env: process.env,
     });
-    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["discord", "telegram"],
-        preferBuiltPluginArtifacts: true,
-      }),
-    );
+    expect(getLastPluginLoadOption("onlyPluginIds")).toEqual(["discord", "telegram"]);
+    expect(getLastPluginLoadOption("preferBuiltPluginArtifacts")).toBe(true);
   });
 
   test("routes plugin registration logs through the plugin logger", () => {
@@ -430,11 +457,7 @@ describe("loadGatewayPlugins", () => {
     });
 
     expect(loadPluginLookUpTable).not.toHaveBeenCalled();
-    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["browser"],
-      }),
-    );
+    expect(getLastPluginLoadOption("onlyPluginIds")).toEqual(["browser"]);
   });
 
   test("reuses a provided lookup table for startup scope and auto-enable manifests", () => {
@@ -454,12 +477,8 @@ describe("loadGatewayPlugins", () => {
       env: process.env,
       manifestRegistry,
     });
-    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        manifestRegistry,
-        onlyPluginIds: ["telegram"],
-      }),
-    );
+    expect(getLastPluginLoadOption("manifestRegistry")).toBe(manifestRegistry);
+    expect(getLastPluginLoadOption("onlyPluginIds")).toEqual(["telegram"]);
   });
 
   test("pins the initial startup channel registry against later active-registry churn", () => {
@@ -502,16 +521,12 @@ describe("loadGatewayPlugins", () => {
       config: rawConfig,
       env: process.env,
     });
-    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: resolvedConfig,
-        activationSourceConfig: rawConfig,
-        onlyPluginIds: ["slack"],
-        autoEnabledReasons: {
-          slack: ["slack configured"],
-        },
-      }),
-    );
+    expect(getLastPluginLoadOption("config")).toStrictEqual(resolvedConfig);
+    expect(getLastPluginLoadOption("activationSourceConfig")).toStrictEqual(rawConfig);
+    expect(getLastPluginLoadOption("onlyPluginIds")).toEqual(["slack"]);
+    expect(getLastPluginLoadOption("autoEnabledReasons")).toEqual({
+      slack: ["slack configured"],
+    });
   });
 
   test("preserves runtime defaults while applying source activation to startup loads", () => {
@@ -582,41 +597,31 @@ describe("loadGatewayPlugins", () => {
       pluginIds: ["telegram"],
     });
 
-    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          channels: expect.objectContaining({
-            telegram: expect.objectContaining({
-              enabled: true,
-              dmPolicy: "pairing",
-              groupPolicy: "allowlist",
-            }),
-          }),
-          plugins: expect.objectContaining({
-            allow: ["bench-plugin"],
-            entries: expect.objectContaining({
-              "bench-plugin": expect.objectContaining({
-                enabled: true,
-                config: {
-                  runtimeDefault: true,
-                },
-              }),
-              "memory-core": {
-                config: {
-                  dreaming: {
-                    enabled: false,
-                  },
-                },
-              },
-            }),
-          }),
-        }),
-        activationSourceConfig: rawConfig,
-        autoEnabledReasons: {
-          telegram: ["telegram configured"],
+    const config = requireRecord(getLastPluginLoadOption("config"), "plugin load config");
+    const channels = readRecordField(config, "channels", "plugin load channels");
+    const telegram = readRecordField(channels, "telegram", "telegram channel config");
+    expect(telegram.enabled).toBe(true);
+    expect(telegram.dmPolicy).toBe("pairing");
+    expect(telegram.groupPolicy).toBe("allowlist");
+    const plugins = readRecordField(config, "plugins", "plugin load plugins config");
+    expect(plugins.allow).toEqual(["bench-plugin"]);
+    const entries = readRecordField(plugins, "entries", "plugin load entries");
+    const benchPlugin = readRecordField(entries, "bench-plugin", "bench plugin entry");
+    expect(benchPlugin.enabled).toBe(true);
+    expect(benchPlugin.config).toEqual({
+      runtimeDefault: true,
+    });
+    expect(entries["memory-core"]).toEqual({
+      config: {
+        dreaming: {
+          enabled: false,
         },
-      }),
-    );
+      },
+    });
+    expect(getLastPluginLoadOption("activationSourceConfig")).toStrictEqual(rawConfig);
+    expect(getLastPluginLoadOption("autoEnabledReasons")).toEqual({
+      telegram: ["telegram configured"],
+    });
   });
 
   test("treats an empty startup scope as no plugin load instead of an unscoped load", () => {
@@ -677,15 +682,11 @@ describe("loadGatewayPlugins", () => {
       workspaceDir: "/tmp",
       env: process.env,
     });
-    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: autoEnabledConfig,
-        activationSourceConfig: {},
-        autoEnabledReasons: {
-          slack: ["slack configured"],
-        },
-      }),
-    );
+    expect(getLastPluginLoadOption("config")).toStrictEqual(autoEnabledConfig);
+    expect(getLastPluginLoadOption("activationSourceConfig")).toEqual({});
+    expect(getLastPluginLoadOption("autoEnabledReasons")).toEqual({
+      slack: ["slack configured"],
+    });
   });
 
   test("re-derives auto-enable reasons when only activationSourceConfig is provided", () => {
@@ -715,15 +716,11 @@ describe("loadGatewayPlugins", () => {
       workspaceDir: "/tmp",
       env: process.env,
     });
-    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: resolvedConfig,
-        activationSourceConfig: rawConfig,
-        autoEnabledReasons: {
-          slack: ["slack configured"],
-        },
-      }),
-    );
+    expect(getLastPluginLoadOption("config")).toStrictEqual(resolvedConfig);
+    expect(getLastPluginLoadOption("activationSourceConfig")).toStrictEqual(rawConfig);
+    expect(getLastPluginLoadOption("autoEnabledReasons")).toEqual({
+      slack: ["slack configured"],
+    });
   });
 
   test("provides subagent runtime with sessions.get method aliases", async () => {
@@ -731,11 +728,13 @@ describe("loadGatewayPlugins", () => {
     serverPluginsModule.setFallbackGatewayContext(createTestContext("sessions-get-aliases"));
     handleGatewayRequest
       .mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
-        expect(opts.req).toMatchObject({ method: "sessions.get", params: { key: "s-read" } });
+        expect(opts.req.method).toBe("sessions.get");
+        expect(opts.req.params).toEqual({ key: "s-read" });
         opts.respond(true, { messages: [{ id: "m-1" }] });
       })
       .mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
-        expect(opts.req).toMatchObject({ method: "sessions.get", params: { key: "s-legacy" } });
+        expect(opts.req.method).toBe("sessions.get");
+        expect(opts.req.params).toEqual({ key: "s-legacy" });
         opts.respond(true, { messages: [{ id: "m-2" }] });
       });
 
@@ -793,13 +792,12 @@ describe("loadGatewayPlugins", () => {
       }),
     );
 
-    expect(getLastDispatchedParams()).toMatchObject({
-      sessionKey: "s-override",
-      message: "use the override",
-      provider: "anthropic",
-      model: "claude-haiku-4-5",
-      deliver: false,
-    });
+    const params = getRequiredLastDispatchedParams();
+    expect(params.sessionKey).toBe("s-override");
+    expect(params.message).toBe("use the override");
+    expect(params.provider).toBe("anthropic");
+    expect(params.model).toBe("claude-haiku-4-5");
+    expect(params.deliver).toBe(false);
   });
 
   test("forwards caller-supplied idempotencyKey on subagent run", async () => {
@@ -814,11 +812,10 @@ describe("loadGatewayPlugins", () => {
       idempotencyKey: "caller-provided-key",
     });
 
-    expect(getLastDispatchedParams()).toMatchObject({
-      sessionKey: "s-idem-forward",
-      message: "hello",
-      idempotencyKey: "caller-provided-key",
-    });
+    const params = getRequiredLastDispatchedParams();
+    expect(params.sessionKey).toBe("s-idem-forward");
+    expect(params.message).toBe("hello");
+    expect(params.idempotencyKey).toBe("caller-provided-key");
   });
 
   test("forwards lightContext as lightweight bootstrap context on subagent run", async () => {
@@ -834,13 +831,12 @@ describe("loadGatewayPlugins", () => {
       deliver: false,
     });
 
-    expect(getLastDispatchedParams()).toMatchObject({
-      sessionKey: "s-light-context",
-      message: "hello",
-      lane: "dreaming-narrative:s-light-context",
-      bootstrapContextMode: "lightweight",
-      deliver: false,
-    });
+    const params = getRequiredLastDispatchedParams();
+    expect(params.sessionKey).toBe("s-light-context");
+    expect(params.message).toBe("hello");
+    expect(params.lane).toBe("dreaming-narrative:s-light-context");
+    expect(params.bootstrapContextMode).toBe("lightweight");
+    expect(params.deliver).toBe(false);
   });
 
   test("generates a non-empty idempotencyKey when the caller omits it", async () => {
@@ -909,11 +905,10 @@ describe("loadGatewayPlugins", () => {
       }),
     );
 
-    expect(getLastDispatchedParams()).toMatchObject({
-      sessionKey: "s-trusted-override",
-      provider: "anthropic",
-      model: "claude-haiku-4-5",
-    });
+    const params = getRequiredLastDispatchedParams();
+    expect(params.sessionKey).toBe("s-trusted-override");
+    expect(params.provider).toBe("anthropic");
+    expect(params.model).toBe("claude-haiku-4-5");
   });
 
   test("tags plugin fallback subagent runs with the creating plugin id", async () => {
@@ -929,9 +924,7 @@ describe("loadGatewayPlugins", () => {
       }),
     );
 
-    expect(getLastDispatchedClientInternal()).toMatchObject({
-      pluginRuntimeOwnerId: "memory-core",
-    });
+    expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("memory-core");
   });
 
   test("includes docs guidance when a plugin fallback override is not trusted", async () => {
@@ -978,10 +971,9 @@ describe("loadGatewayPlugins", () => {
       }),
     );
 
-    expect(getLastDispatchedParams()).toMatchObject({
-      sessionKey: "s-model-only-override",
-      model: "anthropic/claude-haiku-4-5",
-    });
+    const params = getRequiredLastDispatchedParams();
+    expect(params.sessionKey).toBe("s-model-only-override");
+    expect(params.model).toBe("anthropic/claude-haiku-4-5");
     expect(getLastDispatchedParams()).not.toHaveProperty("provider");
   });
 
@@ -1119,9 +1111,7 @@ describe("loadGatewayPlugins", () => {
     ).resolves.toBeUndefined();
 
     expect(getLastDispatchedClientScopes()).toEqual(["operator.admin"]);
-    expect(getLastDispatchedClientInternal()).toMatchObject({
-      pluginRuntimeOwnerId: "memory-core",
-    });
+    expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("memory-core");
   });
 
   test("allows session deletion when the request scope already has admin", async () => {
@@ -1174,9 +1164,7 @@ describe("loadGatewayPlugins", () => {
     ).resolves.toBeUndefined();
 
     expect(getLastDispatchedClientScopes()).toEqual(["operator.admin"]);
-    expect(getLastDispatchedClientInternal()).toMatchObject({
-      pluginRuntimeOwnerId: "memory-core",
-    });
+    expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("memory-core");
   });
 
   test("can prefer setup-runtime channel plugins during startup loads", () => {
@@ -1185,11 +1173,7 @@ describe("loadGatewayPlugins", () => {
       preferSetupRuntimeForChannelPlugins: true,
     });
 
-    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        preferSetupRuntimeForChannelPlugins: true,
-      }),
-    );
+    expect(getLastPluginLoadOption("preferSetupRuntimeForChannelPlugins")).toBe(true);
   });
 
   test("primes configured bindings during gateway startup", () => {
@@ -1236,10 +1220,9 @@ describe("loadGatewayPlugins", () => {
       }),
     );
 
-    expect(getLastDispatchedParams()).toMatchObject({
-      sessionKey: "s-auto-enabled-bootstrap-policy",
-      model: "openai/gpt-5.4",
-    });
+    const params = getRequiredLastDispatchedParams();
+    expect(params.sessionKey).toBe("s-auto-enabled-bootstrap-policy");
+    expect(params.model).toBe("openai/gpt-5.4");
   });
 
   test("can suppress duplicate diagnostics when reloading full runtime plugins", () => {
@@ -1293,12 +1276,8 @@ describe("loadGatewayPlugins", () => {
       env: process.env,
       manifestRegistry,
     });
-    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        manifestRegistry,
-        onlyPluginIds: ["discord"],
-      }),
-    );
+    expect(getLastPluginLoadOption("manifestRegistry")).toBe(manifestRegistry);
+    expect(getLastPluginLoadOption("onlyPluginIds")).toEqual(["discord"]);
   });
 
   test("runs registry hook before priming configured bindings", () => {

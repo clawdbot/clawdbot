@@ -1,24 +1,31 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import YAML from "yaml";
 
 type RootPackageManifest = {
   dependencies?: Record<string, string>;
-  pnpm?: {
-    overrides?: Record<string, string>;
-  };
+};
+
+type PnpmWorkspaceConfig = {
+  overrides?: Record<string, string>;
 };
 
 const PI_PACKAGE_NAMES = [
-  "@mariozechner/pi-agent-core",
-  "@mariozechner/pi-ai",
-  "@mariozechner/pi-coding-agent",
-  "@mariozechner/pi-tui",
+  "@earendil-works/pi-agent-core",
+  "@earendil-works/pi-ai",
+  "@earendil-works/pi-coding-agent",
+  "@earendil-works/pi-tui",
 ] as const;
 
 function readRootManifest(): RootPackageManifest {
   const manifestPath = path.resolve(process.cwd(), "package.json");
   return JSON.parse(fs.readFileSync(manifestPath, "utf8")) as RootPackageManifest;
+}
+
+function readPnpmWorkspaceConfig(): PnpmWorkspaceConfig {
+  const workspacePath = path.resolve(process.cwd(), "pnpm-workspace.yaml");
+  return YAML.parse(fs.readFileSync(workspacePath, "utf8")) as PnpmWorkspaceConfig;
 }
 
 function isExactPinnedVersion(spec: string): boolean {
@@ -76,13 +83,13 @@ describe("pi package graph guardrails", () => {
   });
 
   it("forbids pnpm overrides that target Pi packages", () => {
-    const manifest = readRootManifest();
-    const overrides = manifest.pnpm?.overrides ?? {};
+    const pnpmWorkspace = readPnpmWorkspaceConfig();
+    const overrides = pnpmWorkspace.overrides ?? {};
     const piOverrides = Object.keys(overrides).filter(isPiOverrideKey);
 
     expectNoGraphViolations(
       piOverrides,
-      `pnpm.overrides must not target Pi packages. Found: ${piOverrides.join(", ") || "<none>"}. Pi-specific overrides can silently create an unsupported package graph.`,
+      `pnpm-workspace.yaml overrides must not target Pi packages. Found: ${piOverrides.join(", ") || "<none>"}. Pi-specific overrides can silently create an unsupported package graph.`,
     );
   });
 });

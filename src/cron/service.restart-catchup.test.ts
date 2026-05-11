@@ -74,6 +74,28 @@ describe("CronService restart catch-up", () => {
     };
   }
 
+  function expectQueuedSystemEvent(
+    enqueueSystemEvent: ReturnType<typeof vi.fn>,
+    expectedText: string,
+  ) {
+    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    const [text, options] = enqueueSystemEvent.mock.calls[0] ?? [];
+    expect(text).toBe(expectedText);
+    expect((options as { agentId?: string } | undefined)?.agentId).toBeUndefined();
+  }
+
+  function expectInterruptedJobEvent(
+    onEvent: ReturnType<typeof vi.fn>,
+    expected: { jobId: string; runAtMs: number },
+  ) {
+    const event = onEvent.mock.calls
+      .map(([evt]) => evt as CronEvent)
+      .find((evt) => evt.action === "finished" && evt.jobId === expected.jobId);
+    expect(event?.status).toBe("error");
+    expect(event?.error).toBe("cron: job interrupted by gateway restart");
+    expect(event?.runAtMs).toBe(expected.runAtMs);
+  }
+
   async function withRestartedCron(
     jobs: unknown[],
     run: (params: {
@@ -130,10 +152,7 @@ describe("CronService restart catch-up", () => {
         },
       ],
       async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
-        expect(enqueueSystemEvent).toHaveBeenCalledWith(
-          "digest now",
-          expect.objectContaining({ agentId: undefined }),
-        );
+        expectQueuedSystemEvent(enqueueSystemEvent, "digest now");
         expect(requestHeartbeat).toHaveBeenCalled();
 
         const listedJobs = await cron.list({ includeDisabled: true });
@@ -217,9 +236,13 @@ describe("CronService restart catch-up", () => {
         },
       ],
       async ({ cron, enqueueSystemEvent, requestHeartbeat, onEvent }) => {
-        expect(noopLogger.warn).toHaveBeenCalledWith(
-          expect.objectContaining({ jobId: "restart-stale-running" }),
-          "cron: marking interrupted running job failed on startup",
+        const warning = vi
+          .mocked(noopLogger.warn)
+          .mock.calls.find(
+            ([, message]) => message === "cron: marking interrupted running job failed on startup",
+          );
+        expect((warning?.[0] as { jobId?: string } | undefined)?.jobId).toBe(
+          "restart-stale-running",
         );
 
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
@@ -233,15 +256,10 @@ describe("CronService restart catch-up", () => {
         expect(updated?.state.lastRunAtMs).toBe(staleRunningAt);
         expect(updated?.state.lastError).toBe("cron: job interrupted by gateway restart");
         expect(updated?.state.nextRunAtMs).toBeGreaterThan(Date.parse("2025-12-13T17:00:00.000Z"));
-        expect(onEvent).toHaveBeenCalledWith(
-          expect.objectContaining({
-            action: "finished",
-            jobId: "restart-stale-running",
-            status: "error",
-            error: "cron: job interrupted by gateway restart",
-            runAtMs: staleRunningAt,
-          }),
-        );
+        expectInterruptedJobEvent(onEvent, {
+          jobId: "restart-stale-running",
+          runAtMs: staleRunningAt,
+        });
       },
     );
   });
@@ -269,10 +287,7 @@ describe("CronService restart catch-up", () => {
         },
       ],
       async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
-        expect(enqueueSystemEvent).toHaveBeenCalledWith(
-          "catch missed slot",
-          expect.objectContaining({ agentId: undefined }),
-        );
+        expectQueuedSystemEvent(enqueueSystemEvent, "catch missed slot");
         expect(requestHeartbeat).toHaveBeenCalled();
 
         const listedJobs = await cron.list({ includeDisabled: true });
@@ -317,15 +332,10 @@ describe("CronService restart catch-up", () => {
         expect(updated?.state.lastRunAtMs).toBe(staleRunningAt);
         expect(updated?.state.nextRunAtMs).toBeUndefined();
         expect(updated?.state.lastError).toBe("cron: job interrupted by gateway restart");
-        expect(onEvent).toHaveBeenCalledWith(
-          expect.objectContaining({
-            action: "finished",
-            jobId: "restart-stale-one-shot",
-            status: "error",
-            error: "cron: job interrupted by gateway restart",
-            runAtMs: staleRunningAt,
-          }),
-        );
+        expectInterruptedJobEvent(onEvent, {
+          jobId: "restart-stale-one-shot",
+          runAtMs: staleRunningAt,
+        });
       },
     );
   });
@@ -413,10 +423,7 @@ describe("CronService restart catch-up", () => {
         },
       ],
       async ({ enqueueSystemEvent, requestHeartbeat }) => {
-        expect(enqueueSystemEvent).toHaveBeenCalledWith(
-          "replay after backoff elapsed",
-          expect.objectContaining({ agentId: undefined }),
-        );
+        expectQueuedSystemEvent(enqueueSystemEvent, "replay after backoff elapsed");
         expect(requestHeartbeat).toHaveBeenCalled();
       },
     );

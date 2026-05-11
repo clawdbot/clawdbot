@@ -154,7 +154,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   const gateway = resolveGatewayOptions(opts);
   const scopes = Array.isArray(extra?.scopes)
     ? extra.scopes
-    : resolveLeastPrivilegeOperatorScopesForMethod(method);
+    : resolveLeastPrivilegeOperatorScopesForMethod(method, params);
   return await callGateway<T>({
     url: gateway.url,
     token: gateway.token,

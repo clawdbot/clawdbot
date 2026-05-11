@@ -7,16 +7,17 @@ import {
   type SessionWriteLockAcquireTimeoutConfig,
   resolveSessionWriteLockAcquireTimeoutMs,
 } from "../../agents/session-write-lock.js";
+import { redactSecrets } from "../../logging/redact.js";
 
 const TRANSCRIPT_APPEND_SCAN_CHUNK_BYTES = 64 * 1024;
 const SESSION_MANAGER_APPEND_MAX_BYTES = 8 * 1024 * 1024;
 
-let piCodingAgentModulePromise: Promise<typeof import("@mariozechner/pi-coding-agent")> | null =
+let piCodingAgentModulePromise: Promise<typeof import("@earendil-works/pi-coding-agent")> | null =
   null;
 const transcriptAppendQueues = new Map<string, Promise<void>>();
 
 async function loadCurrentSessionVersion(): Promise<number> {
-  piCodingAgentModulePromise ??= import("@mariozechner/pi-coding-agent");
+  piCodingAgentModulePromise ??= import("@earendil-works/pi-coding-agent");
   return (await piCodingAgentModulePromise).CURRENT_SESSION_VERSION;
 }
 
@@ -290,7 +291,7 @@ async function appendSessionTranscriptMessageLocked(params: {
       id: messageId,
       ...(shouldRawAppend ? {} : { parentId: leafInfo.leafId ?? null }),
       timestamp: new Date(now).toISOString(),
-      message: params.message,
+      message: redactSecrets(params.message),
     };
     await fs.appendFile(params.transcriptPath, `${JSON.stringify(entry)}\n`, "utf-8");
     return { messageId };

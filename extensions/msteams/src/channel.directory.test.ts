@@ -71,35 +71,25 @@ describe("msteams directory", () => {
 
     const directory = expectDirectorySurface(msteamsDirectoryAdapter);
 
-    await expect(
-      directory.listPeers({
-        cfg,
-        query: undefined,
-        limit: undefined,
-        runtime: runtimeEnv,
-      }),
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        { kind: "user", id: "user:alice" },
-        { kind: "user", id: "user:Bob" },
-        { kind: "user", id: "user:carol" },
-        { kind: "user", id: "user:bob" },
-      ]),
-    );
+    const peers = await directory.listPeers({
+      cfg,
+      query: undefined,
+      limit: undefined,
+      runtime: runtimeEnv,
+    });
+    expect(peers).toContainEqual({ kind: "user", id: "user:alice" });
+    expect(peers).toContainEqual({ kind: "user", id: "user:Bob" });
+    expect(peers).toContainEqual({ kind: "user", id: "user:carol" });
+    expect(peers).toContainEqual({ kind: "user", id: "user:bob" });
 
-    await expect(
-      directory.listGroups({
-        cfg,
-        query: undefined,
-        limit: undefined,
-        runtime: runtimeEnv,
-      }),
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        { kind: "group", id: "conversation:chan1" },
-        { kind: "group", id: "conversation:chan2" },
-      ]),
-    );
+    const groups = await directory.listGroups({
+      cfg,
+      query: undefined,
+      limit: undefined,
+      runtime: runtimeEnv,
+    });
+    expect(groups).toContainEqual({ kind: "group", id: "conversation:chan1" });
+    expect(groups).toContainEqual({ kind: "group", id: "conversation:chan2" });
   });
 
   it("normalizes spaced allowlist and dm entries", async () => {
@@ -114,21 +104,16 @@ describe("msteams directory", () => {
 
     const directory = expectDirectorySurface(msteamsDirectoryAdapter);
 
-    await expect(
-      directory.listPeers({
-        cfg,
-        query: undefined,
-        limit: undefined,
-        runtime: runtimeEnv,
-      }),
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        { kind: "user", id: "user:Bob" },
-        { kind: "user", id: "user:Alice" },
-        { kind: "user", id: "user:Carol" },
-        { kind: "user", id: "user:Dave" },
-      ]),
-    );
+    const peers = await directory.listPeers({
+      cfg,
+      query: undefined,
+      limit: undefined,
+      runtime: runtimeEnv,
+    });
+    expect(peers).toContainEqual({ kind: "user", id: "user:Bob" });
+    expect(peers).toContainEqual({ kind: "user", id: "user:Alice" });
+    expect(peers).toContainEqual({ kind: "user", id: "user:Carol" });
+    expect(peers).toContainEqual({ kind: "user", id: "user:Dave" });
   });
 });
 
@@ -141,14 +126,9 @@ describe("msteams session route", () => {
       target: "msteams:user:alice-id",
     });
 
-    expect(route).toMatchObject({
-      peer: {
-        kind: "direct",
-        id: "alice-id",
-      },
-      from: "msteams:alice-id",
-      to: "user:alice-id",
-    });
+    expect(route?.peer).toEqual({ kind: "direct", id: "alice-id" });
+    expect(route?.from).toBe("msteams:alice-id");
+    expect(route?.to).toBe("user:alice-id");
   });
 
   it("builds channel routes for thread conversations and strips suffix metadata", () => {
@@ -159,14 +139,9 @@ describe("msteams session route", () => {
       target: "teams:19:abc123@thread.tacv2;messageid=42",
     });
 
-    expect(route).toMatchObject({
-      peer: {
-        kind: "channel",
-        id: "19:abc123@thread.tacv2",
-      },
-      from: "msteams:channel:19:abc123@thread.tacv2",
-      to: "conversation:19:abc123@thread.tacv2",
-    });
+    expect(route?.peer).toEqual({ kind: "channel", id: "19:abc123@thread.tacv2" });
+    expect(route?.from).toBe("msteams:channel:19:abc123@thread.tacv2");
+    expect(route?.to).toBe("conversation:19:abc123@thread.tacv2");
   });
 
   it("returns group routes for non-user, non-channel conversations", () => {
@@ -177,14 +152,9 @@ describe("msteams session route", () => {
       target: "msteams:conversation:19:groupchat",
     });
 
-    expect(route).toMatchObject({
-      peer: {
-        kind: "group",
-        id: "19:groupchat",
-      },
-      from: "msteams:group:19:groupchat",
-      to: "conversation:19:groupchat",
-    });
+    expect(route?.peer).toEqual({ kind: "group", id: "19:groupchat" });
+    expect(route?.from).toBe("msteams:group:19:groupchat");
+    expect(route?.to).toBe("conversation:19:groupchat");
   });
 
   it("returns null when the target cannot be normalized", () => {

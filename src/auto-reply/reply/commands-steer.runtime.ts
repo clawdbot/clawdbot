@@ -1,5 +1,6 @@
 export {
+  formatEmbeddedPiQueueFailureSummary,
   isEmbeddedPiRunActive,
-  queueEmbeddedPiMessage,
+  queueEmbeddedPiMessageWithOutcome,
   resolveActiveEmbeddedRunSessionId,
 } from "../../agents/pi-embedded-runner/runs.js";

@@ -404,6 +404,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         vi.fn() as unknown as PluginRuntime["mediaUnderstanding"]["describeImageFile"],
       describeImageFileWithModel:
         vi.fn() as unknown as PluginRuntime["mediaUnderstanding"]["describeImageFileWithModel"],
+      extractStructuredWithModel:
+        vi.fn() as unknown as PluginRuntime["mediaUnderstanding"]["extractStructuredWithModel"],
       describeVideoFile:
         vi.fn() as unknown as PluginRuntime["mediaUnderstanding"]["describeVideoFile"],
       transcribeAudioFile:

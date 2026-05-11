@@ -8,9 +8,9 @@ const mocks = vi.hoisted(() => ({
   formatOpenAIOAuthTlsPreflightFix: vi.fn(),
 }));
 
-vi.mock("@mariozechner/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
-    "@mariozechner/pi-ai/oauth",
+vi.mock("@earendil-works/pi-ai/oauth", async () => {
+  const actual = await vi.importActual<typeof import("@earendil-works/pi-ai/oauth")>(
+    "@earendil-works/pi-ai/oauth",
   );
   return {
     ...actual,
@@ -64,6 +64,37 @@ function createCodexCredentials(extra: Record<string, unknown> = {}) {
   };
 }
 
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  expect(value).toBeTypeOf("object");
+  expect(value).not.toBeNull();
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
+function expectMockFirstArgFields(mock: unknown, expected: Record<string, unknown>): void {
+  const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
+  const [arg] = calls[0] ?? [];
+  expectFields(arg, expected);
+}
+
+function expectRuntimeErrorContains(runtime: RuntimeEnv, fragment: string): void {
+  expect(
+    (runtime.error as unknown as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls?.some(
+      ([message]) => String(message).includes(fragment),
+    ),
+    `runtime.error contains ${fragment}`,
+  ).toBe(true);
+}
+
+function expectPromptTextCall(prompter: WizardPrompter): void {
+  const textMock = prompter.text as unknown as { mock?: { calls?: Array<Array<unknown>> } };
+  const [arg] = textMock.mock?.calls?.[0] ?? [];
+  expectFields(arg, { message: "Paste the authorization code (or full redirect URL):" });
+  expect(typeof (arg as { validate?: unknown }).validate).toBe("function");
+}
+
 async function startCodexAuth(opts: CodexLoginOptions) {
   await opts.onAuth({ url: CODEX_AUTHORIZE_URL });
   expect(opts.onManualCodeInput).toBeTypeOf("function");
@@ -99,9 +130,7 @@ describe("loginOpenAICodexOAuth", () => {
 
     expect(result).toEqual(creds);
     expect(mocks.loginOpenAICodex).toHaveBeenCalledOnce();
-    expect(mocks.loginOpenAICodex).toHaveBeenCalledWith(
-      expect.objectContaining({ originator: "openclaw" }),
-    );
+    expectMockFirstArgFields(mocks.loginOpenAICodex, { originator: "openclaw" });
     expect(spin.stop).toHaveBeenCalledWith("OpenAI OAuth complete");
     expect(runtime.error).not.toHaveBeenCalled();
   });
@@ -175,7 +204,7 @@ describe("loginOpenAICodexOAuth", () => {
     ).rejects.toThrow("oauth failed");
 
     expect(spin.stop).toHaveBeenCalledWith("OpenAI OAuth failed");
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("oauth failed"));
+    expectRuntimeErrorContains(runtime, "oauth failed");
     expect(prompter.note).toHaveBeenCalledWith(
       "Trouble with OAuth? See https://docs.openclaw.ai/start/faq",
       "OAuth help",
@@ -197,7 +226,7 @@ describe("loginOpenAICodexOAuth", () => {
     ).rejects.toThrow(/unsupported_region/i);
 
     expect(spin.stop).toHaveBeenCalledWith("OpenAI OAuth failed");
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("HTTPS_PROXY"));
+    expectRuntimeErrorContains(runtime, "HTTPS_PROXY");
     expect(prompter.note).toHaveBeenCalledWith(
       "Trouble with OAuth? See https://docs.openclaw.ai/start/faq",
       "OAuth help",
@@ -215,10 +244,7 @@ describe("loginOpenAICodexOAuth", () => {
     const { result, prompter } = await runCodexOAuth({ isRemote: true });
 
     expect(result).toEqual(creds);
-    expect(prompter.text).toHaveBeenCalledWith({
-      message: "Paste the authorization code (or full redirect URL):",
-      validate: expect.any(Function),
-    });
+    expectPromptTextCall(prompter);
   });
 
   it("waits briefly before prompting for manual input after the local browser flow starts", async () => {
@@ -239,22 +265,18 @@ describe("loginOpenAICodexOAuth", () => {
       return createCodexCredentials({ manualCode: await manualPromise });
     });
 
-    await expect(
-      loginOpenAICodexOAuth({
-        prompter,
-        runtime,
-        isRemote: false,
-        openUrl: async () => {},
-      }),
-    ).resolves.toMatchObject({
+    const result = await loginOpenAICodexOAuth({
+      prompter,
+      runtime,
+      isRemote: false,
+      openUrl: async () => {},
+    });
+    expectFields(result, {
       access: "access-token",
       refresh: "refresh-token",
     });
 
-    expect(prompter.text).toHaveBeenCalledWith({
-      message: "Paste the authorization code (or full redirect URL):",
-      validate: expect.any(Function),
-    });
+    expectPromptTextCall(prompter);
     expect(spin.stop).toHaveBeenCalledWith("Manual OAuth entry required");
     expect(spin.stop.mock.invocationCallOrder[0]).toBeLessThan(
       text.mock.invocationCallOrder[0] ?? 0,
@@ -282,14 +304,13 @@ describe("loginOpenAICodexOAuth", () => {
       return createCodexCredentials({ manualCode: firstManualCode });
     });
 
-    await expect(
-      loginOpenAICodexOAuth({
-        prompter,
-        runtime,
-        isRemote: false,
-        openUrl: async () => {},
-      }),
-    ).resolves.toMatchObject({
+    const result = await loginOpenAICodexOAuth({
+      prompter,
+      runtime,
+      isRemote: false,
+      openUrl: async () => {},
+    });
+    expectFields(result, {
       access: "access-token",
       refresh: "refresh-token",
     });
@@ -317,11 +338,10 @@ describe("loginOpenAICodexOAuth", () => {
       return createCodexCredentials();
     });
 
-    await expect(runCodexOAuth({ isRemote: false })).resolves.toMatchObject({
-      result: expect.objectContaining({
-        access: "access-token",
-        refresh: "refresh-token",
-      }),
+    const callbackResult = await runCodexOAuth({ isRemote: false });
+    expectFields(callbackResult.result, {
+      access: "access-token",
+      refresh: "refresh-token",
     });
 
     expect(vi.getTimerCount()).toBe(0);
@@ -387,22 +407,18 @@ describe("loginOpenAICodexOAuth", () => {
       },
     );
 
-    await expect(
-      loginOpenAICodexOAuth({
-        prompter,
-        runtime,
-        isRemote: false,
-        openUrl: async () => {},
-      }),
-    ).resolves.toMatchObject({
+    const result = await loginOpenAICodexOAuth({
+      prompter,
+      runtime,
+      isRemote: false,
+      openUrl: async () => {},
+    });
+    expectFields(result, {
       access: "access-token",
       refresh: "refresh-token",
     });
 
-    expect(prompter.text).toHaveBeenCalledWith({
-      message: "Paste the authorization code (or full redirect URL):",
-      validate: expect.any(Function),
-    });
+    expectPromptTextCall(prompter);
     expect(spin.stop).toHaveBeenCalledWith("Manual OAuth entry required");
     expect(spin.stop.mock.invocationCallOrder[0]).toBeLessThan(
       text.mock.invocationCallOrder[0] ?? 0,
@@ -425,14 +441,13 @@ describe("loginOpenAICodexOAuth", () => {
       return createCodexCredentials({ manualCode: firstManualCode });
     });
 
-    await expect(
-      loginOpenAICodexOAuth({
-        prompter,
-        runtime,
-        isRemote: false,
-        openUrl: async () => {},
-      }),
-    ).resolves.toMatchObject({
+    const result = await loginOpenAICodexOAuth({
+      prompter,
+      runtime,
+      isRemote: false,
+      openUrl: async () => {},
+    });
+    expectFields(result, {
       access: "access-token",
       refresh: "refresh-token",
     });
@@ -461,14 +476,13 @@ describe("loginOpenAICodexOAuth", () => {
       return createCodexCredentials();
     });
 
-    await expect(
-      loginOpenAICodexOAuth({
-        prompter,
-        runtime,
-        isRemote: false,
-        openUrl: async () => {},
-      }),
-    ).resolves.toMatchObject({
+    const result = await loginOpenAICodexOAuth({
+      prompter,
+      runtime,
+      isRemote: false,
+      openUrl: async () => {},
+    });
+    expectFields(result, {
       access: "access-token",
       refresh: "refresh-token",
     });

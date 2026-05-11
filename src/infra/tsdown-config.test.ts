@@ -83,49 +83,48 @@ describe("tsdown config", () => {
   it("keeps core, plugin runtime, plugin-sdk, bundled root plugins, and bundled hooks in one dist graph", () => {
     const distGraph = requireUnifiedDistGraph();
 
-    expect(entryKeys(distGraph)).toEqual(
-      expect.arrayContaining([
-        "agents/auth-profiles.runtime",
-        "agents/model-catalog.runtime",
-        "agents/models-config.runtime",
-        "cli/gateway-lifecycle.runtime",
-        "plugins/memory-state",
-        "subagent-registry.runtime",
-        "task-registry-control.runtime",
-        "agents/pi-model-discovery-runtime",
-        "link-understanding/apply.runtime",
-        "media-understanding/apply.runtime",
-        "index",
-        "commands/status.summary.runtime",
-        "provider-dispatcher.runtime",
-        "plugins/provider-discovery.runtime",
-        "plugins/provider-runtime.runtime",
-        "plugins/runtime/index",
-        "plugin-sdk/compat",
-        "plugin-sdk/index",
-        bundledEntry("active-memory"),
-        "bundled/boot-md/handler",
-      ]),
-    );
+    const keys = entryKeys(distGraph);
+    for (const entry of [
+      "acp/control-plane/manager",
+      "agents/auth-profiles.runtime",
+      "agents/model-catalog.runtime",
+      "agents/models-config.runtime",
+      "cli/gateway-lifecycle.runtime",
+      "plugins/memory-state",
+      "subagent-registry.runtime",
+      "task-registry-control.runtime",
+      "agents/pi-model-discovery-runtime",
+      "link-understanding/apply.runtime",
+      "media-understanding/apply.runtime",
+      "index",
+      "commands/status.summary.runtime",
+      "provider-dispatcher.runtime",
+      "plugins/provider-discovery.runtime",
+      "plugins/provider-runtime.runtime",
+      "plugins/runtime/index",
+      "web-fetch/runtime",
+      "plugin-sdk/compat",
+      "plugin-sdk/index",
+      bundledEntry("active-memory"),
+      "bundled/boot-md/handler",
+    ]) {
+      expect(keys).toContain(entry);
+    }
   });
 
   it("keeps gateway lifecycle lazy runtime behind one stable dist entry", () => {
     const distGraph = requireUnifiedDistGraph();
 
-    expect(entrySources(distGraph)).toEqual(
-      expect.objectContaining({
-        "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
-      }),
+    expect(entrySources(distGraph)["cli/gateway-lifecycle.runtime"]).toBe(
+      "src/cli/gateway-cli/lifecycle.runtime.ts",
     );
   });
 
   it("keeps reply dispatcher lazy runtime behind one root stable dist entry", () => {
     const distGraph = requireUnifiedDistGraph();
 
-    expect(entrySources(distGraph)).toEqual(
-      expect.objectContaining({
-        "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
-      }),
+    expect(entrySources(distGraph)["provider-dispatcher.runtime"]).toBe(
+      "src/auto-reply/reply/provider-dispatcher.runtime.ts",
     );
   });
 
@@ -174,18 +173,18 @@ describe("tsdown config", () => {
       expect(neverBundle("vitest")).toBe(true);
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
     } else {
-      expect(neverBundle).toEqual(
-        expect.arrayContaining([
-          "@discordjs/voice",
-          "@lancedb/lancedb",
-          "@larksuiteoapi/node-sdk",
-          "@vitest/expect",
-          "matrix-js-sdk",
-          "prism-media",
-          "qrcode-terminal",
-          "vitest",
-        ]),
-      );
+      for (const dependency of [
+        "@discordjs/voice",
+        "@lancedb/lancedb",
+        "@larksuiteoapi/node-sdk",
+        "@vitest/expect",
+        "matrix-js-sdk",
+        "prism-media",
+        "qrcode-terminal",
+        "vitest",
+      ]) {
+        expect(neverBundle).toContain(dependency);
+      }
     }
     if (typeof external !== "function") {
       throw new Error("expected unified graph external predicate");

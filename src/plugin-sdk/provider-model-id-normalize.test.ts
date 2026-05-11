@@ -8,6 +8,12 @@ describe("provider model id normalization", () => {
     expect(normalizeGooglePreviewModelId("gemini-3.1-pro")).toBe("gemini-3.1-pro-preview");
   });
 
+  it("routes provider-prefixed Gemini 3 Pro to the current Gemini 3.1 Pro preview", () => {
+    expect(normalizeGooglePreviewModelId("google/gemini-3-pro-preview")).toBe(
+      "google/gemini-3.1-pro-preview",
+    );
+  });
+
   it("does not rewrite already-current Gemini replacement ids", () => {
     expect(normalizeGooglePreviewModelId("gemini-3.1-pro-preview")).toBe("gemini-3.1-pro-preview");
     expect(normalizeGooglePreviewModelId("gemini-2.5-flash")).toBe("gemini-2.5-flash");

@@ -15,8 +15,9 @@ import { resetPdfToolAuthEnv, withTempPdfAgentDir } from "./pdf-tool.test-suppor
 
 const completeMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
+vi.mock("@earendil-works/pi-ai", async () => {
+  const actual =
+    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
   return {
     ...actual,
     complete: completeMock,
@@ -78,6 +79,15 @@ function withDefaultModel(primary: string): OpenClawConfig {
   return {
     agents: { defaults: { model: { primary } } },
   } as OpenClawConfig;
+}
+
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  expect(value).toBeTypeOf("object");
+  expect(value).not.toBeNull();
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
 }
 
 async function stubPdfToolInfra(
@@ -257,9 +267,7 @@ describe("createPdfTool", () => {
     await withConfiguredPdfTool(async (tool) => {
       const manyPdfs = Array.from({ length: 15 }, (_, i) => `/tmp/doc${i}.pdf`);
       const result = await tool.execute("t1", { prompt: "test", pdfs: manyPdfs });
-      expect(result).toMatchObject({
-        details: { error: "too_many_pdfs" },
-      });
+      expectFields(result.details, { error: "too_many_pdfs" });
     });
   });
 
@@ -297,9 +305,7 @@ describe("createPdfTool", () => {
         prompt: "test",
         pdf: "ftp://example.com/doc.pdf",
       });
-      expect(result).toMatchObject({
-        details: { error: "unsupported_pdf_reference" },
-      });
+      expectFields(result.details, { error: "unsupported_pdf_reference" });
     });
   });
 
@@ -326,15 +332,13 @@ describe("createPdfTool", () => {
           pdf: `media://inbound/${mediaId}`,
         });
 
-        expect(loadSpy).toHaveBeenCalledWith(
-          `media://inbound/${mediaId}`,
-          expect.objectContaining({
-            localRoots: [],
-          }),
-        );
-        expect(result).toMatchObject({
-          content: [{ type: "text", text: "native summary" }],
-          details: { native: true, model: ANTHROPIC_PDF_MODEL },
+        const [loadRef, loadOptions] = loadSpy.mock.calls[0] ?? [];
+        expect(loadRef).toBe(`media://inbound/${mediaId}`);
+        expectFields(loadOptions, { localRoots: [] });
+        expect(result.content).toEqual([{ type: "text", text: "native summary" }]);
+        expectFields(result.details, {
+          native: true,
+          model: ANTHROPIC_PDF_MODEL,
         });
       });
     });
@@ -364,12 +368,11 @@ describe("createPdfTool", () => {
         pdf: "http://198.18.0.153/doc.pdf",
       });
 
-      expect(loadSpy).toHaveBeenCalledWith(
-        "http://198.18.0.153/doc.pdf",
-        expect.objectContaining({
-          ssrfPolicy: { allowRfc2544BenchmarkRange: true },
-        }),
-      );
+      const [loadRef, loadOptions] = loadSpy.mock.calls[0] ?? [];
+      expect(loadRef).toBe("http://198.18.0.153/doc.pdf");
+      expectFields(loadOptions, {
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      });
     });
   });
 
@@ -396,7 +399,9 @@ describe("createPdfTool", () => {
           pdf: mediaPath,
         });
 
-        expect(loadSpy).toHaveBeenCalledWith(mediaPath, expect.any(Object));
+        const [loadRef, loadOptions] = loadSpy.mock.calls[0] ?? [];
+        expect(loadRef).toBe(mediaPath);
+        expect(loadOptions).toBeTypeOf("object");
       });
     });
   });
@@ -417,21 +422,22 @@ describe("createPdfTool", () => {
         pdf: "/tmp/doc.pdf",
       });
 
-      expect(modelsConfig.ensureOpenClawModelsJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agents: expect.objectContaining({
-            defaults: expect.objectContaining({
-              pdfModel: { primary: ANTHROPIC_PDF_MODEL },
-            }),
-          }),
-        }),
-        agentDir,
-        { workspaceDir },
+      const ensureModelsJsonMock = vi.mocked(modelsConfig.ensureOpenClawModelsJson);
+      const [modelsConfigArg, modelsAgentDir, modelsOptions] =
+        ensureModelsJsonMock.mock.calls[0] ?? [];
+      expectFields(
+        (modelsConfigArg as { agents?: { defaults?: unknown } } | undefined)?.agents?.defaults,
+        {
+          pdfModel: { primary: ANTHROPIC_PDF_MODEL },
+        },
       );
+      expect(modelsAgentDir).toBe(agentDir);
+      expect(modelsOptions).toEqual({ workspaceDir });
       expect(extractSpy).not.toHaveBeenCalled();
-      expect(result).toMatchObject({
-        content: [{ type: "text", text: "native summary" }],
-        details: { native: true, model: ANTHROPIC_PDF_MODEL },
+      expect(result.content).toEqual([{ type: "text", text: "native summary" }]);
+      expectFields(result.details, {
+        native: true,
+        model: ANTHROPIC_PDF_MODEL,
       });
     });
   });
@@ -474,9 +480,10 @@ describe("createPdfTool", () => {
       });
 
       expect(extractSpy).toHaveBeenCalledTimes(1);
-      expect(result).toMatchObject({
-        content: [{ type: "text", text: "fallback summary" }],
-        details: { native: false, model: OPENAI_PDF_MODEL },
+      expect(result.content).toEqual([{ type: "text", text: "fallback summary" }]);
+      expectFields(result.details, {
+        native: false,
+        model: OPENAI_PDF_MODEL,
       });
       const [, context] = completeMock.mock.calls[0] ?? [];
       expect(context?.systemPrompt).toBeUndefined();
@@ -510,9 +517,10 @@ describe("createPdfTool", () => {
         pdf: "/tmp/doc.pdf",
       });
 
-      expect(result).toMatchObject({
-        content: [{ type: "text", text: "codex summary" }],
-        details: { native: false, model: CODEX_PDF_MODEL },
+      expect(result.content).toEqual([{ type: "text", text: "codex summary" }]);
+      expectFields(result.details, {
+        native: false,
+        model: CODEX_PDF_MODEL,
       });
       expect(completeMock).toHaveBeenCalledTimes(1);
       const [, context] = completeMock.mock.calls[0] ?? [];
@@ -547,9 +555,10 @@ describe("createPdfTool", () => {
         pdf: "/tmp/doc.pdf",
       });
 
-      expect(result).toMatchObject({
-        content: [{ type: "text", text: "codex summary" }],
-        details: { native: false, model: CODEX_PDF_MODEL },
+      expect(result.content).toEqual([{ type: "text", text: "codex summary" }]);
+      expectFields(result.details, {
+        native: false,
+        model: CODEX_PDF_MODEL,
       });
       expect(completeMock).toHaveBeenCalledTimes(1);
       const [, context] = completeMock.mock.calls[0] ?? [];

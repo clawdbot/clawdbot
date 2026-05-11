@@ -315,11 +315,10 @@ describe("bundled plugin metadata", () => {
       contains: ["runtime-api.js"],
     });
     expect(discord?.manifest.id).toBe("discord");
-    expect(collectRepoBundledChannelConfigsForTest("discord")?.discord).toEqual(
-      expect.objectContaining({
-        schema: expect.objectContaining({ type: "object" }),
-      }),
-    );
+    const discordChannelConfig = collectRepoBundledChannelConfigsForTest("discord")?.discord as
+      | { schema?: { type?: unknown } }
+      | undefined;
+    expect(discordChannelConfig?.schema?.type).toBe("object");
   });
 
   it("keeps Slack's doctor contract sidecar on the bundled public surface", () => {
@@ -368,11 +367,10 @@ describe("bundled plugin metadata", () => {
   });
 
   it("loads tlon channel config metadata from the lightweight schema surface", () => {
-    expect(collectRepoBundledChannelConfigsForTest("tlon")?.tlon).toEqual(
-      expect.objectContaining({
-        schema: expect.objectContaining({ type: "object" }),
-      }),
-    );
+    const tlonChannelConfig = collectRepoBundledChannelConfigsForTest("tlon")?.tlon as
+      | { schema?: { type?: unknown } }
+      | undefined;
+    expect(tlonChannelConfig?.schema?.type).toBe("object");
   });
 
   it("keeps bundled persisted-auth metadata on channel package manifests", () => {
@@ -951,7 +949,7 @@ describe("bundled plugin metadata", () => {
     const channelConfigs = entries[0]?.manifest.channelConfigs as
       | Record<string, unknown>
       | undefined;
-    expect(channelConfigs?.alpha).toMatchObject({
+    expect(channelConfigs?.alpha).toEqual({
       schema: {
         type: "object",
         properties: {

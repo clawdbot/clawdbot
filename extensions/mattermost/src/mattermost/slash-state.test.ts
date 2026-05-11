@@ -58,7 +58,13 @@ describe("slash-state token routing", () => {
     });
 
     const match = resolveSlashHandlerForToken("tok-a");
-    expect(match).toMatchObject({ kind: "single", source: "token", accountIds: ["a1"] });
+    expect(match.kind).toBe("single");
+    if (match.kind !== "single") {
+      throw new Error("expected single match");
+    }
+    expect(match.source).toBe("token");
+    expect(match.accountIds).toEqual(["a1"]);
+    expect(typeof match.handler).toBe("function");
   });
 
   it("returns ambiguous when same token exists in multiple accounts", () => {
@@ -99,7 +105,13 @@ describe("slash-state token routing", () => {
       command: "/oc_status",
     });
 
-    expect(match).toMatchObject({ kind: "single", source: "command", accountIds: ["a1"] });
+    expect(match.kind).toBe("single");
+    if (match.kind !== "single") {
+      throw new Error("expected single match");
+    }
+    expect(match.source).toBe("command");
+    expect(match.accountIds).toEqual(["a1"]);
+    expect(typeof match.handler).toBe("function");
   });
 
   it("returns ambiguous when registered team and command match multiple accounts", () => {

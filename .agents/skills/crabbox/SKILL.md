@@ -127,6 +127,7 @@ Read the JSON summary. Useful fields:
 - `provider`: should be `blacksmith-testbox`
 - `leaseId`: `tbx_...`
 - `syncDelegated`: should be `true`
+- `commandPhases`: populated when the command prints `CRABBOX_PHASE:<name>`
 - `commandMs` / `totalMs`
 - `exitCode`
 
@@ -137,6 +138,47 @@ unclear:
 ```sh
 blacksmith testbox list
 ```
+
+## Observability Flags
+
+Use these on debugging runs before inventing ad hoc logging:
+
+- `--preflight`: prints run context, workspace mode, SSH target, remote user/cwd,
+  sudo/apt, Node, pnpm, Docker, and bubblewrap. On `blacksmith-testbox`, this
+  prints a delegated-unsupported note because the workflow owns setup.
+- `CRABBOX_ENV_ALLOW=NAME,...`: forwards only listed local env vars for direct
+  providers and prints `set len=N secret=true` style summaries. On
+  `blacksmith-testbox`, env forwarding is unsupported; put secrets in the
+  Testbox workflow instead.
+- `--capture-stdout <path>` / `--capture-stderr <path>`: write remote streams to
+  local files and keep binary/noisy output out of retained logs. Parent
+  directories must already exist. These are direct-provider only.
+- `--capture-on-fail`: on non-zero direct-provider exits, downloads
+  `.crabbox/captures/*.tar.gz` with `test-results`, `playwright-report`,
+  `coverage`, JUnit XML, and nearby logs. Treat as secret-bearing until reviewed.
+- `--timing-json`: final machine-readable timing. Add
+  `echo CRABBOX_PHASE:install`, `CRABBOX_PHASE:test`, etc. in long shell
+  commands; direct providers and Blacksmith Testbox both report them as
+  `commandPhases`.
+
+Live-provider debug template for direct AWS/Hetzner leases:
+
+```sh
+mkdir -p .crabbox/logs
+CRABBOX_ENV_ALLOW=OPENAI_API_KEY,OPENAI_BASE_URL \
+  pnpm crabbox:run -- --provider aws \
+  --preflight \
+  --timing-json \
+  --capture-stdout .crabbox/logs/live-provider.stdout.log \
+  --capture-stderr .crabbox/logs/live-provider.stderr.log \
+  --capture-on-fail \
+  --shell -- \
+  "echo CRABBOX_PHASE:install; pnpm install --frozen-lockfile; echo CRABBOX_PHASE:test; pnpm test:live"
+```
+
+Do not pass `--capture-*`, `--download`, `--checksum`, `--force-sync-large`, or
+`--sync-only` to delegated providers. Crabbox rejects them because the provider
+owns sync or command transport.
 
 ## Efficient Bug E2E Verification
 
@@ -294,18 +336,19 @@ Common Crabbox-only failures:
   report the capacity blocker.
 
 If Crabbox cannot dispatch, sync, attach, or stop but Blacksmith itself works,
-use direct Blacksmith from the repo root:
+first try the same command through the repo wrapper with `--debug` and
+`--timing-json`:
 
 ```sh
-blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90
-blacksmith testbox run --id <tbx_id> "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test:changed"
-blacksmith testbox stop --id <tbx_id>
+pnpm crabbox:run -- --provider blacksmith-testbox --debug --timing-json -- \
+  CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test:changed
 ```
 
-Direct full suite:
+Full suite:
 
 ```sh
-blacksmith testbox run --id <tbx_id> "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test"
+pnpm crabbox:run -- --provider blacksmith-testbox --debug --timing-json -- \
+  CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test
 ```
 
 Auth fallback, only when `blacksmith` says auth is missing:
@@ -340,16 +383,15 @@ The hydration workflow owns checkout, Node/pnpm setup, dependency install,
 secrets, ready marker, and keepalive. Crabbox owns dispatch, sync, SSH command
 execution, timing, logs/results, and cleanup.
 
-Minimal direct Blacksmith fallback, from repo root:
+Minimal Blacksmith-backed Crabbox run, from repo root:
 
 ```sh
-blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90
-blacksmith testbox run --id <tbx_id> "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test:changed"
-blacksmith testbox stop --id <tbx_id>
+pnpm crabbox:run -- --provider blacksmith-testbox --timing-json -- \
+  CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test:changed
 ```
 
-Use direct Blacksmith only when Crabbox is the broken layer and Blacksmith
-itself still works. Prefer direct `blacksmith testbox list` for cleanup
+Use direct Blacksmith only when Crabbox is the broken layer and you are
+isolating a Crabbox bug. Prefer direct `blacksmith testbox list` for cleanup
 diagnostics, not as a reusable work queue.
 
 Important Blacksmith footguns:

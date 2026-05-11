@@ -161,7 +161,6 @@ type BackgroundTaskContext = {
 
 export class AcpSessionManager {
   private readonly actorQueue = new SessionActorQueue();
-  private readonly actorTailBySession = this.actorQueue.getTailMapForTesting();
   private readonly runtimeCache = new RuntimeCache();
   private readonly activeTurnBySession = new Map<string, ActiveTurnState>();
   private readonly turnLatencyStats: TurnLatencyStats = {

@@ -186,14 +186,14 @@ describe("downloadToFile", () => {
       await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("archive");
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://example.com/signal-cli.tgz",
-        requireHttps: true,
-        timeoutMs: 5 * 60_000,
-        auditContext: "signal-cli-install-archive",
-      }),
-    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
+      url: "https://example.com/signal-cli.tgz",
+      maxRedirects: 5,
+      requireHttps: true,
+      timeoutMs: 5 * 60_000,
+      capture: false,
+      auditContext: "signal-cli-install-archive",
+    });
     expect(fetchResult.release).toHaveBeenCalledTimes(1);
   });
 
@@ -251,14 +251,20 @@ describe("installSignalCliFromRelease", () => {
       error: "No compatible release asset found for this platform.",
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.github.com/repos/AsamK/signal-cli/releases/latest",
-        requireHttps: true,
-        timeoutMs: 30_000,
-        auditContext: "signal-cli-release-info",
-      }),
-    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
+      url: "https://api.github.com/repos/AsamK/signal-cli/releases/latest",
+      maxRedirects: 5,
+      requireHttps: true,
+      timeoutMs: 30_000,
+      capture: false,
+      auditContext: "signal-cli-release-info",
+      init: {
+        headers: {
+          "User-Agent": "openclaw",
+          Accept: "application/vnd.github+json",
+        },
+      },
+    });
     expect(fetchResult.release).toHaveBeenCalledTimes(1);
   });
 });

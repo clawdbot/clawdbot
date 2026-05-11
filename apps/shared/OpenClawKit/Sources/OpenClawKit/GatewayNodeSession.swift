@@ -53,6 +53,7 @@ public actor GatewayNodeSession {
     private var activeBootstrapToken: String?
     private var activePassword: String?
     private var activeConnectOptionsKey: String?
+    private var activeSessionIdentity: ObjectIdentifier?
     private var connectOptions: GatewayConnectOptions?
     private var onConnected: (@Sendable () async -> Void)?
     private var onDisconnected: (@Sendable (String) async -> Void)?
@@ -195,11 +196,13 @@ public actor GatewayNodeSession {
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse) async throws
     {
         let nextOptionsKey = self.connectOptionsKey(connectOptions)
+        let nextSessionIdentity = sessionBox.map { ObjectIdentifier($0.session) }
         let shouldReconnect = self.activeURL != url ||
             self.activeToken != token ||
             self.activeBootstrapToken != bootstrapToken ||
             self.activePassword != password ||
             self.activeConnectOptionsKey != nextOptionsKey ||
+            self.activeSessionIdentity != nextSessionIdentity ||
             self.channel == nil
 
         self.connectOptions = connectOptions
@@ -231,6 +234,7 @@ public actor GatewayNodeSession {
             self.activeBootstrapToken = bootstrapToken
             self.activePassword = password
             self.activeConnectOptionsKey = nextOptionsKey
+            self.activeSessionIdentity = nextSessionIdentity
         }
 
         guard let channel = self.channel else {
@@ -256,6 +260,7 @@ public actor GatewayNodeSession {
         self.activeBootstrapToken = nil
         self.activePassword = nil
         self.activeConnectOptionsKey = nil
+        self.activeSessionIdentity = nil
         self.hasEverConnected = false
         self.resetConnectionState()
     }

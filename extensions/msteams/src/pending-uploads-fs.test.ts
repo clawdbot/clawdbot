@@ -137,7 +137,14 @@ describe("msteams pending uploads (fs-backed)", () => {
       },
       { env },
     );
-    expect(await requirePendingUpload("upload-rm", env)).toMatchObject({ id: "upload-rm" });
+    const loaded = await requirePendingUpload("upload-rm", env);
+    expect(loaded.id).toBe("upload-rm");
+    expect(loaded.filename).toBe("rm.bin");
+    expect(loaded.contentType).toBeUndefined();
+    expect(loaded.conversationId).toBe("19:conv@thread.v2");
+    expect(loaded.consentCardActivityId).toBeUndefined();
+    expect(loaded.buffer.toString("utf8")).toBe("x");
+    expect(Number.isFinite(loaded.createdAt)).toBe(true);
 
     await removePendingUploadFs("upload-rm", { env });
     expect(await getPendingUploadFs("upload-rm", { env })).toBeUndefined();

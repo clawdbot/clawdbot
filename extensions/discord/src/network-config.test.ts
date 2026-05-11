@@ -22,7 +22,7 @@ describe("createDiscordDnsLookup", () => {
 
   it("returns reordered address arrays when the caller requests all addresses", async () => {
     dnsMocks.lookup.mockImplementation((_hostname: string, options: unknown, callback: unknown) => {
-      expect(options).toMatchObject({ all: true });
+      expect(options).toEqual({ all: true });
       (callback as (err: NodeJS.ErrnoException | null, addresses: dns.LookupAddress[]) => void)(
         null,
         [

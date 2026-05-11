@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { z } from "openclaw/plugin-sdk/zod";
 import YAML from "yaml";
+import { z } from "zod";
 
 export const DEFAULT_QA_AGENT_IDENTITY_MARKDOWN = `# Dev C-3PO
 

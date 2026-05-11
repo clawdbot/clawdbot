@@ -16,6 +16,7 @@ type TelegramSequentialKeyContext = {
   me?: UserFromGetMe;
   message?: Message;
   channelPost?: Message;
+  editedMessage?: Message;
   editedChannelPost?: Message;
   update?: {
     message?: Message;
@@ -56,6 +57,7 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   const msg =
     ctx.message ??
     ctx.channelPost ??
+    ctx.editedMessage ??
     ctx.editedChannelPost ??
     ctx.update?.message ??
     ctx.update?.edited_message ??

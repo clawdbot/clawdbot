@@ -170,6 +170,17 @@ function resolveSystemdUnitNameFromServicePath(sourcePath: string | undefined): 
   return base.endsWith(".service") ? base : "openclaw-gateway.service";
 }
 
+function shouldDeferUpdateModeSystemdServiceRepair(params: {
+  repairMode: DoctorPrompter["repairMode"];
+  shouldForce: boolean;
+}): boolean {
+  return (
+    process.platform === "linux" &&
+    isDoctorUpdateRepairMode(params.repairMode) &&
+    !params.shouldForce
+  );
+}
+
 async function suppressRunningSystemdExecStartRepairs(params: {
   command: GatewayServiceCommandConfig;
   issues: { code: string }[];
@@ -512,6 +523,19 @@ export async function maybeRepairGatewayServiceConfig(
   }
 
   const updateRepairMode = isDoctorUpdateRepairMode(prompter.repairMode);
+  if (
+    shouldDeferUpdateModeSystemdServiceRepair({
+      repairMode: prompter.repairMode,
+      shouldForce: prompter.shouldForce,
+    })
+  ) {
+    note(
+      "Update-mode doctor detected gateway service drift but left the live systemd unit unchanged. Review the service file and run `openclaw gateway install --force` when you want OpenClaw to replace operator-owned systemd directives.",
+      "Gateway service config",
+    );
+    return;
+  }
+
   const repairMessage = needsAggressive
     ? "Overwrite gateway service config with current defaults now?"
     : "Update gateway service config to the recommended defaults now?";

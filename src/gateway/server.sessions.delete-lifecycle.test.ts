@@ -19,6 +19,11 @@ import {
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
+function expectObject(value: unknown) {
+  expect(typeof value).toBe("object");
+  expect(value).not.toBeNull();
+}
+
 test("sessions.delete rejects main and aborts active runs", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
@@ -49,14 +54,16 @@ test("sessions.delete rejects main and aborts active runs", async () => {
   );
   expect(bundleMcpRuntimeMocks.disposeSessionMcpRuntime).toHaveBeenCalledWith("sess-active");
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledTimes(1);
-  expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledWith({
-    sessionKeys: expect.arrayContaining([
-      "discord:group:dev",
-      "agent:main:discord:group:dev",
-      "sess-active",
-    ]),
-    onWarn: expect.any(Function),
-  });
+  const closeTabsCall = (
+    browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mock.calls as unknown as Array<
+      [{ sessionKeys?: string[]; onWarn?: unknown }]
+    >
+  )[0]?.[0];
+  expect(closeTabsCall?.sessionKeys).toHaveLength(3);
+  expect(closeTabsCall?.sessionKeys).toContain("discord:group:dev");
+  expect(closeTabsCall?.sessionKeys).toContain("agent:main:discord:group:dev");
+  expect(closeTabsCall?.sessionKeys).toContain("sess-active");
+  expect(typeof closeTabsCall?.onWarn).toBe("function");
   expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
   expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledWith(
     {
@@ -152,19 +159,37 @@ test("sessions.delete closes ACP runtime handles before removing ACP sessions", 
   });
   expect(deleted.ok).toBe(true);
   expect(deleted.payload?.deleted).toBe(true);
-  expect(acpManagerMocks.closeSession).toHaveBeenCalledWith({
-    allowBackendUnavailable: true,
-    cfg: expect.any(Object),
-    discardPersistentState: true,
-    requireAcpSession: false,
-    reason: "session-delete",
-    sessionKey: "agent:main:discord:group:dev",
-  });
-  expect(acpManagerMocks.cancelSession).toHaveBeenCalledWith({
-    cfg: expect.any(Object),
-    reason: "session-delete",
-    sessionKey: "agent:main:discord:group:dev",
-  });
+  expect(acpManagerMocks.closeSession).toHaveBeenCalledTimes(1);
+  const closeSessionCall = (
+    acpManagerMocks.closeSession.mock.calls as unknown as Array<
+      [
+        {
+          allowBackendUnavailable?: boolean;
+          cfg?: unknown;
+          discardPersistentState?: boolean;
+          requireAcpSession?: boolean;
+          reason?: string;
+          sessionKey?: string;
+        },
+      ]
+    >
+  )[0]?.[0];
+  expect(closeSessionCall?.allowBackendUnavailable).toBe(true);
+  expectObject(closeSessionCall?.cfg);
+  expect(closeSessionCall?.discardPersistentState).toBe(true);
+  expect(closeSessionCall?.requireAcpSession).toBe(false);
+  expect(closeSessionCall?.reason).toBe("session-delete");
+  expect(closeSessionCall?.sessionKey).toBe("agent:main:discord:group:dev");
+
+  expect(acpManagerMocks.cancelSession).toHaveBeenCalledTimes(1);
+  const cancelSessionCall = (
+    acpManagerMocks.cancelSession.mock.calls as unknown as Array<
+      [{ cfg?: unknown; reason?: string; sessionKey?: string }]
+    >
+  )[0]?.[0];
+  expectObject(cancelSessionCall?.cfg);
+  expect(cancelSessionCall?.reason).toBe("session-delete");
+  expect(cancelSessionCall?.sessionKey).toBe("agent:main:discord:group:dev");
 });
 
 test("sessions.delete emits session_end with deleted reason and no replacement", async () => {
@@ -201,19 +226,19 @@ test("sessions.delete emits session_end with deleted reason and no replacement",
   const [event, context] = (
     sessionLifecycleHookMocks.runSessionEnd.mock.calls as unknown as Array<[unknown, unknown]>
   )[0] ?? [undefined, undefined];
-  expect(event).toMatchObject({
-    sessionId: "sess-delete",
-    sessionKey: "agent:main:discord:group:delete",
-    reason: "deleted",
-    transcriptArchived: true,
-  });
+  expect((event as { sessionId?: string } | undefined)?.sessionId).toBe("sess-delete");
+  expect((event as { sessionKey?: string } | undefined)?.sessionKey).toBe(
+    "agent:main:discord:group:delete",
+  );
+  expect((event as { reason?: string } | undefined)?.reason).toBe("deleted");
+  expect((event as { transcriptArchived?: boolean } | undefined)?.transcriptArchived).toBe(true);
   expect((event as { sessionFile?: string } | undefined)?.sessionFile).toContain(".jsonl.deleted.");
   expect((event as { nextSessionId?: string } | undefined)?.nextSessionId).toBeUndefined();
-  expect(context).toMatchObject({
-    sessionId: "sess-delete",
-    sessionKey: "agent:main:discord:group:delete",
-    agentId: "main",
-  });
+  expect((context as { sessionId?: string } | undefined)?.sessionId).toBe("sess-delete");
+  expect((context as { sessionKey?: string } | undefined)?.sessionKey).toBe(
+    "agent:main:discord:group:delete",
+  );
+  expect((context as { agentId?: string } | undefined)?.agentId).toBe("main");
 });
 
 test("sessions.delete does not emit lifecycle events when nothing was deleted", async () => {
@@ -253,12 +278,10 @@ test("sessions.delete emits subagent targetKind for subagent sessions", async ()
   const event = (subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][])[0]?.[0] as
     | { targetKind?: string; targetSessionKey?: string; reason?: string; outcome?: string }
     | undefined;
-  expect(event).toMatchObject({
-    targetSessionKey: "agent:main:subagent:worker",
-    targetKind: "subagent",
-    reason: "session-delete",
-    outcome: "deleted",
-  });
+  expect(event?.targetSessionKey).toBe("agent:main:subagent:worker");
+  expect(event?.targetKind).toBe("subagent");
+  expect(event?.reason).toBe("session-delete");
+  expect(event?.outcome).toBe("deleted");
   expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
   expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
     targetSessionKey: "agent:main:subagent:worker",

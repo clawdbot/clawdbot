@@ -199,9 +199,9 @@ function formatEntry(entry) {
   return `${entry.file}:${entry.line} [${entry.kind}] ${entry.reason} (${entry.specifier} -> ${entry.resolvedPath})`;
 }
 
-export async function runPluginExtensionImportBoundaryCheck(argv = process.argv.slice(2), io) {
+export async function runPluginExtensionImportBoundaryCheck(argv, io) {
   return await runBaselineInventoryCheck({
-    argv,
+    argv: argv ?? process.argv.slice(2),
     io,
     collectActual: collectPluginExtensionImportBoundaryInventory,
     readExpected: readExpectedInventory,
@@ -211,7 +211,7 @@ export async function runPluginExtensionImportBoundaryCheck(argv = process.argv.
   });
 }
 
-export async function main(argv = process.argv.slice(2), io) {
+export async function main(argv, io) {
   const exitCode = await runPluginExtensionImportBoundaryCheck(argv, io);
   if (!io && exitCode !== 0) {
     process.exit(exitCode);

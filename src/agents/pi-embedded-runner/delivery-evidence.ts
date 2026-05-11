@@ -11,6 +11,10 @@ type AgentPayloadLike = {
 
 export type AgentDeliveryEvidence = {
   payloads?: unknown;
+  deliveryStatus?: {
+    status?: unknown;
+    errorMessage?: unknown;
+  };
   didSendViaMessagingTool?: unknown;
   messagingToolSentTexts?: unknown;
   messagingToolSentMediaUrls?: unknown;
@@ -105,4 +109,16 @@ export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): bool
     hasPositiveNumber(result.successfulCronAdds) ||
     hasPositiveNumber(result.meta?.toolSummary?.calls)
   );
+}
+
+export function getAgentCommandDeliveryFailure(result: AgentDeliveryEvidence): string | undefined {
+  const status = result.deliveryStatus?.status;
+  if (status !== "failed" && status !== "partial_failed") {
+    return undefined;
+  }
+  const message = result.deliveryStatus?.errorMessage;
+  if (hasNonEmptyString(message)) {
+    return message;
+  }
+  return status === "partial_failed" ? "agent delivery partially failed" : "agent delivery failed";
 }

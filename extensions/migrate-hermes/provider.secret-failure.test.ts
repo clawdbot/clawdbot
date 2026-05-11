@@ -84,15 +84,23 @@ describe("Hermes migration provider secret write failures", () => {
       }),
     );
 
-    expect(result.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "secret:openai",
-          status: "error",
-          reason: HERMES_REASON_AUTH_PROFILE_WRITE_FAILED,
-        }),
-      ]),
-    );
+    expect(result.items).toEqual([
+      {
+        id: "secret:openai",
+        kind: "secret",
+        action: "create",
+        source: path.join(source, ".env"),
+        target: `${path.join(stateDir, "agents", "main", "agent")}/auth-profiles.json#openai:hermes-import`,
+        status: "error",
+        sensitive: true,
+        reason: HERMES_REASON_AUTH_PROFILE_WRITE_FAILED,
+        details: {
+          envVar: "OPENAI_API_KEY",
+          provider: "openai",
+          profileId: "openai:hermes-import",
+        },
+      },
+    ]);
     expect(result.summary.errors).toBe(1);
     expect(result.summary.migrated).toBe(0);
   });

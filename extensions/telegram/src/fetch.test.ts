@@ -282,6 +282,20 @@ function expectCallerDispatcherPreserved(callIndexes: number[], dispatcher: unkn
   }
 }
 
+function loggerHasMessageContaining(logger: ReturnType<typeof vi.fn>, fragment: string): boolean {
+  return logger.mock.calls.some(
+    ([message]) => typeof message === "string" && message.includes(fragment),
+  );
+}
+
+function expectLoggerMessageContaining(logger: ReturnType<typeof vi.fn>, fragment: string): void {
+  expect(loggerHasMessageContaining(logger, fragment)).toBe(true);
+}
+
+function expectNoLoggerMessageContaining(logger: ReturnType<typeof vi.fn>, fragment: string): void {
+  expect(loggerHasMessageContaining(logger, fragment)).toBe(false);
+}
+
 async function expectNoStickyRetryWithSameDispatcher(params: {
   resolved: ReturnType<typeof resolveTelegramFetchOrThrow>;
   expectedAgentCtor: typeof ProxyAgentCtor | typeof EnvHttpProxyAgentCtor;
@@ -765,14 +779,17 @@ describe("resolveTelegramFetch", () => {
     expectStickyAutoSelectDispatcher(firstDispatcher);
     expect(secondDispatcher?.options?.connect?.family).toBe(4);
     expect(secondDispatcher?.options?.connect?.autoSelectFamily).toBe(false);
-    expect(loggerDebug).toHaveBeenCalledWith(
-      expect.stringContaining("fetch fallback: enabling sticky IPv4-only dispatcher"),
+    expectLoggerMessageContaining(
+      loggerDebug,
+      "fetch fallback: enabling sticky IPv4-only dispatcher",
     );
-    expect(loggerDebug).toHaveBeenCalledWith(
-      expect.stringContaining("fetch fallback: recovered from attempt 1 to attempt 0"),
+    expectLoggerMessageContaining(
+      loggerDebug,
+      "fetch fallback: recovered from attempt 1 to attempt 0",
     );
-    expect(loggerWarn).not.toHaveBeenCalledWith(
-      expect.stringContaining("fetch fallback: enabling sticky IPv4-only dispatcher"),
+    expectNoLoggerMessageContaining(
+      loggerWarn,
+      "fetch fallback: enabling sticky IPv4-only dispatcher",
     );
   });
 
@@ -812,11 +829,10 @@ describe("resolveTelegramFetch", () => {
     expect(eighthDispatcher).toBe(firstDispatcher);
     expect(ninthDispatcher).toBe(firstDispatcher);
     expectPinnedFallbackIpDispatcher(3);
-    expect(loggerWarn).toHaveBeenCalledWith(
-      expect.stringContaining("fetch fallback: DNS-resolved IP unreachable"),
-    );
-    expect(loggerDebug).toHaveBeenCalledWith(
-      expect.stringContaining("fetch fallback: recovered from attempt 2 to attempt 0"),
+    expectLoggerMessageContaining(loggerWarn, "fetch fallback: DNS-resolved IP unreachable");
+    expectLoggerMessageContaining(
+      loggerDebug,
+      "fetch fallback: recovered from attempt 2 to attempt 0",
     );
   });
 
@@ -855,9 +871,7 @@ describe("resolveTelegramFetch", () => {
     expect(getDispatcherFromUndiciCall(7)).toBe(firstDispatcher);
     expect(getDispatcherFromUndiciCall(8)).toBe(secondDispatcher);
     expect(getDispatcherFromUndiciCall(9)).toBe(secondDispatcher);
-    expect(loggerDebug).toHaveBeenCalledWith(
-      expect.stringContaining("fetch fallback: re-probing primary dispatcher"),
-    );
+    expectLoggerMessageContaining(loggerDebug, "fetch fallback: re-probing primary dispatcher");
   });
 
   it("keeps the armed fallback sticky when all attempts fail", async () => {
@@ -933,12 +947,11 @@ describe("resolveTelegramFetch", () => {
     expect(getDispatcherFromUndiciCall(7)).toBe(getDispatcherFromUndiciCall(3));
     expect(getDispatcherFromUndiciCall(8)).toBe(getDispatcherFromUndiciCall(1));
     expect(getDispatcherFromUndiciCall(9)).toBe(getDispatcherFromUndiciCall(2));
-    expect(loggerWarn).toHaveBeenCalledWith(
-      expect.stringContaining("telegram transport attempt marked temporarily unhealthy"),
+    expectLoggerMessageContaining(
+      loggerWarn,
+      "telegram transport attempt marked temporarily unhealthy",
     );
-    expect(loggerDebug).toHaveBeenCalledWith(
-      expect.stringContaining("fetch fallback: re-probing primary dispatcher"),
-    );
+    expectLoggerMessageContaining(loggerDebug, "fetch fallback: re-probing primary dispatcher");
   });
 
   it("preserves caller-provided dispatcher across fallback retry", async () => {

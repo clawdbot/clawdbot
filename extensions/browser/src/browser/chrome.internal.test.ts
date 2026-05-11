@@ -442,6 +442,8 @@ describe("chrome.ts internal", () => {
       vi.stubEnv("HTTP_PROXY", "http://proxy.test:8080");
       vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8443");
       vi.stubEnv("NO_PROXY", "localhost");
+      vi.stubEnv("XDG_CONFIG_HOME", undefined);
+      vi.stubEnv("XDG_CACHE_HOME", undefined);
 
       // Set up a real HTTP server impersonating Chrome's /json/version.
       await withMockChromeCdpServer({

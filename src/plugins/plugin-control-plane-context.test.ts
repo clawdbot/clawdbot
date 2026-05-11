@@ -91,16 +91,22 @@ describe("plugin control-plane context", () => {
   it("keeps the canonical context inspectable for cache diagnostics", () => {
     const context = resolvePluginControlPlaneContext({
       config: { plugins: { load: { paths: ["/opt/plugins"] } } },
-      env: { HOME: "/home/a", OPENCLAW_HOME: "/openclaw/a" } as NodeJS.ProcessEnv,
+      env: {
+        HOME: "/home/a",
+        OPENCLAW_HOME: "/openclaw/a",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      } as NodeJS.ProcessEnv,
       inventoryFingerprint: "inventory",
       policyHash: "policy",
     });
 
-    expect(context).toMatchObject({
+    expect(context).toStrictEqual({
       discovery: {
         loadPaths: ["/opt/plugins"],
         roots: {
+          stock: "/tmp/openclaw-empty-bundled-plugins",
           global: "/openclaw/a/.openclaw/extensions",
+          workspace: undefined,
         },
       },
       inventoryFingerprint: "inventory",

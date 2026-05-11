@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type RuntimeSendOpts = {
   cfg?: OpenClawConfig;
+  blocks?: unknown;
   mediaUrl?: string;
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
@@ -58,6 +59,19 @@ export function createChannelOutboundRuntimeSend(params: {
         gatewayClientScopes: opts.gatewayClientScopes,
       });
       const hasMedia = Boolean(opts.mediaUrl);
+      if (opts.blocks && outbound?.sendPayload) {
+        return await outbound.sendPayload({
+          ...buildContext(),
+          payload: {
+            text,
+            channelData: {
+              [params.channelId]: {
+                blocks: opts.blocks,
+              },
+            },
+          },
+        });
+      }
       if (hasMedia && outbound?.sendMedia) {
         return await outbound.sendMedia(buildContext());
       }

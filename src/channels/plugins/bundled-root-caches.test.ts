@@ -225,9 +225,11 @@ describe("bundled root-aware plugin lookups", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = root.pluginsDir;
     expect(bootstrapRegistry.getBootstrapChannelSecrets("alpha")).toBeUndefined();
     expect(bootstrapRegistry.getBootstrapChannelSecrets("alpha")).toBeUndefined();
-    expect(bootstrapRegistry.getBootstrapChannelPlugin("alpha")).toMatchObject({
+    expect(bootstrapRegistry.getBootstrapChannelPlugin("alpha")).toEqual({
       id: "alpha",
       meta: { id: "alpha", label: "Alpha" },
+      capabilities: {},
+      config: {},
     });
     expect(getBundledChannelSecretsMock).toHaveBeenCalledTimes(2);
     expect(getBundledChannelPluginMock).toHaveBeenCalledTimes(1);

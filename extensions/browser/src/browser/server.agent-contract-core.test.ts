@@ -31,6 +31,16 @@ type ActErrorHttpResponse = {
   body: ActErrorResponse;
 };
 
+function expectRecordFields(value: unknown, expected: Record<string, unknown>): void {
+  expect(value).toBeDefined();
+  expect(typeof value).toBe("object");
+  expect(value).not.toBeNull();
+  const actual = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(expectedValue);
+  }
+}
+
 async function postActAndReadError(base: string, body?: unknown): Promise<ActErrorHttpResponse> {
   const realFetch = getBrowserTestFetch();
   const response = await realFetch(`${base}/act`, {
@@ -187,10 +197,8 @@ describe("browser control server", () => {
         targetId: "abcd1234",
       });
 
-      expect(response).toMatchObject({
-        ok: true,
-        targetId: "fresh5678",
-      });
+      expect(response.ok).toBe(true);
+      expect(response.targetId).toBe("fresh5678");
     },
     slowTimeoutMs,
   );
@@ -320,14 +328,8 @@ describe("browser control server", () => {
     };
 
     expect(report.ok).toBe(true);
-    expect(report.checks).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "live-snapshot",
-          status: "pass",
-        }),
-      ]),
-    );
+    const liveSnapshotCheck = report.checks?.find((check) => check.id === "live-snapshot");
+    expectRecordFields(liveSnapshotCheck, { id: "live-snapshot", status: "pass" });
     expect(cdpMocks.snapshotAria).toHaveBeenCalledWith({
       wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
       limit: 25,
@@ -343,16 +345,15 @@ describe("browser control server", () => {
     });
     expect(nav.ok).toBe(true);
     expect(typeof nav.targetId).toBe("string");
-    expect(pwMocks.navigateViaPlaywright).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cdpUrl: state.cdpBaseUrl,
-        targetId: "abcd1234",
-        url: "https://example.com",
-        ssrfPolicy: {
-          dangerouslyAllowPrivateNetwork: true,
-        },
-      }),
-    );
+    const [navigateArgs] = pwMocks.navigateViaPlaywright.mock.calls[0] ?? [];
+    expectRecordFields(navigateArgs, {
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      url: "https://example.com",
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
+    });
 
     const click = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "click",
@@ -361,20 +362,17 @@ describe("browser control server", () => {
       modifiers: ["Shift"],
     });
     expect(click.ok).toBe(true);
-    expect(pwMocks.clickViaPlaywright).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        cdpUrl: state.cdpBaseUrl,
-        targetId: "abcd1234",
-        ref: "1",
-        button: "left",
-        modifiers: ["Shift"],
-        ssrfPolicy: {
-          dangerouslyAllowPrivateNetwork: true,
-        },
-      }),
-    );
     const [clickArgs] = pwMocks.clickViaPlaywright.mock.calls[0] ?? [];
+    expectRecordFields(clickArgs, {
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      ref: "1",
+      button: "left",
+      modifiers: ["Shift"],
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
+    });
     expect((clickArgs as { doubleClick?: boolean }).doubleClick).toBeUndefined();
 
     const clickSelector = await realFetch(`${base}/act`, {
@@ -384,18 +382,15 @@ describe("browser control server", () => {
     });
     expect(clickSelector.status).toBe(200);
     expect(((await clickSelector.json()) as { ok?: boolean }).ok).toBe(true);
-    expect(pwMocks.clickViaPlaywright).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        cdpUrl: state.cdpBaseUrl,
-        targetId: "abcd1234",
-        selector: "button.save",
-        ssrfPolicy: {
-          dangerouslyAllowPrivateNetwork: true,
-        },
-      }),
-    );
     const [clickSelectorArgs] = pwMocks.clickViaPlaywright.mock.calls[1] ?? [];
+    expectRecordFields(clickSelectorArgs, {
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      selector: "button.save",
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
+    });
     expect((clickSelectorArgs as { doubleClick?: boolean }).doubleClick).toBeUndefined();
 
     const clickCoords = await postJson<{ ok: boolean; url?: string }>(`${base}/act`, {
@@ -408,20 +403,19 @@ describe("browser control server", () => {
     });
     expect(clickCoords.ok).toBe(true);
     expect(clickCoords.url).toBe("https://example.com");
-    expect(pwMocks.clickCoordsViaPlaywright).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cdpUrl: state.cdpBaseUrl,
-        targetId: "abcd1234",
-        x: 42.5,
-        y: 64,
-        doubleClick: true,
-        button: "left",
-        delayMs: 10,
-        ssrfPolicy: {
-          dangerouslyAllowPrivateNetwork: true,
-        },
-      }),
-    );
+    const [clickCoordsArgs] = pwMocks.clickCoordsViaPlaywright.mock.calls[0] ?? [];
+    expectRecordFields(clickCoordsArgs, {
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      x: 42.5,
+      y: 64,
+      doubleClick: true,
+      button: "left",
+      delayMs: 10,
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
+    });
 
     const type = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "type",
@@ -429,19 +423,16 @@ describe("browser control server", () => {
       text: "",
     });
     expect(type.ok).toBe(true);
-    expect(pwMocks.typeViaPlaywright).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        cdpUrl: state.cdpBaseUrl,
-        targetId: "abcd1234",
-        ref: "1",
-        text: "",
-        ssrfPolicy: {
-          dangerouslyAllowPrivateNetwork: true,
-        },
-      }),
-    );
     const [typeArgs] = pwMocks.typeViaPlaywright.mock.calls[0] ?? [];
+    expectRecordFields(typeArgs, {
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      ref: "1",
+      text: "",
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
+    });
     expect((typeArgs as { submit?: boolean }).submit).toBeUndefined();
     expect((typeArgs as { slowly?: boolean }).slowly).toBeUndefined();
 
@@ -450,17 +441,15 @@ describe("browser control server", () => {
       key: "Enter",
     });
     expect(press.ok).toBe(true);
-    expect(pwMocks.pressKeyViaPlaywright).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cdpUrl: state.cdpBaseUrl,
-        targetId: "abcd1234",
-        key: "Enter",
-        ssrfPolicy: {
-          dangerouslyAllowPrivateNetwork: true,
-        },
-      }),
-    );
     const [pressArgs] = pwMocks.pressKeyViaPlaywright.mock.calls[0] ?? [];
+    expectRecordFields(pressArgs, {
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      key: "Enter",
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
+    });
     expect((pressArgs as { delayMs?: number }).delayMs).toBeUndefined();
 
     const hover = await postJson<{ ok: boolean }>(`${base}/act`, {
@@ -468,14 +457,12 @@ describe("browser control server", () => {
       ref: "2",
     });
     expect(hover.ok).toBe(true);
-    expect(pwMocks.hoverViaPlaywright).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cdpUrl: state.cdpBaseUrl,
-        targetId: "abcd1234",
-        ref: "2",
-      }),
-    );
     const [hoverArgs] = pwMocks.hoverViaPlaywright.mock.calls[0] ?? [];
+    expectRecordFields(hoverArgs, {
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      ref: "2",
+    });
     expect((hoverArgs as { timeoutMs?: number }).timeoutMs).toBeUndefined();
 
     const scroll = await postJson<{ ok: boolean }>(`${base}/act`, {
@@ -483,14 +470,12 @@ describe("browser control server", () => {
       ref: "2",
     });
     expect(scroll.ok).toBe(true);
-    expect(pwMocks.scrollIntoViewViaPlaywright).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cdpUrl: state.cdpBaseUrl,
-        targetId: "abcd1234",
-        ref: "2",
-      }),
-    );
     const [scrollArgs] = pwMocks.scrollIntoViewViaPlaywright.mock.calls[0] ?? [];
+    expectRecordFields(scrollArgs, {
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      ref: "2",
+    });
     expect((scrollArgs as { timeoutMs?: number }).timeoutMs).toBeUndefined();
 
     const drag = await postJson<{ ok: boolean }>(`${base}/act`, {
@@ -499,15 +484,13 @@ describe("browser control server", () => {
       endRef: "4",
     });
     expect(drag.ok).toBe(true);
-    expect(pwMocks.dragViaPlaywright).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cdpUrl: state.cdpBaseUrl,
-        targetId: "abcd1234",
-        startRef: "3",
-        endRef: "4",
-      }),
-    );
     const [dragArgs] = pwMocks.dragViaPlaywright.mock.calls[0] ?? [];
+    expectRecordFields(dragArgs, {
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      startRef: "3",
+      endRef: "4",
+    });
     expect((dragArgs as { timeoutMs?: number }).timeoutMs).toBeUndefined();
   });
   it("POST /tabs/open?profile=unknown returns 404", async () => {

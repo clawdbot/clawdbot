@@ -1,4 +1,4 @@
-import type { proto, WAMessage } from "@whiskeysockets/baileys";
+import type { proto, WAMessage } from "baileys";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { createWaSocket } from "../session.js";
 import { extractContextInfo } from "./extract.js";

@@ -13,6 +13,11 @@ export {
   formatMatchMetadata,
   resolveEnabledConfiguredAccountId,
 } from "../channels/plugins/status-issues/shared.js";
+export {
+  resolveReactionLevel,
+  type ReactionLevel,
+  type ResolvedReactionLevel,
+} from "../utils/reaction-level.js";
 
 type RuntimeLifecycleSnapshot = {
   running?: boolean | null;

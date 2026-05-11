@@ -61,8 +61,8 @@ describe("mattermost monitor auth", () => {
     isDangerousNameMatchingEnabled.mockReturnValue(false);
     resolveAllowlistMatchSimple.mockReturnValue({ allowed: false });
 
-    expect(
-      await authorizeMattermostCommandInvocation({
+    await expect(
+      authorizeMattermostCommandInvocation({
         account: {
           config: { dmPolicy: "open" },
         } as never,
@@ -74,16 +74,22 @@ describe("mattermost monitor auth", () => {
         allowTextCommands: true,
         hasControlCommand: true,
       }),
-    ).toMatchObject({
+    ).resolves.toEqual({
       ok: false,
       denyReason: "unauthorized",
+      commandAuthorized: false,
+      channelInfo: { type: "D", name: "alice", display_name: "Alice" },
       kind: "direct",
+      chatType: "direct",
+      channelName: "alice",
+      channelDisplay: "Alice",
+      roomLabel: "#alice",
     });
 
     resolveAllowlistMatchSimple.mockReturnValue({ allowed: true });
 
-    expect(
-      await authorizeMattermostCommandInvocation({
+    await expect(
+      authorizeMattermostCommandInvocation({
         account: {
           config: { dmPolicy: "open", allowFrom: ["*"] },
         } as never,
@@ -95,14 +101,19 @@ describe("mattermost monitor auth", () => {
         allowTextCommands: false,
         hasControlCommand: false,
       }),
-    ).toMatchObject({
+    ).resolves.toEqual({
       ok: true,
       commandAuthorized: true,
+      channelInfo: { type: "D", name: "alice", display_name: "Alice" },
       kind: "direct",
+      chatType: "direct",
+      channelName: "alice",
+      channelDisplay: "Alice",
+      roomLabel: "#alice",
     });
 
-    expect(
-      await authorizeMattermostCommandInvocation({
+    await expect(
+      authorizeMattermostCommandInvocation({
         account: {
           config: { dmPolicy: "disabled" },
         } as never,
@@ -114,13 +125,20 @@ describe("mattermost monitor auth", () => {
         allowTextCommands: false,
         hasControlCommand: false,
       }),
-    ).toMatchObject({
+    ).resolves.toEqual({
       ok: false,
       denyReason: "dm-disabled",
+      commandAuthorized: false,
+      channelInfo: { type: "D", name: "alice", display_name: "Alice" },
+      kind: "direct",
+      chatType: "direct",
+      channelName: "alice",
+      channelDisplay: "Alice",
+      roomLabel: "#alice",
     });
 
-    expect(
-      await authorizeMattermostCommandInvocation({
+    await expect(
+      authorizeMattermostCommandInvocation({
         account: {
           config: { groupPolicy: "allowlist" },
         } as never,
@@ -132,10 +150,16 @@ describe("mattermost monitor auth", () => {
         allowTextCommands: true,
         hasControlCommand: false,
       }),
-    ).toMatchObject({
+    ).resolves.toEqual({
       ok: false,
       denyReason: "channel-no-allowlist",
+      commandAuthorized: false,
+      channelInfo: { type: "O", name: "town-square", display_name: "Town Square" },
       kind: "channel",
+      chatType: "channel",
+      channelName: "town-square",
+      channelDisplay: "Town Square",
+      roomLabel: "#town-square",
     });
   });
 });

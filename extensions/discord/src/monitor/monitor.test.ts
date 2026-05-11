@@ -1,5 +1,5 @@
 import { ChannelType } from "discord-api-types/v10";
-import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { type DiscordComponentEntry, type DiscordModalEntry } from "../components.js";
@@ -49,6 +49,20 @@ function getLastRecordedCtx(): Record<string, unknown> | undefined {
     | { ctx?: Record<string, unknown> }
     | undefined;
   return params?.ctx;
+}
+
+function getLastPluginDispatchCtx(): Record<string, unknown> | undefined {
+  const params = dispatchPluginInteractiveHandlerMock.mock.calls.at(-1)?.[0] as
+    | { ctx?: Record<string, unknown> }
+    | undefined;
+  return params?.ctx;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
 }
 
 function discordTestSendResult(messageId: string, channelId = "dm-channel") {
@@ -235,13 +249,9 @@ describe("discord component interactions", () => {
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          auth: { isAuthorizedSender: params.isAuthorizedSender },
-        }),
-      }),
-    );
+    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledTimes(1);
+    const auth = requireRecord(getLastPluginDispatchCtx()?.auth, "plugin dispatch auth");
+    expect(auth.isAuthorizedSender).toBe(params.isAuthorizedSender);
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   }
 
@@ -308,16 +318,9 @@ describe("discord component interactions", () => {
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(lastDispatchCtx?.BodyForAgent).toBe('Clicked "Approve".');
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
-    expect(dispatchReplyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        dispatcherOptions: expect.objectContaining({
-          responsePrefixContextProvider: expect.any(Function),
-        }),
-        replyOptions: expect.objectContaining({
-          onModelSelected: expect.any(Function),
-        }),
-      }),
-    );
+    const dispatchParams = dispatchReplyMock.mock.calls[0]?.[0] as DispatchParams | undefined;
+    expect(typeof dispatchParams?.dispatcherOptions.responsePrefixContextProvider).toBe("function");
+    expect(typeof dispatchParams?.replyOptions?.onModelSelected).toBe("function");
     expect(resolveDiscordComponentEntry({ id: "btn_1" })).toBeNull();
   });
 
@@ -665,14 +668,10 @@ describe("discord component interactions", () => {
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          conversationId: "channel:group-dm-1",
-          senderId: "123456789",
-        }),
-      }),
-    );
+    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledTimes(1);
+    const ctx = getLastPluginDispatchCtx();
+    expect(ctx?.conversationId).toBe("channel:group-dm-1");
+    expect(ctx?.senderId).toBe("123456789");
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 
@@ -708,11 +707,11 @@ describe("discord component interactions", () => {
 
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
-    expect(lastDispatchCtx).toMatchObject({
-      From: "discord:group:group-dm-1",
-      ChatType: "group",
-      ConversationLabel: "Group DM #incident-room channel id:group-dm-1",
-    });
+    expect(lastDispatchCtx?.From).toBe("discord:group:group-dm-1");
+    expect(lastDispatchCtx?.ChatType).toBe("group");
+    expect(lastDispatchCtx?.ConversationLabel).toBe(
+      "Group DM #incident-room channel id:group-dm-1",
+    );
   });
 
   it("blocks Group DM modal triggers before showing the modal", async () => {
@@ -866,12 +865,13 @@ describe("discord component interactions", () => {
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
     expect(acknowledge).toHaveBeenCalledTimes(1);
-    expect(editDiscordComponentMessageMock).toHaveBeenCalledWith(
-      "user:123456789",
-      "msg-1",
-      { text: expect.any(String) },
-      expect.objectContaining({ accountId: "default" }),
-    );
+    expect(editDiscordComponentMessageMock).toHaveBeenCalledTimes(1);
+    const [target, messageId, payload, options] =
+      editDiscordComponentMessageMock.mock.calls[0] ?? [];
+    expect(target).toBe("user:123456789");
+    expect(messageId).toBe("msg-1");
+    expect(typeof (payload as { text?: unknown } | undefined)?.text).toBe("string");
+    expect((options as { accountId?: unknown } | undefined)?.accountId).toBe("default");
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 });

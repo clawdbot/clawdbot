@@ -240,27 +240,24 @@ describe("signal createSignalEventHandler inbound context", () => {
       }),
     );
 
-    expect(sendTypingMock).toHaveBeenCalledWith(
-      "+15550001111",
-      expect.objectContaining({
-        cfg: expect.objectContaining({
-          channels: expect.objectContaining({
-            signal: expect.objectContaining({ dmPolicy: "open" }),
-          }),
-        }),
-      }),
-    );
-    expect(sendReadReceiptMock).toHaveBeenCalledWith(
-      "signal:+15550001111",
-      1700000000000,
-      expect.objectContaining({
-        cfg: expect.objectContaining({
-          channels: expect.objectContaining({
-            signal: expect.objectContaining({ dmPolicy: "open" }),
-          }),
-        }),
-      }),
-    );
+    expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", {
+      cfg: {
+        messages: { inbound: { debounceMs: 0 } },
+        channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+      },
+      baseUrl: "http://localhost",
+      account: "+15550009999",
+      accountId: "default",
+    });
+    expect(sendReadReceiptMock).toHaveBeenCalledWith("signal:+15550001111", 1700000000000, {
+      cfg: {
+        messages: { inbound: { debounceMs: 0 } },
+        channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+      },
+      baseUrl: "http://localhost",
+      account: "+15550009999",
+      accountId: "default",
+    });
   });
 
   it("drops DM commands in open mode without allowlists", async () => {
@@ -468,13 +465,11 @@ describe("signal createSignalEventHandler inbound context", () => {
     );
 
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      "reaction added",
-      expect.objectContaining({
-        sessionKey: "agent:main:signal:group:g1",
-        trusted: false,
-      }),
-    );
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("reaction added", {
+      sessionKey: "agent:main:signal:group:g1",
+      contextKey: "signal:reaction:added:1700000000000:+15550001111:+1:g1",
+      trusted: false,
+    });
   });
 
   it("drops quote-only group context from non-allowlisted quoted senders in allowlist mode", async () => {

@@ -19,6 +19,7 @@ import { buildOutboundSessionContext } from "../../infra/outbound/session-contex
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { extractToolPayload } from "../../infra/outbound/tool-payload.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { normalizePollInput } from "../../polls.js";
 import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
 import {
@@ -352,6 +353,10 @@ export const sendHandlers: GatewayRequestHandlers = {
           sessionKey: normalizeOptionalString(request.sessionKey) ?? undefined,
           sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
           agentId: normalizeOptionalString(request.agentId) ?? undefined,
+          mediaLocalRoots: getAgentScopedMediaLocalRoots(
+            cfg,
+            normalizeOptionalString(request.agentId) ?? undefined,
+          ),
           toolContext: request.toolContext,
           dryRun: false,
         });
@@ -397,6 +402,9 @@ export const sendHandlers: GatewayRequestHandlers = {
       agentId?: string;
       replyToId?: string;
       threadId?: string;
+      forceDocument?: boolean;
+      silent?: boolean;
+      parseMode?: "HTML";
       sessionKey?: string;
       idempotencyKey: string;
     };
@@ -547,9 +555,12 @@ export const sendHandlers: GatewayRequestHandlers = {
           replyToId: replyToId ?? null,
           session: outboundSession,
           gifPlayback: request.gifPlayback,
+          forceDocument: request.forceDocument,
           threadId: outboundRoute?.threadId ?? threadId ?? null,
           deps: outboundDeps,
           gatewayClientScopes: client?.connect?.scopes ?? [],
+          silent: request.silent,
+          formatting: request.parseMode ? { parseMode: request.parseMode } : undefined,
           mirror: outboundSessionKey
             ? {
                 sessionKey: outboundSessionKey,

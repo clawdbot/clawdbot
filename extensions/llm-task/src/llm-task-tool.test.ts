@@ -155,7 +155,10 @@ describe("llm-task tool (json-only)", () => {
           additionalProperties: false,
         },
       }),
-    ).resolves.toMatchObject({ details: { json: { foo: "bar" } } });
+    ).resolves.toEqual({
+      content: [{ type: "text", text: '{\n  "foo": "bar"\n}' }],
+      details: { json: { foo: "bar" }, provider: "openai-codex", model: "gpt-5.2" },
+    });
 
     await expect(
       tool.execute("id", {
@@ -168,7 +171,10 @@ describe("llm-task tool (json-only)", () => {
           additionalProperties: false,
         },
       }),
-    ).resolves.toMatchObject({ details: { json: { count: 1 } } });
+    ).resolves.toEqual({
+      content: [{ type: "text", text: '{\n  "count": 1\n}' }],
+      details: { json: { count: 1 }, provider: "openai-codex", model: "gpt-5.2" },
+    });
   });
 
   it("throws on invalid json", async () => {

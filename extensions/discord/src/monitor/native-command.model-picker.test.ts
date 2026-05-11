@@ -5,14 +5,14 @@ import { ChannelType } from "discord-api-types/v10";
 import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth";
 import type { ChatCommandDefinition, CommandArgsParsing } from "openclaw/plugin-sdk/command-auth";
 import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as globalsModule from "openclaw/plugin-sdk/runtime-env";
 import {
   loadSessionStore,
   resolveStorePath,
   saveSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import * as commandTextModule from "openclaw/plugin-sdk/text-runtime";
+import * as commandTextModule from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { resolveDiscordChannelContext } from "./agent-components-helpers.js";
@@ -810,21 +810,22 @@ describe("Discord model picker interactions", () => {
       .spyOn(modelPickerModule, "loadDiscordModelPickerData")
       .mockResolvedValue(pickerData);
     const interaction = createInteraction({ userId: "owner" });
+    const cfg = {
+      ...context.cfg,
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "openai-codex/*": {},
+            "vllm/*": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
 
     await replyWithDiscordModelPickerProviders({
       interaction: interaction as never,
-      cfg: {
-        ...context.cfg,
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-opus-4-5" },
-            models: {
-              "openai-codex/*": {},
-              "vllm/*": {},
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg,
       command: "model",
       userId: "owner",
       accountId: context.accountId,
@@ -833,7 +834,7 @@ describe("Discord model picker interactions", () => {
       safeInteractionCall: async (_label, fn) => await fn(),
     });
 
-    expect(loadSpy).toHaveBeenCalledWith(expect.any(Object), "main");
+    expect(loadSpy).toHaveBeenCalledWith(cfg, "main");
     const payload = JSON.stringify(interaction.reply.mock.calls[0]?.[0]);
     expect(payload).toContain("openai-codex");
     expect(payload).toContain("gpt-5.5-codex");

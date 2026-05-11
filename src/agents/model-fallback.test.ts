@@ -9,6 +9,7 @@ import {
   setCurrentPluginMetadataSnapshot,
 } from "../plugins/current-plugin-metadata-snapshot.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { CommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { FailoverError } from "./failover-error.js";
@@ -544,6 +545,22 @@ describe("runWithModelFallback", () => {
     expect(result.attempts[0].reason).toBe("unknown");
   });
 
+  it("does not treat command-lane watchdog timeouts as model fallback failures", async () => {
+    const cfg = makeCfg();
+    const timeoutError = new CommandLaneTaskTimeoutError("cron-nested", 330_000);
+    const run = vi.fn().mockRejectedValue(timeoutError);
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      }),
+    ).rejects.toBe(timeoutError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps raw provider schema errors in fallback summaries", async () => {
     const cfg = makeCfg({
       agents: {
@@ -1012,7 +1029,7 @@ describe("runWithModelFallback", () => {
     });
   });
 
-  it("puts configured primary next when an override model is requested", () => {
+  it("puts configured fallbacks before the configured primary when an override model is requested", () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -1032,7 +1049,34 @@ describe("runWithModelFallback", () => {
       }),
     ).toEqual([
       { provider: "anthropic", model: "claude-opus-4-5" },
+      { provider: "anthropic", model: "claude-haiku-3-5" },
+      { provider: "openrouter", model: "openrouter/deepseek-chat" },
       { provider: "openai", model: "gpt-4.1-mini" },
+    ]);
+  });
+
+  it("keeps configured fallbacks before configured primary for duplicate provider model ids", () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "deepseek/deepseek-v4-flash",
+            fallbacks: ["minimax-portal/MiniMax-M2.7"],
+          },
+        },
+      },
+    });
+
+    expect(
+      __testing.resolveFallbackCandidates({
+        cfg,
+        provider: "qianfan",
+        model: "deepseek-v4-flash",
+      }),
+    ).toEqual([
+      { provider: "qianfan", model: "deepseek-v4-flash" },
+      { provider: "minimax-portal", model: "MiniMax-M2.7" },
+      { provider: "deepseek", model: "deepseek-v4-flash" },
     ]);
   });
 
@@ -1085,7 +1129,7 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
-  it("falls back to configured primary for override credential validation errors", async () => {
+  it("tries configured fallbacks before primary for override credential validation errors", async () => {
     const cfg = makeCfg();
     const run = createOverrideFailureRun({
       overrideProvider: "anthropic",
@@ -1105,6 +1149,7 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([
       ["anthropic", "claude-opus-4"],
+      ["anthropic", "claude-haiku-3-5"],
       ["openai", "gpt-4.1-mini"],
     ]);
   });
@@ -1179,7 +1224,7 @@ describe("runWithModelFallback", () => {
         provider: "anthropic",
         model: "claude-opus-4-6",
         error: new Error("Unknown model: anthropic/claude-opus-4-6"),
-        expectedFallback: ["openai", "gpt-4.1-mini"],
+        expectedFallback: ["anthropic", "claude-haiku-3-5"],
       },
       {
         name: "openai model not found",
@@ -1240,7 +1285,7 @@ describe("runWithModelFallback", () => {
 
       expect(result.result).toBe("ok");
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Model "openai/gpt-6" not found'),
+        '[model-fallback] Model "openai/gpt-6" not found. Fell back to "anthropic/claude-haiku-3-5".',
       );
     } finally {
       warnSpy.mockRestore();
@@ -1679,7 +1724,7 @@ describe("runWithModelFallback", () => {
           ],
         },
         {
-          name: "different provider skips configured fallbacks",
+          name: "different provider uses configured primary when no fallbacks exist",
           cfg: makeCfg({
             agents: {
               defaults: {

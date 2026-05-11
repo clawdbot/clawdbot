@@ -219,9 +219,9 @@ function formatEntry(entry) {
   return `${entry.provider} ${entry.file}:${entry.line} ${entry.reason}`;
 }
 
-export async function runWebSearchProviderBoundaryCheck(argv = process.argv.slice(2), io) {
+export async function runWebSearchProviderBoundaryCheck(argv, io) {
   return await runBaselineInventoryCheck({
-    argv,
+    argv: argv ?? process.argv.slice(2),
     io,
     collectActual: collectWebSearchProviderBoundaryInventory,
     readExpected: readExpectedInventory,
@@ -231,7 +231,7 @@ export async function runWebSearchProviderBoundaryCheck(argv = process.argv.slic
   });
 }
 
-export async function main(argv = process.argv.slice(2), io) {
+export async function main(argv, io) {
   const exitCode = await runWebSearchProviderBoundaryCheck(argv, io);
   if (!io && exitCode !== 0) {
     process.exit(exitCode);

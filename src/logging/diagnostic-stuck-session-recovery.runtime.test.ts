@@ -89,6 +89,13 @@ function resetMocks() {
   mocks.diag.warn.mockReset();
 }
 
+function warnLogMessages(): string[] {
+  return mocks.diag.warn.mock.calls.map(([message]) => {
+    expect(typeof message).toBe("string");
+    return message as string;
+  });
+}
+
 describe("stuck session recovery", () => {
   beforeEach(() => {
     resetMocks();
@@ -108,10 +115,10 @@ describe("stuck session recovery", () => {
     expect(mocks.waitForEmbeddedPiRunEnd).not.toHaveBeenCalled();
     expect(mocks.forceClearEmbeddedPiRun).not.toHaveBeenCalled();
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
-    expect(mocks.diag.warn).toHaveBeenCalledWith(
-      expect.stringContaining("reason=active_embedded_run"),
-    );
-    expect(mocks.diag.warn).toHaveBeenCalledWith(expect.stringContaining("action=observe_only"));
+    expect(warnLogMessages()).toEqual([
+      "stuck session recovery skipped: sessionId=session-1 sessionKey=agent:main:main age=180s queueDepth=1 activeSessionId=session-1",
+      "stuck session recovery outcome: status=skipped action=observe_only sessionId=session-1 sessionKey=agent:main:main activeSessionId=session-1 activeWorkKind=embedded_run reason=active_embedded_run",
+    ]);
   });
 
   it("aborts an active embedded run when active abort recovery is enabled", async () => {
@@ -172,15 +179,10 @@ describe("stuck session recovery", () => {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
 
-    expect(mocks.diag.warn).toHaveBeenCalledWith(
-      expect.stringContaining("action=abort_embedded_run"),
-    );
-    expect(mocks.diag.warn).toHaveBeenCalledWith(
-      expect.stringContaining('stopped="Twitter Mention Moderation Agent"'),
-    );
-    expect(mocks.diag.warn).toHaveBeenCalledWith(
-      expect.stringContaining('lastAssistant="There are 40 cached mentions."'),
-    );
+    expect(warnLogMessages()).toEqual([
+      'stuck session recovery: sessionId=run-456 sessionKey=agent:clawblocker:cron:job-123:run:run-456 age=629s action=abort_embedded_run aborted=true drained=true released=0 stopped="Twitter Mention Moderation Agent" cronJobId=job-123 cronRunId=run-456 lastAssistant="There are 40 cached mentions."',
+      "stuck session recovery outcome: status=aborted action=abort_embedded_run sessionId=run-456 sessionKey=agent:clawblocker:cron:job-123:run:run-456 activeSessionId=run-456 activeWorkKind=embedded_run lane=session:agent:clawblocker:cron:job-123:run:run-456 aborted=true drained=true forceCleared=false released=0",
+    ]);
   });
 
   it("force-clears and releases the session lane when abort cleanup does not drain", async () => {
@@ -255,12 +257,9 @@ describe("stuck session recovery", () => {
     expect(mocks.abortEmbeddedPiRun).not.toHaveBeenCalled();
     expect(mocks.forceClearEmbeddedPiRun).not.toHaveBeenCalled();
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
-    expect(mocks.diag.warn).toHaveBeenCalledWith(
-      expect.stringContaining("reason=active_reply_work"),
-    );
-    expect(mocks.diag.warn).toHaveBeenCalledWith(
-      expect.stringContaining("activeSessionId=queued-reply-session"),
-    );
+    expect(warnLogMessages()).toEqual([
+      "stuck session recovery outcome: status=skipped action=keep_lane sessionId=queued-reply-session sessionKey=agent:main:main activeSessionId=queued-reply-session activeWorkKind=embedded_run reason=active_reply_work",
+    ]);
   });
 
   it("does not release the session lane while unregistered lane work is active", async () => {
@@ -287,10 +286,9 @@ describe("stuck session recovery", () => {
     expect(mocks.abortEmbeddedPiRun).not.toHaveBeenCalled();
     expect(mocks.forceClearEmbeddedPiRun).not.toHaveBeenCalled();
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
-    expect(mocks.diag.warn).toHaveBeenCalledWith(
-      expect.stringContaining("reason=active_lane_task"),
-    );
-    expect(mocks.diag.warn).toHaveBeenCalledWith(expect.stringContaining("laneActive=1"));
+    expect(warnLogMessages()).toEqual([
+      "stuck session recovery outcome: status=skipped action=keep_lane sessionId=unregistered-work-session sessionKey=agent:main:main lane=session:agent:main:main reason=active_lane_task laneActive=1 laneQueued=1",
+    ]);
   });
 
   it("reports when recovery finds no active work to release", async () => {
@@ -306,7 +304,9 @@ describe("stuck session recovery", () => {
     });
 
     expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
-    expect(mocks.diag.warn).toHaveBeenCalledWith(expect.stringContaining("reason=no_active_work"));
+    expect(warnLogMessages()).toEqual([
+      "stuck session recovery outcome: status=noop action=none sessionId=stale-session sessionKey=agent:main:main lane=session:agent:main:main reason=no_active_work",
+    ]);
   });
 
   it("releases a stale session-id lane when no session key is available", async () => {

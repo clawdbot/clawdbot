@@ -180,20 +180,41 @@ describe("manifest model catalog planner", () => {
     });
 
     expect(plan.entries).toEqual([
-      expect.objectContaining({
+      {
         pluginId: "moonshot",
         provider: "moonshotai",
         discovery: "static",
-      }),
+        rows: [
+          {
+            provider: "moonshotai",
+            id: "kimi-k2.6",
+            ref: "moonshotai/kimi-k2.6",
+            mergeKey: "moonshotai::kimi-k2.6",
+            name: "Kimi K2.6",
+            source: "manifest",
+            input: ["text"],
+            reasoning: false,
+            status: "available",
+            api: "openai-completions",
+            baseUrl: "https://api.moonshot.ai/v1",
+          },
+        ],
+      },
     ]);
     expect(plan.rows).toEqual([
-      expect.objectContaining({
+      {
         provider: "moonshotai",
         id: "kimi-k2.6",
         ref: "moonshotai/kimi-k2.6",
+        mergeKey: "moonshotai::kimi-k2.6",
+        name: "Kimi K2.6",
+        source: "manifest",
+        input: ["text"],
+        reasoning: false,
+        status: "available",
         api: "openai-completions",
         baseUrl: "https://api.moonshot.ai/v1",
-      }),
+      },
     ]);
   });
 
@@ -225,11 +246,19 @@ describe("manifest model catalog planner", () => {
     });
 
     expect(plan.rows).toEqual([
-      expect.objectContaining({
+      {
         provider: "moonshot-ai",
         id: "kimi-k2.6",
         ref: "moonshot-ai/kimi-k2.6",
-      }),
+        mergeKey: "moonshot-ai::kimi-k2.6",
+        name: "Kimi K2.6",
+        source: "manifest",
+        input: ["text"],
+        reasoning: false,
+        status: "available",
+        api: "openai-completions",
+        baseUrl: "https://api.moonshot.ai/v1",
+      },
     ]);
   });
 

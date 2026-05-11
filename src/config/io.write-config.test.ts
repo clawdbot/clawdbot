@@ -106,6 +106,46 @@ describe("config io write", () => {
     return persisted.commands;
   };
 
+  const requireRecord = (value: unknown, label: string): Record<string, unknown> => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`expected ${label} to be a record`);
+    }
+    return value as Record<string, unknown>;
+  };
+
+  const requireArray = (value: unknown, label: string): unknown[] => {
+    if (!Array.isArray(value)) {
+      throw new Error(`expected ${label} to be an array`);
+    }
+    return value;
+  };
+
+  const expectInstallRecord = (
+    record: unknown,
+    expected: { source: string; spec: string; installPath: string },
+  ) => {
+    const actual = requireRecord(record, "plugin install record");
+    expect(actual.source).toBe(expected.source);
+    expect(actual.spec).toBe(expected.spec);
+    expect(actual.installPath).toBe(expected.installPath);
+  };
+
+  const expectConfigWriteRejected = async (promise: Promise<unknown>) => {
+    try {
+      await promise;
+    } catch (error) {
+      expect(requireRecord(error, "config write rejection").code).toBe("CONFIG_WRITE_REJECTED");
+      return;
+    }
+    throw new Error("expected config write rejection");
+  };
+
+  const expectPersistedHashResult = (result: unknown) => {
+    const persistedHash = requireRecord(result, "config write result").persistedHash;
+    expect(typeof persistedHash).toBe("string");
+    expect(persistedHash).not.toBe("");
+  };
+
   const createFastConfigIO = (home: string) =>
     createConfigIO({
       env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
@@ -155,8 +195,9 @@ describe("config io write", () => {
         logger: { warn, error: vi.fn() },
       });
 
-      await expect(io.readConfigFileSnapshot()).resolves.toMatchObject({ exists: true });
-      expect(io.loadConfig()).toMatchObject({ gateway: { mode: "local" } });
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.exists).toBe(true);
+      expect(io.loadConfig().gateway).toEqual({ mode: "local" });
 
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining(
@@ -256,18 +297,18 @@ describe("config io write", () => {
         const initialRaw = await fs.readFile(configPath, "utf-8");
         const cfg = io.loadConfig();
 
-        expect(cfg.plugins?.installs?.demo).toMatchObject({
+        expectInstallRecord(cfg.plugins?.installs?.demo, {
           source: "npm",
           spec: "demo@1.0.0",
           installPath: pluginDir,
         });
         const snapshot = await io.readConfigFileSnapshot();
-        expect(snapshot.sourceConfig.plugins?.installs?.demo).toMatchObject({
+        expectInstallRecord(snapshot.sourceConfig.plugins?.installs?.demo, {
           source: "npm",
           spec: "demo@1.0.0",
           installPath: pluginDir,
         });
-        expect(snapshot.runtimeConfig.plugins?.installs?.demo).toMatchObject({
+        expectInstallRecord(snapshot.runtimeConfig.plugins?.installs?.demo, {
           source: "npm",
           spec: "demo@1.0.0",
           installPath: pluginDir,
@@ -350,25 +391,22 @@ describe("config io write", () => {
           },
         });
 
-        await expect(
-          readPersistedInstalledPluginIndex({
+        const index = requireRecord(
+          await readPersistedInstalledPluginIndex({
             stateDir: path.join(home, ".openclaw"),
           }),
-        ).resolves.toMatchObject({
-          installRecords: {
-            demo: {
-              source: "npm",
-              spec: "demo@1.0.0",
-              installPath: pluginDir,
-            },
-          },
-          plugins: [
-            expect.objectContaining({
-              pluginId: "demo",
-              installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
-            }),
-          ],
+          "persisted plugin index",
+        );
+        expectInstallRecord(requireRecord(index.installRecords, "install records").demo, {
+          source: "npm",
+          spec: "demo@1.0.0",
+          installPath: pluginDir,
         });
+        const plugins = requireArray(index.plugins, "plugin index plugins");
+        expect(plugins).toHaveLength(1);
+        const indexedPlugin = requireRecord(plugins[0], "indexed plugin");
+        expect(indexedPlugin.pluginId).toBe("demo");
+        expect(indexedPlugin.installRecordHash).toMatch(/^[a-f0-9]{64}$/u);
         const persistedConfig = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
           plugins?: { installs?: unknown };
         };
@@ -415,20 +453,18 @@ describe("config io write", () => {
         },
       });
 
-      await expect(
-        readPersistedInstalledPluginIndex({
+      const index = requireRecord(
+        await readPersistedInstalledPluginIndex({
           stateDir: path.join(home, ".openclaw"),
         }),
-      ).resolves.toMatchObject({
-        installRecords: {
-          missing: {
-            source: "npm",
-            spec: "missing-plugin@1.0.0",
-            installPath: pluginDir,
-          },
-        },
-        plugins: [],
+        "persisted plugin index",
+      );
+      expectInstallRecord(requireRecord(index.installRecords, "install records").missing, {
+        source: "npm",
+        spec: "missing-plugin@1.0.0",
+        installPath: pluginDir,
       });
+      expect(index.plugins).toEqual([]);
       const persistedConfig = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
         plugins?: { installs?: unknown };
       };
@@ -464,7 +500,7 @@ describe("config io write", () => {
       await fs.writeFile(path.join(unwritableStatePath, "plugins"), "not a directory", "utf-8");
 
       const loadedConfig = io.loadConfig();
-      expect(loadedConfig.plugins?.installs?.demo).toMatchObject({
+      expectInstallRecord(loadedConfig.plugins?.installs?.demo, {
         source: "npm",
         spec: "demo@1.0.0",
         installPath: pluginDir,
@@ -478,7 +514,7 @@ describe("config io write", () => {
       );
 
       const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as typeof original;
-      expect(persisted.plugins.installs.demo).toMatchObject({
+      expectInstallRecord(persisted.plugins.installs.demo, {
         source: "npm",
         spec: "demo@1.0.0",
         installPath: pluginDir,
@@ -512,7 +548,7 @@ describe("config io write", () => {
       );
 
       const persistedConfig = JSON.parse(await fs.readFile(configPath, "utf-8")) as typeof original;
-      expect(persistedConfig.plugins.installs.demo).toMatchObject({
+      expectInstallRecord(persistedConfig.plugins.installs.demo, {
         source: "npm",
         spec: "demo@1.0.0",
         installPath: pluginDir,
@@ -816,16 +852,14 @@ describe("config io write", () => {
         legacyIssues: [],
       } satisfies ConfigFileSnapshot;
 
-      await expect(
+      await expectConfigWriteRejected(
         io.writeConfigFile(
           { update: { channel: "beta" } },
           {
             baseSnapshot,
           },
         ),
-      ).rejects.toMatchObject({
-        code: "CONFIG_WRITE_REJECTED",
-      });
+      );
 
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
       const entries = await fs.readdir(path.dirname(configPath));
@@ -872,19 +906,16 @@ describe("config io write", () => {
         legacyIssues: [],
       } satisfies ConfigFileSnapshot;
 
-      await expect(
-        io.writeConfigFile(
-          { meta: original.meta, gateway: { mode: "local" } },
-          {
-            allowConfigSizeDrop: true,
-            baseSnapshot,
-          },
-        ),
-      ).resolves.toMatchObject({
-        persistedConfig: expect.objectContaining({ gateway: { mode: "local" } }),
-      });
+      const acceptedWrite = await io.writeConfigFile(
+        { meta: original.meta, gateway: { mode: "local" } },
+        {
+          allowConfigSizeDrop: true,
+          baseSnapshot,
+        },
+      );
+      expect(acceptedWrite.persistedConfig.gateway).toEqual({ mode: "local" });
 
-      await expect(
+      await expectConfigWriteRejected(
         io.writeConfigFile(
           { meta: original.meta },
           {
@@ -892,9 +923,7 @@ describe("config io write", () => {
             baseSnapshot,
           },
         ),
-      ).rejects.toMatchObject({
-        code: "CONFIG_WRITE_REJECTED",
-      });
+      );
     });
   });
 
@@ -1059,8 +1088,8 @@ describe("config io write", () => {
         logger: silentLogger,
       });
 
-      await expect(
-        io.writeConfigFile({
+      expectPersistedHashResult(
+        await io.writeConfigFile({
           agents: { list: [{ id: "main", default: true }] },
           plugins: {
             entries: {
@@ -1070,7 +1099,7 @@ describe("config io write", () => {
             },
           },
         }),
-      ).resolves.toMatchObject({ persistedHash: expect.any(String) });
+      );
     });
 
     mockLoadPluginManifestRegistry.mockReturnValue({
@@ -1147,7 +1176,10 @@ describe("config io write", () => {
           },
         });
 
-        expect(JSON.parse(await fs.readFile(configPath, "utf-8"))).toEqual({
+        const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+          meta?: Record<string, unknown>;
+        };
+        expect(persisted).toEqual({
           gateway: { mode: "local", port: 18789 },
           models: {
             providers: {
@@ -1159,10 +1191,12 @@ describe("config io write", () => {
             },
           },
           meta: {
-            lastTouchedAt: expect.any(String),
-            lastTouchedVersion: expect.any(String),
+            lastTouchedAt: persisted.meta?.lastTouchedAt,
+            lastTouchedVersion: persisted.meta?.lastTouchedVersion,
           },
         });
+        expect(typeof persisted.meta?.lastTouchedAt).toBe("string");
+        expect(typeof persisted.meta?.lastTouchedVersion).toBe("string");
       } finally {
         if (previousConfigPath === undefined) {
           delete process.env.OPENCLAW_CONFIG_PATH;
@@ -1227,24 +1261,21 @@ describe("config io write", () => {
           agents: { defaults: { model: { primary: "openrouter/anthropic/claude-sonnet-4.6" } } },
         });
 
-        expect(JSON.parse(await fs.readFile(configPath, "utf-8"))).toMatchObject({
-          gateway: {
-            auth: { token: "${OPENCLAW_GATEWAY_TOKEN}" },
+        const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+          gateway?: { auth?: { token?: string } };
+        };
+        expect(persisted.gateway?.auth?.token).toBe("${OPENCLAW_GATEWAY_TOKEN}");
+        expect(observedSources).toHaveLength(1);
+        const observedSource = requireRecord(observedSources[0], "observed source config");
+        expect(observedSource.gateway).toEqual({
+          mode: "local",
+          auth: { mode: "token", token: "gateway-token-runtime" },
+        });
+        expect(observedSource.agents).toEqual({
+          defaults: {
+            model: { primary: "openrouter/anthropic/claude-sonnet-4.6" },
           },
         });
-        expect(observedSources).toEqual([
-          expect.objectContaining({
-            gateway: {
-              mode: "local",
-              auth: { mode: "token", token: "gateway-token-runtime" },
-            },
-            agents: {
-              defaults: {
-                model: { primary: "openrouter/anthropic/claude-sonnet-4.6" },
-              },
-            },
-          }),
-        ]);
       } finally {
         unsubscribe();
         if (previousConfigPath === undefined) {

@@ -160,6 +160,35 @@ function createSessionBindingCapabilities() {
   };
 }
 
+type FocusTargetSessionParams = {
+  requesterKey?: string;
+};
+
+type SessionBindingBindInput = {
+  placement: "current" | "child";
+  targetKind: "session" | "agent";
+  targetSessionKey: string;
+  conversation: {
+    channel: string;
+    accountId: string;
+    conversationId: string;
+    parentConversationId?: string;
+  };
+  metadata?: Record<string, unknown>;
+};
+
+function firstFocusTargetSessionParams(): FocusTargetSessionParams {
+  const firstCall = hoisted.resolveFocusTargetSessionMock.mock.calls[0];
+  expect(firstCall).toBeDefined();
+  return firstCall[0] as FocusTargetSessionParams;
+}
+
+function firstSessionBindingBindInput(): SessionBindingBindInput {
+  const firstCall = hoisted.sessionBindingBindMock.mock.calls[0];
+  expect(firstCall).toBeDefined();
+  return firstCall[0] as SessionBindingBindInput;
+}
+
 function buildCommandParams(params?: {
   cfg?: OpenClawConfig;
   chatType?: string;
@@ -289,22 +318,13 @@ describe("focus actions", () => {
 
     expect(result.reply?.text).toContain("bound this conversation");
     expect(result.reply?.text).toContain("(acp)");
-    expect(hoisted.resolveFocusTargetSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requesterKey: "agent:main:main",
-      }),
-    );
-    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        placement: "current",
-        targetKind: "session",
-        targetSessionKey: "agent:codex-acp:session-1",
-        conversation: expect.objectContaining({
-          channel: THREAD_CHANNEL,
-          conversationId: "thread-1",
-        }),
-      }),
-    );
+    expect(firstFocusTargetSessionParams().requesterKey).toBe("agent:main:main");
+    const bindInput = firstSessionBindingBindInput();
+    expect(bindInput.placement).toBe("current");
+    expect(bindInput.targetKind).toBe("session");
+    expect(bindInput.targetSessionKey).toBe("agent:codex-acp:session-1");
+    expect(bindInput.conversation.channel).toBe(THREAD_CHANNEL);
+    expect(bindInput.conversation.conversationId).toBe("thread-1");
   });
 
   it("rejects /focus from a leaf subagent", async () => {
@@ -342,15 +362,10 @@ describe("focus actions", () => {
     const result = await handleSubagentsFocusAction(buildFocusContext());
 
     expect(result.reply?.text).toContain("bound this conversation");
-    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        placement: "current",
-        conversation: expect.objectContaining({
-          channel: TOPIC_CHANNEL,
-          conversationId: "-100200300:topic:77",
-        }),
-      }),
-    );
+    const bindInput = firstSessionBindingBindInput();
+    expect(bindInput.placement).toBe("current");
+    expect(bindInput.conversation.channel).toBe(TOPIC_CHANNEL);
+    expect(bindInput.conversation.conversationId).toBe("-100200300:topic:77");
   });
 
   it("creates a room-chat child thread from a top-level room when spawning is enabled", async () => {
@@ -377,15 +392,10 @@ describe("focus actions", () => {
     );
 
     expect(result.reply?.text).toContain("created child conversation thread-created and bound it");
-    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        placement: "child",
-        conversation: expect.objectContaining({
-          channel: ROOM_CHANNEL,
-          conversationId: "!room:example.org",
-        }),
-      }),
-    );
+    const bindInput = firstSessionBindingBindInput();
+    expect(bindInput.placement).toBe("child");
+    expect(bindInput.conversation.channel).toBe(ROOM_CHANNEL);
+    expect(bindInput.conversation.conversationId).toBe("!room:example.org");
   });
 
   it("treats a room thread turn as the current thread", async () => {
@@ -400,16 +410,11 @@ describe("focus actions", () => {
     const result = await handleSubagentsFocusAction(buildFocusContext());
 
     expect(result.reply?.text).toContain("bound this conversation");
-    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        placement: "current",
-        conversation: expect.objectContaining({
-          channel: ROOM_CHANNEL,
-          conversationId: "$root",
-          parentConversationId: "!room:example.org",
-        }),
-      }),
-    );
+    const bindInput = firstSessionBindingBindInput();
+    expect(bindInput.placement).toBe("current");
+    expect(bindInput.conversation.channel).toBe(ROOM_CHANNEL);
+    expect(bindInput.conversation.conversationId).toBe("$root");
+    expect(bindInput.conversation.parentConversationId).toBe("!room:example.org");
   });
 
   it("rejects room top-level thread creation when spawnSessions is disabled", async () => {
@@ -460,27 +465,11 @@ describe("focus actions", () => {
 
     await handleSubagentsFocusAction(buildFocusContext());
 
-    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: expect.objectContaining({
-          introText: expect.stringContaining("agent session id: codex-123"),
-        }),
-      }),
-    );
-    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: expect.objectContaining({
-          introText: expect.stringContaining("acpx session id: acpx-456"),
-        }),
-      }),
-    );
-    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: expect.objectContaining({
-          introText: expect.stringContaining("codex resume codex-123"),
-        }),
-      }),
-    );
+    const introText = firstSessionBindingBindInput().metadata?.introText;
+    expect(typeof introText).toBe("string");
+    expect(introText).toContain("agent session id: codex-123");
+    expect(introText).toContain("acpx session id: acpx-456");
+    expect(introText).toContain("codex resume codex-123");
   });
 
   it("rejects rebinding when another user owns the thread", async () => {

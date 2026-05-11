@@ -1,16 +1,18 @@
 import {
+  type BuildChannelTurnContextParams,
+  type BuiltChannelTurnContext,
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
   toLocationContext,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { normalizeCommandBody } from "openclaw/plugin-sdk/command-surface";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import {
   buildPendingHistoryContextFromMap,
@@ -19,7 +21,7 @@ import {
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 import { isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
 import type {
@@ -42,22 +44,23 @@ import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 
-type FinalizedTelegramInboundContext = ReturnType<
-  typeof import("./bot-message-context.session.runtime.js").finalizeInboundContext
->;
-
-export type TelegramInboundContextPayload = FinalizedTelegramInboundContext & {
+export type TelegramInboundContextPayload = BuiltChannelTurnContext & {
   From: string;
   To: string;
   ChatType: string;
   RawBody: string;
+  ReplyToIsExternal?: boolean;
+  ReplyToQuotePosition?: number;
+  ReplyToQuoteEntities?: TelegramReplyTarget["quoteEntities"];
+  ReplyToQuoteSourceText?: string;
+  ReplyToQuoteSourceEntities?: TelegramReplyTarget["quoteSourceEntities"];
 };
 
 type TelegramMessageContextSessionRuntime =
   typeof import("./bot-message-context.session.runtime.js");
 
 const sessionRuntimeMethods = [
-  "finalizeInboundContext",
+  "buildChannelTurnContext",
   "readSessionUpdatedAt",
   "recordInboundSession",
   "resolveInboundLastRouteSessionKey",
@@ -405,81 +408,126 @@ export async function buildTelegramInboundContextPayload(params: {
       : undefined;
   const currentMediaForContext = stickerCacheHit ? [] : allMedia;
   const contextMedia = [...currentMediaForContext, ...replyMedia];
-  const ctxPayload = sessionRuntime.finalizeInboundContext({
-    Body: combinedBody,
-    BodyForAgent: bodyText,
-    InboundHistory: inboundHistory,
-    RawBody: rawBody,
-    CommandBody: commandBody,
-    From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,
-    To: `telegram:${chatId}`,
-    SessionKey: route.sessionKey,
-    AccountId: route.accountId,
-    ChatType: isGroup ? "group" : "direct",
-    ConversationLabel: conversationLabel,
-    GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
-    GroupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
-    SenderName: senderName,
-    SenderId: senderId || undefined,
-    SenderUsername: senderUsername || undefined,
-    Provider: "telegram",
-    Surface: "telegram",
-    BotUsername: primaryCtx.me?.username ?? undefined,
-    MessageSid: options?.messageIdOverride ?? String(msg.message_id),
-    ReplyToId: visibleReplyChain[0]?.messageId ?? visibleReplyTarget?.id,
-    ReplyToBody: visibleReplyChain[0]?.body ?? visibleReplyTarget?.body,
-    ReplyToSender: visibleReplyChain[0]?.sender ?? visibleReplyTarget?.sender,
-    ReplyChain: visibleReplyChain.length > 0 ? visibleReplyChain : undefined,
-    ReplyToIsQuote: visibleReplyTarget?.kind === "quote" ? true : undefined,
-    ReplyToIsExternal: visibleReplyTarget?.source === "external_reply" ? true : undefined,
-    ReplyToQuoteText: visibleReplyTarget?.quoteText,
-    ReplyToQuotePosition: visibleReplyTarget?.quotePosition,
-    ReplyToQuoteEntities: visibleReplyTarget?.quoteEntities,
-    ReplyToQuoteSourceText: visibleReplyTarget?.quoteSourceText,
-    ReplyToQuoteSourceEntities: visibleReplyTarget?.quoteSourceEntities,
-    ReplyToForwardedFrom: visibleReplyTarget?.forwardedFrom?.from,
-    ReplyToForwardedFromType: visibleReplyTarget?.forwardedFrom?.fromType,
-    ReplyToForwardedFromId: visibleReplyTarget?.forwardedFrom?.fromId,
-    ReplyToForwardedFromUsername: visibleReplyTarget?.forwardedFrom?.fromUsername,
-    ReplyToForwardedFromTitle: visibleReplyTarget?.forwardedFrom?.fromTitle,
-    ReplyToForwardedDate: visibleReplyTarget?.forwardedFrom?.date
-      ? visibleReplyTarget.forwardedFrom.date * 1000
-      : undefined,
-    ForwardedFrom: visibleForwardOrigin?.from,
-    ForwardedFromType: visibleForwardOrigin?.fromType,
-    ForwardedFromId: visibleForwardOrigin?.fromId,
-    ForwardedFromUsername: visibleForwardOrigin?.fromUsername,
-    ForwardedFromTitle: visibleForwardOrigin?.fromTitle,
-    ForwardedFromSignature: visibleForwardOrigin?.fromSignature,
-    ForwardedFromChatType: visibleForwardOrigin?.fromChatType,
-    ForwardedFromMessageId: visibleForwardOrigin?.fromMessageId,
-    ForwardedDate: visibleForwardOrigin?.date ? visibleForwardOrigin.date * 1000 : undefined,
-    Timestamp: msg.date ? msg.date * 1000 : undefined,
-    WasMentioned: isGroup ? effectiveWasMentioned : undefined,
-    UntrustedStructuredContext: promptContext.length > 0 ? promptContext : undefined,
-    MediaPath: contextMedia.length > 0 ? contextMedia[0]?.path : undefined,
-    MediaType: contextMedia.length > 0 ? contextMedia[0]?.contentType : undefined,
-    MediaUrl: contextMedia.length > 0 ? contextMedia[0]?.path : undefined,
-    MediaPaths: contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
-    MediaUrls: contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
-    MediaTypes:
-      contextMedia.length > 0
-        ? (contextMedia.map((m) => m.contentType).filter(Boolean) as string[])
+  const replyHead = visibleReplyChain[0];
+  const telegramFrom = isGroup
+    ? buildTelegramGroupFrom(chatId, resolvedThreadId)
+    : `telegram:${chatId}`;
+  const telegramTo = `telegram:${chatId}`;
+  const locationContext = locationData ? toLocationContext(locationData) : undefined;
+  const ctxPayload = sessionRuntime.buildChannelTurnContext({
+    channel: "telegram",
+    accountId: route.accountId,
+    provider: "telegram",
+    surface: "telegram",
+    messageId: options?.messageIdOverride ?? String(msg.message_id),
+    timestamp: msg.date ? msg.date * 1000 : undefined,
+    from: telegramFrom,
+    sender: {
+      ...(senderId ? { id: senderId } : {}),
+      name: senderName,
+      username: senderUsername || undefined,
+    },
+    conversation: {
+      kind: isGroup ? "group" : "direct",
+      id: String(chatId),
+      label: conversationLabel,
+      threadId: threadSpec.id != null ? String(threadSpec.id) : undefined,
+      routePeer: {
+        kind: isGroup ? "group" : "direct",
+        id: String(chatId),
+      },
+    },
+    route: {
+      agentId: route.agentId,
+      accountId: route.accountId,
+      routeSessionKey: route.sessionKey,
+      mainSessionKey: route.mainSessionKey,
+    },
+    reply: {
+      to: telegramTo,
+      originatingTo: telegramTo,
+      replyToId: replyHead?.messageId ?? visibleReplyTarget?.id,
+      messageThreadId: threadSpec.id,
+    },
+    message: {
+      body: combinedBody,
+      rawBody,
+      bodyForAgent: bodyText,
+      commandBody,
+      envelopeFrom: conversationLabel,
+      inboundHistory,
+    },
+    access: {
+      commands: {
+        authorized: commandAuthorized,
+        allowTextCommands: true,
+        useAccessGroups: cfg.commands?.useAccessGroups !== false,
+        authorizers: [],
+      },
+    },
+    media: contextMedia.map((media, index) => ({
+      path: media.path,
+      url: media.path,
+      contentType: media.contentType,
+      transcribed: audioTranscribedMediaIndex === index,
+    })),
+    supplemental: {
+      quote:
+        replyHead || visibleReplyTarget
+          ? {
+              id: replyHead?.messageId ?? visibleReplyTarget?.id,
+              body: replyHead?.body ?? visibleReplyTarget?.body,
+              sender: replyHead?.sender ?? visibleReplyTarget?.sender,
+              senderAllowed: true,
+              isQuote:
+                replyHead?.isQuote ?? (visibleReplyTarget?.kind === "quote" ? true : undefined),
+            }
+          : undefined,
+      forwarded: visibleForwardOrigin
+        ? {
+            from: visibleForwardOrigin.from,
+            fromType: visibleForwardOrigin.fromType,
+            fromId: visibleForwardOrigin.fromId,
+            date: visibleForwardOrigin.date ? visibleForwardOrigin.date * 1000 : undefined,
+            senderAllowed: true,
+          }
         : undefined,
-    ...(audioTranscribedMediaIndex !== undefined
-      ? { MediaTranscribedIndexes: [audioTranscribedMediaIndex] }
-      : {}),
-    Sticker: allMedia[0]?.stickerMetadata,
-    StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
-    ...(locationData ? toLocationContext(locationData) : undefined),
-    CommandAuthorized: commandAuthorized,
-    CommandSource: options?.commandSource,
-    MessageThreadId: threadSpec.id,
-    IsForum: isForum,
-    TopicName: isForum && topicName ? topicName : undefined,
-    OriginatingChannel: "telegram" as const,
-    OriginatingTo: `telegram:${chatId}`,
-  });
+      groupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
+      untrustedContext: promptContext.length > 0 ? promptContext : undefined,
+    },
+    contextVisibility: contextVisibilityMode,
+    extra: {
+      BotUsername: primaryCtx.me?.username ?? undefined,
+      GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
+      ReplyChain: visibleReplyChain.length > 0 ? visibleReplyChain : undefined,
+      ReplyToIsExternal: visibleReplyTarget?.source === "external_reply" ? true : undefined,
+      ReplyToQuoteText: visibleReplyTarget?.quoteText,
+      ReplyToQuotePosition: visibleReplyTarget?.quotePosition,
+      ReplyToQuoteEntities: visibleReplyTarget?.quoteEntities,
+      ReplyToQuoteSourceText: visibleReplyTarget?.quoteSourceText,
+      ReplyToQuoteSourceEntities: visibleReplyTarget?.quoteSourceEntities,
+      ReplyToForwardedFrom: visibleReplyTarget?.forwardedFrom?.from,
+      ReplyToForwardedFromType: visibleReplyTarget?.forwardedFrom?.fromType,
+      ReplyToForwardedFromId: visibleReplyTarget?.forwardedFrom?.fromId,
+      ReplyToForwardedFromUsername: visibleReplyTarget?.forwardedFrom?.fromUsername,
+      ReplyToForwardedFromTitle: visibleReplyTarget?.forwardedFrom?.fromTitle,
+      ReplyToForwardedDate: visibleReplyTarget?.forwardedFrom?.date
+        ? visibleReplyTarget.forwardedFrom.date * 1000
+        : undefined,
+      ForwardedFromUsername: visibleForwardOrigin?.fromUsername,
+      ForwardedFromTitle: visibleForwardOrigin?.fromTitle,
+      ForwardedFromSignature: visibleForwardOrigin?.fromSignature,
+      ForwardedFromChatType: visibleForwardOrigin?.fromChatType,
+      ForwardedFromMessageId: visibleForwardOrigin?.fromMessageId,
+      WasMentioned: isGroup ? effectiveWasMentioned : undefined,
+      Sticker: allMedia[0]?.stickerMetadata,
+      StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
+      ...locationContext,
+      CommandSource: options?.commandSource,
+      IsForum: isForum,
+      TopicName: isForum && topicName ? topicName : undefined,
+    },
+  } satisfies BuildChannelTurnContextParams);
 
   const pinnedMainDmOwner = !isGroup
     ? sessionRuntime.resolvePinnedMainDmOwnerFromAllowlist({

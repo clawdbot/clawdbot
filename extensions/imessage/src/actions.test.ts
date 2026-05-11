@@ -1,8 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const probeMock = vi.hoisted(() => ({
   getCachedIMessagePrivateApiStatus: vi.fn(),
+  probeIMessagePrivateApi: vi.fn(),
 }));
 
 const runtimeMock = vi.hoisted(() => ({
@@ -13,8 +14,28 @@ const runtimeMock = vi.hoisted(() => ({
   sendAttachment: vi.fn(),
 }));
 
+const loggerMock = vi.hoisted(() => ({
+  warn: vi.fn(),
+  info: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+  trace: vi.fn(),
+  fatal: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    createSubsystemLogger: () => loggerMock,
+  };
+});
+
 vi.mock("./probe.js", () => ({
   getCachedIMessagePrivateApiStatus: probeMock.getCachedIMessagePrivateApiStatus,
+  probeIMessagePrivateApi: probeMock.probeIMessagePrivateApi,
 }));
 
 vi.mock("./private-api-status.js", () => ({
@@ -39,6 +60,15 @@ function cfg(actions?: Record<string, boolean | undefined>): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function imsgOptions(chatGuid = "") {
+  return {
+    cliPath: "imsg",
+    dbPath: "/tmp/messages.db",
+    timeoutMs: undefined,
+    chatGuid,
+  };
+}
+
 describe("imessage message actions", () => {
   beforeEach(() => {
     runtimeMock.resolveIMessageMessageId.mockClear();
@@ -48,6 +78,8 @@ describe("imessage message actions", () => {
     runtimeMock.sendRichMessage.mockReset();
     runtimeMock.sendAttachment.mockReset();
     probeMock.getCachedIMessagePrivateApiStatus.mockReset();
+    probeMock.probeIMessagePrivateApi.mockReset();
+    loggerMock.warn.mockReset();
   });
 
   it("does not advertise private API actions when the bridge is known unavailable", () => {
@@ -73,9 +105,18 @@ describe("imessage message actions", () => {
       currentChannelId: "chat_guid:iMessage;+;chat0000",
     } as never);
 
-    expect(described?.actions).toEqual(
-      expect.arrayContaining(["react", "reply", "sendWithEffect", "upload-file"]),
-    );
+    expect(described?.actions).toStrictEqual([
+      "react",
+      "edit",
+      "reply",
+      "sendWithEffect",
+      "renameGroup",
+      "setGroupIcon",
+      "addParticipant",
+      "removeParticipant",
+      "leaveGroup",
+      "upload-file",
+    ]);
   });
 
   it("advertises BB-parity actions when private API and selectors are available", () => {
@@ -93,21 +134,19 @@ describe("imessage message actions", () => {
       currentChannelId: "chat_guid:iMessage;+;chat0000",
     } as never);
 
-    expect(described?.actions).toEqual(
-      expect.arrayContaining([
-        "react",
-        "edit",
-        "unsend",
-        "reply",
-        "sendWithEffect",
-        "renameGroup",
-        "setGroupIcon",
-        "addParticipant",
-        "removeParticipant",
-        "leaveGroup",
-        "upload-file",
-      ]),
-    );
+    expect(described?.actions).toStrictEqual([
+      "react",
+      "edit",
+      "unsend",
+      "reply",
+      "sendWithEffect",
+      "renameGroup",
+      "setGroupIcon",
+      "addParticipant",
+      "removeParticipant",
+      "leaveGroup",
+      "upload-file",
+    ]);
   });
 
   it("respects configured action gates", () => {
@@ -128,6 +167,33 @@ describe("imessage message actions", () => {
     expect(described?.actions).not.toContain("react");
     expect(described?.actions).not.toContain("reply");
     expect(described?.actions).toContain("edit");
+  });
+
+  it("emits a channels/imessage WARN when the private API bridge is unavailable", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue(undefined);
+    probeMock.probeIMessagePrivateApi.mockResolvedValue({
+      available: false,
+      v2Ready: false,
+      selectors: {},
+    });
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "react",
+        cfg: cfg(),
+        params: {
+          chatGuid: "iMessage;+;chat0000",
+          messageId: "message-guid",
+          emoji: "👍",
+        },
+      } as never),
+    ).rejects.toThrow(/imsg private API bridge/);
+
+    expect(loggerMock.warn).toHaveBeenCalledTimes(1);
+    const warnArg = String(loggerMock.warn.mock.calls[0][0]);
+    expect(warnArg).toMatch(/iMessage react blocked: private API bridge unavailable/);
+    expect(warnArg).toMatch(/imsg launch/);
+    expect(runtimeMock.sendReaction).not.toHaveBeenCalled();
   });
 
   it("rejects configured-off actions at execution time", async () => {
@@ -170,16 +236,18 @@ describe("imessage message actions", () => {
       },
     } as never);
 
-    expect(runtimeMock.sendReaction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        chatGuid: "iMessage;+;chat0000",
-        messageId: "message-guid",
-        reaction: "like",
-        options: expect.objectContaining({
-          dbPath: "/tmp/messages.db",
-        }),
-      }),
-    );
+    expect(runtimeMock.sendReaction.mock.calls).toStrictEqual([
+      [
+        {
+          chatGuid: "iMessage;+;chat0000",
+          messageId: "message-guid",
+          reaction: "like",
+          remove: undefined,
+          partIndex: undefined,
+          options: imsgOptions("iMessage;+;chat0000"),
+        },
+      ],
+    ]);
   });
 
   it("resolves chat_id targets before invoking bridge actions", async () => {
@@ -201,16 +269,26 @@ describe("imessage message actions", () => {
       },
     } as never);
 
-    expect(runtimeMock.resolveChatGuidForTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        target: { kind: "chat_id", chatId: 42 },
-      }),
-    );
-    expect(runtimeMock.sendReaction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        chatGuid: "iMessage;+;resolved",
-      }),
-    );
+    expect(runtimeMock.resolveChatGuidForTarget.mock.calls).toStrictEqual([
+      [
+        {
+          target: { kind: "chat_id", chatId: 42 },
+          options: imsgOptions(),
+        },
+      ],
+    ]);
+    expect(runtimeMock.sendReaction.mock.calls).toStrictEqual([
+      [
+        {
+          chatGuid: "iMessage;+;resolved",
+          messageId: "message-guid",
+          reaction: "like",
+          remove: undefined,
+          partIndex: undefined,
+          options: imsgOptions("iMessage;+;resolved"),
+        },
+      ],
+    ]);
   });
 
   it("resolves short message ids before invoking bridge actions", async () => {
@@ -240,11 +318,18 @@ describe("imessage message actions", () => {
         chatId: undefined,
       },
     });
-    expect(runtimeMock.sendReaction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messageId: "full-guid",
-      }),
-    );
+    expect(runtimeMock.sendReaction.mock.calls).toStrictEqual([
+      [
+        {
+          chatGuid: "iMessage;+;chat0000",
+          messageId: "full-guid",
+          reaction: "like",
+          remove: undefined,
+          partIndex: undefined,
+          options: imsgOptions("iMessage;+;chat0000"),
+        },
+      ],
+    ]);
   });
 
   it("resolves chat_identifier targets before invoking bridge actions", async () => {
@@ -266,16 +351,26 @@ describe("imessage message actions", () => {
       },
     } as never);
 
-    expect(runtimeMock.resolveChatGuidForTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        target: { kind: "chat_identifier", chatIdentifier: "team-thread" },
-      }),
-    );
-    expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        chatGuid: "iMessage;+;resolved-ident",
-      }),
-    );
+    expect(runtimeMock.resolveChatGuidForTarget.mock.calls).toStrictEqual([
+      [
+        {
+          target: { kind: "chat_identifier", chatIdentifier: "team-thread" },
+          options: imsgOptions(),
+        },
+      ],
+    ]);
+    expect(runtimeMock.sendRichMessage.mock.calls).toStrictEqual([
+      [
+        {
+          chatGuid: "iMessage;+;resolved-ident",
+          text: "reply",
+          replyToMessageId: "message-guid",
+          partIndex: undefined,
+          attachment: undefined,
+          options: imsgOptions("iMessage;+;resolved-ident"),
+        },
+      ],
+    ]);
   });
 
   describe("reply with attachment (openclaw/imsg#114 plumbing)", () => {
@@ -322,13 +417,22 @@ describe("imessage message actions", () => {
           filename: "card.png",
         },
       } as never);
-      expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ replyToMessageId: "message-guid" }),
-      );
-      const attachment = readLastAttachment();
-      expect(attachment?.kind).toBe("buffer");
-      expect(attachment?.filename).toBe("card.png");
-      expect(Buffer.from(attachment?.buffer ?? new Uint8Array()).toString()).toBe("PNGDATA");
+      expect(runtimeMock.sendRichMessage.mock.calls).toStrictEqual([
+        [
+          {
+            chatGuid: "iMessage;+;resolved-ident",
+            text: "🦞 here it is",
+            replyToMessageId: "message-guid",
+            partIndex: undefined,
+            attachment: {
+              kind: "buffer",
+              buffer: Uint8Array.from(Buffer.from("PNGDATA")),
+              filename: "card.png",
+            },
+            options: imsgOptions("iMessage;+;resolved-ident"),
+          },
+        ],
+      ]);
     });
 
     it("falls back to attachment.bin when filename is missing (post-hydration)", async () => {
@@ -444,29 +548,41 @@ describe("imessage message actions", () => {
 
       // resolveChatGuid synthesizes the chat_identifier; the runtime then
       // does the chats.list lookup against it.
-      expect(runtimeMock.resolveChatGuidForTarget).toHaveBeenCalledWith(
-        expect.objectContaining({
-          target: {
-            kind: "chat_identifier",
-            chatIdentifier: "iMessage;-;+12069106512",
+      expect(runtimeMock.resolveChatGuidForTarget.mock.calls).toStrictEqual([
+        [
+          {
+            target: {
+              kind: "chat_identifier",
+              chatIdentifier: "iMessage;-;+12069106512",
+            },
+            options: imsgOptions(),
           },
-        }),
-      );
+        ],
+      ]);
       // The cache lookup uses the synthesized chat_identifier as scope so
       // cross-chat checks have something to match against.
       expect(runtimeMock.resolveIMessageMessageId).toHaveBeenCalledWith("5", {
         requireKnownShortId: true,
-        chatContext: expect.objectContaining({
+        chatContext: {
+          chatGuid: undefined,
           chatIdentifier: "iMessage;-;+12069106512",
-        }),
+          chatId: undefined,
+        },
       });
       // sendReaction lands on the real registered chat guid, not the
       // synthesized stand-in.
-      expect(runtimeMock.sendReaction).toHaveBeenCalledWith(
-        expect.objectContaining({
-          chatGuid: "any;-;+12069106512",
-        }),
-      );
+      expect(runtimeMock.sendReaction.mock.calls).toStrictEqual([
+        [
+          {
+            chatGuid: "any;-;+12069106512",
+            messageId: "full-guid",
+            reaction: "like",
+            remove: undefined,
+            partIndex: undefined,
+            options: imsgOptions("any;-;+12069106512"),
+          },
+        ],
+      ]);
     });
 
     it("rejects react/edit/unsend when the synthesized chat is not registered", async () => {
@@ -520,11 +636,18 @@ describe("imessage message actions", () => {
         },
       } as never);
 
-      expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          chatGuid: "iMessage;-;+18001234567",
-        }),
-      );
+      expect(runtimeMock.sendRichMessage.mock.calls).toStrictEqual([
+        [
+          {
+            chatGuid: "iMessage;-;+18001234567",
+            text: "first contact",
+            replyToMessageId: "parent-guid",
+            partIndex: undefined,
+            attachment: undefined,
+            options: imsgOptions("iMessage;-;+18001234567"),
+          },
+        ],
+      ]);
     });
 
     it("removes a tapback by fanning out across all known kinds when emoji is empty/unknown and remove:true", async () => {
@@ -606,11 +729,16 @@ describe("imessage message actions", () => {
         },
       } as never);
 
-      expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          effectId: "com.apple.MobileSMS.expressivesend.impact",
-        }),
-      );
+      expect(runtimeMock.sendRichMessage.mock.calls).toStrictEqual([
+        [
+          {
+            chatGuid: "iMessage;+;chat0000",
+            text: "boom",
+            effectId: "com.apple.MobileSMS.expressivesend.impact",
+            options: imsgOptions("iMessage;+;chat0000"),
+          },
+        ],
+      ]);
     });
 
     it.each([
@@ -643,9 +771,16 @@ describe("imessage message actions", () => {
           },
         } as never);
 
-        expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith(
-          expect.objectContaining({ effectId: canonical }),
-        );
+        expect(runtimeMock.sendRichMessage.mock.calls).toStrictEqual([
+          [
+            {
+              chatGuid: "iMessage;+;chat0000",
+              text: "boom",
+              effectId: canonical,
+              options: imsgOptions("iMessage;+;chat0000"),
+            },
+          ],
+        ]);
       },
     );
 
@@ -694,13 +829,17 @@ describe("imessage message actions", () => {
         },
       } as never);
 
-      expect(runtimeMock.sendAttachment).toHaveBeenCalledWith(
-        expect.objectContaining({
-          chatGuid: "iMessage;+;chat0000",
-          filename: "photo.jpg",
-          asVoice: true,
-        }),
-      );
+      expect(runtimeMock.sendAttachment.mock.calls).toStrictEqual([
+        [
+          {
+            chatGuid: "iMessage;+;chat0000",
+            buffer: Uint8Array.from(Buffer.from("image")),
+            filename: "photo.jpg",
+            asVoice: true,
+            options: imsgOptions("iMessage;+;chat0000"),
+          },
+        ],
+      ]);
       expect(result?.details).toEqual({ ok: true, messageId: "sent-guid" });
     },
   );

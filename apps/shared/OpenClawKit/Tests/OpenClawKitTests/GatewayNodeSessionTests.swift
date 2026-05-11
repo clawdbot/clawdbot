@@ -286,6 +286,54 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
+    func changedSessionBoxRebuildsExistingGatewayChannel() async throws {
+        let firstSession = FakeGatewayWebSocketSession()
+        let secondSession = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "node",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: URL(string: "wss://example.invalid")!,
+            token: "shared-token",
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: firstSession),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in
+                BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+            })
+
+        try await gateway.connect(
+            url: URL(string: "wss://example.invalid")!,
+            token: "shared-token",
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: secondSession),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in
+                BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+            })
+
+        #expect(firstSession.snapshotMakeCount() == 1)
+        #expect(secondSession.snapshotMakeCount() == 1)
+
+        await gateway.disconnect()
+    }
+
+    @Test
     func bootstrapHelloStoresAdditionalDeviceTokens() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

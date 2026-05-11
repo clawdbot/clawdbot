@@ -127,7 +127,7 @@ export class GatewayPlugin extends Plugin {
     this.heartbeatTimers.firstHeartbeatTimeout = timer;
   }
 
-  async registerClient(client: Client): Promise<void> {
+  override async registerClient(client: Client): Promise<void> {
     this.client = client;
     if (this.options.shard) {
       client.shardId = this.options.shard[0];

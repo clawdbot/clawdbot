@@ -73,6 +73,15 @@ const policy: ChannelIngressPolicyInput = {
   groupPolicy: "allowlist",
 };
 
+function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+  expect(record).toBeDefined();
+  const actual = record as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+  return actual;
+}
+
 describe("channel message access ingress", () => {
   it.each([
     {
@@ -114,8 +123,8 @@ describe("channel message access ingress", () => {
     },
   ])("$name", async ({ input, policy, expected, secondPolicy, secondExpected }) => {
     const state = await resolveChannelIngressState(input);
-    expect(decideChannelIngress(state, policy)).toMatchObject(expected);
-    expect(decideChannelIngress(state, secondPolicy)).toMatchObject(secondExpected);
+    expectRecordFields(decideChannelIngress(state, policy), expected);
+    expectRecordFields(decideChannelIngress(state, secondPolicy), secondExpected);
   });
 
   it("applies route sender allowlists without retaining raw sender values", async () => {
@@ -141,11 +150,11 @@ describe("channel message access ingress", () => {
 
     const decision = decideChannelIngress(state, policy);
 
-    expect(state.routeFacts[0]?.senderAllowlist).toMatchObject({
+    const senderAllowlist = expectRecordFields(state.routeFacts[0]?.senderAllowlist, {
       hasConfiguredEntries: true,
-      match: { matched: true },
     });
-    expect(decision).toMatchObject({ admission: "dispatch", decision: "allow" });
+    expectRecordFields(senderAllowlist.match, { matched: true });
+    expectRecordFields(decision, { admission: "dispatch", decision: "allow" });
     expect(JSON.stringify(state)).not.toContain(rawSender);
     expect(JSON.stringify(decision)).not.toContain(rawSender);
   });
@@ -168,7 +177,7 @@ describe("channel message access ingress", () => {
       }),
     );
 
-    expect(decideChannelIngress(state, policy)).toMatchObject({
+    expectRecordFields(decideChannelIngress(state, policy), {
       admission: "drop",
       reasonCode: "route_sender_empty",
     });
@@ -216,11 +225,12 @@ describe("channel message access ingress", () => {
     const decision = decideChannelIngress(state, policy);
 
     expect(state.event.originSubjectMatched).toBe(entry.matched);
-    expect(decision).toMatchObject(entry.expected);
+    expectRecordFields(decision, entry.expected);
     if (entry.matched) {
-      expect(
-        decision.graph.gates.find((gate) => gate.phase === "sender" && gate.kind === "dmSender"),
-      ).toMatchObject({
+      const gate = decision.graph.gates.find(
+        (gate) => gate.phase === "sender" && gate.kind === "dmSender",
+      );
+      expectRecordFields(gate, {
         effect: "ignore",
         reasonCode: "sender_not_required",
       });

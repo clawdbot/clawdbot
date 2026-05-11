@@ -13,17 +13,15 @@ describe("concept vocabulary", () => {
         "Configuración de gateway, configuration du routeur, Sicherung und Überwachung Glacier.",
     });
 
-    expect(tags).toEqual(
-      expect.arrayContaining([
-        "gateway",
-        "configuración",
-        "configuration",
-        "routeur",
-        "sicherung",
-        "überwachung",
-        "glacier",
-      ]),
-    );
+    expect(tags).toStrictEqual([
+      "gateway",
+      "glacier",
+      "routeur",
+      "sicherung",
+      "überwachung",
+      "configuración",
+      "configuration",
+    ]);
     expect(tags).not.toContain("de");
     expect(tags).not.toContain("du");
     expect(tags).not.toContain("und");
@@ -37,18 +35,16 @@ describe("concept vocabulary", () => {
         "障害対応ルーター設定とバックアップ確認。路由器备份与网关同步。라우터 백업 페일오버 점검.",
     });
 
-    expect(tags).toEqual(
-      expect.arrayContaining([
-        "障害対応",
-        "ルーター",
-        "バックアップ",
-        "路由器",
-        "备份",
-        "网关",
-        "라우터",
-        "백업",
-      ]),
-    );
+    expect(tags).toStrictEqual([
+      "バックアップ",
+      "ルーター",
+      "障害対応",
+      "路由器",
+      "备份",
+      "网关",
+      "라우터",
+      "백업",
+    ]);
     expect(tags).not.toContain("ルー");
     expect(tags).not.toContain("ター");
   });

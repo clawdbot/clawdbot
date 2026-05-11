@@ -13,7 +13,7 @@ export {
 } from "./sessions-send-tokens.js";
 
 const DEFAULT_PING_PONG_TURNS = 5;
-const MAX_PING_PONG_TURNS = 5;
+const MAX_PING_PONG_TURNS = 20;
 
 export type AnnounceTarget = {
   channel: string;

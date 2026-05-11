@@ -1,8 +1,37 @@
+import deprecatedBarrelPluginSdkSubpathList from "../../scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json" with { type: "json" };
+import deprecatedPublicPluginSdkSubpathList from "../../scripts/lib/plugin-sdk-deprecated-public-subpaths.json" with { type: "json" };
 import pluginSdkEntryList from "../../scripts/lib/plugin-sdk-entrypoints.json" with { type: "json" };
+import privateLocalOnlyPluginSdkSubpathList from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
 
 export const pluginSdkEntrypoints = [...pluginSdkEntryList];
 
 export const pluginSdkSubpaths = pluginSdkEntrypoints.filter((entry) => entry !== "index");
+
+const privateLocalOnlyPluginSdkSubpathSet = new Set<string>(
+  privateLocalOnlyPluginSdkSubpathList.filter(
+    (entry): entry is string => typeof entry === "string" && !entry.includes("/"),
+  ),
+);
+
+export const privateLocalOnlyPluginSdkEntrypoints = pluginSdkSubpaths.filter((entry) =>
+  privateLocalOnlyPluginSdkSubpathSet.has(entry),
+);
+
+export const publicPluginSdkEntrypoints = pluginSdkEntrypoints.filter(
+  (entry) => entry === "index" || !privateLocalOnlyPluginSdkSubpathSet.has(entry),
+);
+
+export const publicPluginSdkSubpaths = publicPluginSdkEntrypoints.filter(
+  (entry) => entry !== "index",
+);
+
+export const deprecatedPublicPluginSdkEntrypoints = publicPluginSdkSubpaths.filter((entry) =>
+  deprecatedPublicPluginSdkSubpathList.includes(entry),
+);
+
+export const deprecatedBarrelPluginSdkEntrypoints = pluginSdkSubpaths.filter((entry) =>
+  deprecatedBarrelPluginSdkSubpathList.includes(entry),
+);
 
 // Transitional compatibility/helper surfaces owned by their matching bundled plugin.
 // Cross-owner extension imports are blocked by the package contract guardrails.
@@ -17,6 +46,7 @@ export const supportedBundledFacadeSdkEntrypoints = [
   "matrix",
   "mattermost",
   "memory-core-engine-runtime",
+  "provider-zai-endpoint",
   "qa-runner-runtime",
   "telegram-account",
   "tts-runtime",
@@ -57,15 +87,15 @@ export function buildPluginSdkEntrySources(entries: readonly string[] = pluginSd
 
 /** List the public package specifiers that should resolve to plugin SDK entrypoints. */
 export function buildPluginSdkSpecifiers() {
-  return pluginSdkEntrypoints.map((entry) =>
+  return publicPluginSdkEntrypoints.map((entry) =>
     entry === "index" ? "openclaw/plugin-sdk" : `openclaw/plugin-sdk/${entry}`,
   );
 }
 
-/** Build the package.json exports map for all plugin SDK subpaths. */
+/** Build the package.json exports map for public plugin SDK subpaths. */
 export function buildPluginSdkPackageExports() {
   return Object.fromEntries(
-    pluginSdkEntrypoints.map((entry) => [
+    publicPluginSdkEntrypoints.map((entry) => [
       entry === "index" ? "./plugin-sdk" : `./plugin-sdk/${entry}`,
       {
         types: `./dist/plugin-sdk/${entry}.d.ts`,

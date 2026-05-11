@@ -243,7 +243,7 @@ export async function configureWithEnvToken(
     {
       username,
       clientId,
-      accessToken: "",
+      accessToken: envToken,
       enabled: true,
     },
     resolvedAccountId,

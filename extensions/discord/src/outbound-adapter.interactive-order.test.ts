@@ -61,9 +61,16 @@ describe("discordOutbound shared interactive ordering", () => {
           { type: "text", text: "Last" },
         ],
       },
-      expect.objectContaining({
+      {
+        accountId: undefined,
+        chunkMode: undefined,
         cfg: {},
-      }),
+        maxLinesPerMessage: undefined,
+        replyTo: undefined,
+        silent: undefined,
+        tableMode: undefined,
+        textLimit: undefined,
+      },
     );
     expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
     expect(result).toEqual({

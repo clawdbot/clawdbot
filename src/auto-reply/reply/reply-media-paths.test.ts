@@ -21,6 +21,58 @@ vi.mock("../../media/read-capability.js", () => ({
 
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 
+type NormalizedReply = {
+  mediaUrl?: string;
+  mediaUrls?: string[];
+  text?: string;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(isRecord(value)).toBe(true);
+  if (!isRecord(value)) {
+    throw new Error(`${label} was not an object`);
+  }
+  return value;
+}
+
+function expectMedia(result: NormalizedReply, mediaUrl: string, mediaUrls: string[]): void {
+  expect(result.mediaUrl).toBe(mediaUrl);
+  expect(result.mediaUrls).toEqual(mediaUrls);
+}
+
+function expectNoMedia(result: NormalizedReply): void {
+  expect(result.mediaUrl).toBeUndefined();
+  expect(result.mediaUrls).toBeUndefined();
+}
+
+function expectOutboundAttachmentCall(
+  index: number,
+  mediaUrl: string,
+  mediaMaxBytes: number,
+): Record<string, unknown> {
+  const call = resolveOutboundAttachmentFromUrl.mock.calls[index] as unknown[] | undefined;
+  expect(call).toBeDefined();
+  if (!call) {
+    throw new Error(`missing outbound attachment call ${index + 1}`);
+  }
+  expect(call[0]).toBe(mediaUrl);
+  expect(call[1]).toBe(mediaMaxBytes);
+  return requireRecord(call[2], "outbound attachment options");
+}
+
+function expectAgentScopedMediaAccessCall(): Record<string, unknown> {
+  const call = resolveAgentScopedOutboundMediaAccess.mock.calls[0] as unknown[] | undefined;
+  expect(call).toBeDefined();
+  if (!call) {
+    throw new Error("missing agent scoped media access call");
+  }
+  return requireRecord(call[0], "agent scoped media access request");
+}
+
 describe("createReplyMediaPathNormalizer", () => {
   beforeEach(() => {
     ensureSandboxWorkspaceForSession.mockReset().mockResolvedValue(null);
@@ -48,19 +100,14 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: ["./out/photo.png"],
     });
 
-    expect(result).toMatchObject({
-      mediaUrl: "/tmp/outbound-media/photo.png",
-      mediaUrls: ["/tmp/outbound-media/photo.png"],
-    });
-    expect(resolveOutboundAttachmentFromUrl).toHaveBeenCalledWith(
+    expectMedia(result, "/tmp/outbound-media/photo.png", ["/tmp/outbound-media/photo.png"]);
+    const options = expectOutboundAttachmentCall(
+      0,
       path.join("/tmp/agent-workspace", "out", "photo.png"),
       5 * 1024 * 1024,
-      expect.objectContaining({
-        mediaAccess: expect.objectContaining({
-          workspaceDir: "/tmp/agent-workspace",
-        }),
-      }),
     );
+    const mediaAccess = requireRecord(options.mediaAccess, "media access");
+    expect(mediaAccess.workspaceDir).toBe("/tmp/agent-workspace");
   });
 
   it("maps sandbox-relative media back to the host sandbox workspace before staging", async () => {
@@ -78,21 +125,19 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: ["./out/photo.png", "file:///workspace/screens/final.png"],
     });
 
-    expect(result).toMatchObject({
-      mediaUrl: "/tmp/outbound-media/photo.png",
-      mediaUrls: ["/tmp/outbound-media/photo.png", "/tmp/outbound-media/final.png"],
-    });
-    expect(resolveOutboundAttachmentFromUrl).toHaveBeenNthCalledWith(
-      1,
+    expectMedia(result, "/tmp/outbound-media/photo.png", [
+      "/tmp/outbound-media/photo.png",
+      "/tmp/outbound-media/final.png",
+    ]);
+    expectOutboundAttachmentCall(
+      0,
       path.join("/tmp/sandboxes/session-1", "out", "photo.png"),
       5 * 1024 * 1024,
-      expect.any(Object),
     );
-    expect(resolveOutboundAttachmentFromUrl).toHaveBeenNthCalledWith(
-      2,
+    expectOutboundAttachmentCall(
+      1,
       path.join("/tmp/sandboxes/session-1", "screens", "final.png"),
       5 * 1024 * 1024,
-      expect.any(Object),
     );
   });
 
@@ -112,15 +157,12 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: ["./out/photo.png"],
     });
 
-    expect(result).toMatchObject({
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-    });
+    expectNoMedia(result);
     expect(resolveOutboundAttachmentFromUrl).toHaveBeenCalledTimes(1);
-    expect(resolveOutboundAttachmentFromUrl).toHaveBeenCalledWith(
+    expectOutboundAttachmentCall(
+      0,
       path.join("/tmp/sandboxes/session-1", "out", "photo.png"),
       5 * 1024 * 1024,
-      expect.any(Object),
     );
     expect(result.text).toBe("⚠️ Media failed.");
   });
@@ -136,10 +178,7 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: ["file:///Users/peter/Documents/report.pdf"],
     });
 
-    expect(result).toMatchObject({
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-    });
+    expectNoMedia(result);
     expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
   });
 
@@ -158,10 +197,7 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: ["file:///Users/peter/Documents/report.pdf"],
     });
 
-    expect(result).toMatchObject({
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-    });
+    expectNoMedia(result);
     expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
   });
 
@@ -180,10 +216,7 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: ["/Users/peter/Documents/report.pdf"],
     });
 
-    expect(result).toMatchObject({
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-    });
+    expectNoMedia(result);
     expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
   });
 
@@ -199,15 +232,8 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: [absolutePath],
     });
 
-    expect(result).toMatchObject({
-      mediaUrl: "/tmp/outbound-media/chart.png",
-      mediaUrls: ["/tmp/outbound-media/chart.png"],
-    });
-    expect(resolveOutboundAttachmentFromUrl).toHaveBeenCalledWith(
-      absolutePath,
-      8 * 1024 * 1024,
-      expect.any(Object),
-    );
+    expectMedia(result, "/tmp/outbound-media/chart.png", ["/tmp/outbound-media/chart.png"]);
+    expectOutboundAttachmentCall(0, absolutePath, 8 * 1024 * 1024);
   });
 
   it("prefers channel account media limits when staging reply attachments", async () => {
@@ -236,11 +262,7 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: [absolutePath],
     });
 
-    expect(resolveOutboundAttachmentFromUrl).toHaveBeenCalledWith(
-      absolutePath,
-      64 * 1024 * 1024,
-      expect.any(Object),
-    );
+    expectOutboundAttachmentCall(0, absolutePath, 64 * 1024 * 1024);
   });
 
   it("drops workspace-relative media paths that escape the agent workspace", async () => {
@@ -254,10 +276,7 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: ["../../etc/passwd"],
     });
 
-    expect(result).toMatchObject({
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-    });
+    expectNoMedia(result);
     expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
   });
 
@@ -276,10 +295,7 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: ["../../etc/passwd"],
     });
 
-    expect(result).toMatchObject({
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-    });
+    expectNoMedia(result);
     expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
   });
 
@@ -295,10 +311,9 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: ["/Users/peter/.openclaw/media/tool-image-generation/generated.png"],
     });
 
-    expect(result).toMatchObject({
-      mediaUrl: "/Users/peter/.openclaw/media/tool-image-generation/generated.png",
-      mediaUrls: ["/Users/peter/.openclaw/media/tool-image-generation/generated.png"],
-    });
+    expectMedia(result, "/Users/peter/.openclaw/media/tool-image-generation/generated.png", [
+      "/Users/peter/.openclaw/media/tool-image-generation/generated.png",
+    ]);
     expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
   });
 
@@ -318,10 +333,9 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: ["/Users/peter/.openclaw/media/outbound/generated.png"],
     });
 
-    expect(result).toMatchObject({
-      mediaUrl: "/Users/peter/.openclaw/media/outbound/generated.png",
-      mediaUrls: ["/Users/peter/.openclaw/media/outbound/generated.png"],
-    });
+    expectMedia(result, "/Users/peter/.openclaw/media/outbound/generated.png", [
+      "/Users/peter/.openclaw/media/outbound/generated.png",
+    ]);
     expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
   });
 
@@ -348,10 +362,7 @@ describe("createReplyMediaPathNormalizer", () => {
         mediaUrls: [symlinkPath],
       });
 
-      expect(result).toMatchObject({
-        mediaUrl: undefined,
-        mediaUrls: undefined,
-      });
+      expectNoMedia(result);
       expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
     } finally {
       await fs.rm(symlinkPath, { force: true });
@@ -374,10 +385,7 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: ["/Users/peter/secrets/photo.png"],
     });
 
-    expect(result).toMatchObject({
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-    });
+    expectNoMedia(result);
   });
 
   it("keeps reply text and appends a warning when all reply media is dropped", async () => {
@@ -393,11 +401,8 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: ["./out/missing.png"],
     });
 
-    expect(result).toMatchObject({
-      text: "WA_MEDIA_DM_07\n⚠️ Media failed.",
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-    });
+    expect(result.text).toBe("WA_MEDIA_DM_07\n⚠️ Media failed.");
+    expectNoMedia(result);
   });
 
   it("returns a warning-only text reply when media-only output is dropped upstream", async () => {
@@ -412,11 +417,8 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: ["./out/missing.png"],
     });
 
-    expect(result).toMatchObject({
-      text: "⚠️ Media failed.",
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-    });
+    expect(result.text).toBe("⚠️ Media failed.");
+    expectNoMedia(result);
   });
 
   it("threads requester context into shared outbound media access", async () => {
@@ -439,7 +441,8 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: ["./out/photo.png"],
     });
 
-    expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith({
+    expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledTimes(1);
+    expect(expectAgentScopedMediaAccessCall()).toEqual({
       cfg: {},
       agentId: undefined,
       workspaceDir: "/tmp/agent-workspace",
@@ -469,9 +472,12 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: [absolutePath],
     });
 
-    expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith({
+    expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledTimes(1);
+    const accessRequest = expectAgentScopedMediaAccessCall();
+    expect(typeof accessRequest.agentId).toBe("string");
+    expect({ ...accessRequest, agentId: undefined }).toEqual({
       cfg: { tools: { fs: { workspaceOnly: false } } },
-      agentId: expect.any(String),
+      agentId: undefined,
       workspaceDir: "/tmp/agent-workspace",
       mediaSources: [absolutePath],
       sessionKey: "session-key",
@@ -499,13 +505,13 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: [homeRelativePath],
     });
 
-    expect(result).toMatchObject({
-      mediaUrl: "/tmp/outbound-media/chart.png",
-      mediaUrls: ["/tmp/outbound-media/chart.png"],
-    });
-    expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith({
+    expectMedia(result, "/tmp/outbound-media/chart.png", ["/tmp/outbound-media/chart.png"]);
+    expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledTimes(1);
+    const accessRequest = expectAgentScopedMediaAccessCall();
+    expect(typeof accessRequest.agentId).toBe("string");
+    expect({ ...accessRequest, agentId: undefined }).toEqual({
       cfg: { tools: { fs: { workspaceOnly: false } } },
-      agentId: expect.any(String),
+      agentId: undefined,
       workspaceDir: "/tmp/agent-workspace",
       mediaSources: [homeRelativePath],
       sessionKey: "session-key",

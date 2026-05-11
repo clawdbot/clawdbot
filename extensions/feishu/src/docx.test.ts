@@ -63,6 +63,30 @@ type ToolResultWithDetails = {
 
 const WORKSPACE_ROOT = path.resolve("/workspace");
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).toBeTypeOf("object");
+  expect(value, label).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+function callArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
+  const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
+  const call = calls.at(callIndex);
+  expect(call, label).toBeDefined();
+  return call?.[argIndex];
+}
+
+function expectLoadWebMediaCall(fileName: string, localRoots: unknown[] | undefined) {
+  const source = callArg(loadWebMediaMock, 0, 0, "loadWebMedia source");
+  const options = requireRecord(
+    callArg(loadWebMediaMock, 0, 1, "loadWebMedia options"),
+    "loadWebMedia options",
+  );
+  expect(String(source)).toContain(fileName);
+  expect(options.optimizeImages).toBe(false);
+  expect(options.localRoots).toEqual(localRoots);
+}
+
 describe("feishu_doc image fetch hardening", () => {
   afterAll(() => {
     vi.restoreAllMocks();
@@ -208,7 +232,9 @@ describe("feishu_doc image fetch hardening", () => {
     expect(blockDescendantCreateMock).toHaveBeenCalledTimes(1);
     const call = blockDescendantCreateMock.mock.calls[0]?.[0];
     expect(call?.data.children_id).toEqual(["h1", "t1", "h2"]);
-    expect(call?.data.descendants).toEqual(expect.arrayContaining(blocks));
+    for (const block of blocks) {
+      expect(call?.data.descendants).toContainEqual(block);
+    }
     expect(call?.data.descendants).toHaveLength(3);
 
     expect(result.details.blocks_added).toBe(3);
@@ -398,15 +424,14 @@ describe("feishu_doc image fetch hardening", () => {
     expect(result.details.requester_permission_added).toBe(true);
     expect(result.details.requester_open_id).toBe("ou_123");
     expect(result.details.requester_perm_type).toBe("edit");
-    expect(permissionMemberCreateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          member_type: "openid",
-          member_id: "ou_123",
-          perm: "edit",
-        }),
-      }),
+    const permissionPayload = requireRecord(
+      callArg(permissionMemberCreateMock, 0, 0, "permission create payload"),
+      "permission create payload",
     );
+    const permissionData = requireRecord(permissionPayload.data, "permission data");
+    expect(permissionData.member_type).toBe("openid");
+    expect(permissionData.member_id).toBe("ou_123");
+    expect(permissionData.perm).toBe("edit");
   });
 
   it("create skips requester grant when trusted requester identity is unavailable", async () => {
@@ -484,20 +509,16 @@ describe("feishu_doc image fetch hardening", () => {
 
     // Without workspace-only policy, localRoots stays undefined so loadWebMedia
     // applies its default managed-root access behavior.
-    expect(loadWebMediaMock).toHaveBeenCalledWith(
-      expect.stringContaining("test-local.txt"),
-      expect.objectContaining({ optimizeImages: false, localRoots: undefined }),
-    );
+    expectLoadWebMediaCall("test-local.txt", undefined);
 
-    expect(driveUploadAllMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          parent_type: "docx_file",
-          parent_node: "doc_1",
-          file_name: "test-local.txt",
-        }),
-      }),
+    const uploadPayload = requireRecord(
+      callArg(driveUploadAllMock, 0, 0, "drive upload payload"),
+      "drive upload payload",
     );
+    const uploadData = requireRecord(uploadPayload.data, "drive upload data");
+    expect(uploadData.parent_type).toBe("docx_file");
+    expect(uploadData.parent_node).toBe("doc_1");
+    expect(uploadData.file_name).toBe("test-local.txt");
   });
 
   it("passes workspace localRoots for upload_file when workspace-only policy is active", async () => {
@@ -525,10 +546,7 @@ describe("feishu_doc image fetch hardening", () => {
       filename: "test-local.txt",
     });
 
-    expect(loadWebMediaMock).toHaveBeenCalledWith(
-      expect.stringContaining("test-local.txt"),
-      expect.objectContaining({ optimizeImages: false, localRoots: [WORKSPACE_ROOT] }),
-    );
+    expectLoadWebMediaCall("test-local.txt", [WORKSPACE_ROOT]);
   });
 
   it("passes empty localRoots when workspace-only policy is active without workspaceDir", async () => {
@@ -555,10 +573,7 @@ describe("feishu_doc image fetch hardening", () => {
       filename: "test-local.txt",
     });
 
-    expect(loadWebMediaMock).toHaveBeenCalledWith(
-      expect.stringContaining("test-local.txt"),
-      expect.objectContaining({ optimizeImages: false, localRoots: [] }),
-    );
+    expectLoadWebMediaCall("test-local.txt", []);
   });
 
   it("passes workspace localRoots for upload_image local paths when workspace-only policy is active", async () => {
@@ -579,10 +594,7 @@ describe("feishu_doc image fetch hardening", () => {
       filename: "test-local.png",
     });
 
-    expect(loadWebMediaMock).toHaveBeenCalledWith(
-      expect.stringContaining("test-local.png"),
-      expect.objectContaining({ optimizeImages: false, localRoots: [WORKSPACE_ROOT] }),
-    );
+    expectLoadWebMediaCall("test-local.png", [WORKSPACE_ROOT]);
   });
 
   it("passes workspace localRoots for upload_image absolute local paths when workspace-only policy is active", async () => {
@@ -609,10 +621,7 @@ describe("feishu_doc image fetch hardening", () => {
         filename: "absolute-image.png",
       });
 
-      expect(loadWebMediaMock).toHaveBeenCalledWith(
-        expect.stringContaining("absolute-image.png"),
-        expect.objectContaining({ optimizeImages: false, localRoots: [WORKSPACE_ROOT] }),
-      );
+      expectLoadWebMediaCall("absolute-image.png", [WORKSPACE_ROOT]);
     } finally {
       rmSync(fixtureDir, { recursive: true, force: true });
     }

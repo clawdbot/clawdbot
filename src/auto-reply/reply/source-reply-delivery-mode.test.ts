@@ -19,6 +19,15 @@ const globalToolOnlyReplyConfig = {
   },
 } as const satisfies OpenClawConfig;
 
+function expectPolicyFields(
+  policy: ReturnType<typeof resolveSourceReplyVisibilityPolicy>,
+  fields: Partial<ReturnType<typeof resolveSourceReplyVisibilityPolicy>>,
+): void {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(policy[key as keyof typeof policy]).toBe(value);
+  }
+}
+
 describe("resolveSourceReplyDeliveryMode", () => {
   it("defaults groups and channels to message-tool-only delivery", () => {
     expect(resolveSourceReplyDeliveryMode({ cfg: emptyConfig, ctx: { ChatType: "channel" } })).toBe(
@@ -162,41 +171,43 @@ describe("resolveSourceReplyDeliveryMode", () => {
 
 describe("resolveSourceReplyVisibilityPolicy", () => {
   it("allows direct automatic delivery without suppressing typing", () => {
-    expect(
+    expectPolicyFields(
       resolveSourceReplyVisibilityPolicy({
         cfg: emptyConfig,
         ctx: { ChatType: "direct" },
         sendPolicy: "allow",
       }),
-    ).toMatchObject({
-      sourceReplyDeliveryMode: "automatic",
-      sendPolicyDenied: false,
-      suppressAutomaticSourceDelivery: false,
-      suppressDelivery: false,
-      suppressHookUserDelivery: false,
-      suppressHookReplyLifecycle: false,
-      suppressTyping: false,
-      deliverySuppressionReason: "",
-    });
+      {
+        sourceReplyDeliveryMode: "automatic",
+        sendPolicyDenied: false,
+        suppressAutomaticSourceDelivery: false,
+        suppressDelivery: false,
+        suppressHookUserDelivery: false,
+        suppressHookReplyLifecycle: false,
+        suppressTyping: false,
+        deliverySuppressionReason: "",
+      },
+    );
   });
 
   it("suppresses automatic source delivery for default group turns without suppressing typing", () => {
-    expect(
+    expectPolicyFields(
       resolveSourceReplyVisibilityPolicy({
         cfg: emptyConfig,
         ctx: { ChatType: "group" },
         sendPolicy: "allow",
       }),
-    ).toMatchObject({
-      sourceReplyDeliveryMode: "message_tool_only",
-      sendPolicyDenied: false,
-      suppressAutomaticSourceDelivery: true,
-      suppressDelivery: true,
-      suppressHookUserDelivery: true,
-      suppressHookReplyLifecycle: false,
-      suppressTyping: false,
-      deliverySuppressionReason: "sourceReplyDeliveryMode: message_tool_only",
-    });
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        sendPolicyDenied: false,
+        suppressAutomaticSourceDelivery: true,
+        suppressDelivery: true,
+        suppressHookUserDelivery: true,
+        suppressHookReplyLifecycle: false,
+        suppressTyping: false,
+        deliverySuppressionReason: "sourceReplyDeliveryMode: message_tool_only",
+      },
+    );
   });
 
   it("keeps native and authorized text command replies visible in groups", () => {
@@ -209,123 +220,130 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
         CommandBody: "/status",
       },
     ] as const) {
-      expect(
+      expectPolicyFields(
         resolveSourceReplyVisibilityPolicy({
           cfg: emptyConfig,
           ctx,
           sendPolicy: "allow",
         }),
-      ).toMatchObject({
-        sourceReplyDeliveryMode: "automatic",
-        suppressAutomaticSourceDelivery: false,
-        suppressDelivery: false,
-        suppressHookReplyLifecycle: false,
-        suppressTyping: false,
-      });
+        {
+          sourceReplyDeliveryMode: "automatic",
+          suppressAutomaticSourceDelivery: false,
+          suppressDelivery: false,
+          suppressHookReplyLifecycle: false,
+          suppressTyping: false,
+        },
+      );
     }
   });
 
   it("keeps configured automatic group delivery visible", () => {
-    expect(
+    expectPolicyFields(
       resolveSourceReplyVisibilityPolicy({
         cfg: automaticGroupReplyConfig,
         ctx: { ChatType: "channel" },
         sendPolicy: "allow",
       }),
-    ).toMatchObject({
-      sourceReplyDeliveryMode: "automatic",
-      suppressAutomaticSourceDelivery: false,
-      suppressDelivery: false,
-      suppressHookReplyLifecycle: false,
-      suppressTyping: false,
-    });
+      {
+        sourceReplyDeliveryMode: "automatic",
+        suppressAutomaticSourceDelivery: false,
+        suppressDelivery: false,
+        suppressHookReplyLifecycle: false,
+        suppressTyping: false,
+      },
+    );
   });
 
   it("supports explicit message-tool-only delivery for direct chats without suppressing typing", () => {
-    expect(
+    expectPolicyFields(
       resolveSourceReplyVisibilityPolicy({
         cfg: emptyConfig,
         ctx: { ChatType: "direct" },
         requested: "message_tool_only",
         sendPolicy: "allow",
       }),
-    ).toMatchObject({
-      sourceReplyDeliveryMode: "message_tool_only",
-      suppressAutomaticSourceDelivery: true,
-      suppressDelivery: true,
-      suppressHookReplyLifecycle: false,
-      suppressTyping: false,
-      deliverySuppressionReason: "sourceReplyDeliveryMode: message_tool_only",
-    });
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        suppressAutomaticSourceDelivery: true,
+        suppressDelivery: true,
+        suppressHookReplyLifecycle: false,
+        suppressTyping: false,
+        deliverySuppressionReason: "sourceReplyDeliveryMode: message_tool_only",
+      },
+    );
   });
 
   it("lets sendPolicy deny suppress delivery and typing", () => {
-    expect(
+    expectPolicyFields(
       resolveSourceReplyVisibilityPolicy({
         cfg: emptyConfig,
         ctx: { ChatType: "group" },
         sendPolicy: "deny",
       }),
-    ).toMatchObject({
-      sourceReplyDeliveryMode: "message_tool_only",
-      sendPolicyDenied: true,
-      suppressDelivery: true,
-      suppressHookUserDelivery: true,
-      suppressHookReplyLifecycle: true,
-      suppressTyping: true,
-      deliverySuppressionReason: "sendPolicy: deny",
-    });
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        sendPolicyDenied: true,
+        suppressDelivery: true,
+        suppressHookUserDelivery: true,
+        suppressHookReplyLifecycle: true,
+        suppressTyping: true,
+        deliverySuppressionReason: "sendPolicy: deny",
+      },
+    );
   });
 
   it("keeps explicit typing suppression separate from delivery suppression", () => {
-    expect(
+    expectPolicyFields(
       resolveSourceReplyVisibilityPolicy({
         cfg: emptyConfig,
         ctx: { ChatType: "direct" },
         sendPolicy: "allow",
         explicitSuppressTyping: true,
       }),
-    ).toMatchObject({
-      sourceReplyDeliveryMode: "automatic",
-      suppressDelivery: false,
-      suppressHookUserDelivery: false,
-      suppressHookReplyLifecycle: true,
-      suppressTyping: true,
-    });
+      {
+        sourceReplyDeliveryMode: "automatic",
+        suppressDelivery: false,
+        suppressHookUserDelivery: false,
+        suppressHookReplyLifecycle: true,
+        suppressTyping: true,
+      },
+    );
   });
 
   it("keeps ACP child user delivery suppression separate from source delivery", () => {
-    expect(
+    expectPolicyFields(
       resolveSourceReplyVisibilityPolicy({
         cfg: emptyConfig,
         ctx: { ChatType: "direct" },
         sendPolicy: "allow",
         suppressAcpChildUserDelivery: true,
       }),
-    ).toMatchObject({
-      sourceReplyDeliveryMode: "automatic",
-      suppressDelivery: false,
-      suppressHookUserDelivery: true,
-      suppressHookReplyLifecycle: true,
-      suppressTyping: false,
-    });
+      {
+        sourceReplyDeliveryMode: "automatic",
+        suppressDelivery: false,
+        suppressHookUserDelivery: true,
+        suppressHookReplyLifecycle: true,
+        suppressTyping: false,
+      },
+    );
   });
   it("keeps delivery automatic when message-tool-only mode cannot send visibly", () => {
-    expect(
+    expectPolicyFields(
       resolveSourceReplyVisibilityPolicy({
         cfg: emptyConfig,
         ctx: { ChatType: "group" },
         sendPolicy: "allow",
         messageToolAvailable: false,
       }),
-    ).toMatchObject({
-      sourceReplyDeliveryMode: "automatic",
-      suppressAutomaticSourceDelivery: false,
-      suppressDelivery: false,
-      suppressHookUserDelivery: false,
-      deliverySuppressionReason: "",
-    });
-    expect(
+      {
+        sourceReplyDeliveryMode: "automatic",
+        suppressAutomaticSourceDelivery: false,
+        suppressDelivery: false,
+        suppressHookUserDelivery: false,
+        deliverySuppressionReason: "",
+      },
+    );
+    expectPolicyFields(
       resolveSourceReplyVisibilityPolicy({
         cfg: emptyConfig,
         ctx: { ChatType: "channel" },
@@ -333,11 +351,12 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
         sendPolicy: "allow",
         messageToolAvailable: false,
       }),
-    ).toMatchObject({
-      sourceReplyDeliveryMode: "automatic",
-      suppressAutomaticSourceDelivery: false,
-      suppressDelivery: false,
-      deliverySuppressionReason: "",
-    });
+      {
+        sourceReplyDeliveryMode: "automatic",
+        suppressAutomaticSourceDelivery: false,
+        suppressDelivery: false,
+        deliverySuppressionReason: "",
+      },
+    );
   });
 });

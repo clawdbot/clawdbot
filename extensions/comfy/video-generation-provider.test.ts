@@ -102,33 +102,22 @@ describe("comfy video-generation provider", () => {
       }),
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        url: "http://127.0.0.1:8188/prompt",
-        auditContext: "comfy-video-generate",
-      }),
-    );
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0].url).toBe("http://127.0.0.1:8188/prompt");
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0].auditContext).toBe("comfy-video-generate");
     expect(parseJsonBody(1)).toEqual({
       prompt: {
         "6": { inputs: { text: "animate a lobster" } },
         "9": { inputs: {} },
       },
     });
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        url: "http://127.0.0.1:8188/history/local-video-1",
-        auditContext: "comfy-history",
-      }),
+    expect(fetchWithSsrFGuardMock.mock.calls[1]?.[0].url).toBe(
+      "http://127.0.0.1:8188/history/local-video-1",
     );
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({
-        url: "http://127.0.0.1:8188/view?filename=generated.mp4&subfolder=&type=output",
-        auditContext: "comfy-video-download",
-      }),
+    expect(fetchWithSsrFGuardMock.mock.calls[1]?.[0].auditContext).toBe("comfy-history");
+    expect(fetchWithSsrFGuardMock.mock.calls[2]?.[0].url).toBe(
+      "http://127.0.0.1:8188/view?filename=generated.mp4&subfolder=&type=output",
     );
+    expect(fetchWithSsrFGuardMock.mock.calls[2]?.[0].auditContext).toBe("comfy-video-download");
     expect(result).toEqual({
       videos: [
         {
@@ -179,13 +168,10 @@ describe("comfy video-generation provider", () => {
       }),
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        url: "https://cloud.comfy.org/api/prompt",
-        auditContext: "comfy-video-generate",
-      }),
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0].url).toBe(
+      "https://cloud.comfy.org/api/prompt",
     );
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0].auditContext).toBe("comfy-video-generate");
     expect(result.metadata).toEqual({
       promptId: "cloud-video-1",
       outputNodeIds: ["9"],

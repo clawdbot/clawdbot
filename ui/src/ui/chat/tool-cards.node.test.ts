@@ -44,11 +44,9 @@ describe("tool-card extraction", () => {
     );
 
     expect(cards).toHaveLength(1);
-    expect(cards[0]).toMatchObject({
-      id: "msg:1:call-1",
-      name: "browser.open",
-      outputText: "Opened page",
-    });
+    expect(cards[0]?.id).toBe("msg:1:call-1");
+    expect(cards[0]?.name).toBe("browser.open");
+    expect(cards[0]?.outputText).toBe("Opened page");
     expect(cards[0]?.inputText).toContain('"url": "https://example.com"');
     expect(cards[0]?.inputText).toContain('"retry": 0');
   });
@@ -126,14 +124,10 @@ describe("tool-card extraction", () => {
     );
 
     expect(cards).toHaveLength(2);
-    expect(cards[0]).toMatchObject({
-      inputText: '{\n  "url": "https://example.com/a"\n}',
-      outputText: "Opened A",
-    });
-    expect(cards[1]).toMatchObject({
-      inputText: '{\n  "url": "https://example.com/b"\n}',
-      outputText: "Opened B",
-    });
+    expect(cards[0]?.inputText).toBe('{\n  "url": "https://example.com/a"\n}');
+    expect(cards[0]?.outputText).toBe("Opened A");
+    expect(cards[1]?.inputText).toBe('{\n  "url": "https://example.com/b"\n}');
+    expect(cards[1]?.outputText).toBe("Opened B");
   });
 
   it("extracts tool result output from text block content arrays", () => {
@@ -211,15 +205,13 @@ describe("tool-card extraction", () => {
       "msg:view:1",
     );
 
-    expect(card?.preview).toMatchObject({
-      kind: "canvas",
-      surface: "assistant_message",
-      render: "url",
-      viewId: "cv_inline",
-      url: "/__openclaw__/canvas/documents/cv_inline/index.html",
-      title: "Inline demo",
-      preferredHeight: 420,
-    });
+    expect(card?.preview?.kind).toBe("canvas");
+    expect(card?.preview?.surface).toBe("assistant_message");
+    expect(card?.preview?.render).toBe("url");
+    expect(card?.preview?.viewId).toBe("cv_inline");
+    expect(card?.preview?.url).toBe("/__openclaw__/canvas/documents/cv_inline/index.html");
+    expect(card?.preview?.title).toBe("Inline demo");
+    expect(card?.preview?.preferredHeight).toBe(420);
   });
 
   it("does not create previews for non-assistant canvas or generic outputs", () => {

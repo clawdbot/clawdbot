@@ -51,6 +51,15 @@ vi.mock("../status.js", async () => {
   };
 });
 
+function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
+  expect(mock.mock.calls).toHaveLength(1);
+  const [arg] = mock.mock.calls[0] ?? [];
+  if (!arg) {
+    throw new Error(`expected ${label} to receive arguments`);
+  }
+  return arg;
+}
+
 function buildInfoParams(
   commandBodyNormalized: string,
   cfg: OpenClawConfig,
@@ -214,11 +223,11 @@ describe("info command handlers", () => {
 
     expect(statusResult?.shouldContinue).toBe(false);
 
-    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        parentSessionKey: "discord:group:parent-room",
-      }),
-    );
+    const statusReplyParams = firstMockArg(
+      vi.mocked(buildStatusReply),
+      "buildStatusReply",
+    ) as Parameters<typeof buildStatusReply>[0];
+    expect(statusReplyParams.parentSessionKey).toBe("discord:group:parent-room");
   });
 
   it("preserves the shared session store path when routing /status", async () => {
@@ -231,11 +240,11 @@ describe("info command handlers", () => {
     const statusResult = await handleStatusCommand(params, true);
 
     expect(statusResult?.shouldContinue).toBe(false);
-    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        storePath: "/tmp/target-session-store.json",
-      }),
-    );
+    const statusReplyParams = firstMockArg(
+      vi.mocked(buildStatusReply),
+      "buildStatusReply",
+    ) as Parameters<typeof buildStatusReply>[0];
+    expect(statusReplyParams.storePath).toBe("/tmp/target-session-store.json");
   });
 
   it("prefers the target session entry when routing /status", async () => {
@@ -259,15 +268,13 @@ describe("info command handlers", () => {
     const statusResult = await handleStatusCommand(params, true);
 
     expect(statusResult?.shouldContinue).toBe(false);
-    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionEntry: expect.objectContaining({
-          sessionId: "target-session",
-          parentSessionKey: "target-parent",
-        }),
-        parentSessionKey: "target-parent",
-      }),
-    );
+    const statusReplyParams = firstMockArg(
+      vi.mocked(buildStatusReply),
+      "buildStatusReply",
+    ) as Parameters<typeof buildStatusReply>[0];
+    expect(statusReplyParams.sessionEntry?.sessionId).toBe("target-session");
+    expect(statusReplyParams.sessionEntry?.parentSessionKey).toBe("target-parent");
+    expect(statusReplyParams.parentSessionKey).toBe("target-parent");
   });
 
   it("forwards resolved fast mode to /status", async () => {
@@ -280,11 +287,11 @@ describe("info command handlers", () => {
     const statusResult = await handleStatusCommand(params, true);
 
     expect(statusResult?.shouldContinue).toBe(false);
-    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        resolvedFastMode: true,
-      }),
-    );
+    const statusReplyParams = firstMockArg(
+      vi.mocked(buildStatusReply),
+      "buildStatusReply",
+    ) as Parameters<typeof buildStatusReply>[0];
+    expect(statusReplyParams.resolvedFastMode).toBe(true);
   });
 
   it("uses the canonical target session agent when listing /commands", async () => {
@@ -300,10 +307,10 @@ describe("info command handlers", () => {
     const result = await handleCommandsListCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
-    expect(listSkillCommandsForAgentsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentIds: ["target"],
-      }),
-    );
+    const listParams = firstMockArg(
+      listSkillCommandsForAgentsMock,
+      "listSkillCommandsForAgents",
+    ) as { agentIds?: string[] };
+    expect(listParams.agentIds).toEqual(["target"]);
   });
 });

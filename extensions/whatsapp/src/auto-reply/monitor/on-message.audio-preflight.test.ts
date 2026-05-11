@@ -163,13 +163,11 @@ describe("createWebOnMessageHandler audio preflight", () => {
     await handler(makeAudioMsg());
 
     expect(events).toEqual(["ack", "stt"]);
-    expect(processMessageMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        preflightAudioTranscript: "transcribed voice note",
-        ackAlreadySent: true,
-        ackReaction: ackReactionHandle,
-      }),
-    );
+    expect(processMessageMock).toHaveBeenCalledTimes(1);
+    const [processParams] = processMessageMock.mock.calls[0] ?? [];
+    expect(processParams.preflightAudioTranscript).toBe("transcribed voice note");
+    expect(processParams.ackAlreadySent).toBe(true);
+    expect(processParams.ackReaction).toBe(ackReactionHandle);
   });
 
   it("skips early DM ack/preflight when access-control was not explicitly passed through", async () => {
@@ -205,12 +203,11 @@ describe("createWebOnMessageHandler audio preflight", () => {
     expect(events).toStrictEqual([]);
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
     expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
-    expect(processMessageMock).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        preflightAudioTranscript: expect.anything(),
-        ackAlreadySent: true,
-      }),
-    );
+    expect(processMessageMock).toHaveBeenCalledTimes(1);
+    const [processParams] = processMessageMock.mock.calls[0] ?? [];
+    expect(processParams).not.toHaveProperty("preflightAudioTranscript");
+    expect(processParams).not.toHaveProperty("ackAlreadySent");
+    expect(processParams).not.toHaveProperty("ackReaction");
   });
 
   it("preserves per-agent ack checks for group broadcast voice notes", async () => {
@@ -295,25 +292,19 @@ describe("createWebOnMessageHandler audio preflight", () => {
 
     await handler(makeGroupAudioMsg());
 
-    expect(applyGroupGatingMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        deferMissingMention: true,
-      }),
-    );
+    expect(applyGroupGatingMock).toHaveBeenCalledTimes(2);
+    const [firstGatingParams] = applyGroupGatingMock.mock.calls[0] ?? [];
+    expect(firstGatingParams.deferMissingMention).toBe(true);
+    expect(firstGatingParams).not.toHaveProperty("mentionText");
     expect(events).toEqual(["ack", "stt"]);
-    expect(applyGroupGatingMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        mentionText: "transcribed voice note",
-      }),
-    );
-    expect(processMessageMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        preflightAudioTranscript: "transcribed voice note",
-        ackAlreadySent: true,
-      }),
-    );
+    const [secondGatingParams] = applyGroupGatingMock.mock.calls[1] ?? [];
+    expect(secondGatingParams.mentionText).toBe("transcribed voice note");
+    expect(secondGatingParams).not.toHaveProperty("deferMissingMention");
+    expect(processMessageMock).toHaveBeenCalledTimes(1);
+    const [processParams] = processMessageMock.mock.calls[0] ?? [];
+    expect(processParams.preflightAudioTranscript).toBe("transcribed voice note");
+    expect(processParams.ackAlreadySent).toBe(true);
+    expect(processParams.ackReaction).toBe(ackReactionHandle);
   });
 
   it("passes routing ctx fields to transcribeFirstAudio so echoTranscript can deliver (#79778)", async () => {
@@ -351,10 +342,16 @@ describe("createWebOnMessageHandler audio preflight", () => {
 
     await handler(makeAudioMsg());
 
-    expect(capturedCtx).toMatchObject({
-      Provider: "whatsapp",
-      OriginatingTo: "+15550000002",
+    expect(capturedCtx).toEqual({
+      MediaPaths: ["/tmp/voice.ogg"],
+      MediaTypes: ["audio/ogg; codecs=opus"],
       From: "+15550000002",
+      To: "+15550000001",
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "+15550000002",
+      AccountId: "default",
     });
   });
 

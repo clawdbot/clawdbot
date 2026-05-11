@@ -39,6 +39,17 @@ function overview(overrides: Partial<CrestodianOverview["tools"]> = {}): Crestod
   };
 }
 
+function requireRecord(value: unknown): Record<string, unknown> {
+  expect(value).toBeTruthy();
+  expect(typeof value).toBe("object");
+  expect(Array.isArray(value)).toBe(false);
+  return value as Record<string, unknown>;
+}
+
+function firstMockArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  return requireRecord(mock.mock.calls[0]?.[0]);
+}
+
 describe("Crestodian assistant", () => {
   it("parses the first compact JSON command", () => {
     expect(
@@ -108,34 +119,37 @@ describe("Crestodian assistant", () => {
     );
     const runEmbeddedPiAgent = vi.fn();
 
-    await expect(
-      planCrestodianCommandWithLocalRuntime({
-        input: "what is going on",
-        overview: overview({
-          claude: { command: "claude", found: true },
-          codex: { command: "codex", found: true },
-        }),
-        deps: {
-          runCliAgent,
-          runEmbeddedPiAgent,
-          createTempDir: async () => "/tmp/crestodian-planner",
-          removeTempDir: async () => {},
-        },
+    const result = await planCrestodianCommandWithLocalRuntime({
+      input: "what is going on",
+      overview: overview({
+        claude: { command: "claude", found: true },
+        codex: { command: "codex", found: true },
       }),
-    ).resolves.toMatchObject({
-      command: "status",
-      reply: "Checking the shell.",
-      modelLabel: "claude-cli/claude-opus-4-7",
+      deps: {
+        runCliAgent,
+        runEmbeddedPiAgent,
+        createTempDir: async () => "/tmp/crestodian-planner",
+        removeTempDir: async () => {},
+      },
     });
+    expect(result).not.toBeNull();
+    if (result === null) {
+      throw new Error("Expected planner result");
+    }
+    expect(result.command).toBe("status");
+    expect(result.reply).toBe("Checking the shell.");
+    expect(result.modelLabel).toBe("claude-cli/claude-opus-4-7");
 
     expect(runCliAgent).toHaveBeenCalledTimes(1);
-    const firstCliCall = runCliAgent.mock.calls[0][0];
-    expect(firstCliCall).toMatchObject({
-      provider: "claude-cli",
-      model: "claude-opus-4-7",
-      cleanupCliLiveSessionOnRunEnd: true,
-    });
-    expect(firstCliCall.config?.agents?.defaults?.cliBackends).toBeUndefined();
+    const firstCliCall = firstMockArg(runCliAgent);
+    expect(firstCliCall.provider).toBe("claude-cli");
+    expect(firstCliCall.model).toBe("claude-opus-4-7");
+    expect(firstCliCall.cleanupCliLiveSessionOnRunEnd).toBe(true);
+    const firstCliConfig = requireRecord(firstCliCall.config);
+    const firstCliAgents = requireRecord(firstCliConfig.agents);
+    const firstCliDefaults = requireRecord(firstCliAgents.defaults);
+    expect(firstCliDefaults.cliBackends).toBeUndefined();
+    expect(firstCliCall.extraSystemPrompt).toBeTypeOf("string");
     expect(firstCliCall.extraSystemPrompt).toContain("Do not use tools, shell commands");
     expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
   });
@@ -155,23 +169,23 @@ describe("Crestodian assistant", () => {
         codex: { command: "codex", found: true },
       }),
     );
-    expect(codexAppServer?.buildConfig("/tmp/workspace")).toMatchObject({
-      agents: {
-        defaults: {
-          workspace: "/tmp/workspace",
-          model: { primary: "openai/gpt-5.5" },
-        },
-      },
-      plugins: { entries: { codex: { enabled: true } } },
-    });
-    expect(codexCli?.buildConfig("/tmp/workspace")).toMatchObject({
-      agents: {
-        defaults: {
-          workspace: "/tmp/workspace",
-          model: { primary: "codex-cli/gpt-5.5" },
-        },
-      },
-    });
+    const codexAppServerConfig = requireRecord(codexAppServer?.buildConfig("/tmp/workspace"));
+    const codexAppServerAgents = requireRecord(codexAppServerConfig.agents);
+    const codexAppServerDefaults = requireRecord(codexAppServerAgents.defaults);
+    const codexAppServerModel = requireRecord(codexAppServerDefaults.model);
+    const codexAppServerPlugins = requireRecord(codexAppServerConfig.plugins);
+    const codexAppServerEntries = requireRecord(codexAppServerPlugins.entries);
+    const codexAppServerCodexEntry = requireRecord(codexAppServerEntries.codex);
+    expect(codexAppServerDefaults.workspace).toBe("/tmp/workspace");
+    expect(codexAppServerModel.primary).toBe("openai/gpt-5.5");
+    expect(codexAppServerCodexEntry.enabled).toBe(true);
+
+    const codexCliConfig = requireRecord(codexCli?.buildConfig("/tmp/workspace"));
+    const codexCliAgents = requireRecord(codexCliConfig.agents);
+    const codexCliDefaults = requireRecord(codexCliAgents.defaults);
+    const codexCliModel = requireRecord(codexCliDefaults.model);
+    expect(codexCliDefaults.workspace).toBe("/tmp/workspace");
+    expect(codexCliModel.primary).toBe("codex-cli/gpt-5.5");
   });
 
   it("falls back to Codex app-server when Claude CLI planning fails", async () => {
@@ -187,43 +201,43 @@ describe("Crestodian assistant", () => {
       }),
     );
 
-    await expect(
-      planCrestodianCommandWithLocalRuntime({
-        input: "is gateway alive",
-        overview: overview({
-          claude: { command: "claude", found: true },
-          codex: { command: "codex", found: true },
-        }),
-        deps: {
-          runCliAgent,
-          runEmbeddedPiAgent,
-          createTempDir: async () => "/tmp/crestodian-planner",
-          removeTempDir: async () => {},
-        },
+    const result = await planCrestodianCommandWithLocalRuntime({
+      input: "is gateway alive",
+      overview: overview({
+        claude: { command: "claude", found: true },
+        codex: { command: "codex", found: true },
       }),
-    ).resolves.toMatchObject({
-      command: "gateway status",
-      reply: "Codex planner online.",
-      modelLabel: "openai/gpt-5.5 via codex",
+      deps: {
+        runCliAgent,
+        runEmbeddedPiAgent,
+        createTempDir: async () => "/tmp/crestodian-planner",
+        removeTempDir: async () => {},
+      },
     });
+    expect(result).not.toBeNull();
+    if (result === null) {
+      throw new Error("Expected planner result");
+    }
+    expect(result.command).toBe("gateway status");
+    expect(result.reply).toBe("Codex planner online.");
+    expect(result.modelLabel).toBe("openai/gpt-5.5 via codex");
 
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
-    const firstEmbeddedCall = runEmbeddedPiAgent.mock.calls[0][0];
-    expect(firstEmbeddedCall).toMatchObject({
-      provider: "openai",
-      model: "gpt-5.5",
-      agentHarnessId: "codex",
-      disableTools: true,
-      toolsAllow: [],
-    });
-    expect(firstEmbeddedCall.config).toMatchObject({
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.5" },
-        },
-      },
-      plugins: { entries: { codex: { enabled: true } } },
-    });
+    const firstEmbeddedCall = firstMockArg(runEmbeddedPiAgent);
+    expect(firstEmbeddedCall.provider).toBe("openai");
+    expect(firstEmbeddedCall.model).toBe("gpt-5.5");
+    expect(firstEmbeddedCall.agentHarnessId).toBe("codex");
+    expect(firstEmbeddedCall.disableTools).toBe(true);
+    expect(firstEmbeddedCall.toolsAllow).toEqual([]);
+    const embeddedConfig = requireRecord(firstEmbeddedCall.config);
+    const embeddedAgents = requireRecord(embeddedConfig.agents);
+    const embeddedDefaults = requireRecord(embeddedAgents.defaults);
+    const embeddedModel = requireRecord(embeddedDefaults.model);
+    const embeddedPlugins = requireRecord(embeddedConfig.plugins);
+    const embeddedEntries = requireRecord(embeddedPlugins.entries);
+    const embeddedCodexEntry = requireRecord(embeddedEntries.codex);
+    expect(embeddedModel.primary).toBe("openai/gpt-5.5");
+    expect(embeddedCodexEntry.enabled).toBe(true);
   });
 
   it("uses Codex CLI if the app-server planner is not usable", async () => {
@@ -240,31 +254,31 @@ describe("Crestodian assistant", () => {
       throw new Error("codex app-server unavailable");
     });
 
-    await expect(
-      planCrestodianCommandWithLocalRuntime({
-        input: "show models",
-        overview: overview({
-          codex: { command: "codex", found: true },
-        }),
-        deps: {
-          runCliAgent,
-          runEmbeddedPiAgent,
-          createTempDir: async () => "/tmp/crestodian-planner",
-          removeTempDir: async () => {},
-        },
+    const result = await planCrestodianCommandWithLocalRuntime({
+      input: "show models",
+      overview: overview({
+        codex: { command: "codex", found: true },
       }),
-    ).resolves.toMatchObject({
-      command: "models",
-      reply: "CLI fallback.",
-      modelLabel: "codex-cli/gpt-5.5",
+      deps: {
+        runCliAgent,
+        runEmbeddedPiAgent,
+        createTempDir: async () => "/tmp/crestodian-planner",
+        removeTempDir: async () => {},
+      },
     });
+    expect(result).not.toBeNull();
+    if (result === null) {
+      throw new Error("Expected planner result");
+    }
+    expect(result.command).toBe("models");
+    expect(result.reply).toBe("CLI fallback.");
+    expect(result.modelLabel).toBe("codex-cli/gpt-5.5");
 
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
     expect(runCliAgent).toHaveBeenCalledTimes(1);
-    expect(runCliAgent.mock.calls[0][0]).toMatchObject({
-      provider: "codex-cli",
-      model: "gpt-5.5",
-      cleanupCliLiveSessionOnRunEnd: true,
-    });
+    const firstCliCall = firstMockArg(runCliAgent);
+    expect(firstCliCall.provider).toBe("codex-cli");
+    expect(firstCliCall.model).toBe("gpt-5.5");
+    expect(firstCliCall.cleanupCliLiveSessionOnRunEnd).toBe(true);
   });
 });

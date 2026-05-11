@@ -57,11 +57,11 @@ describe("promptChannelAllowlist", () => {
     });
 
     expect(result).toEqual(["one", "two"]);
-    expect(prompter.text).toHaveBeenCalledWith(
-      expect.objectContaining({
-        initialValue: "alpha, beta",
-      }),
-    );
+    expect(prompter.text).toHaveBeenCalledWith({
+      message: "Test allowlist (comma-separated)",
+      placeholder: undefined,
+      initialValue: "alpha, beta",
+    });
   });
 });
 

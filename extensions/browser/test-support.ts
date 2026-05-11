@@ -12,4 +12,4 @@ export {
   isLiveTestEnabled,
 } from "openclaw/plugin-sdk/test-env";
 export type { FetchMock, TempHomeEnv } from "openclaw/plugin-sdk/test-env";
-export type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

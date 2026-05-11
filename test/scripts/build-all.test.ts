@@ -162,6 +162,18 @@ describe("resolveBuildAllSteps", () => {
     ]);
   });
 
+  it("uses a CLI startup profile without generated plugin assets", () => {
+    expect(resolveBuildAllSteps("cliStartup").map((step) => step.label)).toEqual([
+      "tsdown",
+      "check-cli-bootstrap-imports",
+      "runtime-postbuild",
+      "build-stamp",
+      "runtime-postbuild-stamp",
+      "write-cli-startup-metadata",
+      "write-cli-compat",
+    ]);
+  });
+
   it("writes the runtime postbuild stamp after the build stamp", () => {
     const labels = resolveBuildAllSteps("full").map((step) => step.label);
     expect(labels).toContain("runtime-postbuild");

@@ -40,6 +40,10 @@ vi.mock("../auto-reply/reply/directive-handling.levels.js", () => ({
 
 const { resolveDirectStatusReplyForSession } = await import("./command-status.runtime.js");
 
+function expectResolvedReasoningLevel(value: unknown, expected: string) {
+  expect((value as { resolvedReasoningLevel?: unknown }).resolvedReasoningLevel).toBe(expected);
+}
+
 describe("resolveDirectStatusReplyForSession", () => {
   beforeEach(() => {
     buildStatusReply.mockReset();
@@ -96,12 +100,8 @@ describe("resolveDirectStatusReplyForSession", () => {
     });
 
     expect(buildStatusReply).toHaveBeenCalledOnce();
-    expect(buildStatusReply.mock.calls[0]?.[0]).toMatchObject({
-      resolvedReasoningLevel: "off",
-    });
-    expect(result).toMatchObject({
-      resolvedReasoningLevel: "off",
-    });
+    expectResolvedReasoningLevel(buildStatusReply.mock.calls[0]?.[0], "off");
+    expectResolvedReasoningLevel(result, "off");
   });
 
   it("allows configured reasoning defaults for authorized direct /status senders", async () => {
@@ -138,9 +138,7 @@ describe("resolveDirectStatusReplyForSession", () => {
       defaultGroupActivation: () => "always",
     });
 
-    expect(result).toMatchObject({
-      resolvedReasoningLevel: "stream",
-    });
+    expectResolvedReasoningLevel(result, "stream");
   });
 
   it("hides configured reasoning defaults from unauthorized direct /status senders", async () => {
@@ -177,9 +175,7 @@ describe("resolveDirectStatusReplyForSession", () => {
       defaultGroupActivation: () => "always",
     });
 
-    expect(result).toMatchObject({
-      resolvedReasoningLevel: "off",
-    });
+    expectResolvedReasoningLevel(result, "off");
   });
 
   it("hides session reasoning state from unauthorized direct /status senders", async () => {
@@ -211,9 +207,7 @@ describe("resolveDirectStatusReplyForSession", () => {
       defaultGroupActivation: () => "always",
     });
 
-    expect(result).toMatchObject({
-      resolvedReasoningLevel: "off",
-    });
+    expectResolvedReasoningLevel(result, "off");
   });
 
   it("allows session reasoning state for authorized direct /status senders", async () => {
@@ -245,8 +239,6 @@ describe("resolveDirectStatusReplyForSession", () => {
       defaultGroupActivation: () => "always",
     });
 
-    expect(result).toMatchObject({
-      resolvedReasoningLevel: "stream",
-    });
+    expectResolvedReasoningLevel(result, "stream");
   });
 });

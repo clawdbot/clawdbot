@@ -138,13 +138,18 @@ describe("msteamsOutbound cfg threading", () => {
       options: ["Pizza", "Sushi"],
       maxSelections: 1,
     });
-    expect(mocks.createPoll).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "poll-1",
-        question: "Snack?",
-        options: ["Pizza", "Sushi"],
-      }),
-    );
+    const [pollRecord] = mocks.createPoll.mock.calls[0] ?? [];
+    expect(pollRecord).toEqual({
+      id: "poll-1",
+      question: "Snack?",
+      options: ["Pizza", "Sushi"],
+      maxSelections: 1,
+      createdAt: pollRecord?.createdAt,
+      conversationId: "conv-1",
+      messageId: "msg-poll-1",
+      votes: {},
+    });
+    expect(Number.isNaN(Date.parse(pollRecord?.createdAt))).toBe(false);
   });
 
   it("chunks outbound text without requiring MSTeams runtime initialization", () => {

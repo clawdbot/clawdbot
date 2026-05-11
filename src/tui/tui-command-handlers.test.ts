@@ -18,6 +18,24 @@ async function flushAsyncSelect() {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+function expectSendChatFields(
+  sendChat: ReturnType<typeof vi.fn>,
+  expected: { message: string; sessionId?: string; sessionKey?: string },
+) {
+  const call = sendChat.mock.calls.at(-1);
+  if (!call) {
+    throw new Error("expected gateway sendChat call");
+  }
+  const payload = call[0] as { message?: unknown; sessionId?: unknown; sessionKey?: unknown };
+  expect(payload.message).toBe(expected.message);
+  if (expected.sessionId !== undefined) {
+    expect(payload.sessionId).toBe(expected.sessionId);
+  }
+  if (expected.sessionKey !== undefined) {
+    expect(payload.sessionKey).toBe(expected.sessionKey);
+  }
+}
+
 function createHarness(params?: {
   sendChat?: ReturnType<typeof vi.fn>;
   getGatewayStatus?: ReturnType<typeof vi.fn>;
@@ -193,12 +211,10 @@ describe("tui command handlers", () => {
 
     expect(addSystem).not.toHaveBeenCalled();
     expect(addUser).toHaveBeenCalledWith("/unregistered-command");
-    expect(sendChat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        message: "/unregistered-command",
-      }),
-    );
+    expectSendChatFields(sendChat, {
+      sessionKey: "agent:main:main",
+      message: "/unregistered-command",
+    });
     expect(requestRender).toHaveBeenCalled();
   });
 
@@ -209,13 +225,11 @@ describe("tui command handlers", () => {
 
     await handleCommand("/status");
 
-    expect(sendChat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        sessionId: "session-before-relaunch",
-        message: "/status",
-      }),
-    );
+    expectSendChatFields(sendChat, {
+      sessionKey: "agent:main:main",
+      sessionId: "session-before-relaunch",
+      message: "/status",
+    });
   });
 
   it("opens a context mode selector for /context without sending immediately", async () => {
@@ -235,12 +249,10 @@ describe("tui command handlers", () => {
     selector?.onSelect?.({ value: "detail", label: "detail" });
     await flushAsyncSelect();
 
-    expect(sendChat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        message: "/context detail",
-      }),
-    );
+    expectSendChatFields(sendChat, {
+      sessionKey: "agent:main:main",
+      message: "/context detail",
+    });
     expect(closeOverlay).toHaveBeenCalledTimes(1);
   });
 
@@ -250,12 +262,10 @@ describe("tui command handlers", () => {
     await handleCommand("/context list");
 
     expect(openOverlay).not.toHaveBeenCalled();
-    expect(sendChat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        message: "/context list",
-      }),
-    );
+    expectSendChatFields(sendChat, {
+      sessionKey: "agent:main:main",
+      message: "/context list",
+    });
   });
 
   it("forwards /context help directly", async () => {
@@ -264,12 +274,10 @@ describe("tui command handlers", () => {
     await handleCommand("/context help");
 
     expect(openOverlay).not.toHaveBeenCalled();
-    expect(sendChat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        message: "/context help",
-      }),
-    );
+    expectSendChatFields(sendChat, {
+      sessionKey: "agent:main:main",
+      message: "/context help",
+    });
   });
 
   it("forwards /status to the shared gateway command path", async () => {
@@ -279,12 +287,10 @@ describe("tui command handlers", () => {
 
     expect(addSystem).not.toHaveBeenCalled();
     expect(addUser).toHaveBeenCalledWith("/status");
-    expect(sendChat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        message: "/status",
-      }),
-    );
+    expectSendChatFields(sendChat, {
+      sessionKey: "agent:main:main",
+      message: "/status",
+    });
   });
 
   it("keeps gateway diagnostics on /gateway-status", async () => {
@@ -376,11 +382,7 @@ describe("tui command handlers", () => {
     expect(state.activeChatRunId).toBe("run-main");
     expect(setActivityStatus).not.toHaveBeenCalledWith("sending");
     expect(setActivityStatus).not.toHaveBeenCalledWith("waiting");
-    expect(sendChat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "/btw what changed?",
-      }),
-    );
+    expectSendChatFields(sendChat, { message: "/btw what changed?" });
   });
 
   it("sends /side without hijacking the active main run", async () => {
@@ -395,11 +397,7 @@ describe("tui command handlers", () => {
     expect(noteLocalRunId).not.toHaveBeenCalled();
     expect(noteLocalBtwRunId).toHaveBeenCalledTimes(1);
     expect(state.activeChatRunId).toBe("run-main");
-    expect(sendChat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "/side what changed?",
-      }),
-    );
+    expectSendChatFields(sendChat, { message: "/side what changed?" });
   });
 
   it("creates unique session for /new and resets shared session for /reset", async () => {
@@ -559,10 +557,8 @@ describe("tui command handlers", () => {
     await handleCommand("/model");
 
     const selector = openOverlay.mock.calls[0]?.[0] as SelectableOverlay | undefined;
-    expect(selector?.items?.[0]).toMatchObject({
-      value: "openrouter/auto",
-      label: "openrouter/auto",
-    });
+    expect(selector?.items?.[0]?.value).toBe("openrouter/auto");
+    expect(selector?.items?.[0]?.label).toBe("openrouter/auto");
 
     selector?.onSelect?.({ value: "openrouter/auto", label: "openrouter/auto" });
     await flushAsyncSelect();

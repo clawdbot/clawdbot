@@ -37,33 +37,38 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "list", "--json"]);
 
-    expect(buildPluginRegistrySnapshotReport).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: {},
-        logger: expect.objectContaining({
-          info: expect.any(Function),
-          warn: expect.any(Function),
-          error: expect.any(Function),
-        }),
-      }),
-    );
-
-    expect(JSON.parse(runtimeLogs[0] ?? "null")).toEqual({
-      workspaceDir: "/workspace",
-      registry: {
-        source: "persisted",
-        diagnostics: [],
+    expect(buildPluginRegistrySnapshotReport).toHaveBeenCalledTimes(1);
+    const [reportOptions] = buildPluginRegistrySnapshotReport.mock.calls[0] as [
+      {
+        config?: unknown;
+        logger?: { info?: unknown; warn?: unknown; error?: unknown };
       },
-      plugins: [
-        expect.objectContaining({
-          id: "demo",
-          imported: true,
-          activated: true,
-          explicitlyEnabled: true,
-        }),
-      ],
-      diagnostics: [],
-    });
+    ];
+    expect(reportOptions?.config).toEqual({});
+    expect(reportOptions?.logger?.info).toBeTypeOf("function");
+    expect(reportOptions?.logger?.warn).toBeTypeOf("function");
+    expect(reportOptions?.logger?.error).toBeTypeOf("function");
+
+    const output = JSON.parse(runtimeLogs[0] ?? "null") as {
+      workspaceDir?: string;
+      registry?: { source?: string; diagnostics?: unknown[] };
+      plugins?: Array<{
+        id?: string;
+        imported?: boolean;
+        activated?: boolean;
+        explicitlyEnabled?: boolean;
+      }>;
+      diagnostics?: unknown[];
+    };
+    expect(output.workspaceDir).toBe("/workspace");
+    expect(output.registry?.source).toBe("persisted");
+    expect(output.registry?.diagnostics).toEqual([]);
+    expect(output.plugins).toHaveLength(1);
+    expect(output.plugins?.[0]?.id).toBe("demo");
+    expect(output.plugins?.[0]?.imported).toBe(true);
+    expect(output.plugins?.[0]?.activated).toBe(true);
+    expect(output.plugins?.[0]?.explicitlyEnabled).toBe(true);
+    expect(output.diagnostics).toEqual([]);
   });
 
   it("keeps doctor on a module-loading snapshot", async () => {

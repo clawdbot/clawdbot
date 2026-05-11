@@ -1,5 +1,8 @@
-// Shared config/runtime boundary for plugins that need config loading,
-// config writes, or session-store helpers without importing src internals.
+/**
+ * @deprecated Public SDK subpath has no bundled extension production imports.
+ * Prefer narrower config subpaths such as plugin-config-runtime,
+ * config-mutation, and runtime-config-snapshot.
+ */
 
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {

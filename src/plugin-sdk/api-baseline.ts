@@ -9,7 +9,7 @@ import {
   type PluginSdkDocCategory,
   type PluginSdkDocEntrypoint,
 } from "../../scripts/lib/plugin-sdk-doc-metadata.ts";
-import { pluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mjs";
+import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mjs";
 
 export type PluginSdkApiExportKind =
   | "class"
@@ -507,7 +507,7 @@ export function computePluginSdkApiBaselineHashFileContent(
 }
 
 function validateMetadata(): void {
-  const canonicalEntrypoints = new Set<string>(pluginSdkEntrypoints);
+  const canonicalEntrypoints = new Set<string>(publicPluginSdkEntrypoints);
   const metadataEntrypoints = new Set<string>(Object.keys(pluginSdkDocMetadata));
 
   for (const entrypoint of metadataEntrypoints) {

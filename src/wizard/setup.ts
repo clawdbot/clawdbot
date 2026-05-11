@@ -178,9 +178,10 @@ async function requireRiskAcknowledgement(params: {
 
 export async function runSetupWizard(
   opts: OnboardOptions,
-  runtime: RuntimeEnv = defaultRuntime,
+  runtime: RuntimeEnv | undefined,
   prompter: WizardPrompter,
 ) {
+  runtime ??= defaultRuntime;
   const onboardHelpers = await import("../commands/onboard-helpers.js");
   onboardHelpers.printWizardHeader(runtime);
   await prompter.intro("OpenClaw setup");

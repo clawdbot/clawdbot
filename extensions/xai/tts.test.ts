@@ -1,10 +1,18 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { isValidXaiTtsVoice, XAI_BASE_URL, XAI_TTS_VOICES, xaiTTS } from "./tts.js";
 
 describe("xai tts", () => {
   const originalFetch = globalThis.fetch;
+  let ssrfMock: { mockRestore: () => void } | undefined;
+
+  beforeEach(() => {
+    ssrfMock = mockPinnedHostnameResolution();
+  });
 
   afterEach(() => {
+    ssrfMock?.mockRestore();
+    ssrfMock = undefined;
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
   });

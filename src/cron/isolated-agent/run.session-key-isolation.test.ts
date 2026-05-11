@@ -38,17 +38,15 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
 
     expect(result.status).toBe("ok");
     expect(result.sessionKey).toBe("agent:default:cron:daily-monitor:run:isolated-run-1");
-    expect(resolveCronSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        forceNew: true,
-        sessionKey: "agent:default:cron:daily-monitor",
-      }),
+    expect(resolveCronSessionMock.mock.calls[0]?.[0]?.forceNew).toBe(true);
+    expect(resolveCronSessionMock.mock.calls[0]?.[0]?.sessionKey).toBe(
+      "agent:default:cron:daily-monitor",
     );
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      sessionId: "isolated-run-1",
-      sessionKey: "agent:default:cron:daily-monitor:run:isolated-run-1",
-    });
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.sessionId).toBe("isolated-run-1");
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.sessionKey).toBe(
+      "agent:default:cron:daily-monitor:run:isolated-run-1",
+    );
     expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.sessionKey).not.toBe(
       "agent:default:cron:daily-monitor",
     );
@@ -77,10 +75,10 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     expect(result.status).toBe("ok");
     expect(result.sessionKey).toBe("agent:default:project-alpha-monitor");
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      sessionId: "bound-run-1",
-      sessionKey: "agent:default:project-alpha-monitor",
-    });
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.sessionId).toBe("bound-run-1");
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.sessionKey).toBe(
+      "agent:default:project-alpha-monitor",
+    );
   });
 
   it("uses a run-scoped key for CLI isolated cron execution", async () => {
@@ -108,10 +106,10 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     expect(result.status).toBe("ok");
     expect(result.sessionKey).toBe("agent:default:cron:cli-monitor:run:isolated-cli-run-1");
     expect(runCliAgentMock).toHaveBeenCalledOnce();
-    expect(runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      sessionId: "isolated-cli-run-1",
-      sessionKey: "agent:default:cron:cli-monitor:run:isolated-cli-run-1",
-    });
+    expect(runCliAgentMock.mock.calls[0]?.[0]?.sessionId).toBe("isolated-cli-run-1");
+    expect(runCliAgentMock.mock.calls[0]?.[0]?.sessionKey).toBe(
+      "agent:default:cron:cli-monitor:run:isolated-cli-run-1",
+    );
     expect(runCliAgentMock.mock.calls[0]?.[0]?.sessionKey).not.toBe(
       "agent:default:cron:cli-monitor",
     );

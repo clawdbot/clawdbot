@@ -1,7 +1,7 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { withTimeout } from "openclaw/plugin-sdk/text-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createSlackWebClient } from "./client.js";
+import { formatSlackError } from "./errors.js";
 
 export type SlackProbe = BaseProbeResult & {
   status?: number | null;
@@ -31,10 +31,10 @@ export async function probeSlack(token: string, timeoutMs = 2500): Promise<Slack
       team: { id: result.team_id, name: result.team },
     };
   } catch (err) {
-    const message = formatErrorMessage(err);
+    const message = formatSlackError(err);
     const status =
-      typeof (err as { status?: number }).status === "number"
-        ? (err as { status?: number }).status
+      typeof (err as { statusCode?: number }).statusCode === "number"
+        ? (err as { statusCode?: number }).statusCode
         : null;
     return {
       ok: false,

@@ -185,14 +185,15 @@ describe("before_tool_call loop detection behavior", () => {
   }
 
   function expectToolLoopBlockedResult(result: unknown, expectedReason: string) {
-    expect(result).toMatchObject({
-      content: [{ type: "text", text: expect.stringContaining(expectedReason) }],
-      details: {
-        status: "blocked",
-        deniedReason: "tool-loop",
-        reason: expect.stringContaining(expectedReason),
-      },
-    });
+    const record = requireRecord(result, "tool result");
+    const content = requireArray(record.content, "tool result content");
+    const textContent = requireRecord(content[0], "tool result content item");
+    expect(textContent.type).toBe("text");
+    expect(String(textContent.text)).toContain(expectedReason);
+    const details = requireRecord(record.details, "tool result details");
+    expect(details.status).toBe("blocked");
+    expect(details.deniedReason).toBe("tool-loop");
+    expect(String(details.reason)).toContain(expectedReason);
   }
 
   async function expectUnblockedToolExecution(
@@ -201,11 +202,38 @@ describe("before_tool_call loop detection behavior", () => {
     params: unknown,
   ) {
     const result = await tool.execute(toolCallId, params, undefined, undefined);
-    expect(result).toMatchObject({
-      content: expect.any(Array),
-      details: expect.any(Object),
-    });
+    const record = requireRecord(result, "tool result");
+    requireArray(record.content, "tool result content");
+    requireRecord(record.details, "tool result details");
     return result;
+  }
+
+  function requireRecord(value: unknown, label: string): Record<string, unknown> {
+    expect(typeof value).toBe("object");
+    expect(value).not.toBeNull();
+    if (typeof value !== "object" || value === null) {
+      throw new Error(`${label} was not an object`);
+    }
+    return value as Record<string, unknown>;
+  }
+
+  function requireArray(value: unknown, label: string): unknown[] {
+    expect(Array.isArray(value)).toBe(true);
+    if (!Array.isArray(value)) {
+      throw new Error(`${label} was not an array`);
+    }
+    return value;
+  }
+
+  function expectEventFields(
+    event: DiagnosticEventPayload | DiagnosticToolLoopEvent | undefined,
+    fields: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const record = requireRecord(event, "diagnostic event");
+    for (const [key, value] of Object.entries(fields)) {
+      expect(record[key]).toEqual(value);
+    }
+    return record;
   }
 
   it("blocks known poll loops when no progress repeats", async () => {
@@ -371,7 +399,7 @@ describe("before_tool_call loop detection behavior", () => {
       const warningPingPong = emitted.find(
         (evt) => evt.level === "warning" && evt.detector === "ping_pong",
       );
-      expect(warningPingPong).toMatchObject({
+      expectEventFields(warningPingPong, {
         type: "tool.loop",
         level: "warning",
         action: "warn",
@@ -430,7 +458,7 @@ describe("before_tool_call loop detection behavior", () => {
         "tool.execution.started",
         "tool.execution.completed",
       ]);
-      expect(emitted[0]).toMatchObject({
+      const started = expectEventFields(emitted[0], {
         type: "tool.execution.started",
         runId: "run-1",
         sessionKey: "session-key",
@@ -440,19 +468,18 @@ describe("before_tool_call loop detection behavior", () => {
         paramsSummary: {
           kind: "object",
         },
-        trace: {
-          traceId: trace.traceId,
-          parentSpanId: trace.spanId,
-          spanId: expect.any(String),
-          traceFlags: trace.traceFlags,
-        },
       });
+      const startedTrace = requireRecord(started.trace, "started trace");
+      expect(startedTrace.traceId).toBe(trace.traceId);
+      expect(startedTrace.parentSpanId).toBe(trace.spanId);
+      expect(typeof startedTrace.spanId).toBe("string");
+      expect(startedTrace.traceFlags).toBe(trace.traceFlags);
       expect(emitted[0]?.trace).not.toBe(trace);
       expect(Object.isFrozen(emitted[0]?.trace)).toBe(true);
-      expect(emitted[1]).toMatchObject({
+      const completed = expectEventFields(emitted[1], {
         type: "tool.execution.completed",
-        durationMs: expect.any(Number),
       });
+      expect(typeof completed.durationMs).toBe("number");
       expect(JSON.stringify(emitted)).not.toContain("sk-1234567890abcdef1234567890abcdef");
       expect(JSON.stringify(emitted)).not.toContain("pwd");
     });
@@ -478,13 +505,13 @@ describe("before_tool_call loop detection behavior", () => {
         "tool.execution.started",
         "tool.execution.error",
       ]);
-      expect(emitted[1]).toMatchObject({
+      const errorEvent = expectEventFields(emitted[1], {
         type: "tool.execution.error",
         toolName: "read",
         toolCallId: "tool-call-error",
-        durationMs: expect.any(Number),
         errorCategory: "Error",
       });
+      expect(typeof errorEvent.durationMs).toBe("number");
       expect(JSON.stringify(emitted[1])).not.toContain("sk-1234567890abcdef1234567890abcdef");
     });
   });
@@ -516,7 +543,7 @@ describe("before_tool_call loop detection behavior", () => {
       });
       expect(execute).not.toHaveBeenCalled();
       expect(emitted.map((evt) => evt.type)).toEqual(["tool.execution.blocked"]);
-      expect(emitted[0]).toMatchObject({
+      expectEventFields(emitted[0], {
         type: "tool.execution.blocked",
         toolName: "read",
         toolCallId: "tool-call-blocked",
@@ -555,7 +582,7 @@ describe("before_tool_call loop detection behavior", () => {
         "tool.execution.started",
         "tool.execution.error",
       ]);
-      expect(emitted[1]).toMatchObject({
+      expectEventFields(emitted[1], {
         type: "tool.execution.error",
         toolName: "read",
         toolCallId: "tool-call-hostile-error",
@@ -583,7 +610,7 @@ describe("before_tool_call loop detection behavior", () => {
       ).rejects.toThrow("rate limited");
       await flush();
 
-      expect(emitted[1]).toMatchObject({
+      expectEventFields(emitted[1], {
         type: "tool.execution.error",
         errorCode: "429",
       });
@@ -611,10 +638,10 @@ describe("before_tool_call loop detection behavior", () => {
       await tool.execute("tool-call-proxy", params, undefined, undefined);
       await flush();
 
-      expect(emitted[0]).toMatchObject({
+      const started = expectEventFields(emitted[0], {
         type: "tool.execution.started",
-        paramsSummary: { kind: "object" },
       });
+      expect(started.paramsSummary).toEqual({ kind: "object" });
     });
   });
 });
@@ -625,6 +652,35 @@ describe("before_tool_call requireApproval handling", () => {
     runBeforeToolCall: ReturnType<typeof vi.fn>;
   };
   const mockCallGateway = vi.mocked(callGatewayTool);
+
+  function requireRecord(value: unknown, label: string): Record<string, unknown> {
+    expect(typeof value).toBe("object");
+    expect(value).not.toBeNull();
+    if (typeof value !== "object" || value === null) {
+      throw new Error(`${label} was not an object`);
+    }
+    return value as Record<string, unknown>;
+  }
+
+  function requireHookCall(
+    index: number,
+  ): [event: Record<string, unknown>, context: Record<string, unknown>] {
+    const call = hookRunner.runBeforeToolCall.mock.calls[index] as unknown[] | undefined;
+    expect(call).toBeDefined();
+    if (!call) {
+      throw new Error(`missing before_tool_call hook call ${index + 1}`);
+    }
+    return [
+      requireRecord(call[0], "before_tool_call event"),
+      requireRecord(call[1], "before_tool_call context"),
+    ];
+  }
+
+  function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+    for (const [key, value] of Object.entries(fields)) {
+      expect(record[key]).toEqual(value);
+    }
+  }
 
   beforeEach(() => {
     resetDiagnosticSessionStateForTest();
@@ -728,21 +784,20 @@ describe("before_tool_call requireApproval handling", () => {
     });
 
     expect(result.blocked).toBe(false);
-    const call = hookRunner.runBeforeToolCall.mock.calls[0];
-    expect(call?.[0]).toMatchObject({
+    const [event, toolContext] = requireHookCall(0);
+    expectRecordFields(event, {
       toolName: "exec",
       runId: "run-1",
       toolCallId: "tool-1",
     });
-    const toolContext = call?.[1] as { trace?: typeof trace } | undefined;
-    expect(toolContext).toMatchObject({
+    expectRecordFields(toolContext, {
       toolName: "exec",
       runId: "run-1",
       toolCallId: "tool-1",
-      trace,
     });
-    expect(toolContext?.trace).not.toBe(trace);
-    expect(Object.isFrozen(toolContext?.trace)).toBe(true);
+    expect(toolContext.trace).toEqual(trace);
+    expect(toolContext.trace).not.toBe(trace);
+    expect(Object.isFrozen(toolContext.trace)).toBe(true);
   });
 
   it("passes host-derived apply_patch paths to before_tool_call hooks", async () => {
@@ -768,24 +823,23 @@ describe("before_tool_call requireApproval handling", () => {
     });
 
     expect(result.blocked).toBe(false);
-    expect(hookRunner.runBeforeToolCall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "apply_patch",
-        runId: "run-patch",
-        toolCallId: "patch-1",
-        derivedPaths: [
-          path.join(cwd, "src/new.ts"),
-          path.join(cwd, "src/old.ts"),
-          path.join(cwd, "src/renamed.ts"),
-          path.join(cwd, "src/dead.ts"),
-        ],
-      }),
-      expect.objectContaining({
-        toolName: "apply_patch",
-        runId: "run-patch",
-        toolCallId: "patch-1",
-      }),
-    );
+    const [event, context] = requireHookCall(0);
+    expectRecordFields(event, {
+      toolName: "apply_patch",
+      runId: "run-patch",
+      toolCallId: "patch-1",
+      derivedPaths: [
+        path.join(cwd, "src/new.ts"),
+        path.join(cwd, "src/old.ts"),
+        path.join(cwd, "src/renamed.ts"),
+        path.join(cwd, "src/dead.ts"),
+      ],
+    });
+    expectRecordFields(context, {
+      toolName: "apply_patch",
+      runId: "run-patch",
+      toolCallId: "patch-1",
+    });
   });
 
   it("derives sandboxed apply_patch paths through the sandbox bridge", async () => {
@@ -820,13 +874,11 @@ describe("before_tool_call requireApproval handling", () => {
     });
 
     expect(result.blocked).toBe(false);
-    expect(hookRunner.runBeforeToolCall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "apply_patch",
-        derivedPaths: ["/host/sandbox/src/new.ts"],
-      }),
-      expect.anything(),
-    );
+    const [event] = requireHookCall(0);
+    expectRecordFields(event, {
+      toolName: "apply_patch",
+      derivedPaths: ["/host/sandbox/src/new.ts"],
+    });
   });
 
   it("does not fail hooks when sandbox path derivation rejects a target", async () => {
@@ -856,14 +908,13 @@ describe("before_tool_call requireApproval handling", () => {
     });
 
     expect(result.blocked).toBe(false);
-    expect(hookRunner.runBeforeToolCall).toHaveBeenCalledWith(
-      expect.not.objectContaining({ derivedPaths: expect.anything() }),
-      expect.objectContaining({
-        toolName: "apply_patch",
-        runId: "run-patch",
-        toolCallId: "patch-sandbox-rejected",
-      }),
-    );
+    const [event, context] = requireHookCall(0);
+    expect(event).not.toHaveProperty("derivedPaths");
+    expectRecordFields(context, {
+      toolName: "apply_patch",
+      runId: "run-patch",
+      toolCallId: "patch-sandbox-rejected",
+    });
   });
 
   it("skips derived path extraction when no policies or hooks can consume it", async () => {
@@ -939,13 +990,11 @@ describe("before_tool_call requireApproval handling", () => {
 
     expect(result).toEqual({ blocked: false, params: { input: rewrittenPatch } });
     expect(seenByLaterPolicy).toEqual([[path.join(cwd, "src/new.ts")]]);
-    expect(hookRunner.runBeforeToolCall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: { input: rewrittenPatch },
-        derivedPaths: [path.join(cwd, "src/new.ts")],
-      }),
-      expect.anything(),
-    );
+    const [event] = requireHookCall(0);
+    expectRecordFields(event, {
+      params: { input: rewrittenPatch },
+      derivedPaths: [path.join(cwd, "src/new.ts")],
+    });
   });
 
   it("calls gateway RPC and unblocks on allow-once", async () => {
@@ -970,17 +1019,15 @@ describe("before_tool_call requireApproval handling", () => {
 
     expect(result.blocked).toBe(false);
     expect(mockCallGateway).toHaveBeenCalledTimes(2);
-    expect(mockCallGateway).toHaveBeenCalledWith(
-      "plugin.approval.request",
-      expect.any(Object),
-      expect.objectContaining({ twoPhase: true }),
-      { expectFinal: false },
-    );
-    expect(mockCallGateway).toHaveBeenCalledWith(
-      "plugin.approval.waitDecision",
-      expect.any(Object),
-      { id: "server-id-1" },
-    );
+    const requestCall = mockCallGateway.mock.calls[0];
+    expect(requestCall?.[0]).toBe("plugin.approval.request");
+    requireRecord(requestCall?.[1], "approval request gateway client");
+    expect(requireRecord(requestCall?.[2], "approval request params").twoPhase).toBe(true);
+    expect(requestCall?.[3]).toEqual({ expectFinal: false });
+    const waitCall = mockCallGateway.mock.calls[1];
+    expect(waitCall?.[0]).toBe("plugin.approval.waitDecision");
+    requireRecord(waitCall?.[1], "approval wait gateway client");
+    expect(waitCall?.[2]).toEqual({ id: "server-id-1" });
   });
 
   it("blocks on deny decision", async () => {

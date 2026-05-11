@@ -5,6 +5,7 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { MessageToolsConfig } from "../../config/types.tools.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { formatTargetDisplay, lookupDirectoryDisplay } from "./target-resolver.js";
@@ -88,12 +89,92 @@ function isCrossContextTarget(params: {
   return normalizedTarget !== normalizedCurrent;
 }
 
+function resolveAgentMessageToolsConfig(
+  cfg: OpenClawConfig,
+  agentId?: string | null,
+): MessageToolsConfig | undefined {
+  const trimmedAgentId = agentId?.trim();
+  const globalConfig = cfg.tools?.message;
+  if (!trimmedAgentId) {
+    return globalConfig;
+  }
+  const agentConfig = cfg.agents?.list?.find((entry) => entry.id === trimmedAgentId)?.tools
+    ?.message;
+  if (!agentConfig) {
+    return globalConfig;
+  }
+  return {
+    ...globalConfig,
+    ...agentConfig,
+    crossContext:
+      globalConfig?.crossContext || agentConfig.crossContext
+        ? {
+            ...globalConfig?.crossContext,
+            ...agentConfig.crossContext,
+            marker:
+              globalConfig?.crossContext?.marker || agentConfig.crossContext?.marker
+                ? {
+                    ...globalConfig?.crossContext?.marker,
+                    ...agentConfig.crossContext?.marker,
+                  }
+                : undefined,
+          }
+        : undefined,
+    broadcast:
+      globalConfig?.broadcast || agentConfig.broadcast
+        ? {
+            ...globalConfig?.broadcast,
+            ...agentConfig.broadcast,
+          }
+        : undefined,
+    actions:
+      globalConfig?.actions || agentConfig.actions
+        ? {
+            ...globalConfig?.actions,
+            ...agentConfig.actions,
+          }
+        : undefined,
+  };
+}
+
+export function resolveEffectiveMessageToolsConfig(params: {
+  cfg: OpenClawConfig;
+  agentId?: string | null;
+}): MessageToolsConfig | undefined {
+  return resolveAgentMessageToolsConfig(params.cfg, params.agentId);
+}
+
+export function resolveAllowedMessageActions(params: {
+  cfg: OpenClawConfig;
+  agentId?: string | null;
+}): string[] | undefined {
+  const allow = resolveEffectiveMessageToolsConfig(params)?.actions?.allow;
+  if (!allow) {
+    return undefined;
+  }
+  const normalized = allow.map((entry) => entry.trim()).filter(Boolean);
+  return normalized.length > 0 ? Array.from(new Set(normalized)) : undefined;
+}
+
+export function enforceMessageActionAllowlist(params: {
+  cfg: OpenClawConfig;
+  agentId?: string | null;
+  action: ChannelMessageActionName;
+}): void {
+  const allowed = resolveAllowedMessageActions(params);
+  if (!allowed || allowed.includes(params.action)) {
+    return;
+  }
+  throw new Error(`Message action "${params.action}" is disabled for this agent.`);
+}
+
 export function enforceCrossContextPolicy(params: {
   channel: ChannelId;
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
   toolContext?: ChannelThreadingToolContext;
   cfg: OpenClawConfig;
+  agentId?: string | null;
 }): void {
   const currentTarget = params.toolContext?.currentChannelId?.trim();
   if (!currentTarget) {
@@ -103,15 +184,17 @@ export function enforceCrossContextPolicy(params: {
     return;
   }
 
-  if (params.cfg.tools?.message?.allowCrossContextSend) {
+  const messageConfig = resolveEffectiveMessageToolsConfig({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  if (messageConfig?.allowCrossContextSend) {
     return;
   }
 
   const currentProvider = params.toolContext?.currentChannelProvider;
-  const allowWithinProvider =
-    params.cfg.tools?.message?.crossContext?.allowWithinProvider !== false;
-  const allowAcrossProviders =
-    params.cfg.tools?.message?.crossContext?.allowAcrossProviders === true;
+  const allowWithinProvider = messageConfig?.crossContext?.allowWithinProvider !== false;
+  const allowAcrossProviders = messageConfig?.crossContext?.allowAcrossProviders === true;
 
   if (currentProvider && currentProvider !== params.channel) {
     if (!allowAcrossProviders) {
@@ -146,6 +229,7 @@ export async function buildCrossContextDecoration(params: {
   target: string;
   toolContext?: ChannelThreadingToolContext;
   accountId?: string | null;
+  agentId?: string | null;
 }): Promise<CrossContextDecoration | null> {
   if (!params.toolContext?.currentChannelId) {
     return null;
@@ -158,7 +242,10 @@ export async function buildCrossContextDecoration(params: {
     return null;
   }
 
-  const markerConfig = params.cfg.tools?.message?.crossContext?.marker;
+  const markerConfig = resolveEffectiveMessageToolsConfig({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  })?.crossContext?.marker;
   if (markerConfig?.enabled === false) {
     return null;
   }

@@ -128,6 +128,43 @@ describe("createDirectRoomTracker", () => {
     expect(client.getJoinedRoomMembers).toHaveBeenCalledWith("!room:example.org");
   });
 
+  it("promotes strict unmapped rooms when the per-room fallback gate allows it", async () => {
+    const client = createMockClient({ isDm: false, dmCacheAvailable: true });
+    const tracker = createDirectRoomTracker(client, {
+      canPromoteUnmappedStrictRoom: () => true,
+    });
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(true);
+
+    expect(client.setAccountData).toHaveBeenCalledWith(
+      EventType.Direct,
+      expect.objectContaining({
+        "@alice:example.org": ["!room:example.org"],
+      }),
+    );
+  });
+
+  it("does not promote strict unmapped rooms when the per-room fallback gate vetoes it", async () => {
+    const client = createMockClient({ isDm: false, dmCacheAvailable: true });
+    const tracker = createDirectRoomTracker(client, {
+      canPromoteUnmappedStrictRoom: () => false,
+    });
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
+
+    expect(client.setAccountData).not.toHaveBeenCalled();
+  });
+
   it("falls back to strict 2-member membership before m.direct account data is available", async () => {
     const client = createMockClient({ isDm: false, dmCacheAvailable: false });
     const tracker = createDirectRoomTracker(client);
@@ -245,12 +282,9 @@ describe("createDirectRoomTracker", () => {
       }),
     ).resolves.toBe(true);
 
-    expect(client.setAccountData).toHaveBeenCalledWith(
-      EventType.Direct,
-      expect.objectContaining({
-        "@alice:example.org": ["!room:example.org"],
-      }),
-    );
+    expect(client.setAccountData).toHaveBeenCalledWith(EventType.Direct, {
+      "@alice:example.org": ["!room:example.org"],
+    });
   });
 
   it("keeps recent invite candidates across room invalidation", async () => {

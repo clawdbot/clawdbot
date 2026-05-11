@@ -28,6 +28,14 @@ function textOf(result: ProcessToolResult): string {
   return item?.type === "text" ? item.text : "";
 }
 
+function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+  expect(record).toBeDefined();
+  const actual = record as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+}
+
 function installWritableStdin(
   session: ReturnType<typeof createProcessSessionFixture>,
   state?: { writableEnded?: boolean; writableFinished?: boolean; destroyed?: boolean },
@@ -68,7 +76,7 @@ describe("process input-wait hints", () => {
     expect(text).toContain("Name? ");
     expect(text).toContain("No new output for 20s");
     expect(text).toContain("Use process write, send-keys, submit, or paste to provide input.");
-    expect(result.details).toMatchObject({
+    expectRecordFields(result.details, {
       status: "running",
       sessionId: "sess-log-hint",
       stdinWritable: true,
@@ -98,7 +106,7 @@ describe("process input-wait hints", () => {
 
     expect(textOf(result)).toContain("(no new output)");
     expect(textOf(result)).toContain("may be waiting for input");
-    expect(result.details).toMatchObject({
+    expectRecordFields(result.details, {
       status: "running",
       sessionId: "sess-poll",
       stdinWritable: true,
@@ -126,7 +134,7 @@ describe("process input-wait hints", () => {
     expect(textOf(result)).toContain("sess-list");
     expect(textOf(result)).toContain("[input-wait]");
     const sessions = (result.details as { sessions?: Array<Record<string, unknown>> }).sessions;
-    expect(sessions?.[0]).toMatchObject({
+    expectRecordFields(sessions?.[0], {
       sessionId: "sess-list",
       stdinWritable: true,
       waitingForInput: true,
@@ -156,7 +164,7 @@ describe("process input-wait hints", () => {
     expect(textOf(result)).toContain("Password: ");
     expect(textOf(result)).toContain("No new output for 25s");
     expect(textOf(result)).toContain("Use process write, send-keys, submit, or paste");
-    expect(result.details).toMatchObject({
+    expectRecordFields(result.details, {
       status: "running",
       sessionId: "sess-log",
       stdinWritable: true,
@@ -183,7 +191,7 @@ describe("process input-wait hints", () => {
       sessionId: "sess-ended",
     });
     expect(textOf(log)).not.toContain("provide input");
-    expect(log.details).toMatchObject({
+    expectRecordFields(log.details, {
       status: "running",
       stdinWritable: false,
       waitingForInput: false,
@@ -195,7 +203,7 @@ describe("process input-wait hints", () => {
       data: "answer\n",
     });
     expect(textOf(write)).toContain("stdin is not writable");
-    expect(write.details).toMatchObject({ status: "failed" });
+    expectRecordFields(write.details, { status: "failed" });
   });
 
   it("can read finished session logs without exposing input controls", async () => {
@@ -216,7 +224,7 @@ describe("process input-wait hints", () => {
 
     expect(textOf(result)).toContain("done");
     expect(textOf(result)).not.toContain("provide input");
-    expect(result.details).toMatchObject({
+    expectRecordFields(result.details, {
       status: "completed",
       sessionId: "sess-finished",
       exitCode: 0,

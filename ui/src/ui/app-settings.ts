@@ -618,7 +618,7 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
   updateBrowserHistory(url, replace);
 }
 
-export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, replace: boolean) {
+export function syncUrlWithSessionKey(_host: SettingsHost, sessionKey: string, replace: boolean) {
   const href = typeof window === "undefined" ? undefined : window.location?.href;
   if (!href) {
     return;

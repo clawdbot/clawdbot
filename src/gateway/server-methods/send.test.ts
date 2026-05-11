@@ -774,6 +774,28 @@ describe("gateway send mirroring", () => {
     expect(deliveryCall()?.threadId).toBe("1710000000.9999");
   });
 
+  it("forwards gateway send delivery options to outbound delivery", async () => {
+    mockDeliverySuccess("m-options");
+
+    await runSend({
+      to: "channel:C1",
+      message: "<b>report</b>",
+      channel: "slack",
+      forceDocument: true,
+      silent: true,
+      parseMode: "HTML",
+      idempotencyKey: "idem-send-options",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        forceDocument: true,
+        silent: true,
+        formatting: { parseMode: "HTML" },
+      }),
+    );
+  });
+
   it("updates mirror session keys and delivery thread ids when Slack routing derives a thread", async () => {
     mockDeliverySuccess("m-thread-derived");
     mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
@@ -1033,6 +1055,50 @@ describe("gateway send mirroring", () => {
       undefined,
       { channel: "whatsapp" },
     );
+  });
+
+  it("passes agent-scoped media roots to gateway message actions", async () => {
+    let capturedMediaLocalRoots: readonly string[] | undefined;
+    const mediaActionPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram media action dispatch test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["sendAttachment"] }),
+        supportsAction: ({ action }) => action === "sendAttachment",
+        handleAction: async ({ mediaLocalRoots }) => {
+          capturedMediaLocalRoots = mediaLocalRoots;
+          return jsonResult({ ok: true });
+        },
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(mediaActionPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: mediaActionPlugin }]),
+      "send-test-message-action-media-roots",
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "sendAttachment",
+      params: { chatId: "123", mediaUrl: `${TEST_AGENT_WORKSPACE}/render.png` },
+      agentId: "work",
+      idempotencyKey: "idem-message-action-media-roots",
+    });
+
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(capturedMediaLocalRoots).toEqual(expect.arrayContaining([TEST_AGENT_WORKSPACE]));
   });
 
   it("forces senderIsOwner=false for narrowly-scoped callers but honors it for full operators", async () => {

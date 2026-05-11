@@ -4,13 +4,13 @@ import { dispatchOutbound } from "./outbound-dispatch.js";
 import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
 
 const sendVoiceMessageMock = vi.hoisted(() =>
-  vi.fn(async () => ({ id: "voice-1", timestamp: "2026-04-25T00:00:00.000Z" })),
+  vi.fn(async (_params: unknown) => ({ id: "voice-1", timestamp: "2026-04-25T00:00:00.000Z" })),
 );
 const sendMediaMock = vi.hoisted(() =>
-  vi.fn(async () => ({ id: "media-1", timestamp: "2026-04-25T00:00:00.000Z" })),
+  vi.fn(async (_params: unknown) => ({ id: "media-1", timestamp: "2026-04-25T00:00:00.000Z" })),
 );
 const sendTextMock = vi.hoisted(() =>
-  vi.fn(async () => ({ id: "text-1", timestamp: "2026-04-25T00:00:00.000Z" })),
+  vi.fn(async (_params: unknown) => ({ id: "text-1", timestamp: "2026-04-25T00:00:00.000Z" })),
 );
 const audioFileToSilkBase64Mock = vi.hoisted(() => vi.fn(async () => "silk-base64"));
 
@@ -204,14 +204,13 @@ describe("dispatchOutbound", () => {
       accountId: "qq-main",
     });
     expect(audioFileToSilkBase64Mock).toHaveBeenCalledWith("/tmp/openclaw-qqbot/tts.wav");
-    expect(sendMediaMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "voice",
-        source: { base64: "silk-base64" },
-        msgId: "msg-1",
-        ttsText: "read this aloud",
-      }),
-    );
+    const sentMedia = sendMediaMock.mock.calls[0]?.[0] as
+      | { kind?: string; source?: unknown; msgId?: string; ttsText?: string }
+      | undefined;
+    expect(sentMedia?.kind).toBe("voice");
+    expect(sentMedia?.source).toEqual({ base64: "silk-base64" });
+    expect(sentMedia?.msgId).toBe("msg-1");
+    expect(sentMedia?.ttsText).toBe("read this aloud");
     expect(sendTextMock).not.toHaveBeenCalled();
   });
 

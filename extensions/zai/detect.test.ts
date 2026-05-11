@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectZaiEndpoint } from "../plugins/provider-zai-endpoint.js";
+import { detectZaiEndpoint } from "./detect.js";
 
 type FetchResponse = { status: number; body?: unknown };
 
@@ -76,7 +76,9 @@ describe("detectZaiEndpoint", () => {
             status: 404,
             body: { error: { message: "glm-5.1 unavailable" } },
           },
-          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-4.7": { status: 200 },
+          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-4.7": {
+            status: 200,
+          },
         },
         expected: { endpoint: "coding-cn", modelId: "glm-4.7" },
       },
@@ -89,7 +91,9 @@ describe("detectZaiEndpoint", () => {
           "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.1": {
             status: 401,
           },
-          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-4.7": { status: 401 },
+          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-4.7": {
+            status: 401,
+          },
         },
         expected: null,
       },

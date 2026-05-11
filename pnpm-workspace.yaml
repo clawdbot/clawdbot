@@ -32,22 +32,64 @@ minimumReleaseAgeExclude:
   - "sqlite-vec"
   - "sqlite-vec-*"
 
-onlyBuiltDependencies:
-  - "@openclaw/fs-safe"
-  - "@google/genai"
-  - "@lydell/node-pty"
-  - "@matrix-org/matrix-sdk-crypto-nodejs"
-  - "@napi-rs/canvas"
-  - "@tloncorp/api"
-  - "@whiskeysockets/baileys"
-  - "@whiskeysockets/libsignal-node"
-  - authenticate-pam
-  - esbuild
-  - node-llama-cpp
-  - protobufjs
-  - sharp
+nodeLinker: hoisted
 
-ignoredBuiltDependencies:
-  - "@discordjs/opus"
-  - koffi
-  - tree-sitter-bash
+overrides:
+  "@anthropic-ai/sdk": 0.95.1
+  hono: 4.12.18
+  "@hono/node-server": 1.19.14
+  "@aws-sdk/client-bedrock-runtime": 3.1045.0
+  axios: 1.16.0
+  fast-uri: 3.1.2
+  follow-redirects: 1.16.0
+  defu: 6.1.5
+  fast-xml-parser: 5.7.0
+  request: "npm:@cypress/request@3.0.10"
+  request-promise: "npm:@cypress/request-promise@5.0.0"
+  basic-ftp: 6.0.1
+  file-type: 22.0.1
+  form-data: 2.5.4
+  ip-address: 10.2.0
+  minimatch: 10.2.5
+  path-to-regexp: 8.4.0
+  qs: 6.14.2
+  node-domexception: "npm:@nolyfill/domexception@1.0.28"
+  typebox: 1.1.38
+  tar: 7.5.15
+  tough-cookie: 4.1.3
+  yauzl: 3.2.1
+  protobufjs: 7.5.5
+  uuid: 14.0.0
+
+allowBuilds:
+  "@openclaw/fs-safe": true
+  "@google/genai": true
+  "@lydell/node-pty": true
+  "@matrix-org/matrix-sdk-crypto-nodejs": true
+  "@napi-rs/canvas": true
+  "@tloncorp/api": true
+  "@tloncorp/tlon-skill": true
+  baileys: true
+  "@whiskeysockets/libsignal-node": true
+  authenticate-pam: true
+  "@discordjs/opus": false
+  esbuild: true
+  koffi: false
+  node-llama-cpp: true
+  protobufjs: true
+  sharp: true
+  tree-sitter-bash: false
+  openclaw: true
+
+packageExtensions:
+  "@earendil-works/pi-coding-agent":
+    dependencies:
+      strip-ansi: ^7.2.0
+
+peerDependencyRules:
+  allowedVersions:
+    "prism-media>opusscript": "^0.0.8 || ^0.1.1"
+
+patchedDependencies:
+  "baileys@7.0.0-rc10": "patches/baileys@7.0.0-rc10.patch"
+  "@agentclientprotocol/claude-agent-acp@0.33.1": "patches/@agentclientprotocol__claude-agent-acp@0.33.1.patch"

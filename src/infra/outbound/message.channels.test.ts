@@ -321,6 +321,23 @@ describe("gateway url override hardening", () => {
         },
       },
     },
+    {
+      name: "forwards gateway delivery options in send params",
+      params: {
+        threadId: "topic456",
+        forceDocument: true,
+        silent: true,
+        parseMode: "HTML" as const,
+      },
+      expected: {
+        params: {
+          threadId: "topic456",
+          forceDocument: true,
+          silent: true,
+          parseMode: "HTML",
+        },
+      },
+    },
   ])("$name", async ({ params, expected }) => {
     expect(await sendThreadChatGatewayMessage(params)).toMatchObject(expected);
   });

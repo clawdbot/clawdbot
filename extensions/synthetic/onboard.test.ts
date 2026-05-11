@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
 import { SYNTHETIC_DEFAULT_MODEL_REF as SYNTHETIC_DEFAULT_MODEL_REF_PUBLIC } from "./api.js";
+import { buildSyntheticModelDefinition, SYNTHETIC_MODEL_CATALOG } from "./models.js";
 import {
   applySyntheticConfig,
   applySyntheticProviderConfig,
@@ -13,9 +14,22 @@ import {
 describe("synthetic onboard", () => {
   it("adds synthetic provider with correct settings", () => {
     const cfg = applySyntheticConfig({});
-    expect(cfg.models?.providers?.synthetic).toMatchObject({
+    const provider = cfg.models?.providers?.synthetic;
+    expect(provider?.baseUrl).toBe("https://api.synthetic.new/anthropic");
+    expect(provider?.api).toBe("anthropic-messages");
+    expect(provider?.models.map((model) => model.id)).toContain(
+      SYNTHETIC_DEFAULT_MODEL_REF.replace(/^synthetic\//, ""),
+    );
+    expect(cfg.agents?.defaults?.models?.[SYNTHETIC_DEFAULT_MODEL_REF]).toEqual({
+      alias: "MiniMax M2.5",
+    });
+    expect(cfg.agents?.defaults?.model).toEqual({
+      primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.5",
+    });
+    expect(provider).toEqual({
       baseUrl: "https://api.synthetic.new/anthropic",
       api: "anthropic-messages",
+      models: SYNTHETIC_MODEL_CATALOG.map(buildSyntheticModelDefinition),
     });
     expectProviderOnboardPrimaryModel({
       applyConfig: applySyntheticConfig,

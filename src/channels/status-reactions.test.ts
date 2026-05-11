@@ -373,8 +373,13 @@ describe("createStatusReactionController", () => {
     await controller.setDone();
 
     const removeEmojis = collectEmojisForMethod(calls, "remove");
-    expect(removeEmojis).toEqual(expect.arrayContaining(["👀", DEFAULT_EMOJIS.thinking, "🛠️"]));
-    expect(removeEmojis).not.toContain(DEFAULT_EMOJIS.done);
+    expect(removeEmojis).toEqual([
+      "👀",
+      DEFAULT_EMOJIS.stallSoft,
+      DEFAULT_EMOJIS.stallHard,
+      DEFAULT_EMOJIS.thinking,
+      "🛠️",
+    ]);
   });
 
   it("should not remove reactions on terminal state when adapter lacks removeReaction", async () => {

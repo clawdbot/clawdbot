@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddedPiQueueMessageOutcome } from "./pi-embedded-runner/runs.js";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
@@ -14,8 +15,13 @@ const resolveStorePathMock = vi.fn((_store: unknown, _options: unknown) => "/tmp
 const resolveMainSessionKeyMock = vi.fn((_cfg: unknown) => "agent:main:main");
 const readLatestAssistantReplyMock = vi.fn(async (_params?: unknown) => "raw subagent reply");
 const isEmbeddedPiRunActiveMock = vi.fn((_sessionId: string) => false);
-const queueEmbeddedPiMessageMock = vi.fn(
-  (_sessionId: string, _text: string, _options?: unknown) => false,
+const queueEmbeddedPiMessageWithOutcomeMock = vi.fn(
+  (sessionId: string, _text: string, _options?: unknown): EmbeddedPiQueueMessageOutcome => ({
+    queued: false,
+    sessionId,
+    reason: "not_streaming" as const,
+    gatewayHealth: "live" as const,
+  }),
 );
 const waitForEmbeddedPiRunEndMock = vi.fn(async (_sessionId: string, _timeoutMs?: number) => true);
 let mockConfig: ReturnType<(typeof import("../config/config.js"))["getRuntimeConfig"]> = {
@@ -43,8 +49,6 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
   getRuntimeConfig: () => mockConfig,
   loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
-  queueEmbeddedPiMessage: (sessionId: string, text: string, options?: unknown) =>
-    queueEmbeddedPiMessageMock(sessionId, text, options),
   resolveAgentIdFromSessionKey: (sessionKey: string) =>
     resolveAgentIdFromSessionKeyMock(sessionKey),
   resolveMainSessionKey: (cfg: unknown) => resolveMainSessionKeyMock(cfg),
@@ -67,8 +71,8 @@ vi.mock("./subagent-announce-delivery.runtime.js", () =>
     resolveMainSessionKey: (cfg: unknown) => resolveMainSessionKeyMock(cfg),
     resolveStorePath: (store: unknown, options: unknown) => resolveStorePathMock(store, options),
     isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
-    queueEmbeddedPiMessage: (sessionId: string, text: string, options?: unknown) =>
-      queueEmbeddedPiMessageMock(sessionId, text, options),
+    queueEmbeddedPiMessageWithOutcome: (sessionId: string, text: string, options?: unknown) =>
+      queueEmbeddedPiMessageWithOutcomeMock(sessionId, text, options),
   }),
 );
 
@@ -100,7 +104,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
       params.requesterSessionOrigin?.channel;
 
     if (sessionId && queueChannel === "discord" && isEmbeddedPiRunActiveMock(sessionId)) {
-      queueEmbeddedPiMessageMock(
+      queueEmbeddedPiMessageWithOutcomeMock(
         sessionId,
         `[Internal task completion event]\n${params.triggerMessage}`,
         { steeringMode: "all" },
@@ -229,7 +233,12 @@ describe("subagent announce seam flow", () => {
     resolveMainSessionKeyMock.mockReset().mockImplementation(() => "agent:main:main");
     readLatestAssistantReplyMock.mockReset().mockResolvedValue("raw subagent reply");
     isEmbeddedPiRunActiveMock.mockReset().mockReturnValue(false);
-    queueEmbeddedPiMessageMock.mockReset().mockReturnValue(false);
+    queueEmbeddedPiMessageWithOutcomeMock.mockReset().mockImplementation((sessionId: string) => ({
+      queued: false,
+      sessionId,
+      reason: "not_streaming",
+      gatewayHealth: "live",
+    }));
     waitForEmbeddedPiRunEndMock.mockReset().mockResolvedValue(true);
     mockConfig = {
       session: {
@@ -338,7 +347,12 @@ describe("subagent announce seam flow", () => {
       },
     }));
     isEmbeddedPiRunActiveMock.mockReturnValue(true);
-    queueEmbeddedPiMessageMock.mockReturnValue(true);
+    queueEmbeddedPiMessageWithOutcomeMock.mockImplementation((sessionId: string) => ({
+      queued: true,
+      sessionId,
+      target: "embedded_run",
+      gatewayHealth: "live",
+    }));
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
@@ -355,11 +369,11 @@ describe("subagent announce seam flow", () => {
     });
 
     expect(didAnnounce).toBe(true);
-    expect(queueEmbeddedPiMessageMock).toHaveBeenCalledWith(
-      "session-origin-provider-steer",
-      expect.stringContaining("[Internal task completion event]"),
-      { steeringMode: "all" },
-    );
+    const queuedCall = queueEmbeddedPiMessageWithOutcomeMock.mock.calls[0];
+    expect(queuedCall?.[0]).toBe("session-origin-provider-steer");
+    expect(queuedCall?.[1]).toContain("[Internal task completion event]");
+    expect(queuedCall?.[1]).toContain("task: do thing");
+    expect(queuedCall?.[2]).toEqual({ steeringMode: "all" });
     expect(agentSpy).not.toHaveBeenCalled();
   });
 

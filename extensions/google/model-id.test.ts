@@ -30,6 +30,12 @@ describe("google model id helpers", () => {
     expect(normalizeGoogleModelId("gemini-3.1-pro-preview")).toBe("gemini-3.1-pro-preview");
   });
 
+  it("normalizes provider-prefixed Gemini 3 Pro config ids", () => {
+    expect(normalizeGoogleModelId("google/gemini-3-pro-preview")).toBe(
+      "google/gemini-3.1-pro-preview",
+    );
+  });
+
   it("adds the preview suffix for gemini 3.1 flash-lite", () => {
     expect(normalizeGoogleModelId("gemini-3.1-flash-lite")).toBe("gemini-3.1-flash-lite-preview");
   });

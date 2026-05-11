@@ -67,6 +67,22 @@ async function runBrowserRequest(params: Record<string, unknown>) {
   return { respond, nodeRegistry };
 }
 
+function invokeParams(nodeRegistry: ReturnType<typeof createContext>) {
+  const call = (nodeRegistry.invoke.mock.calls as unknown[][])[0];
+  if (!call) {
+    throw new Error("expected browser node invoke call");
+  }
+  return call[0] as { command?: string; params?: Record<string, unknown> };
+}
+
+function firstRespondCall(respond: ReturnType<typeof vi.fn>): RespondCall {
+  const call = respond.mock.calls[0] as RespondCall | undefined;
+  if (!call) {
+    throw new Error("expected respond call");
+  }
+  return call;
+}
+
 describe("browser.request profile selection", () => {
   beforeEach(() => {
     loadConfigMock.mockReturnValue({
@@ -83,16 +99,10 @@ describe("browser.request profile selection", () => {
       body: { profile: "work", request: { action: "click", ref: "btn1" } },
     });
 
-    expect(nodeRegistry.invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "browser.proxy",
-        params: expect.objectContaining({
-          profile: "work",
-        }),
-      }),
-    );
-    const call = respond.mock.calls[0] as RespondCall | undefined;
-    expect(call?.[0]).toBe(true);
+    const invoke = invokeParams(nodeRegistry);
+    expect(invoke.command).toBe("browser.proxy");
+    expect(invoke.params?.profile).toBe("work");
+    expect(firstRespondCall(respond)[0]).toBe(true);
   });
 
   it("prefers query profile over body profile when both are present", async () => {
@@ -103,13 +113,7 @@ describe("browser.request profile selection", () => {
       body: { profile: "work", request: { action: "click", ref: "btn1" } },
     });
 
-    expect(nodeRegistry.invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({
-          profile: "chrome",
-        }),
-      }),
-    );
+    expect(invokeParams(nodeRegistry).params?.profile).toBe("chrome");
   });
 
   it.each([
@@ -151,13 +155,10 @@ describe("browser.request profile selection", () => {
     });
 
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: "browser.request cannot mutate persistent browser profiles",
-      }),
-    );
+    const [ok, payload, error] = firstRespondCall(respond);
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error?.message).toBe("browser.request cannot mutate persistent browser profiles");
   });
 
   it("allows non-mutating profile reads", async () => {
@@ -166,16 +167,10 @@ describe("browser.request profile selection", () => {
       path: "/profiles",
     });
 
-    expect(nodeRegistry.invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "browser.proxy",
-        params: expect.objectContaining({
-          method: "GET",
-          path: "/profiles",
-        }),
-      }),
-    );
-    const call = respond.mock.calls[0] as RespondCall | undefined;
-    expect(call?.[0]).toBe(true);
+    const invoke = invokeParams(nodeRegistry);
+    expect(invoke.command).toBe("browser.proxy");
+    expect(invoke.params?.method).toBe("GET");
+    expect(invoke.params?.path).toBe("/profiles");
+    expect(firstRespondCall(respond)[0]).toBe(true);
   });
 });

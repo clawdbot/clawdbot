@@ -10,7 +10,18 @@ describe("buildChannelConfigSchema", () => {
   it("builds json schema when toJSONSchema is available", () => {
     const schema = z.object({ enabled: z.boolean().default(true) });
     const result = buildChannelConfigSchema(schema);
-    expect(result.schema).toMatchObject({ type: "object" });
+    expect(result.schema).toEqual({
+      $schema: "http://json-schema.org/draft-07/schema#",
+      type: "object",
+      properties: {
+        enabled: {
+          type: "boolean",
+          default: true,
+        },
+      },
+      required: ["enabled"],
+      additionalProperties: false,
+    });
   });
 
   it("falls back when toJSONSchema is missing (zod v3 plugin compatibility)", () => {

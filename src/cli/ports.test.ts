@@ -33,6 +33,16 @@ function makeErrServer(code: string): net.Server {
   return fake;
 }
 
+async function expectRejectCode(promise: Promise<unknown>, code: string): Promise<void> {
+  try {
+    await promise;
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe(code);
+    return;
+  }
+  throw new Error(`expected rejection with code ${code}`);
+}
+
 describe("probePortFree", () => {
   it("resolves false (not rejects) when bind returns EADDRINUSE", async () => {
     mockCreateServer.mockReturnValue(makeErrServer("EADDRINUSE"));
@@ -41,17 +51,17 @@ describe("probePortFree", () => {
 
   it("rejects immediately for EADDRNOTAVAIL (non-retryable: host address not on any interface)", async () => {
     mockCreateServer.mockReturnValue(makeErrServer("EADDRNOTAVAIL"));
-    await expect(probePortFree(9999, "192.0.2.1")).rejects.toMatchObject({ code: "EADDRNOTAVAIL" });
+    await expectRejectCode(probePortFree(9999, "192.0.2.1"), "EADDRNOTAVAIL");
   });
 
   it("rejects immediately for EACCES (non-retryable bind error)", async () => {
     mockCreateServer.mockReturnValue(makeErrServer("EACCES"));
-    await expect(probePortFree(80, "0.0.0.0")).rejects.toMatchObject({ code: "EACCES" });
+    await expectRejectCode(probePortFree(80, "0.0.0.0"), "EACCES");
   });
 
   it("rejects immediately for other non-retryable errors", async () => {
     mockCreateServer.mockReturnValue(makeErrServer("EINVAL"));
-    await expect(probePortFree(9999, "0.0.0.0")).rejects.toMatchObject({ code: "EINVAL" });
+    await expectRejectCode(probePortFree(9999, "0.0.0.0"), "EINVAL");
   });
 
   it("resolves true when the port is free", async () => {
@@ -115,9 +125,7 @@ describe("waitForPortBindable", () => {
     // mockCreateServer would be called many times. We assert it's called exactly once.
     mockCreateServer.mockClear();
     mockCreateServer.mockReturnValue(makeErrServer("EACCES"));
-    await expect(
-      waitForPortBindable(80, { timeoutMs: 5000, intervalMs: 50 }),
-    ).rejects.toMatchObject({ code: "EACCES" });
+    await expectRejectCode(waitForPortBindable(80, { timeoutMs: 5000, intervalMs: 50 }), "EACCES");
     // Only one probe should have been attempted — no spinning through the retry loop.
     expect(mockCreateServer).toHaveBeenCalledTimes(1);
   });

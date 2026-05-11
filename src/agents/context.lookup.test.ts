@@ -296,7 +296,7 @@ describe("lookupContextTokens", () => {
     await flushAsyncWarmup();
 
     expect(contextTestState.discoverModels).toHaveBeenCalledWith(
-      expect.anything(),
+      {},
       expect.stringMatching(/\/\.openclaw\/agents\/main\/agent$/),
       { normalizeModels: false },
     );

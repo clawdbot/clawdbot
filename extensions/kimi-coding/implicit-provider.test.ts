@@ -47,10 +47,42 @@ describe("Kimi implicit provider (#22409)", () => {
   it("publishes the Kimi provider when an API key is resolved", async () => {
     const provider = await runKimiCatalogProvider({ apiKey: "test-key" });
 
-    expect(provider).toMatchObject({
-      apiKey: "test-key",
+    expect(provider).toEqual({
       baseUrl: "https://api.kimi.com/coding/",
       api: "anthropic-messages",
+      headers: {
+        "User-Agent": "claude-code/0.1.0",
+      },
+      models: [
+        {
+          id: "kimi-for-coding",
+          name: "Kimi Code",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 262144,
+          maxTokens: 32768,
+        },
+        {
+          id: "kimi-code",
+          name: "Kimi Code (legacy kimi-code)",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 262144,
+          maxTokens: 32768,
+        },
+        {
+          id: "k2p5",
+          name: "Kimi Code (legacy k2p5)",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 262144,
+          maxTokens: 32768,
+        },
+      ],
+      apiKey: "test-key",
     });
   });
 

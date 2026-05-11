@@ -33,6 +33,26 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.lstat(targetPath);
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error);
+    const statError = error as NodeJS.ErrnoException;
+    expect({
+      code: statError.code,
+      path: statError.path,
+      syscall: statError.syscall,
+    }).toEqual({
+      code: "ENOENT",
+      path: targetPath,
+      syscall: "lstat",
+    });
+    return;
+  }
+  throw new Error(`Expected path to be missing: ${targetPath}`);
+}
+
 describe("managed npm root", () => {
   it("keeps existing plugin dependencies when adding another managed plugin", async () => {
     const npmRoot = await makeTempRoot();
@@ -127,8 +147,14 @@ describe("managed npm root", () => {
   });
 
   it("reads package-level npm overrides for managed plugin installs", async () => {
-    await expect(readOpenClawManagedNpmRootOverrides()).resolves.toMatchObject({
+    await expect(readOpenClawManagedNpmRootOverrides()).resolves.toEqual({
+      "@aws-sdk/client-bedrock-runtime": "3.1045.0",
       axios: "1.16.0",
+      "fast-uri": "3.1.2",
+      "follow-redirects": "1.16.0",
+      "ip-address": "10.2.0",
+      "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+      uuid: "14.0.0",
     });
   });
 
@@ -389,24 +415,21 @@ describe("managed npm root", () => {
 
     const runCommand = vi.fn().mockResolvedValue(successfulSpawn);
     await expect(repairManagedNpmRootOpenClawPeer({ npmRoot, runCommand })).resolves.toBe(true);
-    expect(runCommand).toHaveBeenCalledWith(
-      [
-        "npm",
-        "uninstall",
-        "--loglevel=error",
-        "--legacy-peer-deps",
-        "--ignore-scripts",
-        "--no-audit",
-        "--no-fund",
-        "openclaw",
-      ],
-      expect.objectContaining({
-        cwd: npmRoot,
-        env: expect.objectContaining({
-          npm_config_legacy_peer_deps: "true",
-        }),
-      }),
-    );
+    expect(runCommand).toHaveBeenCalledTimes(1);
+    const [repairArgs, repairOptions] = runCommand.mock.calls[0];
+    expect(repairArgs).toEqual([
+      "npm",
+      "uninstall",
+      "--loglevel=error",
+      "--legacy-peer-deps",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      "openclaw",
+    ]);
+    expect(repairOptions?.cwd).toBe(npmRoot);
+    expect(repairOptions?.timeoutMs).toBe(300_000);
+    expect(repairOptions?.env?.npm_config_legacy_peer_deps).toBe("true");
 
     const manifest = JSON.parse(await fs.readFile(path.join(npmRoot, "package.json"), "utf8")) as {
       dependencies?: Record<string, string>;
@@ -426,20 +449,10 @@ describe("managed npm root", () => {
     expect(lockfile.packages?.["node_modules/openclaw"]).toBeUndefined();
     expect(lockfile.packages?.["node_modules/@openclaw/discord"]?.version).toBe("2026.5.4");
     expect(lockfile.dependencies?.openclaw).toBeUndefined();
-    await expect(fs.lstat(path.join(npmRoot, "node_modules", "openclaw"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(npmRoot, "node_modules", "openclaw"));
     for (const binName of ["openclaw", "openclaw.cmd", "openclaw.ps1"]) {
-      await expect(
-        fs.lstat(path.join(npmRoot, "node_modules", ".bin", binName)),
-      ).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectPathMissing(path.join(npmRoot, "node_modules", ".bin", binName));
     }
-    await expect(
-      fs.lstat(path.join(npmRoot, "node_modules", ".package-lock.json")),
-    ).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(npmRoot, "node_modules", ".package-lock.json"));
   });
 });

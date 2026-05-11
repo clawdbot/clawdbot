@@ -8,6 +8,7 @@ import {
   normalizedParameterFreeSchema,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CodexThreadStartParams } from "./protocol.js";
 import { createCodexTestModel } from "./test-support.js";
 import { startOrResumeThread } from "./thread-lifecycle.js";
 
@@ -103,7 +104,7 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
       description: parameterFreeTool.description,
       inputSchema: normalizedParameterFreeSchema(),
     };
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "thread/start") {
         return threadStartResult();
       }
@@ -118,12 +119,24 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
       appServer: createAppServerOptions(),
     });
 
-    expect(request).toHaveBeenCalledWith(
-      "thread/start",
-      expect.objectContaining({
-        dynamicTools: [dynamicTool],
-      }),
-    );
+    expect(request).toHaveBeenCalledTimes(1);
+    const [method, payload] = request.mock.calls[0] ?? [];
+    if (method !== "thread/start") {
+      throw new Error(`expected thread/start request, got ${method}`);
+    }
+    const startPayload = payload as CodexThreadStartParams | undefined;
+    expect(startPayload?.dynamicTools).toStrictEqual([dynamicTool]);
+    expect(startPayload?.cwd).toBe(workspaceDir);
+    expect(startPayload?.model).toBe("gpt-5.4");
+    expect(startPayload?.modelProvider).toBeUndefined();
+    expect(startPayload?.approvalPolicy).toBe("never");
+    expect(startPayload?.approvalsReviewer).toBe("user");
+    expect(startPayload?.sandbox).toBe("workspace-write");
+    expect(startPayload?.serviceName).toBe("OpenClaw");
+    expect(startPayload?.experimentalRawEvents).toBe(true);
+    expect(startPayload?.persistExtendedHistory).toBe(true);
+    expect(typeof startPayload?.developerInstructions).toBe("string");
+    expect(startPayload?.developerInstructions).toContain("OpenClaw");
   });
 
   it("accepts Codex app-server priority service tier responses", async () => {

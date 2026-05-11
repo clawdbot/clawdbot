@@ -54,13 +54,10 @@ describe("plugin registry provider-like registrations", () => {
     });
 
     expect(pluginRegistry.registry.modelCatalogProviders).toHaveLength(1);
-    expect(pluginRegistry.registry.modelCatalogProviders[0]).toMatchObject({
-      pluginId: "catalog-owner",
-      provider: {
-        provider: "catalog-provider",
-        kinds: ["text", "video_generation"],
-      },
-    });
+    const catalogRegistration = pluginRegistry.registry.modelCatalogProviders[0];
+    expect(catalogRegistration?.pluginId).toBe("catalog-owner");
+    expect(catalogRegistration?.provider.provider).toBe("catalog-provider");
+    expect(catalogRegistration?.provider.kinds).toEqual(["text", "video_generation"]);
   });
 
   it("publishes text catalog rows for registered provider catalog hooks", async () => {
@@ -99,10 +96,8 @@ describe("plugin registry provider-like registrations", () => {
     expect(pluginRegistry.registry.providers).toHaveLength(1);
     expect(pluginRegistry.registry.modelCatalogProviders).toHaveLength(1);
     const catalogProvider = pluginRegistry.registry.modelCatalogProviders[0]?.provider;
-    expect(catalogProvider).toMatchObject({
-      provider: "text-provider",
-      kinds: ["text"],
-    });
+    expect(catalogProvider?.provider).toBe("text-provider");
+    expect(catalogProvider?.kinds).toEqual(["text"]);
     await expect(catalogProvider?.staticCatalog?.({} as never)).resolves.toEqual([
       {
         kind: "text",
@@ -152,30 +147,24 @@ describe("plugin registry provider-like registrations", () => {
     expect(pluginRegistry.registry.videoGenerationProviders).toHaveLength(1);
     expect(pluginRegistry.registry.modelCatalogProviders).toHaveLength(1);
     const catalogProvider = pluginRegistry.registry.modelCatalogProviders[0]?.provider;
-    expect(catalogProvider).toMatchObject({
-      provider: "video-provider",
-      kinds: ["video_generation"],
+    expect(catalogProvider?.provider).toBe("video-provider");
+    expect(catalogProvider?.kinds).toEqual(["video_generation"]);
+    const staticRows = await catalogProvider?.staticCatalog?.({} as never);
+    expect(staticRows).toHaveLength(2);
+    expect(staticRows?.[0]?.kind).toBe("video_generation");
+    expect(staticRows?.[0]?.provider).toBe("video-provider");
+    expect(staticRows?.[0]?.model).toBe("video-default");
+    expect(staticRows?.[0]?.source).toBe("static");
+    expect(staticRows?.[0]?.default).toBe(true);
+    expect(staticRows?.[0]?.capabilities).toEqual({
+      generate: {
+        supportedDurationSeconds: [4, 8],
+      },
     });
-    expect(await catalogProvider?.staticCatalog?.({} as never)).toEqual([
-      expect.objectContaining({
-        kind: "video_generation",
-        provider: "video-provider",
-        model: "video-default",
-        source: "static",
-        default: true,
-        capabilities: expect.objectContaining({
-          generate: {
-            supportedDurationSeconds: [4, 8],
-          },
-        }),
-      }),
-      expect.objectContaining({
-        kind: "video_generation",
-        provider: "video-provider",
-        model: "video-pro",
-        source: "static",
-      }),
-    ]);
+    expect(staticRows?.[1]?.kind).toBe("video_generation");
+    expect(staticRows?.[1]?.provider).toBe("video-provider");
+    expect(staticRows?.[1]?.model).toBe("video-pro");
+    expect(staticRows?.[1]?.source).toBe("static");
   });
 
   it("does not duplicate manifest-declared capability provider ids during runtime registration", () => {

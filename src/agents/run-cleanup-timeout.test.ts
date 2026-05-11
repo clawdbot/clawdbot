@@ -30,8 +30,9 @@ describe("agent cleanup timeout", () => {
     await expect(result).resolves.toBeUndefined();
 
     expect(cleanup).toHaveBeenCalledTimes(1);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("agent cleanup timed out:"));
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("step=bundle-mcp-retire"));
+    expect(log.warn).toHaveBeenCalledWith(
+      "agent cleanup timed out: runId=run-1 sessionId=session-1 step=bundle-mcp-retire timeoutMs=10000",
+    );
   });
 
   it("logs cleanup rejection without throwing", async () => {
@@ -47,7 +48,8 @@ describe("agent cleanup timeout", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("agent cleanup failed:"));
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("dispose failed"));
+    expect(log.warn).toHaveBeenCalledWith(
+      "agent cleanup failed: runId=run-2 sessionId=session-2 step=context-engine-dispose error=dispose failed",
+    );
   });
 });

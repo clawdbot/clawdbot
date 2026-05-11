@@ -9,6 +9,62 @@ import {
   stopTalkTranscriptionRelaySession,
 } from "./talk-transcription-relay.js";
 
+type BroadcastEvent = { event: string; payload: unknown; connIds: string[] };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(isRecord(value), `${label} must be an object`).toBe(true);
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(
+  value: unknown,
+  label: string,
+  expected: Record<string, unknown>,
+): Record<string, unknown> {
+  const record = requireRecord(value, label);
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], `${label}.${key}`).toEqual(expectedValue);
+  }
+  return record;
+}
+
+function findPayloadByType(events: BroadcastEvent[], type: string): Record<string, unknown> {
+  const event = events.find((candidate) => {
+    const payload = candidate.payload;
+    return isRecord(payload) && payload.type === type;
+  });
+  if (!event) {
+    throw new Error(`expected relay event type ${type}`);
+  }
+  expect(event.event).toBe("talk.event");
+  return requireRecord(event.payload, `${type} payload`);
+}
+
+function findPayloadByTalkEventType(
+  events: BroadcastEvent[],
+  type: string,
+): Record<string, unknown> {
+  const event = events.find((candidate) => {
+    const payload = candidate.payload;
+    return isRecord(payload) && isRecord(payload.talkEvent) && payload.talkEvent.type === type;
+  });
+  if (!event) {
+    throw new Error(`expected talk event type ${type}`);
+  }
+  return requireRecord(event.payload, `${type} payload`);
+}
+
+function expectTalkEventFields(
+  payload: Record<string, unknown>,
+  expected: Record<string, unknown>,
+): Record<string, unknown> {
+  return expectRecordFields(payload.talkEvent, "talk event", expected);
+}
+
 describe("talk transcription gateway relay", () => {
   afterEach(() => {
     clearTalkTranscriptionRelaySessionsForTest();
@@ -51,16 +107,16 @@ describe("talk transcription gateway relay", () => {
     });
     await Promise.resolve();
 
-    expect(session).toMatchObject({
+    expectRecordFields(session, "session", {
       provider: "stt-test",
       mode: "transcription",
       transport: "gateway-relay",
-      audio: {
-        inputEncoding: "pcm16",
-        inputSampleRateHz: 24000,
-      },
     });
-    expect(sttRequest).toMatchObject({
+    expectRecordFields(session.audio, "session audio", {
+      inputEncoding: "pcm16",
+      inputSampleRateHz: 24000,
+    });
+    expectRecordFields(sttRequest, "stt request", {
       providerConfig: { model: "stt-model" },
     });
 
@@ -76,78 +132,72 @@ describe("talk transcription gateway relay", () => {
 
     expect(sttSession.sendAudio).toHaveBeenCalledWith(Buffer.from("audio-in"));
     expect(sttSession.close).toHaveBeenCalledOnce();
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          event: "talk.event",
-          connIds: ["conn-1"],
-          payload: expect.objectContaining({
-            transcriptionSessionId: session.transcriptionSessionId,
-            type: "ready",
-            talkEvent: expect.objectContaining({
-              sessionId: session.transcriptionSessionId,
-              type: "session.ready",
-              mode: "transcription",
-              transport: "gateway-relay",
-              brain: "none",
-              provider: "stt-test",
-            }),
-          }),
-        }),
-        expect.objectContaining({
-          payload: expect.objectContaining({
-            transcriptionSessionId: session.transcriptionSessionId,
-            type: "speechStart",
-            talkEvent: expect.objectContaining({ type: "turn.started", turnId: "turn-1" }),
-          }),
-        }),
-        expect.objectContaining({
-          payload: expect.objectContaining({
-            transcriptionSessionId: session.transcriptionSessionId,
-            type: "partial",
-            text: "hel",
-            talkEvent: expect.objectContaining({
-              type: "transcript.delta",
-              turnId: "turn-1",
-              payload: { text: "hel" },
-            }),
-          }),
-        }),
-        expect.objectContaining({
-          payload: expect.objectContaining({
-            transcriptionSessionId: session.transcriptionSessionId,
-            type: "transcript",
-            text: "hello world",
-            final: true,
-            talkEvent: expect.objectContaining({
-              type: "transcript.done",
-              turnId: "turn-1",
-              final: true,
-              payload: { text: "hello world" },
-            }),
-          }),
-        }),
-        expect.objectContaining({
-          payload: expect.objectContaining({
-            transcriptionSessionId: session.transcriptionSessionId,
-            type: "inputAudio",
-            byteLength: 8,
-            talkEvent: expect.objectContaining({ type: "input.audio.delta" }),
-          }),
-        }),
-        expect.objectContaining({
-          payload: expect.objectContaining({
-            transcriptionSessionId: session.transcriptionSessionId,
-            type: "close",
-            reason: "completed",
-            talkEvent: expect.objectContaining({
-              type: "session.closed",
-              final: true,
-            }),
-          }),
-        }),
-      ]),
-    );
+    const readyPayload = findPayloadByType(events, "ready");
+    expect(events.find((event) => event.payload === readyPayload)?.connIds).toEqual(["conn-1"]);
+    expectRecordFields(readyPayload, "ready payload", {
+      transcriptionSessionId: session.transcriptionSessionId,
+      type: "ready",
+    });
+    expectTalkEventFields(readyPayload, {
+      sessionId: session.transcriptionSessionId,
+      type: "session.ready",
+      mode: "transcription",
+      transport: "gateway-relay",
+      brain: "none",
+      provider: "stt-test",
+    });
+
+    const speechStartPayload = findPayloadByType(events, "speechStart");
+    expectRecordFields(speechStartPayload, "speechStart payload", {
+      transcriptionSessionId: session.transcriptionSessionId,
+      type: "speechStart",
+    });
+    expectTalkEventFields(speechStartPayload, { type: "turn.started", turnId: "turn-1" });
+
+    const partialPayload = findPayloadByType(events, "partial");
+    expectRecordFields(partialPayload, "partial payload", {
+      transcriptionSessionId: session.transcriptionSessionId,
+      type: "partial",
+      text: "hel",
+    });
+    expectTalkEventFields(partialPayload, {
+      type: "transcript.delta",
+      turnId: "turn-1",
+      payload: { text: "hel" },
+    });
+
+    const transcriptPayload = findPayloadByType(events, "transcript");
+    expectRecordFields(transcriptPayload, "transcript payload", {
+      transcriptionSessionId: session.transcriptionSessionId,
+      type: "transcript",
+      text: "hello world",
+      final: true,
+    });
+    expectTalkEventFields(transcriptPayload, {
+      type: "transcript.done",
+      turnId: "turn-1",
+      final: true,
+      payload: { text: "hello world" },
+    });
+
+    const audioPayload = findPayloadByType(events, "inputAudio");
+    expectRecordFields(audioPayload, "input audio payload", {
+      transcriptionSessionId: session.transcriptionSessionId,
+      type: "inputAudio",
+      byteLength: 8,
+    });
+    expectTalkEventFields(audioPayload, { type: "input.audio.delta" });
+
+    const closePayload = findPayloadByType(events, "close");
+    expectRecordFields(closePayload, "close payload", {
+      transcriptionSessionId: session.transcriptionSessionId,
+      type: "close",
+      reason: "completed",
+    });
+    expectTalkEventFields(closePayload, {
+      type: "session.closed",
+      final: true,
+    });
   });
 
   it("cancels an active transcription turn and closes the provider session", async () => {
@@ -192,27 +242,22 @@ describe("talk transcription gateway relay", () => {
     });
 
     expect(sttSession.close).toHaveBeenCalledOnce();
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          payload: expect.objectContaining({
-            transcriptionSessionId: session.transcriptionSessionId,
-            talkEvent: expect.objectContaining({
-              type: "turn.cancelled",
-              turnId: "turn-1",
-              payload: { reason: "barge-in" },
-              final: true,
-            }),
-          }),
-        }),
-        expect.objectContaining({
-          payload: expect.objectContaining({
-            transcriptionSessionId: session.transcriptionSessionId,
-            type: "close",
-            reason: "completed",
-          }),
-        }),
-      ]),
-    );
+    const cancelledPayload = findPayloadByTalkEventType(events, "turn.cancelled");
+    expectRecordFields(cancelledPayload, "cancelled payload", {
+      transcriptionSessionId: session.transcriptionSessionId,
+    });
+    expectTalkEventFields(cancelledPayload, {
+      type: "turn.cancelled",
+      turnId: "turn-1",
+      payload: { reason: "barge-in" },
+      final: true,
+    });
+
+    const closePayload = findPayloadByType(events, "close");
+    expectRecordFields(closePayload, "close payload", {
+      transcriptionSessionId: session.transcriptionSessionId,
+      type: "close",
+      reason: "completed",
+    });
   });
 });

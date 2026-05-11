@@ -23,9 +23,17 @@ describe("memory-wiki tools", () => {
     const evidenceArraySchema = asSchemaObject(evidenceSchema.items);
     const evidenceProperties = asSchemaObject(evidenceArraySchema.properties);
 
-    expect(Object.keys(evidenceProperties)).toEqual(
-      expect.arrayContaining(["kind", "confidence", "privacyTier"]),
-    );
-    expect(evidenceProperties.confidence).toMatchObject({ minimum: 0, maximum: 1 });
+    expect(Object.keys(evidenceProperties).toSorted()).toEqual([
+      "confidence",
+      "kind",
+      "lines",
+      "note",
+      "path",
+      "privacyTier",
+      "sourceId",
+      "updatedAt",
+      "weight",
+    ]);
+    expect(evidenceProperties.confidence).toEqual({ type: "number", minimum: 0, maximum: 1 });
   });
 });

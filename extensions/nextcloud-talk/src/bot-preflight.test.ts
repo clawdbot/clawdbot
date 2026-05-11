@@ -70,27 +70,27 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
   it("passes when the matching bot has the response feature bit", async () => {
     mockBotAdmin(1 | 2 | 8);
 
-    await expect(
-      probeNextcloudTalkBotResponseFeature({ account: account() }),
-    ).resolves.toMatchObject({
+    await expect(probeNextcloudTalkBotResponseFeature({ account: account() })).resolves.toEqual({
       ok: true,
       code: "ok",
       botId: "7",
+      botName: "OpenClaw",
       features: 11,
+      message: 'Nextcloud Talk bot "OpenClaw" has the response feature.',
     });
   });
 
   it("reports missing response feature for the matching webhook bot", async () => {
     mockBotAdmin(1 | 8);
 
-    await expect(
-      probeNextcloudTalkBotResponseFeature({ account: account() }),
-    ).resolves.toMatchObject({
+    await expect(probeNextcloudTalkBotResponseFeature({ account: account() })).resolves.toEqual({
       ok: false,
       code: "missing_response_feature",
       botId: "7",
+      botName: "OpenClaw",
       features: 9,
-      message: expect.stringContaining("--feature response"),
+      message:
+        'Nextcloud Talk bot "OpenClaw" (7) is missing the response feature (features=9); outbound replies will fail. Run ./occ talk:bot:state --feature webhook --feature response --feature reaction 7 1 or reinstall the bot with --feature response.',
     });
   });
 
@@ -105,10 +105,12 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
           },
         }),
       }),
-    ).resolves.toMatchObject({
+    ).resolves.toEqual({
       ok: true,
       skipped: true,
       code: "missing_api_credentials",
+      message:
+        "Nextcloud Talk bot response feature probe skipped: apiUser/apiPassword are not configured.",
     });
     expect(hoisted.fetchWithSsrFGuard).not.toHaveBeenCalled();
   });

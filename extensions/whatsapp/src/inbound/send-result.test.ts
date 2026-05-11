@@ -1,4 +1,4 @@
-import type { WAMessage } from "@whiskeysockets/baileys";
+import type { WAMessage } from "baileys";
 import { describe, expect, it } from "vitest";
 import { combineWhatsAppSendResults, normalizeWhatsAppSendResult } from "./send-result.js";
 
@@ -15,19 +15,37 @@ describe("WhatsApp send receipts", () => {
       "text",
     );
 
-    expect(result.receipt).toMatchObject({
+    expect(result.receipt?.sentAt).toBeTypeOf("number");
+    expect(result.receipt).toEqual({
       primaryPlatformMessageId: "wa-1",
       platformMessageIds: ["wa-1"],
+      sentAt: result.receipt?.sentAt,
+      raw: [
+        {
+          channel: "whatsapp",
+          messageId: "wa-1",
+          toJid: "123@s.whatsapp.net",
+          meta: {
+            fromMe: true,
+            participant: undefined,
+          },
+        },
+      ],
       parts: [
-        expect.objectContaining({
+        {
+          index: 0,
           platformMessageId: "wa-1",
           kind: "text",
-          raw: expect.objectContaining({
+          raw: {
             channel: "whatsapp",
             messageId: "wa-1",
             toJid: "123@s.whatsapp.net",
-          }),
-        }),
+            meta: {
+              fromMe: true,
+              participant: undefined,
+            },
+          },
+        },
       ],
     });
   });
@@ -44,12 +62,60 @@ describe("WhatsApp send receipts", () => {
 
     const combined = combineWhatsAppSendResults("media", [media, text]);
 
-    expect(combined.receipt).toMatchObject({
+    expect(combined.receipt?.sentAt).toBeTypeOf("number");
+    expect(combined.receipt).toEqual({
       primaryPlatformMessageId: "media-1",
       platformMessageIds: ["media-1", "text-1"],
+      sentAt: combined.receipt?.sentAt,
+      raw: [
+        {
+          channel: "whatsapp",
+          messageId: "media-1",
+          toJid: "chat@s.whatsapp.net",
+          meta: {
+            fromMe: undefined,
+            participant: undefined,
+          },
+        },
+        {
+          channel: "whatsapp",
+          messageId: "text-1",
+          toJid: "chat@s.whatsapp.net",
+          meta: {
+            fromMe: undefined,
+            participant: undefined,
+          },
+        },
+      ],
       parts: [
-        expect.objectContaining({ platformMessageId: "media-1", kind: "media" }),
-        expect.objectContaining({ platformMessageId: "text-1", kind: "media" }),
+        {
+          index: 0,
+          platformMessageId: "media-1",
+          kind: "media",
+          raw: {
+            channel: "whatsapp",
+            messageId: "media-1",
+            toJid: "chat@s.whatsapp.net",
+            meta: {
+              fromMe: undefined,
+              participant: undefined,
+            },
+          },
+        },
+        {
+          index: 1,
+          platformMessageId: "text-1",
+          kind: "media",
+          raw: {
+            channel: "whatsapp",
+            messageId: "text-1",
+            toJid: "chat@s.whatsapp.net",
+            meta: {
+              fromMe: undefined,
+              participant: undefined,
+            },
+          },
+        },
       ],
     });
   });

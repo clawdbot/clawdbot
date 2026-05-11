@@ -52,8 +52,17 @@ describe("buildMinimaxSpeechProvider", () => {
     });
 
     it("exposes models and voices", () => {
-      expect(provider.models).toContain("speech-2.8-hd");
-      expect(provider.models).toEqual(expect.arrayContaining(["speech-2.6-hd", "speech-02-hd"]));
+      expect(provider.models).toEqual([
+        "speech-2.8-hd",
+        "speech-2.8-turbo",
+        "speech-2.6-hd",
+        "speech-2.6-turbo",
+        "speech-02-hd",
+        "speech-02-turbo",
+        "speech-01-hd",
+        "speech-01-turbo",
+        "speech-01-240228",
+      ]);
       expect(provider.voices).toContain("English_expressive_narrator");
     });
   });
@@ -436,7 +445,10 @@ describe("buildMinimaxSpeechProvider", () => {
       });
 
       const [, init] = vi.mocked(globalThis.fetch).mock.calls[0];
-      expect(init?.headers).toMatchObject({ Authorization: "Bearer sk-cp-env" });
+      expect(init?.headers).toEqual({
+        Authorization: "Bearer sk-cp-env",
+        "Content-Type": "application/json",
+      });
     });
 
     it("uses a minimax-portal auth profile before env API keys", async () => {
@@ -475,7 +487,10 @@ describe("buildMinimaxSpeechProvider", () => {
 
       const [url, init] = vi.mocked(globalThis.fetch).mock.calls[0];
       expect(url).toBe("https://api.minimaxi.com/v1/t2a_v2");
-      expect(init?.headers).toMatchObject({ Authorization: "Bearer portal-token" });
+      expect(init?.headers).toEqual({
+        Authorization: "Bearer portal-token",
+        "Content-Type": "application/json",
+      });
     });
 
     it("throws when API key is missing", async () => {

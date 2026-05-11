@@ -104,22 +104,25 @@ describe("discoverOpenAICompatibleLocalModels", () => {
     });
 
     expect(models).toEqual([
-      expect.objectContaining({
+      {
         id: "Qwen/Qwen3-32B",
         name: "Qwen/Qwen3-32B",
-      }),
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 8192,
+      },
     ]);
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://127.0.0.1:8000/v1/models",
-        init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
-        policy: {
-          hostnameAllowlist: ["127.0.0.1"],
-          allowPrivateNetwork: true,
-        },
-        timeoutMs: 5000,
-      }),
-    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
+      url: "http://127.0.0.1:8000/v1/models",
+      init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
+      policy: {
+        hostnameAllowlist: ["127.0.0.1"],
+        allowPrivateNetwork: true,
+      },
+      timeoutMs: 5000,
+    });
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -139,12 +142,12 @@ describe("discoverOpenAICompatibleLocalModels", () => {
       env: {},
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://metadata.google.internal/v1/models",
-        policy: undefined,
-      }),
-    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
+      url: "http://metadata.google.internal/v1/models",
+      init: { headers: undefined },
+      policy: undefined,
+      timeoutMs: 5000,
+    });
     expect(release).toHaveBeenCalledOnce();
   });
 });
@@ -187,18 +190,25 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
       api: "openai-completions",
       apiKey: params.envVar,
       models: [
-        expect.objectContaining({
+        {
           id: params.modelId,
-        }),
+          name: params.modelId,
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128000,
+          maxTokens: 8192,
+        },
       ],
     });
     expect(readPrimaryModel(cfg)).toBe(`${params.providerId}/${params.modelId}`);
-    expect(ctx.resolveApiKey).toHaveBeenCalledWith(
-      expect.objectContaining({
-        flagName: "--custom-api-key",
-        envVar: params.envVar,
-      }),
-    );
+    expect(ctx.resolveApiKey).toHaveBeenCalledWith({
+      provider: params.providerId,
+      flagValue: params.apiKey,
+      flagName: "--custom-api-key",
+      envVar: params.envVar,
+      envVarName: params.envVar,
+    });
     expect(upsertAuthProfileWithLock).toHaveBeenCalledWith({
       profileId,
       agentDir: ctx.agentDir,

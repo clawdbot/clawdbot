@@ -1,5 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayScopedOptions } from "../../gateway/call.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { callGatewayTool, resolveGatewayOptions } from "./gateway.js";
 
 const mocks = vi.hoisted(() => ({
@@ -33,6 +35,7 @@ describe("gateway tool defaults", () => {
   beforeEach(() => {
     mocks.callGateway.mockClear();
     mocks.configState.value = {};
+    setActivePluginRegistry(createEmptyPluginRegistry());
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
   });
 
@@ -164,6 +167,69 @@ describe("gateway tool defaults", () => {
     expect(call.method).toBe("cron.add");
     expect(call.params).toEqual({ id: "job-1" });
     expect(call.scopes).toEqual(["operator.admin"]);
+  });
+
+  it("derives plugin session action scopes from call params", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.sessionActions = [
+      {
+        pluginId: "scope-plugin",
+        pluginName: "Scope Plugin",
+        source: "test",
+        action: {
+          id: "approve",
+          requiredScopes: ["operator.approvals"],
+          handler: () => ({ result: { ok: true } }),
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await callGatewayTool(
+      "plugins.sessionAction",
+      {},
+      {
+        pluginId: "scope-plugin",
+        actionId: "approve",
+        sessionKey: "agent:main:main",
+      },
+    );
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "plugins.sessionAction",
+        scopes: ["operator.approvals"],
+      }),
+    );
+  });
+
+  it("falls back to broad scopes when a plugin session action is not locally registered", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await callGatewayTool(
+      "plugins.sessionAction",
+      {},
+      {
+        pluginId: "remote-plugin",
+        actionId: "approve",
+      },
+    );
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "plugins.sessionAction",
+        scopes: [
+          "operator.admin",
+          "operator.read",
+          "operator.write",
+          "operator.approvals",
+          "operator.pairing",
+          "operator.talk.secrets",
+        ],
+      }),
+    );
   });
 
   it("allows explicit scope overrides for dynamic callers", async () => {

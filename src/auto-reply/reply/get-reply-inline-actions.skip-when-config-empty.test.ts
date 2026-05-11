@@ -143,6 +143,33 @@ async function runInlineStatusAction(storePath?: string) {
   return { result, typing };
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value).toBeTypeOf("object");
+  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function mockObjectArg(mock: ReturnType<typeof vi.fn>, label: string, callIndex = 0, argIndex = 0) {
+  const call = mock.mock.calls[callIndex];
+  expect(call).toBeDefined();
+  if (!call) {
+    throw new Error(`expected ${label} mock call ${callIndex}`);
+  }
+  return requireRecord(call[argIndex], `${label} argument ${argIndex}`);
+}
+
+function mockCallArgs(mock: ReturnType<typeof vi.fn>, label: string, callIndex = 0): unknown[] {
+  const call = mock.mock.calls[callIndex] as unknown[] | undefined;
+  expect(call).toBeDefined();
+  if (!call) {
+    throw new Error(`expected ${label} mock call ${callIndex}`);
+  }
+  return call;
+}
+
 describe("handleInlineActions", () => {
   beforeEach(() => {
     handleCommandsMock.mockReset();
@@ -207,11 +234,7 @@ describe("handleInlineActions", () => {
 
     expect(result).toEqual({ kind: "reply", reply: { text: "done" } });
     expect(handleCommandsMock).toHaveBeenCalledTimes(1);
-    expect(handleCommandsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDir,
-      }),
-    );
+    expect(mockObjectArg(handleCommandsMock, "handleCommands").agentDir).toBe(agentDir);
   });
 
   it("prefers the target session entry when routing inline commands into handleCommands", async () => {
@@ -252,12 +275,9 @@ describe("handleInlineActions", () => {
     );
 
     expect(result).toEqual({ kind: "reply", reply: { text: "done" } });
-    expect(handleCommandsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionEntry: expect.objectContaining({
-          sessionId: "target-session",
-        }),
-      }),
+    const commandArgs = mockObjectArg(handleCommandsMock, "handleCommands");
+    expect(requireRecord(commandArgs.sessionEntry, "sessionEntry").sessionId).toBe(
+      "target-session",
     );
   });
 
@@ -266,11 +286,7 @@ describe("handleInlineActions", () => {
 
     expect(result).toEqual({ kind: "reply", reply: undefined });
     expect(buildStatusReplyMock).toHaveBeenCalledTimes(1);
-    expect(buildStatusReplyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        storePath: undefined,
-      }),
-    );
+    expect(mockObjectArg(buildStatusReplyMock, "buildStatusReply").storePath).toBeUndefined();
     expect(handleCommandsMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalled();
   });
@@ -279,10 +295,8 @@ describe("handleInlineActions", () => {
     const { result } = await runInlineStatusAction("/tmp/inline-status-store.json");
 
     expect(result).toEqual({ kind: "reply", reply: undefined });
-    expect(buildStatusReplyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        storePath: "/tmp/inline-status-store.json",
-      }),
+    expect(mockObjectArg(buildStatusReplyMock, "buildStatusReply").storePath).toBe(
+      "/tmp/inline-status-store.json",
     );
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
@@ -325,15 +339,11 @@ describe("handleInlineActions", () => {
     );
 
     expect(result).toEqual({ kind: "reply", reply: undefined });
-    expect(buildStatusReplyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionEntry: expect.objectContaining({
-          sessionId: "target-session",
-          parentSessionKey: "target-parent",
-        }),
-        parentSessionKey: "target-parent",
-      }),
-    );
+    const statusArgs = mockObjectArg(buildStatusReplyMock, "buildStatusReply");
+    const statusSessionEntry = requireRecord(statusArgs.sessionEntry, "status sessionEntry");
+    expect(statusSessionEntry.sessionId).toBe("target-session");
+    expect(statusSessionEntry.parentSessionKey).toBe("target-parent");
+    expect(statusArgs.parentSessionKey).toBe("target-parent");
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
 
@@ -564,12 +574,9 @@ describe("handleInlineActions", () => {
     expect(ctx.Body).toBe(
       "Act as an engineering advisor.\n\nFocus on:\nbuild me a deployment plan",
     );
-    expect(handleCommandsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          Body: "Act as an engineering advisor.\n\nFocus on:\nbuild me a deployment plan",
-        }),
-      }),
+    const commandArgs = mockObjectArg(handleCommandsMock, "handleCommands");
+    expect(requireRecord(commandArgs.ctx, "handleCommands ctx").Body).toBe(
+      "Act as an engineering advisor.\n\nFocus on:\nbuild me a deployment plan",
     );
   });
 
@@ -624,11 +631,9 @@ describe("handleInlineActions", () => {
     );
 
     expect(result).toEqual({ kind: "reply", reply: { text: "✅ Done." } });
-    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requesterAgentIdOverride: "named-worker",
-      }),
-    );
+    expect(
+      mockObjectArg(createOpenClawToolsMock, "createOpenClawTools").requesterAgentIdOverride,
+    ).toBe("named-worker");
     expect(toolExecute).toHaveBeenCalled();
   });
 
@@ -682,20 +687,15 @@ describe("handleInlineActions", () => {
     );
 
     expect(result).toEqual({ kind: "reply", reply: { text: "✅ Done." } });
-    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        senderIsOwner: true,
-      }),
-    );
-    expect(toolExecute).toHaveBeenCalledWith(
-      expect.stringMatching(/^cmd_/),
-      {
-        command: "display name",
-        commandName: "set_profile",
-        skillName: "matrix-profile",
-      },
-      undefined,
-    );
+    expect(mockObjectArg(createOpenClawToolsMock, "createOpenClawTools").senderIsOwner).toBe(true);
+    const toolCall = mockCallArgs(toolExecute, "toolExecute");
+    expect(toolCall?.[0]).toMatch(/^cmd_/);
+    expect(toolCall?.[1]).toEqual({
+      command: "display name",
+      commandName: "set_profile",
+      skillName: "matrix-profile",
+    });
+    expect(toolCall?.[2]).toBeUndefined();
   });
 
   it("honors construction-time before-tool-call blocks for inline tool dispatch", async () => {
@@ -778,21 +778,17 @@ describe("handleInlineActions", () => {
       kind: "reply",
       reply: { text: "❌ Tool call blocked: denied by policy" },
     });
-    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "target-session",
-        currentChannelId: "whatsapp",
-      }),
-    );
-    expect(toolExecute).toHaveBeenCalledWith(
-      expect.stringMatching(/^cmd_/),
-      {
-        command: "display name",
-        commandName: "set_profile",
-        skillName: "matrix-profile",
-      },
-      abortController.signal,
-    );
+    const toolsArgs = mockObjectArg(createOpenClawToolsMock, "createOpenClawTools");
+    expect(toolsArgs.sessionId).toBe("target-session");
+    expect(toolsArgs.currentChannelId).toBe("whatsapp");
+    const blockedToolCall = mockCallArgs(toolExecute, "toolExecute");
+    expect(blockedToolCall?.[0]).toMatch(/^cmd_/);
+    expect(blockedToolCall?.[1]).toEqual({
+      command: "display name",
+      commandName: "set_profile",
+      skillName: "matrix-profile",
+    });
+    expect(blockedToolCall?.[2]).toBe(abortController.signal);
     expect(typing.cleanup).toHaveBeenCalled();
   });
 });

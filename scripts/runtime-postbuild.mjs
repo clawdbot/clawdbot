@@ -48,6 +48,10 @@ const LEGACY_ROOT_RUNTIME_COMPAT_ALIASES = [
   ["provider-dispatcher-6EQEtc-t.js", "provider-dispatcher.runtime.js"],
   ["provider-dispatcher-BpL2E92x.js", "provider-dispatcher.runtime.js"],
   ["provider-dispatcher-JG96SkLX.js", "provider-dispatcher.runtime.js"],
+  // v2026.5.4 tool/control-plane lazy chunks. These predate the stable
+  // nested dist entries, but live gateways may still import them after update.
+  ["manager-DzRWrKSA.js", "acp/control-plane/manager.js"],
+  ["runtime-CeGN4XUC.js", "web-fetch/runtime.js"],
 ];
 const LEGACY_PLUGIN_INSTALL_RUNTIME_MARKERS = [
   "scanPackageInstallSource",

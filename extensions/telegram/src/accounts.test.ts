@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as runtimeEnvModule from "openclaw/plugin-sdk/runtime-env";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -362,18 +362,17 @@ describe("mergeTelegramAccountConfig", () => {
       },
     };
 
-    expect(mergeTelegramAccountConfig(cfg, "bot1")).toMatchObject({
-      botToken: "bot-1-token",
-      dmPolicy: "allowlist",
-      allowFrom: ["123"],
-      groupPolicy: "allowlist",
-    });
-    expect(mergeTelegramAccountConfig(cfg, "bot2")).toMatchObject({
-      botToken: "bot-2-token",
-      dmPolicy: "allowlist",
-      allowFrom: ["123"],
-      groupPolicy: "allowlist",
-    });
+    const bot1 = mergeTelegramAccountConfig(cfg, "bot1");
+    expect(bot1.botToken).toBe("bot-1-token");
+    expect(bot1.dmPolicy).toBe("allowlist");
+    expect(bot1.allowFrom).toEqual(["123"]);
+    expect(bot1.groupPolicy).toBe("allowlist");
+
+    const bot2 = mergeTelegramAccountConfig(cfg, "bot2");
+    expect(bot2.botToken).toBe("bot-2-token");
+    expect(bot2.dmPolicy).toBe("allowlist");
+    expect(bot2.allowFrom).toEqual(["123"]);
+    expect(bot2.groupPolicy).toBe("allowlist");
   });
 
   it("keeps top-level policy fallback when auth lives in accounts.default", () => {
@@ -393,12 +392,11 @@ describe("mergeTelegramAccountConfig", () => {
       },
     };
 
-    expect(mergeTelegramAccountConfig(cfg, "default")).toMatchObject({
-      botToken: "legacy-token",
-      dmPolicy: "allowlist",
-      allowFrom: ["123"],
-      groupPolicy: "allowlist",
-    });
+    const merged = mergeTelegramAccountConfig(cfg, "default");
+    expect(merged.botToken).toBe("legacy-token");
+    expect(merged.dmPolicy).toBe("allowlist");
+    expect(merged.allowFrom).toEqual(["123"]);
+    expect(merged.groupPolicy).toBe("allowlist");
   });
 
   it("drops account wildcard DM access when top-level allowFrom is restrictive", () => {
@@ -420,11 +418,10 @@ describe("mergeTelegramAccountConfig", () => {
       },
     };
 
-    expect(mergeTelegramAccountConfig(cfg, "alerts")).toMatchObject({
-      botToken: "bot-token",
-      dmPolicy: "open",
-      allowFrom: ["123"],
-    });
+    const merged = mergeTelegramAccountConfig(cfg, "alerts");
+    expect(merged.botToken).toBe("bot-token");
+    expect(merged.dmPolicy).toBe("open");
+    expect(merged.allowFrom).toEqual(["123"]);
   });
 
   it("keeps explicit account allowlist entries while dropping a conflicting wildcard", () => {
@@ -444,9 +441,8 @@ describe("mergeTelegramAccountConfig", () => {
       },
     };
 
-    expect(mergeTelegramAccountConfig(cfg, "alerts")).toMatchObject({
-      allowFrom: ["456"],
-    });
+    const merged = mergeTelegramAccountConfig(cfg, "alerts");
+    expect(merged.allowFrom).toEqual(["456"]);
   });
 });
 

@@ -207,11 +207,10 @@ describe("doctor contract registry load-path plugins", () => {
     const llm = readPluginLlmPolicy(result.config, pluginId);
 
     expect(result.changes).toEqual(["configured load-path doctor contract LLM policy"]);
-    expect(llm).toMatchObject({
+    expect(llm).toEqual({
       allowModelOverride: true,
       allowedModels: ["openai-codex/gpt-5.4-mini"],
     });
-    expect(llm).not.toHaveProperty("allowAgentIdOverride");
   });
 
   it("discovers session route-state owners from plugins.load.paths", () => {

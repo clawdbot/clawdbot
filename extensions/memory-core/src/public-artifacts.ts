@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveMemoryHostEventLogPath } from "openclaw/plugin-sdk/memory-core-host-events";
 import { resolveMemoryDreamingWorkspaces } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { MemoryPluginPublicArtifact } from "openclaw/plugin-sdk/memory-host-core";
+import { resolveMemoryHostEventLogPath } from "openclaw/plugin-sdk/memory-host-events";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import type { OpenClawConfig } from "../api.js";
 

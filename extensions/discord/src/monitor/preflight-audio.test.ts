@@ -8,7 +8,7 @@ vi.mock("./preflight-audio.runtime.js", () => ({
 
 import { resolveDiscordPreflightAudioMentionContext } from "./preflight-audio.js";
 
-const cfg = {} as import("openclaw/plugin-sdk/config-types").OpenClawConfig;
+const cfg = {} as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
 
 describe("resolveDiscordPreflightAudioMentionContext", () => {
   beforeEach(() => {
@@ -34,14 +34,14 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
       cfg,
     });
 
-    expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          MediaUrls: ["https://cdn.discordapp.com/attachments/voice.ogg"],
-          MediaTypes: ["audio/ogg"],
-        }),
-      }),
-    );
+    expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
+      ctx: {
+        MediaUrls: ["https://cdn.discordapp.com/attachments/voice.ogg"],
+        MediaTypes: ["audio/ogg"],
+      },
+      cfg,
+      agentDir: undefined,
+    });
     expect(result).toEqual({
       hasAudioAttachment: true,
       hasTypedText: false,
@@ -67,14 +67,14 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
       cfg,
     });
 
-    expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          MediaUrls: ["https://cdn.discordapp.com/attachments/voice.opus"],
-          MediaTypes: ["audio/opus"],
-        }),
-      }),
-    );
+    expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
+      ctx: {
+        MediaUrls: ["https://cdn.discordapp.com/attachments/voice.opus"],
+        MediaTypes: ["audio/opus"],
+      },
+      cfg,
+      agentDir: undefined,
+    });
   });
 
   it("preflights Discord voice attachments by waveform metadata", async () => {
@@ -97,14 +97,14 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
       cfg,
     });
 
-    expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          MediaUrls: ["https://cdn.discordapp.com/attachments/voice"],
-          MediaTypes: ["audio/ogg"],
-        }),
-      }),
-    );
+    expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
+      ctx: {
+        MediaUrls: ["https://cdn.discordapp.com/attachments/voice"],
+        MediaTypes: ["audio/ogg"],
+      },
+      cfg,
+      agentDir: undefined,
+    });
   });
 
   it("does not preflight typed direct-message audio", async () => {

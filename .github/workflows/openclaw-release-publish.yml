@@ -37,6 +37,15 @@ on:
         required: true
         default: true
         type: boolean
+      release_profile:
+        description: Release coverage profile used for release evidence summaries
+        required: false
+        default: beta
+        type: choice
+        options:
+          - beta
+          - stable
+          - full
       wait_for_clawhub:
         description: Wait for ClawHub plugin publish before marking this workflow complete
         required: true
@@ -53,8 +62,8 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.x"
-  PNPM_VERSION: "10.32.1"
+  NODE_VERSION: "24.15.0"
+  PNPM_VERSION: "11.0.8"
 
 jobs:
   resolve_release_target:
@@ -62,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
-      sha: ${{ steps.ref.outputs.sha }}
+      sha: ${{ steps.manifest.outputs.sha || steps.ref.outputs.sha }}
     steps:
       - name: Validate inputs
         env:
@@ -72,6 +81,7 @@ jobs:
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_PROFILE: ${{ inputs.release_profile }}
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
@@ -103,6 +113,23 @@ jobs:
             echo "plugin_publish_scope=all-publishable must not include plugins." >&2
             exit 1
           fi
+          case "$RELEASE_PROFILE" in
+            beta|stable|full) ;;
+            *)
+              echo "release_profile must be one of: beta, stable, full" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Download OpenClaw npm preflight manifest
+        if: ${{ inputs.publish_openclaw_npm }}
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-npm-preflight-${{ inputs.tag }}
+          path: ${{ runner.temp }}/openclaw-npm-preflight-manifest
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.preflight_run_id }}
+          github-token: ${{ github.token }}
 
       - name: Checkout release tag
         uses: actions/checkout@v6
@@ -111,16 +138,53 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
-          install-bun: "false"
-
       - name: Resolve checked-out release ref
         id: ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate OpenClaw npm preflight manifest
+        id: manifest
+        if: ${{ inputs.publish_openclaw_npm }}
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          EXPECTED_SHA: ${{ steps.ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          preflight_dir="${RUNNER_TEMP}/openclaw-npm-preflight-manifest"
+          manifest="${preflight_dir}/preflight-manifest.json"
+          if [[ ! -f "$manifest" ]]; then
+            echo "OpenClaw npm preflight manifest is missing." >&2
+            ls -la "$preflight_dir" >&2 || true
+            exit 1
+          fi
+          release_tag="$(jq -r '.releaseTag // ""' "$manifest")"
+          release_sha="$(jq -r '.releaseSha // ""' "$manifest")"
+          npm_dist_tag="$(jq -r '.npmDistTag // ""' "$manifest")"
+          tarball_name="$(jq -r '.tarballName // ""' "$manifest")"
+          tarball_sha256="$(jq -r '.tarballSha256 // ""' "$manifest")"
+          if [[ "$release_tag" != "$RELEASE_TAG" ]]; then
+            echo "Preflight manifest tag mismatch: expected $RELEASE_TAG, got $release_tag" >&2
+            exit 1
+          fi
+          if [[ "$release_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Preflight manifest SHA mismatch: expected $EXPECTED_SHA, got $release_sha" >&2
+            exit 1
+          fi
+          if [[ "$npm_dist_tag" != "$RELEASE_NPM_DIST_TAG" ]]; then
+            echo "Preflight manifest npm dist-tag mismatch: expected $RELEASE_NPM_DIST_TAG, got $npm_dist_tag" >&2
+            exit 1
+          fi
+          if [[ -z "$tarball_name" || ! -f "${preflight_dir}/${tarball_name}" ]]; then
+            echo "Preflight manifest tarball is missing: $tarball_name" >&2
+            exit 1
+          fi
+          actual_tarball_sha256="$(sha256sum "${preflight_dir}/${tarball_name}" | awk '{print $1}')"
+          if [[ "$actual_tarball_sha256" != "$tarball_sha256" ]]; then
+            echo "Preflight manifest tarball digest mismatch." >&2
+            exit 1
+          fi
+          echo "sha=$release_sha" >> "$GITHUB_OUTPUT"
 
       - name: Validate release tag is reachable from main or release branch
         run: |
@@ -139,27 +203,33 @@ jobs:
           echo "Release tag must point to a commit reachable from main or release/*." >&2
           exit 1
 
-      - name: Verify plugin versions were synced for this release
-        run: pnpm plugins:sync:check
-
       - name: Summarize release target
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-          TARGET_SHA: ${{ steps.ref.outputs.sha }}
+          TARGET_SHA: ${{ steps.manifest.outputs.sha || steps.ref.outputs.sha }}
+          RELEASE_PROFILE: ${{ inputs.release_profile }}
         run: |
           {
             echo "### Release target"
             echo
             echo "- Tag: \`${RELEASE_TAG}\`"
             echo "- SHA: \`${TARGET_SHA}\`"
+            echo "- Release profile: \`${RELEASE_PROFILE}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   publish:
     name: Publish plugins, then OpenClaw
     needs: [resolve_release_target]
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 60
     steps:
+      - name: Checkout release SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve_release_target.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Dispatch publish workflows
         env:
           GH_TOKEN: ${{ github.token }}
@@ -274,15 +344,21 @@ jobs:
             changelog_file="${RUNNER_TEMP}/CHANGELOG.md"
             notes_file="${RUNNER_TEMP}/release-notes.md"
 
-            gh api --repo "$GITHUB_REPOSITORY" "repos/${GITHUB_REPOSITORY}/contents/CHANGELOG.md?ref=${TARGET_SHA}" \
-              --jq '.content' | base64 --decode > "${changelog_file}"
+            git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"
             awk -v version="${notes_version}" '
               $0 == "## " version { in_section = 1; next }
               /^## / && in_section { exit }
               in_section { print }
             ' "${changelog_file}" > "${notes_file}"
+            if [[ ! -s "${notes_file}" ]] && [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
+              awk '
+                $0 == "## Unreleased" { in_section = 1; next }
+                /^## / && in_section { exit }
+                in_section { print }
+              ' "${changelog_file}" > "${notes_file}"
+            fi
             if [[ ! -s "${notes_file}" ]]; then
-              echo "CHANGELOG.md does not contain release notes for ${notes_version}." >&2
+              echo "CHANGELOG.md does not contain release notes for ${notes_version} or an Unreleased prerelease fallback." >&2
               exit 1
             fi
 

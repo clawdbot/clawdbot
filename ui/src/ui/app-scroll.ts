@@ -14,6 +14,8 @@ type ScrollHost = {
   chatUserNearBottom: boolean;
   chatHeaderControlsHidden: boolean;
   chatNewMessagesBelow: boolean;
+  chatIsProgrammaticScroll: boolean;
+  chatProgrammaticScrollTarget: number;
   logsScrollFrame: number | null;
   logsAtBottom: boolean;
   topbarObserver: ResizeObserver | null;
@@ -75,11 +77,17 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
           typeof window.matchMedia !== "function" ||
           !window.matchMedia("(prefers-reduced-motion: reduce)").matches);
       const scrollTop = target.scrollHeight;
+      host.chatProgrammaticScrollTarget = scrollTop;
+      host.chatIsProgrammaticScroll = true;
       if (typeof target.scrollTo === "function") {
         target.scrollTo({ top: scrollTop, behavior: smoothEnabled ? "smooth" : "auto" });
       } else {
         target.scrollTop = scrollTop;
       }
+      // Clear the flag after the scroll event has fired (sync or next microtask).
+      requestAnimationFrame(() => {
+        host.chatIsProgrammaticScroll = false;
+      });
       host.chatUserNearBottom = true;
       host.chatNewMessagesBelow = false;
       const retryDelay = effectiveForce ? 150 : 120;
@@ -98,7 +106,12 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
         if (!shouldStickRetry) {
           return;
         }
+        host.chatProgrammaticScrollTarget = latest.scrollHeight;
+        host.chatIsProgrammaticScroll = true;
         latest.scrollTop = latest.scrollHeight;
+        requestAnimationFrame(() => {
+          host.chatIsProgrammaticScroll = false;
+        });
         host.chatUserNearBottom = true;
       }, retryDelay);
     });
@@ -135,6 +148,17 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
   const scrollTop = Math.max(0, container.scrollTop);
   const delta = scrollTop - host.chatLastScrollTop;
   host.chatLastScrollTop = scrollTop;
+  // Ignore scroll events that we ourselves triggered — they must not flip
+  // chatUserNearBottom to false while streaming content grows the page.
+  // Only suppress if scrollTop is still at or above the position we scrolled to;
+  // if it dropped below, the user scrolled up during the guard window and we must
+  // process the event so streaming stops pinning them back to the bottom.
+  if (
+    host.chatIsProgrammaticScroll &&
+    container.scrollTop >= host.chatProgrammaticScrollTarget - container.clientHeight
+  ) {
+    return;
+  }
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
   host.chatUserNearBottom = distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
   const hasUsefulScroll = container.scrollHeight - container.clientHeight > NEAR_BOTTOM_THRESHOLD;
@@ -168,6 +192,8 @@ export function resetChatScroll(host: ScrollHost) {
   host.chatLastScrollTop = 0;
   host.chatHeaderControlsHidden = false;
   host.chatNewMessagesBelow = false;
+  host.chatIsProgrammaticScroll = false;
+  host.chatProgrammaticScrollTarget = 0;
 }
 
 export function exportLogs(lines: string[], label: string) {

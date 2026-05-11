@@ -16,10 +16,11 @@ async function withCanvasTemp<T>(prefix: string, run: (dir: string) => Promise<T
 function expectResolvedFile(
   result: Awaited<ReturnType<typeof resolveFileWithinRoot>>,
 ): ResolvedFile {
-  expect(result).toEqual(expect.objectContaining({ handle: expect.any(Object) }));
   if (result === null) {
     throw new Error("Expected resolved file within root");
   }
+  expect(typeof result.handle.close).toBe("function");
+  expect(typeof result.handle.readFile).toBe("function");
   return result;
 }
 

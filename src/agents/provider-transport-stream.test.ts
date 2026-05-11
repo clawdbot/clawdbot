@@ -1,5 +1,6 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
+import { attachModelProviderLocalService } from "./provider-local-service.js";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 import {
   buildTransportAwareSimpleStreamFn,
@@ -130,13 +131,13 @@ describe("provider transport stream contracts", () => {
     expect(resolveTransportAwareSimpleApi(model.api)).toBeUndefined();
     expect(createBoundaryAwareStreamFnForModel(model)).toBeUndefined();
     expect(() => createTransportAwareStreamFnForModel(model)).toThrow(
-      'Model-provider request.proxy/request.tls is not yet supported for api "ollama"',
+      'Model-provider request.proxy/request.tls/localService is not yet supported for api "ollama"',
     );
     expect(() => buildTransportAwareSimpleStreamFn(model)).toThrow(
-      'Model-provider request.proxy/request.tls is not yet supported for api "ollama"',
+      'Model-provider request.proxy/request.tls/localService is not yet supported for api "ollama"',
     );
     expect(() => prepareTransportAwareSimpleModel(model)).toThrow(
-      'Model-provider request.proxy/request.tls is not yet supported for api "ollama"',
+      'Model-provider request.proxy/request.tls/localService is not yet supported for api "ollama"',
     );
   });
 
@@ -173,6 +174,27 @@ describe("provider transport stream contracts", () => {
       expect(buildTransportAwareSimpleStreamFn(model)).toBeUndefined();
       expect(prepareTransportAwareSimpleModel(model)).toBe(model);
     }
+  });
+
+  it("routes localService models through the OpenClaw simple-completion transport", () => {
+    const model = attachModelProviderLocalService(
+      buildModel("openai-completions", {
+        id: "google/gemma-4-E2B-it",
+        provider: "inferrs",
+        baseUrl: "http://127.0.0.1:8080/v1",
+      }),
+      {
+        command: "/usr/local/bin/inferrs",
+        args: ["serve", "google/gemma-4-E2B-it"],
+      },
+    );
+
+    expect(createTransportAwareStreamFnForModel(model)).toBeTypeOf("function");
+    expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
+    const preparedModel = prepareTransportAwareSimpleModel(model);
+    expect(preparedModel.api).toBe("openclaw-openai-completions-transport");
+    expect(preparedModel.provider).toBe("inferrs");
+    expect(preparedModel.id).toBe("google/gemma-4-E2B-it");
   });
 
   it("keeps Codex defaults on the OpenClaw transport until PI preserves attribution", () => {

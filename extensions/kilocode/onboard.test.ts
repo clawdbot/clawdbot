@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { describe, expect, it, vi } from "vitest";
@@ -102,7 +102,7 @@ describe("Kilo Gateway provider config", () => {
     it("sets Kilo Gateway alias in agent default models", () => {
       const result = applyKilocodeProviderConfig(emptyCfg);
       const agentModel = result.agents?.defaults?.models?.[KILOCODE_DEFAULT_MODEL_REF];
-      expect(agentModel).toMatchObject({ alias: "Kilo Gateway" });
+      expect(agentModel).toEqual({ alias: "Kilo Gateway" });
     });
 
     it("preserves existing alias if already set", () => {
@@ -150,9 +150,9 @@ describe("Kilo Gateway provider config", () => {
 
       try {
         const result = resolveEnvApiKey("kilocode");
-        expect(result).toMatchObject({
+        expect(result).toEqual({
           apiKey: "test-kilo-key",
-          source: expect.stringContaining("KILOCODE_API_KEY"),
+          source: "env: KILOCODE_API_KEY",
         });
       } finally {
         vi.unstubAllEnvs();

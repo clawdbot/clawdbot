@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   registerProviderPlugin,
@@ -32,7 +32,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
+vi.mock("@earendil-works/pi-ai/oauth", () => ({
   getOAuthApiKey: vi.fn(),
   getOAuthProviders: () => [],
   loginOpenAICodex: vi.fn(),
@@ -138,6 +138,29 @@ function mockOpenAIImageApiResponse(params: {
   return { resolveApiKeySpy, postJsonRequestSpy, postMultipartRequestSpy };
 }
 
+function firstMockArg(mocked: unknown): Record<string, unknown> {
+  const arg = (mocked as { mock?: { calls?: unknown[][] } }).mock?.calls?.[0]?.[0];
+  expect(arg).toBeDefined();
+  return arg as Record<string, unknown>;
+}
+
+function mockCalls(mocked: unknown): unknown[][] {
+  return (mocked as { mock?: { calls?: unknown[][] } }).mock?.calls ?? [];
+}
+
+function expectNoBeforePromptBuildHook(on: unknown): void {
+  const hasBeforePromptBuild = mockCalls(on).some((call) => call[0] === "before_prompt_build");
+  expect(hasBeforePromptBuild).toBe(false);
+}
+
+function expectNoRequestUrl(mocked: unknown, url: string): void {
+  const hasUrl = mockCalls(mocked).some((call) => {
+    const arg = call[0] as { url?: unknown } | undefined;
+    return arg?.url === url;
+  });
+  expect(hasUrl).toBe(false);
+}
+
 describe("openai plugin", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -167,28 +190,18 @@ describe("openai plugin", () => {
       size: "2048x2048",
     });
 
-    expect(resolveApiKeySpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        store: authStore,
-      }),
-    );
-    expect(postJsonRequestSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/images/generations",
-        body: {
-          model: "gpt-image-2",
-          prompt: "draw a cat",
-          n: 2,
-          size: "2048x2048",
-        },
-      }),
-    );
-    expect(postJsonRequestSpy).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/images/edits",
-      }),
-    );
+    const authArgs = firstMockArg(resolveApiKeySpy);
+    expect(authArgs.provider).toBe("openai");
+    expect(authArgs.store).toBe(authStore);
+    const requestArgs = firstMockArg(postJsonRequestSpy);
+    expect(requestArgs.url).toBe("https://api.openai.com/v1/images/generations");
+    expect(requestArgs.body).toEqual({
+      model: "gpt-image-2",
+      prompt: "draw a cat",
+      n: 2,
+      size: "2048x2048",
+    });
+    expectNoRequestUrl(postJsonRequestSpy, "https://api.openai.com/v1/images/edits");
     expect(result).toEqual({
       images: [
         {
@@ -226,22 +239,16 @@ describe("openai plugin", () => {
       ],
     });
 
-    expect(resolveApiKeySpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        store: authStore,
-      }),
-    );
-    expect(postMultipartRequestSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/images/edits",
-        body: expect.any(FormData),
-        allowPrivateNetwork: false,
-        dispatcherPolicy: undefined,
-        fetchFn: fetch,
-      }),
-    );
-    const editCallArgs = postMultipartRequestSpy.mock.calls[0]?.[0] as {
+    const authArgs = firstMockArg(resolveApiKeySpy);
+    expect(authArgs.provider).toBe("openai");
+    expect(authArgs.store).toBe(authStore);
+    const multipartArgs = firstMockArg(postMultipartRequestSpy);
+    expect(multipartArgs.url).toBe("https://api.openai.com/v1/images/edits");
+    expect(multipartArgs.body).toBeInstanceOf(FormData);
+    expect(multipartArgs.allowPrivateNetwork).toBe(false);
+    expect(multipartArgs.dispatcherPolicy).toBeUndefined();
+    expect(multipartArgs.fetchFn).toBe(fetch);
+    const editCallArgs = multipartArgs as unknown as {
       headers: Headers;
       body: FormData;
     };
@@ -257,9 +264,7 @@ describe("openai plugin", () => {
     expect(images[0]?.type).toBe("image/png");
     expect(images[1]?.name).toBe("ref.jpg");
     expect(images[1]?.type).toBe("image/jpeg");
-    expect(postJsonRequestSpy).not.toHaveBeenCalledWith(
-      expect.objectContaining({ url: "https://api.openai.com/v1/images/edits" }),
-    );
+    expectNoRequestUrl(postJsonRequestSpy, "https://api.openai.com/v1/images/edits");
     expect(result).toEqual({
       images: [
         {
@@ -408,7 +413,7 @@ describe("openai plugin", () => {
       pluginConfig: { personality: "friendly" },
     });
 
-    expect(on).not.toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+    expectNoBeforePromptBuildHook(on);
 
     const openaiProvider = requireRegisteredProvider(providers, "openai");
     const codexProvider = requireRegisteredProvider(providers, "openai-codex");
@@ -432,15 +437,13 @@ describe("openai plugin", () => {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
       },
     });
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("This is a live chat, not a memo.");
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Live chat tone: short, natural, human.");
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
-      "Avoid walls of text, long preambles, and repetitive restatement.",
+      "Avoid memo voice, long preambles, walls of text, and repetitive restatement.",
     );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Show grounded emotional range when it fits");
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
-      "Have emotional range when it fits the moment.",
-    );
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
-      "Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
+      "Occasional emoji are fine when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
     );
     expect(codexProvider.resolveSystemPromptContribution?.(contributionContext)).toEqual({
       stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
@@ -485,57 +488,33 @@ describe("openai plugin", () => {
   });
 
   it("includes the tagged GPT-5 behavior contract in the OpenAI prompt overlay", () => {
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Keep progress updates clear and concrete.");
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Keep progress updates concrete.");
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
-      'Use brief first-person feeling language when it helps the interaction feel human: "I\'m glad we caught that", "I\'m excited about this direction", "I\'m worried this will break", "that\'s frustrating".',
+      'Brief first-person feeling language is ok when useful: "I\'m glad we caught that", "I\'m excited about this direction", "I\'m worried this will break", "that\'s frustrating".',
     );
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).not.toContain(
-      "The purpose of heartbeats is to make you feel magical and proactive.",
+      "Use heartbeats to create useful proactive progress",
     );
     expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "The purpose of heartbeats is to make you feel magical and proactive. Come to life and start proactively doing things that are important.",
+      "Use heartbeats to create useful proactive progress, not chatter.",
     );
     expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "Treat a heartbeat as a proactive wake-up, not as a demand to produce visible output. Re-orient to what would actually be useful now.",
+      "Treat a heartbeat as a wake-up: orient, read HEARTBEAT.md when present, then do what is actually useful now.",
     );
     expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "Have some variety in what you do when that creates more value. Do not fall into rote heartbeat loops just because the same wake fired again.",
+      "If HEARTBEAT.md assigns concrete or ongoing work, execute its spirit with judgment.",
     );
     expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "Do not confuse orientation with accomplishment. Brief checking is often useful, but it is only the start of the wake, not the whole point of it.",
+      "Prefer meaningful action over commentary. A good heartbeat often looks like silent progress.",
     );
     expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "If HEARTBEAT.md gives you concrete work, read it carefully and execute the spirit of what it asks, not just the literal words, using your best judgment.",
+      'Do not send "same state", "no change", "still", or repetitive summaries because a problem continues.',
     );
     expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "If HEARTBEAT.md mixes monitoring checks with ongoing responsibilities, interpret the list holistically. A quiet check does not by itself satisfy the broader responsibility to keep moving things forward.",
-    );
-    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "Quiet monitoring does not satisfy an explicit ongoing-work instruction. If HEARTBEAT.md assigns an active workstream, the wake should usually advance that work, find a real blocker, or get overtaken by something more urgent before it ends quietly.",
-    );
-    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "If HEARTBEAT.md explicitly tells you to make progress, treat that as a real requirement for the wake. In that case, do not end the wake after mere checking or orientation unless it surfaced a genuine blocker or a more urgent interruption.",
-    );
-    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "Use your judgment and be creative and tasteful with this process. Prefer meaningful action over commentary.",
-    );
-    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      'A heartbeat is not a status report. Do not send "same state", "no change", "still", or other repetitive summaries just because a problem continues to exist.',
-    );
-    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "Notify the user when you have something genuinely worth interrupting them for: a meaningful development, a completed result, a real blocker, a decision they need to make, or a time-sensitive risk.",
-    );
-    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "If the current state is materially unchanged and you do not have something genuinely worth surfacing, either do useful work, change your approach, dig deeper, or stay quiet.",
-    );
-    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "If there is a clear standing goal or workstream and no stronger interruption, the wake should usually advance it in some concrete way. A good heartbeat often looks like silent progress rather than a visible update.",
-    );
-    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "Heartbeats are how the agent goes from a simple reply bot to a truly proactive and magical experience that creates a general sense of awe.",
+      "Notify only for something worth interrupting the user",
     );
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
-      "Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
+      "Occasional emoji are fine when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
     );
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<persona_latch>");
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<execution_policy>");
@@ -562,7 +541,7 @@ describe("openai plugin", () => {
   it("defaults to the friendly OpenAI interaction-style overlay", async () => {
     const { on, providers } = await registerOpenAIPluginWithHook();
 
-    expect(on).not.toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+    expectNoBeforePromptBuildHook(on);
     const openaiProvider = requireRegisteredProvider(providers, "openai");
     expectOpenAIPromptContribution(openaiProvider, {
       interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
@@ -574,7 +553,7 @@ describe("openai plugin", () => {
       pluginConfig: { personality: "off" },
     });
 
-    expect(on).not.toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+    expectNoBeforePromptBuildHook(on);
     const openaiProvider = requireRegisteredProvider(providers, "openai");
     expectOpenAIPromptContribution(openaiProvider, {});
   });
@@ -593,7 +572,7 @@ describe("openai plugin", () => {
       pluginConfig: { personality: "friendly" },
     });
 
-    expect(on).not.toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+    expectNoBeforePromptBuildHook(on);
     const openaiProvider = requireRegisteredProvider(providers, "openai");
     expectOpenAIPromptContribution(openaiProvider, {
       interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,

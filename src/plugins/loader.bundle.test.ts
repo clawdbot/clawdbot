@@ -153,7 +153,7 @@ describe("bundle plugins", () => {
 
     expect(plugin?.status).toBe("loaded");
     expect(plugin?.bundleFormat).toBe(expectedFormat);
-    expect(plugin?.bundleCapabilities).toEqual(expect.arrayContaining(expectedCapabilities));
+    expect(plugin?.bundleCapabilities).toEqual(expectedCapabilities);
     expectNoUnwiredBundleDiagnostic(registry, pluginId);
   });
 
@@ -189,7 +189,7 @@ describe("bundle plugins", () => {
 
     const plugin = registry.plugins.find((entry) => entry.id === "claude-mcp-url");
     expect(plugin?.status).toBe("loaded");
-    expect(plugin?.bundleCapabilities).toEqual(expect.arrayContaining(["mcpServers"]));
+    expect(plugin?.bundleCapabilities).toEqual(["mcpServers"]);
     expect(
       registry.diagnostics.some(
         (diag) =>

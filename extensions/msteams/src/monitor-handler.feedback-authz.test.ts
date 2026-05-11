@@ -130,7 +130,14 @@ function createFeedbackInvokeContext(params: {
 }
 
 async function expectFileMissing(filePath: string) {
-  await expect(access(filePath)).rejects.toMatchObject({ code: "ENOENT" });
+  let error: unknown;
+  try {
+    await access(filePath);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
 async function withFeedbackHandler(params: {
@@ -189,12 +196,28 @@ describe("msteams feedback invoke authz", () => {
           path.join(tmpDir, "msteams_direct_owner-aad.jsonl"),
           "utf-8",
         );
-        expect(JSON.parse(transcript.trim())).toMatchObject({
+        const event = JSON.parse(transcript.trim()) as Record<string, unknown>;
+        expect(Object.keys(event).toSorted()).toEqual([
+          "agentId",
+          "comment",
+          "conversationId",
+          "event",
+          "messageId",
+          "sessionKey",
+          "ts",
+          "type",
+          "value",
+        ]);
+        expect(typeof event.ts).toBe("number");
+        expect({ ...event, ts: 0 }).toEqual({
+          type: "custom",
           event: "feedback",
+          ts: 0,
           messageId: "bot-msg-1",
           value: "positive",
           comment: "allowed feedback",
           sessionKey: "msteams:direct:owner-aad",
+          agentId: "default",
           conversationId: "a:personal-chat",
         });
         expect(originalRun).not.toHaveBeenCalled();
@@ -232,11 +255,29 @@ describe("msteams feedback invoke authz", () => {
           path.join(tmpDir, "msteams_direct_owner-aad.jsonl"),
           "utf-8",
         );
-        expect(JSON.parse(transcript.trim())).toMatchObject({
+        const event = JSON.parse(transcript.trim()) as Record<string, unknown>;
+        expect(Object.keys(event).toSorted()).toEqual([
+          "agentId",
+          "comment",
+          "conversationId",
+          "event",
+          "messageId",
+          "sessionKey",
+          "ts",
+          "type",
+          "value",
+        ]);
+        expect(typeof event.ts).toBe("number");
+        expect({ ...event, ts: 0 }).toEqual({
+          type: "custom",
           event: "feedback",
+          ts: 0,
+          messageId: "bot-msg-1",
           value: "positive",
           comment: "allowed dm feedback",
           sessionKey: "msteams:direct:owner-aad",
+          agentId: "default",
+          conversationId: "a:personal-chat",
         });
         expect(originalRun).not.toHaveBeenCalled();
       },

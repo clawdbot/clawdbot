@@ -24,7 +24,7 @@ export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pair
 export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
-export type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 export { GoogleChatConfigSchema } from "openclaw/plugin-sdk/bundled-channel-config-schema";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
@@ -37,11 +37,14 @@ export { fetchRemoteMedia, resolveChannelMediaMaxBytes } from "openclaw/plugin-s
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 export { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-export type { GoogleChatAccountConfig, GoogleChatConfig } from "openclaw/plugin-sdk/config-types";
+export type {
+  GoogleChatAccountConfig,
+  GoogleChatConfig,
+} from "openclaw/plugin-sdk/config-contracts";
 export { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 export { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
 export { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
-export { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-path";
+export { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 export {
   registerWebhookTargetWithPluginRoute,
   resolveWebhookTargetWithAuthOrReject,

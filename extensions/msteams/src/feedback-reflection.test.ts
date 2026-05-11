@@ -224,7 +224,7 @@ describe("loadSessionLearnings", () => {
       "Legacy learning",
       "New learning",
     ]);
-    await expect(rm(legacyFile, { force: false })).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(rm(legacyFile, { force: false })).rejects.toHaveProperty("code", "ENOENT");
     await expect(loadSessionLearnings(tmpDir, "msteams:user1")).resolves.toEqual([
       "Legacy learning",
       "New learning",

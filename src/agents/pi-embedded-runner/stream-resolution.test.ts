@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { getApiProvider, streamSimple } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { getApiProvider, streamSimple } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as providerTransportStream from "../provider-transport-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../system-prompt-cache-boundary.js";
@@ -28,6 +28,22 @@ const overrideBoundaryAwareStreamFnOnce = (streamFn: StreamFn): void => {
     streamFn,
   );
 };
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value).toBeTypeOf("object");
+  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+async function expectStreamResultRecord(
+  result: ReturnType<StreamFn>,
+  label: string,
+): Promise<Record<string, unknown>> {
+  return requireRecord(await result, label);
+}
 
 afterEach(() => {
   __testing.resetPiNativeCodexResponsesStreamFnForTest();
@@ -147,16 +163,16 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     });
 
     expect(streamFn).not.toBe(streamSimple);
-    await expect(
+    const result = await expectStreamResultRecord(
       streamFn(
         { provider: "openai-codex", id: "codex-mini-latest" } as never,
         { systemPrompt: `intro${SYSTEM_PROMPT_CACHE_BOUNDARY}tail` } as never,
         {},
       ),
-    ).resolves.toMatchObject({
-      context: { systemPrompt: "intro\ntail" },
-      options: { apiKey: "oauth-bearer-token" },
-    });
+      "codex native result",
+    );
+    expect(requireRecord(result.context, "codex native context").systemPrompt).toBe("intro\ntail");
+    expect(requireRecord(result.options, "codex native options").apiKey).toBe("oauth-bearer-token");
     expect(nativeStreamFn).toHaveBeenCalledTimes(1);
   });
 
@@ -194,9 +210,11 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     });
 
     expect(streamFn).not.toBe(nativeStreamFn);
-    await expect(
+    const result = await expectStreamResultRecord(
       streamFn({ provider: "llama", id: "qwen36-35b-a3b" } as never, {} as never, {}),
-    ).resolves.toMatchObject({ apiKey: "local-token" });
+      "openai compatible result",
+    );
+    expect(result.apiKey).toBe("local-token");
     expect(innerStreamFn).toHaveBeenCalledTimes(1);
   });
 
@@ -217,13 +235,15 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     });
 
     expect(streamFn).not.toBe(currentStreamFn);
-    await expect(
+    const result = await expectStreamResultRecord(
       streamFn(
         { provider: "cloudflare-ai-gateway", id: "claude-sonnet-4-6" } as never,
         {} as never,
         {},
       ),
-    ).resolves.toMatchObject({ apiKey: "anthropic-runtime-key" });
+      "runtime auth result",
+    );
+    expect(result.apiKey).toBe("anthropic-runtime-key");
     expect(currentStreamFn).not.toHaveBeenCalled();
     expect(innerStreamFn).toHaveBeenCalledTimes(1);
   });
@@ -246,11 +266,11 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       authStorage,
     });
 
-    await expect(
+    const result = await expectStreamResultRecord(
       streamFn({ provider: "openai", id: "gpt-5.4" } as never, {} as never, {}),
-    ).resolves.toMatchObject({
-      apiKey: "resolved-key",
-    });
+      "provider-owned result",
+    );
+    expect(result.apiKey).toBe("resolved-key");
     expect(authStorage.getApiKey).not.toHaveBeenCalled();
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
@@ -271,11 +291,11 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       resolvedApiKey: "resolved-key",
     });
 
-    await expect(
+    const result = await expectStreamResultRecord(
       streamFn({ provider: "github-copilot", id: "gpt-5.4" } as never, {} as never, {}),
-    ).resolves.toMatchObject({
-      signal,
-    });
+      "provider-owned signal result",
+    );
+    expect(result.signal).toBe(signal);
   });
 
   it("does not overwrite an explicit provider-owned stream signal", async () => {
@@ -294,13 +314,13 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       } as never,
     });
 
-    await expect(
+    const result = await expectStreamResultRecord(
       streamFn({ provider: "github-copilot", id: "gpt-5.4" } as never, {} as never, {
         signal: explicitSignal,
       }),
-    ).resolves.toMatchObject({
-      signal: explicitSignal,
-    });
+      "provider-owned explicit signal result",
+    );
+    expect(result.signal).toBe(explicitSignal);
   });
 
   it("injects the resolved run api key into the PI native Codex Responses fallback", async () => {
@@ -317,9 +337,11 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       resolvedApiKey: "oauth-bearer-token",
     });
 
-    await expect(
+    const result = await expectStreamResultRecord(
       streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {}),
-    ).resolves.toMatchObject({ apiKey: "oauth-bearer-token" });
+      "codex api key result",
+    );
+    expect(result.apiKey).toBe("oauth-bearer-token");
     expect(nativeStreamFn).toHaveBeenCalledTimes(1);
   });
 
@@ -340,9 +362,11 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       authStorage,
     });
 
-    await expect(
+    const result = await expectStreamResultRecord(
       streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {}),
-    ).resolves.toMatchObject({ apiKey: "stored-bearer-token" });
+      "codex stored api key result",
+    );
+    expect(result.apiKey).toBe("stored-bearer-token");
     expect(authStorage.getApiKey).toHaveBeenCalledWith("openai-codex");
   });
 
@@ -362,9 +386,12 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       resolvedApiKey: "oauth-bearer-token",
     });
 
-    await expect(
+    const result = await expectStreamResultRecord(
       streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {}),
-    ).resolves.toMatchObject({ signal: runSignal, apiKey: "oauth-bearer-token" });
+      "codex signal and api key result",
+    );
+    expect(result.signal).toBe(runSignal);
+    expect(result.apiKey).toBe("oauth-bearer-token");
   });
 
   it("does not overwrite an explicit signal on the PI native fallback path", async () => {
@@ -384,11 +411,13 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       resolvedApiKey: "oauth-bearer-token",
     });
 
-    await expect(
+    const result = await expectStreamResultRecord(
       streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {
         signal: explicitSignal,
       }),
-    ).resolves.toMatchObject({ signal: explicitSignal });
+      "codex explicit signal result",
+    );
+    expect(result.signal).toBe(explicitSignal);
   });
 
   it("forwards the run signal on the sync PI native fallback path without auth credentials", async () => {
@@ -406,9 +435,11 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       } as never,
     });
 
-    await expect(
+    const result = await expectStreamResultRecord(
       streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {}),
-    ).resolves.toMatchObject({ signal: runSignal });
+      "codex unauthenticated signal result",
+    );
+    expect(result.signal).toBe(runSignal);
   });
 
   it("strips cache boundary markers on the PI native fallback path", async () => {
@@ -426,8 +457,10 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     });
 
     const systemPrompt = `intro${SYSTEM_PROMPT_CACHE_BOUNDARY}tail`;
-    await expect(
+    const result = await expectStreamResultRecord(
       streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, { systemPrompt } as never, {}),
-    ).resolves.toMatchObject({ systemPrompt: "intro\ntail" });
+      "codex stripped context result",
+    );
+    expect(result.systemPrompt).toBe("intro\ntail");
   });
 });

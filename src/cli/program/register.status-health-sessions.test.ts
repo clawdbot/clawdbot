@@ -46,6 +46,27 @@ const flowsCancelCommand = mocks.flowsCancelCommand;
 const setVerbose = mocks.setVerbose;
 const runtime = mocks.runtime;
 
+type MockCalls = {
+  mock: { calls: unknown[][] };
+};
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(typeof value, label).toBe("object");
+  expect(value, label).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+function expectCommandOptions(command: MockCalls, expected: Record<string, unknown>) {
+  expect(command.mock.calls).toHaveLength(1);
+  const [options, actualRuntime] = command.mock.calls[0] ?? [];
+  expect(actualRuntime).toBe(runtime);
+  const optionsRecord = requireRecord(options, "command options");
+  for (const [key, value] of Object.entries(expected)) {
+    expect(optionsRecord[key], key).toEqual(value);
+  }
+  return optionsRecord;
+}
+
 vi.mock("../../commands/status.js", () => ({
   statusCommand: mocks.statusCommand,
 }));
@@ -135,17 +156,14 @@ describe("registerStatusHealthSessionsCommands", () => {
     ]);
 
     expect(setVerbose).toHaveBeenCalledWith(true);
-    expect(statusCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        json: true,
-        all: true,
-        deep: true,
-        usage: true,
-        timeoutMs: 5000,
-        verbose: true,
-      }),
-      runtime,
-    );
+    expectCommandOptions(statusCommand, {
+      json: true,
+      all: true,
+      deep: true,
+      usage: true,
+      timeoutMs: 5000,
+      verbose: true,
+    });
   });
 
   it("rejects invalid status timeout without calling status command", async () => {
@@ -162,14 +180,11 @@ describe("registerStatusHealthSessionsCommands", () => {
     await runCli(["health", "--json", "--timeout", "2500", "--verbose"]);
 
     expect(setVerbose).toHaveBeenCalledWith(true);
-    expect(healthCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        json: true,
-        timeoutMs: 2500,
-        verbose: true,
-      }),
-      runtime,
-    );
+    expectCommandOptions(healthCommand, {
+      json: true,
+      timeoutMs: 2500,
+      verbose: true,
+    });
   });
 
   it("rejects invalid health timeout without calling health command", async () => {
@@ -196,38 +211,29 @@ describe("registerStatusHealthSessionsCommands", () => {
     ]);
 
     expect(setVerbose).toHaveBeenCalledWith(true);
-    expect(sessionsCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        json: true,
-        store: "/tmp/sessions.json",
-        active: "120",
-        limit: "25",
-      }),
-      runtime,
-    );
+    expectCommandOptions(sessionsCommand, {
+      json: true,
+      store: "/tmp/sessions.json",
+      active: "120",
+      limit: "25",
+    });
   });
 
   it("runs sessions command with --agent forwarding", async () => {
     await runCli(["sessions", "--agent", "work"]);
 
-    expect(sessionsCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agent: "work",
-        allAgents: false,
-      }),
-      runtime,
-    );
+    expectCommandOptions(sessionsCommand, {
+      agent: "work",
+      allAgents: false,
+    });
   });
 
   it("runs sessions command with --all-agents forwarding", async () => {
     await runCli(["sessions", "--all-agents"]);
 
-    expect(sessionsCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allAgents: true,
-      }),
-      runtime,
-    );
+    expectCommandOptions(sessionsCommand, {
+      allAgents: true,
+    });
   });
 
   it("runs sessions cleanup subcommand with forwarded options", async () => {
@@ -245,31 +251,25 @@ describe("registerStatusHealthSessionsCommands", () => {
       "--json",
     ]);
 
-    expect(sessionsCleanupCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        store: "/tmp/sessions.json",
-        agent: undefined,
-        allAgents: false,
-        dryRun: true,
-        enforce: true,
-        fixMissing: true,
-        fixDmScope: true,
-        activeKey: "agent:main:main",
-        json: true,
-      }),
-      runtime,
-    );
+    expectCommandOptions(sessionsCleanupCommand, {
+      store: "/tmp/sessions.json",
+      agent: undefined,
+      allAgents: false,
+      dryRun: true,
+      enforce: true,
+      fixMissing: true,
+      fixDmScope: true,
+      activeKey: "agent:main:main",
+      json: true,
+    });
   });
 
   it("forwards parent-level all-agents to cleanup subcommand", async () => {
     await runCli(["sessions", "--all-agents", "cleanup", "--dry-run"]);
 
-    expect(sessionsCleanupCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allAgents: true,
-      }),
-      runtime,
-    );
+    expectCommandOptions(sessionsCleanupCommand, {
+      allAgents: true,
+    });
   });
 
   it("runs sessions export-trajectory with owner-routable export options", async () => {
@@ -287,16 +287,13 @@ describe("registerStatusHealthSessionsCommands", () => {
       "--json",
     ]);
 
-    expect(exportTrajectoryCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:telegram:direct:owner",
-        output: "bug-123",
-        workspace: "/workspace",
-        store: "/tmp/sessions.json",
-        json: true,
-      }),
-      runtime,
-    );
+    expectCommandOptions(exportTrajectoryCommand, {
+      sessionKey: "agent:main:telegram:direct:owner",
+      output: "bug-123",
+      workspace: "/workspace",
+      store: "/tmp/sessions.json",
+      json: true,
+    });
   });
 
   it("forwards encoded sessions export-trajectory requests", async () => {
@@ -308,50 +305,38 @@ describe("registerStatusHealthSessionsCommands", () => {
       "--json",
     ]);
 
-    expect(exportTrajectoryCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requestJsonBase64: "eyJzZXNzaW9uS2V5IjoiYWdlbnQ6bWFpbjp0ZWxlZ3JhbTpkaXJlY3Q6b3duZXIifQ",
-        json: true,
-      }),
-      runtime,
-    );
+    expectCommandOptions(exportTrajectoryCommand, {
+      requestJsonBase64: "eyJzZXNzaW9uS2V5IjoiYWdlbnQ6bWFpbjp0ZWxlZ3JhbTpkaXJlY3Q6b3duZXIifQ",
+      json: true,
+    });
   });
 
   it("runs tasks list from the parent command", async () => {
     await runCli(["tasks", "--json", "--runtime", "acp", "--status", "running"]);
 
-    expect(tasksListCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        json: true,
-        runtime: "acp",
-        status: "running",
-      }),
-      runtime,
-    );
+    expectCommandOptions(tasksListCommand, {
+      json: true,
+      runtime: "acp",
+      status: "running",
+    });
   });
 
   it("runs tasks show subcommand with lookup forwarding", async () => {
     await runCli(["tasks", "show", "run-123", "--json"]);
 
-    expect(tasksShowCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        lookup: "run-123",
-        json: true,
-      }),
-      runtime,
-    );
+    expectCommandOptions(tasksShowCommand, {
+      lookup: "run-123",
+      json: true,
+    });
   });
 
   it("runs tasks maintenance subcommand with apply forwarding", async () => {
     await runCli(["tasks", "--json", "maintenance", "--apply"]);
 
-    expect(tasksMaintenanceCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        json: true,
-        apply: true,
-      }),
-      runtime,
-    );
+    expectCommandOptions(tasksMaintenanceCommand, {
+      json: true,
+      apply: true,
+    });
   });
 
   it("runs tasks audit subcommand with filters", async () => {
@@ -367,84 +352,63 @@ describe("registerStatusHealthSessionsCommands", () => {
       "5",
     ]);
 
-    expect(tasksAuditCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        json: true,
-        severity: "error",
-        code: "stale_running",
-        limit: 5,
-      }),
-      runtime,
-    );
+    expectCommandOptions(tasksAuditCommand, {
+      json: true,
+      severity: "error",
+      code: "stale_running",
+      limit: 5,
+    });
   });
 
   it("routes tasks flow commands through the TaskFlow handlers", async () => {
     await runCli(["tasks", "flow", "list", "--json", "--status", "blocked"]);
-    expect(flowsListCommand).toHaveBeenCalledWith(expect.any(Object), runtime);
+    expectCommandOptions(flowsListCommand, {});
 
     await runCli(["tasks", "flow", "show", "flow-123", "--json"]);
-    expect(flowsShowCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        lookup: "flow-123",
-      }),
-      runtime,
-    );
+    expectCommandOptions(flowsShowCommand, {
+      lookup: "flow-123",
+    });
 
     await runCli(["tasks", "flow", "cancel", "flow-123"]);
-    expect(flowsCancelCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        lookup: "flow-123",
-      }),
-      runtime,
-    );
+    expectCommandOptions(flowsCancelCommand, {
+      lookup: "flow-123",
+    });
   });
 
   it("runs tasks notify subcommand with lookup and policy forwarding", async () => {
     await runCli(["tasks", "notify", "run-123", "state_changes"]);
 
-    expect(tasksNotifyCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        lookup: "run-123",
-        notify: "state_changes",
-      }),
-      runtime,
-    );
+    expectCommandOptions(tasksNotifyCommand, {
+      lookup: "run-123",
+      notify: "state_changes",
+    });
   });
 
   it("runs tasks cancel subcommand with lookup forwarding", async () => {
     await runCli(["tasks", "cancel", "run-123"]);
 
-    expect(tasksCancelCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        lookup: "run-123",
-      }),
-      runtime,
-    );
+    expectCommandOptions(tasksCancelCommand, {
+      lookup: "run-123",
+    });
   });
 
   it("runs commitments list with filters", async () => {
     await runCli(["commitments", "--json", "--agent", "work", "--status", "snoozed"]);
 
-    expect(commitmentsListCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        json: true,
-        agent: "work",
-        status: "snoozed",
-        all: false,
-      }),
-      runtime,
-    );
+    expectCommandOptions(commitmentsListCommand, {
+      json: true,
+      agent: "work",
+      status: "snoozed",
+      all: false,
+    });
   });
 
   it("runs commitments dismiss with id forwarding", async () => {
     await runCli(["commitments", "dismiss", "cm_1", "cm_2"]);
 
-    expect(commitmentsDismissCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ids: ["cm_1", "cm_2"],
-      }),
-      runtime,
-    );
+    expectCommandOptions(commitmentsDismissCommand, {
+      ids: ["cm_1", "cm_2"],
+    });
   });
 
   it("does not register the legacy top-level flows command", () => {

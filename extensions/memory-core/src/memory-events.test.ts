@@ -86,10 +86,10 @@ describe("memory host event journal integration", () => {
 
     const events = await readMemoryHostEvents({ workspaceDir });
 
-    expect(written.inlinePath).toEqual(
-      expect.stringContaining(path.join("memory", "2026-04-05.md")),
+    expect(written.inlinePath).toBe(path.join(workspaceDir, "memory", "2026-04-05.md"));
+    expect(written.reportPath).toBe(
+      path.join(workspaceDir, "memory", "dreaming", "light", "2026-04-05.md"),
     );
-    expect(written.reportPath).toEqual(expect.stringContaining(path.join("memory", "dreaming")));
     await expect(fs.readFile(written.inlinePath ?? "", "utf8")).resolves.toContain("- staged note");
     await expect(fs.readFile(written.reportPath ?? "", "utf8")).resolves.toContain("- second note");
     expect(events).toHaveLength(1);

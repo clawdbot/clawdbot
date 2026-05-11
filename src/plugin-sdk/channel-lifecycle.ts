@@ -1,3 +1,8 @@
+/**
+ * @deprecated Broad public SDK barrel. Prefer focused channel-message and
+ * channel lifecycle subpaths, and avoid adding new imports here.
+ */
+
 export * from "./channel-lifecycle.core.js";
 export * from "../channels/draft-preview-finalizer.js";
 export * from "../channels/draft-stream-controls.js";

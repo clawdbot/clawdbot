@@ -1,4 +1,4 @@
-import type { ProviderStreamOptions } from "@mariozechner/pi-ai";
+import type { ProviderStreamOptions } from "@earendil-works/pi-ai";
 import {
   describeImageWithModelPayloadTransform,
   describeImagesWithModelPayloadTransform,

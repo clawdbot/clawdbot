@@ -12,7 +12,7 @@ import {
 } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
-type GetOAuthApiKey = typeof import("@mariozechner/pi-ai/oauth").getOAuthApiKey;
+type GetOAuthApiKey = typeof import("@earendil-works/pi-ai/oauth").getOAuthApiKey;
 
 const { getOAuthApiKeyMock } = vi.hoisted(() => ({
   getOAuthApiKeyMock: vi.fn<GetOAuthApiKey>(async () => {
@@ -43,7 +43,7 @@ vi.mock("../cli-credentials.js", () => ({
   resetCliCredentialCachesForTest: () => undefined,
 }));
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
+vi.mock("@earendil-works/pi-ai/oauth", () => ({
   getOAuthApiKey: getOAuthApiKeyMock,
   getOAuthProviders: () => [
     { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
@@ -62,7 +62,7 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 }));
 
 afterAll(() => {
-  vi.doUnmock("@mariozechner/pi-ai/oauth");
+  vi.doUnmock("@earendil-works/pi-ai/oauth");
   vi.doUnmock("../cli-credentials.js");
   vi.doUnmock("../../plugins/provider-runtime.runtime.js");
   vi.doUnmock("../../plugins/provider-runtime.js");
@@ -83,6 +83,20 @@ function mockRotatedOpenAICodexRefresh() {
     expires: Date.now() + 86_400_000,
     accountId: "acct-rotated",
   });
+}
+
+function expectPersistedOpenAICodexProfileWithoutInlineTokens(
+  credential: AuthProfileStore["profiles"][string],
+  metadata: Record<string, unknown> = {},
+): void {
+  expect(credential).toMatchObject({
+    type: "oauth",
+    provider: "openai-codex",
+    ...metadata,
+  });
+  expect(credential).not.toHaveProperty("access");
+  expect(credential).not.toHaveProperty("refresh");
+  expect(credential).not.toHaveProperty("idToken");
 }
 
 function resolveOpenAICodexProfile(params: { profileId: string; agentDir: string }) {
@@ -212,7 +226,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
   });
 
-  it("persists plugin-refreshed openai-codex credentials before returning", async () => {
+  it("persists plugin-refreshed openai-codex metadata before returning", async () => {
     const profileId = "openai-codex:default";
     saveAuthProfileStore(
       createExpiredOauthStore({
@@ -233,11 +247,11 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     });
 
     const persisted = await readPersistedStore(agentDir);
-    const profile = requireOAuthProfile(persisted, profileId);
-    expect(profile.provider).toBe("openai-codex");
-    expect(profile.access).toBe("rotated-access-token");
-    expect(profile.refresh).toBe("rotated-refresh-token");
-    expect(profile.accountId).toBe("acct-rotated");
+    expectPersistedOpenAICodexProfileWithoutInlineTokens(persisted.profiles[profileId], {
+      accountId: "acct-rotated",
+    });
+    expect(JSON.stringify(persisted)).not.toContain("rotated-access-token");
+    expect(JSON.stringify(persisted)).not.toContain("rotated-refresh-token");
   });
 
   it("refreshes imported Codex credentials into the canonical auth store without writing back to .codex", async () => {
@@ -286,12 +300,17 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       email: undefined,
     });
     const persisted = await readPersistedStore(agentDir);
-    const profile = requireOAuthProfile(persisted, profileId);
-    expect(profile.provider).toBe("openai-codex");
-    expect(profile.access).toBe("rotated-cli-access-token");
-    expect(profile.refresh).toBe("rotated-cli-refresh-token");
-    expect(profile.accountId).toBe("acct-rotated");
-    expect(profile.access).not.toBe("expired-access-token");
+    expectPersistedOpenAICodexProfileWithoutInlineTokens(persisted.profiles[profileId], {
+      accountId: "acct-rotated",
+    });
+    expect(JSON.stringify(persisted)).not.toContain("rotated-cli-access-token");
+    expect(JSON.stringify(persisted)).not.toContain("rotated-cli-refresh-token");
+    expect(persisted.profiles[profileId]).not.toEqual(
+      expect.objectContaining({
+        provider: "openai-codex",
+        access: "expired-access-token",
+      }),
+    );
   });
 
   it("ignores mismatched fresh Codex CLI credentials when canonical local auth is bound to another account", async () => {
@@ -344,13 +363,18 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     });
 
     const persisted = await readPersistedStore(agentDir);
-    const profile = requireOAuthProfile(persisted, profileId);
-    expect(profile.access).toBe("fresh-local-access-token");
-    expect(profile.refresh).toBe("fresh-local-refresh-token");
-    expect(profile.accountId).toBe("acct-local");
-    expect(profile.access).not.toBe("fresh-cli-access-token");
-    expect(profile.refresh).not.toBe("fresh-cli-refresh-token");
-    expect(profile.accountId).not.toBe("acct-external");
+    expectPersistedOpenAICodexProfileWithoutInlineTokens(persisted.profiles[profileId], {
+      accountId: "acct-local",
+    });
+    expect(JSON.stringify(persisted)).not.toContain("fresh-local-access-token");
+    expect(JSON.stringify(persisted)).not.toContain("fresh-local-refresh-token");
+    expect(persisted.profiles[profileId]).not.toEqual(
+      expect.objectContaining({
+        access: "fresh-cli-access-token",
+        refresh: "fresh-cli-refresh-token",
+        accountId: "acct-external",
+      }),
+    );
   });
 
   it("keeps the canonical refresh token when imported Codex CLI state is expired", async () => {
@@ -406,10 +430,14 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     });
 
     const persisted = await readPersistedStore(agentDir);
-    const profile = requireOAuthProfile(persisted, profileId);
-    expect(profile.access).toBe("fresh-access-token");
-    expect(profile.refresh).toBe("fresh-refresh-token");
-    expect(profile.refresh).not.toBe("fresh-cli-refresh-token");
+    expectPersistedOpenAICodexProfileWithoutInlineTokens(persisted.profiles[profileId]);
+    expect(JSON.stringify(persisted)).not.toContain("fresh-access-token");
+    expect(JSON.stringify(persisted)).not.toContain("fresh-refresh-token");
+    expect(persisted.profiles[profileId]).not.toEqual(
+      expect.objectContaining({
+        refresh: "fresh-cli-refresh-token",
+      }),
+    );
   });
 
   it("adopts fresher stored credentials after refresh_token_reused", async () => {
@@ -514,9 +542,9 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
 
     expect(getOAuthApiKeyMock).toHaveBeenCalledTimes(2);
     const persisted = await readPersistedStore(agentDir);
-    const profile = requireOAuthProfile(persisted, profileId);
-    expect(profile.access).toBe("retried-access-token");
-    expect(profile.refresh).toBe("retried-refresh-token");
+    expectPersistedOpenAICodexProfileWithoutInlineTokens(persisted.profiles[profileId]);
+    expect(JSON.stringify(persisted)).not.toContain("retried-access-token");
+    expect(JSON.stringify(persisted)).not.toContain("retried-refresh-token");
   });
 
   it("keeps throwing for non-codex providers on the same refresh error", async () => {

@@ -60,4 +60,58 @@ describe("createWebChannelStatusController", () => {
     expect(last.connected).toBe(true);
     expect(last.lastTransportActivityAt).toBe(1000);
   });
+
+  it("clears watchdog recovery history once the socket is healthy again", () => {
+    const patches: Record<string, unknown>[] = [];
+    const controller = createWebChannelStatusController((s) => patches.push({ ...s }));
+
+    controller.noteConnected(1000);
+    controller.noteClose({
+      at: 2000,
+      statusCode: 499,
+      error: "status=499",
+      reconnectAttempts: 1,
+      healthState: "reconnecting",
+      watchdogRecovery: true,
+    });
+    expect(patches.at(-1)!.lastDisconnect).toEqual({
+      at: 2000,
+      status: 499,
+      error: "status=499",
+      loggedOut: false,
+    });
+    controller.noteConnected(3000);
+
+    const last = patches.at(-1)!;
+    expect(last.connected).toBe(true);
+    expect(last.healthState).toBe("healthy");
+    expect(last.reconnectAttempts).toBe(0);
+    expect(last.lastDisconnect).toBeNull();
+  });
+
+  it("keeps non-watchdog reconnect history after the socket reconnects", () => {
+    const patches: Record<string, unknown>[] = [];
+    const controller = createWebChannelStatusController((s) => patches.push({ ...s }));
+
+    controller.noteConnected(1000);
+    controller.noteClose({
+      at: 2000,
+      statusCode: 408,
+      error: "status=408",
+      reconnectAttempts: 1,
+      healthState: "reconnecting",
+    });
+    controller.noteConnected(3000);
+
+    const last = patches.at(-1)!;
+    expect(last.connected).toBe(true);
+    expect(last.healthState).toBe("healthy");
+    expect(last.reconnectAttempts).toBe(1);
+    expect(last.lastDisconnect).toEqual({
+      at: 2000,
+      status: 408,
+      error: "status=408",
+      loggedOut: false,
+    });
+  });
 });

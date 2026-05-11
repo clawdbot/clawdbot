@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, test } from "vitest";
 import {
   appendAssistantMessageToSessionTranscript,
@@ -200,6 +200,26 @@ type SessionHistorySseStream = {
   streamState: { buffer: string };
 };
 
+function expectOpenClawMetadata(
+  metadata: { id?: string; seq?: number } | undefined,
+  expected: { id?: string; seq: number },
+) {
+  if (expected.id !== undefined) {
+    expect(metadata?.id).toBe(expected.id);
+  }
+  expect(metadata?.seq).toBe(expected.seq);
+}
+
+function expectErrorResponse(body: unknown, expected: { type: string; message: string }) {
+  expect(body).toEqual({
+    ok: false,
+    error: {
+      type: expected.type,
+      message: expected.message,
+    },
+  });
+}
+
 async function openSessionHistorySse(
   port: number,
   sessionKey: string,
@@ -240,13 +260,14 @@ async function expectMessageEventMatch(
   ).toBe(params.text);
   expect((event.data as { messageSeq?: number }).messageSeq).toBe(params.seq);
   if (params.id !== undefined) {
-    expect(
+    expectOpenClawMetadata(
       (event.data as { message?: { __openclaw?: { id?: string; seq?: number } } }).message
         ?.__openclaw,
-    ).toMatchObject({
-      id: params.id,
-      seq: params.seq,
-    });
+      {
+        id: params.id,
+        seq: params.seq,
+      },
+    );
   }
   return event;
 }
@@ -282,15 +303,16 @@ describe("session history HTTP endpoints", () => {
       expect(body.sessionKey).toBe("agent:main:main");
       expect(body.messages).toHaveLength(1);
       expect(body.messages?.[0]?.content?.[0]?.text).toBe("hello from history");
-      expect(
+      expectOpenClawMetadata(
         (
           body.messages?.[0] as {
             __openclaw?: { id?: string; seq?: number };
           }
         )?.__openclaw,
-      ).toMatchObject({
-        seq: 1,
-      });
+        {
+          seq: 1,
+        },
+      );
     });
   });
 
@@ -299,12 +321,9 @@ describe("session history HTTP endpoints", () => {
     await withGatewayHarness(async (harness) => {
       const res = await fetchSessionHistory(harness.port, "agent:main:missing");
       expect(res.status).toBe(404);
-      await expect(res.json()).resolves.toMatchObject({
-        ok: false,
-        error: {
-          type: "not_found",
-          message: "Session not found: agent:main:missing",
-        },
+      expectErrorResponse(await res.json(), {
+        type: "not_found",
+        message: "Session not found: agent:main:missing",
       });
     });
   });
@@ -438,7 +457,7 @@ describe("session history HTTP endpoints", () => {
         }>;
       };
       expect(nextData.messages?.[0]?.content?.[0]?.text).toBe("third message");
-      expect(nextData.messages?.[0]?.__openclaw).toMatchObject({
+      expectOpenClawMetadata(nextData.messages?.[0]?.__openclaw, {
         id: thirdMessageId,
         seq: 3,
       });
@@ -528,7 +547,7 @@ describe("session history HTTP endpoints", () => {
       expect(body.sessionKey).toBe("agent:main:main");
       expect(body.messages).toHaveLength(1);
       expect(body.messages?.[0]?.content?.[0]?.text).toBe("Done.");
-      expect(body.messages?.[0]?.__openclaw).toMatchObject({
+      expectOpenClawMetadata(body.messages?.[0]?.__openclaw, {
         id: visibleMessageId,
         seq: 2,
       });
@@ -710,12 +729,9 @@ describe("session history HTTP endpoints", () => {
         },
       );
       expect(httpHistory.status).toBe(403);
-      await expect(httpHistory.json()).resolves.toMatchObject({
-        ok: false,
-        error: {
-          type: "forbidden",
-          message: "missing scope: operator.read",
-        },
+      expectErrorResponse(await httpHistory.json(), {
+        type: "forbidden",
+        message: "missing scope: operator.read",
       });
 
       const httpHistoryWithoutScopes = await fetch(
@@ -725,12 +741,9 @@ describe("session history HTTP endpoints", () => {
         },
       );
       expect(httpHistoryWithoutScopes.status).toBe(403);
-      await expect(httpHistoryWithoutScopes.json()).resolves.toMatchObject({
-        ok: false,
-        error: {
-          type: "forbidden",
-          message: "missing scope: operator.read",
-        },
+      expectErrorResponse(await httpHistoryWithoutScopes.json(), {
+        type: "forbidden",
+        message: "missing scope: operator.read",
       });
     } finally {
       ws.close();

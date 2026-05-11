@@ -1,3 +1,4 @@
+import OpenClawKit
 import OpenClawProtocol
 import SwiftUI
 import UIKit
@@ -454,6 +455,7 @@ private struct HomeCanvasAgentCard: Codable {
 
 private struct CanvasContent: View {
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(GatewayConnectionController.self) private var gatewayController
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
     @State private var showGatewayActions: Bool = false
@@ -522,13 +524,9 @@ private struct CanvasContent: View {
             {
                 GatewayProblemBanner(
                     problem: gatewayProblem,
-                    primaryActionTitle: gatewayProblem.retryable ? "Retry" : "Open Settings",
+                    primaryActionTitle: self.gatewayProblemPrimaryActionTitle(gatewayProblem),
                     onPrimaryAction: {
-                        if gatewayProblem.retryable {
-                            self.retryGatewayConnection()
-                        } else {
-                            self.openSettings()
-                        }
+                        self.handleGatewayProblemPrimaryAction(gatewayProblem)
                     },
                     onShowDetails: {
                         self.showGatewayProblemDetails = true
@@ -556,9 +554,9 @@ private struct CanvasContent: View {
             if let gatewayProblem = self.appModel.lastGatewayProblem {
                 GatewayProblemDetailsSheet(
                     problem: gatewayProblem,
-                    primaryActionTitle: "Open Settings",
+                    primaryActionTitle: self.gatewayProblemPrimaryActionTitle(gatewayProblem),
                     onPrimaryAction: {
-                        self.openSettings()
+                        self.handleGatewayProblemPrimaryAction(gatewayProblem)
                     })
             }
         }
@@ -576,6 +574,21 @@ private struct CanvasContent: View {
             voiceWakeEnabled: self.voiceWakeEnabled,
             cameraHUDText: self.cameraHUDText,
             cameraHUDKind: self.cameraHUDKind)
+    }
+
+    private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
+        if problem.canTrustRotatedCertificate { return "Trust certificate" }
+        return problem.retryable ? "Retry" : "Open Settings"
+    }
+
+    private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) {
+        if problem.canTrustRotatedCertificate {
+            Task { await self.gatewayController.trustRotatedGatewayCertificate(from: problem) }
+        } else if problem.retryable {
+            self.retryGatewayConnection()
+        } else {
+            self.openSettings()
+        }
     }
 }
 

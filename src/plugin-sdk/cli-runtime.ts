@@ -1,4 +1,7 @@
-// Public CLI/output helpers for plugins that share terminal-facing command behavior.
+/**
+ * @deprecated Broad public SDK barrel. Prefer focused CLI/runtime subpaths and
+ * avoid adding new imports here.
+ */
 
 export * from "../cli/command-format.js";
 export { inheritOptionFromParent } from "../cli/command-options.js";

@@ -122,13 +122,14 @@ describe("resolveDiscordChannelAllowlist", () => {
       entry: "111/222",
     });
 
-    expect(res[0]).toMatchObject({
+    expect(res[0]).toEqual({
       input: "111/222",
       resolved: true,
       guildId: "111",
+      guildName: "Guild One",
       channelId: "222",
       channelName: "general",
-      guildName: "Guild One",
+      archived: undefined,
     });
   });
 
@@ -142,7 +143,7 @@ describe("resolveDiscordChannelAllowlist", () => {
       entry: "111/222",
     });
 
-    expect(res[0]).toMatchObject({
+    expect(res[0]).toEqual({
       input: "111/222",
       resolved: false,
       guildId: "111",

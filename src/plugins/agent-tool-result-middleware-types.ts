@@ -1,4 +1,4 @@
-import type { AgentToolResult as PiAgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult as PiAgentToolResult } from "@earendil-works/pi-agent-core";
 
 export type OpenClawAgentToolResult<TResult = unknown> = PiAgentToolResult<TResult>;
 

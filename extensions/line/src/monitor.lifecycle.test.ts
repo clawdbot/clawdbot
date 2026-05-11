@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { WEBHOOK_IN_FLIGHT_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
@@ -31,14 +31,41 @@ let getLineRuntimeState: typeof import("./monitor.js").getLineRuntimeState;
 let clearLineRuntimeStateForTests: typeof import("./monitor.js").clearLineRuntimeStateForTests;
 let innerLineWebhookHandlerMock: ReturnType<typeof vi.fn<LineNodeWebhookHandler>>;
 
-function requireRegisteredRoute(): { handler: LineNodeWebhookHandler } {
-  const route = registerWebhookTargetWithPluginRouteMock.mock.calls[0]?.[0]?.route as
-    | { handler: LineNodeWebhookHandler }
+type RegisteredRoute = {
+  accountId?: string;
+  auth?: string;
+  handler?: LineNodeWebhookHandler;
+  path?: string;
+  pluginId?: string;
+  replaceExisting?: boolean;
+};
+
+type RegisteredTarget = {
+  accountId?: string;
+  path: string;
+};
+
+type WebhookRegistration = {
+  route: RegisteredRoute;
+  target: RegisteredTarget;
+};
+
+function requireWebhookRegistration(): WebhookRegistration {
+  const registration = registerWebhookTargetWithPluginRouteMock.mock.calls[0]?.[0] as
+    | WebhookRegistration
     | undefined;
-  if (!route) {
+  if (!registration) {
+    throw new Error("expected registered LINE webhook target");
+  }
+  return registration;
+}
+
+function requireRegisteredRoute(): { handler: LineNodeWebhookHandler } {
+  const route = requireWebhookRegistration().route;
+  if (!route.handler) {
     throw new Error("expected registered LINE webhook route");
   }
-  return route;
+  return { handler: route.handler };
 }
 
 vi.mock("./bot.js", () => ({
@@ -205,9 +232,7 @@ describe("monitorLineProvider lifecycle", () => {
     });
 
     expect(registerWebhookTargetWithPluginRouteMock).toHaveBeenCalledTimes(1);
-    expect(registerWebhookTargetWithPluginRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({ route: expect.objectContaining({ auth: "plugin" }) }),
-    );
+    expect(requireWebhookRegistration().route.auth).toBe("plugin");
     expect(resolved).toBe(false);
 
     abort.abort();
@@ -224,19 +249,14 @@ describe("monitorLineProvider lifecycle", () => {
       runtime: {} as RuntimeEnv,
     });
 
-    const registration = registerWebhookTargetWithPluginRouteMock.mock.calls[0]?.[0];
-    expect(registration).toEqual(
-      expect.objectContaining({
-        target: expect.objectContaining({ accountId: "work", path: "/line/webhook" }),
-        route: expect.objectContaining({
-          accountId: "work",
-          auth: "plugin",
-          pluginId: "line",
-        }),
-      }),
-    );
-    expect(registration?.route).not.toHaveProperty("path");
-    expect(registration?.route).not.toHaveProperty("replaceExisting");
+    const registration = requireWebhookRegistration();
+    expect(registration.target.accountId).toBe("work");
+    expect(registration.target.path).toBe("/line/webhook");
+    expect(registration.route.accountId).toBe("work");
+    expect(registration.route.auth).toBe("plugin");
+    expect(registration.route.pluginId).toBe("line");
+    expect(registration.route).not.toHaveProperty("path");
+    expect(registration.route).not.toHaveProperty("replaceExisting");
     monitor.stop();
   });
 
@@ -289,11 +309,7 @@ describe("monitorLineProvider lifecycle", () => {
       runtime: {} as RuntimeEnv,
     });
 
-    expect(getLineRuntimeState("work")).toEqual(
-      expect.objectContaining({
-        running: true,
-      }),
-    );
+    expect(getLineRuntimeState("work")?.running).toBe(true);
     expect(getLineRuntimeState("default")).toBeUndefined();
 
     monitor.stop();

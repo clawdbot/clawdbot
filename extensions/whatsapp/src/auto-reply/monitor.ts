@@ -11,6 +11,7 @@ import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   defaultRuntime,
   formatDurationPrecise,
+  warn,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
@@ -18,6 +19,7 @@ import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "../account
 import { WHATSAPP_AUTH_UNSTABLE_CODE, WhatsAppAuthUnstableError } from "../auth-store.js";
 import {
   WhatsAppConnectionController,
+  WHATSAPP_WATCHDOG_TIMEOUT_ERROR,
   type ManagedWhatsAppListener,
 } from "../connection-controller.js";
 import { attachWebInboxToSocket, type WhatsAppGroupMetadataCache } from "../inbound/monitor.js";
@@ -566,11 +568,14 @@ export async function monitorWebChannel(
         break;
       }
 
+      const isWatchdogRecoveryReconnect =
+        decision.normalized.error === WHATSAPP_WATCHDOG_TIMEOUT_ERROR;
       statusController.noteClose({
         statusCode: decision.normalized.statusCode,
         error: decision.normalized.errorText,
         reconnectAttempts: decision.reconnectAttempts,
         healthState: decision.healthState,
+        watchdogRecovery: isWatchdogRecoveryReconnect,
       });
       reconnectLogger.info(
         {
@@ -582,9 +587,14 @@ export async function monitorWebChannel(
         },
         "web reconnect: scheduling retry",
       );
-      runtime.error(
-        `WhatsApp Web connection closed (status ${decision.normalized.statusLabel}). Retry ${decision.reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDurationPrecise(decision.delayMs ?? 0)}… (${decision.normalized.errorText})`,
-      );
+      const reconnectMessage = isWatchdogRecoveryReconnect
+        ? `WhatsApp Web watchdog is recovering a stale connection (status ${decision.normalized.statusLabel}). Retry ${decision.reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDurationPrecise(decision.delayMs ?? 0)}.`
+        : `WhatsApp Web connection closed (status ${decision.normalized.statusLabel}). Retry ${decision.reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDurationPrecise(decision.delayMs ?? 0)}… (${decision.normalized.errorText})`;
+      if (isWatchdogRecoveryReconnect) {
+        runtime.log(warn(reconnectMessage));
+      } else {
+        runtime.error(reconnectMessage);
+      }
       await controller.closeCurrentConnection();
       try {
         await controller.waitBeforeRetry(decision.delayMs ?? 0);

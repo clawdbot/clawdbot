@@ -24,7 +24,6 @@ export {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
-export { parseGeminiAuth } from "../infra/gemini-auth.js";
 export {
   getImageGenerationProvider,
   listImageGenerationProviders,

@@ -7,6 +7,39 @@ import { bundledPluginFile, getBundledPluginRoots } from "./test-helpers/bundled
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
+function runtimeApiPluginFile(pluginId: string): string {
+  return bundledPluginFile({ rootDir: ROOT_DIR, pluginId, relativePath: "runtime-api.ts" });
+}
+
+const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
+  "acpx",
+  "browser",
+  "canvas",
+  "clickclack",
+  "copilot-proxy",
+  "diffs",
+  "feishu",
+  "google",
+  "line",
+  "lmstudio",
+  "lobster",
+  "mattermost",
+  "memory-core",
+  "ollama",
+  "open-prose",
+  "phone-control",
+  "qa-channel",
+  "qa-lab",
+  "qa-matrix",
+  "qqbot",
+  "tlon",
+  "tokenjuice",
+  "webhooks",
+  "zai",
+  "zalo",
+  "zalouser",
+] as const;
+
 const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
   [bundledPluginFile({ rootDir: ROOT_DIR, pluginId: "discord", relativePath: "runtime-api.ts" })]: [
     'export { discordMessageActions, handleDiscordAction, isDiscordModerationAction, readDiscordChannelCreateParams, readDiscordChannelEditParams, readDiscordChannelMoveParams, readDiscordModerationCommand, readDiscordParentIdParam, requiredGuildPermissionForModerationAction, type DiscordModerationAction, type DiscordModerationCommand } from "./runtime-api.actions.js";',
@@ -51,7 +84,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";',
     'export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";',
     'export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";',
-    'export type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";',
+    'export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";',
     'export { GoogleChatConfigSchema } from "openclaw/plugin-sdk/bundled-channel-config-schema";',
     'export { GROUP_POLICY_BLOCKED_LABEL, resolveAllowlistProviderRuntimeGroupPolicy, resolveDefaultGroupPolicy, warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";',
     'export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";',
@@ -59,11 +92,11 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";',
     'export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";',
     'export { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";',
-    'export type { GoogleChatAccountConfig, GoogleChatConfig } from "openclaw/plugin-sdk/config-types";',
+    'export type { GoogleChatAccountConfig, GoogleChatConfig } from "openclaw/plugin-sdk/config-contracts";',
     'export { extractToolSend } from "openclaw/plugin-sdk/tool-send";',
     'export { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";',
     'export { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";',
-    'export { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-path";',
+    'export { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";',
     'export { registerWebhookTargetWithPluginRoute, resolveWebhookTargetWithAuthOrReject, withResolvedWebhookRequestPipeline } from "openclaw/plugin-sdk/webhook-targets";',
     'export { createWebhookInFlightLimiter, readJsonWebhookBodyOrReject, type WebhookInFlightLimiter } from "openclaw/plugin-sdk/webhook-request-guards";',
     'export { setGoogleChatRuntime } from "./src/runtime.js";',
@@ -80,7 +113,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";',
     'export { PAIRING_APPROVED_MESSAGE, buildProbeChannelStatusSummary, createDefaultChannelRuntimeState } from "openclaw/plugin-sdk/channel-status";',
     'export { buildChannelKeyCandidates, normalizeChannelSlug, resolveChannelEntryMatchWithFallback, resolveNestedAllowlistDecision } from "openclaw/plugin-sdk/channel-targets";',
-    'export type { GroupPolicy, GroupToolPolicyConfig, MSTeamsChannelConfig, MSTeamsConfig, MSTeamsReplyStyle, MSTeamsTeamConfig, MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";',
+    'export type { GroupPolicy, GroupToolPolicyConfig, MSTeamsChannelConfig, MSTeamsConfig, MSTeamsReplyStyle, MSTeamsTeamConfig, MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";',
     'export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";',
     'export { resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";',
     'export { withFileLock } from "openclaw/plugin-sdk/file-lock";',
@@ -114,7 +147,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { setMatrixRuntime } from "./src/runtime.js";',
     'export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";',
     'export type { ChannelDirectoryEntry, ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";',
-    'export type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";',
+    'export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";',
     'export { formatZonedTimestamp } from "openclaw/plugin-sdk/time-runtime";',
     'export type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";',
     'export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";',
@@ -130,7 +163,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";',
     'export { logInboundDrop } from "openclaw/plugin-sdk/channel-logging";',
     'export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";',
-    'export type { BlockStreamingCoalesceConfig, DmConfig, DmPolicy, GroupPolicy, GroupToolPolicyConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";',
+    'export type { BlockStreamingCoalesceConfig, DmConfig, DmPolicy, GroupPolicy, GroupToolPolicyConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";',
     'export { GROUP_POLICY_BLOCKED_LABEL, resolveAllowlistProviderRuntimeGroupPolicy, resolveDefaultGroupPolicy, warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";',
     'export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";',
     'export type { OutboundReplyPayload } from "openclaw/plugin-sdk/reply-payload";',
@@ -142,7 +175,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { setNextcloudTalkRuntime } from "./src/runtime.js";',
   ],
   [bundledPluginFile({ rootDir: ROOT_DIR, pluginId: "nostr", relativePath: "runtime-api.ts" })]: [
-    'export type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";',
+    'export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";',
     'export { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";',
     'export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";',
   ],
@@ -188,7 +221,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
       'export { resolveTelegramToken } from "./src/token.js";',
       'export { setTelegramRuntime } from "./src/runtime.js";',
       'export type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";',
-      'export type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";',
+      'export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";',
       'export type TelegramAccountConfig = NonNullable< NonNullable<RuntimeOpenClawConfig["channels"]>["telegram"] >;',
       'export type TelegramActionConfig = NonNullable<TelegramAccountConfig["actions"]>;',
       'export type TelegramNetworkConfig = NonNullable<TelegramAccountConfig["network"]>;',
@@ -199,7 +232,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export type { ChannelAccountSnapshot, ChannelCapabilities, ChannelGatewayContext, ChannelLogSink, ChannelMessageActionAdapter, ChannelMessageActionContext, ChannelMeta, ChannelOutboundAdapter, ChannelOutboundContext, ChannelResolveKind, ChannelResolveResult, ChannelStatusAdapter } from "openclaw/plugin-sdk/channel-contract";',
     'export type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";',
     'export type { OutboundDeliveryResult } from "openclaw/plugin-sdk/channel-send-result";',
-    'export type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";',
+    'export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";',
     'export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";',
     'export type { WizardPrompter } from "openclaw/plugin-sdk/setup";',
   ],
@@ -287,11 +320,13 @@ function readExportStatements(path: string): string[] {
 }
 
 describe("runtime api guardrails", () => {
-  it("keeps runtime api surfaces on an explicit export allowlist", () => {
+  it("keeps runtime api surfaces classified and guarded exports pinned", () => {
     const runtimeApiFiles = collectRuntimeApiFiles();
-    expect(runtimeApiFiles).toEqual(
-      expect.arrayContaining(Object.keys(RUNTIME_API_EXPORT_GUARDS).toSorted()),
-    );
+    const expectedRuntimeApiFiles = [
+      ...Object.keys(RUNTIME_API_EXPORT_GUARDS),
+      ...UNGUARDED_RUNTIME_API_PLUGIN_IDS.map(runtimeApiPluginFile),
+    ].toSorted();
+    expect(runtimeApiFiles.toSorted()).toEqual(expectedRuntimeApiFiles);
 
     for (const file of Object.keys(RUNTIME_API_EXPORT_GUARDS).toSorted()) {
       expect(readExportStatements(file), `${file} runtime api exports changed`).toEqual(

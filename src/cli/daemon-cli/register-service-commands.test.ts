@@ -35,6 +35,15 @@ function createGatewayParentLikeCommand() {
   return gateway;
 }
 
+function expectSingleDaemonCall(mockFn: ReturnType<typeof vi.fn>) {
+  expect(mockFn).toHaveBeenCalledTimes(1);
+  const opts = mockFn.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+  if (opts === undefined) {
+    throw new Error("expected daemon call options");
+  }
+  return opts;
+}
+
 describe("addGatewayServiceCommands", () => {
   beforeEach(() => {
     runDaemonInstall.mockClear();
@@ -50,71 +59,52 @@ describe("addGatewayServiceCommands", () => {
       name: "forwards install option collisions from parent gateway command",
       argv: ["install", "--force", "--port", "19000", "--token", "tok_test"],
       assert: () => {
-        expect(runDaemonInstall).toHaveBeenCalledWith(
-          expect.objectContaining({
-            force: true,
-            port: "19000",
-            token: "tok_test",
-          }),
-        );
+        const opts = expectSingleDaemonCall(runDaemonInstall);
+        expect(opts.force).toBe(true);
+        expect(opts.port).toBe("19000");
+        expect(opts.token).toBe("tok_test");
       },
     },
     {
       name: "forwards restart force and wait controls",
       argv: ["restart", "--wait", "30s"],
       assert: () => {
-        expect(runDaemonRestart).toHaveBeenCalledWith(
-          expect.objectContaining({
-            wait: "30s",
-          }),
-        );
+        const opts = expectSingleDaemonCall(runDaemonRestart);
+        expect(opts.wait).toBe("30s");
       },
     },
     {
       name: "forwards restart safe control",
       argv: ["restart", "--safe"],
       assert: () => {
-        expect(runDaemonRestart).toHaveBeenCalledWith(
-          expect.objectContaining({
-            safe: true,
-          }),
-        );
+        const opts = expectSingleDaemonCall(runDaemonRestart);
+        expect(opts.safe).toBe(true);
       },
     },
     {
       name: "forwards restart force control",
       argv: ["restart", "--force"],
       assert: () => {
-        expect(runDaemonRestart).toHaveBeenCalledWith(
-          expect.objectContaining({
-            force: true,
-          }),
-        );
+        const opts = expectSingleDaemonCall(runDaemonRestart);
+        expect(opts.force).toBe(true);
       },
     },
     {
       name: "forwards status auth collisions from parent gateway command",
       argv: ["status", "--token", "tok_status", "--password", "pw_status"],
       assert: () => {
-        expect(runDaemonStatus).toHaveBeenCalledWith(
-          expect.objectContaining({
-            rpc: expect.objectContaining({
-              token: "tok_status",
-              password: "pw_status", // pragma: allowlist secret
-            }),
-          }),
-        );
+        const opts = expectSingleDaemonCall(runDaemonStatus);
+        const rpc = opts.rpc as { token?: unknown; password?: unknown } | undefined;
+        expect(rpc?.token).toBe("tok_status");
+        expect(rpc?.password).toBe("pw_status"); // pragma: allowlist secret
       },
     },
     {
       name: "forwards require-rpc for status",
       argv: ["status", "--require-rpc"],
       assert: () => {
-        expect(runDaemonStatus).toHaveBeenCalledWith(
-          expect.objectContaining({
-            requireRpc: true,
-          }),
-        );
+        const opts = expectSingleDaemonCall(runDaemonStatus);
+        expect(opts.requireRpc).toBe(true);
       },
     },
   ])("$name", async ({ argv, assert }) => {

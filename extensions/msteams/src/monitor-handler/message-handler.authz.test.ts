@@ -272,6 +272,24 @@ describe("msteams monitor handler authz", () => {
       ?.ctxPayload;
   }
 
+  function recordFromMockCall(value: unknown): Record<string, unknown> {
+    expect(value).toBeDefined();
+    return value as Record<string, unknown>;
+  }
+
+  function mockCallArg(mocked: unknown, callIndex: number, argIndex: number): unknown {
+    const calls = (mocked as { mock?: { calls?: unknown[][] } }).mock?.calls;
+    expect(calls?.[callIndex]).toBeDefined();
+    return calls?.[callIndex]?.[argIndex];
+  }
+
+  function logMeta(logFn: unknown, message: string): Record<string, unknown> {
+    const calls = (logFn as { mock?: { calls?: Array<[unknown, unknown?]> } }).mock?.calls ?? [];
+    const call = calls.find(([loggedMessage]) => loggedMessage === message);
+    expect(call).toBeDefined();
+    return recordFromMockCall(call?.[1]);
+  }
+
   it("does not treat DM pairing-store entries as group allowlist entries", async () => {
     const { conversationStore, deps, readAllowFromStore } = createDeps({
       channels: {
@@ -453,17 +471,14 @@ describe("msteams monitor handler authz", () => {
       sendActivity: vi.fn(async () => undefined),
     } as unknown as Parameters<typeof handler>[0]);
 
-    expect(conversationStore.upsert).toHaveBeenCalledWith(
-      "19:team-channel@thread.tacv2",
-      expect.objectContaining({
-        tenantId: "tenant-from-channel-data",
-        aadObjectId: "sender-aad",
-        conversation: expect.objectContaining({
-          id: "19:team-channel@thread.tacv2",
-          tenantId: "tenant-from-channel-data",
-        }),
-      }),
-    );
+    expect(conversationStore.upsert).toHaveBeenCalledTimes(1);
+    expect(mockCallArg(conversationStore.upsert, 0, 0)).toBe("19:team-channel@thread.tacv2");
+    const storedRef = recordFromMockCall(mockCallArg(conversationStore.upsert, 0, 1));
+    expect(storedRef.tenantId).toBe("tenant-from-channel-data");
+    expect(storedRef.aadObjectId).toBe("sender-aad");
+    const storedConversation = recordFromMockCall(storedRef.conversation);
+    expect(storedConversation.id).toBe("19:team-channel@thread.tacv2");
+    expect(storedConversation.tenantId).toBe("tenant-from-channel-data");
   });
 
   it("stores no tenantId when channelData.tenant is missing", async () => {
@@ -507,14 +522,10 @@ describe("msteams monitor handler authz", () => {
 
     expect(conversationStore.upsert).toHaveBeenCalledTimes(1);
     // Top-level tenantId must not be present when no source is available.
-    expect(conversationStore.upsert).toHaveBeenCalledWith(
-      "19:no-tenant@thread.tacv2",
-      expect.not.objectContaining({ tenantId: expect.anything() }),
-    );
-    expect(conversationStore.upsert).toHaveBeenCalledWith(
-      "19:no-tenant@thread.tacv2",
-      expect.objectContaining({ aadObjectId: "sender-aad" }),
-    );
+    expect(mockCallArg(conversationStore.upsert, 0, 0)).toBe("19:no-tenant@thread.tacv2");
+    const storedRef = recordFromMockCall(mockCallArg(conversationStore.upsert, 0, 1));
+    expect("tenantId" in storedRef).toBe(false);
+    expect(storedRef.aadObjectId).toBe("sender-aad");
   });
 
   it("logs an info drop reason when dmPolicy allowlist rejects a sender", async () => {
@@ -530,14 +541,10 @@ describe("msteams monitor handler authz", () => {
     const handler = createMSTeamsMessageHandler(deps);
     await handler(createAttackerPersonalActivity("msg-drop-dm"));
 
-    expect(deps.log.info).toHaveBeenCalledWith(
-      "dropping dm (not allowlisted)",
-      expect.objectContaining({
-        sender: "attacker-aad",
-        dmPolicy: "allowlist",
-        reason: "dmPolicy=allowlist (not allowlisted)",
-      }),
-    );
+    const meta = logMeta(deps.log.info, "dropping dm (not allowlisted)");
+    expect(meta.sender).toBe("attacker-aad");
+    expect(meta.dmPolicy).toBe("allowlist");
+    expect(meta.reason).toBe("dmPolicy=allowlist (not allowlisted)");
   });
 
   it("logs an info drop reason when group policy has an empty allowlist", async () => {
@@ -555,12 +562,10 @@ describe("msteams monitor handler authz", () => {
     const handler = createMSTeamsMessageHandler(deps);
     await handler(createAttackerGroupActivity());
 
-    expect(deps.log.info).toHaveBeenCalledWith(
-      "dropping group message (groupPolicy: allowlist, no allowlist)",
-      expect.objectContaining({
-        conversationId: "19:group@thread.tacv2",
-      }),
-    );
+    expect(
+      logMeta(deps.log.info, "dropping group message (groupPolicy: allowlist, no allowlist)")
+        .conversationId,
+    ).toBe("19:group@thread.tacv2");
   });
 
   it("blocks unauthorized text control commands through shared ingress", async () => {
@@ -614,9 +619,7 @@ describe("msteams monitor handler authz", () => {
     expect(conversationStore.upsert).toHaveBeenCalled();
     const dispatched =
       runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0];
-    expect(dispatched?.ctxPayload).toMatchObject({
-      CommandAuthorized: true,
-    });
+    expect(recordFromMockCall(dispatched?.ctxPayload).CommandAuthorized).toBe(true);
   });
 
   it("filters non-allowlisted thread messages out of BodyForAgent", async () => {
@@ -650,11 +653,11 @@ describe("msteams monitor handler authz", () => {
     if (!dispatched) {
       throw new Error("expected authorized thread message to dispatch");
     }
-    expect(dispatched.ctxPayload).toMatchObject({
-      BodyForAgent:
-        "[Thread history]\nAlice: Allowed context\n[/Thread history]\n\nCurrent message",
-      GroupSpace: "team123",
-    });
+    const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
+    expect(ctxPayload.BodyForAgent).toBe(
+      "[Thread history]\nAlice: Allowed context\n[/Thread history]\n\nCurrent message",
+    );
+    expect(ctxPayload.GroupSpace).toBe("team123");
     expect(String((dispatched.ctxPayload as { BodyForAgent?: string }).BodyForAgent)).not.toContain(
       "Mallory",
     );
@@ -691,10 +694,9 @@ describe("msteams monitor handler authz", () => {
 
     const dispatched =
       runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0];
-    expect(dispatched?.ctxPayload).toMatchObject({
-      BodyForAgent:
-        "[Thread history]\nAlice: Allowlisted by display name\n[/Thread history]\n\nCurrent message",
-    });
+    expect(recordFromMockCall(dispatched?.ctxPayload).BodyForAgent).toBe(
+      "[Thread history]\nAlice: Allowlisted by display name\n[/Thread history]\n\nCurrent message",
+    );
   });
 
   it("keeps quote context when the parent sender id is allowlisted", async () => {
@@ -706,10 +708,9 @@ describe("msteams monitor handler authz", () => {
       }),
     );
 
-    expect(ctxPayload).toMatchObject({
-      ReplyToBody: "Quoted body",
-      ReplyToSender: "Alice",
-    });
+    const ctx = recordFromMockCall(ctxPayload);
+    expect(ctx.ReplyToBody).toBe("Quoted body");
+    expect(ctx.ReplyToSender).toBe("Alice");
   });
 
   it("drops quote context when attachment metadata disagrees with a blocked parent sender", async () => {
@@ -721,10 +722,9 @@ describe("msteams monitor handler authz", () => {
       }),
     );
 
-    expect(ctxPayload).toMatchObject({
-      ReplyToBody: undefined,
-      ReplyToSender: undefined,
-      BodyForAgent: "Current message",
-    });
+    const ctx = recordFromMockCall(ctxPayload);
+    expect(ctx.ReplyToBody).toBeUndefined();
+    expect(ctx.ReplyToSender).toBeUndefined();
+    expect(ctx.BodyForAgent).toBe("Current message");
   });
 });

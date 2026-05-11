@@ -30,10 +30,7 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
     });
 
     expect(appended).toBe(false);
-    expect(sessionManager.appendCustomEntry).not.toHaveBeenCalledWith(
-      ATTEMPT_CACHE_TTL_CUSTOM_TYPE,
-      expect.anything(),
-    );
+    expect(sessionManager.appendCustomEntry).not.toHaveBeenCalled();
   });
 
   it("appends cache-ttl when no compaction completed during the attempt", () => {

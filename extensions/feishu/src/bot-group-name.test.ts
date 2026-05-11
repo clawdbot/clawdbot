@@ -65,7 +65,9 @@ describe("resolveGroupName", () => {
     mockGetChatInfo.mockRejectedValue(new Error("network timeout"));
     const result = await resolveGroupName({ account, chatId: "oc_test2", log });
     expect(result).toBeUndefined();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("getChatInfo failed"));
+    expect(log).toHaveBeenCalledWith(
+      "feishu[test-account]: getChatInfo failed for oc_test2: Error: network timeout",
+    );
   });
 
   it("returns undefined for whitespace-only name", async () => {

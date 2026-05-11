@@ -164,10 +164,10 @@ Then verify backend health:
 
 ### acpx command and version configuration
 
-By default, the `acpx` plugin registers the embedded ACP backend without
-spawning an ACP agent during Gateway startup. Run `/acp doctor` for an explicit
-live probe. Set `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=1` only when you need the
-Gateway to probe the configured agent at startup.
+By default, the `acpx` plugin probes the embedded ACP backend during Gateway
+startup and waits for that probe before the gateway `ready` signal. Set
+`OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=0` to skip the startup probe and register
+the backend lazily instead. Run `/acp doctor` for an explicit on-demand probe.
 
 Override the command or version in plugin config:
 
@@ -289,11 +289,10 @@ Restart the gateway after changing this value.
 
 ### Health probe agent configuration
 
-When `/acp doctor` or the opt-in startup probe checks the backend, the bundled
-`acpx` plugin probes one harness agent. If `acp.allowedAgents` is set, it
-defaults to the first allowed agent; otherwise it defaults to `codex`. If your
-deployment needs a different ACP agent for health checks, set the probe agent
-explicitly:
+When `/acp doctor` or the startup probe checks the backend, the bundled `acpx`
+plugin probes one harness agent. If `acp.allowedAgents` is set, it defaults to
+the first allowed agent; otherwise it defaults to `codex`. If your deployment
+needs a different ACP agent for health checks, set the probe agent explicitly:
 
 ```bash
 openclaw config set plugins.entries.acpx.config.probeAgent claude

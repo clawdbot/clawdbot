@@ -2,19 +2,11 @@ import os from "node:os";
 import path from "node:path";
 import { safeParseJsonWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
-import { z } from "openclaw/plugin-sdk/zod";
+import { z } from "zod";
 import { getNostrRuntime } from "./runtime.js";
 
 const STORE_VERSION = 2;
 const PROFILE_STATE_VERSION = 1;
-
-type _NostrBusStateV1 = {
-  version: 1;
-  /** Unix timestamp (seconds) of the last processed event */
-  lastProcessedAt: number | null;
-  /** Gateway startup timestamp (seconds) - events before this are old */
-  gatewayStartedAt: number | null;
-};
 
 type NostrBusState = {
   version: 2;

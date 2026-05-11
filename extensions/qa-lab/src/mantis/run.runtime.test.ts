@@ -73,23 +73,32 @@ describe("mantis before/after runtime", () => {
         entry.args[2],
         entry.args[3],
       ]),
-    ).toEqual([
-      ["git", "worktree", "add", "--detach", expect.stringContaining("baseline")],
-      ["pnpm", "--dir", expect.stringContaining("baseline"), "openclaw", "qa"],
-      ["git", "worktree", "add", "--detach", expect.stringContaining("candidate")],
-      ["pnpm", "--dir", expect.stringContaining("candidate"), "openclaw", "qa"],
-    ]);
+    ).toHaveLength(4);
+    expect(commands[0]?.command).toBe("git");
+    expect(commands[0]?.args.slice(0, 3)).toEqual(["worktree", "add", "--detach"]);
+    expect(commands[0]?.args[3]).toContain("baseline");
+    expect(commands[1]?.command).toBe("pnpm");
+    expect(commands[1]?.args[0]).toBe("--dir");
+    expect(commands[1]?.args[1]).toContain("baseline");
+    expect(commands[1]?.args.slice(2, 4)).toEqual(["openclaw", "qa"]);
+    expect(commands[2]?.command).toBe("git");
+    expect(commands[2]?.args.slice(0, 3)).toEqual(["worktree", "add", "--detach"]);
+    expect(commands[2]?.args[3]).toContain("candidate");
+    expect(commands[3]?.command).toBe("pnpm");
+    expect(commands[3]?.args[0]).toBe("--dir");
+    expect(commands[3]?.args[1]).toContain("candidate");
+    expect(commands[3]?.args.slice(2, 4)).toEqual(["openclaw", "qa"]);
 
     const comparison = JSON.parse(await fs.readFile(result.comparisonPath, "utf8")) as {
       baseline: { reproduced: boolean; status: string };
       candidate: { fixed: boolean; status: string };
       pass: boolean;
     };
-    expect(comparison).toMatchObject({
-      baseline: { reproduced: true, status: "fail" },
-      candidate: { fixed: true, status: "pass" },
-      pass: true,
-    });
+    expect(comparison.baseline.reproduced).toBe(true);
+    expect(comparison.baseline.status).toBe("fail");
+    expect(comparison.candidate.fixed).toBe(true);
+    expect(comparison.candidate.status).toBe("pass");
+    expect(comparison.pass).toBe(true);
     await expect(
       fs.readFile(path.join(result.outputDir, "baseline", "baseline.png"), "utf8"),
     ).resolves.toBe("baseline screenshot");
@@ -156,33 +165,23 @@ describe("mantis before/after runtime", () => {
       candidate: { expected: string; fixed: boolean };
       pass: boolean;
     };
-    expect(comparison).toMatchObject({
-      baseline: {
-        expected: "thread reply omits filePath attachment",
-        reproduced: true,
-      },
-      candidate: {
-        expected: "thread reply includes filePath attachment",
-        fixed: true,
-      },
-      pass: true,
-    });
+    expect(comparison.baseline.expected).toBe("thread reply omits filePath attachment");
+    expect(comparison.baseline.reproduced).toBe(true);
+    expect(comparison.candidate.expected).toBe("thread reply includes filePath attachment");
+    expect(comparison.candidate.fixed).toBe(true);
+    expect(comparison.pass).toBe(true);
     const manifest = JSON.parse(await fs.readFile(result.manifestPath, "utf8")) as {
       artifacts: { alt?: string; label: string }[];
       title: string;
     };
     expect(manifest.title).toBe("Mantis Discord Thread Attachment QA");
-    expect(manifest.artifacts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          alt: "Baseline Discord thread reply without filePath attachment",
-          label: "Baseline missing filePath attachment",
-        }),
-        expect.objectContaining({
-          alt: "Candidate Discord thread reply with filePath attachment",
-          label: "Candidate includes filePath attachment",
-        }),
-      ]),
+    const baselineArtifact = manifest.artifacts.find(
+      (artifact) => artifact.label === "Baseline missing filePath attachment",
     );
+    expect(baselineArtifact?.alt).toBe("Baseline Discord thread reply without filePath attachment");
+    const candidateArtifact = manifest.artifacts.find(
+      (artifact) => artifact.label === "Candidate includes filePath attachment",
+    );
+    expect(candidateArtifact?.alt).toBe("Candidate Discord thread reply with filePath attachment");
   });
 });

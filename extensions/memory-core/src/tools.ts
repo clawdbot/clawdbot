@@ -37,7 +37,7 @@ import {
 } from "./tools.shared.js";
 
 type MemorySearchToolResult =
-  | (Record<string, unknown> & { corpus: "memory"; score: number; path: string })
+  | (MemorySearchResult & { corpus: MemorySource })
   | MemoryCorpusSearchResult;
 
 function sortMemorySearchToolResults<T extends { score: number; path: string }>(results: T[]): T[] {
@@ -267,9 +267,7 @@ export function createMemorySearchTool(options: {
           });
           const searchStartedAt = Date.now();
           let rawResults: MemorySearchResult[] = [];
-          let surfacedMemoryResults: Array<
-            Record<string, unknown> & { corpus: "memory"; score: number; path: string }
-          > = [];
+          let surfacedMemoryResults: Array<MemorySearchResult & { corpus: MemorySource }> = [];
           let provider: string | undefined;
           let model: string | undefined;
           let fallback: unknown;
@@ -326,7 +324,7 @@ export function createMemorySearchTool(options: {
                 : decorated;
             surfacedMemoryResults = memoryResults.map((result) => ({
               ...result,
-              corpus: "memory" as const,
+              corpus: result.source,
             }));
             const sleepTimezone = resolveMemoryDeepDreamingConfig({
               pluginConfig: resolveMemoryCorePluginConfig(cfg),

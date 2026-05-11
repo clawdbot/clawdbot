@@ -87,6 +87,27 @@ function listExecApprovalTempFiles(homeDir: string): string[] {
   return fs.readdirSync(dir).filter((name) => name.endsWith(".tmp"));
 }
 
+function requireRecord(value: unknown): Record<string, unknown> {
+  expect(value).toBeTruthy();
+  expect(typeof value).toBe("object");
+  expect(Array.isArray(value)).toBe(false);
+  return value as Record<string, unknown>;
+}
+
+function allowlistEntries(homeDir: string, agentId: string): Record<string, unknown>[] {
+  const file = readApprovalsFile(homeDir);
+  return (file.agents?.[agentId]?.allowlist ?? []).map((entry) => requireRecord(entry));
+}
+
+function expectAllowlistEntryFields(
+  entry: Record<string, unknown>,
+  fields: Record<string, unknown>,
+): void {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(entry[key]).toEqual(value);
+  }
+}
+
 describe("exec approvals store helpers", () => {
   it("expands home-prefixed default file and socket paths", () => {
     const dir = createHomeDir();
@@ -417,13 +438,13 @@ describe("exec approvals store helpers", () => {
     addAllowlistEntry(approvals, "worker", "/usr/bin/rg");
     addAllowlistEntry(approvals, "worker", "   ");
 
-    expect(readApprovalsFile(dir).agents?.worker?.allowlist).toEqual([
-      expect.objectContaining({
-        pattern: "/usr/bin/rg",
-        lastUsedAt: 123_456,
-      }),
-    ]);
-    expect(readApprovalsFile(dir).agents?.worker?.allowlist?.[0]?.id).toMatch(/^[0-9a-f-]{36}$/i);
+    const allowlist = allowlistEntries(dir, "worker");
+    expect(allowlist).toHaveLength(1);
+    expectAllowlistEntryFields(allowlist[0] ?? {}, {
+      pattern: "/usr/bin/rg",
+      lastUsedAt: 123_456,
+    });
+    expect(allowlist[0]?.id).toMatch(/^[0-9a-f-]{36}$/i);
   });
 
   it("persists durable command approvals without storing plaintext command text", () => {
@@ -433,56 +454,36 @@ describe("exec approvals store helpers", () => {
     const approvals = ensureExecApprovals();
     addDurableCommandApproval(approvals, "worker", 'printenv API_KEY="secret-value"');
 
-    expect(readApprovalsFile(dir).agents?.worker?.allowlist).toEqual([
-      expect.objectContaining({
-        source: "allow-always",
-        lastUsedAt: 321_000,
-      }),
-    ]);
-    expect(readApprovalsFile(dir).agents?.worker?.allowlist?.[0]?.pattern).toMatch(
-      /^=command:[0-9a-f]{16}$/i,
-    );
-    expect(readApprovalsFile(dir).agents?.worker?.allowlist?.[0]).not.toHaveProperty("commandText");
+    const allowlist = allowlistEntries(dir, "worker");
+    expect(allowlist).toHaveLength(1);
+    expectAllowlistEntryFields(allowlist[0] ?? {}, {
+      source: "allow-always",
+      lastUsedAt: 321_000,
+    });
+    expect(allowlist[0]?.pattern).toMatch(/^=command:[0-9a-f]{16}$/i);
+    expect(allowlist[0]).not.toHaveProperty("commandText");
   });
 
   it("strips legacy plaintext command text during normalization", () => {
-    expect(
-      normalizeExecApprovals({
-        version: 1,
-        agents: {
-          main: {
-            allowlist: [
-              {
-                pattern: "=command:test",
-                source: "allow-always",
-                commandText: "echo secret-token",
-              },
-            ],
-          },
+    const normalized = normalizeExecApprovals({
+      version: 1,
+      agents: {
+        main: {
+          allowlist: [
+            {
+              pattern: "=command:test",
+              source: "allow-always",
+              commandText: "echo secret-token",
+            },
+          ],
         },
-      }).agents?.main?.allowlist,
-    ).toEqual([
-      expect.objectContaining({
-        pattern: "=command:test",
-        source: "allow-always",
-      }),
-    ]);
-    expect(
-      normalizeExecApprovals({
-        version: 1,
-        agents: {
-          main: {
-            allowlist: [
-              {
-                pattern: "=command:test",
-                source: "allow-always",
-                commandText: "echo secret-token",
-              },
-            ],
-          },
-        },
-      }).agents?.main?.allowlist?.[0],
-    ).not.toHaveProperty("commandText");
+      },
+    });
+    const allowlist = normalized.agents?.main?.allowlist ?? [];
+    expect(allowlist).toHaveLength(1);
+    expect(allowlist[0]?.pattern).toBe("=command:test");
+    expect(allowlist[0]?.source).toBe("allow-always");
+    expect(allowlist[0]).not.toHaveProperty("commandText");
   });
 
   it("preserves source and argPattern metadata for allow-always entries", () => {
@@ -503,20 +504,20 @@ describe("exec approvals store helpers", () => {
       source: "allow-always",
     });
 
-    expect(readApprovalsFile(dir).agents?.worker?.allowlist).toEqual([
-      expect.objectContaining({
-        pattern: "/usr/bin/python3",
-        argPattern: "^script\\.py\x00$",
-        source: "allow-always",
-        lastUsedAt: 321_000,
-      }),
-      expect.objectContaining({
-        pattern: "/usr/bin/python3",
-        argPattern: "^other\\.py\x00$",
-        source: "allow-always",
-        lastUsedAt: 321_000,
-      }),
-    ]);
+    const allowlist = allowlistEntries(dir, "worker");
+    expect(allowlist).toHaveLength(2);
+    expectAllowlistEntryFields(allowlist[0] ?? {}, {
+      pattern: "/usr/bin/python3",
+      argPattern: "^script\\.py\x00$",
+      source: "allow-always",
+      lastUsedAt: 321_000,
+    });
+    expectAllowlistEntryFields(allowlist[1] ?? {}, {
+      pattern: "/usr/bin/python3",
+      argPattern: "^other\\.py\x00$",
+      source: "allow-always",
+      lastUsedAt: 321_000,
+    });
   });
 
   it("records allowlist usage on the matching entry and backfills missing ids", () => {
@@ -542,16 +543,16 @@ describe("exec approvals store helpers", () => {
       "/opt/homebrew/bin/rg",
     );
 
-    expect(readApprovalsFile(dir).agents?.main?.allowlist).toEqual([
-      expect.objectContaining({
-        pattern: "/usr/bin/rg",
-        lastUsedAt: 999_000,
-        lastUsedCommand: "rg needle",
-        lastResolvedPath: "/opt/homebrew/bin/rg",
-      }),
-      { pattern: "/usr/bin/jq", id: "keep-id" },
-    ]);
-    expect(readApprovalsFile(dir).agents?.main?.allowlist?.[0]?.id).toMatch(/^[0-9a-f-]{36}$/i);
+    const allowlist = allowlistEntries(dir, "main");
+    expect(allowlist).toHaveLength(2);
+    expectAllowlistEntryFields(allowlist[0] ?? {}, {
+      pattern: "/usr/bin/rg",
+      lastUsedAt: 999_000,
+      lastUsedCommand: "rg needle",
+      lastResolvedPath: "/opt/homebrew/bin/rg",
+    });
+    expect(allowlist[0]?.id).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(allowlist[1]).toEqual({ pattern: "/usr/bin/jq", id: "keep-id" });
   });
 
   it("dedupes allowlist usage by pattern and argPattern", () => {
@@ -584,18 +585,18 @@ describe("exec approvals store helpers", () => {
       resolvedPath: "/usr/bin/python3",
     });
 
-    expect(readApprovalsFile(dir).agents?.main?.allowlist).toEqual([
-      expect.objectContaining({
-        pattern: "/usr/bin/python3",
-        argPattern: "^a\\.py\x00$",
-        lastUsedAt: 777_000,
-      }),
-      expect.objectContaining({
-        pattern: "/usr/bin/python3",
-        argPattern: "^b\\.py\x00$",
-        lastUsedAt: 777_000,
-      }),
-    ]);
+    const allowlist = allowlistEntries(dir, "main");
+    expect(allowlist).toHaveLength(2);
+    expectAllowlistEntryFields(allowlist[0] ?? {}, {
+      pattern: "/usr/bin/python3",
+      argPattern: "^a\\.py\x00$",
+      lastUsedAt: 777_000,
+    });
+    expectAllowlistEntryFields(allowlist[1] ?? {}, {
+      pattern: "/usr/bin/python3",
+      argPattern: "^b\\.py\x00$",
+      lastUsedAt: 777_000,
+    });
   });
 
   it("persists allow-always patterns with shared helper", () => {
@@ -633,14 +634,14 @@ describe("exec approvals store helpers", () => {
         argPattern: "^a\\.py\x00$",
       },
     ]);
-    expect(readApprovalsFile(dir).agents?.worker?.allowlist).toEqual([
-      expect.objectContaining({
-        pattern: "/usr/bin/custom-tool.exe",
-        argPattern: "^a\\.py\x00$",
-        source: "allow-always",
-        lastUsedAt: 654_321,
-      }),
-    ]);
+    const allowlist = allowlistEntries(dir, "worker");
+    expect(allowlist).toHaveLength(1);
+    expectAllowlistEntryFields(allowlist[0] ?? {}, {
+      pattern: "/usr/bin/custom-tool.exe",
+      argPattern: "^a\\.py\x00$",
+      source: "allow-always",
+      lastUsedAt: 654_321,
+    });
   });
 
   it("returns null when approval socket credentials are missing", async () => {

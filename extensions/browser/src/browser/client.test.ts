@@ -85,13 +85,14 @@ describe("browser client", () => {
     const calls: string[] = [];
     stubSnapshotFetch(calls);
 
-    await expect(
-      browserSnapshot("http://127.0.0.1:18791", {
-        format: "ai",
-        labels: true,
-        mode: "efficient",
-      }),
-    ).resolves.toMatchObject({ ok: true, format: "ai" });
+    const snapshot = await browserSnapshot("http://127.0.0.1:18791", {
+      format: "ai",
+      labels: true,
+      mode: "efficient",
+    });
+
+    expect(snapshot.ok).toBe(true);
+    expect(snapshot.format).toBe("ai");
 
     const parsed = new URL(requireSnapshotCall(calls));
     expect(parsed.searchParams.get("labels")).toBe("1");
@@ -264,65 +265,78 @@ describe("browser client", () => {
       }),
     );
 
-    await expect(browserStatus("http://127.0.0.1:18791")).resolves.toMatchObject({
-      running: true,
-      cdpPort: 18792,
-    });
-    await expect(browserDoctor("http://127.0.0.1:18791")).resolves.toMatchObject({
-      ok: true,
+    const statusResult = await browserStatus("http://127.0.0.1:18791");
+    expect(statusResult.running).toBe(true);
+    expect(statusResult.cdpPort).toBe(18792);
+
+    const doctorResult = await browserDoctor("http://127.0.0.1:18791");
+    expect(doctorResult.ok).toBe(true);
+    expect(doctorResult.profile).toBe("openclaw");
+
+    const deepDoctorResult = await browserDoctor("http://127.0.0.1:18791", {
       profile: "openclaw",
+      deep: true,
     });
-    await expect(
-      browserDoctor("http://127.0.0.1:18791", { profile: "openclaw", deep: true }),
-    ).resolves.toMatchObject({
-      ok: true,
-      profile: "openclaw",
-    });
+    expect(deepDoctorResult.ok).toBe(true);
+    expect(deepDoctorResult.profile).toBe("openclaw");
 
     await expect(browserTabs("http://127.0.0.1:18791")).resolves.toHaveLength(1);
-    await expect(
-      browserOpenTab("http://127.0.0.1:18791", "https://example.com"),
-    ).resolves.toMatchObject({ targetId: "t2" });
+    const openedTab = await browserOpenTab("http://127.0.0.1:18791", "https://example.com");
+    expect(openedTab.targetId).toBe("t2");
 
-    await expect(
-      browserSnapshot("http://127.0.0.1:18791", { format: "aria", limit: 1 }),
-    ).resolves.toMatchObject({ ok: true, format: "aria" });
-
-    await expect(
-      browserNavigate("http://127.0.0.1:18791", { url: "https://example.com" }),
-    ).resolves.toMatchObject({ ok: true, targetId: "t1" });
-    await expect(
-      browserAct("http://127.0.0.1:18791", { kind: "click", ref: "1" }),
-    ).resolves.toMatchObject({ ok: true, targetId: "t1", results: [{ ok: true }] });
-    await expect(
-      browserArmFileChooser("http://127.0.0.1:18791", {
-        paths: ["/tmp/a.txt"],
-      }),
-    ).resolves.toMatchObject({ ok: true });
-    await expect(
-      browserArmDialog("http://127.0.0.1:18791", { accept: true }),
-    ).resolves.toMatchObject({ ok: true });
-    await expect(
-      browserConsoleMessages("http://127.0.0.1:18791", { level: "error" }),
-    ).resolves.toMatchObject({ ok: true, targetId: "t1" });
-    await expect(browserPdfSave("http://127.0.0.1:18791")).resolves.toMatchObject({
-      ok: true,
-      path: "/tmp/a.pdf",
+    const snapshot = await browserSnapshot("http://127.0.0.1:18791", {
+      format: "aria",
+      limit: 1,
     });
-    await expect(
-      browserScreenshotAction("http://127.0.0.1:18791", { fullPage: true, timeoutMs: 12_345 }),
-    ).resolves.toMatchObject({ ok: true, path: "/tmp/a.png" });
-    await expect(
-      browserScreenshotAction("http://127.0.0.1:18791", { targetId: "t-default" }),
-    ).resolves.toMatchObject({ ok: true, path: "/tmp/a.png" });
+    expect(snapshot.ok).toBe(true);
+    expect(snapshot.format).toBe("aria");
 
-    expect(calls.map((call) => call.url)).toEqual(
-      expect.arrayContaining([
-        expect.stringMatching(/\/tabs$/),
-        expect.stringMatching(/\/doctor$/),
-        expect.stringMatching(/\/doctor\?profile=openclaw&deep=true$/),
-      ]),
-    );
+    const navigation = await browserNavigate("http://127.0.0.1:18791", {
+      url: "https://example.com",
+    });
+    expect(navigation.ok).toBe(true);
+    expect(navigation.targetId).toBe("t1");
+
+    const act = await browserAct("http://127.0.0.1:18791", { kind: "click", ref: "1" });
+    expect(act.ok).toBe(true);
+    expect(act.targetId).toBe("t1");
+    expect(act.results).toEqual([{ ok: true }]);
+
+    const fileChooser = await browserArmFileChooser("http://127.0.0.1:18791", {
+      paths: ["/tmp/a.txt"],
+    });
+    expect(fileChooser.ok).toBe(true);
+
+    const dialog = await browserArmDialog("http://127.0.0.1:18791", { accept: true });
+    expect(dialog.ok).toBe(true);
+
+    const consoleMessages = await browserConsoleMessages("http://127.0.0.1:18791", {
+      level: "error",
+    });
+    expect(consoleMessages.ok).toBe(true);
+    expect(consoleMessages.targetId).toBe("t1");
+
+    const pdf = await browserPdfSave("http://127.0.0.1:18791");
+    expect(pdf.ok).toBe(true);
+    expect(pdf.path).toBe("/tmp/a.pdf");
+
+    const screenshotResult = await browserScreenshotAction("http://127.0.0.1:18791", {
+      fullPage: true,
+      timeoutMs: 12_345,
+    });
+    expect(screenshotResult.ok).toBe(true);
+    expect(screenshotResult.path).toBe("/tmp/a.png");
+
+    const defaultScreenshotResult = await browserScreenshotAction("http://127.0.0.1:18791", {
+      targetId: "t-default",
+    });
+    expect(defaultScreenshotResult.ok).toBe(true);
+    expect(defaultScreenshotResult.path).toBe("/tmp/a.png");
+
+    const urls = calls.map((call) => call.url);
+    expect(urls.some((url) => url.endsWith("/tabs"))).toBe(true);
+    expect(urls.some((url) => url.endsWith("/doctor"))).toBe(true);
+    expect(urls.some((url) => url.endsWith("/doctor?profile=openclaw&deep=true"))).toBe(true);
     const status = calls.find((c) => c.url.endsWith("/"));
     expect(status?.init?.timeoutMs).toBe(7_500);
     const doctor = calls.find((c) => c.url.endsWith("/doctor"));
@@ -336,22 +350,18 @@ describe("browser client", () => {
     const screenshot = screenshotCalls[0];
     expect(screenshot?.init?.method).toBe("POST");
     expect(screenshot?.init?.timeoutMs).toBe(12_345);
-    expect(
-      JSON.parse(typeof screenshot?.init?.body === "string" ? screenshot.init.body : "{}"),
-    ).toMatchObject({
-      fullPage: true,
-      timeoutMs: 12_345,
-    });
+    const screenshotBody = JSON.parse(
+      typeof screenshot?.init?.body === "string" ? screenshot.init.body : "{}",
+    ) as { fullPage?: unknown; timeoutMs?: unknown };
+    expect(screenshotBody.fullPage).toBe(true);
+    expect(screenshotBody.timeoutMs).toBe(12_345);
     const defaultScreenshot = screenshotCalls[1];
     expect(defaultScreenshot?.init?.timeoutMs).toBe(20_000);
-    expect(
-      JSON.parse(
-        typeof defaultScreenshot?.init?.body === "string" ? defaultScreenshot.init.body : "{}",
-      ),
-    ).toMatchObject({
-      targetId: "t-default",
-      timeoutMs: 20_000,
-    });
+    const defaultScreenshotBody = JSON.parse(
+      typeof defaultScreenshot?.init?.body === "string" ? defaultScreenshot.init.body : "{}",
+    ) as { targetId?: unknown; timeoutMs?: unknown };
+    expect(defaultScreenshotBody.targetId).toBe("t-default");
+    expect(defaultScreenshotBody.timeoutMs).toBe(20_000);
   });
 
   it("gives browser act requests enough client timeout for long waits", async () => {

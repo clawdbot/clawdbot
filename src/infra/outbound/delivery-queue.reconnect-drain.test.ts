@@ -35,6 +35,17 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
   return count;
 }
 
+function requireRecord(value: unknown): Record<string, unknown> {
+  expect(value).toBeTruthy();
+  expect(typeof value).toBe("object");
+  expect(Array.isArray(value)).toBe(false);
+  return value as Record<string, unknown>;
+}
+
+function expectLogMessageWith(logFn: ReturnType<typeof vi.fn>, text: string): void {
+  expect(logFn.mock.calls.some(([message]) => String(message).includes(text))).toBe(true);
+}
+
 async function drainDirectChatReconnectPending(opts: {
   accountId: string;
   deliver: DeliverFn;
@@ -113,9 +124,10 @@ describe("drainPendingDeliveries for reconnect", () => {
     await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
 
     expect(deliver).toHaveBeenCalledTimes(1);
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "directchat", to: "+1555", skipQueue: true }),
-    );
+    const delivery = requireRecord(deliver.mock.calls[0]?.[0]);
+    expect(delivery.channel).toBe("directchat");
+    expect(delivery.to).toBe("+1555");
+    expect(delivery.skipQueue).toBe(true);
   });
 
   it("skips entries from other accounts", async () => {
@@ -180,9 +192,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     expect(deliver).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(tmpDir, "delivery-queue", `${id}.json`))).toBe(false);
     expect(fs.existsSync(path.join(tmpDir, "delivery-queue", "failed", `${id}.json`))).toBe(true);
-    expect(log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("refusing blind replay without adapter reconciliation"),
-    );
+    expectLogMessageWith(log.warn, "refusing blind replay without adapter reconciliation");
   });
 
   it("skips entries where retryCount >= MAX_RETRIES", async () => {
@@ -243,7 +253,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     const second = drainDirectChatReconnectPending(opts);
     await second;
 
-    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("already in progress"));
+    expectLogMessageWith(log.info, "already in progress");
 
     // Unblock first drain
     resolveDeliver!();
@@ -293,9 +303,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
 
     expect(deliver).toHaveBeenCalledTimes(1);
-    expect(log.info).toHaveBeenCalledWith(
-      expect.stringContaining(`entry ${id} is already being recovered`),
-    );
+    expectLogMessageWith(log.info, `entry ${id} is already being recovered`);
 
     resolveDeliver!();
     await startupRecovery;
@@ -346,9 +354,12 @@ describe("drainPendingDeliveries for reconnect", () => {
     });
 
     await vi.waitFor(() => {
-      expect(deliver).toHaveBeenCalledWith(
-        expect.objectContaining({ channel: "demo-channel-a", to: "+1000" }),
-      );
+      const deliveries = deliver.mock.calls.map(([delivery]) => requireRecord(delivery));
+      expect(
+        deliveries.some(
+          (delivery) => delivery.channel === "demo-channel-a" && delivery.to === "+1000",
+        ),
+      ).toBe(true);
     });
 
     await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
@@ -358,9 +369,7 @@ describe("drainPendingDeliveries for reconnect", () => {
 
     expect(deliver).toHaveBeenCalledTimes(2);
     expect(countMatching(deliveredTargets, (target) => target === "+1555")).toBe(1);
-    expect(startupLog.info).toHaveBeenCalledWith(
-      expect.stringContaining("Recovery skipped for delivery"),
-    );
+    expectLogMessageWith(startupLog.info, "Recovery skipped for delivery");
   });
   it("drains fresh pending entries for the reconnecting account", async () => {
     const log = createRecoveryLog();
@@ -413,7 +422,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
 
     expect(deliver).not.toHaveBeenCalled();
-    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("not ready for retry yet"));
+    expectLogMessageWith(log.info, "not ready for retry yet");
   });
 
   it("still bypasses backoff for no-listener failures on reconnect", async () => {
@@ -475,7 +484,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     });
 
     expect(deliver).not.toHaveBeenCalled();
-    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("not ready for retry yet"));
+    expectLogMessageWith(log.info, "not ready for retry yet");
   });
 
   it("skips entries that an in-flight live delivery has actively claimed", async () => {
@@ -495,9 +504,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     const claimResult = await withActiveDeliveryClaim(id, async () => {
       await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
       expect(deliver).not.toHaveBeenCalled();
-      expect(log.info).toHaveBeenCalledWith(
-        expect.stringContaining(`entry ${id} is already being recovered`),
-      );
+      expectLogMessageWith(log.info, `entry ${id} is already being recovered`);
     });
     expect(claimResult.status).toBe("claimed");
 

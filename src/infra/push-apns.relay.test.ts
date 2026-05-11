@@ -42,6 +42,18 @@ function createRelayPushParams() {
   };
 }
 
+function expectRelayConfig(
+  resolved: ReturnType<typeof resolveApnsRelayConfigFromEnv>,
+  expected: { baseUrl: string; timeoutMs: number },
+) {
+  expect(resolved.ok).toBe(true);
+  if (!resolved.ok) {
+    throw new Error("expected APNs relay config to resolve");
+  }
+  expect(resolved.value.baseUrl).toBe(expected.baseUrl);
+  expect(resolved.value.timeoutMs).toBe(expected.timeoutMs);
+}
+
 describe("push-apns.relay", () => {
   describe("resolveApnsRelayConfigFromEnv", () => {
     it("returns a missing-config error when no relay base URL is configured", () => {
@@ -70,12 +82,9 @@ describe("push-apns.relay", () => {
         },
       );
 
-      expect(resolved).toMatchObject({
-        ok: true,
-        value: {
-          baseUrl: "https://relay-override.example.com/base",
-          timeoutMs: 1000,
-        },
+      expectRelayConfig(resolved, {
+        baseUrl: "https://relay-override.example.com/base",
+        timeoutMs: 1000,
       });
     });
 
@@ -86,12 +95,9 @@ describe("push-apns.relay", () => {
         OPENCLAW_APNS_RELAY_TIMEOUT_MS: "nope",
       } as NodeJS.ProcessEnv);
 
-      expect(resolved).toMatchObject({
-        ok: true,
-        value: {
-          baseUrl: "http://[::1]:8787",
-          timeoutMs: 10_000,
-        },
+      expectRelayConfig(resolved, {
+        baseUrl: "http://[::1]:8787",
+        timeoutMs: 10_000,
       });
     });
 
@@ -154,20 +160,29 @@ describe("push-apns.relay", () => {
       });
 
       expect(sender).toHaveBeenCalledTimes(1);
-      const sent = sender.mock.calls[0]?.[0];
-      expect(sent).toMatchObject({
-        relayConfig: {
-          baseUrl: "https://relay.example.com",
-          timeoutMs: 1000,
-        },
-        sendGrant: "send-grant-123",
-        relayHandle: "relay-handle-123",
-        gatewayDeviceId: relayGatewayIdentity.deviceId,
-        signedAtMs: 123_456_789,
-        pushType: "alert",
-        priority: "10",
-        payload: { aps: { alert: { title: "Wake", body: "Ping" } } },
-      });
+      const sent = sender.mock.calls[0]?.[0] as
+        | {
+            relayConfig?: { baseUrl?: string; timeoutMs?: number };
+            sendGrant?: string;
+            relayHandle?: string;
+            gatewayDeviceId?: string;
+            signedAtMs?: number;
+            pushType?: string;
+            priority?: string;
+            payload?: unknown;
+            bodyJson?: string;
+            signature?: string;
+          }
+        | undefined;
+      expect(sent?.relayConfig?.baseUrl).toBe("https://relay.example.com");
+      expect(sent?.relayConfig?.timeoutMs).toBe(1000);
+      expect(sent?.sendGrant).toBe("send-grant-123");
+      expect(sent?.relayHandle).toBe("relay-handle-123");
+      expect(sent?.gatewayDeviceId).toBe(relayGatewayIdentity.deviceId);
+      expect(sent?.signedAtMs).toBe(123_456_789);
+      expect(sent?.pushType).toBe("alert");
+      expect(sent?.priority).toBe("10");
+      expect(sent?.payload).toEqual({ aps: { alert: { title: "Wake", body: "Ping" } } });
       expect(sent?.bodyJson).toBe(
         JSON.stringify({
           relayHandle: "relay-handle-123",
@@ -188,13 +203,11 @@ describe("push-apns.relay", () => {
           sent?.signature ?? "",
         ),
       ).toBe(true);
-      expect(result).toMatchObject({
-        ok: true,
-        status: 200,
-        apnsId: "relay-apns-id",
-        environment: "production",
-        tokenSuffix: "abcd1234",
-      });
+      expect(result.ok).toBe(true);
+      expect(result.status).toBe(200);
+      expect(result.apnsId).toBe("relay-apns-id");
+      expect(result.environment).toBe("production");
+      expect(result.tokenSuffix).toBe("abcd1234");
     });
 
     it("does not follow relay redirects", async () => {
@@ -208,13 +221,12 @@ describe("push-apns.relay", () => {
       const result = await sendApnsRelayPush(createRelayPushParams());
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
-      expect(result).toMatchObject({
-        ok: false,
-        status: 302,
-        reason: "RelayRedirectNotAllowed",
-        environment: "production",
-      });
+      const fetchOptions = fetchMock.mock.calls[0]?.[1] as { redirect?: unknown } | undefined;
+      expect(fetchOptions?.redirect).toBe("manual");
+      expect(result.ok).toBe(false);
+      expect(result.status).toBe(302);
+      expect(result.reason).toBe("RelayRedirectNotAllowed");
+      expect(result.environment).toBe("production");
     });
 
     it("falls back to fetch status when the relay body is not JSON", async () => {

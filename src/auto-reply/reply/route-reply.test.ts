@@ -106,10 +106,29 @@ function createChannelPlugin(
   };
 }
 
-function expectLastDelivery(
-  matcher: Partial<Parameters<(typeof mocks.deliverOutboundPayloads.mock.calls)[number][0]>[0]>,
-) {
-  expect(mocks.deliverOutboundPayloads).toHaveBeenLastCalledWith(expect.objectContaining(matcher));
+function lastDelivery() {
+  const call = mocks.deliverOutboundPayloads.mock.calls.at(-1);
+  expect(call).toBeDefined();
+  const delivery = call?.[0];
+  expect(typeof delivery).toBe("object");
+  expect(delivery).not.toBeNull();
+  return delivery as Record<string, unknown>;
+}
+
+function expectLastDeliveryFields(fields: Record<string, unknown>) {
+  const delivery = lastDelivery();
+  for (const [key, expected] of Object.entries(fields)) {
+    expect(delivery[key]).toEqual(expected);
+  }
+}
+
+function lastDeliveryPayload(index = 0): Record<string, unknown> {
+  const payloads = lastDelivery().payloads;
+  expect(Array.isArray(payloads)).toBe(true);
+  const payload = (payloads as unknown[])[index];
+  expect(typeof payload).toBe("object");
+  expect(payload).not.toBeNull();
+  return payload as Record<string, unknown>;
 }
 
 async function expectSlackNoDelivery(
@@ -225,15 +244,11 @@ describe("routeReply", () => {
       cfg: {} as never,
     });
     expect(res.ok).toBe(true);
-    expectLastDelivery({
+    expectLastDeliveryFields({
       channel: "slack",
       to: "channel:C123",
-      payloads: [
-        expect.objectContaining({
-          text: `${SILENT_REPLY_TOKEN} -- (why am I here?)`,
-        }),
-      ],
     });
+    expect(lastDeliveryPayload().text).toBe(`${SILENT_REPLY_TOKEN} -- (why am I here?)`);
   });
 
   it("passes policySessionKey through to outbound delivery targets", async () => {
@@ -263,15 +278,11 @@ describe("routeReply", () => {
     });
 
     expect(res.ok).toBe(true);
-    expectLastDelivery({
-      payloads: [expect.objectContaining({ text: "native command response" })],
-      session: expect.objectContaining({
-        key: "agent:main:main",
-        policyKey: "agent:main:direct:U123",
-      }),
-    });
-    const session = mocks.deliverOutboundPayloads.mock.calls.at(-1)?.[0]?.session;
-    expect(session).not.toEqual(expect.objectContaining({ conversationType: "group" }));
+    expect(lastDeliveryPayload().text).toBe("native command response");
+    const session = lastDelivery().session as Record<string, unknown>;
+    expect(session.key).toBe("agent:main:main");
+    expect(session.policyKey).toBe("agent:main:direct:U123");
+    expect(session.conversationType).toBeUndefined();
   });
 
   it("uses explicit policy conversation type to preserve routed direct silent replies", async () => {
@@ -300,14 +311,11 @@ describe("routeReply", () => {
     });
 
     expect(res.ok).toBe(true);
-    expectLastDelivery({
-      payloads: [expect.objectContaining({ text: SILENT_REPLY_TOKEN })],
-      session: expect.objectContaining({
-        key: "agent:main:main",
-        policyKey: "agent:main:main",
-        conversationType: "direct",
-      }),
-    });
+    expect(lastDeliveryPayload().text).toBe(SILENT_REPLY_TOKEN);
+    const session = lastDelivery().session as Record<string, unknown>;
+    expect(session.key).toBe("agent:main:main");
+    expect(session.policyKey).toBe("agent:main:main");
+    expect(session.conversationType).toBe("direct");
   });
 
   it("applies responsePrefix when routing", async () => {
@@ -320,9 +328,7 @@ describe("routeReply", () => {
       to: "channel:C123",
       cfg,
     });
-    expectLastDelivery({
-      payloads: [expect.objectContaining({ text: "[openclaw] hi" })],
-    });
+    expect(lastDeliveryPayload().text).toBe("[openclaw] hi");
   });
 
   it("routes directive-only Slack replies when interactive replies are enabled", async () => {
@@ -339,13 +345,7 @@ describe("routeReply", () => {
       to: "channel:C123",
       cfg,
     });
-    expectLastDelivery({
-      payloads: [
-        expect.objectContaining({
-          text: "[[slack_select: Choose one | Alpha:alpha]]",
-        }),
-      ],
-    });
+    expect(lastDeliveryPayload().text).toBe("[[slack_select: Choose one | Alpha:alpha]]");
   });
 
   it("does not bypass the empty-reply guard for invalid Slack blocks", async () => {
@@ -378,9 +378,7 @@ describe("routeReply", () => {
       sessionKey: "agent:rich:main",
       cfg,
     });
-    expectLastDelivery({
-      payloads: [expect.objectContaining({ text: "hi" })],
-    });
+    expect(lastDeliveryPayload().text).toBe("hi");
   });
 
   it("uses threadId for Slack when replyToId is missing", async () => {
@@ -391,7 +389,7 @@ describe("routeReply", () => {
       threadId: "456.789",
       cfg: {} as never,
     });
-    expectLastDelivery({
+    expectLastDeliveryFields({
       channel: "slack",
       replyToId: "456.789",
       threadId: null,
@@ -406,7 +404,7 @@ describe("routeReply", () => {
       threadId: 42,
       cfg: {} as never,
     });
-    expectLastDelivery({
+    expectLastDeliveryFields({
       channel: "telegram",
       to: "telegram:123",
       threadId: 42,
@@ -420,10 +418,10 @@ describe("routeReply", () => {
       to: "channel:C123",
       cfg: {} as never,
     });
-    expectLastDelivery({
+    expectLastDeliveryFields({
       channel: "slack",
-      payloads: [expect.objectContaining({ text: "BTW\nQuestion: what is 17 * 19?\n\n323" })],
     });
+    expect(lastDeliveryPayload().text).toBe("BTW\nQuestion: what is 17 * 19?\n\n323");
   });
 
   it("formats BTW replies prominently on routed discord sends", async () => {
@@ -433,10 +431,10 @@ describe("routeReply", () => {
       to: "channel:123456",
       cfg: {} as never,
     });
-    expectLastDelivery({
+    expectLastDeliveryFields({
       channel: "discord",
-      payloads: [expect.objectContaining({ text: "BTW\nQuestion: what is 17 * 19?\n\n323" })],
     });
+    expect(lastDeliveryPayload().text).toBe("BTW\nQuestion: what is 17 * 19?\n\n323");
   });
 
   it("passes replyToId to Telegram sends", async () => {
@@ -446,7 +444,7 @@ describe("routeReply", () => {
       to: "telegram:123",
       cfg: {} as never,
     });
-    expectLastDelivery({
+    expectLastDeliveryFields({
       channel: "telegram",
       to: "telegram:123",
       replyToId: "123",
@@ -461,17 +459,13 @@ describe("routeReply", () => {
       cfg: {} as never,
     });
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expectLastDelivery({
+    expectLastDeliveryFields({
       channel: "slack",
       to: "channel:C123",
-      payloads: [
-        expect.objectContaining({
-          text: "voice caption",
-          mediaUrl: "file:///tmp/clip.mp3",
-          audioAsVoice: true,
-        }),
-      ],
     });
+    expect(lastDeliveryPayload().text).toBe("voice caption");
+    expect(lastDeliveryPayload().mediaUrl).toBe("file:///tmp/clip.mp3");
+    expect(lastDeliveryPayload().audioAsVoice).toBe(true);
   });
 
   it("uses replyToId as threadTs for Slack", async () => {
@@ -481,7 +475,7 @@ describe("routeReply", () => {
       to: "channel:C123",
       cfg: {} as never,
     });
-    expectLastDelivery({
+    expectLastDeliveryFields({
       channel: "slack",
       replyToId: "1710000000.0001",
       threadId: null,
@@ -496,7 +490,7 @@ describe("routeReply", () => {
       threadId: "1710000000.9999",
       cfg: {} as never,
     });
-    expectLastDelivery({
+    expectLastDeliveryFields({
       channel: "slack",
       replyToId: "1710000000.9999",
       threadId: null,
@@ -511,7 +505,7 @@ describe("routeReply", () => {
       threadId: "1710000000.9999",
       cfg: {} as never,
     });
-    expectLastDelivery({
+    expectLastDeliveryFields({
       channel: "slack",
       replyToId: "1710000000.9999",
       threadId: null,
@@ -534,7 +528,7 @@ describe("routeReply", () => {
         },
       } as unknown as OpenClawConfig,
     });
-    expectLastDelivery({
+    expectLastDeliveryFields({
       channel: "mattermost",
       to: "channel:CHAN1",
       replyToId: "post-root",
@@ -549,15 +543,11 @@ describe("routeReply", () => {
       to: "channel:C123",
       cfg: {} as never,
     });
-    expectLastDelivery({
+    expectLastDeliveryFields({
       channel: "slack",
-      payloads: [
-        expect.objectContaining({
-          text: "caption",
-          mediaUrls: ["a", "b"],
-        }),
-      ],
     });
+    expect(lastDeliveryPayload().text).toBe("caption");
+    expect(lastDeliveryPayload().mediaUrls).toEqual(["a", "b"]);
   });
 
   it("routes WhatsApp with the account id intact", async () => {
@@ -568,7 +558,7 @@ describe("routeReply", () => {
       accountId: "acc-1",
       cfg: {} as never,
     });
-    expectLastDelivery({
+    expectLastDeliveryFields({
       channel: "whatsapp",
       to: "+15551234567",
       accountId: "acc-1",
@@ -589,12 +579,12 @@ describe("routeReply", () => {
       to: "conversation:19:abc@thread.tacv2",
       cfg,
     });
-    expectLastDelivery({
+    expectLastDeliveryFields({
       channel: "msteams",
       to: "conversation:19:abc@thread.tacv2",
       cfg,
-      payloads: [expect.objectContaining({ text: "hi" })],
     });
+    expect(lastDeliveryPayload().text).toBe("hi");
   });
 
   it("passes mirror data when sessionKey is set", async () => {
@@ -607,14 +597,11 @@ describe("routeReply", () => {
       groupId: "channel:C123",
       cfg: {} as never,
     });
-    expectLastDelivery({
-      mirror: expect.objectContaining({
-        sessionKey: "agent:main:main",
-        text: "hi",
-        isGroup: true,
-        groupId: "channel:C123",
-      }),
-    });
+    const mirror = lastDelivery().mirror as Record<string, unknown>;
+    expect(mirror.sessionKey).toBe("agent:main:main");
+    expect(mirror.text).toBe("hi");
+    expect(mirror.isGroup).toBe(true);
+    expect(mirror.groupId).toBe("channel:C123");
   });
 
   it("skips mirror data when mirror is false", async () => {
@@ -626,7 +613,7 @@ describe("routeReply", () => {
       mirror: false,
       cfg: {} as never,
     });
-    expectLastDelivery({
+    expectLastDeliveryFields({
       mirror: undefined,
     });
   });

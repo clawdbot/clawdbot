@@ -104,6 +104,7 @@ function buildDescriptorContextCacheKey(params: {
     workspaceDir: ctx.workspaceDir ?? null,
     agentDir: ctx.agentDir ?? null,
     agentId: ctx.agentId ?? null,
+    activeModel: ctx.activeModel ?? null,
     browser: ctx.browser ?? null,
     messageChannel: ctx.messageChannel ?? null,
     agentAccountId: ctx.agentAccountId ?? null,

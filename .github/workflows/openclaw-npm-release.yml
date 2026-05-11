@@ -32,8 +32,8 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.x"
-  PNPM_VERSION: "10.32.1"
+  NODE_VERSION: "24.15.0"
+  PNPM_VERSION: "11.0.8"
 
 jobs:
   # PLEASE DON'T ADD LONG-RUNNING OR FLAKY CHECKS TO THE npm RELEASE PATH.
@@ -239,6 +239,9 @@ jobs:
             exit 1
           fi
           RELEASE_SHA="$(git rev-parse HEAD)"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          TARBALL_NAME="$(basename "$PACK_PATH")"
+          TARBALL_SHA256="$(sha256sum "$PACK_PATH" | awk '{print $1}')"
           ARTIFACT_DIR="$RUNNER_TEMP/openclaw-npm-preflight"
           rm -rf "$ARTIFACT_DIR"
           mkdir -p "$ARTIFACT_DIR"
@@ -246,6 +249,24 @@ jobs:
           printf '%s\n' "$RELEASE_TAG" > "$ARTIFACT_DIR/release-tag.txt"
           printf '%s\n' "$RELEASE_SHA" > "$ARTIFACT_DIR/release-sha.txt"
           printf '%s\n' "$RELEASE_NPM_DIST_TAG" > "$ARTIFACT_DIR/release-npm-dist-tag.txt"
+          ARTIFACT_DIR="$ARTIFACT_DIR" RELEASE_TAG="$RELEASE_TAG" RELEASE_SHA="$RELEASE_SHA" RELEASE_NPM_DIST_TAG="$RELEASE_NPM_DIST_TAG" PACKAGE_VERSION="$PACKAGE_VERSION" TARBALL_NAME="$TARBALL_NAME" TARBALL_SHA256="$TARBALL_SHA256" node <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const manifest = {
+            version: 1,
+            releaseTag: process.env.RELEASE_TAG,
+            releaseSha: process.env.RELEASE_SHA,
+            npmDistTag: process.env.RELEASE_NPM_DIST_TAG,
+            packageName: "openclaw",
+            packageVersion: process.env.PACKAGE_VERSION,
+            tarballName: process.env.TARBALL_NAME,
+            tarballSha256: process.env.TARBALL_SHA256,
+          };
+          fs.writeFileSync(
+            path.join(process.env.ARTIFACT_DIR, "preflight-manifest.json"),
+            `${JSON.stringify(manifest, null, 2)}\n`,
+          );
+          NODE
           echo "dir=$ARTIFACT_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Upload prepared npm publish bundle
@@ -379,17 +400,17 @@ jobs:
         run: |
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
-          TAG_FILE="preflight-tarball/release-tag.txt"
-          SHA_FILE="preflight-tarball/release-sha.txt"
-          NPM_DIST_TAG_FILE="preflight-tarball/release-npm-dist-tag.txt"
-          if [[ ! -f "$TAG_FILE" || ! -f "$SHA_FILE" || ! -f "$NPM_DIST_TAG_FILE" ]]; then
+          MANIFEST_FILE="preflight-tarball/preflight-manifest.json"
+          if [[ ! -f "$MANIFEST_FILE" ]]; then
             echo "Prepared preflight metadata is missing." >&2
             ls -la preflight-tarball >&2 || true
             exit 1
           fi
-          ARTIFACT_RELEASE_TAG="$(tr -d '\r\n' < "$TAG_FILE")"
-          ARTIFACT_RELEASE_SHA="$(tr -d '\r\n' < "$SHA_FILE")"
-          ARTIFACT_RELEASE_NPM_DIST_TAG="$(tr -d '\r\n' < "$NPM_DIST_TAG_FILE")"
+          ARTIFACT_RELEASE_TAG="$(jq -r '.releaseTag // ""' "$MANIFEST_FILE")"
+          ARTIFACT_RELEASE_SHA="$(jq -r '.releaseSha // ""' "$MANIFEST_FILE")"
+          ARTIFACT_RELEASE_NPM_DIST_TAG="$(jq -r '.npmDistTag // ""' "$MANIFEST_FILE")"
+          ARTIFACT_TARBALL_NAME="$(jq -r '.tarballName // ""' "$MANIFEST_FILE")"
+          ARTIFACT_TARBALL_SHA256="$(jq -r '.tarballSha256 // ""' "$MANIFEST_FILE")"
           if [[ "$ARTIFACT_RELEASE_TAG" != "$RELEASE_TAG" ]]; then
             echo "Prepared preflight tag mismatch: expected $RELEASE_TAG, got $ARTIFACT_RELEASE_TAG" >&2
             exit 1
@@ -400,6 +421,15 @@ jobs:
           fi
           if [[ "$ARTIFACT_RELEASE_NPM_DIST_TAG" != "$RELEASE_NPM_DIST_TAG" ]]; then
             echo "Prepared preflight npm dist-tag mismatch: expected $RELEASE_NPM_DIST_TAG, got $ARTIFACT_RELEASE_NPM_DIST_TAG" >&2
+            exit 1
+          fi
+          if [[ -z "$ARTIFACT_TARBALL_NAME" || ! -f "preflight-tarball/$ARTIFACT_TARBALL_NAME" ]]; then
+            echo "Prepared preflight tarball named in manifest is missing: $ARTIFACT_TARBALL_NAME" >&2
+            exit 1
+          fi
+          actual_tarball_sha256="$(sha256sum "preflight-tarball/$ARTIFACT_TARBALL_NAME" | awk '{print $1}')"
+          if [[ "$actual_tarball_sha256" != "$ARTIFACT_TARBALL_SHA256" ]]; then
+            echo "Prepared preflight tarball digest mismatch." >&2
             exit 1
           fi
 

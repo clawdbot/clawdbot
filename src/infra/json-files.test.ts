@@ -142,7 +142,8 @@ describe("json file helpers", () => {
         "Refusing copy fallback through symlink destination",
       );
 
-      await expect(fs.lstat(filePath)).resolves.toSatisfy((stat) => stat.isSymbolicLink());
+      const fileStat = await fs.lstat(filePath);
+      expect(fileStat.isSymbolicLink()).toBe(true);
       await expect(fs.readFile(outsidePath, "utf8")).resolves.toBe("outside");
     });
   });

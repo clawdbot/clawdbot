@@ -1,6 +1,6 @@
 import { ChannelType } from "discord-api-types/v10";
 import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { peekSystemEvents, resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -121,9 +121,11 @@ describe("agent components", () => {
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "[Discord component: hello clicked by Alice#1234 (123456789)]",
-      expect.objectContaining({
+      {
         sessionKey: defaultDmSessionKey,
-      }),
+        contextKey: "discord:agent-button:dm-channel:hello:123456789",
+        trusted: false,
+      },
     );
     if (params.expectPairingStoreRead) {
       expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
@@ -188,12 +190,16 @@ describe("agent components", () => {
     });
 
     expect(defer).not.toHaveBeenCalled();
-    expect(ctx).toMatchObject({
+    expect(ctx).toEqual({
       channelId: "group-dm-channel",
+      user: { id: "123456789", username: "Alice", discriminator: "1234" },
+      username: "Alice#1234",
+      userId: "123456789",
+      replyOpts: { ephemeral: true },
       isDirectMessage: false,
       isGroupDm: true,
+      memberRoleIds: [],
       rawGuildId: undefined,
-      userId: "123456789",
     });
   });
 
@@ -243,9 +249,11 @@ describe("agent components", () => {
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "[Discord component: hello clicked by Alice#1234 (123456789)]",
-      expect.objectContaining({
+      {
         sessionKey: defaultGroupDmSessionKey,
-      }),
+        contextKey: "discord:agent-button:group-dm-channel:hello:123456789",
+        trusted: false,
+      },
     );
     expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
@@ -322,9 +330,11 @@ describe("agent components", () => {
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "[Discord select menu: hello interacted by Alice#1234 (123456789) (selected: alpha)]",
-      expect.objectContaining({
+      {
         sessionKey: defaultDmSessionKey,
-      }),
+        contextKey: "discord:agent-select:dm-channel:hello:123456789",
+        trusted: false,
+      },
     );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
@@ -344,9 +354,11 @@ describe("agent components", () => {
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "[Discord component: hello_cid clicked by Alice#1234 (123456789)]",
-      expect.objectContaining({
+      {
         sessionKey: defaultDmSessionKey,
-      }),
+        contextKey: "discord:agent-button:dm-channel:hello_cid:123456789",
+        trusted: false,
+      },
     );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
@@ -366,9 +378,11 @@ describe("agent components", () => {
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "[Discord component: hello%2G clicked by Alice#1234 (123456789)]",
-      expect.objectContaining({
+      {
         sessionKey: defaultDmSessionKey,
-      }),
+        contextKey: "discord:agent-button:dm-channel:hello%2G:123456789",
+        trusted: false,
+      },
     );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });

@@ -62,9 +62,10 @@ describe("listChannelCatalogEntries", () => {
     expect(loadRecordsSpy).toHaveBeenCalledTimes(1);
     expect(loadRecordsSpy).toHaveBeenCalledWith({ env: ENV });
     expect(discoverSpy).toHaveBeenCalledTimes(1);
-    expect(discoverSpy.mock.calls[0][0]).toMatchObject({
+    expect(discoverSpy.mock.calls[0]?.[0]).toStrictEqual({
       env: ENV,
       installRecords: RECORDS,
+      workspaceDir: undefined,
     });
   });
 
@@ -90,7 +91,11 @@ describe("listChannelCatalogEntries", () => {
     module.listChannelCatalogEntries({ env: ENV, installRecords: supplied });
 
     expect(loadRecordsSpy).not.toHaveBeenCalled();
-    expect(discoverSpy.mock.calls[0][0]).toMatchObject({ installRecords: supplied });
+    expect(discoverSpy.mock.calls[0]?.[0]).toStrictEqual({
+      env: ENV,
+      installRecords: supplied,
+      workspaceDir: undefined,
+    });
   });
 
   it("omits installRecords from discovery when the ledger is empty", async () => {

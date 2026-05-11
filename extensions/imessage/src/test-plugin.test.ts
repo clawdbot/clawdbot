@@ -96,22 +96,18 @@ describe("createIMessageTestPlugin", () => {
   });
 
   it("declares durable final delivery capabilities", () => {
-    expect(imessagePlugin.outbound?.deliveryCapabilities?.durableFinal).toEqual(
-      expect.objectContaining({
-        text: true,
-        media: true,
-        replyTo: true,
-        messageSendingHooks: true,
-      }),
-    );
-    expect(createIMessageTestPlugin().outbound?.deliveryCapabilities?.durableFinal).toEqual(
-      expect.objectContaining({
-        text: true,
-        media: true,
-        replyTo: true,
-        messageSendingHooks: true,
-      }),
-    );
+    expect(imessagePlugin.outbound?.deliveryCapabilities?.durableFinal).toStrictEqual({
+      text: true,
+      media: true,
+      replyTo: true,
+      messageSendingHooks: true,
+    });
+    expect(createIMessageTestPlugin().outbound?.deliveryCapabilities?.durableFinal).toStrictEqual({
+      text: true,
+      media: true,
+      replyTo: true,
+      messageSendingHooks: true,
+    });
   });
 
   it("backs declared durable final capabilities with delivery proofs", async () => {
@@ -235,8 +231,18 @@ describe("createIMessageTestPlugin", () => {
   it("exposes seeded private API actions for binding contract tests", () => {
     const plugin = createIMessageTestPlugin();
 
-    expect(plugin.actions?.describeMessageTool({} as never)?.actions).toEqual(
-      expect.arrayContaining(["react", "edit", "unsend", "reply", "sendWithEffect", "upload-file"]),
-    );
+    expect(plugin.actions?.describeMessageTool({} as never)?.actions).toStrictEqual([
+      "react",
+      "edit",
+      "unsend",
+      "reply",
+      "sendWithEffect",
+      "upload-file",
+      "renameGroup",
+      "setGroupIcon",
+      "addParticipant",
+      "removeParticipant",
+      "leaveGroup",
+    ]);
   });
 });

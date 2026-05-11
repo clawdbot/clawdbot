@@ -1,4 +1,4 @@
-import { applyXaiModelCompat } from "openclaw/plugin-sdk/provider-tools";
+import { applyXaiModelCompat } from "./model-compat.js";
 
 type XaiRuntimeModelCompat = {
   compat?: unknown;

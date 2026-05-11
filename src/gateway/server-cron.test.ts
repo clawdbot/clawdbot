@@ -108,6 +108,62 @@ function createCronConfig(name: string): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).toBeTypeOf("object");
+  expect(value, label).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+function requireArray(value: unknown, label: string): Array<unknown> {
+  expect(Array.isArray(value), label).toBe(true);
+  return value as Array<unknown>;
+}
+
+function callArg(
+  mock: { mock: { calls: Array<Array<unknown>> } },
+  callIndex: number,
+  argIndex: number,
+  label: string,
+) {
+  const call = mock.mock.calls.at(callIndex);
+  expect(call, label).toBeDefined();
+  return call?.[argIndex];
+}
+
+function expectHookContext(callIndex: number, fields: { config?: unknown; hasGetCron?: boolean }) {
+  const context = requireRecord(
+    callArg(runCronChangedMock, callIndex, 1, "cron_changed context"),
+    "cron_changed context",
+  );
+  if ("config" in fields) {
+    expect(context.config).toBe(fields.config);
+  }
+  if (fields.hasGetCron === true) {
+    expect(context.getCron).toBeTypeOf("function");
+  }
+}
+
+function expectIsolatedRunFields(fields: Record<string, unknown>) {
+  const options = requireRecord(
+    callArg(runCronIsolatedAgentTurnMock, 0, 0, "isolated cron run"),
+    "isolated cron run",
+  );
+  for (const [key, value] of Object.entries(fields)) {
+    expect(options[key]).toEqual(value);
+  }
+  return options;
+}
+
+function expectCleanupForSessionKeys(sessionKeys: string[]) {
+  expect(cleanupBrowserSessionsForLifecycleEndMock).toHaveBeenCalledTimes(1);
+  const options = requireRecord(
+    callArg(cleanupBrowserSessionsForLifecycleEndMock, 0, 0, "cleanup options"),
+    "cleanup options",
+  );
+  expect(options.sessionKeys).toEqual(sessionKeys);
+  expect(options.onWarn).toBeTypeOf("function");
+}
+
 describe("buildGatewayCronService", () => {
   beforeEach(() => {
     enqueueSystemEventMock.mockClear();
@@ -144,22 +200,20 @@ describe("buildGatewayCronService", () => {
         payload: { kind: "systemEvent", text: "sync external wake" },
       });
 
-      expect(runCronChangedMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: "added",
-          jobId: job.id,
-          sessionTarget: "main",
-          job: expect.objectContaining({
-            id: job.id,
-            sessionTarget: "main",
-            state: expect.objectContaining({ nextRunAtMs: job.state.nextRunAtMs }),
-          }),
-        }),
-        expect.objectContaining({
-          config: cfg,
-          getCron: expect.any(Function),
-        }),
+      const event = requireRecord(
+        callArg(runCronChangedMock, 0, 0, "cron_changed event"),
+        "cron_changed event",
       );
+      expect(event.action).toBe("added");
+      expect(event.jobId).toBe(job.id);
+      expect(event.sessionTarget).toBe("main");
+      const eventJob = requireRecord(event.job, "cron_changed job");
+      expect(eventJob.id).toBe(job.id);
+      expect(eventJob.sessionTarget).toBe("main");
+      expect(requireRecord(eventJob.state, "cron_changed job state").nextRunAtMs).toBe(
+        job.state.nextRunAtMs,
+      );
+      expectHookContext(0, { config: cfg, hasGetCron: true });
     } finally {
       state.cron.stop();
     }
@@ -187,21 +241,18 @@ describe("buildGatewayCronService", () => {
       runCronChangedMock.mockClear();
       await state.cron.remove(job.id);
 
-      expect(runCronChangedMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: "removed",
-          jobId: job.id,
-          sessionTarget: "main",
-          job: expect.objectContaining({
-            id: job.id,
-            name: "to-be-removed",
-            sessionTarget: "main",
-          }),
-        }),
-        expect.objectContaining({
-          getCron: expect.any(Function),
-        }),
+      const event = requireRecord(
+        callArg(runCronChangedMock, 0, 0, "cron_changed event"),
+        "cron_changed event",
       );
+      expect(event.action).toBe("removed");
+      expect(event.jobId).toBe(job.id);
+      expect(event.sessionTarget).toBe("main");
+      const eventJob = requireRecord(event.job, "cron_changed job");
+      expect(eventJob.id).toBe(job.id);
+      expect(eventJob.name).toBe("to-be-removed");
+      expect(eventJob.sessionTarget).toBe("main");
+      expectHookContext(0, { hasGetCron: true });
     } finally {
       state.cron.stop();
     }
@@ -227,22 +278,19 @@ describe("buildGatewayCronService", () => {
         payload: { kind: "agentTurn", message: "agent check" },
       });
 
-      expect(runCronChangedMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: "added",
-          jobId: job.id,
-          sessionTarget: "session:project-alpha",
-          agentId: "yinze",
-          job: expect.objectContaining({
-            id: job.id,
-            agentId: "yinze",
-            sessionTarget: "session:project-alpha",
-          }),
-        }),
-        expect.objectContaining({
-          config: cfg,
-        }),
+      const event = requireRecord(
+        callArg(runCronChangedMock, 0, 0, "cron_changed event"),
+        "cron_changed event",
       );
+      expect(event.action).toBe("added");
+      expect(event.jobId).toBe(job.id);
+      expect(event.sessionTarget).toBe("session:project-alpha");
+      expect(event.agentId).toBe("yinze");
+      const eventJob = requireRecord(event.job, "cron_changed job");
+      expect(eventJob.id).toBe(job.id);
+      expect(eventJob.agentId).toBe("yinze");
+      expect(eventJob.sessionTarget).toBe("session:project-alpha");
+      expectHookContext(0, { config: cfg });
     } finally {
       state.cron.stop();
     }
@@ -301,17 +349,15 @@ describe("buildGatewayCronService", () => {
 
       await state.cron.run(job.id, "force");
 
-      expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-        "hello",
-        expect.objectContaining({
-          sessionKey: "agent:main:discord:channel:ops",
-        }),
-      );
-      expect(requestHeartbeatMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionKey: "agent:main:discord:channel:ops",
-        }),
-      );
+      expect(callArg(enqueueSystemEventMock, 0, 0, "system event text")).toBe("hello");
+      expect(
+        requireRecord(callArg(enqueueSystemEventMock, 0, 1, "system event options"), "options")
+          .sessionKey,
+      ).toBe("agent:main:discord:channel:ops");
+      expect(
+        requireRecord(callArg(requestHeartbeatMock, 0, 0, "heartbeat request"), "request")
+          .sessionKey,
+      ).toBe("agent:main:discord:channel:ops");
     } finally {
       state.cron.stop();
     }
@@ -438,17 +484,16 @@ describe("buildGatewayCronService", () => {
       await state.cron.run(job.id, "force");
 
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
-        url: "http://127.0.0.1:8080/cron-finished",
-        init: {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: expect.stringContaining('"action":"finished"'),
-          signal: expect.any(AbortSignal),
-        },
-      });
+      const request = requireRecord(
+        callArg(fetchWithSsrFGuardMock, 0, 0, "fetch request"),
+        "fetch request",
+      );
+      expect(request.url).toBe("http://127.0.0.1:8080/cron-finished");
+      const init = requireRecord(request.init, "fetch init");
+      expect(init.method).toBe("POST");
+      expect(init.headers).toEqual({ "Content-Type": "application/json" });
+      expect(String(init.body)).toContain('"action":"finished"');
+      expect(init.signal).toBeInstanceOf(AbortSignal);
     } finally {
       state.cron.stop();
     }
@@ -483,16 +528,9 @@ describe("buildGatewayCronService", () => {
 
       await state.cron.run(job.id, "force");
 
-      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          job: expect.objectContaining({ id: job.id }),
-          sessionKey: "project-alpha-monitor",
-        }),
-      );
-      expect(cleanupBrowserSessionsForLifecycleEndMock).toHaveBeenCalledWith({
-        sessionKeys: ["project-alpha-monitor"],
-        onWarn: expect.any(Function),
-      });
+      const options = expectIsolatedRunFields({ sessionKey: "project-alpha-monitor" });
+      expect(requireRecord(options.job, "isolated job").id).toBe(job.id);
+      expectCleanupForSessionKeys(["project-alpha-monitor"]);
     } finally {
       state.cron.stop();
     }
@@ -523,21 +561,17 @@ describe("buildGatewayCronService", () => {
 
       await state.cron.run(job.id, "force");
 
-      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          job: expect.objectContaining({ id: job.id }),
-          sessionKey: `cron:${job.id}`,
+      const options = expectIsolatedRunFields({ sessionKey: `cron:${job.id}` });
+      expect(requireRecord(options.job, "isolated job").id).toBe(job.id);
+      const isolatedRunCalls = runCronIsolatedAgentTurnMock.mock.calls as Array<Array<unknown>>;
+      expect(
+        isolatedRunCalls.some(([value]) => {
+          const record =
+            value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+          return record.sessionKey === "main";
         }),
-      );
-      expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionKey: "main",
-        }),
-      );
-      expect(cleanupBrowserSessionsForLifecycleEndMock).toHaveBeenCalledWith({
-        sessionKeys: [`cron:${job.id}`],
-        onWarn: expect.any(Function),
-      });
+      ).toBe(false);
+      expectCleanupForSessionKeys([`cron:${job.id}`]);
     } finally {
       state.cron.stop();
     }
@@ -596,21 +630,15 @@ describe("buildGatewayCronService", () => {
 
       await state.cron.run(job.id, "force");
 
-      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: "yinze",
-          cfg: expect.objectContaining({
-            agents: expect.objectContaining({
-              list: expect.arrayContaining([
-                expect.objectContaining({
-                  id: "yinze",
-                  workspace: path.join(tmpDir, "workspace-yinze"),
-                }),
-              ]),
-            }),
-          }),
-        }),
+      const options = expectIsolatedRunFields({ agentId: "yinze" });
+      const cfg = requireRecord(options.cfg, "isolated run config");
+      const agents = requireRecord(cfg.agents, "isolated run agents");
+      const list = requireArray(agents.list, "isolated run agent list");
+      const yinze = requireRecord(
+        list.find((agent) => requireRecord(agent, "agent entry").id === "yinze"),
+        "yinze agent entry",
       );
+      expect(yinze.workspace).toBe(path.join(tmpDir, "workspace-yinze"));
     } finally {
       state.cron.stop();
     }
@@ -691,28 +719,24 @@ describe("buildGatewayCronService", () => {
         heartbeat: {},
       });
 
-      expect(runHeartbeatOnceMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: "yinze",
-          cfg: expect.objectContaining({
-            agents: expect.objectContaining({
-              list: expect.arrayContaining([
-                expect.objectContaining({
-                  id: "yinze",
-                  heartbeat: expect.objectContaining({
-                    target: "last",
-                    deliveryFormat: "markdown",
-                  }),
-                }),
-              ]),
-            }),
-          }),
-          heartbeat: expect.objectContaining({
-            target: "last",
-            deliveryFormat: "markdown",
-          }),
-        }),
+      const options = requireRecord(
+        callArg(runHeartbeatOnceMock, 0, 0, "heartbeat options"),
+        "heartbeat options",
       );
+      expect(options.agentId).toBe("yinze");
+      const cfg = requireRecord(options.cfg, "heartbeat config");
+      const agents = requireRecord(cfg.agents, "heartbeat agents");
+      const list = requireArray(agents.list, "heartbeat agent list");
+      const yinze = requireRecord(
+        list.find((agent) => requireRecord(agent, "agent entry").id === "yinze"),
+        "yinze agent entry",
+      );
+      const agentHeartbeat = requireRecord(yinze.heartbeat, "agent heartbeat");
+      expect(agentHeartbeat.target).toBe("last");
+      expect(agentHeartbeat.deliveryFormat).toBe("markdown");
+      const heartbeat = requireRecord(options.heartbeat, "heartbeat override");
+      expect(heartbeat.target).toBe("last");
+      expect(heartbeat.deliveryFormat).toBe("markdown");
     } finally {
       state.cron.stop();
     }

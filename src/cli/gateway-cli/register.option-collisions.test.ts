@@ -145,25 +145,21 @@ describe("gateway register option collisions", () => {
       name: "forwards --token to gateway call when parent and child option names collide",
       argv: ["gateway", "call", "health", "--token", "tok_call", "--json"],
       assert: () => {
-        expect(callGatewayCli).toHaveBeenCalledWith(
-          "health",
-          expect.objectContaining({
-            token: "tok_call",
-          }),
-          {},
-        );
+        expect(callGatewayCli).toHaveBeenCalledTimes(1);
+        const [method, opts, params] = callGatewayCli.mock.calls[0] ?? [];
+        expect(method).toBe("health");
+        expect((opts as { token?: string } | undefined)?.token).toBe("tok_call");
+        expect(params).toEqual({});
       },
     },
     {
       name: "forwards --token to gateway probe when parent and child option names collide",
       argv: ["gateway", "probe", "--token", "tok_probe", "--json"],
       assert: () => {
-        expect(gatewayStatusCommand).toHaveBeenCalledWith(
-          expect.objectContaining({
-            token: "tok_probe",
-          }),
-          defaultRuntime,
-        );
+        expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
+        const [opts, runtime] = gatewayStatusCommand.mock.calls[0] ?? [];
+        expect((opts as { token?: string } | undefined)?.token).toBe("tok_probe");
+        expect(runtime).toBe(defaultRuntime);
       },
     },
   ])("$name", async ({ argv, assert }) => {

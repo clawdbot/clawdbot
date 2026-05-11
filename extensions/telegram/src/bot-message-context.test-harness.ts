@@ -1,5 +1,5 @@
+import { buildChannelTurnContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { BuildTelegramMessageContextParams, TelegramMediaRef } from "./bot-message-context.js";
-import { finalizeTelegramInboundContextForTest } from "./bot-message-context.session-runtime-test-support.js";
 
 export const baseTelegramMessageContextConfig = {
   agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
@@ -8,9 +8,6 @@ export const baseTelegramMessageContextConfig = {
 } as never;
 
 type TelegramTestSessionRuntime = NonNullable<BuildTelegramMessageContextParams["sessionRuntime"]>;
-const finalizeInboundContextForTest = finalizeTelegramInboundContextForTest as NonNullable<
-  TelegramTestSessionRuntime["finalizeInboundContext"]
->;
 
 type BuildTelegramMessageContextForTestParams = {
   message: Record<string, unknown>;
@@ -28,7 +25,7 @@ type BuildTelegramMessageContextForTestParams = {
 };
 
 const telegramMessageContextSessionRuntimeForTest = {
-  finalizeInboundContext: finalizeInboundContextForTest,
+  buildChannelTurnContext,
   readSessionUpdatedAt: () => undefined,
   recordInboundSession: async () => undefined,
   resolveInboundLastRouteSessionKey: ({ route, sessionKey }) =>

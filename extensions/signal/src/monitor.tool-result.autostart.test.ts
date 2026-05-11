@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import type { SignalDaemonExitEvent } from "./daemon.js";
 import {
@@ -54,11 +54,8 @@ async function runMonitorWithMocks(opts: MonitorSignalProviderOptions) {
 
 function expectWaitForTransportReadyTimeout(timeoutMs: number) {
   expect(waitForTransportReadyMock).toHaveBeenCalledTimes(1);
-  expect(waitForTransportReadyMock).toHaveBeenCalledWith(
-    expect.objectContaining({
-      timeoutMs,
-    }),
-  );
+  const options = waitForTransportReadyMock.mock.calls[0]?.[0] as { timeoutMs?: number };
+  expect(options.timeoutMs).toBe(timeoutMs);
 }
 
 describe("monitorSignalProvider autostart", () => {
@@ -74,17 +71,22 @@ describe("monitorSignalProvider autostart", () => {
     });
 
     expect(waitForTransportReadyMock).toHaveBeenCalledTimes(1);
-    expect(waitForTransportReadyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        label: "signal daemon",
-        timeoutMs: 30_000,
-        logAfterMs: 10_000,
-        logIntervalMs: 10_000,
-        pollIntervalMs: 150,
-        runtime,
-        abortSignal: expect.any(AbortSignal),
-      }),
-    );
+    const options = waitForTransportReadyMock.mock.calls[0]?.[0] as {
+      abortSignal?: unknown;
+      check?: unknown;
+    } & Record<string, unknown>;
+    expect(options).toEqual({
+      label: "signal daemon",
+      timeoutMs: 30_000,
+      logAfterMs: 10_000,
+      logIntervalMs: 10_000,
+      pollIntervalMs: 150,
+      runtime,
+      abortSignal: options.abortSignal,
+      check: options.check,
+    });
+    expect(options.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(typeof options.check).toBe("function");
   });
 
   it("uses startupTimeoutMs override when provided", async () => {

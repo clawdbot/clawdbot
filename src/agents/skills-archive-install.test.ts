@@ -55,9 +55,9 @@ async function expectFlatRootMarkerRejected(params: {
     onExtracted: async () => ({ ok: true as const }),
   });
 
-  expect(result).toMatchObject({
+  expect(result).toEqual({
     ok: false,
-    error: expect.stringContaining("unexpected archive layout"),
+    error: "Error: unexpected archive layout (dirs: )",
   });
 }
 

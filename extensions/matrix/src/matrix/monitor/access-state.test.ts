@@ -4,6 +4,17 @@ import {
   resolveMatrixMonitorCommandAccess,
 } from "./access-state.js";
 
+async function expectCommandAccess(
+  state: Parameters<typeof resolveMatrixMonitorCommandAccess>[0],
+  params: Parameters<typeof resolveMatrixMonitorCommandAccess>[1],
+  expected: { authorized: boolean; shouldBlockControlCommand: boolean },
+): Promise<void> {
+  const access = await resolveMatrixMonitorCommandAccess(state, params);
+
+  expect(access.authorized).toBe(expected.authorized);
+  expect(access.shouldBlockControlCommand).toBe(expected.shouldBlockControlCommand);
+}
+
 describe("resolveMatrixMonitorAccessState", () => {
   it("normalizes group allowlists and uses shared ingress matching", async () => {
     const state = await resolveMatrixMonitorAccessState({
@@ -31,16 +42,15 @@ describe("resolveMatrixMonitorAccessState", () => {
       isRoom: true,
     });
 
-    expect(
-      await resolveMatrixMonitorCommandAccess(state, {
+    await expectCommandAccess(
+      state,
+      {
         useAccessGroups: true,
         allowTextCommands: true,
         hasControlCommand: true,
-      }),
-    ).toMatchObject({
-      authorized: false,
-      shouldBlockControlCommand: true,
-    });
+      },
+      { authorized: false, shouldBlockControlCommand: true },
+    );
   });
 
   it("does not let pairing-store entries authorize open DMs without wildcard", async () => {
@@ -69,16 +79,61 @@ describe("resolveMatrixMonitorAccessState", () => {
       isRoom: true,
     });
 
-    expect(
-      await resolveMatrixMonitorCommandAccess(state, {
+    await expectCommandAccess(
+      state,
+      {
         useAccessGroups: true,
         allowTextCommands: true,
         hasControlCommand: true,
-      }),
-    ).toMatchObject({
-      authorized: false,
-      shouldBlockControlCommand: true,
+      },
+      { authorized: false, shouldBlockControlCommand: true },
+    );
+  });
+
+  it("treats unresolved configured room allowlists as configured but nonmatching", async () => {
+    const groupState = await resolveMatrixMonitorAccessState({
+      allowFrom: [],
+      storeAllowFrom: [],
+      groupAllowFrom: ["Alice"],
+      roomUsers: [],
+      senderId: "@alice:example.org",
+      isRoom: true,
+      groupPolicy: "allowlist",
     });
+    const roomState = await resolveMatrixMonitorAccessState({
+      allowFrom: [],
+      storeAllowFrom: [],
+      groupAllowFrom: [],
+      roomUsers: ["Dana"],
+      senderId: "@dana:example.org",
+      isRoom: true,
+      groupPolicy: "open",
+    });
+
+    expect(groupState.effectiveGroupAllowFrom).toEqual(["alice"]);
+    expect(groupState.messageIngress.ingress.decision).toBe("block");
+    expect(groupState.messageIngress.ingress.reasonCode).toBe("group_policy_not_allowlisted");
+    expect(roomState.effectiveRoomUsers).toEqual(["dana"]);
+    expect(roomState.messageIngress.ingress.decision).toBe("block");
+    expect(roomState.messageIngress.ingress.reasonCode).toBe("group_policy_not_allowlisted");
+    await expectCommandAccess(
+      groupState,
+      {
+        useAccessGroups: true,
+        allowTextCommands: true,
+        hasControlCommand: true,
+      },
+      { authorized: false, shouldBlockControlCommand: true },
+    );
+    await expectCommandAccess(
+      roomState,
+      {
+        useAccessGroups: true,
+        allowTextCommands: true,
+        hasControlCommand: true,
+      },
+      { authorized: false, shouldBlockControlCommand: true },
+    );
   });
 
   it("authorizes room control commands through the shared ingress command gate", async () => {
@@ -91,16 +146,15 @@ describe("resolveMatrixMonitorAccessState", () => {
       isRoom: true,
     });
 
-    expect(
-      await resolveMatrixMonitorCommandAccess(state, {
+    await expectCommandAccess(
+      state,
+      {
         useAccessGroups: true,
         allowTextCommands: true,
         hasControlCommand: true,
-      }),
-    ).toMatchObject({
-      authorized: true,
-      shouldBlockControlCommand: false,
-    });
+      },
+      { authorized: true, shouldBlockControlCommand: false },
+    );
   });
 
   it("keeps command allow mode when access groups are disabled", async () => {
@@ -113,16 +167,15 @@ describe("resolveMatrixMonitorAccessState", () => {
       isRoom: true,
     });
 
-    expect(
-      await resolveMatrixMonitorCommandAccess(state, {
+    await expectCommandAccess(
+      state,
+      {
         useAccessGroups: false,
         allowTextCommands: true,
         hasControlCommand: true,
-      }),
-    ).toMatchObject({
-      authorized: true,
-      shouldBlockControlCommand: false,
-    });
+      },
+      { authorized: true, shouldBlockControlCommand: false },
+    );
   });
 
   it("keeps room-user allowlists out of dm traffic", async () => {
@@ -136,16 +189,15 @@ describe("resolveMatrixMonitorAccessState", () => {
     });
 
     expect(state.messageIngress.senderAccess.decision).toBe("pairing");
-    expect(
-      await resolveMatrixMonitorCommandAccess(state, {
+    await expectCommandAccess(
+      state,
+      {
         useAccessGroups: true,
         allowTextCommands: true,
         hasControlCommand: true,
-      }),
-    ).toMatchObject({
-      authorized: false,
-      shouldBlockControlCommand: true,
-    });
+      },
+      { authorized: false, shouldBlockControlCommand: true },
+    );
   });
 
   it("uses the shared ingress decision for room user sender gates", async () => {

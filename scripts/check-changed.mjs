@@ -40,7 +40,7 @@ function isTruthyEnvFlag(value) {
   return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
 }
 
-export function shouldDelegateChangedCheckToTestbox(argv = [], env = process.env) {
+export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env) {
   if (!isTruthyEnvFlag(env.OPENCLAW_TESTBOX)) {
     return false;
   }
@@ -56,10 +56,31 @@ export function shouldDelegateChangedCheckToTestbox(argv = [], env = process.env
   return true;
 }
 
-export function buildChangedCheckTestboxArgs(argv = []) {
+export function buildChangedCheckCrabboxArgs(argv = []) {
   return [
-    "testbox:run",
+    "crabbox:run",
     "--",
+    "--provider",
+    "blacksmith-testbox",
+    "--blacksmith-org",
+    "openclaw",
+    "--blacksmith-workflow",
+    ".github/workflows/ci-check-testbox.yml",
+    "--blacksmith-job",
+    "check",
+    "--blacksmith-ref",
+    "main",
+    "--idle-timeout",
+    "90m",
+    "--ttl",
+    "240m",
+    "--timing-json",
+    "--",
+    "CI=1",
+    "NODE_OPTIONS=--max-old-space-size=4096",
+    "OPENCLAW_TEST_PROJECTS_PARALLEL=6",
+    "OPENCLAW_VITEST_MAX_WORKERS=1",
+    "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000",
     "OPENCLAW_TESTBOX=1",
     "OPENCLAW_TESTBOX_REMOTE_RUN=1",
     "pnpm",
@@ -68,13 +89,13 @@ export function buildChangedCheckTestboxArgs(argv = []) {
   ];
 }
 
-export async function runChangedCheckViaTestbox(argv = [], env = process.env) {
+export async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
   console.error(
-    "[check:changed] OPENCLAW_TESTBOX=1 set; delegating to Blacksmith Testbox via `pnpm testbox:run`.",
+    "[check:changed] OPENCLAW_TESTBOX=1 set; delegating to Blacksmith Testbox via `pnpm crabbox:run`.",
   );
   return await runManagedCommand({
     bin: "pnpm",
-    args: buildChangedCheckTestboxArgs(argv),
+    args: buildChangedCheckCrabboxArgs(argv),
     env,
   });
 }
@@ -330,8 +351,8 @@ function isDirectRun() {
 
 if (isDirectRun()) {
   const argv = process.argv.slice(2);
-  if (shouldDelegateChangedCheckToTestbox(argv, process.env)) {
-    process.exitCode = await runChangedCheckViaTestbox(argv, process.env);
+  if (shouldDelegateChangedCheckToCrabbox(argv, process.env)) {
+    process.exitCode = await runChangedCheckViaCrabbox(argv, process.env);
   } else {
     const args = parseArgs(argv);
     const paths =

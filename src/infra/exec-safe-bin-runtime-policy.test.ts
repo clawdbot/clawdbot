@@ -156,8 +156,9 @@ describe("exec safe-bin runtime policy", () => {
             worldWritable: true,
           },
         ]);
-        expect(onWarning).toHaveBeenCalledWith(expect.stringContaining(path.resolve(dir)));
-        expect(onWarning).toHaveBeenCalledWith(expect.stringContaining("world-writable"));
+        expect(onWarning).toHaveBeenCalledExactlyOnceWith(
+          `exec: safeBinTrustedDirs includes world-writable directory '${path.resolve(dir)}'; remove trust or tighten permissions (for example chmod 755).`,
+        );
       } finally {
         await fs.chmod(dir, 0o755).catch(() => undefined);
       }

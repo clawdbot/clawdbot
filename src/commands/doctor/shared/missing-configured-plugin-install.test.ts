@@ -1216,6 +1216,19 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       {},
     ],
     [
+      "default model runtime policy",
+      {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+      },
+      {},
+    ],
+    [
       "agent model runtime policy",
       {
         agents: {

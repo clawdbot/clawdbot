@@ -82,6 +82,29 @@ const startWatchRun = ({
   return { watcher, createWatcher, fakeProcess, runPromise };
 };
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireMockCall(mock: ReturnType<typeof vi.fn>, callIndex: number): unknown[] {
+  const call = mock.mock.calls[callIndex] as unknown[] | undefined;
+  if (!call) {
+    throw new Error(`expected mock call ${callIndex}`);
+  }
+  return call;
+}
+
+function requireSpawnOptions(spawn: ReturnType<typeof vi.fn>, callIndex: number) {
+  return requireRecord(requireMockCall(spawn, callIndex)[2], "spawn options");
+}
+
+function requireSpawnEnv(spawn: ReturnType<typeof vi.fn>, callIndex: number) {
+  return requireRecord(requireSpawnOptions(spawn, callIndex).env, "spawn env");
+}
+
 describe("watch-node script", () => {
   it("wires chokidar watch to run-node with watched source/config paths", async () => {
     const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
@@ -134,30 +157,19 @@ describe("watch-node script", () => {
       expect(watchOptions.ignored("tsconfig.json")).toBe(false);
 
       expect(spawn).toHaveBeenCalledTimes(1);
-      expect(spawn).toHaveBeenCalledWith(
-        "/usr/local/bin/node",
-        ["scripts/run-node.mjs", "gateway", "--force"],
-        expect.objectContaining({
-          cwd,
-          stdio: "inherit",
-          env: expect.objectContaining({
-            PATH: "/usr/bin",
-            OPENCLAW_WATCH_MODE: "1",
-            OPENCLAW_WATCH_SESSION: "1700000000000-4242",
-            OPENCLAW_NO_RESPAWN: "1",
-            OPENCLAW_WATCH_COMMAND: "gateway --force",
-          }),
-        }),
-      );
-      expect(spawn).toHaveBeenCalledWith(
-        "/usr/local/bin/node",
-        ["scripts/run-node.mjs", "gateway", "--force"],
-        expect.objectContaining({
-          env: expect.not.objectContaining({
-            OPENCLAW_TRACE_SYNC_IO: expect.any(String),
-          }),
-        }),
-      );
+      const spawnCall = requireMockCall(spawn, 0);
+      expect(spawnCall[0]).toBe("/usr/local/bin/node");
+      expect(spawnCall[1]).toEqual(["scripts/run-node.mjs", "gateway", "--force"]);
+      const spawnOptions = requireSpawnOptions(spawn, 0);
+      expect(spawnOptions.cwd).toBe(cwd);
+      expect(spawnOptions.stdio).toBe("inherit");
+      const spawnEnv = requireSpawnEnv(spawn, 0);
+      expect(spawnEnv.PATH).toBe("/usr/bin");
+      expect(spawnEnv.OPENCLAW_WATCH_MODE).toBe("1");
+      expect(spawnEnv.OPENCLAW_WATCH_SESSION).toBe("1700000000000-4242");
+      expect(spawnEnv.OPENCLAW_NO_RESPAWN).toBe("1");
+      expect(spawnEnv.OPENCLAW_WATCH_COMMAND).toBe("gateway --force");
+      expect(spawnEnv.OPENCLAW_TRACE_SYNC_IO).toBeUndefined();
       fakeProcess.emit("SIGINT");
       const exitCode = await runPromise;
       expect(exitCode).toBe(130);
@@ -179,15 +191,10 @@ describe("watch-node script", () => {
         spawn,
       });
 
-      expect(spawn).toHaveBeenCalledWith(
-        "/usr/local/bin/node",
-        ["scripts/run-node.mjs", "gateway", "--force"],
-        expect.objectContaining({
-          env: expect.objectContaining({
-            OPENCLAW_TRACE_SYNC_IO: "0",
-          }),
-        }),
-      );
+      const spawnCall = requireMockCall(spawn, 0);
+      expect(spawnCall[0]).toBe("/usr/local/bin/node");
+      expect(spawnCall[1]).toEqual(["scripts/run-node.mjs", "gateway", "--force"]);
+      expect(requireSpawnEnv(spawn, 0).OPENCLAW_TRACE_SYNC_IO).toBe("0");
 
       fakeProcess.emit("SIGINT");
       await runPromise;
@@ -315,23 +322,24 @@ describe("watch-node script", () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(spawn).toHaveBeenCalledTimes(2);
-    expect(spawn).toHaveBeenNthCalledWith(
-      2,
-      "/usr/local/bin/node",
-      ["scripts/run-node.mjs", "doctor", "--fix", "--non-interactive"],
-      expect.objectContaining({ stdio: "inherit" }),
-    );
+    const doctorSpawnCall = requireMockCall(spawn, 1);
+    expect(doctorSpawnCall[0]).toBe("/usr/local/bin/node");
+    expect(doctorSpawnCall[1]).toEqual([
+      "scripts/run-node.mjs",
+      "doctor",
+      "--fix",
+      "--non-interactive",
+    ]);
+    expect(requireSpawnOptions(spawn, 1).stdio).toBe("inherit");
 
     doctor.emit("exit", 0, null);
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(spawn).toHaveBeenCalledTimes(3);
-    expect(spawn).toHaveBeenNthCalledWith(
-      3,
-      "/usr/local/bin/node",
-      ["scripts/run-node.mjs", "gateway", "--force"],
-      expect.objectContaining({ stdio: "inherit" }),
-    );
+    const restartedGatewaySpawnCall = requireMockCall(spawn, 2);
+    expect(restartedGatewaySpawnCall[0]).toBe("/usr/local/bin/node");
+    expect(restartedGatewaySpawnCall[1]).toEqual(["scripts/run-node.mjs", "gateway", "--force"]);
+    expect(requireSpawnOptions(spawn, 2).stdio).toBe("inherit");
 
     fakeProcess.emit("SIGINT");
     const exitCode = await runPromise;
@@ -396,16 +404,12 @@ describe("watch-node script", () => {
       spawn,
     });
 
-    expect(spawn).toHaveBeenCalledWith(
-      "/usr/local/bin/node",
-      ["scripts/run-node.mjs", "gateway", "--force"],
-      expect.objectContaining({
-        env: expect.objectContaining({
-          LAUNCH_JOB_LABEL: "ai.openclaw.gateway",
-          OPENCLAW_NO_RESPAWN: "1",
-        }),
-      }),
-    );
+    const spawnCall = requireMockCall(spawn, 0);
+    expect(spawnCall[0]).toBe("/usr/local/bin/node");
+    expect(spawnCall[1]).toEqual(["scripts/run-node.mjs", "gateway", "--force"]);
+    const spawnEnv = requireSpawnEnv(spawn, 0);
+    expect(spawnEnv.LAUNCH_JOB_LABEL).toBe("ai.openclaw.gateway");
+    expect(spawnEnv.OPENCLAW_NO_RESPAWN).toBe("1");
 
     fakeProcess.emit("SIGINT");
     const exitCode = await runPromise;
@@ -612,11 +616,10 @@ describe("watch-node script", () => {
 
       expect(signalProcess).toHaveBeenCalledWith(2121, "SIGTERM");
       expect(spawn).toHaveBeenCalledTimes(1);
-      expect(JSON.parse(fs.readFileSync(lockPath, "utf8"))).toMatchObject({
-        pid: 4242,
-        command: "gateway --force",
-        watchSession: "1700000000000-4242",
-      });
+      const lockRecord = requireRecord(JSON.parse(fs.readFileSync(lockPath, "utf8")), "watch lock");
+      expect(lockRecord.pid).toBe(4242);
+      expect(lockRecord.command).toBe("gateway --force");
+      expect(lockRecord.watchSession).toBe("1700000000000-4242");
 
       fakeProcess.emit("SIGINT");
       const exitCode = await runPromise;

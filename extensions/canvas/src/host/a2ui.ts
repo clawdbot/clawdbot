@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
-import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/text-runtime";
+import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { A2UI_PATH, injectCanvasLiveReload, isA2uiPath } from "./a2ui-shared.js";
 import { resolveFileWithinRoot } from "./file-resolver.js";
 

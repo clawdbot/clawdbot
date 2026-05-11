@@ -112,8 +112,8 @@ describe("Codex native hook relay config", () => {
       events: ["pre_tool_use", "post_tool_use"],
     });
 
-    expect(config["hooks.PreToolUse"]).toEqual([expect.objectContaining({ matcher: null })]);
-    expect(config["hooks.PostToolUse"]).toEqual([expect.objectContaining({ matcher: null })]);
+    expect((config["hooks.PreToolUse"] as Array<{ matcher: unknown }>)[0]?.matcher).toBeNull();
+    expect((config["hooks.PostToolUse"] as Array<{ matcher: unknown }>)[0]?.matcher).toBeNull();
   });
 
   it("builds deterministic clearing config when the relay is disabled", () => {

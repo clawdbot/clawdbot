@@ -184,6 +184,52 @@ vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
 const sessionKey = "agent:codex-acp:session-1";
 const originalFetch = globalThis.fetch;
 type MockTtsReply = Awaited<ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>>;
+type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).toBeTypeOf("object");
+  expect(value, label).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+function mockArg(source: MockCallSource, callIndex: number, argIndex: number, label: string) {
+  return source.mock.calls[callIndex]?.[argIndex];
+}
+
+function routeCall(index = 0) {
+  return requireRecord(
+    mockArg(routeMocks.routeReply, index, 0, `route call ${index}`),
+    "route call",
+  );
+}
+
+function routePayload(index = 0) {
+  return requireRecord(routeCall(index).payload, `route payload ${index}`);
+}
+
+function messageActionCall(index = 0) {
+  return requireRecord(
+    mockArg(messageActionMocks.runMessageAction, index, 0, `message action ${index}`),
+    "message action",
+  );
+}
+
+function runTurnCall(index = 0) {
+  return requireRecord(mockArg(managerMocks.runTurn, index, 0, `run turn ${index}`), "run turn");
+}
+
+function dispatcherCall(
+  fn:
+    | ReplyDispatcher["sendToolResult"]
+    | ReplyDispatcher["sendBlockReply"]
+    | ReplyDispatcher["sendFinalReply"],
+  index = 0,
+) {
+  return requireRecord(
+    mockArg(fn as unknown as MockCallSource, index, 0, `dispatcher call ${index}`),
+    "dispatcher call",
+  );
+}
 
 function createDispatcher(): {
   dispatcher: ReplyDispatcher;
@@ -346,12 +392,10 @@ async function runRoutedAcpTextTurn(text: string) {
 }
 
 function expectRoutedPayload(callIndex: number, payload: Partial<MockTtsReply>) {
-  expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
-    callIndex,
-    expect.objectContaining({
-      payload: expect.objectContaining(payload),
-    }),
-  );
+  const routedPayload = routePayload(callIndex - 1);
+  for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
+    expect(routedPayload[key]).toEqual(value);
+  }
 }
 
 describe("tryDispatchAcpReply", () => {
@@ -410,13 +454,9 @@ describe("tryDispatchAcpReply", () => {
 
     expect(result?.counts.block).toBe(0);
     expect(result?.counts.final).toBe(1);
-    expect(routeMocks.routeReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        to: "telegram:thread-1",
-        payload: expect.objectContaining({ text: "hello" }),
-      }),
-    );
+    expect(routeCall().channel).toBe("telegram");
+    expect(routeCall().to).toBe("telegram:thread-1");
+    expect(routePayload().text).toBe("hello");
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
@@ -431,14 +471,14 @@ describe("tryDispatchAcpReply", () => {
       shouldRouteToOriginating: true,
     });
 
-    expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-        promptText: "reply",
-        finalText: "hello",
-      }),
+    const transcript = requireRecord(
+      mockArg(transcriptMocks.persistAcpDispatchTranscript, 0, 0, "transcript call"),
+      "transcript call",
     );
-    expect(routeMocks.routeReply).toHaveBeenCalledWith(expect.objectContaining({ mirror: false }));
+    expect(transcript.sessionKey).toBe(sessionKey);
+    expect(transcript.promptText).toBe("reply");
+    expect(transcript.finalText).toBe("hello");
+    expect(routeCall().mirror).toBe(false);
   });
 
   it("adds source delivery guidance to tool-only ACP turns", async () => {
@@ -450,11 +490,11 @@ describe("tryDispatchAcpReply", () => {
     });
 
     expect(managerMocks.runTurn).toHaveBeenCalledTimes(1);
-    const call = managerMocks.runTurn.mock.calls[0]?.[0] as { text?: string } | undefined;
-    expect(call?.text).toContain("Source channel delivery is private by default");
-    expect(call?.text).toContain("message(action=send)");
-    expect(call?.text).toContain("The target defaults to the current source channel");
-    expect(call?.text).toContain("reply privately unless you send explicitly");
+    const text = runTurnCall().text;
+    expect(text).toContain("Source channel delivery is private by default");
+    expect(text).toContain("message(action=send)");
+    expect(text).toContain("The target defaults to the current source channel");
+    expect(text).toContain("reply privately unless you send explicitly");
   });
 
   it("starts reply lifecycle for tool-only ACP turns while suppressing automatic delivery", async () => {
@@ -517,13 +557,9 @@ describe("tryDispatchAcpReply", () => {
     });
 
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
-    expect(messageActionMocks.runMessageAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "edit",
-        params: expect.objectContaining({
-          messageId: "tool-msg-1",
-        }),
-      }),
+    expect(messageActionCall().action).toBe("edit");
+    expect(requireRecord(messageActionCall().params, "message action params").messageId).toBe(
+      "tool-msg-1",
     );
   });
 
@@ -654,9 +690,12 @@ describe("tryDispatchAcpReply", () => {
         },
       });
 
-      expect(mediaUnderstandingMocks.applyMediaUnderstanding).toHaveBeenCalledWith(
-        expect.objectContaining({ agentDir }),
-      );
+      expect(
+        requireRecord(
+          mockArg(mediaUnderstandingMocks.applyMediaUnderstanding, 0, 0, "media understanding"),
+          "media understanding",
+        ).agentDir,
+      ).toBe(agentDir);
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -735,17 +774,13 @@ describe("tryDispatchAcpReply", () => {
       images: [image],
     });
 
-    expect(managerMocks.runTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "describe image",
-        attachments: [
-          {
-            mediaType: "image/png",
-            data: image.data,
-          },
-        ],
-      }),
-    );
+    expect(runTurnCall().text).toBe("describe image");
+    expect(runTurnCall().attachments).toEqual([
+      {
+        mediaType: "image/png",
+        data: image.data,
+      },
+    ]);
   });
 
   it("skips ACP attachments outside allowed inbound roots", async () => {
@@ -886,11 +921,9 @@ describe("tryDispatchAcpReply", () => {
     });
 
     expect(managerMocks.runTurn).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        isError: true,
-        text: expect.stringContaining("ACP dispatch is disabled by policy."),
-      }),
+    expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain(
+      "ACP dispatch is disabled by policy.",
     );
     expect(bindingServiceMocks.unbind).not.toHaveBeenCalled();
   });
@@ -913,11 +946,9 @@ describe("tryDispatchAcpReply", () => {
 
     expect(managerMocks.runTurn).not.toHaveBeenCalled();
     expect(bindingServiceMocks.unbind).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        isError: true,
-        text: expect.stringContaining("ACP dispatch is disabled by policy."),
-      }),
+    expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain(
+      "ACP dispatch is disabled by policy.",
     );
   });
 
@@ -957,12 +988,8 @@ describe("tryDispatchAcpReply", () => {
       targetSessionKey: canonicalSessionKey,
       reason: "acp-session-init-failed",
     });
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        isError: true,
-        text: expect.stringContaining("ACP metadata is missing."),
-      }),
-    );
+    expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain("ACP metadata is missing.");
   });
 
   it("does not unbind valid bindings on generic ACP runTurn init failure", async () => {
@@ -979,11 +1006,9 @@ describe("tryDispatchAcpReply", () => {
     });
 
     expect(bindingServiceMocks.unbind).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        isError: true,
-        text: expect.stringContaining("Could not initialize ACP session runtime."),
-      }),
+    expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain(
+      "Could not initialize ACP session runtime.",
     );
   });
 
@@ -1028,12 +1053,8 @@ describe("tryDispatchAcpReply", () => {
       targetSessionKey: canonicalSessionKey,
       reason: "acp-session-init-failed",
     });
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        isError: true,
-        text: expect.stringContaining("ACP metadata is missing"),
-      }),
-    );
+    expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain("ACP metadata is missing");
   });
 
   it("uses canonical session keys for bound-session identity notices", async () => {
@@ -1098,15 +1119,9 @@ describe("tryDispatchAcpReply", () => {
     });
 
     expect(bindingServiceMocks.listBySession).toHaveBeenCalledWith(canonicalSessionKey);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: expect.stringContaining("Session ids resolved."),
-      }),
-    );
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: expect.stringContaining("acpx session id: acpx-main"),
-      }),
+    expect(dispatcherCall(dispatcher.sendFinalReply, 0).text).toContain("Session ids resolved.");
+    expect(dispatcherCall(dispatcher.sendFinalReply, 0).text).toContain(
+      "acpx session id: acpx-main",
     );
   });
 
@@ -1182,15 +1197,9 @@ describe("tryDispatchAcpReply", () => {
     });
 
     expect(bindingServiceMocks.listBySession).toHaveBeenCalledWith(canonicalSessionKey);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: expect.stringContaining("Session ids resolved."),
-      }),
-    );
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: expect.stringContaining("acpx session id: acpx-work"),
-      }),
+    expect(dispatcherCall(dispatcher.sendFinalReply, 0).text).toContain("Session ids resolved.");
+    expect(dispatcherCall(dispatcher.sendFinalReply, 0).text).toContain(
+      "acpx session id: acpx-work",
     );
   });
 
@@ -1226,13 +1235,9 @@ describe("tryDispatchAcpReply", () => {
     expect(result?.counts.block).toBe(0);
     expect(result?.counts.final).toBe(1);
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
-    expect(routeMocks.routeReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "discord",
-        to: "channel:1478836151241412759",
-        payload: expect.objectContaining({ text: "Received your test message." }),
-      }),
-    );
+    expect(routeCall().channel).toBe("discord");
+    expect(routeCall().to).toBe("channel:1478836151241412759");
+    expect(routePayload().text).toBe("Received your test message.");
   });
 
   it("routes default ACP text as one final reply to Slack", async () => {
@@ -1256,13 +1261,9 @@ describe("tryDispatchAcpReply", () => {
     expect(result?.counts.block).toBe(0);
     expect(result?.counts.final).toBe(1);
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
-    expect(routeMocks.routeReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "slack",
-        to: "channel:C123",
-        payload: expect.objectContaining({ text: "Shared update." }),
-      }),
-    );
+    expect(routeCall().channel).toBe("slack");
+    expect(routeCall().to).toBe("channel:C123");
+    expect(routePayload().text).toBe("Shared update.");
   });
 
   it("delivers default Telegram ACP text directly as a final reply", async () => {
@@ -1287,9 +1288,7 @@ describe("tryDispatchAcpReply", () => {
     expect(counts.final).toBe(0);
     expect(result?.queuedFinal).toBe(true);
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "CODEX_OK" }),
-    );
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toBe("CODEX_OK");
   });
 
   it("delivers default Discord ACP text directly as a final reply", async () => {
@@ -1317,9 +1316,7 @@ describe("tryDispatchAcpReply", () => {
     expect(counts.final).toBe(0);
     expect(result?.queuedFinal).toBe(true);
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Received." }),
-    );
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toBe("Received.");
   });
 
   it("delivers default Slack ACP text directly as a final reply", async () => {
@@ -1347,9 +1344,7 @@ describe("tryDispatchAcpReply", () => {
     expect(counts.final).toBe(0);
     expect(result?.queuedFinal).toBe(true);
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Slack says hi." }),
-    );
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toBe("Slack says hi.");
   });
 
   it("treats Telegram ACP final delivery as a successful final response", async () => {
@@ -1370,9 +1365,7 @@ describe("tryDispatchAcpReply", () => {
 
     expect(result?.queuedFinal).toBe(true);
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "CODEX_OK" }),
-    );
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toBe("CODEX_OK");
   });
 
   it("delivers default ACP text as final for channels without a visibility override", async () => {
@@ -1397,9 +1390,7 @@ describe("tryDispatchAcpReply", () => {
     expect(counts.final).toBe(0);
     expect(result?.queuedFinal).toBe(true);
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "CODEX_OK" }),
-    );
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toBe("CODEX_OK");
   });
 
   it("falls back to final text when a later telegram ACP block delivery fails", async () => {
@@ -1442,17 +1433,9 @@ describe("tryDispatchAcpReply", () => {
       },
     });
 
-    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ text: "First chunk. " }),
-    );
-    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ text: "Second chunk." }),
-    );
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "First chunk. \nSecond chunk." }),
-    );
+    expect(dispatcherCall(dispatcher.sendBlockReply, 0).text).toBe("First chunk. ");
+    expect(dispatcherCall(dispatcher.sendBlockReply, 1).text).toBe("Second chunk.");
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toBe("First chunk. \nSecond chunk.");
     expect(result?.queuedFinal).toBe(true);
   });
 
@@ -1494,14 +1477,8 @@ describe("tryDispatchAcpReply", () => {
       },
     });
 
-    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ text: "abcde" }),
-    );
-    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ text: "f" }),
-    );
+    expect(dispatcherCall(dispatcher.sendBlockReply, 0).text).toBe("abcde");
+    expect(dispatcherCall(dispatcher.sendBlockReply, 1).text).toBe("f");
   });
 
   it("does not add a second routed payload when routed final text was already visible", async () => {

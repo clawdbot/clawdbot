@@ -108,9 +108,12 @@ describe("gradium speech provider", () => {
     });
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toMatchObject({
+    expect(JSON.parse(init.body as string)).toEqual({
+      text: "Telephony test",
       voice_id: "override-voice",
+      only_audio: true,
       output_format: "ulaw_8000",
+      json_config: '{"padding_bonus":0}',
     });
     expect(result.outputFormat).toBe("ulaw_8000");
     expect(result.sampleRate).toBe(8_000);

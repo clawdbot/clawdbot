@@ -131,6 +131,20 @@ async function expectNoMessageWithin(params: {
   await expect(received).resolves.toBe(false);
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(value: unknown, expected: Record<string, unknown>): void {
+  const record = requireRecord(value, "record");
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key]).toEqual(expectedValue);
+  }
+}
+
 describe("session.message websocket events", () => {
   test("includes spawned session ownership metadata on lifecycle sessions.changed events", async () => {
     const storePath = await createSessionStoreFile();
@@ -167,7 +181,7 @@ describe("session.message websocket events", () => {
       });
 
       const event = await changedEvent;
-      expect(event.payload).toMatchObject({
+      expectRecordFields(event.payload, {
         sessionKey: "agent:main:child",
         reason: "reactivated",
         spawnedBy: "agent:main:parent",
@@ -216,7 +230,8 @@ describe("session.message websocket events", () => {
         storePath,
       });
       expect(appended.ok).toBe(true);
-      await expect(subscribedEvent).resolves.toMatchObject({
+      const event = await subscribedEvent;
+      expectRecordFields(event, {
         type: "event",
         event: "session.message",
       });
@@ -266,17 +281,14 @@ describe("session.message websocket events", () => {
       if (!appended.ok) {
         throw new Error(`append failed: ${appended.reason}`);
       }
-      expect(emitSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionFile: appended.sessionFile,
-          sessionKey: "agent:main:main",
-          messageId: appended.messageId,
-          message: expect.objectContaining({
-            role: "assistant",
-            content: [{ type: "text", text: "live websocket message" }],
-          }),
-        }),
-      );
+      const emitParams = requireRecord(emitSpy.mock.calls[0]?.[0], "transcript update params");
+      expect(emitParams.sessionFile).toBe(appended.sessionFile);
+      expect(emitParams.sessionKey).toBe("agent:main:main");
+      expect(emitParams.messageId).toBe(appended.messageId);
+      expectRecordFields(emitParams.message, {
+        role: "assistant",
+        content: [{ type: "text", text: "live websocket message" }],
+      });
       const transcript = await fs.readFile(appended.sessionFile, "utf-8");
       expect(transcript).toContain('"live websocket message"');
     } finally {
@@ -423,7 +435,7 @@ describe("session.message websocket events", () => {
         message: transcriptMessage,
         messageId: "msg-usage",
       });
-      expect(messageEvent.payload).toMatchObject({
+      expectRecordFields(messageEvent.payload, {
         sessionKey: "agent:main:main",
         messageId: "msg-usage",
         messageSeq: 1,
@@ -434,7 +446,7 @@ describe("session.message websocket events", () => {
         modelProvider: "openai",
         model: "gpt-5.4",
       });
-      expect(changedEvent.payload).toMatchObject({
+      expectRecordFields(changedEvent.payload, {
         sessionKey: "agent:main:main",
         phase: "message",
         messageId: "msg-usage",
@@ -518,7 +530,7 @@ describe("session.message websocket events", () => {
         messageEventPromise,
         changedEventPromise,
       ]);
-      expect(messageEvent.payload).toMatchObject({
+      expectRecordFields(messageEvent.payload, {
         sessionKey: "agent:main:child",
         spawnedBy: "agent:main:main",
         spawnedWorkspaceDir: "/tmp/subagent-workspace",
@@ -528,7 +540,7 @@ describe("session.message websocket events", () => {
         subagentControlScope: "children",
         parentSessionKey: "agent:main:main",
       });
-      expect(changedEvent.payload).toMatchObject({
+      expectRecordFields(changedEvent.payload, {
         sessionKey: "agent:main:child",
         phase: "message",
         spawnedBy: "agent:main:main",
@@ -583,14 +595,14 @@ describe("session.message websocket events", () => {
         message: transcriptMessage,
         messageId: "msg-thread",
       });
-      expect(messageEvent.payload).toMatchObject({
+      expectRecordFields(messageEvent.payload, {
         sessionKey: "agent:main:main",
         lastChannel: "telegram",
         lastTo: "-100123",
         lastAccountId: "acct-1",
         lastThreadId: 42,
       });
-      expect(changedEvent.payload).toMatchObject({
+      expectRecordFields(changedEvent.payload, {
         sessionKey: "agent:main:main",
         phase: "message",
         lastChannel: "telegram",
@@ -738,7 +750,7 @@ describe("session.message websocket events", () => {
       });
 
       const messageEvent = await messageEventPromise;
-      expect(messageEvent.payload).toMatchObject({
+      expectRecordFields(messageEvent.payload, {
         sessionKey: "agent:main:newer",
         messageId: "msg-shared",
         messageSeq: 1,

@@ -58,6 +58,18 @@ function createReloadCronJob(params?: Partial<CronJob>): CronJob {
   };
 }
 
+function expectWarnedJob(params: { storePath: string; jobId: string; message: string }) {
+  const warnCalls = logger.warn.mock.calls as unknown as Array<
+    [{ storePath?: string; jobId?: string }, string]
+  >;
+  const warning = warnCalls.find(
+    ([metadata, message]) => metadata.jobId === params.jobId && message.includes(params.message),
+  );
+  expect(warning?.[0].storePath).toBe(params.storePath);
+  expect(warning?.[0].jobId).toBe(params.jobId);
+  expect(warning?.[1]).toContain(params.message);
+}
+
 describe("cron service store seam coverage", () => {
   it("loads stored jobs, recomputes next runs, and does not rewrite the store on load", async () => {
     const { storePath } = await makeStorePath();
@@ -89,26 +101,26 @@ describe("cron service store seam coverage", () => {
     if (job.payload.kind === "agentTurn") {
       expect(job.payload.message).toBe("ping");
     }
-    expect(job.delivery).toMatchObject({
-      mode: "announce",
-      channel: "telegram",
-      to: "123",
-    });
+    expect(job.delivery?.mode).toBe("announce");
+    expect(job.delivery?.channel).toBe("telegram");
+    expect(job.delivery?.to).toBe("123");
     expect(job?.state.nextRunAtMs).toBe(STORE_TEST_NOW);
 
     const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
       jobs: Array<Record<string, unknown>>;
     };
     const persistedJob = persisted.jobs[0];
-    expect(persistedJob?.payload).toMatchObject({
-      kind: "agentTurn",
-      message: "ping",
-    });
-    expect(persistedJob?.delivery).toMatchObject({
-      mode: "announce",
-      channel: "telegram",
-      to: "123",
-    });
+    const persistedPayload = persistedJob?.payload as
+      | { kind?: string; message?: string }
+      | undefined;
+    expect(persistedPayload?.kind).toBe("agentTurn");
+    expect(persistedPayload?.message).toBe("ping");
+    const persistedDelivery = persistedJob?.delivery as
+      | { mode?: string; channel?: string; to?: string }
+      | undefined;
+    expect(persistedDelivery?.mode).toBe("announce");
+    expect(persistedDelivery?.channel).toBe("telegram");
+    expect(persistedDelivery?.to).toBe("123");
 
     const firstMtime = state.storeFileMtimeMs;
     expect(typeof firstMtime).toBe("number");
@@ -138,10 +150,7 @@ describe("cron service store seam coverage", () => {
 
     await ensureLoaded(state);
 
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ storePath, jobId: "repro-stable-id" }),
-      expect.stringContaining("legacy jobId"),
-    );
+    expectWarnedJob({ storePath, jobId: "repro-stable-id", message: "legacy jobId" });
 
     const job = findJobOrThrow(state, "repro-stable-id");
     expect(job.id).toBe("repro-stable-id");
@@ -204,10 +213,11 @@ describe("cron service store seam coverage", () => {
 
     const job = findJobOrThrow(state, "unsafe-session-target-job");
     expect(job.sessionTarget).toBe("session:../../outside");
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ storePath, jobId: "unsafe-session-target-job" }),
-      expect.stringContaining("invalid persisted sessionTarget"),
-    );
+    expectWarnedJob({
+      storePath,
+      jobId: "unsafe-session-target-job",
+      message: "invalid persisted sessionTarget",
+    });
   });
 
   it("clears stale nextRunAtMs after force reload when cron schedule expression changes", async () => {

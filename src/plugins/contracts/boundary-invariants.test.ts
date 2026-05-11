@@ -77,6 +77,11 @@ const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {
     "const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);",
     "const currentGuardrail = resolveCurrentPluginConfig(config)?.guardrail;",
   ],
+  "extensions/amazon-bedrock-mantle/register.sync.runtime.ts": [
+    "resolvePluginConfigObject(",
+    "const startupPluginConfig = (api.pluginConfig ?? {})",
+    "const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);",
+  ],
   "extensions/codex/provider.ts": [
     "resolvePluginConfigObject(",
     "const runtimePluginConfig = resolvePluginConfigObject(ctx.config, CODEX_PROVIDER_ID);",

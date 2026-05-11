@@ -167,6 +167,60 @@ const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2
   );
 };
 
+type GatewayCall = {
+  method?: string;
+  params?: Record<string, unknown>;
+};
+
+type AgentCallParams = {
+  message?: string;
+  lane?: string;
+  channel?: string;
+  sessionKey?: string;
+  extraSystemPrompt?: string;
+  inputProvenance?: {
+    kind?: string;
+    sourceSessionKey?: string;
+  };
+};
+
+type SessionsSendDetails = {
+  status?: string;
+  runId?: string;
+  reply?: string;
+  error?: string;
+  sessionKey?: string;
+  delivery?: {
+    status?: string;
+    mode?: string;
+  };
+};
+
+function requireGatewayCall(call: unknown, method: string): GatewayCall {
+  const request = call as GatewayCall | undefined;
+  if (request?.method !== method) {
+    throw new Error(`expected ${method} gateway call`);
+  }
+  return request;
+}
+
+function agentParams(call: { params?: unknown }): AgentCallParams {
+  return (call.params ?? {}) as AgentCallParams;
+}
+
+function expectInterSessionAgentCall(call: { params?: unknown }): void {
+  const params = agentParams(call);
+  expect(params.message).toContain("[Inter-session message");
+  expect(params.message).toContain("isUser=false");
+  expect(params.lane).toMatch(/^nested(?::|$)/);
+  expect(params.channel).toBe("webchat");
+  expect(params.inputProvenance?.kind).toBe("inter_session");
+}
+
+function sessionsSendDetails(details: unknown): SessionsSendDetails {
+  return details as SessionsSendDetails;
+}
+
 describe("sessions tools", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
@@ -450,11 +504,10 @@ describe("sessions tools", () => {
         }>;
       };
       expect(details.sessions).toHaveLength(1);
-      expect(details.sessions?.[0]).toMatchObject({
-        key: "agent:main:main",
-        derivedTitle: "Visible project kickoff",
-        lastMessagePreview: "Visible latest reply",
-      });
+      const visible = details.sessions?.[0];
+      expect(visible?.key).toBe("agent:main:main");
+      expect(visible?.derivedTitle).toBe("Visible project kickoff");
+      expect(visible?.lastMessagePreview).toBe("Visible latest reply");
       expect(JSON.stringify(details.sessions)).not.toContain("Hidden");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -761,10 +814,8 @@ describe("sessions tools", () => {
     const historyCall = callGatewayMock.mock.calls.find(
       (call) => (call[0] as { method?: string }).method === "chat.history",
     );
-    expect(historyCall?.[0]).toMatchObject({
-      method: "chat.history",
-      params: { sessionKey: targetKey },
-    });
+    const request = requireGatewayCall(historyCall?.[0], "chat.history");
+    expect(request.params?.sessionKey).toBe(targetKey);
   });
 
   it("sessions_history errors on missing sessionId", async () => {
@@ -864,11 +915,11 @@ describe("sessions tools", () => {
       message: "ping",
       timeoutSeconds: 0,
     });
-    expect(fire.details).toMatchObject({
-      status: "accepted",
-      runId: "run-1",
-      delivery: { status: "pending", mode: "announce" },
-    });
+    const fireDetails = sessionsSendDetails(fire.details);
+    expect(fireDetails.status).toBe("accepted");
+    expect(fireDetails.runId).toBe("run-1");
+    expect(fireDetails.delivery?.status).toBe("pending");
+    expect(fireDetails.delivery?.mode).toBe("announce");
     await waitForCalls(() => agentCallCount, 3);
     await waitForCalls(() => waitCallCount, 3);
     await waitForCalls(() => historyCallCount, 3);
@@ -879,11 +930,11 @@ describe("sessions tools", () => {
       timeoutSeconds: 1,
     });
     const waited = await waitPromise;
-    expect(waited.details).toMatchObject({
-      status: "ok",
-      reply: "done",
-      delivery: { status: "pending", mode: "announce" },
-    });
+    const waitedDetails = sessionsSendDetails(waited.details);
+    expect(waitedDetails.status).toBe("ok");
+    expect(waitedDetails.reply).toBe("done");
+    expect(waitedDetails.delivery?.status).toBe("pending");
+    expect(waitedDetails.delivery?.mode).toBe("announce");
     expect(typeof (waited.details as { runId?: string }).runId).toBe("string");
     await waitForCalls(() => agentCallCount, 6);
     await waitForCalls(() => waitCallCount, 6);
@@ -894,13 +945,7 @@ describe("sessions tools", () => {
     const historyOnlyCalls = calls.filter((call) => call.method === "chat.history");
     expect(agentCalls).toHaveLength(6);
     for (const call of agentCalls) {
-      expect(call.params).toMatchObject({
-        message: expect.stringContaining("[Inter-session message"),
-        lane: expect.stringMatching(/^nested(?::|$)/),
-        channel: "webchat",
-        inputProvenance: { kind: "inter_session" },
-      });
-      expect((call.params as { message?: string }).message).toContain("isUser=false");
+      expectInterSessionAgentCall(call);
     }
     expect(
       agentCalls.some(
@@ -966,10 +1011,8 @@ describe("sessions tools", () => {
     const agentCall = callGatewayMock.mock.calls.find(
       (call) => (call[0] as { method?: string }).method === "agent",
     );
-    expect(agentCall?.[0]).toMatchObject({
-      method: "agent",
-      params: { sessionKey: targetKey },
-    });
+    const request = requireGatewayCall(agentCall?.[0], "agent");
+    expect(request.params?.sessionKey).toBe(targetKey);
   });
 
   it("sessions_send runs ping-pong then announces", async () => {
@@ -1058,10 +1101,9 @@ describe("sessions tools", () => {
       message: "ping",
       timeoutSeconds: 1,
     });
-    expect(waited.details).toMatchObject({
-      status: "ok",
-      reply: "initial",
-    });
+    const waitedDetails = sessionsSendDetails(waited.details);
+    expect(waitedDetails.status).toBe("ok");
+    expect(waitedDetails.reply).toBe("initial");
     await vi.waitFor(
       () => {
         expect(countMatching(calls, (call) => call.method === "agent")).toBe(3);
@@ -1072,11 +1114,10 @@ describe("sessions tools", () => {
     const agentCalls = calls.filter((call) => call.method === "agent");
     expect(agentCalls).toHaveLength(3);
     for (const call of agentCalls) {
-      expect(call.params).toMatchObject({
-        lane: expect.stringMatching(/^nested(?::|$)/),
-        channel: "webchat",
-        inputProvenance: { kind: "inter_session" },
-      });
+      const params = agentParams(call);
+      expect(params.lane).toMatch(/^nested(?::|$)/);
+      expect(params.channel).toBe("webchat");
+      expect(params.inputProvenance?.kind).toBe("inter_session");
     }
 
     const replySteps = calls.filter(
@@ -1088,11 +1129,9 @@ describe("sessions tools", () => {
         ),
     );
     expect(replySteps).toHaveLength(2);
-    expect(sendParams).toMatchObject({
-      to: "group:target",
-      channel: "discord",
-      message: "announce now",
-    });
+    expect(sendParams.to).toBe("group:target");
+    expect(sendParams.channel).toBe("discord");
+    expect(sendParams.message).toBe("announce now");
   });
 
   it("sessions_send keeps delayed requester replies alive after a wait timeout", async () => {
@@ -1173,11 +1212,11 @@ describe("sessions tools", () => {
       message: "ping",
       timeoutSeconds: 1,
     });
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      sessionKey: targetKey,
-      delivery: { status: "pending", mode: "announce" },
-    });
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("accepted");
+    expect(details.sessionKey).toBe(targetKey);
+    expect(details.delivery?.status).toBe("pending");
+    expect(details.delivery?.mode).toBe("announce");
 
     await vi.waitFor(
       () => {
@@ -1206,10 +1245,8 @@ describe("sessions tools", () => {
           sessionKey?: string;
         }
       | undefined;
-    expect(replyParams).toMatchObject({
-      sessionKey: requesterKey,
-      inputProvenance: { sourceSessionKey: targetKey },
-    });
+    expect(replyParams?.sessionKey).toBe(requesterKey);
+    expect(replyParams?.inputProvenance?.sourceSessionKey).toBe(targetKey);
     expect(replyParams?.message).toContain("late director reply");
     expect(replyParams?.extraSystemPrompt).toContain("Agent-to-agent reply step");
     expect(replyParams?.extraSystemPrompt).toContain("Current agent: Agent 1 (requester)");
@@ -1254,11 +1291,10 @@ describe("sessions tools", () => {
       message: "ping",
       timeoutSeconds: 1,
     });
-    expect(result.details).toMatchObject({
-      status: "timeout",
-      error: "agent run timed out",
-      sessionKey: targetKey,
-    });
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("timeout");
+    expect(details.error).toBe("agent run timed out");
+    expect(details.sessionKey).toBe(targetKey);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
   });
@@ -1322,11 +1358,11 @@ describe("sessions tools", () => {
       timeoutSeconds: 1,
     });
 
-    expect(waited.details).toMatchObject({
-      status: "ok",
-      reply: "child reply",
-      delivery: { status: "skipped", mode: "announce" },
-    });
+    const waitedDetails = sessionsSendDetails(waited.details);
+    expect(waitedDetails.status).toBe("ok");
+    expect(waitedDetails.reply).toBe("child reply");
+    expect(waitedDetails.delivery?.status).toBe("skipped");
+    expect(waitedDetails.delivery?.mode).toBe("announce");
     expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
     const replyPromptAgentCalls = calls.filter(
       (call) =>
@@ -1455,10 +1491,9 @@ describe("sessions tools", () => {
       message: "ping",
       timeoutSeconds: 1,
     });
-    expect(waited.details).toMatchObject({
-      status: "ok",
-      reply: "initial",
-    });
+    const waitedDetails = sessionsSendDetails(waited.details);
+    expect(waitedDetails.status).toBe("ok");
+    expect(waitedDetails.reply).toBe("initial");
     await vi.waitFor(
       () => {
         expect(countMatching(calls, (call) => call.method === "send")).toBe(1);
@@ -1466,12 +1501,10 @@ describe("sessions tools", () => {
       { timeout: 2_000, interval: 5 },
     );
 
-    expect(sendParams).toMatchObject({
-      to: "123@g.us",
-      channel: "whatsapp",
-      accountId: "work",
-      message: "announce now",
-      threadId: "99",
-    });
+    expect(sendParams.to).toBe("123@g.us");
+    expect(sendParams.channel).toBe("whatsapp");
+    expect(sendParams.accountId).toBe("work");
+    expect(sendParams.message).toBe("announce now");
+    expect(sendParams.threadId).toBe("99");
   });
 });

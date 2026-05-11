@@ -1,4 +1,4 @@
-import { Editor, Key, matchesKey } from "@mariozechner/pi-tui";
+import { Editor, Key, matchesKey } from "@earendil-works/pi-tui";
 
 export class CustomEditor extends Editor {
   onEscape?: () => void;
@@ -13,7 +13,7 @@ export class CustomEditor extends Editor {
   onAltEnter?: () => void;
   onAltUp?: () => void;
 
-  handleInput(data: string): void {
+  override handleInput(data: string): void {
     if (matchesKey(data, Key.alt("enter")) && this.onAltEnter) {
       this.onAltEnter();
       return;

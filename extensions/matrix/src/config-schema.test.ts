@@ -43,6 +43,15 @@ describe("MatrixConfigSchema SecretInput", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts the Matrix name matching compatibility flag", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      dangerouslyAllowNameMatching: true,
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("accepts room-level account assignments", () => {
     const result = MatrixConfigSchema.safeParse({
       homeserver: "https://matrix.example.org",

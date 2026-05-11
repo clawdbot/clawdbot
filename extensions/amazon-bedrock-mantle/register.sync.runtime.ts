@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   mergeImplicitMantleProvider,
@@ -7,8 +9,25 @@ import {
 } from "./discovery.js";
 import { createMantleAnthropicStreamFn } from "./mantle-anthropic.runtime.js";
 
+type BedrockMantlePluginConfig = {
+  discovery?: {
+    enabled?: boolean;
+  };
+};
+
 export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
   const providerId = "amazon-bedrock-mantle";
+  const startupPluginConfig = (api.pluginConfig ?? {}) as BedrockMantlePluginConfig;
+
+  function resolveCurrentPluginConfig(
+    config: OpenClawConfig | undefined,
+  ): BedrockMantlePluginConfig | undefined {
+    const runtimePluginConfig = resolvePluginConfigObject(config, providerId);
+    return (
+      (runtimePluginConfig as BedrockMantlePluginConfig | undefined) ??
+      (config ? undefined : startupPluginConfig)
+    );
+  }
 
   api.registerProvider({
     id: providerId,
@@ -18,8 +37,10 @@ export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
     catalog: {
       order: "simple",
       run: async (ctx) => {
+        const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);
         const implicit = await resolveImplicitMantleProvider({
           env: ctx.env,
+          pluginConfig: currentPluginConfig,
         });
         if (!implicit) {
           return null;

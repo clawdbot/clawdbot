@@ -82,10 +82,11 @@ describe("comfy music-generation provider", () => {
       } as never,
     });
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       model: "workflow",
       tracks: [
         {
+          buffer: Buffer.from("music-bytes"),
           mimeType: "audio/mpeg",
           fileName: "song.mp3",
         },
@@ -96,6 +97,5 @@ describe("comfy music-generation provider", () => {
         inputImageCount: 0,
       },
     });
-    expect(result.tracks[0]?.buffer).toEqual(Buffer.from("music-bytes"));
   });
 });

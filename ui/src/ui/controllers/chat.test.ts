@@ -51,6 +51,19 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+function requireRecord(value: unknown): Record<string, unknown> {
+  expect(value).toBeTruthy();
+  expect(typeof value).toBe("object");
+  expect(Array.isArray(value)).toBe(false);
+  return value as Record<string, unknown>;
+}
+
+function expectTextChatMessage(message: unknown, role: string, text: string): void {
+  const record = requireRecord(message);
+  expect(record.role).toBe(role);
+  expect(record.content).toEqual([{ type: "text", text }]);
+}
+
 function createActiveStreamingState() {
   return createState({
     sessionKey: "main",
@@ -374,10 +387,7 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
     expect(state.chatMessages).toHaveLength(2);
     expect(state.chatMessages[0]).toEqual(existingMessage);
-    expect(state.chatMessages[1]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "Here is my reply" }],
-    });
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Here is my reply");
   });
 
   it("does not persist empty or whitespace-only stream on final", () => {
@@ -519,10 +529,7 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
     expect(state.chatMessages).toHaveLength(2);
     expect(state.chatMessages[0]).toEqual(existingMessage);
-    expect(state.chatMessages[1]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "Partial reply" }],
-    });
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Partial reply");
   });
 
   it("falls back to streamed partial when aborted payload has non-assistant role", () => {
@@ -550,10 +557,7 @@ describe("handleChatEvent", () => {
 
     expect(handleChatEvent(state, payload)).toBe("aborted");
     expect(state.chatMessages).toHaveLength(2);
-    expect(state.chatMessages[1]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "Partial reply" }],
-    });
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Partial reply");
   });
 
   it("processes aborted from own run without message and empty stream", () => {
@@ -871,14 +875,12 @@ describe("sendChatMessage", () => {
 
     expect(result).toMatch(UUID_V4_RE);
     expect(state.currentSessionId).toBe("session-before-reconnect");
-    expect(request).toHaveBeenLastCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        sessionKey: "main",
-        sessionId: "session-before-reconnect",
-        message: "continue",
-      }),
-    );
+    const sendRequest = request.mock.calls.at(-1);
+    expect(sendRequest?.[0]).toBe("chat.send");
+    const sendParams = requireRecord(sendRequest?.[1]);
+    expect(sendParams.sessionKey).toBe("main");
+    expect(sendParams.sessionId).toBe("session-before-reconnect");
+    expect(sendParams.message).toBe("continue");
   });
 
   it("serializes non-image chat attachments as files", async () => {
@@ -898,34 +900,31 @@ describe("sendChatMessage", () => {
     ]);
 
     expect(result).toMatch(UUID_V4_RE);
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        message: "summarize",
-        attachments: [
-          {
-            type: "file",
-            mimeType: "application/pdf",
-            fileName: "brief.pdf",
-            content: Buffer.from("%PDF-1.4\n").toString("base64"),
-          },
-        ],
-      }),
-    );
-    expect(state.chatMessages[0]).toMatchObject({
-      role: "user",
-      content: [
-        { type: "text", text: "summarize" },
-        {
-          type: "attachment",
-          attachment: {
-            kind: "document",
-            label: "brief.pdf",
-            mimeType: "application/pdf",
-          },
-        },
-      ],
-    });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls[0]?.[0]).toBe("chat.send");
+    const sendParams = requireRecord(request.mock.calls[0]?.[1]);
+    expect(sendParams.message).toBe("summarize");
+    expect(sendParams.attachments).toEqual([
+      {
+        type: "file",
+        mimeType: "application/pdf",
+        fileName: "brief.pdf",
+        content: Buffer.from("%PDF-1.4\n").toString("base64"),
+      },
+    ]);
+    const userMessage = requireRecord(state.chatMessages[0]);
+    expect(userMessage.role).toBe("user");
+    const content = userMessage.content;
+    expect(Array.isArray(content)).toBe(true);
+    const contentParts = content as unknown[];
+    expect(contentParts).toHaveLength(2);
+    expect(contentParts[0]).toEqual({ type: "text", text: "summarize" });
+    const attachmentPart = requireRecord(contentParts[1]);
+    expect(attachmentPart.type).toBe("attachment");
+    const attachmentPreview = requireRecord(attachmentPart.attachment);
+    expect(attachmentPreview.kind).toBe("document");
+    expect(attachmentPreview.label).toBe("brief.pdf");
+    expect(attachmentPreview.mimeType).toBe("application/pdf");
   });
 
   it("serializes attachments from the side payload store without copying data URLs into chat state", async () => {
@@ -950,17 +949,15 @@ describe("sendChatMessage", () => {
     const result = await sendChatMessage(state, "summarize", [attachment]);
 
     expect(result).toMatch(UUID_V4_RE);
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        attachments: [
-          expect.objectContaining({
-            type: "file",
-            content: Buffer.from(pdfBytes).toString("base64"),
-          }),
-        ],
-      }),
-    );
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls[0]?.[0]).toBe("chat.send");
+    const sendParams = requireRecord(request.mock.calls[0]?.[1]);
+    const attachments = sendParams.attachments;
+    expect(Array.isArray(attachments)).toBe(true);
+    const [attachmentParam] = attachments as unknown[];
+    const attachmentRecord = requireRecord(attachmentParam);
+    expect(attachmentRecord.type).toBe("file");
+    expect(attachmentRecord.content).toBe(Buffer.from(pdfBytes).toString("base64"));
     expect(JSON.stringify(state.chatMessages)).not.toContain(
       Buffer.from(pdfBytes).toString("base64"),
     );
@@ -983,15 +980,14 @@ describe("sendChatMessage", () => {
 
     expect(result).toBeNull();
     expect(state.lastError).toContain("origin not allowed");
-    expect(state.chatMessages.at(-1)).toMatchObject({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: expect.stringContaining("origin not allowed"),
-        },
-      ],
-    });
+    const assistantMessage = requireRecord(state.chatMessages.at(-1));
+    expect(assistantMessage.role).toBe("assistant");
+    const content = assistantMessage.content;
+    expect(Array.isArray(content)).toBe(true);
+    const [textPart] = content as unknown[];
+    const textRecord = requireRecord(textPart);
+    expect(textRecord.type).toBe("text");
+    expect(String(textRecord.text)).toContain("origin not allowed");
   });
 });
 

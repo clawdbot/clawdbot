@@ -123,6 +123,51 @@ async function expectOversizedPromptRejected(params: { sessionId: string; text: 
   sessionStore.clearAllSessionsForTest();
 }
 
+type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).toBeTypeOf("object");
+  expect(value, label).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+function configOptions(value: unknown) {
+  expect(Array.isArray(value), "config options").toBe(true);
+  return value as Array<Record<string, unknown>>;
+}
+
+function expectConfigOption(options: unknown, id: string, fields: Record<string, unknown>) {
+  const option = configOptions(options).find((candidate) => candidate.id === id);
+  expect(option, `config option ${id}`).toBeDefined();
+  for (const [field, value] of Object.entries(fields)) {
+    expect(option?.[field]).toEqual(value);
+  }
+}
+
+function sessionUpdatePayloads(source: MockCallSource, updateType?: string) {
+  const payloads = source.mock.calls.map((call, index) => {
+    const envelope = requireRecord(call[0], `session update envelope ${index}`);
+    return {
+      sessionId: envelope.sessionId,
+      update: requireRecord(envelope.update, `session update ${index}`),
+    };
+  });
+  if (!updateType) {
+    return payloads;
+  }
+  return payloads.filter((payload) => payload.update.sessionUpdate === updateType);
+}
+
+function expectSessionUpdate(source: MockCallSource, sessionId: string, updateType: string) {
+  const update = sessionUpdatePayloads(source, updateType).find(
+    (payload) => payload.sessionId === sessionId,
+  )?.update;
+  if (!update) {
+    throw new Error(`expected ${sessionId} ${updateType}`);
+  }
+  return update;
+}
+
 describe("acp session creation rate limit", () => {
   it("rate limits excessive newSession bursts", async () => {
     const sessionStore = createInMemorySessionStore();
@@ -215,31 +260,14 @@ describe("acp session UX bridge behavior", () => {
 
     expect(result.modes?.currentModeId).toBe("adaptive");
     expect(result.modes?.availableModes.map((mode) => mode.id)).toContain("adaptive");
-    expect(result.configOptions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "thought_level",
-          currentValue: "adaptive",
-          category: "thought_level",
-        }),
-        expect.objectContaining({
-          id: "verbose_level",
-          currentValue: "off",
-        }),
-        expect.objectContaining({
-          id: "reasoning_level",
-          currentValue: "off",
-        }),
-        expect.objectContaining({
-          id: "response_usage",
-          currentValue: "off",
-        }),
-        expect.objectContaining({
-          id: "elevated_level",
-          currentValue: "off",
-        }),
-      ]),
-    );
+    expectConfigOption(result.configOptions, "thought_level", {
+      currentValue: "adaptive",
+      category: "thought_level",
+    });
+    expectConfigOption(result.configOptions, "verbose_level", { currentValue: "off" });
+    expectConfigOption(result.configOptions, "reasoning_level", { currentValue: "off" });
+    expectConfigOption(result.configOptions, "response_usage", { currentValue: "off" });
+    expectConfigOption(result.configOptions, "elevated_level", { currentValue: "off" });
 
     sessionStore.clearAllSessionsForTest();
   });
@@ -317,30 +345,11 @@ describe("acp session UX bridge behavior", () => {
       "max",
       "high",
     ]);
-    expect(result.configOptions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "thought_level",
-          currentValue: "high",
-        }),
-        expect.objectContaining({
-          id: "verbose_level",
-          currentValue: "full",
-        }),
-        expect.objectContaining({
-          id: "reasoning_level",
-          currentValue: "stream",
-        }),
-        expect.objectContaining({
-          id: "response_usage",
-          currentValue: "tokens",
-        }),
-        expect.objectContaining({
-          id: "elevated_level",
-          currentValue: "ask",
-        }),
-      ]),
-    );
+    expectConfigOption(result.configOptions, "thought_level", { currentValue: "high" });
+    expectConfigOption(result.configOptions, "verbose_level", { currentValue: "full" });
+    expectConfigOption(result.configOptions, "reasoning_level", { currentValue: "stream" });
+    expectConfigOption(result.configOptions, "response_usage", { currentValue: "tokens" });
+    expectConfigOption(result.configOptions, "elevated_level", { currentValue: "ask" });
     expect(sessionUpdate).toHaveBeenCalledWith({
       sessionId: "agent:main:work",
       update: {
@@ -362,12 +371,7 @@ describe("acp session UX bridge behavior", () => {
         content: { type: "text", text: "Answer" },
       },
     });
-    expect(sessionUpdate).toHaveBeenCalledWith({
-      sessionId: "agent:main:work",
-      update: expect.objectContaining({
-        sessionUpdate: "available_commands_update",
-      }),
-    });
+    expectSessionUpdate(sessionUpdate, "agent:main:work", "available_commands_update");
     expect(sessionUpdate).toHaveBeenCalledWith({
       sessionId: "agent:main:work",
       update: {
@@ -433,18 +437,8 @@ describe("acp session UX bridge behavior", () => {
     const result = await agent.loadSession(createLoadSessionRequest("agent:main:recover"));
 
     expect(result.modes?.currentModeId).toBe("adaptive");
-    expect(sessionUpdate).toHaveBeenCalledWith({
-      sessionId: "agent:main:recover",
-      update: expect.objectContaining({
-        sessionUpdate: "available_commands_update",
-      }),
-    });
-    expect(sessionUpdate).not.toHaveBeenCalledWith({
-      sessionId: "agent:main:recover",
-      update: expect.objectContaining({
-        sessionUpdate: "user_message_chunk",
-      }),
-    });
+    expectSessionUpdate(sessionUpdate, "agent:main:recover", "available_commands_update");
+    expect(sessionUpdatePayloads(sessionUpdate, "user_message_chunk")).toEqual([]);
 
     sessionStore.clearAllSessionsForTest();
   });
@@ -517,18 +511,11 @@ describe("acp setSessionMode bridge behavior", () => {
         currentModeId: "high",
       },
     });
-    expect(sessionUpdate).toHaveBeenCalledWith({
-      sessionId: "mode-session",
-      update: {
-        sessionUpdate: "config_option_update",
-        configOptions: expect.arrayContaining([
-          expect.objectContaining({
-            id: "thought_level",
-            currentValue: "high",
-          }),
-        ]),
-      },
-    });
+    expectConfigOption(
+      expectSessionUpdate(sessionUpdate, "mode-session", "config_option_update").configOptions,
+      "thought_level",
+      { currentValue: "high" },
+    );
 
     sessionStore.clearAllSessionsForTest();
   });
@@ -575,14 +562,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       createSetSessionConfigOptionRequest("config-session", "thought_level", "minimal"),
     );
 
-    expect(result.configOptions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "thought_level",
-          currentValue: "minimal",
-        }),
-      ]),
-    );
+    expectConfigOption(result.configOptions, "thought_level", { currentValue: "minimal" });
     expect(sessionUpdate).toHaveBeenCalledWith({
       sessionId: "config-session",
       update: {
@@ -590,18 +570,11 @@ describe("acp setSessionConfigOption bridge behavior", () => {
         currentModeId: "minimal",
       },
     });
-    expect(sessionUpdate).toHaveBeenCalledWith({
-      sessionId: "config-session",
-      update: {
-        sessionUpdate: "config_option_update",
-        configOptions: expect.arrayContaining([
-          expect.objectContaining({
-            id: "thought_level",
-            currentValue: "minimal",
-          }),
-        ]),
-      },
-    });
+    expectConfigOption(
+      expectSessionUpdate(sessionUpdate, "config-session", "config_option_update").configOptions,
+      "thought_level",
+      { currentValue: "minimal" },
+    );
 
     sessionStore.clearAllSessionsForTest();
   });
@@ -647,26 +620,12 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       createSetSessionConfigOptionRequest("reasoning-session", "reasoning_level", "stream"),
     );
 
-    expect(result.configOptions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "reasoning_level",
-          currentValue: "stream",
-        }),
-      ]),
+    expectConfigOption(result.configOptions, "reasoning_level", { currentValue: "stream" });
+    expectConfigOption(
+      expectSessionUpdate(sessionUpdate, "reasoning-session", "config_option_update").configOptions,
+      "reasoning_level",
+      { currentValue: "stream" },
     );
-    expect(sessionUpdate).toHaveBeenCalledWith({
-      sessionId: "reasoning-session",
-      update: {
-        sessionUpdate: "config_option_update",
-        configOptions: expect.arrayContaining([
-          expect.objectContaining({
-            id: "reasoning_level",
-            currentValue: "stream",
-          }),
-        ]),
-      },
-    });
 
     sessionStore.clearAllSessionsForTest();
   });
@@ -718,26 +677,12 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       createSetSessionConfigOptionRequest("fast-session", "fast_mode", "on"),
     );
 
-    expect(result.configOptions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "fast_mode",
-          currentValue: "on",
-        }),
-      ]),
+    expectConfigOption(result.configOptions, "fast_mode", { currentValue: "on" });
+    expectConfigOption(
+      expectSessionUpdate(sessionUpdate, "fast-session", "config_option_update").configOptions,
+      "fast_mode",
+      { currentValue: "on" },
     );
-    expect(sessionUpdate).toHaveBeenCalledWith({
-      sessionId: "fast-session",
-      update: {
-        sessionUpdate: "config_option_update",
-        configOptions: expect.arrayContaining([
-          expect.objectContaining({
-            id: "fast_mode",
-            currentValue: "on",
-          }),
-        ]),
-      },
-    });
 
     sessionStore.clearAllSessionsForTest();
   });
@@ -777,15 +722,10 @@ describe("acp setSessionConfigOption bridge behavior", () => {
 
     await agent.loadSession(createLoadSessionRequest("timeout-session"));
 
-    await expect(
-      agent.setSessionConfigOption(
-        createSetSessionConfigOptionRequest("timeout-session", "timeout", "180"),
-      ),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        configOptions: expect.any(Array),
-      }),
+    const result = await agent.setSessionConfigOption(
+      createSetSessionConfigOptionRequest("timeout-session", "timeout", "180"),
     );
+    expect(Array.isArray(result.configOptions)).toBe(true);
 
     expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
 
@@ -833,10 +773,13 @@ describe("acp setSessionConfigOption bridge behavior", () => {
     ).rejects.toThrow(
       'ACP bridge does not support non-string session config option values for "thought_level".',
     );
-    expect(request).not.toHaveBeenCalledWith(
-      "sessions.patch",
-      expect.objectContaining({ key: "bool-config-session" }),
-    );
+    expect(
+      (request as unknown as MockCallSource).mock.calls.some(
+        ([method, params]) =>
+          method === "sessions.patch" &&
+          requireRecord(params, "sessions.patch params").key === "bool-config-session",
+      ),
+    ).toBe(false);
 
     sessionStore.clearAllSessionsForTest();
   });

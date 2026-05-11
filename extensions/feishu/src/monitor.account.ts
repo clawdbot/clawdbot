@@ -194,6 +194,16 @@ function firstString(...values: unknown[]): string | undefined {
   return undefined;
 }
 
+function readFeishuIdentityField(
+  value: unknown,
+  field: "open_id" | "user_id" | "union_id",
+): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return firstString(value[field]);
+}
+
 function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEvent | null {
   if (!isRecord(value)) {
     return null;
@@ -204,10 +214,24 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
   if (!isRecord(action)) {
     return null;
   }
+  const operatorUserId = operator.user_id;
   const token = readString(value.token);
-  const openId = firstString(operator.open_id, value.open_id, context.open_id);
-  const userId = firstString(operator.user_id, value.user_id, context.user_id);
-  const unionId = firstString(operator.union_id);
+  const openId = firstString(
+    operator.open_id,
+    readFeishuIdentityField(operatorUserId, "open_id"),
+    value.open_id,
+    context.open_id,
+  );
+  const userId = firstString(
+    operator.user_id,
+    readFeishuIdentityField(operatorUserId, "user_id"),
+    value.user_id,
+    context.user_id,
+  );
+  const unionId = firstString(
+    operator.union_id,
+    readFeishuIdentityField(operatorUserId, "union_id"),
+  );
   const tag = readString(action.tag);
   const actionValue = action.value;
   const openMessageId = firstString(value.open_message_id, context.open_message_id);

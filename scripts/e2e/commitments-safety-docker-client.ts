@@ -151,11 +151,8 @@ async function verifyExtractionStoresMetadataOnly() {
 
     const store = await loadCommitmentStore();
     assert(store.commitments.length === 1, `unexpected store size ${store.commitments.length}`);
-    assert(!("sourceUserText" in store.commitments[0]!), "source user text was persisted");
-    assert(
-      !("sourceAssistantText" in store.commitments[0]!),
-      "source assistant text was persisted",
-    );
+    assert(!("sourceUserText" in store.commitments[0]), "source user text was persisted");
+    assert(!("sourceAssistantText" in store.commitments[0]), "source assistant text was persisted");
     const raw = await fs.readFile(resolveCommitmentStorePath(), "utf8");
     assert(!raw.includes("CALL_TOOL"), "raw source text leaked into commitment store");
   });
@@ -212,8 +209,8 @@ async function verifyLegacySourceIsPrunedOnDueRead() {
       nowMs,
     });
     assert(due.length === 1, `unexpected due count ${due.length}`);
-    assert(!("sourceUserText" in due[0]!), "legacy source user text surfaced as due");
-    assert(!("sourceAssistantText" in due[0]!), "legacy source assistant text surfaced as due");
+    assert(!("sourceUserText" in due[0]), "legacy source user text surfaced as due");
+    assert(!("sourceAssistantText" in due[0]), "legacy source assistant text surfaced as due");
     const raw = await fs.readFile(storePath, "utf8");
     assert(!raw.includes("CALL_TOOL"), "legacy source text remained after due read");
   });
@@ -273,9 +270,9 @@ async function verifyExpiryTransitionsAndStripsLegacySource() {
 
     const store = await loadCommitmentStore();
     assert(store.commitments[0]?.status === "expired", "legacy commitment was not expired");
-    assert(!("sourceUserText" in store.commitments[0]!), "legacy source user text was retained");
+    assert(!("sourceUserText" in store.commitments[0]), "legacy source user text was retained");
     assert(
-      !("sourceAssistantText" in store.commitments[0]!),
+      !("sourceAssistantText" in store.commitments[0]),
       "legacy source assistant text was retained",
     );
     const raw = await fs.readFile(resolveCommitmentStorePath(), "utf8");

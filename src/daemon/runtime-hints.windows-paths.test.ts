@@ -30,7 +30,7 @@ describe("buildPlatformRuntimeLogHints", () => {
       }),
     ).toEqual([
       "Launchd stdout (if installed): /tmp/openclaw-state/logs/gateway.log",
-      "Launchd stderr (if installed): /tmp/openclaw-state/logs/gateway.err.log",
+      "Launchd stderr (if installed): suppressed",
       "Restart attempts: /tmp/openclaw-state/logs/gateway-restart.log",
     ]);
   });

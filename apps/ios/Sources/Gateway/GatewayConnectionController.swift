@@ -295,6 +295,47 @@ final class GatewayConnectionController {
         self.appModel?.gatewayStatusText = "Offline"
     }
 
+    @discardableResult
+    func trustRotatedGatewayCertificate(from problem: GatewayConnectionProblem) async -> Bool {
+        guard problem.canTrustRotatedCertificate,
+              let stableID = problem.tlsStoreKey,
+              let fingerprint = problem.tlsObservedFingerprint
+        else {
+            self.appModel?.gatewayStatusText = "Certificate review required"
+            return false
+        }
+
+        guard GatewayTLSStore.replaceFingerprint(fingerprint, stableID: stableID) else {
+            self.appModel?.gatewayStatusText = "Could not update gateway certificate"
+            return false
+        }
+
+        GatewayDiagnostics.log(
+            "gateway tls pin replaced stableID=\(stableID) "
+                + "old=\(problem.tlsExpectedFingerprint ?? "unknown") new=\(fingerprint)")
+        self.appModel?.gatewayStatusText = "Gateway certificate updated. Reconnecting…"
+        if let appModel = self.appModel, let cfg = appModel.activeGatewayConnectConfig {
+            let currentTLS = cfg.tls
+            let refreshedTLS = GatewayTLSParams(
+                required: currentTLS?.required ?? true,
+                expectedFingerprint: fingerprint,
+                allowTOFU: currentTLS?.allowTOFU ?? false,
+                storeKey: currentTLS?.storeKey ?? stableID)
+            let refreshedConfig = GatewayConnectConfig(
+                url: cfg.url,
+                stableID: cfg.stableID,
+                tls: refreshedTLS,
+                token: cfg.token,
+                bootstrapToken: cfg.bootstrapToken,
+                password: cfg.password,
+                nodeOptions: cfg.nodeOptions)
+            appModel.applyGatewayConnectConfig(refreshedConfig)
+        } else {
+            await self.connectLastKnown()
+        }
+        return true
+    }
+
     private func updateFromDiscovery() {
         let newGateways = self.discovery.gateways
         self.gateways = newGateways

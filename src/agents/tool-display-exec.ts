@@ -297,6 +297,54 @@ type ExecSummary = {
   allGeneric?: boolean;
 };
 
+function normalizePathForDisplay(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+$/g, "");
+}
+
+function classifyWorkspacePath(
+  path: string,
+): "agent" | "repo" | "sandbox" | "workspace" | undefined {
+  const normalized = normalizePathForDisplay(path);
+  const segments = normalized.split("/").filter(Boolean);
+  if (segments.length === 0) {
+    return undefined;
+  }
+
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    if (!segment) {
+      continue;
+    }
+    if (segment === ".openclaw" && segments[index + 1] === "workspace") {
+      return "agent";
+    }
+    if (segment === ".openclaw" && segments[index + 1] === "sandboxes") {
+      return "sandbox";
+    }
+    if (/[-_]workspace$/i.test(segment) && segment.toLowerCase() !== "workspace") {
+      return "agent";
+    }
+    if (/^workspace[-_]/i.test(segment)) {
+      return "agent";
+    }
+  }
+
+  if (segments.includes("Projects") || segments.includes("projects")) {
+    return "repo";
+  }
+
+  if (segments.at(-1)?.toLowerCase() === "workspace") {
+    return "workspace";
+  }
+
+  return undefined;
+}
+
+function formatCwdSuffix(cwd: string): string {
+  const workspace = classifyWorkspacePath(cwd);
+  return workspace ? `(${workspace})` : `(in ${cwd})`;
+}
+
 function summarizeExecCommand(command: string): ExecSummary | undefined {
   const { command: cleaned, chdirPath } = stripShellPreamble(command);
   if (!cleaned) {
@@ -415,10 +463,10 @@ export function resolveExecDetail(
 
   const compact = compactRawCommand(unwrapped);
   if (result?.allGeneric !== false && isGenericSummary(summary)) {
-    return cwd ? `${compact} (in ${cwd})` : compact;
+    return cwd ? `${compact} ${formatCwdSuffix(cwd)}` : compact;
   }
 
-  const displaySummary = cwd ? `${summary} (in ${cwd})` : summary;
+  const displaySummary = cwd ? `${summary} ${formatCwdSuffix(cwd)}` : summary;
   if (
     options?.detailMode !== "explain" &&
     compact &&

@@ -49,12 +49,13 @@ describe("memory-wiki plugin", () => {
       "wiki_get",
     ]);
     expect(registerCli).toHaveBeenCalledTimes(1);
-    expect(registerCli.mock.calls[0]?.[1]).toMatchObject({
+    expect(registerCli.mock.calls[0]?.[1]).toStrictEqual({
       descriptors: [
-        expect.objectContaining({
+        {
           name: "wiki",
+          description: "Inspect and initialize the memory wiki vault",
           hasSubcommands: true,
-        }),
+        },
       ],
     });
   });

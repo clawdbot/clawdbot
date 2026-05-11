@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Context, Model } from "@earendil-works/pi-ai";
 import { applyExtraParamsToAgent } from "./pi-embedded-runner/extra-params.js";
 
 export function runExtraParamsPayloadCase(params: {

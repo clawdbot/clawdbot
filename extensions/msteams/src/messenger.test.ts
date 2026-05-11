@@ -100,6 +100,34 @@ function requireSentMessage(sent: Array<{ text?: string; entities?: unknown[] }>
   return firstSent;
 }
 
+function findEntity(
+  entities: unknown,
+  predicate: (entity: Record<string, unknown>) => boolean,
+): Record<string, unknown> | undefined {
+  return (entities as Array<Record<string, unknown>> | undefined)?.find(predicate);
+}
+
+function requireAiGeneratedEntity(entities: unknown): Record<string, unknown> {
+  const entity = findEntity(
+    entities,
+    (candidate) =>
+      Array.isArray(candidate.additionalType) &&
+      candidate.additionalType.includes("AIGeneratedContent"),
+  );
+  if (!entity) {
+    throw new Error("expected Teams AI-generated entity");
+  }
+  return entity;
+}
+
+function requireMentionEntity(entities: unknown): Record<string, unknown> {
+  const entity = findEntity(entities, (candidate) => candidate.type === "mention");
+  if (!entity) {
+    throw new Error("expected Teams mention entity");
+  }
+  return entity;
+}
+
 const createFallbackAdapter = (proactiveSent: string[]): MSTeamsAdapter => ({
   continueConversation: async (_appId, _reference, logic) => {
     await logic({
@@ -345,21 +373,15 @@ describe("msteams messenger", () => {
         expect(firstSent.text).toContain(
           "📎 [upload.txt](https://onedrive.example.com/share/item123)",
         );
-        expect(sent[0]?.entities).toEqual(
-          expect.arrayContaining([
-            {
-              type: "mention",
-              text: "<at>John</at>",
-              mentioned: {
-                id: "29:08q2j2o3jc09au90eucae",
-                name: "John",
-              },
-            },
-            expect.objectContaining({
-              additionalType: ["AIGeneratedContent"],
-            }),
-          ]),
-        );
+        const mentionEntity = requireMentionEntity(sent[0]?.entities);
+        expect(mentionEntity.text).toBe("<at>John</at>");
+        expect(mentionEntity.mentioned).toEqual({
+          id: "29:08q2j2o3jc09au90eucae",
+          name: "John",
+        });
+        expect(requireAiGeneratedEntity(sent[0]?.entities).additionalType).toEqual([
+          "AIGeneratedContent",
+        ]);
       } finally {
         await rm(tmpDir, { recursive: true, force: true });
       }
@@ -462,8 +484,8 @@ describe("msteams messenger", () => {
 
       const adapter = createNoopAdapter();
 
-      await expect(
-        sendMSTeamsMessages({
+      try {
+        await sendMSTeamsMessages({
           replyStyle: "thread",
           adapter,
           appId: "app123",
@@ -471,8 +493,11 @@ describe("msteams messenger", () => {
           context: ctx,
           messages: [{ text: "one" }],
           retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
-        }),
-      ).rejects.toMatchObject({ statusCode: 400 });
+        });
+        throw new Error("expected Teams send client error");
+      } catch (error) {
+        expect((error as { statusCode?: unknown }).statusCode).toBe(400);
+      }
     });
 
     it("falls back to proactive messaging when thread context is revoked", async () => {
@@ -799,28 +824,17 @@ describe("msteams messenger", () => {
 
     it("adds AI-generated entity to text messages", async () => {
       const activity = await buildActivity({ text: "hello" }, baseRef);
-      const entities = activity.entities as Array<Record<string, unknown>>;
-      expect(entities).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "https://schema.org/Message",
-            "@type": "Message",
-            additionalType: ["AIGeneratedContent"],
-          }),
-        ]),
-      );
+      const aiEntity = requireAiGeneratedEntity(activity.entities);
+      expect(aiEntity.type).toBe("https://schema.org/Message");
+      expect(aiEntity["@type"]).toBe("Message");
+      expect(aiEntity.additionalType).toEqual(["AIGeneratedContent"]);
     });
 
     it("adds AI-generated entity to media-only messages", async () => {
       const activity = await buildActivity({ mediaUrl: "https://example.com/img.png" }, baseRef);
-      const entities = activity.entities as Array<Record<string, unknown>>;
-      expect(entities).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            additionalType: ["AIGeneratedContent"],
-          }),
-        ]),
-      );
+      expect(requireAiGeneratedEntity(activity.entities).additionalType).toEqual([
+        "AIGeneratedContent",
+      ]);
     });
 
     it("preserves mention entities alongside AI entity", async () => {
@@ -828,13 +842,7 @@ describe("msteams messenger", () => {
       const entities = activity.entities as Array<Record<string, unknown>>;
       // Should have at least the AI entity
       expect(entities.length).toBeGreaterThanOrEqual(1);
-      expect(entities).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            additionalType: ["AIGeneratedContent"],
-          }),
-        ]),
-      );
+      expect(requireAiGeneratedEntity(entities).additionalType).toEqual(["AIGeneratedContent"]);
     });
 
     it("sets feedbackLoopEnabled in channelData when enabled", async () => {

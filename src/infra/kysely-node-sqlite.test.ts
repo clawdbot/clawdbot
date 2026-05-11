@@ -24,7 +24,7 @@ describe("NodeSqliteKyselyDialect", () => {
     await expect(db.selectFrom("person").selectAll().execute()).resolves.toEqual([
       { id: 1, name: "Ada" },
     ]);
-    await expect(sql`select name from person where id = ${1}`.execute(db)).resolves.toMatchObject({
+    await expect(sql`select name from person where id = ${1}`.execute(db)).resolves.toEqual({
       rows: [{ name: "Ada" }],
     });
     await expect(
@@ -32,7 +32,7 @@ describe("NodeSqliteKyselyDialect", () => {
     ).resolves.toEqual([{ id: 2, name: "Grace" }]);
     await expect(
       sql`insert into person (name) values ('Lin') returning *`.execute(db),
-    ).resolves.toMatchObject({
+    ).resolves.toEqual({
       rows: [{ id: 3, name: "Lin" }],
     });
 
@@ -63,9 +63,7 @@ describe("NodeSqliteKyselyDialect", () => {
       }),
     });
 
-    await expect(
-      sql<{ user_version: number }>`pragma user_version`.execute(db),
-    ).resolves.toMatchObject({
+    await expect(sql<{ user_version: number }>`pragma user_version`.execute(db)).resolves.toEqual({
       rows: [{ user_version: 7 }],
     });
     expect(createDatabase).toHaveBeenCalledTimes(1);

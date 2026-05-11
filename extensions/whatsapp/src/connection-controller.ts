@@ -1,4 +1,4 @@
-import { DisconnectReason, type WASocket } from "@whiskeysockets/baileys";
+import { DisconnectReason, type WASocket } from "baileys";
 import { info } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -23,6 +23,7 @@ const WHATSAPP_LOGGED_OUT_RELINK_MESSAGE =
   "WhatsApp reported the session is logged out. Cleared cached web session; please rerun openclaw channels login and scan the QR again.";
 export const WHATSAPP_LOGGED_OUT_QR_MESSAGE =
   "WhatsApp reported the session is logged out. Cleared cached web session; please scan a new QR.";
+export const WHATSAPP_WATCHDOG_TIMEOUT_ERROR = "watchdog-timeout";
 
 type TimerHandle = ReturnType<typeof setInterval>;
 type WaSocket = Awaited<ReturnType<typeof createWaSocket>>;
@@ -641,7 +642,7 @@ export class WhatsAppConnectionController {
       this.forceClose({
         status: 499,
         isLoggedOut: false,
-        error: "watchdog-timeout",
+        error: WHATSAPP_WATCHDOG_TIMEOUT_ERROR,
       });
     }, this.watchdogCheckMs);
   }

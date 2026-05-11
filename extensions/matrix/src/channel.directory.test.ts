@@ -26,6 +26,18 @@ function requireMatrixReplyToModeResolver() {
   return resolveReplyToMode;
 }
 
+function requireDirectoryEntry(
+  entries: readonly { kind: string; id: string; name?: string }[],
+  kind: string,
+  id: string,
+) {
+  const entry = entries.find((candidate) => candidate.kind === kind && candidate.id === id);
+  if (!entry) {
+    throw new Error(`expected Matrix directory entry ${kind}:${id}`);
+  }
+  return entry;
+}
+
 describe("matrix directory", () => {
   const runtimeEnv: RuntimeEnv = createRuntimeEnv();
 
@@ -49,37 +61,29 @@ describe("matrix directory", () => {
 
     const directory = requireMatrixDirectory();
 
-    await expect(
-      directory.listPeers({
-        cfg,
-        accountId: undefined,
-        query: undefined,
-        limit: undefined,
-        runtime: runtimeEnv,
-      }),
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        { kind: "user", id: "user:@alice:example.org" },
-        { kind: "user", id: "bob", name: "incomplete id; expected @user:server" },
-        { kind: "user", id: "user:@carol:example.org" },
-        { kind: "user", id: "user:@dana:example.org" },
-      ]),
+    const peers = await directory.listPeers({
+      cfg,
+      accountId: undefined,
+      query: undefined,
+      limit: undefined,
+      runtime: runtimeEnv,
+    });
+    expect(requireDirectoryEntry(peers, "user", "user:@alice:example.org").name).toBeUndefined();
+    expect(requireDirectoryEntry(peers, "user", "bob").name).toBe(
+      "incomplete id; expected @user:server",
     );
+    expect(requireDirectoryEntry(peers, "user", "user:@carol:example.org").name).toBeUndefined();
+    expect(requireDirectoryEntry(peers, "user", "user:@dana:example.org").name).toBeUndefined();
 
-    await expect(
-      directory.listGroups({
-        cfg,
-        accountId: undefined,
-        query: undefined,
-        limit: undefined,
-        runtime: runtimeEnv,
-      }),
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        { kind: "group", id: "room:!room1:example.org" },
-        { kind: "group", id: "#alias:example.org" },
-      ]),
-    );
+    const groups = await directory.listGroups({
+      cfg,
+      accountId: undefined,
+      query: undefined,
+      limit: undefined,
+      runtime: runtimeEnv,
+    });
+    expect(requireDirectoryEntry(groups, "group", "room:!room1:example.org").name).toBeUndefined();
+    expect(requireDirectoryEntry(groups, "group", "#alias:example.org").name).toBeUndefined();
   });
 
   it("resolves replyToMode from account config", () => {
@@ -361,29 +365,26 @@ describe("matrix directory", () => {
     expect(updated.channels?.["matrix"]?.accessToken).toBeUndefined();
     expect(updated.channels?.["matrix"]?.deviceId).toBeUndefined();
     expect(updated.channels?.["matrix"]?.avatarUrl).toBeUndefined();
-    expect(updated.channels?.["matrix"]?.accounts?.default).toMatchObject({
-      accessToken: "default-token",
-      homeserver: "https://default.example.org",
-      deviceId: "DEFAULTDEVICE",
-      avatarUrl: "mxc://server/avatar",
-      encryption: true,
-      threadReplies: "inbound",
-      groups: {
-        "!room:example.org": { requireMention: true },
-      },
+    const defaultAccount = updated.channels?.["matrix"]?.accounts?.default;
+    expect(defaultAccount?.accessToken).toBe("default-token");
+    expect(defaultAccount?.homeserver).toBe("https://default.example.org");
+    expect(defaultAccount?.deviceId).toBe("DEFAULTDEVICE");
+    expect(defaultAccount?.avatarUrl).toBe("mxc://server/avatar");
+    expect(defaultAccount?.encryption).toBe(true);
+    expect(defaultAccount?.threadReplies).toBe("inbound");
+    expect(defaultAccount?.groups).toEqual({
+      "!room:example.org": { requireMention: true },
     });
-    expect(updated.channels?.["matrix"]?.accounts?.ops).toMatchObject({
-      enabled: true,
-      homeserver: "https://matrix.example.org",
-      userId: "@ops:example.org",
-      accessToken: "ops-token",
-    });
-    expect(resolveMatrixConfigForAccount(updated, "ops", {})).toMatchObject({
-      homeserver: "https://matrix.example.org",
-      userId: "@ops:example.org",
-      accessToken: "ops-token",
-      deviceId: undefined,
-    });
+    const opsAccount = updated.channels?.["matrix"]?.accounts?.ops;
+    expect(opsAccount?.enabled).toBe(true);
+    expect(opsAccount?.homeserver).toBe("https://matrix.example.org");
+    expect(opsAccount?.userId).toBe("@ops:example.org");
+    expect(opsAccount?.accessToken).toBe("ops-token");
+    const resolvedOps = resolveMatrixConfigForAccount(updated, "ops", {});
+    expect(resolvedOps.homeserver).toBe("https://matrix.example.org");
+    expect(resolvedOps.userId).toBe("@ops:example.org");
+    expect(resolvedOps.accessToken).toBe("ops-token");
+    expect(resolvedOps.deviceId).toBeUndefined();
   });
 
   it("writes default matrix account credentials under channels.matrix.accounts.default", () => {
@@ -406,12 +407,11 @@ describe("matrix directory", () => {
       },
     }) as CoreConfig;
 
-    expect(updated.channels?.["matrix"]).toMatchObject({
-      enabled: true,
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accessToken: "bot-token",
-    });
+    const matrixConfig = updated.channels?.["matrix"];
+    expect(matrixConfig?.enabled).toBe(true);
+    expect(matrixConfig?.homeserver).toBe("https://matrix.example.org");
+    expect(matrixConfig?.userId).toBe("@bot:example.org");
+    expect(matrixConfig?.accessToken).toBe("bot-token");
     expect(updated.channels?.["matrix"]?.accounts).toBeUndefined();
   });
 
@@ -514,23 +514,21 @@ describe("matrix directory", () => {
         },
       }) as CoreConfig;
 
-      expect(updated.channels?.["matrix"]?.accounts?.ops).toMatchObject({
-        name: "Ops",
-        enabled: true,
-        encryption: true,
-      });
-      expect(updated.channels?.["matrix"]?.accounts?.ops?.homeserver).toBeUndefined();
-      expect(updated.channels?.["matrix"]?.accounts?.ops?.userId).toBeUndefined();
-      expect(updated.channels?.["matrix"]?.accounts?.ops?.accessToken).toBeUndefined();
-      expect(updated.channels?.["matrix"]?.accounts?.ops?.password).toBeUndefined();
-      expect(updated.channels?.["matrix"]?.accounts?.ops?.deviceId).toBeUndefined();
-      expect(updated.channels?.["matrix"]?.accounts?.ops?.deviceName).toBeUndefined();
-      expect(resolveMatrixConfigForAccount(updated, "ops", process.env)).toMatchObject({
-        homeserver: "https://ops.env.example.org",
-        accessToken: "ops-env-token",
-        deviceId: "OPSENVDEVICE",
-        deviceName: "Ops Env Device",
-      });
+      const opsAccount = updated.channels?.["matrix"]?.accounts?.ops;
+      expect(opsAccount?.name).toBe("Ops");
+      expect(opsAccount?.enabled).toBe(true);
+      expect(opsAccount?.encryption).toBe(true);
+      expect(opsAccount?.homeserver).toBeUndefined();
+      expect(opsAccount?.userId).toBeUndefined();
+      expect(opsAccount?.accessToken).toBeUndefined();
+      expect(opsAccount?.password).toBeUndefined();
+      expect(opsAccount?.deviceId).toBeUndefined();
+      expect(opsAccount?.deviceName).toBeUndefined();
+      const resolvedOps = resolveMatrixConfigForAccount(updated, "ops", process.env);
+      expect(resolvedOps.homeserver).toBe("https://ops.env.example.org");
+      expect(resolvedOps.accessToken).toBe("ops-env-token");
+      expect(resolvedOps.deviceId).toBe("OPSENVDEVICE");
+      expect(resolvedOps.deviceName).toBe("Ops Env Device");
     } finally {
       for (const [key, value] of Object.entries(envKeys)) {
         if (value === undefined) {

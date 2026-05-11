@@ -9,6 +9,19 @@ import {
 import type { v2 } from "./protocol.js";
 
 describe("Codex plugin activation", () => {
+  function expectActivationResult(
+    result: Awaited<ReturnType<typeof ensureCodexPluginActivation>>,
+    expected: { ok: boolean; reason: string; installAttempted: boolean },
+  ) {
+    expect(result.ok).toBe(expected.ok);
+    expect(result.reason).toBe(expected.reason);
+    expect(result.installAttempted).toBe(expected.installAttempted);
+  }
+
+  function expectBooleanParam(params: unknown, key: string, expected: boolean) {
+    expect((params as Record<string, unknown> | undefined)?.[key]).toBe(expected);
+  }
+
   it("skips plugin/install when the migrated plugin is already active", async () => {
     const calls: string[] = [];
     const result = await ensureCodexPluginActivation({
@@ -22,7 +35,7 @@ describe("Codex plugin activation", () => {
       },
     });
 
-    expect(result).toMatchObject({
+    expectActivationResult(result, {
       ok: true,
       reason: "already_active",
       installAttempted: false,
@@ -60,7 +73,7 @@ describe("Codex plugin activation", () => {
       },
     });
 
-    expect(result).toMatchObject({
+    expectActivationResult(result, {
       ok: true,
       reason: "already_active",
       installAttempted: true,
@@ -97,7 +110,7 @@ describe("Codex plugin activation", () => {
           return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
         }
         if (method === "skills/list") {
-          expect(params).toMatchObject({ forceReload: true });
+          expectBooleanParam(params, "forceReload", true);
           return { data: [] } satisfies v2.SkillsListResponse;
         }
         if (method === "hooks/list") {
@@ -107,14 +120,14 @@ describe("Codex plugin activation", () => {
           return {};
         }
         if (method === "app/list") {
-          expect(params).toMatchObject({ forceRefetch: true });
+          expectBooleanParam(params, "forceRefetch", true);
           return { data: [], nextCursor: null } satisfies v2.AppsListResponse;
         }
         throw new Error(`unexpected request ${method}`);
       },
     });
 
-    expect(result).toMatchObject({
+    expectActivationResult(result, {
       ok: true,
       reason: "installed",
       installAttempted: true,
@@ -162,7 +175,7 @@ describe("Codex plugin activation", () => {
       },
     });
 
-    expect(result).toMatchObject({
+    expectActivationResult(result, {
       ok: true,
       reason: "installed",
       installAttempted: true,
@@ -192,7 +205,7 @@ describe("Codex plugin activation", () => {
       },
     });
 
-    expect(result).toMatchObject({
+    expectActivationResult(result, {
       ok: false,
       reason: "refresh_failed",
       installAttempted: true,
@@ -241,7 +254,7 @@ describe("Codex plugin activation", () => {
       },
     });
 
-    expect(result).toMatchObject({
+    expectActivationResult(result, {
       ok: true,
       reason: "installed",
       installAttempted: true,

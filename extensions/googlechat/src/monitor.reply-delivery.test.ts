@@ -101,7 +101,7 @@ describe("Google Chat reply delivery", () => {
     });
     expect(statusSink).toHaveBeenCalledTimes(2);
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Google Chat message send failed"),
+      "Google Chat message send failed: Error: message not found",
     );
   });
 

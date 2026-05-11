@@ -33,7 +33,7 @@ const BUNDLED_EXTENSION_CONFIG_IMPORT_GUARDS = [
   },
   {
     path: "extensions/googlechat/src/config-schema.ts",
-    allowedSpecifier: "../runtime-api.js",
+    allowedSpecifier: "../config-api.js",
   },
   // Teams keeps a package-local config barrel so production code does not
   // reach through a public plugin-sdk helper seam from inside the same extension.

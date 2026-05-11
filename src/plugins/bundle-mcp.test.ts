@@ -170,12 +170,15 @@ describe("loadEnabledBundleMcpConfig", () => {
           },
         });
 
-        expect(loaded.config.mcpServers.enabledProbe).toEqual(
-          expect.objectContaining({
-            command: "node",
-            args: [expect.stringContaining("enabled.mjs")],
-          }),
-        );
+        const enabledProbe = loaded.config.mcpServers.enabledProbe;
+        const enabledArgs = getServerArgs(enabledProbe);
+        expect(isRecord(enabledProbe) ? enabledProbe.command : undefined).toBe("node");
+        expect(enabledArgs).toHaveLength(1);
+        expect(typeof enabledArgs?.[0]).toBe("string");
+        if (typeof enabledArgs?.[0] !== "string") {
+          throw new Error("expected inline MCP enabledProbe args to include enabled.mjs");
+        }
+        expect(enabledArgs[0]).toContain("enabled.mjs");
         expect(loaded.config.mcpServers.disabledProbe).toBeUndefined();
       },
     );
@@ -245,12 +248,9 @@ describe("loadEnabledBundleMcpConfig", () => {
         });
 
         expect(loaded.config.mcpServers).toStrictEqual({});
-        expect(loaded.diagnostics).toEqual([
-          expect.objectContaining({
-            pluginId: "malformed-mcp",
-            message: expect.stringContaining("unable to read .mcp.json"),
-          }),
-        ]);
+        expect(loaded.diagnostics).toHaveLength(1);
+        expect(loaded.diagnostics[0]?.pluginId).toBe("malformed-mcp");
+        expect(loaded.diagnostics[0]?.message).toContain("unable to read .mcp.json");
       },
     );
   });
@@ -276,12 +276,9 @@ describe("loadEnabledBundleMcpConfig", () => {
         });
 
         expect(loaded.config.lspServers).toStrictEqual({});
-        expect(loaded.diagnostics).toEqual([
-          expect.objectContaining({
-            pluginId: "malformed-lsp",
-            message: expect.stringContaining("unable to read .lsp.json"),
-          }),
-        ]);
+        expect(loaded.diagnostics).toHaveLength(1);
+        expect(loaded.diagnostics[0]?.pluginId).toBe("malformed-lsp");
+        expect(loaded.diagnostics[0]?.message).toContain("unable to read .lsp.json");
       },
     );
   });

@@ -85,4 +85,22 @@ describe("outbound message planning", () => {
       ["media", undefined, "https://example.com/2.png", undefined],
     ]);
   });
+
+  it("adds formatting overrides only to chunked text units", () => {
+    const units = planOutboundTextMessageUnits({
+      text: "**bold**",
+      textLimit: 4000,
+      chunker: () => ["<b>bold</b>"],
+      chunkedTextFormatting: { parseMode: "HTML" },
+      overrides: {},
+    });
+
+    expect(units).toEqual([
+      {
+        kind: "text",
+        text: "<b>bold</b>",
+        overrides: { formatting: { parseMode: "HTML" } },
+      },
+    ]);
+  });
 });

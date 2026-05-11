@@ -7,7 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeStringEntries,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   createChannelPairingController,
@@ -29,9 +29,6 @@ function normalizeUserId(raw?: string | null): string {
   }
   return normalizeLowercaseStringOrEmpty(trimmed.replace(/^users\//i, ""));
 }
-
-type GoogleChatDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
-type GoogleChatGroupPolicy = "open" | "allowlist" | "disabled";
 
 const GOOGLECHAT_EMAIL_KIND = "plugin:googlechat-email" as const;
 

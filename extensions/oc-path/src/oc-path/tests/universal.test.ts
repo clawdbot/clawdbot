@@ -8,6 +8,30 @@ import { parseOcPath } from "../oc-path.js";
 import { parseMd } from "../parse.js";
 import { detectInsertion, resolveOcPath, setOcPath } from "../universal.js";
 
+function expectLeaf(
+  match: ReturnType<typeof resolveOcPath>,
+  expected: { leafType: string; valueText: string },
+) {
+  expect(match?.kind).toBe("leaf");
+  if (match?.kind === "leaf") {
+    expect(match.leafType).toBe(expected.leafType);
+    expect(match.valueText).toBe(expected.valueText);
+  }
+}
+
+function expectNode(match: ReturnType<typeof resolveOcPath>, descriptor: string) {
+  expect(match?.kind).toBe("node");
+  if (match?.kind === "node") {
+    expect(match.descriptor).toBe(descriptor);
+  }
+}
+
+function expectInsertionPoint(match: ReturnType<typeof resolveOcPath>, container: string) {
+  expect(match?.kind).toBe("insertion-point");
+  if (match?.kind === "insertion-point") {
+    expect(match.container).toBe(container);
+  }
+}
 
 describe("detectInsertion", () => {
   it("returns null for plain paths", () => {
@@ -38,23 +62,22 @@ describe("detectInsertion", () => {
   });
 });
 
-
 describe("resolveOcPath — md AST", () => {
   const md = parseMd("---\nname: github\n---\n\n## Boundaries\n\n- enabled: true\n").ast;
 
   it("returns leaf with valueText for frontmatter entry", () => {
     const m = resolveOcPath(md, parseOcPath("oc://X.md/[frontmatter]/name"));
-    expect(m).toMatchObject({ kind: "leaf", valueText: "github", leafType: "string" });
+    expectLeaf(m, { valueText: "github", leafType: "string" });
   });
 
   it("returns leaf for item-field", () => {
     const m = resolveOcPath(md, parseOcPath("oc://X.md/boundaries/enabled/enabled"));
-    expect(m).toMatchObject({ kind: "leaf", valueText: "true", leafType: "string" });
+    expectLeaf(m, { valueText: "true", leafType: "string" });
   });
 
   it("returns node for block", () => {
     const m = resolveOcPath(md, parseOcPath("oc://X.md/boundaries"));
-    expect(m).toMatchObject({ kind: "node", descriptor: "md-block" });
+    expectNode(m, "md-block");
   });
 
   it("returns root for file-only path", () => {
@@ -72,32 +95,32 @@ describe("resolveOcPath — jsonc AST", () => {
 
   it("returns leaf:number for numeric value", () => {
     const m = resolveOcPath(ast, parseOcPath("oc://config/k"));
-    expect(m).toMatchObject({ kind: "leaf", valueText: "42", leafType: "number" });
+    expectLeaf(m, { valueText: "42", leafType: "number" });
   });
 
   it("returns leaf:string for string value", () => {
     const m = resolveOcPath(ast, parseOcPath("oc://config/s"));
-    expect(m).toMatchObject({ kind: "leaf", valueText: "x", leafType: "string" });
+    expectLeaf(m, { valueText: "x", leafType: "string" });
   });
 
   it("returns leaf:boolean for bool value", () => {
     const m = resolveOcPath(ast, parseOcPath("oc://config/b"));
-    expect(m).toMatchObject({ kind: "leaf", valueText: "true", leafType: "boolean" });
+    expectLeaf(m, { valueText: "true", leafType: "boolean" });
   });
 
   it("returns leaf:null for null value", () => {
     const m = resolveOcPath(ast, parseOcPath("oc://config/n"));
-    expect(m).toMatchObject({ kind: "leaf", valueText: "null", leafType: "null" });
+    expectLeaf(m, { valueText: "null", leafType: "null" });
   });
 
   it("returns node:jsonc-array for array value", () => {
     const m = resolveOcPath(ast, parseOcPath("oc://config/arr"));
-    expect(m).toMatchObject({ kind: "node", descriptor: "jsonc-array" });
+    expectNode(m, "jsonc-array");
   });
 
   it("returns leaf at array index", () => {
     const m = resolveOcPath(ast, parseOcPath("oc://config/arr.1"));
-    expect(m).toMatchObject({ kind: "leaf", valueText: "2", leafType: "number" });
+    expectLeaf(m, { valueText: "2", leafType: "number" });
   });
 });
 
@@ -106,17 +129,17 @@ describe("resolveOcPath — jsonl AST", () => {
 
   it("returns node:jsonl-line for line address", () => {
     const m = resolveOcPath(ast, parseOcPath("oc://log/L1"));
-    expect(m).toMatchObject({ kind: "node", descriptor: "jsonl-line" });
+    expectNode(m, "jsonl-line");
   });
 
   it("returns leaf for field on line", () => {
     const m = resolveOcPath(ast, parseOcPath("oc://log/L2/event"));
-    expect(m).toMatchObject({ kind: "leaf", valueText: "step", leafType: "string" });
+    expectLeaf(m, { valueText: "step", leafType: "string" });
   });
 
   it("returns leaf:number for $last/n", () => {
     const m = resolveOcPath(ast, parseOcPath("oc://log/$last/n"));
-    expect(m).toMatchObject({ kind: "leaf", valueText: "2", leafType: "number" });
+    expectLeaf(m, { valueText: "2", leafType: "number" });
   });
 });
 
@@ -124,37 +147,37 @@ describe("resolveOcPath — insertion-point detection", () => {
   it("returns insertion-point for md section append", () => {
     const md = parseMd("## Tools\n").ast;
     const m = resolveOcPath(md, parseOcPath("oc://X.md/tools/+"));
-    expect(m).toMatchObject({ kind: "insertion-point", container: "md-section" });
+    expectInsertionPoint(m, "md-section");
   });
 
   it("returns insertion-point for md file-level", () => {
     const md = parseMd("## Tools\n").ast;
     const m = resolveOcPath(md, parseOcPath("oc://X.md/+"));
-    expect(m).toMatchObject({ kind: "insertion-point", container: "md-file" });
+    expectInsertionPoint(m, "md-file");
   });
 
   it("returns insertion-point for md frontmatter +key", () => {
     const md = parseMd("---\nname: x\n---\n").ast;
     const m = resolveOcPath(md, parseOcPath("oc://X.md/[frontmatter]/+description"));
-    expect(m).toMatchObject({ kind: "insertion-point", container: "md-frontmatter" });
+    expectInsertionPoint(m, "md-frontmatter");
   });
 
   it("returns insertion-point for jsonc array +", () => {
     const ast = parseJsonc('{ "items": [1,2,3] }').ast;
     const m = resolveOcPath(ast, parseOcPath("oc://config/items/+"));
-    expect(m).toMatchObject({ kind: "insertion-point", container: "jsonc-array" });
+    expectInsertionPoint(m, "jsonc-array");
   });
 
   it("returns insertion-point for jsonc object +key", () => {
     const ast = parseJsonc('{ "plugins": {} }').ast;
     const m = resolveOcPath(ast, parseOcPath("oc://config/plugins/+gitlab"));
-    expect(m).toMatchObject({ kind: "insertion-point", container: "jsonc-object" });
+    expectInsertionPoint(m, "jsonc-object");
   });
 
   it("returns insertion-point for jsonl file-root +", () => {
     const ast = parseJsonl("").ast;
     const m = resolveOcPath(ast, parseOcPath("oc://log/+"));
-    expect(m).toMatchObject({ kind: "insertion-point", container: "jsonl-file" });
+    expectInsertionPoint(m, "jsonl-file");
   });
 
   it("returns null when insertion target is not a container", () => {
@@ -163,7 +186,6 @@ describe("resolveOcPath — insertion-point detection", () => {
     expect(m).toBeNull();
   });
 });
-
 
 describe("setOcPath — md leaf", () => {
   it("replaces frontmatter value", () => {
@@ -275,7 +297,6 @@ describe("setOcPath — jsonl leaf", () => {
     }
   });
 });
-
 
 describe("setOcPath — md insertion", () => {
   it("appends item to section with `+`", () => {
@@ -420,7 +441,6 @@ describe("setOcPath — jsonl insertion (session append)", () => {
     expect(r.ok).toBe(false);
   });
 });
-
 
 describe("setOcPath — cross-cutting properties", () => {
   it("is non-mutating across all kinds", () => {

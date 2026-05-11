@@ -62,7 +62,8 @@ describe("buildXiaomiSpeechProvider", () => {
         cfg: {} as never,
         timeoutMs: 30000,
       });
-      expect(config).toMatchObject({
+      expect(config).toEqual({
+        apiKey: undefined,
         baseUrl: "https://example.com/v1",
         model: "mimo-v2-tts",
         voice: "default_en",
@@ -163,7 +164,10 @@ describe("buildXiaomiSpeechProvider", () => {
       expect(mockFetch).toHaveBeenCalledOnce();
       const [url, init] = mockFetch.mock.calls[0];
       expect(url).toBe("https://api.xiaomimimo.com/v1/chat/completions");
-      expect(init?.headers).toMatchObject({ "api-key": "sk-test" });
+      expect(init?.headers).toEqual({
+        "api-key": "sk-test",
+        "Content-Type": "application/json",
+      });
       const body = JSON.parse(init!.body as string);
       expect(body.model).toBe("mimo-v2-tts");
       expect(body.messages).toEqual([

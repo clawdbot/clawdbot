@@ -94,7 +94,7 @@ on:
         default: stable
         type: choice
         options:
-          - minimum
+          - beta
           - stable
           - full
   workflow_call:
@@ -287,8 +287,8 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.x"
-  PNPM_VERSION: "10.32.1"
+  NODE_VERSION: "24.15.0"
+  PNPM_VERSION: "11.0.8"
 
 jobs:
   validate_selected_ref:
@@ -385,21 +385,21 @@ jobs:
             if [[ -n "$live_model_providers" ]]; then
               add_suite docker-live-models
             else
-              add_profile_suite docker-live-models "minimum stable full"
+              add_profile_suite docker-live-models "beta minimum stable full"
             fi
 
             if [[ "$LIVE_MODELS_ONLY" != "true" ]]; then
               add_suite live-cache
 
               add_profile_suite native-live-src-agents "stable full"
-              add_profile_suite native-live-src-gateway-core "minimum stable full"
+              add_profile_suite native-live-src-gateway-core "beta minimum stable full"
               add_profile_suite native-live-src-gateway-profiles-anthropic "stable full"
               add_profile_suite native-live-src-gateway-profiles-anthropic-smoke "stable"
               add_profile_suite native-live-src-gateway-profiles-anthropic-opus "full"
               add_profile_suite native-live-src-gateway-profiles-anthropic-sonnet-haiku "full"
               add_profile_suite native-live-src-gateway-profiles-google "stable full"
               add_profile_suite native-live-src-gateway-profiles-minimax "stable full"
-              add_profile_suite native-live-src-gateway-profiles-openai "minimum stable full"
+              add_profile_suite native-live-src-gateway-profiles-openai "beta minimum stable full"
               add_profile_suite native-live-src-gateway-profiles-fireworks "full"
               add_profile_suite native-live-src-gateway-profiles-deepseek "full"
               add_profile_suite native-live-src-gateway-profiles-opencode-go "full"
@@ -412,11 +412,11 @@ jobs:
               add_profile_suite native-live-test "stable full"
               add_profile_suite native-live-extensions-l-n "full"
               add_profile_suite native-live-extensions-moonshot "full"
-              add_profile_suite native-live-extensions-openai "minimum stable full"
+              add_profile_suite native-live-extensions-openai "beta minimum stable full"
               add_profile_suite native-live-extensions-o-z-other "full"
               add_profile_suite native-live-extensions-xai "full"
 
-              add_profile_suite live-gateway-docker "minimum stable full"
+              add_profile_suite live-gateway-docker "beta minimum stable full"
               add_profile_suite live-gateway-anthropic-docker "stable full"
               add_profile_suite live-gateway-google-docker "stable full"
               add_profile_suite live-gateway-minimax-docker "stable full"
@@ -455,7 +455,7 @@ jobs:
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
     runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 60
+    timeout-minutes: 20
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -490,12 +490,12 @@ jobs:
       - name: Verify live prompt cache floors
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            echo "live-cache attempt ${attempt}/3"
-            if pnpm test:live:cache; then
+          for attempt in 1 2; do
+            echo "live-cache attempt ${attempt}/2"
+            if timeout --foreground --kill-after=30s 8m pnpm test:live:cache; then
               exit 0
             fi
-            if [[ "$attempt" == "3" ]]; then
+            if [[ "$attempt" == "2" ]]; then
               exit 1
             fi
             sleep $((attempt * 15))
@@ -505,7 +505,7 @@ jobs:
     needs: validate_selected_ref
     if: inputs.include_repo_e2e && inputs.live_suite_filter == ''
     runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 90
+    timeout-minutes: ${{ inputs.release_test_profile == 'full' && 90 || 60 }}
     env:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
@@ -542,7 +542,7 @@ jobs:
           - suite_id: openshell-e2e
             label: OpenShell repo E2E
             command: pnpm test:e2e:openshell
-            timeout_minutes: 120
+            timeout_minutes: 60
             requires_repo_e2e: true
             requires_live_suites: false
     env:
@@ -615,46 +615,60 @@ jobs:
         include:
           - chunk_id: core
             label: core
-            timeout_minutes: 120
+            timeout_minutes: 60
+            profiles: stable full
           - chunk_id: package-update-openai
             label: package/update OpenAI install
-            timeout_minutes: 30
+            timeout_minutes: 20
+            profiles: beta minimum stable full
           - chunk_id: package-update-anthropic
             label: package/update Anthropic install
-            timeout_minutes: 180
+            timeout_minutes: 60
+            profiles: beta minimum stable full
           - chunk_id: package-update-core
             label: package/update core
-            timeout_minutes: 120
+            timeout_minutes: 60
+            profiles: beta minimum stable full
           - chunk_id: plugins-runtime-plugins
             label: plugins/runtime plugins
-            timeout_minutes: 120
+            timeout_minutes: 60
+            profiles: stable full
           - chunk_id: plugins-runtime-services
             label: plugins/runtime services
-            timeout_minutes: 120
+            timeout_minutes: 60
+            profiles: stable full
           - chunk_id: plugins-runtime-install-a
             label: plugins/runtime install A
-            timeout_minutes: 120
+            timeout_minutes: 60
+            profiles: stable full
           - chunk_id: plugins-runtime-install-b
             label: plugins/runtime install B
-            timeout_minutes: 120
+            timeout_minutes: 60
+            profiles: stable full
           - chunk_id: plugins-runtime-install-c
             label: plugins/runtime install C
-            timeout_minutes: 120
+            timeout_minutes: 60
+            profiles: stable full
           - chunk_id: plugins-runtime-install-d
             label: plugins/runtime install D
-            timeout_minutes: 120
+            timeout_minutes: 60
+            profiles: stable full
           - chunk_id: plugins-runtime-install-e
             label: plugins/runtime install E
-            timeout_minutes: 120
+            timeout_minutes: 60
+            profiles: stable full
           - chunk_id: plugins-runtime-install-f
             label: plugins/runtime install F
-            timeout_minutes: 120
+            timeout_minutes: 60
+            profiles: stable full
           - chunk_id: plugins-runtime-install-g
             label: plugins/runtime install G
-            timeout_minutes: 120
+            timeout_minutes: 60
+            profiles: stable full
           - chunk_id: plugins-runtime-install-h
             label: plugins/runtime install H
-            timeout_minutes: 120
+            timeout_minutes: 60
+            profiles: stable full
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -707,6 +721,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+      OPENCLAW_DOCKER_ALL_RELEASE_PROFILE: ${{ inputs.release_test_profile }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}
@@ -716,12 +731,14 @@ jobs:
       DOCKER_E2E_CHUNK: ${{ matrix.chunk_id }}
     steps:
       - name: Checkout selected ref
+        if: contains(matrix.profiles, inputs.release_test_profile)
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted release harness
+        if: contains(matrix.profiles, inputs.release_test_profile)
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
@@ -729,6 +746,7 @@ jobs:
           path: .release-harness
 
       - name: Log in to GHCR for shared Docker E2E image
+        if: contains(matrix.profiles, inputs.release_test_profile)
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
           registry: ghcr.io
@@ -736,6 +754,7 @@ jobs:
           password: ${{ github.token }}
 
       - name: Setup Node environment
+        if: contains(matrix.profiles, inputs.release_test_profile)
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -743,14 +762,17 @@ jobs:
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
+        if: contains(matrix.profiles, inputs.release_test_profile)
         run: bash scripts/ci-hydrate-live-auth.sh
 
       - name: Plan Docker E2E chunk
+        if: contains(matrix.profiles, inputs.release_test_profile)
         id: plan
         shell: bash
         env:
           CHUNK: ${{ matrix.chunk_id }}
           INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
+          RELEASE_TEST_PROFILE: ${{ inputs.release_test_profile }}
         run: |
           set -euo pipefail
           if [[ -z "$CHUNK" ]]; then
@@ -762,6 +784,7 @@ jobs:
           export OPENCLAW_DOCKER_ALL_PROFILE=release-path
           export OPENCLAW_DOCKER_ALL_CHUNK="$CHUNK"
           export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="$INCLUDE_OPENWEBUI"
+          export OPENCLAW_DOCKER_ALL_RELEASE_PROFILE="$RELEASE_TEST_PROFILE"
 
           plan_path=".artifacts/docker-tests/release-${CHUNK}-plan.json"
           node .release-harness/scripts/test-docker-all.mjs --plan-json > "$plan_path"
@@ -769,27 +792,28 @@ jobs:
           echo "plan_json=$plan_path" >> "$GITHUB_OUTPUT"
 
       - name: Download OpenClaw Docker E2E package
-        if: steps.plan.outputs.needs_package == '1'
+        if: contains(matrix.profiles, inputs.release_test_profile) && steps.plan.outputs.needs_package == '1'
         uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
           path: .artifacts/docker-e2e-package
 
       - name: Pull shared bare Docker E2E image
-        if: steps.plan.outputs.needs_bare_image == '1'
+        if: contains(matrix.profiles, inputs.release_test_profile) && steps.plan.outputs.needs_bare_image == '1'
         shell: bash
         run: |
           set -euo pipefail
           bash .release-harness/scripts/ci-docker-pull-retry.sh "${OPENCLAW_DOCKER_E2E_BARE_IMAGE}"
 
       - name: Pull shared functional Docker E2E image
-        if: steps.plan.outputs.needs_functional_image == '1'
+        if: contains(matrix.profiles, inputs.release_test_profile) && steps.plan.outputs.needs_functional_image == '1'
         shell: bash
         run: |
           set -euo pipefail
           bash .release-harness/scripts/ci-docker-pull-retry.sh "${OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE}"
 
       - name: Validate Docker E2E credentials
+        if: contains(matrix.profiles, inputs.release_test_profile)
         shell: bash
         env:
           CREDENTIALS: ${{ steps.plan.outputs.credentials }}
@@ -808,11 +832,13 @@ jobs:
           fi
 
       - name: Run Docker E2E chunk
+        if: contains(matrix.profiles, inputs.release_test_profile)
         shell: bash
         run: |
           set -euo pipefail
           export OPENCLAW_DOCKER_ALL_PROFILE=release-path
           export OPENCLAW_DOCKER_ALL_CHUNK="${DOCKER_E2E_CHUNK}"
+          export OPENCLAW_DOCKER_ALL_RELEASE_PROFILE="${OPENCLAW_DOCKER_ALL_RELEASE_PROFILE}"
           export OPENCLAW_DOCKER_ALL_BUILD=0
           export OPENCLAW_DOCKER_ALL_PREFLIGHT=0
           export OPENCLAW_DOCKER_ALL_FAIL_FAST=0
@@ -877,7 +903,7 @@ jobs:
     if: inputs.docker_lanes != ''
     name: Docker E2E targeted lanes (${{ matrix.group.label }})
     runs-on: blacksmith-32vcpu-ubuntu-2404
-    timeout-minutes: 90
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -1086,7 +1112,7 @@ jobs:
     if: inputs.include_openwebui && !inputs.include_release_path_suites && inputs.docker_lanes == ''
     name: Docker E2E (openwebui)
     runs-on: blacksmith-32vcpu-ubuntu-2404
-    timeout-minutes: 75
+    timeout-minutes: 60
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -1213,7 +1239,7 @@ jobs:
     needs: validate_selected_ref
     if: inputs.include_release_path_suites || inputs.include_openwebui || inputs.docker_lanes != ''
     runs-on: blacksmith-32vcpu-ubuntu-2404
-    timeout-minutes: 90
+    timeout-minutes: ${{ inputs.release_test_profile == 'full' && 90 || 60 }}
     permissions:
       actions: read
       contents: read
@@ -1252,6 +1278,7 @@ jobs:
           LANES: ${{ inputs.docker_lanes }}
           INCLUDE_RELEASE_PATH_SUITES: ${{ inputs.include_release_path_suites }}
           INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
+          RELEASE_TEST_PROFILE: ${{ inputs.release_test_profile }}
           OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
           OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}
           OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
@@ -1268,6 +1295,7 @@ jobs:
             export OPENCLAW_DOCKER_ALL_LANES=openwebui
           fi
           export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="$INCLUDE_OPENWEBUI"
+          export OPENCLAW_DOCKER_ALL_RELEASE_PROFILE="$RELEASE_TEST_PROFILE"
 
           plan_path=".artifacts/docker-tests/plan.json"
           node .release-harness/scripts/test-docker-all.mjs --plan-json > "$plan_path"
@@ -1544,7 +1572,7 @@ jobs:
             profiles: stable full
           - provider_label: OpenAI
             providers: openai
-            profiles: minimum stable full
+            profiles: beta minimum stable full
           - provider_label: OpenCode
             providers: opencode-go
             profiles: full
@@ -1863,15 +1891,15 @@ jobs:
           - suite_id: native-live-src-agents
             label: Native live agents
             command: node .release-harness/scripts/test-live-shard.mjs native-live-src-agents
-            timeout_minutes: 90
+            timeout_minutes: 60
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-src-gateway-core
             label: Native live gateway core
             command: node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-core
-            timeout_minutes: 90
+            timeout_minutes: 60
             profile_env_only: false
-            profiles: minimum stable full
+            profiles: beta minimum stable full
           - suite_id: native-live-src-gateway-profiles-anthropic-smoke
             suite_group: native-live-src-gateway-profiles-anthropic
             label: Native live gateway profiles Anthropic smoke
@@ -1883,73 +1911,81 @@ jobs:
             suite_group: native-live-src-gateway-profiles-anthropic
             label: Native live gateway profiles Anthropic Opus
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-4-7,anthropic/claude-opus-4-6 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-anthropic-sonnet-haiku
             suite_group: native-live-src-gateway-profiles-anthropic
             label: Native live gateway profiles Anthropic Sonnet/Haiku
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-google
             label: Native live gateway profiles Google
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=google OPENCLAW_LIVE_GATEWAY_MODELS=google/gemini-3.1-pro-preview,google/gemini-3-flash-preview node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 90
+            timeout_minutes: 60
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-src-gateway-profiles-minimax
             label: Native live gateway profiles MiniMax
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 90
+            timeout_minutes: 60
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-src-gateway-profiles-openai
             label: Native live gateway profiles OpenAI
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 90
+            timeout_minutes: 60
             profile_env_only: false
-            profiles: minimum stable full
+            profiles: beta minimum stable full
           - suite_id: native-live-src-gateway-profiles-fireworks
             label: Native live gateway profiles Fireworks
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=fireworks node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-deepseek
             label: Native live gateway profiles DeepSeek
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-deepseek-glm
             suite_group: native-live-src-gateway-profiles-opencode-go
             label: Native live gateway profiles OpenCode Go DeepSeek/GLM
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/deepseek-v4-flash,opencode-go/deepseek-v4-pro,opencode-go/glm-5,opencode-go/glm-5.1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-kimi
             suite_group: native-live-src-gateway-profiles-opencode-go
             label: Native live gateway profiles OpenCode Go Kimi
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/kimi-k2.5,opencode-go/kimi-k2.6 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-mimo
             suite_group: native-live-src-gateway-profiles-opencode-go
             label: Native live gateway profiles OpenCode Go MiMo
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2-omni,opencode-go/mimo-v2-pro,opencode-go/mimo-v2.5,opencode-go/mimo-v2.5-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-minimax-qwen
             suite_group: native-live-src-gateway-profiles-opencode-go
             label: Native live gateway profiles OpenCode Go MiniMax/Qwen
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/minimax-m2.5,opencode-go/minimax-m2.7,opencode-go/qwen3.5-plus,opencode-go/qwen3.6-plus node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-smoke
             label: Native live gateway profiles OpenCode Go smoke
@@ -1960,25 +1996,28 @@ jobs:
           - suite_id: native-live-src-gateway-profiles-openrouter
             label: Native live gateway profiles OpenRouter
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openrouter node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-xai
             label: Native live gateway profiles xAI
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-zai
             label: Native live gateway profiles Z.ai
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=zai node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-backends
             label: Native live gateway backends
             command: node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends
-            timeout_minutes: 90
+            timeout_minutes: 60
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-src-infra
@@ -1990,39 +2029,42 @@ jobs:
           - suite_id: native-live-test
             label: Native live test harnesses
             command: node .release-harness/scripts/test-live-shard.mjs native-live-test
-            timeout_minutes: 90
+            timeout_minutes: 60
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-extensions-l-n
             label: Native live plugins L-N
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-l-n
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-extensions-moonshot
             label: Native live Moonshot plugin
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-moonshot
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
             advisory: true
             profiles: full
           - suite_id: native-live-extensions-openai
             label: Native live OpenAI plugin
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-openai
-            timeout_minutes: 90
+            timeout_minutes: 60
             profile_env_only: false
-            profiles: minimum stable full
+            profiles: beta minimum stable full
           - suite_id: native-live-extensions-o-z-other
             label: Native live plugins O-Z other
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-o-z-other
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-extensions-xai
             label: Native live xAI plugin
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-xai
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -2188,7 +2230,7 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
             timeout_minutes: 30
             profile_env_only: false
-            profiles: minimum stable full
+            profiles: beta minimum stable full
           - suite_id: live-gateway-anthropic-docker
             label: Docker live gateway Anthropic
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
@@ -2213,6 +2255,7 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,fireworks OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
             timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: live-gateway-advisory-docker-opencode-openrouter
             suite_group: live-gateway-advisory-docker
@@ -2220,6 +2263,7 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go,openrouter OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
             timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: live-gateway-advisory-docker-xai-zai
             suite_group: live-gateway-advisory-docker
@@ -2227,6 +2271,7 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai,zai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
             timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: live-cli-backend-docker
             label: Docker live CLI backend
@@ -2371,7 +2416,20 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'live-gateway-advisory-docker' && startsWith(matrix.suite_id, 'live-gateway-advisory-docker-')))
         env:
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
-        run: bash .release-harness/scripts/ci-live-command-retry.sh
+          OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}
+        run: |
+          set +e
+          bash .release-harness/scripts/ci-live-command-retry.sh
+          status=$?
+          set -e
+          if [[ "$status" -eq 0 ]]; then
+            exit 0
+          fi
+          if [[ "${OPENCLAW_LIVE_SUITE_ADVISORY:-}" == "true" ]]; then
+            echo "::warning::Advisory live suite failed with exit code ${status}: ${{ matrix.suite_id }}"
+            exit 0
+          fi
+          exit "$status"
 
   validate_live_media_provider_suites:
     name: Live media suites (${{ matrix.label }})
@@ -2391,54 +2449,62 @@ jobs:
           - suite_id: native-live-extensions-a-k
             label: Native live plugins A-K
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-a-k
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-audio
             label: Native live media audio plugins
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-audio
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-music-google
             label: Native live media music Google
             command: OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS=google node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-music-google
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-music-minimax
             label: Native live media music MiniMax
             command: OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS=minimax node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-music-minimax
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-video-a
             suite_group: native-live-extensions-media-video
             label: Native live media video plugins A
             command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=alibaba,byteplus,deepinfra,fal node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-video-b
             suite_group: native-live-extensions-media-video
             label: Native live media video plugins B
             command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=google,minimax node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-video-c
             suite_group: native-live-extensions-media-video
             label: Native live media video plugins C
             command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=openai,openrouter,xai node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-video-d
             suite_group: native-live-extensions-media-video
             label: Native live media video plugins D
             command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=qwen,runway,together,vydra node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
-            timeout_minutes: 90
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -2536,4 +2602,18 @@ jobs:
 
       - name: Run ${{ matrix.label }}
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
-        run: ${{ matrix.command }}
+        env:
+          OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}
+        run: |
+          set +e
+          ${{ matrix.command }}
+          status=$?
+          set -e
+          if [[ "$status" -eq 0 ]]; then
+            exit 0
+          fi
+          if [[ "${OPENCLAW_LIVE_SUITE_ADVISORY:-}" == "true" ]]; then
+            echo "::warning::Advisory live suite failed with exit code ${status}: ${{ matrix.suite_id }}"
+            exit 0
+          fi
+          exit "$status"

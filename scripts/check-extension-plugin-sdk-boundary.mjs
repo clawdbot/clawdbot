@@ -294,10 +294,11 @@ function formatInventoryHuman(mode, inventory) {
   return lines.join("\n");
 }
 
-export async function runExtensionPluginSdkBoundaryCheck(argv = process.argv.slice(2), io) {
+export async function runExtensionPluginSdkBoundaryCheck(argv, io) {
+  const args = argv ?? process.argv.slice(2);
   const streams = io ?? { stdout: process.stdout, stderr: process.stderr };
-  const json = argv.includes("--json");
-  const modeArg = argv.find((arg) => arg.startsWith("--mode="));
+  const json = args.includes("--json");
+  const modeArg = args.find((arg) => arg.startsWith("--mode="));
   const mode = modeArg?.slice("--mode=".length) ?? "src-outside-plugin-sdk";
   if (!MODES.has(mode)) {
     throw new Error(`Unknown mode: ${mode}`);
@@ -342,7 +343,7 @@ export async function runExtensionPluginSdkBoundaryCheck(argv = process.argv.sli
   return 1;
 }
 
-export async function main(argv = process.argv.slice(2), io) {
+export async function main(argv, io) {
   const exitCode = await runExtensionPluginSdkBoundaryCheck(argv, io);
   if (!io) {
     process.exitCode = exitCode;

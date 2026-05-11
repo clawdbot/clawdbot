@@ -1,15 +1,4 @@
-/**
- * Shared helpers for FileConsentCard flow in MSTeams.
- *
- * FileConsentCard is required for:
- * - Personal (1:1) chats with large files (>=4MB)
- * - Personal chats with non-image files (PDFs, documents, etc.)
- *
- * This module consolidates the logic used by both send.ts (proactive sends)
- * and messenger.ts (reply path) to avoid duplication.
- */
-
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildFileConsentCard } from "./file-consent.js";
 import { storePendingUploadFs } from "./pending-uploads-fs.js";
 import { storePendingUpload } from "./pending-uploads.js";

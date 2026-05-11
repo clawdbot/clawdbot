@@ -221,16 +221,14 @@ describe("commands.list handler", () => {
       >;
     };
     const model = requireCommand(commands, "model");
-    expect(model).toMatchObject({
-      name: "model",
-      nativeName: "model",
-      textAliases: ["/model", "/m"],
-      description: "Set model",
-      category: "options",
-      source: "native",
-      scope: "both",
-      acceptsArgs: true,
-    });
+    expect(model.name).toBe("model");
+    expect(model.nativeName).toBe("model");
+    expect(model.textAliases).toEqual(["/model", "/m"]);
+    expect(model.description).toBe("Set model");
+    expect(model.category).toBe("options");
+    expect(model.source).toBe("native");
+    expect(model.scope).toBe("both");
+    expect(model.acceptsArgs).toBe(true);
     const args = model.args ?? [];
     expect(args).toHaveLength(1);
     expect(args[0].choices).toEqual([
@@ -281,7 +279,8 @@ describe("commands.list handler", () => {
     const { payload } = callHandler();
     const { commands } = payload as { commands: Array<Record<string, unknown>> };
     const skill = commands.find((c) => c.name === "code_review");
-    expect(skill).toMatchObject({ source: "skill", category: "tools" });
+    expect(skill?.source).toBe("skill");
+    expect(skill?.category).toBe("tools");
   });
 
   it("always includes plugin commands regardless of scope filter", () => {
@@ -322,7 +321,7 @@ describe("commands.list handler", () => {
     const { commands } = payload as { commands: Array<{ name: string; source: string }> };
     expect(requireCommand(commands, "set_model").name).toBe("set_model");
     const plugin = commands.find((c) => c.source === "plugin");
-    expect(plugin).toMatchObject({ name: "discord_tts" });
+    expect(plugin?.name).toBe("discord_tts");
   });
 
   it("uses default names without provider", () => {
@@ -349,11 +348,9 @@ describe("commands.list handler", () => {
       }>;
     };
     const model = commands.find((c) => c.source === "native" && c.name === "model");
-    expect(model).toMatchObject({
-      name: "model",
-      nativeName: "set_model",
-      textAliases: ["/model", "/m"],
-    });
+    expect(model?.name).toBe("model");
+    expect(model?.nativeName).toBe("set_model");
+    expect(model?.textAliases).toEqual(["/model", "/m"]);
     expect(commands.find((c) => c.name === "set_model")).toBeUndefined();
   });
 
@@ -367,11 +364,10 @@ describe("commands.list handler", () => {
         nativeName?: string;
       }>;
     };
-    expect(commands.find((c) => c.source === "plugin")).toMatchObject({
-      name: "tts",
-      textAliases: ["/tts"],
-    });
-    expect(commands.find((c) => c.source === "plugin")?.nativeName).toBeUndefined();
+    const plugin = commands.find((c) => c.source === "plugin");
+    expect(plugin?.name).toBe("tts");
+    expect(plugin?.textAliases).toEqual(["/tts"]);
+    expect(plugin?.nativeName).toBeUndefined();
   });
 
   it("keeps plugin text names while exposing provider-native aliases for scope=text", () => {
@@ -384,18 +380,17 @@ describe("commands.list handler", () => {
         nativeName?: string;
       }>;
     };
-    expect(commands.find((c) => c.source === "plugin")).toMatchObject({
-      name: "tts",
-      nativeName: "discord_tts",
-      textAliases: ["/tts"],
-    });
+    const plugin = commands.find((c) => c.source === "plugin");
+    expect(plugin?.name).toBe("tts");
+    expect(plugin?.nativeName).toBe("discord_tts");
+    expect(plugin?.textAliases).toEqual(["/tts"]);
   });
 
   it("returns provider-specific plugin command names", () => {
     const { payload } = callHandler({ provider: "discord" });
     const { commands } = payload as { commands: Array<{ name: string; source: string }> };
     const plugin = commands.find((c) => c.source === "plugin");
-    expect(plugin).toMatchObject({ name: "discord_tts" });
+    expect(plugin?.name).toBe("discord_tts");
   });
 
   it("excludes args when includeArgs=false", () => {

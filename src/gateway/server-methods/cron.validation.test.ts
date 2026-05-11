@@ -130,6 +130,58 @@ function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
   };
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireCronAddPayload(
+  context: ReturnType<typeof createCronContext>,
+): Record<string, unknown> {
+  const calls = context.cron.add.mock.calls as unknown as [unknown][];
+  return requireRecord(calls[0]?.[0], "cron.add payload");
+}
+
+function requireCronUpdatePatch(
+  context: ReturnType<typeof createCronContext>,
+): Record<string, unknown> {
+  const calls = context.cron.update.mock.calls as unknown as [unknown, unknown][];
+  return requireRecord(calls[0]?.[1], "cron.update patch");
+}
+
+function requireCronUpdateId(context: ReturnType<typeof createCronContext>): unknown {
+  const calls = context.cron.update.mock.calls as unknown as [unknown, unknown][];
+  return calls[0]?.[0];
+}
+
+function expectDeliveryFields(payload: Record<string, unknown>, expected: Record<string, unknown>) {
+  const delivery = requireRecord(payload.delivery, "delivery");
+  for (const [key, value] of Object.entries(expected)) {
+    expect(delivery[key]).toBe(value);
+  }
+}
+
+function expectResponseError(
+  respond: ReturnType<typeof vi.fn>,
+  expected: { code?: string; messageIncludes?: string },
+) {
+  const call = respond.mock.calls[0];
+  if (!call) {
+    throw new Error("expected response call");
+  }
+  expect(call[0]).toBe(false);
+  expect(call[1]).toBeUndefined();
+  const error = requireRecord(call[2], "response error");
+  if (expected.code) {
+    expect(error.code).toBe(expected.code);
+  }
+  if (expected.messageIncludes) {
+    expect(String(error.message)).toContain(expected.messageIncludes);
+  }
+}
+
 describe("cron method validation", () => {
   beforeEach(() => {
     getRuntimeConfig.mockReset().mockReturnValue({} as OpenClawConfig);
@@ -169,16 +221,12 @@ describe("cron method validation", () => {
       },
     });
 
-    expect(context.cron.add).toHaveBeenCalledWith(
-      expect.objectContaining({
-        delivery: expect.objectContaining({
-          mode: "announce",
-          channel: "telegram",
-          to: "-1001234567890",
-          threadId: 123,
-        }),
-      }),
-    );
+    expectDeliveryFields(requireCronAddPayload(context), {
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890",
+      threadId: 123,
+    });
     expect(respond).toHaveBeenCalledWith(true, { id: "cron-1" }, undefined);
   });
 
@@ -213,17 +261,13 @@ describe("cron method validation", () => {
       }),
     );
 
-    expect(context.cron.update).toHaveBeenCalledWith(
-      "cron-1",
-      expect.objectContaining({
-        delivery: expect.objectContaining({
-          mode: "announce",
-          channel: "telegram",
-          to: "-1001234567890",
-          threadId: "456",
-        }),
-      }),
-    );
+    expect(requireCronUpdateId(context)).toBe("cron-1");
+    expectDeliveryFields(requireCronUpdatePatch(context), {
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890",
+      threadId: "456",
+    });
     expect(respond).toHaveBeenCalledWith(true, { id: "cron-1" }, undefined);
   });
 
@@ -251,13 +295,7 @@ describe("cron method validation", () => {
     );
 
     expect(context.cron.update).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-      }),
-    );
+    expectResponseError(respond, { code: "INVALID_REQUEST" });
   });
 
   it("rejects ambiguous announce delivery on add when multiple channels are configured", async () => {
@@ -293,13 +331,7 @@ describe("cron method validation", () => {
     });
 
     expect(context.cron.add).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("delivery.channel is required"),
-      }),
-    );
+    expectResponseError(respond, { messageIncludes: "delivery.channel is required" });
   });
 
   it("accepts provider-prefixed announce target without delivery.channel when multiple channels are configured", async () => {
@@ -368,13 +400,7 @@ describe("cron method validation", () => {
     });
 
     expect(context.cron.add).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("belongs to telegram, not slack"),
-      }),
-    );
+    expectResponseError(respond, { messageIncludes: "belongs to telegram, not slack" });
   });
 
   it("accepts provider-prefixed announce targets when delivery.channel uses a channel alias", async () => {
@@ -443,13 +469,7 @@ describe("cron method validation", () => {
     );
 
     expect(context.cron.update).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("belongs to telegram, not slack"),
-      }),
-    );
+    expectResponseError(respond, { messageIncludes: "belongs to telegram, not slack" });
   });
 
   it("rejects underscored provider prefixes for a different explicit delivery channel", async () => {
@@ -482,13 +502,7 @@ describe("cron method validation", () => {
     });
 
     expect(context.cron.add).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("belongs to synology-chat, not slack"),
-      }),
-    );
+    expectResponseError(respond, { messageIncludes: "belongs to synology-chat, not slack" });
   });
 
   it("rejects ambiguous announce delivery on update when multiple channels are configured", async () => {
@@ -524,13 +538,7 @@ describe("cron method validation", () => {
     );
 
     expect(context.cron.update).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("delivery.channel is required"),
-      }),
-    );
+    expectResponseError(respond, { messageIncludes: "delivery.channel is required" });
   });
 
   it("rejects target ids mistakenly supplied as delivery.channel providers", async () => {
@@ -566,13 +574,7 @@ describe("cron method validation", () => {
     });
 
     expect(context.cron.add).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("delivery.channel must be one of: slack"),
-      }),
-    );
+    expectResponseError(respond, { messageIncludes: "delivery.channel must be one of: slack" });
   });
 
   it("returns INVALID_REQUEST when cron.add throws a croner parse error (#74066)", async () => {
@@ -595,14 +597,7 @@ describe("cron method validation", () => {
       isWebchatConnect: () => false,
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("CronPattern"),
-      }),
-    );
+    expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "CronPattern" });
   });
 
   it("returns INVALID_REQUEST when cron.update throws a croner parse error (#74066)", async () => {
@@ -626,14 +621,7 @@ describe("cron method validation", () => {
       isWebchatConnect: () => false,
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("CronPattern"),
-      }),
-    );
+    expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "CronPattern" });
   });
 
   it("re-throws non-parse errors from cron.add instead of masking as INVALID_REQUEST", async () => {

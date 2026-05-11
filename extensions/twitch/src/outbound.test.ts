@@ -175,52 +175,57 @@ describe("outbound", () => {
         receipt: twitchTestReceipt("twitch-msg-123"),
       });
 
-      await expect(
-        verifyChannelMessageAdapterCapabilityProofs({
-          adapterName: "twitch",
-          adapter: twitchMessageAdapter,
-          proofs: {
-            text: async () => {
-              const result = await twitchMessageAdapter.send?.text?.({
-                cfg: mockConfig,
-                to: "#testchannel",
-                text: "Hello Twitch!",
-                accountId: "default",
-              });
-              expect(result?.receipt?.platformMessageIds).toEqual(["twitch-msg-123"]);
-            },
-            media: async () => {
-              const result = await twitchMessageAdapter.send?.media?.({
-                cfg: mockConfig,
-                to: "#testchannel",
-                text: "image",
-                mediaUrl: "https://example.com/image.png",
-                accountId: "default",
-              });
-              expect(result?.receipt?.platformMessageIds).toEqual(["twitch-msg-123"]);
-              expect(sendMessageTwitchInternal).toHaveBeenLastCalledWith(
-                "testchannel",
-                "image https://example.com/image.png",
-                mockConfig,
-                "default",
-                true,
-                console,
-              );
-            },
-            messageSendingHooks: () => {
-              expect(twitchMessageAdapter.durableFinal?.capabilities?.messageSendingHooks).toBe(
-                true,
-              );
-            },
+      const proofResults = await verifyChannelMessageAdapterCapabilityProofs({
+        adapterName: "twitch",
+        adapter: twitchMessageAdapter,
+        proofs: {
+          text: async () => {
+            const result = await twitchMessageAdapter.send?.text?.({
+              cfg: mockConfig,
+              to: "#testchannel",
+              text: "Hello Twitch!",
+              accountId: "default",
+            });
+            expect(result?.receipt?.platformMessageIds).toEqual(["twitch-msg-123"]);
           },
-        }),
-      ).resolves.toEqual(
-        expect.arrayContaining([
-          { capability: "text", status: "verified" },
-          { capability: "media", status: "verified" },
-          { capability: "messageSendingHooks", status: "verified" },
-        ]),
-      );
+          media: async () => {
+            const result = await twitchMessageAdapter.send?.media?.({
+              cfg: mockConfig,
+              to: "#testchannel",
+              text: "image",
+              mediaUrl: "https://example.com/image.png",
+              accountId: "default",
+            });
+            expect(result?.receipt?.platformMessageIds).toEqual(["twitch-msg-123"]);
+            expect(sendMessageTwitchInternal).toHaveBeenLastCalledWith(
+              "testchannel",
+              "image https://example.com/image.png",
+              mockConfig,
+              "default",
+              true,
+              console,
+            );
+          },
+          messageSendingHooks: () => {
+            expect(twitchMessageAdapter.durableFinal?.capabilities?.messageSendingHooks).toBe(true);
+          },
+        },
+      });
+
+      expect(proofResults).toEqual([
+        { capability: "text", status: "verified" },
+        { capability: "media", status: "verified" },
+        { capability: "payload", status: "not_declared" },
+        { capability: "silent", status: "not_declared" },
+        { capability: "replyTo", status: "not_declared" },
+        { capability: "thread", status: "not_declared" },
+        { capability: "nativeQuote", status: "not_declared" },
+        { capability: "messageSendingHooks", status: "verified" },
+        { capability: "batch", status: "not_declared" },
+        { capability: "reconcileUnknownSend", status: "not_declared" },
+        { capability: "afterSendSuccess", status: "not_declared" },
+        { capability: "afterCommit", status: "not_declared" },
+      ]);
     });
   });
 
@@ -458,14 +463,16 @@ describe("outbound", () => {
         receipt: twitchTestReceipt("msg-secondary"),
       });
 
-      await twitchOutbound.sendText!({
-        cfg: {
-          channels: {
-            twitch: {
-              defaultAccount: "secondary",
-            },
+      const defaultAccountConfig = {
+        channels: {
+          twitch: {
+            defaultAccount: "secondary",
           },
-        } as typeof mockConfig,
+        },
+      } as typeof mockConfig;
+
+      await twitchOutbound.sendText!({
+        cfg: defaultAccountConfig,
         to: "#secondary-channel",
         text: "Hello!",
       });
@@ -473,7 +480,7 @@ describe("outbound", () => {
       expect(sendMessageTwitchInternal).toHaveBeenCalledWith(
         "secondary-channel",
         "Hello!",
-        expect.any(Object),
+        defaultAccountConfig,
         "secondary",
         true,
         console,
@@ -525,12 +532,12 @@ describe("outbound", () => {
       expect(result.messageId).toBe("media-msg-123");
       expect(result.receipt?.platformMessageIds).toEqual(["media-msg-123"]);
       expect(sendMessageTwitchInternal).toHaveBeenCalledWith(
-        expect.anything(),
+        "testchannel",
         "Check this: https://example.com/image.png",
-        expect.anything(),
-        expect.anything(),
-        expect.anything(),
-        expect.anything(),
+        mockConfig,
+        "default",
+        true,
+        console,
       );
     });
 
@@ -553,12 +560,12 @@ describe("outbound", () => {
       });
 
       expect(sendMessageTwitchInternal).toHaveBeenCalledWith(
-        expect.anything(),
+        "testchannel",
         "https://example.com/image.png",
-        expect.anything(),
-        expect.anything(),
-        expect.anything(),
-        expect.anything(),
+        mockConfig,
+        "default",
+        true,
+        console,
       );
     });
   });

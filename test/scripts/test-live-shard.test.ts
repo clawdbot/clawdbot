@@ -24,7 +24,7 @@ describe("scripts/test-live-shard", () => {
       .toSorted();
 
     expect(allFiles.length).toBeGreaterThan(0);
-    expect([...new Set(selectedFiles)].toSorted()).toEqual(allFiles);
+    expect([...new Set(selectedFiles)].toSorted((a, b) => a.localeCompare(b))).toEqual(allFiles);
     expect(duplicateFiles).toEqual(["extensions/music-generation-providers.live.test.ts"]);
     expect(musicProviderFanout).toEqual([
       "native-live-extensions-media-music-google",
@@ -45,7 +45,7 @@ describe("scripts/test-live-shard", () => {
       [
         ...selectLiveShardFiles("native-live-extensions-o-z-other", allFiles),
         ...selectLiveShardFiles("native-live-extensions-xai", allFiles),
-      ].toSorted(),
+      ].toSorted((a, b) => a.localeCompare(b)),
     );
 
     const mediaAlias = selectLiveShardFiles("native-live-extensions-media", allFiles);
@@ -54,7 +54,7 @@ describe("scripts/test-live-shard", () => {
         ...selectLiveShardFiles("native-live-extensions-media-audio", allFiles),
         ...selectLiveShardFiles("native-live-extensions-media-music", allFiles),
         ...selectLiveShardFiles("native-live-extensions-media-video", allFiles),
-      ].toSorted(),
+      ].toSorted((a, b) => a.localeCompare(b)),
     );
   });
 

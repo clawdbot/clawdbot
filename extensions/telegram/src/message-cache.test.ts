@@ -1,11 +1,34 @@
-import { readFile, rm } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import type { Message } from "@grammyjs/types";
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildTelegramConversationContext,
   buildTelegramReplyChain,
   createTelegramMessageCache,
   resolveTelegramMessageCachePath,
 } from "./message-cache.js";
+
+type PersistedCacheEntry = {
+  key: string;
+  node: {
+    sourceMessage: Message;
+  };
+};
+
+function persistedCacheEntry(messageId: number, text: string): PersistedCacheEntry {
+  return {
+    key: `default:7:${messageId}`,
+    node: {
+      sourceMessage: {
+        chat: { id: 7, type: "group", title: "Ops" },
+        message_id: messageId,
+        date: 1736380000 + messageId,
+        text,
+        from: { id: messageId, is_bot: false, first_name: `User ${messageId}` },
+      } as Message,
+    },
+  };
+}
 
 describe("telegram message cache", () => {
   it("hydrates reply chains from persisted cached messages", async () => {
@@ -71,16 +94,48 @@ describe("telegram message cache", () => {
       });
 
       expect(chain).toEqual([
-        expect.objectContaining({
+        {
           messageId: "9001",
+          sender: "Ada",
+          senderId: "2",
+          timestamp: 1736380750000,
           body: "The cache warmer is the piece I meant",
           replyToId: "9000",
-        }),
-        expect.objectContaining({
+          sourceMessage: {
+            chat: { id: 7, type: "private", first_name: "Ada" },
+            message_id: 9001,
+            date: 1736380750,
+            text: "The cache warmer is the piece I meant",
+            from: { id: 2, is_bot: false, first_name: "Ada" },
+            reply_to_message: {
+              chat: { id: 7, type: "private", first_name: "Kesava" },
+              message_id: 9000,
+              date: 1736380700,
+              from: { id: 1, is_bot: false, first_name: "Kesava" },
+              photo: [
+                { file_id: "photo-1", file_unique_id: "photo-unique-1", width: 640, height: 480 },
+              ],
+            },
+          },
+        },
+        {
           messageId: "9000",
+          sender: "Kesava",
+          senderId: "1",
+          timestamp: 1736380700000,
           mediaRef: "telegram:file/photo-1",
           mediaType: "image",
-        }),
+          body: "<media:image>",
+          sourceMessage: {
+            chat: { id: 7, type: "private", first_name: "Kesava" },
+            message_id: 9000,
+            date: 1736380700,
+            from: { id: 1, is_bot: false, first_name: "Kesava" },
+            photo: [
+              { file_id: "photo-1", file_unique_id: "photo-unique-1", width: 640, height: 480 },
+            ],
+          },
+        },
       ]);
     } finally {
       await rm(persistedPath, { force: true });
@@ -220,6 +275,54 @@ describe("telegram message cache", () => {
     }
   });
 
+  it("loads mixed legacy array caches and rewrites them as line-delimited entries", async () => {
+    const storePath = `/tmp/openclaw-telegram-message-cache-legacy-${process.pid}-${Date.now()}.json`;
+    const persistedPath = resolveTelegramMessageCachePath(storePath);
+    await rm(persistedPath, { force: true });
+    try {
+      const legacyEntries = [
+        persistedCacheEntry(35033, "ocdbg-5818 one"),
+        persistedCacheEntry(35034, "ocdbg-5818 two"),
+        persistedCacheEntry(35035, "ocdbg-5818 three"),
+      ];
+      const appendedEntries = [
+        persistedCacheEntry(35036, "ocdbg-5818 four"),
+        persistedCacheEntry(35037, "ocdbg-5818 five"),
+      ];
+      await writeFile(
+        persistedPath,
+        `${JSON.stringify(legacyEntries)}${appendedEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      );
+
+      const cache = createTelegramMessageCache({ persistedPath });
+
+      expect(
+        cache
+          .around({
+            accountId: "default",
+            chatId: 7,
+            messageId: "35035",
+            before: 2,
+            after: 2,
+          })
+          .map((entry) => entry.messageId),
+      ).toEqual(["35033", "35034", "35035", "35036", "35037"]);
+
+      const canonical = await readFile(persistedPath, "utf-8");
+      expect(canonical.startsWith("[")).toBe(false);
+      const lines = canonical.trim().split("\n");
+      expect(lines).toHaveLength(5);
+      expect(
+        lines.map((line) => {
+          const entry = JSON.parse(line) as PersistedCacheEntry;
+          return entry.node.sourceMessage.message_id;
+        }),
+      ).toEqual([35033, 35034, 35035, 35036, 35037]);
+    } finally {
+      await rm(persistedPath, { force: true });
+    }
+  });
+
   it("returns recent chat messages before the current message", () => {
     const cache = createTelegramMessageCache();
     for (const id of [41, 42, 43, 44]) {
@@ -291,5 +394,92 @@ describe("telegram message cache", () => {
         })
         .map((entry) => entry.messageId),
     ).toEqual(["100", "101", "102"]);
+  });
+
+  it("selects reply targets referenced by the current local window", () => {
+    const cache = createTelegramMessageCache();
+    for (const id of [33867, 33868, 33869]) {
+      cache.record({
+        accountId: "default",
+        chatId: 7,
+        msg: {
+          chat: { id: 7, type: "group", title: "Ops" },
+          message_id: id,
+          date: 1736380000 + id,
+          text: `old context ${id}`,
+          from: { id, is_bot: false, first_name: `Old ${id}` },
+        } as Message,
+      });
+    }
+    for (let id = 34460; id <= 34475; id++) {
+      cache.record({
+        accountId: "default",
+        chatId: 7,
+        msg: {
+          chat: { id: 7, type: "group", title: "Ops" },
+          message_id: id,
+          date: 1736380000 + id,
+          text: `recent context ${id}`,
+          from: { id, is_bot: false, first_name: `Recent ${id}` },
+        } as Message,
+      });
+    }
+    cache.record({
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat: { id: 7, type: "group", title: "Ops" },
+        message_id: 34476,
+        date: 1736380000 + 34476,
+        text: "@HamVerBot what about now",
+        from: { id: 34476, is_bot: false, first_name: "Ayaan" },
+        reply_to_message: {
+          chat: { id: 7, type: "group", title: "Ops" },
+          message_id: 33868,
+          date: 1736380000 + 33868,
+          text: "old context 33868",
+          from: { id: 33868, is_bot: false, first_name: "Old 33868" },
+        } as Message["reply_to_message"],
+      } as Message,
+    });
+    cache.record({
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat: { id: 7, type: "group", title: "Ops" },
+        message_id: 34477,
+        date: 1736380000 + 34477,
+        text: "Show me raw input",
+        from: { id: 34477, is_bot: false, first_name: "Ayaan" },
+      } as Message,
+    });
+
+    const context = buildTelegramConversationContext({
+      cache,
+      accountId: "default",
+      chatId: 7,
+      messageId: "34477",
+      replyChainNodes: [],
+      recentLimit: 10,
+      replyTargetWindowSize: 1,
+    });
+
+    expect(context.map((entry) => entry.node.messageId)).toEqual([
+      "33867",
+      "33868",
+      "33869",
+      "34467",
+      "34468",
+      "34469",
+      "34470",
+      "34471",
+      "34472",
+      "34473",
+      "34474",
+      "34475",
+      "34476",
+    ]);
+    expect(context.find((entry) => entry.node.messageId === "33868")?.isReplyTarget).toBe(true);
+    expect(context.find((entry) => entry.node.messageId === "34477")).toBeUndefined();
   });
 });

@@ -15,7 +15,22 @@ import type { AuthProfileStore } from "./auth-profiles/types.js";
 vi.mock("./auth-profiles/external-auth.js", () => ({
   overlayExternalAuthProfiles: <T>(store: T) => store,
   shouldPersistExternalAuthProfile: () => true,
+  syncPersistedExternalCliAuthProfiles: <T>(store: T) => store,
 }));
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectProfileFields(profile: unknown, expected: Record<string, unknown>): void {
+  const actual = requireRecord(profile, "auth profile");
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+}
 
 describe("saveAuthProfileStore", () => {
   it("strips plaintext when keyRef/tokenRef are present", async () => {
@@ -97,7 +112,7 @@ describe("saveAuthProfileStore", () => {
         },
       ]);
 
-      expect(ensureAuthProfileStore(agentDir).profiles["anthropic:default"]).toMatchObject({
+      expectProfileFields(ensureAuthProfileStore(agentDir).profiles["anthropic:default"], {
         access: "access-1",
         refresh: "refresh-1",
       });
@@ -117,7 +132,7 @@ describe("saveAuthProfileStore", () => {
 
       saveAuthProfileStore(rotatedStore, agentDir);
 
-      expect(ensureAuthProfileStore(agentDir).profiles["anthropic:default"]).toMatchObject({
+      expectProfileFields(ensureAuthProfileStore(agentDir).profiles["anthropic:default"], {
         access: "access-2",
         refresh: "refresh-2",
       });
@@ -125,7 +140,7 @@ describe("saveAuthProfileStore", () => {
       const persisted = JSON.parse(await fs.readFile(resolveAuthStorePath(agentDir), "utf8")) as {
         profiles: Record<string, { access?: string; refresh?: string }>;
       };
-      expect(persisted.profiles["anthropic:default"]).toMatchObject({
+      expectProfileFields(persisted.profiles["anthropic:default"], {
         access: "access-2",
         refresh: "refresh-2",
       });
@@ -214,7 +229,7 @@ describe("saveAuthProfileStore", () => {
       });
 
       const localUpdateStore = ensureAuthProfileStoreForLocalUpdate(childAgentDir);
-      expect(localUpdateStore.profiles["openai-codex:default"]).toMatchObject({
+      expectProfileFields(localUpdateStore.profiles["openai-codex:default"], {
         type: "oauth",
         refresh: "main-refresh-token",
       });
@@ -231,7 +246,7 @@ describe("saveAuthProfileStore", () => {
       const child = JSON.parse(await fs.readFile(childAuthPath, "utf8")) as {
         profiles: Record<string, unknown>;
       };
-      expect(child.profiles["openai:default"]).toMatchObject({
+      expectProfileFields(child.profiles["openai:default"], {
         type: "api_key",
         provider: "openai",
       });
@@ -250,7 +265,7 @@ describe("saveAuthProfileStore", () => {
         },
       });
 
-      expect(ensureAuthProfileStore(childAgentDir).profiles["openai-codex:default"]).toMatchObject({
+      expectProfileFields(ensureAuthProfileStore(childAgentDir).profiles["openai-codex:default"], {
         type: "oauth",
         access: "main-refreshed-access-token",
         refresh: "main-refreshed-refresh-token",
@@ -286,7 +301,7 @@ describe("saveAuthProfileStore", () => {
       });
 
       const localUpdateStore = ensureAuthProfileStoreForLocalUpdate(childAgentDir);
-      expect(localUpdateStore.profiles["openai-codex:default"]).toMatchObject({
+      expectProfileFields(localUpdateStore.profiles["openai-codex:default"], {
         type: "oauth",
         refresh: "main-old-refresh-token",
       });
@@ -318,12 +333,12 @@ describe("saveAuthProfileStore", () => {
       const child = JSON.parse(await fs.readFile(childAuthPath, "utf8")) as {
         profiles: Record<string, unknown>;
       };
-      expect(child.profiles["openai:default"]).toMatchObject({
+      expectProfileFields(child.profiles["openai:default"], {
         type: "api_key",
         provider: "openai",
       });
       expect(child.profiles["openai-codex:default"]).toBeUndefined();
-      expect(ensureAuthProfileStore(childAgentDir).profiles["openai-codex:default"]).toMatchObject({
+      expectProfileFields(ensureAuthProfileStore(childAgentDir).profiles["openai-codex:default"], {
         type: "oauth",
         access: "main-refreshed-access-token",
         refresh: "main-refreshed-refresh-token",
@@ -379,11 +394,11 @@ describe("saveAuthProfileStore", () => {
       expect(child.profiles["openai-codex:default"]).toBeUndefined();
 
       const runtime = ensureAuthProfileStore(childAgentDir);
-      expect(runtime.profiles["openai:default"]).toMatchObject({
+      expectProfileFields(runtime.profiles["openai:default"], {
         type: "api_key",
         provider: "openai",
       });
-      expect(runtime.profiles["openai-codex:default"]).toMatchObject({
+      expectProfileFields(runtime.profiles["openai-codex:default"], {
         type: "oauth",
         access: "main-access-token",
         refresh: "main-refresh-token",
@@ -402,7 +417,7 @@ describe("saveAuthProfileStore", () => {
         },
       });
 
-      expect(ensureAuthProfileStore(childAgentDir).profiles["openai-codex:default"]).toMatchObject({
+      expectProfileFields(ensureAuthProfileStore(childAgentDir).profiles["openai-codex:default"], {
         type: "oauth",
         access: "main-refreshed-access-token",
         refresh: "main-refreshed-refresh-token",

@@ -67,7 +67,7 @@ export class User<IsPartial extends boolean = false> extends Base {
   get avatarUrl() {
     return this.avatar ? `https://cdn.discordapp.com/avatars/${this.id}/${this.avatar}.png` : null;
   }
-  toString(): string {
+  override toString(): string {
     return `<@${this.id}>`;
   }
   async fetch(): Promise<User> {

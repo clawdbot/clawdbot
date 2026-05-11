@@ -572,8 +572,34 @@ Telegram, Discord, Slack, and WhatsApp lanes can lease credentials from a shared
 Payload shapes the broker validates on `admin/add`:
 
 - Telegram (`kind: "telegram"`): `{ groupId: string, driverToken: string, sutToken: string }` - `groupId` must be a numeric chat-id string.
+- Telegram real user (`kind: "telegram-user"`): `{ groupId: string, sutToken: string, testerUserId: string, testerUsername: string, telegramApiId: string, telegramApiHash: string, tdlibDatabaseEncryptionKey: string, tdlibArchiveBase64: string, tdlibArchiveSha256: string, desktopTdataArchiveBase64: string, desktopTdataArchiveSha256: string }` - one exclusive burner-account lease used by both the TDLib CLI driver and Telegram Desktop visual witness.
 - Discord (`kind: "discord"`): `{ guildId: string, channelId: string, driverBotToken: string, sutBotToken: string, sutApplicationId: string }`.
 - WhatsApp (`kind: "whatsapp"`): `{ driverPhoneE164: string, sutPhoneE164: string, driverAuthArchiveBase64: string, sutAuthArchiveBase64: string, groupJid?: string }` - phone numbers must be distinct E.164 strings.
+
+For visual real-user Telegram proof, prefer a held Crabbox session:
+
+```bash
+pnpm qa:telegram-user:crabbox -- start --tdlib-url http://artifacts.openclaw.ai/tdlib-v1.8.0-linux-x64.tgz --output-dir .artifacts/qa-e2e/telegram-user-crabbox/pr-review
+pnpm qa:telegram-user:crabbox -- send --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json --text /status
+pnpm qa:telegram-user:crabbox -- finish --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json
+```
+
+`start` holds one exclusive Convex `telegram-user` lease for both the TDLib CLI
+driver and Telegram Desktop witness, starts desktop recording, and leaves the
+Crabbox alive for arbitrary agent-driven repro steps. Agents can use `send`,
+`run`, `screenshot`, and `status` until they are satisfied, then `finish`
+collects the screenshot, video, motion-trimmed video/GIF, TDLib probe outputs,
+and logs before releasing the credential. `publish --session <file> --pr
+<number>` comments only the motion GIF by default; `--full-artifacts` is the
+explicit opt-in for logs and JSON output. The default `probe` command remains a
+one-command shorthand for quick `/status` smoke checks.
+
+Use `--mock-response-file <path>` when a PR needs a deterministic visual diff:
+the same mock model reply can be run on `main` and on the PR head while the
+Telegram formatter or delivery layer changes. Capture defaults are tuned for PR
+comments: standard Crabbox class, 24fps desktop recording, 24fps motion GIF, and
+1920px preview width. Before/after comments should publish a clean bundle that
+contains only the intended GIFs.
 
 Slack lanes can also use the pool. Slack payload shape checks currently live in the Slack QA runner rather than the broker; use `{ channelId: string, driverBotToken: string, sutBotToken: string, sutAppToken: string }`, with a Slack channel id like `Cxxxxxxxxxx`. See [Setting up the Slack workspace](#setting-up-the-slack-workspace) for app and scope provisioning.
 

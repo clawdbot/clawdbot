@@ -158,13 +158,15 @@ describe("enforceTelegramDmAccess", () => {
     expect(firstCall?.[0]).toBe(42);
     const sentText = typeof firstCall?.[1] === "string" ? firstCall[1] : "";
     expect(sentText).toContain("Pairing code:");
-    expect(firstCall?.[2]).toEqual(expect.objectContaining({ parse_mode: "HTML" }));
+    expect(firstCall?.[2]).toEqual({ parse_mode: "HTML" });
     expect(logger.info).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
         chatId: "42",
         senderUserId: "12345",
         username: "tester",
-      }),
+        firstName: "Test",
+        lastName: undefined,
+      },
       "telegram pairing request",
     );
   });

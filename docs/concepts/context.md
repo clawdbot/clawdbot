@@ -22,6 +22,7 @@ Context is _not the same thing_ as "memory": memory can be stored on disk and re
 - `/status` → quick "how full is my window?" view + session settings.
 - `/context list` → what's injected + rough sizes (per file + totals).
 - `/context detail` → deeper breakdown: per-file, per-tool schema sizes, per-skill entry sizes, and system prompt size.
+- `/context map` → WinDirStat-style treemap image of the current session's tracked context contributors.
 - `/usage tokens` → append per-reply usage footer to normal replies.
 - `/compact` → summarize older history into a compact entry to free window space.
 
@@ -73,6 +74,17 @@ Top tools (schema size):
 - exec: 6,240 chars (~1,560 tok)
 … (+N more tools)
 ```
+
+### `/context map`
+
+Sends an image generated from the latest cached run report. Before a normal message has produced a run report in the session, `/context map` returns an unavailable message instead of rendering an estimate. Rectangle area is proportional to tracked prompt characters:
+
+- injected workspace files
+- base system prompt text
+- skill prompt entries
+- tool JSON schemas
+
+`/context list`, `/context detail`, and `/context json` can still inspect an on-demand estimate when no run report is cached.
 
 ## What counts toward the context window
 

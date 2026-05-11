@@ -1,5 +1,17 @@
 import { expect } from "vitest";
 
+type MockCalls = {
+  mock: { calls: unknown[][] };
+};
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
 export function expectFirstSentCardUsesFillWidthOnly(sendCardMock: {
   mock: { calls: unknown[][] };
 }) {
@@ -21,27 +33,22 @@ export function expectFirstSentCardUsesFillWidthOnly(sendCardMock: {
   expect(sentCard?.config?.enable_forward).toBeUndefined();
 }
 
-export function expectSentCardHasP2pAction(sendCardMock: unknown) {
-  expect(sendCardMock).toHaveBeenCalledWith(
-    expect.objectContaining({
-      card: expect.objectContaining({
-        body: expect.objectContaining({
-          elements: expect.arrayContaining([
-            expect.objectContaining({
-              tag: "action",
-              actions: expect.arrayContaining([
-                expect.objectContaining({
-                  value: expect.objectContaining({
-                    c: expect.objectContaining({
-                      t: "p2p",
-                    }),
-                  }),
-                }),
-              ]),
-            }),
-          ]),
-        }),
-      }),
-    }),
-  );
+export function expectSentCardHasP2pAction(sendCardMock: MockCalls) {
+  const hasP2pAction = sendCardMock.mock.calls.some(([arg]) => {
+    const card = asRecord(asRecord(arg)?.card);
+    const body = asRecord(card?.body);
+    return asArray(body?.elements).some((element) => {
+      const elementRecord = asRecord(element);
+      if (elementRecord?.tag !== "action") {
+        return false;
+      }
+      return asArray(elementRecord.actions).some((action) => {
+        const actionRecord = asRecord(action);
+        const value = asRecord(actionRecord?.value);
+        const command = asRecord(value?.c);
+        return command?.t === "p2p";
+      });
+    });
+  });
+  expect(hasP2pAction).toBe(true);
 }

@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunner, type HookRunnerLogger } from "./hooks.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";

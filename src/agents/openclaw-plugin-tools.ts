@@ -24,6 +24,7 @@ type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
   sandboxRoot?: string;
   modelHasVision?: boolean;
   modelProvider?: string;
+  modelId?: string;
   allowMediaInvokeCommands?: boolean;
   requesterAgentIdOverride?: string;
   requireExplicitMessageTarget?: boolean;

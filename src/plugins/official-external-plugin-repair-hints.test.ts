@@ -31,13 +31,16 @@ describe("resolveMissingOfficialExternalChannelPluginRepairHint", () => {
         config: { channels: { feishu: { appId: "cli_xxx" } } },
         channelId: "feishu",
       }),
-    ).toEqual(
-      expect.objectContaining({
-        channelId: "feishu",
-        installCommand: "openclaw plugins install @openclaw/feishu",
-        doctorFixCommand: "openclaw doctor --fix",
-      }),
-    );
+    ).toEqual({
+      pluginId: "feishu",
+      channelId: "feishu",
+      label: "Feishu",
+      installSpec: "@openclaw/feishu",
+      installCommand: "openclaw plugins install @openclaw/feishu",
+      doctorFixCommand: "openclaw doctor --fix",
+      repairHint:
+        "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+    });
   });
 
   it("does not return install hints for policy-blocked official external channel owners", () => {

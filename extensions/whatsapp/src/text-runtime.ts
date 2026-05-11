@@ -1,4 +1,10 @@
-export * from "openclaw/plugin-sdk/text-runtime";
+export {
+  convertMarkdownTables,
+  sanitizeAssistantVisibleText,
+  sanitizeAssistantVisibleTextWithProfile,
+  stripToolCallXmlTags,
+} from "openclaw/plugin-sdk/text-chunking";
+export { normalizeE164, resolveUserPath, sleep } from "openclaw/plugin-sdk/text-utility-runtime";
 export {
   assertWebChannel,
   isSelfChatMode,

@@ -42,11 +42,14 @@ describe("nextcloud talk core", () => {
       target: "nextcloud-talk:room-123",
     });
 
-    expect(route).toMatchObject({
+    expect(route).toEqual({
+      sessionKey: "agent:main:nextcloud-talk:group:room-123",
+      baseSessionKey: "agent:main:nextcloud-talk:group:room-123",
       peer: {
         kind: "group",
         id: "room-123",
       },
+      chatType: "group",
       from: "nextcloud-talk:room:room-123",
       to: "nextcloud-talk:room-123",
     });

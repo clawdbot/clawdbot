@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   buildMatrixQaConfig,
@@ -61,21 +61,22 @@ describe("matrix qa config", () => {
       topology,
     });
 
-    expect(next.channels?.matrix?.accounts?.sut).toMatchObject({
-      dm: {
-        allowFrom: ["@driver:matrix-qa.test"],
-        enabled: true,
-        policy: "allowlist",
-      },
-      groupAllowFrom: ["@driver:matrix-qa.test"],
-      groupPolicy: "allowlist",
-      groups: {
-        "!main:matrix-qa.test": { enabled: true, requireMention: true },
-        "!secondary:matrix-qa.test": { enabled: true, requireMention: true },
-      },
-      replyToMode: "off",
-      threadReplies: "inbound",
+    const sut = next.channels?.matrix?.accounts?.sut;
+    expect(sut?.dm?.allowFrom).toEqual(["@driver:matrix-qa.test"]);
+    expect(sut?.dm?.enabled).toBe(true);
+    expect(sut?.dm?.policy).toBe("allowlist");
+    expect(sut?.groupAllowFrom).toEqual(["@driver:matrix-qa.test"]);
+    expect(sut?.groupPolicy).toBe("allowlist");
+    expect(sut?.groups?.["!main:matrix-qa.test"]).toEqual({
+      enabled: true,
+      requireMention: true,
     });
+    expect(sut?.groups?.["!secondary:matrix-qa.test"]).toEqual({
+      enabled: true,
+      requireMention: true,
+    });
+    expect(sut?.replyToMode).toBe("off");
+    expect(sut?.threadReplies).toBe("inbound");
     expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
   });
 
@@ -134,58 +135,51 @@ describe("matrix qa config", () => {
       topology,
     });
 
-    expect(next.agents?.defaults).toMatchObject({
-      blockStreamingChunk: {
-        breakPreference: "newline",
-        maxChars: 48,
-        minChars: 1,
-      },
-      blockStreamingCoalesce: {
-        idleMs: 0,
-        maxChars: 48,
-        minChars: 1,
+    expect(next.agents?.defaults?.blockStreamingChunk).toEqual({
+      breakPreference: "newline",
+      maxChars: 48,
+      minChars: 1,
+    });
+    expect(next.agents?.defaults?.blockStreamingCoalesce).toEqual({
+      idleMs: 0,
+      maxChars: 48,
+      minChars: 1,
+    });
+    expect(next.tools?.profile).toBe("coding");
+    const observer = next.channels?.matrix?.accounts?.["qa-observer-bot-source"];
+    expect(observer?.accessToken).toBe("observer-token");
+    expect(observer?.enabled).toBe(false);
+    expect(observer?.homeserver).toBe("http://127.0.0.1:28008/");
+    expect(observer?.userId).toBe("@observer:matrix-qa.test");
+    const sut = next.channels?.matrix?.accounts?.sut;
+    expect(sut?.allowBots).toBe("mentions");
+    expect(sut?.autoJoin).toBe("allowlist");
+    expect(sut?.autoJoinAllowlist).toEqual(["!dm:matrix-qa.test", "#ops:matrix-qa.test"]);
+    expect(sut?.blockStreaming).toBe(true);
+    expect(sut?.dm?.sessionScope).toBe("per-room");
+    expect(sut?.dm?.threadReplies).toBe("off");
+    expect(sut?.encryption).toBe(true);
+    expect(sut?.groupAllowFrom).toEqual(["@driver:matrix-qa.test", "@observer:matrix-qa.test"]);
+    expect(sut?.groups?.["!main:matrix-qa.test"]).toEqual({
+      enabled: true,
+      requireMention: true,
+    });
+    expect(sut?.groups?.["!secondary:matrix-qa.test"]).toEqual({
+      allowBots: false,
+      enabled: true,
+      requireMention: false,
+      tools: {
+        allow: ["sessions_spawn"],
       },
     });
-    expect(next.tools).toMatchObject({
-      profile: "coding",
+    expect(sut?.replyToMode).toBe("all");
+    expect(sut?.streaming).toBe("quiet");
+    expect(sut?.threadBindings).toEqual({
+      enabled: true,
+      idleHours: 1,
+      spawnSessions: true,
     });
-    expect(next.channels?.matrix?.accounts?.["qa-observer-bot-source"]).toMatchObject({
-      accessToken: "observer-token",
-      enabled: false,
-      homeserver: "http://127.0.0.1:28008/",
-      userId: "@observer:matrix-qa.test",
-    });
-    expect(next.channels?.matrix?.accounts?.sut).toMatchObject({
-      allowBots: "mentions",
-      autoJoin: "allowlist",
-      autoJoinAllowlist: ["!dm:matrix-qa.test", "#ops:matrix-qa.test"],
-      blockStreaming: true,
-      dm: {
-        sessionScope: "per-room",
-        threadReplies: "off",
-      },
-      encryption: true,
-      groupAllowFrom: ["@driver:matrix-qa.test", "@observer:matrix-qa.test"],
-      groups: {
-        "!main:matrix-qa.test": { enabled: true, requireMention: true },
-        "!secondary:matrix-qa.test": {
-          allowBots: false,
-          enabled: true,
-          requireMention: false,
-          tools: {
-            allow: ["sessions_spawn"],
-          },
-        },
-      },
-      replyToMode: "all",
-      streaming: "quiet",
-      threadBindings: {
-        enabled: true,
-        idleHours: 1,
-        spawnSessions: true,
-      },
-      threadReplies: "always",
-    });
+    expect(sut?.threadReplies).toBe("always");
   });
 
   it("rewrites the owned Matrix QA account instead of retaining stale override fields", () => {
@@ -339,22 +333,17 @@ describe("matrix qa config", () => {
       topology,
     });
 
-    expect(next.approvals).toMatchObject({
-      exec: { enabled: true, mode: "session" },
-      plugin: { enabled: true, mode: "session" },
+    expect(next.approvals?.exec).toEqual({ enabled: true, mode: "session" });
+    expect(next.approvals?.plugin).toEqual({ enabled: true, mode: "session" });
+    const sut = next.channels?.matrix?.accounts?.sut;
+    expect(sut?.chunkMode).toBe("length");
+    expect(sut?.dm?.allowFrom).toEqual(["@driver:matrix-qa.test"]);
+    expect(sut?.dm?.enabled).toBe(true);
+    expect(sut?.execApprovals).toEqual({
+      enabled: true,
+      target: "both",
     });
-    expect(next.channels?.matrix?.accounts?.sut).toMatchObject({
-      chunkMode: "length",
-      dm: {
-        allowFrom: ["@driver:matrix-qa.test"],
-        enabled: true,
-      },
-      execApprovals: {
-        enabled: true,
-        target: "both",
-      },
-      textChunkLimit: 280,
-    });
+    expect(sut?.textChunkLimit).toBe(280);
   });
 
   it("resolves role-based Matrix sender allowlist overrides", () => {

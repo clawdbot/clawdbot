@@ -168,4 +168,52 @@ describe("status-json-payload", () => {
       }),
     ).not.toHaveProperty("securityAudit");
   });
+
+  it("includes model-pricing health from the gateway probe", () => {
+    const payload = buildStatusJsonPayload({
+      summary: { ok: true },
+      surface: {
+        cfg: { gateway: {} },
+        update: {
+          root: "/tmp/openclaw",
+          installKind: "package",
+          packageManager: "npm",
+        } as never,
+        tailscaleMode: "off",
+        gatewayMode: "local",
+        remoteUrlMissing: false,
+        gatewayConnection: { url: "ws://127.0.0.1:18789" },
+        gatewayReachable: true,
+        gatewayProbe: {
+          connectLatencyMs: 42,
+          error: null,
+          health: {
+            ok: true,
+            modelPricing: {
+              state: "degraded",
+              detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
+              sources: [{ source: "openrouter", state: "degraded" }],
+            },
+          },
+        },
+        gatewayProbeAuth: null,
+        gatewaySelf: null,
+        gatewayProbeAuthWarning: null,
+        gatewayService: { label: "LaunchAgent", installed: false, loadedText: "not installed" },
+        nodeService: { label: "node", installed: false, loadedText: "not installed" },
+      },
+      osSummary: { platform: "linux" },
+      memory: null,
+      memoryPlugin: null,
+      agents: [],
+      secretDiagnostics: [],
+    });
+
+    expect(payload.gateway).toMatchObject({
+      modelPricing: {
+        state: "degraded",
+        detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
+      },
+    });
+  });
 });

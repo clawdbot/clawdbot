@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runtimeModule = await import("./runtime.js");
@@ -21,6 +21,22 @@ function defaultActionOptions() {
   };
 }
 
+function expectDiscordActionCall(params: {
+  payload: unknown;
+  cfg: OpenClawConfig;
+  options?: unknown;
+}) {
+  expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
+  const [payload, cfg, options] = handleDiscordActionMock.mock.calls[0] ?? [];
+  expect(payload).toEqual(params.payload);
+  expect(cfg).toBe(params.cfg);
+  if ("options" in params) {
+    expect(options).toEqual(params.options);
+  } else {
+    expect(options).toBeUndefined();
+  }
+}
+
 describe("handleDiscordMessageAction", () => {
   beforeEach(() => {
     handleDiscordActionMock.mockClear();
@@ -41,16 +57,20 @@ describe("handleDiscordMessageAction", () => {
       toolContext: { currentChannelProvider: "discord" },
     });
 
-    expect(handleDiscordActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectDiscordActionCall({
+      payload: {
         action: "timeout",
+        accountId: undefined,
         guildId: "guild-1",
         userId: "user-2",
         durationMinutes: 5,
+        until: undefined,
+        reason: undefined,
+        deleteMessageDays: undefined,
         senderUserId: "trusted-sender-id",
-      }),
+      },
       cfg,
-    );
+    });
   });
 
   it("falls back to toolContext.currentMessageId for reactions", async () => {
@@ -65,16 +85,18 @@ describe("handleDiscordMessageAction", () => {
       toolContext: { currentMessageId: "9001" },
     });
 
-    expect(handleDiscordActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectDiscordActionCall({
+      payload: {
         action: "react",
+        accountId: undefined,
         channelId: "123",
         messageId: "9001",
         emoji: "ok",
-      }),
+        remove: undefined,
+      },
       cfg,
-      defaultActionOptions(),
-    );
+      options: defaultActionOptions(),
+    });
   });
 
   it("falls back to Discord toolContext.currentChannelId for reaction targets", async () => {
@@ -92,16 +114,18 @@ describe("handleDiscordMessageAction", () => {
       },
     });
 
-    expect(handleDiscordActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectDiscordActionCall({
+      payload: {
         action: "react",
+        accountId: undefined,
         channelId: "user:U1",
         messageId: "9001",
         emoji: "ok",
-      }),
+        remove: undefined,
+      },
       cfg,
-      defaultActionOptions(),
-    );
+      options: defaultActionOptions(),
+    });
   });
 
   it("falls back to Discord toolContext.currentChannelId for sends", async () => {
@@ -118,15 +142,25 @@ describe("handleDiscordMessageAction", () => {
       },
     });
 
-    expect(handleDiscordActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectDiscordActionCall({
+      payload: {
         action: "sendMessage",
+        accountId: undefined,
         to: "channel:123",
         content: "hello",
-      }),
+        mediaUrl: undefined,
+        filename: undefined,
+        replyTo: undefined,
+        components: undefined,
+        embeds: undefined,
+        asVoice: false,
+        silent: false,
+        __sessionKey: undefined,
+        __agentId: undefined,
+      },
       cfg,
-      defaultActionOptions(),
-    );
+      options: defaultActionOptions(),
+    });
   });
 
   it("maps upload-file to Discord sendMessage with media read context", async () => {
@@ -155,9 +189,10 @@ describe("handleDiscordMessageAction", () => {
       mediaReadFile,
     });
 
-    expect(handleDiscordActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectDiscordActionCall({
+      payload: {
         action: "sendMessage",
+        accountId: undefined,
         to: "channel:123",
         content: "caption",
         mediaUrl: "/tmp/agent-root/image.png",
@@ -166,14 +201,14 @@ describe("handleDiscordMessageAction", () => {
         silent: true,
         __sessionKey: "session-1",
         __agentId: "agent-1",
-      }),
+      },
       cfg,
-      {
+      options: {
         mediaAccess,
         mediaLocalRoots: ["/tmp/agent-root"],
         mediaReadFile,
       },
-    );
+    });
   });
 
   it("falls back to Discord toolContext.currentChannelId for upload-file", async () => {
@@ -190,16 +225,22 @@ describe("handleDiscordMessageAction", () => {
       },
     });
 
-    expect(handleDiscordActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectDiscordActionCall({
+      payload: {
         action: "sendMessage",
+        accountId: undefined,
         to: "channel:123",
         content: "",
         mediaUrl: "/tmp/agent-root/image.png",
-      }),
+        filename: undefined,
+        replyTo: undefined,
+        silent: false,
+        __sessionKey: undefined,
+        __agentId: undefined,
+      },
       cfg,
-      defaultActionOptions(),
-    );
+      options: defaultActionOptions(),
+    });
   });
 
   it("requires a file path for upload-file", async () => {
@@ -232,20 +273,21 @@ describe("handleDiscordMessageAction", () => {
       mediaReadFile,
     });
 
-    expect(handleDiscordActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectDiscordActionCall({
+      payload: {
         action: "threadReply",
+        accountId: undefined,
         channelId: "thread-123",
         content: "thread update",
         mediaUrl: "/tmp/agent-root/report.md",
-      }),
+        replyTo: undefined,
+      },
       cfg,
-      {
+      options: {
         mediaLocalRoots: ["/tmp/agent-root"],
-        mediaAccess: undefined,
         mediaReadFile,
       },
-    );
+    });
   });
 
   it("forwards top-level components on sends", async () => {
@@ -265,16 +307,25 @@ describe("handleDiscordMessageAction", () => {
       },
     });
 
-    expect(handleDiscordActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectDiscordActionCall({
+      payload: {
         action: "sendMessage",
+        accountId: undefined,
         to: "channel:123",
         content: "hello",
+        mediaUrl: undefined,
+        filename: undefined,
+        replyTo: undefined,
         components,
-      }),
+        embeds: undefined,
+        asVoice: false,
+        silent: false,
+        __sessionKey: undefined,
+        __agentId: undefined,
+      },
       cfg,
-      defaultActionOptions(),
-    );
+      options: defaultActionOptions(),
+    });
   });
 
   it("does not use another provider's current target for Discord sends", async () => {

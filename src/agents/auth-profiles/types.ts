@@ -16,6 +16,12 @@ export type OAuthCredentials = {
   idToken?: string;
 };
 
+export type OAuthCredentialRef = {
+  source: "openclaw-credentials";
+  provider: "openai-codex";
+  id: string;
+};
+
 export type ApiKeyCredential = {
   type: "api_key";
   provider: string;
@@ -57,6 +63,7 @@ export type OAuthCredential = OAuthCredentials & {
   copyToAgents?: boolean;
   email?: string;
   displayName?: string;
+  oauthRef?: OAuthCredentialRef;
 };
 
 export type AuthProfileCredential = ApiKeyCredential | TokenCredential | OAuthCredential;

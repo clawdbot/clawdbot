@@ -588,17 +588,13 @@ describe("zalouser monitor group mention gating", () => {
     });
 
     expect(sendMessageZalouserMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageZalouserMock).toHaveBeenCalledWith(
-      "u-1",
-      replyText,
-      expect.objectContaining({
-        isGroup: false,
-        profile: "default",
-        textMode: "markdown",
-        textChunkMode: "length",
-        textChunkLimit: 1200,
-      }),
-    );
+    expect(sendMessageZalouserMock).toHaveBeenCalledWith("u-1", replyText, {
+      isGroup: false,
+      profile: "default",
+      textMode: "markdown",
+      textChunkMode: "length",
+      textChunkLimit: 1200,
+    });
   });
 
   it("allows DM senders from static access groups", async () => {
@@ -810,17 +806,11 @@ describe("zalouser monitor group mention gating", () => {
     const { dispatchReplyWithBufferedBlockDispatcher, resolveAgentRoute, buildAgentSessionKey } =
       await processOpenDmMessage();
 
-    expect(resolveAgentRoute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        peer: { kind: "direct", id: "321" },
-      }),
-    );
-    expect(buildAgentSessionKey).toHaveBeenCalledWith(
-      expect.objectContaining({
-        peer: { kind: "direct", id: "321" },
-        dmScope: "per-channel-peer",
-      }),
-    );
+    const routeInput = resolveAgentRoute.mock.calls[0]?.[0];
+    expect(routeInput?.peer).toEqual({ kind: "direct", id: "321" });
+    const sessionKeyInput = buildAgentSessionKey.mock.calls[0]?.[0];
+    expect(sessionKeyInput?.peer).toEqual({ kind: "direct", id: "321" });
+    expect(sessionKeyInput?.dmScope).toBe("per-channel-peer");
     const callArg = dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0];
     expect(callArg?.ctx?.SessionKey).toBe("agent:main:zalouser:direct:321");
   });
@@ -893,6 +883,8 @@ describe("zalouser monitor group mention gating", () => {
     await __testing.processMessage({
       message: createGroupMessage({
         content: "first unmentioned line",
+        msgId: "history-1",
+        timestampMs: 1700000000000,
         hasAnyMention: false,
         wasExplicitlyMentioned: false,
       }),
@@ -917,7 +909,11 @@ describe("zalouser monitor group mention gating", () => {
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
     const firstDispatch = dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0];
     expect(firstDispatch?.ctx?.InboundHistory).toEqual([
-      expect.objectContaining({ sender: "Alice", body: "first unmentioned line" }),
+      {
+        sender: "Alice",
+        body: "first unmentioned line",
+        timestamp: 1700000000000,
+      },
     ]);
     expect(String(firstDispatch?.ctx?.Body ?? "")).toContain("first unmentioned line");
 

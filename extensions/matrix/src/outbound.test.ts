@@ -23,6 +23,28 @@ vi.mock("./runtime.js", () => ({
 
 import { matrixOutbound } from "./outbound.js";
 
+type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
+
+function mockCall(source: MockCallSource, label: string, callIndex = 0): Array<unknown> {
+  const call = source.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex}`);
+  }
+  return call;
+}
+
+function mockOptions(
+  source: MockCallSource,
+  label: string,
+  callIndex = 0,
+): Record<string, unknown> {
+  const value = mockCall(source, label, callIndex)[2];
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label} call ${callIndex} options`);
+  }
+  return value as Record<string, unknown>;
+}
+
 describe("matrixOutbound cfg threading", () => {
   beforeEach(() => {
     mocks.sendMessageMatrix.mockReset();
@@ -58,16 +80,14 @@ describe("matrixOutbound cfg threading", () => {
       replyToId: "$reply",
     });
 
-    expect(mocks.sendMessageMatrix).toHaveBeenCalledWith(
-      "room:!room:example",
-      "hello",
-      expect.objectContaining({
-        cfg,
-        accountId: "default",
-        threadId: "$thread",
-        replyToId: "$reply",
-      }),
-    );
+    const call = mockCall(mocks.sendMessageMatrix, "sendMessageMatrix");
+    expect(call[0]).toBe("room:!room:example");
+    expect(call[1]).toBe("hello");
+    const options = mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix");
+    expect(options.cfg).toBe(cfg);
+    expect(options.accountId).toBe("default");
+    expect(options.threadId).toBe("$thread");
+    expect(options.replyToId).toBe("$reply");
   });
 
   it("passes resolved cfg to sendMessageMatrix for media sends", async () => {
@@ -89,16 +109,14 @@ describe("matrixOutbound cfg threading", () => {
       audioAsVoice: true,
     });
 
-    expect(mocks.sendMessageMatrix).toHaveBeenCalledWith(
-      "room:!room:example",
-      "caption",
-      expect.objectContaining({
-        cfg,
-        mediaUrl: "file:///tmp/cat.png",
-        mediaLocalRoots: ["/tmp/openclaw"],
-        audioAsVoice: true,
-      }),
-    );
+    const call = mockCall(mocks.sendMessageMatrix, "sendMessageMatrix");
+    expect(call[0]).toBe("room:!room:example");
+    expect(call[1]).toBe("caption");
+    const options = mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix");
+    expect(options.cfg).toBe(cfg);
+    expect(options.mediaUrl).toBe("file:///tmp/cat.png");
+    expect(options.mediaLocalRoots).toEqual(["/tmp/openclaw"]);
+    expect(options.audioAsVoice).toBe(true);
   });
 
   it("passes resolved cfg through injected deps.matrix", async () => {
@@ -124,16 +142,14 @@ describe("matrixOutbound cfg threading", () => {
       replyToId: "$reply",
     });
 
-    expect(matrix).toHaveBeenCalledWith(
-      "room:!room:example",
-      "hello via deps",
-      expect.objectContaining({
-        cfg,
-        accountId: "default",
-        threadId: "$thread",
-        replyToId: "$reply",
-      }),
-    );
+    const call = mockCall(matrix, "deps.matrix");
+    expect(call[0]).toBe("room:!room:example");
+    expect(call[1]).toBe("hello via deps");
+    const options = mockOptions(matrix, "deps.matrix");
+    expect(options.cfg).toBe(cfg);
+    expect(options.accountId).toBe("default");
+    expect(options.threadId).toBe("$thread");
+    expect(options.replyToId).toBe("$reply");
   });
 
   it("passes resolved cfg to sendPollMatrix", async () => {
@@ -156,18 +172,16 @@ describe("matrixOutbound cfg threading", () => {
       threadId: "$thread",
     });
 
-    expect(mocks.sendPollMatrix).toHaveBeenCalledWith(
-      "room:!room:example",
-      expect.objectContaining({
-        question: "Snack?",
-        options: ["Pizza", "Sushi"],
-      }),
-      expect.objectContaining({
-        cfg,
-        accountId: "default",
-        threadId: "$thread",
-      }),
-    );
+    const call = mockCall(mocks.sendPollMatrix, "sendPollMatrix");
+    expect(call[0]).toBe("room:!room:example");
+    expect(call[1]).toEqual({
+      question: "Snack?",
+      options: ["Pizza", "Sushi"],
+    });
+    const options = mockOptions(mocks.sendPollMatrix, "sendPollMatrix");
+    expect(options.cfg).toBe(cfg);
+    expect(options.accountId).toBe("default");
+    expect(options.threadId).toBe("$thread");
   });
 
   it("renders MessagePresentation into Matrix custom content metadata", async () => {
@@ -267,19 +281,17 @@ describe("matrixOutbound cfg threading", () => {
       replyToId: "$reply",
     });
 
-    expect(mocks.sendMessageMatrix).toHaveBeenCalledWith(
-      "room:!room:example",
-      "Select model",
-      expect.objectContaining({
-        cfg,
-        accountId: "default",
-        threadId: "$thread",
-        replyToId: "$reply",
-        extraContent: {
-          "com.openclaw.presentation": presentationContent,
-        },
-      }),
-    );
+    const call = mockCall(mocks.sendMessageMatrix, "sendMessageMatrix");
+    expect(call[0]).toBe("room:!room:example");
+    expect(call[1]).toBe("Select model");
+    const options = mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix");
+    expect(options.cfg).toBe(cfg);
+    expect(options.accountId).toBe("default");
+    expect(options.threadId).toBe("$thread");
+    expect(options.replyToId).toBe("$reply");
+    expect(options.extraContent).toEqual({
+      "com.openclaw.presentation": presentationContent,
+    });
   });
 
   it("sends empty Matrix presentation payloads with a minimal fallback body", async () => {
@@ -314,15 +326,12 @@ describe("matrixOutbound cfg threading", () => {
       accountId: "default",
     });
 
-    expect(mocks.sendMessageMatrix).toHaveBeenCalledWith(
-      "room:!room:example",
-      "---",
-      expect.objectContaining({
-        extraContent: {
-          "com.openclaw.presentation": presentationContent,
-        },
-      }),
-    );
+    const call = mockCall(mocks.sendMessageMatrix, "sendMessageMatrix");
+    expect(call[0]).toBe("room:!room:example");
+    expect(call[1]).toBe("---");
+    expect(mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix").extraContent).toEqual({
+      "com.openclaw.presentation": presentationContent,
+    });
   });
 
   it("only forwards presentation metadata from Matrix extraContent", async () => {
@@ -361,15 +370,12 @@ describe("matrixOutbound cfg threading", () => {
       accountId: "default",
     });
 
-    expect(mocks.sendMessageMatrix).toHaveBeenCalledWith(
-      "room:!room:example",
-      "Select model",
-      expect.objectContaining({
-        extraContent: {
-          "com.openclaw.presentation": presentationContent,
-        },
-      }),
-    );
+    const call = mockCall(mocks.sendMessageMatrix, "sendMessageMatrix");
+    expect(call[0]).toBe("room:!room:example");
+    expect(call[1]).toBe("Select model");
+    expect(mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix").extraContent).toEqual({
+      "com.openclaw.presentation": presentationContent,
+    });
   });
 
   it("sends all media URLs via sendPayload", async () => {
@@ -394,24 +400,20 @@ describe("matrixOutbound cfg threading", () => {
     });
 
     expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(2);
-    expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
-      1,
-      "room:!room:example",
-      "caption",
-      expect.objectContaining({
-        mediaUrl: "file:///tmp/a.png",
-        threadId: "$thread",
-      }),
+    const firstCall = mockCall(mocks.sendMessageMatrix, "sendMessageMatrix", 0);
+    expect(firstCall[0]).toBe("room:!room:example");
+    expect(firstCall[1]).toBe("caption");
+    expect(mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix", 0).mediaUrl).toBe(
+      "file:///tmp/a.png",
     );
-    expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
-      2,
-      "room:!room:example",
-      "",
-      expect.objectContaining({
-        mediaUrl: "file:///tmp/b.png",
-        threadId: "$thread",
-      }),
+    expect(mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix", 0).threadId).toBe("$thread");
+    const secondCall = mockCall(mocks.sendMessageMatrix, "sendMessageMatrix", 1);
+    expect(secondCall[0]).toBe("room:!room:example");
+    expect(secondCall[1]).toBe("");
+    expect(mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix", 1).mediaUrl).toBe(
+      "file:///tmp/b.png",
     );
+    expect(mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix", 1).threadId).toBe("$thread");
   });
 
   it("sends mediaUrls with extraContent only on first item", async () => {
@@ -446,27 +448,21 @@ describe("matrixOutbound cfg threading", () => {
     });
 
     expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(2);
-    expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
-      1,
-      "room:!room:example",
-      "caption",
-      expect.objectContaining({
-        extraContent: {
-          "com.openclaw.presentation": {
-            version: 1,
-            type: "message.presentation",
-          },
-        },
-      }),
-    );
-    expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
-      2,
-      "room:!room:example",
-      "",
-      expect.not.objectContaining({
-        extraContent: expect.anything(),
-      }),
-    );
+    const firstCall = mockCall(mocks.sendMessageMatrix, "sendMessageMatrix", 0);
+    expect(firstCall[0]).toBe("room:!room:example");
+    expect(firstCall[1]).toBe("caption");
+    expect(mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix", 0).extraContent).toEqual({
+      "com.openclaw.presentation": {
+        version: 1,
+        type: "message.presentation",
+      },
+    });
+    const secondCall = mockCall(mocks.sendMessageMatrix, "sendMessageMatrix", 1);
+    expect(secondCall[0]).toBe("room:!room:example");
+    expect(secondCall[1]).toBe("");
+    expect(
+      mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix", 1).extraContent,
+    ).toBeUndefined();
   });
 
   it("regression: mediaUrls are never silently dropped by sendPayload", async () => {
@@ -490,23 +486,23 @@ describe("matrixOutbound cfg threading", () => {
     });
 
     expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(3);
-    expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
-      1,
-      "room:!room:regression",
-      "caption",
-      expect.objectContaining({ mediaUrl: "file:///img1.png" }),
+    const firstCall = mockCall(mocks.sendMessageMatrix, "sendMessageMatrix", 0);
+    expect(firstCall[0]).toBe("room:!room:regression");
+    expect(firstCall[1]).toBe("caption");
+    expect(mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix", 0).mediaUrl).toBe(
+      "file:///img1.png",
     );
-    expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
-      2,
-      "room:!room:regression",
-      "",
-      expect.objectContaining({ mediaUrl: "file:///img2.png" }),
+    const secondCall = mockCall(mocks.sendMessageMatrix, "sendMessageMatrix", 1);
+    expect(secondCall[0]).toBe("room:!room:regression");
+    expect(secondCall[1]).toBe("");
+    expect(mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix", 1).mediaUrl).toBe(
+      "file:///img2.png",
     );
-    expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
-      3,
-      "room:!room:regression",
-      "",
-      expect.objectContaining({ mediaUrl: "file:///img3.png" }),
+    const thirdCall = mockCall(mocks.sendMessageMatrix, "sendMessageMatrix", 2);
+    expect(thirdCall[0]).toBe("room:!room:regression");
+    expect(thirdCall[1]).toBe("");
+    expect(mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix", 2).mediaUrl).toBe(
+      "file:///img3.png",
     );
   });
 });

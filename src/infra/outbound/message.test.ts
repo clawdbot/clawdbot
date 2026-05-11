@@ -69,6 +69,46 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 let sendMessage: typeof import("./message.js").sendMessage;
 let resetOutboundChannelResolutionStateForTest: typeof import("./channel-resolution.js").resetOutboundChannelResolutionStateForTest;
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(
+  value: unknown,
+  expected: Record<string, unknown>,
+  label: string,
+): Record<string, unknown> {
+  const record = requireRecord(value, label);
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], `${label}.${key}`).toEqual(expectedValue);
+  }
+  return record;
+}
+
+function getMockCallArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  callIndex: number,
+  argIndex: number,
+  label: string,
+): unknown {
+  const call = (mock.mock.calls as unknown[][])[callIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
+function expectDeliveryCallFields(expected: Record<string, unknown>): Record<string, unknown> {
+  return expectRecordFields(
+    getMockCallArg(mocks.deliverOutboundPayloads, 0, 0, "outbound delivery"),
+    expected,
+    "outbound delivery params",
+  );
+}
+
 describe("sendMessage", () => {
   beforeAll(async () => {
     ({ sendMessage } = await import("./message.js"));
@@ -101,13 +141,8 @@ describe("sendMessage", () => {
       agentId: "work",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        session: expect.objectContaining({ agentId: "work" }),
-        channel: "forum",
-        to: "123456",
-      }),
-    );
+    const deliveryParams = expectDeliveryCallFields({ channel: "forum", to: "123456" });
+    expectRecordFields(deliveryParams.session, { agentId: "work" }, "outbound session");
   });
 
   it("forwards requesterSenderId into the outbound delivery session", async () => {
@@ -122,13 +157,13 @@ describe("sendMessage", () => {
       },
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        session: expect.objectContaining({
-          key: "agent:main:forum:group:ops",
-          requesterSenderId: "attacker",
-        }),
-      }),
+    expectRecordFields(
+      expectDeliveryCallFields({}).session,
+      {
+        key: "agent:main:forum:group:ops",
+        requesterSenderId: "attacker",
+      },
+      "outbound session",
     );
   });
 
@@ -146,15 +181,15 @@ describe("sendMessage", () => {
       },
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        session: expect.objectContaining({
-          key: "agent:main:forum:group:ops",
-          requesterSenderName: "Alice",
-          requesterSenderUsername: "alice_u",
-          requesterSenderE164: "+15551234567",
-        }),
-      }),
+    expectRecordFields(
+      expectDeliveryCallFields({}).session,
+      {
+        key: "agent:main:forum:group:ops",
+        requesterSenderName: "Alice",
+        requesterSenderUsername: "alice_u",
+        requesterSenderE164: "+15551234567",
+      },
+      "outbound session",
     );
   });
 
@@ -172,17 +207,20 @@ describe("sendMessage", () => {
       },
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        session: expect.objectContaining({
-          key: "agent:main:directchat:group:ops",
-          requesterAccountId: "work",
-          requesterSenderId: "attacker",
-        }),
-        mirror: expect.objectContaining({
-          sessionKey: "agent:main:forum:dm:123456",
-        }),
-      }),
+    const deliveryParams = expectDeliveryCallFields({});
+    expectRecordFields(
+      deliveryParams.session,
+      {
+        key: "agent:main:directchat:group:ops",
+        requesterAccountId: "work",
+        requesterSenderId: "attacker",
+      },
+      "outbound session",
+    );
+    expectRecordFields(
+      deliveryParams.mirror,
+      { sessionKey: "agent:main:forum:dm:123456" },
+      "outbound mirror",
     );
   });
 
@@ -198,14 +236,14 @@ describe("sendMessage", () => {
       },
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mirror: expect.objectContaining({
-          sessionKey: "agent:main:forum:dm:123456",
-          text: "hi",
-          idempotencyKey: "idem-send-1",
-        }),
-      }),
+    expectRecordFields(
+      expectDeliveryCallFields({}).mirror,
+      {
+        sessionKey: "agent:main:forum:dm:123456",
+        text: "hi",
+        idempotencyKey: "idem-send-1",
+      },
+      "outbound mirror",
     );
   });
 
@@ -219,16 +257,14 @@ describe("sendMessage", () => {
       asVoice: true,
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payloads: [
-          expect.objectContaining({
-            text: "voice note",
-            mediaUrl: "file:///tmp/openclaw-voice.ogg",
-            audioAsVoice: true,
-          }),
-        ],
-      }),
+    expectRecordFields(
+      (expectDeliveryCallFields({}).payloads as unknown[] | undefined)?.[0],
+      {
+        text: "voice note",
+        mediaUrl: "file:///tmp/openclaw-voice.ogg",
+        audioAsVoice: true,
+      },
+      "voice payload",
     );
   });
 
@@ -248,26 +284,35 @@ describe("sendMessage", () => {
       mediaAccess,
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payloads: [
-          expect.objectContaining({
-            text: "prepared",
-            channelData: { forum: { card: true } },
-          }),
-        ],
-        queuePolicy: "required",
-        mediaAccess,
-      }),
+    const deliveryParams = expectDeliveryCallFields({
+      queuePolicy: "required",
+      mediaAccess,
+    });
+    expectRecordFields(
+      (deliveryParams.payloads as unknown[] | undefined)?.[0],
+      {
+        text: "prepared",
+        channelData: { forum: { card: true } },
+      },
+      "prepared payload",
     );
-    expect(mocks.resolveOutboundDurableFinalDeliverySupport).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "forum",
-        requirements: expect.objectContaining({
-          payload: true,
-          reconcileUnknownSend: true,
-        }),
-      }),
+    const supportParams = expectRecordFields(
+      getMockCallArg(
+        mocks.resolveOutboundDurableFinalDeliverySupport,
+        0,
+        0,
+        "durable delivery support",
+      ),
+      { channel: "forum" },
+      "durable delivery support params",
+    );
+    expectRecordFields(
+      supportParams.requirements,
+      {
+        payload: true,
+        reconcileUnknownSend: true,
+      },
+      "durable delivery requirements",
     );
   });
 
@@ -385,12 +430,14 @@ describe("sendMessage", () => {
         mediaUrls: payload.mediaUrls ?? [],
       }));
       expect(payloadSummary, entry.name).toEqual(entry.expectedPayloads);
-      expect(deliveryCall?.mirror, entry.name).toEqual(
-        expect.objectContaining({
+      expectRecordFields(
+        deliveryCall?.mirror,
+        {
           sessionKey: "agent:main:forum:dm:123456",
           text: entry.expectedMirror.text,
           mediaUrls: entry.expectedMirror.mediaUrls,
-        }),
+        },
+        entry.name,
       );
     }
   });
@@ -404,18 +451,21 @@ describe("sendMessage", () => {
       .mockReturnValueOnce(forumPlugin)
       .mockReturnValue(forumPlugin);
 
-    await expect(
-      sendMessage({
-        cfg: { channels: { forum: { token: "test-token" } } },
-        channel: "forum",
-        to: "123456",
-        content: "hi",
-      }),
-    ).resolves.toMatchObject({
+    const result = await sendMessage({
+      cfg: { channels: { forum: { token: "test-token" } } },
       channel: "forum",
       to: "123456",
-      via: "direct",
+      content: "hi",
     });
+    expectRecordFields(
+      result,
+      {
+        channel: "forum",
+        to: "123456",
+        via: "direct",
+      },
+      "send message result",
+    );
 
     expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
   });
@@ -442,26 +492,27 @@ describe("sendMessage", () => {
       return [];
     });
 
-    await expect(
-      sendMessage({
-        cfg: {},
-        channel: "forum",
-        to: "123456",
-        content: "hi",
-        bestEffort: true,
-      }),
-    ).resolves.toMatchObject({
+    const result = await sendMessage({
+      cfg: {},
       channel: "forum",
       to: "123456",
-      via: "direct",
-      result: undefined,
+      content: "hi",
+      bestEffort: true,
     });
-
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bestEffort: true,
-        queuePolicy: "best_effort",
-      }),
+    expectRecordFields(
+      result,
+      {
+        channel: "forum",
+        to: "123456",
+        via: "direct",
+        result: undefined,
+      },
+      "best-effort send message result",
     );
+
+    expectDeliveryCallFields({
+      bestEffort: true,
+      queuePolicy: "best_effort",
+    });
   });
 });

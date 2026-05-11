@@ -1,3 +1,8 @@
+/**
+ * @deprecated Public SDK subpath has no bundled extension production imports.
+ * Use resolveChannelMessageIngress from channel-ingress-runtime instead.
+ */
+
 import { resolveOpenProviderRuntimeGroupPolicy } from "../config/runtime-group-policy.js";
 import type { GroupPolicy } from "../config/types.base.js";
 

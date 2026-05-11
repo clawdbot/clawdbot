@@ -1,9 +1,10 @@
 import type { Block, KnownBlock } from "@slack/web-api";
 import { createDraftStreamLoop } from "openclaw/plugin-sdk/channel-lifecycle";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { deleteSlackMessage, editSlackMessage } from "./actions.js";
+import { formatSlackError } from "./errors.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
+import type { SlackSendIdentity } from "./send.js";
 import { sendMessageSlack } from "./send.js";
 
 const DEFAULT_THROTTLE_MS = 1000;
@@ -32,6 +33,7 @@ export function createSlackDraftStream(params: {
   cfg: OpenClawConfig;
   token: string;
   accountId?: string;
+  identity?: SlackSendIdentity;
   maxChars?: number;
   throttleMs?: number;
   resolveThreadTs?: () => string | undefined;
@@ -92,6 +94,7 @@ export function createSlackDraftStream(params: {
         token: params.token,
         accountId: params.accountId,
         threadTs: params.resolveThreadTs?.(),
+        identity: params.identity,
         ...(blocks ? { blocks } : {}),
       });
       streamChannelId = sent.channelId || streamChannelId;
@@ -104,7 +107,7 @@ export function createSlackDraftStream(params: {
       params.onMessageSent?.();
     } catch (err) {
       stopped = true;
-      params.warn?.(`slack stream preview failed: ${formatErrorMessage(err)}`);
+      params.warn?.(`slack stream preview failed: ${formatSlackError(err)}`);
     }
   };
   const loop = createDraftStreamLoop({
@@ -140,7 +143,7 @@ export function createSlackDraftStream(params: {
         accountId: params.accountId,
       });
     } catch (err) {
-      params.warn?.(`slack stream preview cleanup failed: ${formatErrorMessage(err)}`);
+      params.warn?.(`slack stream preview cleanup failed: ${formatSlackError(err)}`);
     }
   };
 

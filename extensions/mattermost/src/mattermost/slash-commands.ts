@@ -1,18 +1,4 @@
-/**
- * Mattermost native slash command support.
- *
- * Registers custom slash commands via the Mattermost REST API and handles
- * incoming command callbacks via an HTTP endpoint on the gateway.
- *
- * Architecture:
- * - On startup, registers commands with MM via POST /api/v4/commands
- * - MM sends HTTP POST to callbackUrl when a user invokes a command
- * - The callback handler reconstructs the text as `/<command> <args>` and
- *   routes it through the standard inbound reply pipeline
- * - On shutdown, cleans up registered commands via DELETE /api/v4/commands/{id}
- */
-
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MattermostClient } from "./client.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────

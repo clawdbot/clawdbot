@@ -20,7 +20,9 @@ describe("provider auth env trust", () => {
       config,
       includeUntrustedWorkspacePlugins: false,
     });
-    expect(credential).toMatchObject({
+    expect(credential).toEqual({
+      type: "api_key",
+      provider: "whisperx",
       keyRef: { source: "env", provider: "default", id: "WHISPERX_API_KEY" },
     });
   });
@@ -53,7 +55,7 @@ describe("provider auth env trust", () => {
       config,
       includeUntrustedWorkspacePlugins: false,
     });
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       ref: { source: "env", provider: "default", id: "WHISPERX_API_KEY" },
       resolvedValue: "test-secret",
     });
@@ -79,7 +81,7 @@ describe("provider auth env trust", () => {
       config,
       includeUntrustedWorkspacePlugins: false,
     });
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       ref: { source: "env", provider: "default", id: "WHISPERX_API_KEY" },
       resolvedValue: "test-secret",
     });

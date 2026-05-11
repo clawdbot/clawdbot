@@ -276,7 +276,26 @@ function createRuntimeCore(cfg: OpenClawConfig) {
       },
       session: {
         resolveStorePath: () => "/tmp/openclaw-test-sessions.json",
-        recordInboundSession: vi.fn(async () => {}),
+        recordInboundSession: vi.fn(
+          async (_params: {
+            createIfMissing?: unknown;
+            groupResolution?: unknown;
+            onRecordError?: unknown;
+            sessionKey?: string;
+            storePath?: string;
+            updateLastRoute?: {
+              accountId?: string;
+              channel?: string;
+              mainDmOwnerPin?: {
+                onSkip?: unknown;
+                ownerRecipient?: string;
+                senderRecipient?: string;
+              };
+              sessionKey?: string;
+              to?: string;
+            };
+          }) => {},
+        ),
         updateLastRoute: vi.fn(async () => {}),
       },
       turn: {
@@ -465,17 +484,20 @@ describe("mattermost inbound user posts", () => {
     socket.emitClose(1000);
     await monitor;
 
-    expect(runtimeCore.channel.session.recordInboundSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        updateLastRoute: expect.objectContaining({
-          channel: "mattermost",
-          to: "user:user-1",
-          mainDmOwnerPin: expect.objectContaining({
-            ownerRecipient: "user-1",
-            senderRecipient: "user-1",
-          }),
-        }),
-      }),
-    );
+    expect(runtimeCore.channel.session.recordInboundSession).toHaveBeenCalledTimes(1);
+    const [recordCall] = runtimeCore.channel.session.recordInboundSession.mock.calls[0] ?? [];
+    expect(recordCall?.storePath).toBe("/tmp/openclaw-test-sessions.json");
+    expect(recordCall?.sessionKey).toBe("mattermost:default:channel:chan-1");
+    const updateLastRoute = recordCall?.updateLastRoute;
+    expect(updateLastRoute?.sessionKey).toBe("mattermost:default:channel:chan-1");
+    expect(updateLastRoute?.channel).toBe("mattermost");
+    expect(updateLastRoute?.to).toBe("user:user-1");
+    expect(updateLastRoute?.accountId).toBe("default");
+    expect(updateLastRoute?.mainDmOwnerPin?.ownerRecipient).toBe("user-1");
+    expect(updateLastRoute?.mainDmOwnerPin?.senderRecipient).toBe("user-1");
+    expect(typeof updateLastRoute?.mainDmOwnerPin?.onSkip).toBe("function");
+    expect(recordCall?.createIfMissing).toBeUndefined();
+    expect(recordCall?.groupResolution).toBeUndefined();
+    expect(recordCall?.onRecordError).toBeInstanceOf(Function);
   });
 });

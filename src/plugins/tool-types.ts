@@ -4,6 +4,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
+export type OpenClawPluginActiveModelContext = {
+  provider?: string;
+  modelId?: string;
+  modelRef?: string;
+};
+
 /** Trusted execution context passed to plugin-owned agent tool factories. */
 export type OpenClawPluginToolContext = {
   config?: OpenClawConfig;
@@ -19,6 +25,12 @@ export type OpenClawPluginToolContext = {
   sessionKey?: string;
   /** Ephemeral session UUID - regenerated on /new and /reset. Use for per-conversation isolation. */
   sessionId?: string;
+  /**
+   * Runtime-supplied active model metadata for informational use, diagnostics,
+   * and plugin-owned policy decisions. This is not a security boundary against
+   * the local operator, installed plugin code, or a modified OpenClaw runtime.
+   */
+  activeModel?: OpenClawPluginActiveModelContext;
   browser?: {
     sandboxBridgeUrl?: string;
     allowHostControl?: boolean;

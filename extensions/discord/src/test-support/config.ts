@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
 export const EMPTY_DISCORD_TEST_CONFIG = {} as OpenClawConfig;
 

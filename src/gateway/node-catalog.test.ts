@@ -116,31 +116,24 @@ describe("gateway/node-catalog", () => {
     });
 
     const entry = getKnownNodeEntry(catalog, "mac-1");
-    expect(entry?.nodePairing).toEqual(
-      expect.objectContaining({
-        commands: ["system.run"],
-        caps: ["camera"],
-        approvedAtMs: 100,
-      }),
-    );
-    expect(getKnownNode(catalog, "mac-1")).toEqual(
-      expect.objectContaining({
-        nodeId: "mac-1",
-        displayName: "Mac",
-        clientId: "openclaw-macos",
-        clientMode: "node",
-        remoteIp: "100.0.0.11",
-        caps: ["camera", "screen"],
-        commands: ["screen.snapshot", "system.run"],
-        pathEnv: "/usr/bin:/bin",
-        approvedAtMs: 100,
-        connectedAtMs,
-        lastSeenAtMs: connectedAtMs,
-        lastSeenReason: "connect",
-        paired: true,
-        connected: true,
-      }),
-    );
+    expect(entry?.nodePairing?.commands).toEqual(["system.run"]);
+    expect(entry?.nodePairing?.caps).toEqual(["camera"]);
+    expect(entry?.nodePairing?.approvedAtMs).toBe(100);
+    const node = getKnownNode(catalog, "mac-1");
+    expect(node?.nodeId).toBe("mac-1");
+    expect(node?.displayName).toBe("Mac");
+    expect(node?.clientId).toBe("openclaw-macos");
+    expect(node?.clientMode).toBe("node");
+    expect(node?.remoteIp).toBe("100.0.0.11");
+    expect(node?.caps).toEqual(["camera", "screen"]);
+    expect(node?.commands).toEqual(["screen.snapshot", "system.run"]);
+    expect(node?.pathEnv).toBe("/usr/bin:/bin");
+    expect(node?.approvedAtMs).toBe(100);
+    expect(node?.connectedAtMs).toBe(connectedAtMs);
+    expect(node?.lastSeenAtMs).toBe(connectedAtMs);
+    expect(node?.lastSeenReason).toBe("connect");
+    expect(node?.paired).toBe(true);
+    expect(node?.connected).toBe(true);
   });
 
   it("surfaces node-pair metadata even when the node is offline", () => {
@@ -184,25 +177,18 @@ describe("gateway/node-catalog", () => {
 
     const entry = getKnownNodeEntry(catalog, "mac-1");
     expect(entry?.live).toBeUndefined();
-    expect(entry?.nodePairing).toEqual(
-      expect.objectContaining({
-        commands: ["system.run"],
-        caps: ["system"],
-        approvedAtMs: 123,
-      }),
-    );
-    expect(getKnownNode(catalog, "mac-1")).toEqual(
-      expect.objectContaining({
-        nodeId: "mac-1",
-        caps: ["system"],
-        commands: ["system.run"],
-        approvedAtMs: 123,
-        lastSeenAtMs: 456,
-        lastSeenReason: "silent_push",
-        paired: true,
-        connected: false,
-      }),
-    );
+    expect(entry?.nodePairing?.commands).toEqual(["system.run"]);
+    expect(entry?.nodePairing?.caps).toEqual(["system"]);
+    expect(entry?.nodePairing?.approvedAtMs).toBe(123);
+    const node = getKnownNode(catalog, "mac-1");
+    expect(node?.nodeId).toBe("mac-1");
+    expect(node?.caps).toEqual(["system"]);
+    expect(node?.commands).toEqual(["system.run"]);
+    expect(node?.approvedAtMs).toBe(123);
+    expect(node?.lastSeenAtMs).toBe(456);
+    expect(node?.lastSeenReason).toBe("silent_push");
+    expect(node?.paired).toBe(true);
+    expect(node?.connected).toBe(false);
   });
 
   it("uses the newest durable last-seen source for offline nodes", () => {
@@ -245,12 +231,9 @@ describe("gateway/node-catalog", () => {
       connectedNodes: [],
     });
 
-    expect(getKnownNode(catalog, "ios-1")).toEqual(
-      expect.objectContaining({
-        lastSeenAtMs: 300,
-        lastSeenReason: "silent_push",
-      }),
-    );
+    const node = getKnownNode(catalog, "ios-1");
+    expect(node?.lastSeenAtMs).toBe(300);
+    expect(node?.lastSeenReason).toBe("silent_push");
   });
 
   it("prefers the live command surface for connected nodes", () => {
@@ -281,13 +264,10 @@ describe("gateway/node-catalog", () => {
       ],
     });
 
-    expect(getKnownNode(catalog, "mac-1")).toEqual(
-      expect.objectContaining({
-        caps: ["canvas"],
-        commands: ["canvas.snapshot"],
-        connected: true,
-      }),
-    );
+    const node = getKnownNode(catalog, "mac-1");
+    expect(node?.caps).toEqual(["canvas"]);
+    expect(node?.commands).toEqual(["canvas.snapshot"]);
+    expect(node?.connected).toBe(true);
   });
 
   it("ignores malformed node capability entries instead of throwing", () => {
@@ -307,12 +287,10 @@ describe("gateway/node-catalog", () => {
       ],
     });
 
-    expect(listKnownNodes(catalog)).toEqual([
-      expect.objectContaining({
-        nodeId: "bad-node",
-        caps: ["camera"],
-        commands: ["system.run"],
-      }),
-    ]);
+    const nodes = listKnownNodes(catalog);
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]?.nodeId).toBe("bad-node");
+    expect(nodes[0]?.caps).toEqual(["camera"]);
+    expect(nodes[0]?.commands).toEqual(["system.run"]);
   });
 });

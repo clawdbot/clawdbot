@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -109,7 +109,7 @@ export function guardSessionManager(
 
   const hookRunner = getGlobalHookRunner();
   const beforeMessageWrite = (event: {
-    message: import("@mariozechner/pi-agent-core").AgentMessage;
+    message: import("@earendil-works/pi-agent-core").AgentMessage;
   }) => {
     let message = event.message;
     let changed = false;

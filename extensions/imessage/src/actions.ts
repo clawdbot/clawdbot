@@ -11,7 +11,8 @@ import type {
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { resolveIMessageAccount } from "./accounts.js";
 import { IMESSAGE_ACTION_NAMES, IMESSAGE_ACTIONS } from "./actions-contract.js";
@@ -25,6 +26,8 @@ const loadIMessageActionsRuntime = createLazyRuntimeNamedExport(
   () => import("./actions.runtime.js"),
   "imessageActionsRuntime",
 );
+
+const log = createSubsystemLogger("channels/imessage");
 
 const providerId = "imessage";
 
@@ -398,6 +401,15 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         );
       }
       if (!privateApiStatus?.available) {
+        // Surface the silent-drop case: the throw becomes a tool-result
+        // `success:false`, which the model may or may not relay clearly to the
+        // user. Without a log line, an operator has no signal that a reply
+        // disappeared — they only see "channel: running" in `channels status`.
+        // Common cause: gateway restart un-injects the imsg-bridge-helper.dylib
+        // from Messages.app while imsg rpc keeps running.
+        log.warn(
+          `iMessage ${action} blocked: private API bridge unavailable (accountId=${account.accountId}, cliPath=${cliPathForProbe}). Run \`imsg launch\` to re-inject the dylib, then \`openclaw channels status\` to refresh.`,
+        );
         throw new Error(
           `iMessage ${action} requires the imsg private API bridge. Run imsg launch, then openclaw channels status to refresh capability detection.`,
         );

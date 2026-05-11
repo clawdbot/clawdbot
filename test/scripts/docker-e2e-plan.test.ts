@@ -144,6 +144,36 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(withOpenWebUI.lanes.map((lane) => lane.name)).toContain("openwebui");
   });
 
+  it("keeps beta release-path coverage to install, provider, and update proof lanes", () => {
+    const plan = planFor({
+      includeOpenWebUI: true,
+      planReleaseAll: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseProfile: "beta",
+    });
+
+    const laneNames = plan.lanes.map((lane) => lane.name);
+    expect(plan.releaseProfile).toBe("beta");
+    expect(laneNames).toContain("install-e2e-openai");
+    expect(laneNames).toContain("install-e2e-anthropic");
+    expect(laneNames).toContain("update-channel-switch");
+    expect(laneNames).not.toContain("plugins");
+    expect(laneNames).not.toContain("live-plugin-tool");
+    expect(laneNames).not.toContain("bundled-plugin-install-uninstall-0");
+    expect(laneNames).not.toContain("openwebui");
+  });
+
+  it("still allows explicit selected lanes outside the beta release profile", () => {
+    const plan = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseProfile: "beta",
+      selectedLaneNames: ["live-plugin-tool"],
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual(["live-plugin-tool"]);
+  });
+
   it("splits release-path package and plugin chunks across shorter CI jobs", () => {
     const packageInstallOpenAi = planFor({
       includeOpenWebUI: true,
@@ -634,6 +664,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(lane.name).toBe("codex-on-demand");
     expect(lane.resources).toEqual(["docker", "npm", "service"]);
     expect(lane.stateScenario).toBe("empty");
+    expect(lane.timeoutMs).toBe(1_800_000);
     expect(plan.needs.bareImage).toBe(true);
     expect(plan.needs.package).toBe(true);
   });
@@ -751,11 +782,12 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes.map(summarizeLane)).toEqual([
       {
         command:
-          "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=1500 OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=300 pnpm test:install:e2e",
+          "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=120 OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=120 pnpm test:install:e2e",
         imageKind: "bare",
         live: false,
         name: "install-e2e-openai",
         resources: ["docker", "npm", "service"],
+        timeoutMs: 900_000,
         weight: 3,
       },
       {
@@ -784,8 +816,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes).toHaveLength(BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS);
     expect(plan.lanes.at(0)).toBeDefined();
     expect(plan.lanes.at(23)).toBeDefined();
-    expect(summarizeLane(plan.lanes[0]!)).toEqual(bundledPluginSweepLane(0));
-    expect(summarizeLane(plan.lanes[23]!)).toEqual(bundledPluginSweepLane(23));
+    expect(summarizeLane(plan.lanes[0])).toEqual(bundledPluginSweepLane(0));
+    expect(summarizeLane(plan.lanes[23])).toEqual(bundledPluginSweepLane(23));
     expect(plan.needs).toEqual({
       bareImage: false,
       e2eImage: true,

@@ -14,7 +14,9 @@ type PayloadValidationFailureFactory = (httpStatus: number, code: string, messag
 
 const DISCORD_SNOWFLAKE_RE = /^\d{17,20}$/u;
 const E164_RE = /^\+[1-9]\d{6,14}$/u;
+const SHA256_HEX_RE = /^[a-f0-9]{64}$/u;
 const TELEGRAM_CHAT_ID_RE = /^-?\d+$/u;
+const TELEGRAM_USER_ID_RE = /^\d+$/u;
 
 function createCredentialPayloadValidationError(httpStatus: number, code: string, message: string) {
   return new CredentialPayloadValidationError(httpStatus, code, message);
@@ -81,6 +83,82 @@ function normalizeTelegramCredentialPayload(
     groupId,
     driverToken,
     sutToken,
+  } satisfies Record<string, unknown>;
+}
+
+function normalizeTelegramUserCredentialPayload(
+  payload: Record<string, unknown>,
+  createFailure: PayloadValidationFailureFactory,
+) {
+  const kind = "telegram-user";
+  const groupId = requirePayloadString(payload, "groupId", kind, createFailure);
+  if (!TELEGRAM_CHAT_ID_RE.test(groupId)) {
+    throwPayloadError(
+      createFailure,
+      'Credential payload for kind "telegram-user" must include a numeric "groupId" string.',
+    );
+  }
+  const testerUserId = requirePayloadString(payload, "testerUserId", kind, createFailure);
+  if (!TELEGRAM_USER_ID_RE.test(testerUserId)) {
+    throwPayloadError(
+      createFailure,
+      'Credential payload for kind "telegram-user" must include a numeric "testerUserId" string.',
+    );
+  }
+  const telegramApiId = requirePayloadString(payload, "telegramApiId", kind, createFailure);
+  if (!TELEGRAM_USER_ID_RE.test(telegramApiId)) {
+    throwPayloadError(
+      createFailure,
+      'Credential payload for kind "telegram-user" must include a numeric "telegramApiId" string.',
+    );
+  }
+  const tdlibArchiveSha256 = requirePayloadString(
+    payload,
+    "tdlibArchiveSha256",
+    kind,
+    createFailure,
+  ).toLowerCase();
+  const desktopTdataArchiveSha256 = requirePayloadString(
+    payload,
+    "desktopTdataArchiveSha256",
+    kind,
+    createFailure,
+  ).toLowerCase();
+  if (!SHA256_HEX_RE.test(tdlibArchiveSha256)) {
+    throwPayloadError(
+      createFailure,
+      'Credential payload for kind "telegram-user" must include "tdlibArchiveSha256" as a SHA-256 hex string.',
+    );
+  }
+  if (!SHA256_HEX_RE.test(desktopTdataArchiveSha256)) {
+    throwPayloadError(
+      createFailure,
+      'Credential payload for kind "telegram-user" must include "desktopTdataArchiveSha256" as a SHA-256 hex string.',
+    );
+  }
+
+  return {
+    groupId,
+    sutToken: requirePayloadString(payload, "sutToken", kind, createFailure),
+    testerUserId,
+    testerUsername: requirePayloadString(payload, "testerUsername", kind, createFailure),
+    telegramApiId,
+    telegramApiHash: requirePayloadString(payload, "telegramApiHash", kind, createFailure),
+    tdlibDatabaseEncryptionKey: requirePayloadString(
+      payload,
+      "tdlibDatabaseEncryptionKey",
+      kind,
+      createFailure,
+    ),
+    tdlibArchiveBase64: requirePayloadString(payload, "tdlibArchiveBase64", kind, createFailure),
+    tdlibArchiveSha256,
+    desktopTdataArchiveBase64: requirePayloadString(
+      payload,
+      "desktopTdataArchiveBase64",
+      kind,
+      createFailure,
+    ),
+    desktopTdataArchiveSha256,
   } satisfies Record<string, unknown>;
 }
 
@@ -177,19 +255,23 @@ function normalizeWhatsAppCredentialPayload(
   } satisfies Record<string, unknown>;
 }
 
+const credentialPayloadNormalizers: Record<
+  string,
+  (
+    payload: Record<string, unknown>,
+    createFailure: PayloadValidationFailureFactory,
+  ) => Record<string, unknown>
+> = {
+  discord: normalizeDiscordCredentialPayload,
+  telegram: normalizeTelegramCredentialPayload,
+  "telegram-user": normalizeTelegramUserCredentialPayload,
+  whatsapp: normalizeWhatsAppCredentialPayload,
+};
+
 export function normalizeCredentialPayloadForKind(
   kind: string,
   payload: Record<string, unknown>,
   createFailure: PayloadValidationFailureFactory = createCredentialPayloadValidationError,
 ) {
-  if (kind === "telegram") {
-    return normalizeTelegramCredentialPayload(payload, createFailure);
-  }
-  if (kind === "discord") {
-    return normalizeDiscordCredentialPayload(payload, createFailure);
-  }
-  if (kind === "whatsapp") {
-    return normalizeWhatsAppCredentialPayload(payload, createFailure);
-  }
-  return payload;
+  return credentialPayloadNormalizers[kind]?.(payload, createFailure) ?? payload;
 }

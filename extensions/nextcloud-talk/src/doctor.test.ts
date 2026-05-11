@@ -80,6 +80,8 @@ describe("nextcloud-talk doctor", () => {
         } as never,
         doctorFixCommand: "openclaw doctor --fix",
       }),
-    ).resolves.toEqual([expect.stringContaining("missing the response feature")]);
+    ).resolves.toEqual([
+      '- channels.nextcloud-talk.default: Nextcloud Talk bot "OpenClaw" (1) is missing the response feature (features=9); outbound replies will fail.',
+    ]);
   });
 });

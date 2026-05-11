@@ -36,6 +36,41 @@ vi.mock("../infra/fs-safe.js", () => ({
 const { installSkillFromClawHub, searchSkillsFromClawHub, updateSkillsFromClawHub } =
   await import("./skills-clawhub.js");
 
+function expectInstallPackageSourceDir(sourceDir: string) {
+  const call = installPackageDirMock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected installPackageDir call");
+  }
+  expect(call[0]?.sourceDir).toBe(sourceDir);
+}
+
+function expectInstalledSkill(
+  result: Awaited<ReturnType<typeof installSkillFromClawHub>>,
+  expected: { slug?: string; version?: string; targetDir?: string } = {},
+) {
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    throw new Error(`expected skill install success, got ${result.error}`);
+  }
+  if (expected.slug) {
+    expect(result.slug).toBe(expected.slug);
+  }
+  if (expected.version) {
+    expect(result.version).toBe(expected.version);
+  }
+  if (expected.targetDir) {
+    expect(result.targetDir).toBe(expected.targetDir);
+  }
+}
+
+function expectInvalidSlug(result: Awaited<ReturnType<typeof installSkillFromClawHub>>) {
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    throw new Error("expected invalid slug failure");
+  }
+  expect(result.error).toContain("Invalid skill slug");
+}
+
 describe("skills-clawhub", () => {
   beforeEach(() => {
     fetchClawHubSkillDetailMock.mockReset();
@@ -90,13 +125,8 @@ describe("skills-clawhub", () => {
       version: "1.0.0",
       baseUrl: undefined,
     });
-    expect(installPackageDirMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sourceDir: "/tmp/extracted-skill",
-      }),
-    );
-    expect(result).toMatchObject({
-      ok: true,
+    expectInstallPackageSourceDir("/tmp/extracted-skill");
+    expectInstalledSkill(result, {
       slug: "agentreceipt",
       version: "1.0.0",
       targetDir: "/tmp/workspace/skills/agentreceipt",
@@ -114,12 +144,8 @@ describe("skills-clawhub", () => {
         slug: "agentreceipt",
       });
 
-      expect(result).toMatchObject({ ok: true });
-      expect(installPackageDirMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sourceDir: "/tmp/extracted-skill",
-        }),
-      );
+      expectInstalledSkill(result);
+      expectInstallPackageSourceDir("/tmp/extracted-skill");
     },
   );
 
@@ -165,15 +191,13 @@ describe("skills-clawhub", () => {
     }
 
     function expectLegacyUpdateSuccess(results: unknown, workspaceDir: string, slug: string) {
-      expect(results).toMatchObject([
-        {
-          ok: true,
-          slug,
-          previousVersion: "0.9.0",
-          version: "1.0.0",
-          targetDir: path.join(workspaceDir, "skills", slug),
-        },
-      ]);
+      expect(Array.isArray(results)).toBe(true);
+      const first = (results as Array<Record<string, unknown>>)[0];
+      expect(first?.ok).toBe(true);
+      expect(first?.slug).toBe(slug);
+      expect(first?.previousVersion).toBe("0.9.0");
+      expect(first?.version).toBe("1.0.0");
+      expect(first?.targetDir).toBe(path.join(workspaceDir, "skills", slug));
     }
 
     it("updates all tracked legacy Unicode slugs in place", async () => {
@@ -246,10 +270,7 @@ describe("skills-clawhub", () => {
         workspaceDir: "/tmp/workspace",
         slug: "re\u0430ct",
       });
-      expect(result).toMatchObject({
-        ok: false,
-        error: expect.stringContaining("Invalid skill slug"),
-      });
+      expectInvalidSlug(result);
     });
 
     it("rejects Cyrillic homograph 'е' (U+0435) in slug", async () => {
@@ -257,10 +278,7 @@ describe("skills-clawhub", () => {
         workspaceDir: "/tmp/workspace",
         slug: "r\u0435act",
       });
-      expect(result).toMatchObject({
-        ok: false,
-        error: expect.stringContaining("Invalid skill slug"),
-      });
+      expectInvalidSlug(result);
     });
 
     it("rejects Cyrillic homograph 'о' (U+043E) in slug", async () => {
@@ -268,10 +286,7 @@ describe("skills-clawhub", () => {
         workspaceDir: "/tmp/workspace",
         slug: "t\u043Edo",
       });
-      expect(result).toMatchObject({
-        ok: false,
-        error: expect.stringContaining("Invalid skill slug"),
-      });
+      expectInvalidSlug(result);
     });
 
     it("rejects slug with mixed Unicode and ASCII", async () => {
@@ -279,10 +294,7 @@ describe("skills-clawhub", () => {
         workspaceDir: "/tmp/workspace",
         slug: "cаlеndаr",
       });
-      expect(result).toMatchObject({
-        ok: false,
-        error: expect.stringContaining("Invalid skill slug"),
-      });
+      expectInvalidSlug(result);
     });
 
     it("rejects slug with non-Latin scripts", async () => {
@@ -290,10 +302,7 @@ describe("skills-clawhub", () => {
         workspaceDir: "/tmp/workspace",
         slug: "技能",
       });
-      expect(result).toMatchObject({
-        ok: false,
-        error: expect.stringContaining("Invalid skill slug"),
-      });
+      expectInvalidSlug(result);
     });
 
     it("rejects Unicode that case-folds to ASCII (Kelvin sign U+212A)", async () => {
@@ -302,10 +311,7 @@ describe("skills-clawhub", () => {
         workspaceDir: "/tmp/workspace",
         slug: "\u212Aalendar",
       });
-      expect(result).toMatchObject({
-        ok: false,
-        error: expect.stringContaining("Invalid skill slug"),
-      });
+      expectInvalidSlug(result);
     });
 
     it("rejects slug starting with a hyphen", async () => {
@@ -313,10 +319,7 @@ describe("skills-clawhub", () => {
         workspaceDir: "/tmp/workspace",
         slug: "-calendar",
       });
-      expect(result).toMatchObject({
-        ok: false,
-        error: expect.stringContaining("Invalid skill slug"),
-      });
+      expectInvalidSlug(result);
     });
 
     it("rejects slug ending with a hyphen", async () => {
@@ -324,10 +327,7 @@ describe("skills-clawhub", () => {
         workspaceDir: "/tmp/workspace",
         slug: "calendar-",
       });
-      expect(result).toMatchObject({
-        ok: false,
-        error: expect.stringContaining("Invalid skill slug"),
-      });
+      expectInvalidSlug(result);
     });
 
     it("accepts uppercase ASCII slugs (preserves original casing behavior)", async () => {
@@ -335,7 +335,7 @@ describe("skills-clawhub", () => {
         workspaceDir: "/tmp/workspace",
         slug: "React",
       });
-      expect(result).toMatchObject({ ok: true });
+      expectInstalledSkill(result);
     });
 
     it("accepts valid lowercase ASCII slugs", async () => {
@@ -343,7 +343,7 @@ describe("skills-clawhub", () => {
         workspaceDir: "/tmp/workspace",
         slug: "calendar-2",
       });
-      expect(result).toMatchObject({ ok: true });
+      expectInstalledSkill(result);
     });
   });
 

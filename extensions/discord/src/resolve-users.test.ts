@@ -3,6 +3,32 @@ import { describe, expect, it } from "vitest";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import { jsonResponse, urlToString } from "./test-http-helpers.js";
 
+type DiscordAllowlistResult = Awaited<ReturnType<typeof resolveDiscordUserAllowlist>>[number];
+
+function expectResolvedUser(
+  result: DiscordAllowlistResult | undefined,
+  expected: { id: string; input?: string; name?: string },
+) {
+  if (!result) {
+    throw new Error("expected Discord allowlist result");
+  }
+  expect(result.resolved).toBe(true);
+  expect(result.id).toBe(expected.id);
+  if (expected.input !== undefined) {
+    expect(result.input).toBe(expected.input);
+  }
+  if (expected.name !== undefined) {
+    expect(result.name).toBe(expected.name);
+  }
+}
+
+function expectUnresolvedUser(result: DiscordAllowlistResult | undefined) {
+  if (!result) {
+    throw new Error("expected Discord allowlist result");
+  }
+  expect(result.resolved).toBe(false);
+}
+
 function createGuildListProbeFetcher() {
   let guildsCalled = false;
   const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
@@ -78,8 +104,8 @@ describe("resolveDiscordUserAllowlist", () => {
     });
 
     expect(results).toHaveLength(2);
-    expect(results[0]).toMatchObject({ resolved: true, id: "111" });
-    expect(results[1]).toMatchObject({ resolved: true, id: "222" });
+    expectResolvedUser(results[0], { id: "111" });
+    expectResolvedUser(results[1], { id: "222" });
     expect(wasGuildsCalled()).toBe(false);
   });
 
@@ -129,12 +155,7 @@ describe("resolveDiscordUserAllowlist", () => {
 
     expect(guildsCalled).toBe(true);
     expect(results).toHaveLength(1);
-    expect(results[0]).toMatchObject({
-      input: "alice",
-      resolved: true,
-      id: "u1",
-      name: "alice",
-    });
+    expectResolvedUser(results[0], { input: "alice", id: "u1", name: "alice" });
   });
 
   it("fetches guilds only once for multiple username entries", async () => {
@@ -166,8 +187,8 @@ describe("resolveDiscordUserAllowlist", () => {
 
     expect(guildsCallCount).toBe(1);
     expect(results).toHaveLength(2);
-    expect(results[0]).toMatchObject({ resolved: true, id: "u-alice" });
-    expect(results[1]).toMatchObject({ resolved: true, id: "u-bob" });
+    expectResolvedUser(results[0], { id: "u-alice" });
+    expectResolvedUser(results[1], { id: "u-bob" });
   });
 
   it("handles mixed ids and usernames — ids resolve even if guilds fail", async () => {
@@ -190,8 +211,8 @@ describe("resolveDiscordUserAllowlist", () => {
     });
 
     expect(results).toHaveLength(2);
-    expect(results[0]).toMatchObject({ resolved: true, id: "123456789012345678" });
-    expect(results[1]).toMatchObject({ resolved: true, id: "999" });
+    expectResolvedUser(results[0], { id: "123456789012345678" });
+    expectResolvedUser(results[1], { id: "999" });
   });
 
   it("returns unresolved for empty/blank entries", async () => {
@@ -206,8 +227,8 @@ describe("resolveDiscordUserAllowlist", () => {
     });
 
     expect(results).toHaveLength(2);
-    expect(results[0]).toMatchObject({ resolved: false });
-    expect(results[1]).toMatchObject({ resolved: false });
+    expectUnresolvedUser(results[0]);
+    expectUnresolvedUser(results[1]);
   });
 
   it("returns all unresolved when token is empty", async () => {

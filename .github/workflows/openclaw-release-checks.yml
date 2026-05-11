@@ -36,7 +36,7 @@ on:
         default: stable
         type: choice
         options:
-          - minimum
+          - beta
           - stable
           - full
       run_release_soak:
@@ -68,6 +68,11 @@ on:
         required: false
         default: ""
         type: string
+      release_package_spec:
+        description: Optional published package spec for release checks; blank builds the selected SHA package artifact
+        required: false
+        default: ""
+        type: string
       package_acceptance_package_spec:
         description: Optional published package spec for Package Acceptance; blank uses the prepared release artifact
         required: false
@@ -80,8 +85,8 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.x"
-  PNPM_VERSION: "10.33.0"
+  NODE_VERSION: "24.15.0"
+  PNPM_VERSION: "11.0.8"
   OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.5' }}
 
 jobs:
@@ -105,6 +110,7 @@ jobs:
       qa_live_discord_enabled: ${{ steps.inputs.outputs.qa_live_discord_enabled }}
       qa_live_whatsapp_enabled: ${{ steps.inputs.outputs.qa_live_whatsapp_enabled }}
       qa_live_slack_enabled: ${{ steps.inputs.outputs.qa_live_slack_enabled }}
+      release_package_spec: ${{ steps.inputs.outputs.release_package_spec }}
       package_acceptance_package_spec: ${{ steps.inputs.outputs.package_acceptance_package_spec }}
     steps:
       - name: Require main or release workflow ref for release checks
@@ -227,6 +233,7 @@ jobs:
           RELEASE_QA_DISCORD_LIVE_CI_ENABLED: ${{ vars.OPENCLAW_RELEASE_QA_DISCORD_LIVE_CI_ENABLED || 'false' }}
           RELEASE_QA_WHATSAPP_LIVE_CI_ENABLED: ${{ vars.OPENCLAW_RELEASE_QA_WHATSAPP_LIVE_CI_ENABLED || 'false' }}
           RELEASE_QA_SLACK_LIVE_CI_ENABLED: ${{ vars.OPENCLAW_RELEASE_QA_SLACK_LIVE_CI_ENABLED || 'false' }}
+          RELEASE_PACKAGE_SPEC_INPUT: ${{ inputs.release_package_spec }}
           RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT: ${{ inputs.package_acceptance_package_spec }}
         run: |
           set -euo pipefail
@@ -259,7 +266,18 @@ jobs:
           else
             run_release_soak=true
           fi
-          if [[ "$RELEASE_PROFILE_INPUT" == "full" ]]; then
+          release_profile="$RELEASE_PROFILE_INPUT"
+          if [[ "$release_profile" == "minimum" ]]; then
+            release_profile=beta
+          fi
+          case "$release_profile" in
+            beta|stable|full) ;;
+            *)
+              echo "release_profile must be one of: beta, stable, full" >&2
+              exit 1
+              ;;
+          esac
+          if [[ "$release_profile" == "full" ]]; then
             run_release_soak=true
           fi
 
@@ -330,7 +348,7 @@ jobs:
             printf 'ref=%s\n' "$RELEASE_REF_INPUT"
             printf 'provider=%s\n' "$RELEASE_PROVIDER_INPUT"
             printf 'mode=%s\n' "$RELEASE_MODE_INPUT"
-            printf 'release_profile=%s\n' "$RELEASE_PROFILE_INPUT"
+            printf 'release_profile=%s\n' "$release_profile"
             printf 'run_release_soak=%s\n' "$run_release_soak"
             printf 'rerun_group=%s\n' "$RELEASE_RERUN_GROUP_INPUT"
             printf 'live_suite_filter=%s\n' "$RELEASE_LIVE_SUITE_FILTER_INPUT"
@@ -340,6 +358,7 @@ jobs:
             printf 'qa_live_discord_enabled=%s\n' "$qa_live_discord_enabled"
             printf 'qa_live_whatsapp_enabled=%s\n' "$qa_live_whatsapp_enabled"
             printf 'qa_live_slack_enabled=%s\n' "$qa_live_slack_enabled"
+            printf 'release_package_spec=%s\n' "$RELEASE_PACKAGE_SPEC_INPUT"
             printf 'package_acceptance_package_spec=%s\n' "$RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT"
           } >> "$GITHUB_OUTPUT"
 
@@ -350,11 +369,12 @@ jobs:
           RELEASE_REF_FAST_PATH: ${{ steps.fast_ref.outputs.fast }}
           RELEASE_PROVIDER: ${{ inputs.provider }}
           RELEASE_MODE: ${{ inputs.mode }}
-          RELEASE_PROFILE: ${{ inputs.release_profile }}
+          RELEASE_PROFILE: ${{ steps.inputs.outputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ steps.inputs.outputs.run_release_soak }}
           RELEASE_RERUN_GROUP: ${{ inputs.rerun_group }}
           RELEASE_LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           RELEASE_CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
+          RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
         run: |
           {
@@ -375,8 +395,13 @@ jobs:
               echo "- Cross-OS suite filter: \`${RELEASE_CROSS_OS_SUITE_FILTER}\`"
             fi
             echo "- QA live lanes: Matrix \`${{ steps.inputs.outputs.qa_live_matrix_enabled }}\`, Telegram \`${{ steps.inputs.outputs.qa_live_telegram_enabled }}\`, Discord \`${{ steps.inputs.outputs.qa_live_discord_enabled }}\`, WhatsApp \`${{ steps.inputs.outputs.qa_live_whatsapp_enabled }}\`, Slack \`${{ steps.inputs.outputs.qa_live_slack_enabled }}\`"
+            if [[ -n "${RELEASE_PACKAGE_SPEC// }" ]]; then
+              echo "- Release package spec: \`${RELEASE_PACKAGE_SPEC}\`"
+            fi
             if [[ -n "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
               echo "- Package Acceptance package spec: \`${PACKAGE_ACCEPTANCE_PACKAGE_SPEC}\`"
+            elif [[ -n "${RELEASE_PACKAGE_SPEC// }" ]]; then
+              echo "- Package Acceptance package spec: \`${RELEASE_PACKAGE_SPEC}\`"
             else
               echo "- Package Acceptance package spec: prepared release artifact"
             fi
@@ -392,7 +417,7 @@ jobs:
     needs: [resolve_target]
     if: contains(fromJSON('["all","cross-os","package"]'), needs.resolve_target.outputs.rerun_group) || (needs.resolve_target.outputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 15
     permissions:
       contents: read
       packages: write
@@ -426,11 +451,17 @@ jobs:
         shell: bash
         env:
           PACKAGE_REF: ${{ needs.resolve_target.outputs.revision }}
+          RELEASE_PACKAGE_SPEC: ${{ needs.resolve_target.outputs.release_package_spec }}
         run: |
           set -euo pipefail
+          source_args=(--source ref --package-ref "$PACKAGE_REF")
+          package_label="ref:${PACKAGE_REF}"
+          if [[ -n "${RELEASE_PACKAGE_SPEC// }" ]]; then
+            source_args=(--source npm --package-spec "$RELEASE_PACKAGE_SPEC")
+            package_label="$RELEASE_PACKAGE_SPEC"
+          fi
           node scripts/resolve-openclaw-package-candidate.mjs \
-            --source ref \
-            --package-ref "$PACKAGE_REF" \
+            "${source_args[@]}" \
             --output-dir .artifacts/docker-e2e-package \
             --output-name openclaw-current.tgz \
             --metadata .artifacts/docker-e2e-package/package-candidate.json \
@@ -443,7 +474,7 @@ jobs:
             echo "## Release package artifact"
             echo
             echo "- Artifact: \`release-package-under-test\`"
-            echo "- Package ref: \`$PACKAGE_REF\`"
+            echo "- Package: \`$package_label\`"
             echo "- SHA-256: \`$digest\`"
             echo "- Version: \`$version\`"
             echo "- Source SHA: \`$source_sha\`"
@@ -572,7 +603,7 @@ jobs:
       ref: ${{ needs.resolve_target.outputs.revision }}
       include_repo_e2e: false
       include_release_path_suites: true
-      include_openwebui: ${{ needs.resolve_target.outputs.release_profile != 'minimum' }}
+      include_openwebui: ${{ needs.resolve_target.outputs.release_profile != 'beta' }}
       include_live_suites: false
       release_test_profile: ${{ needs.resolve_target.outputs.release_profile }}
       package_artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
@@ -590,10 +621,10 @@ jobs:
     uses: ./.github/workflows/package-acceptance.yml
     with:
       workflow_ref: ${{ github.ref_name }}
-      source: ${{ needs.resolve_target.outputs.package_acceptance_package_spec != '' && 'npm' || 'artifact' }}
-      package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || 'openclaw@beta' }}
+      source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.release_package_spec != '') && 'npm' || 'artifact' }}
+      package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || needs.resolve_target.outputs.release_package_spec || 'openclaw@beta' }}
       artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
-      package_sha256: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.package_sha256 || '' }}
+      package_sha256: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.release_package_spec == '') && needs.prepare_release_package.outputs.package_sha256 || '' }}
       suite_profile: custom
       docker_lanes: doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update
       published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}

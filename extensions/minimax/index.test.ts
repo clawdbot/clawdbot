@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Context, Model } from "@earendil-works/pi-ai";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -134,11 +134,14 @@ describe("minimax provider hooks", () => {
         modelApi: "anthropic-messages",
         modelId: "MiniMax-M2.7",
       } as never),
-    ).toMatchObject({
+    ).toEqual({
       sanitizeMode: "full",
       sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
       preserveSignatures: true,
+      repairToolUseResultPairing: true,
       validateAnthropicTurns: true,
+      allowSyntheticToolResults: true,
     });
 
     expect(
@@ -147,12 +150,13 @@ describe("minimax provider hooks", () => {
         modelApi: "openai-completions",
         modelId: "MiniMax-M2.7",
       } as never),
-    ).toMatchObject({
+    ).toEqual({
       sanitizeToolCallIds: true,
       toolCallIdMode: "strict",
       applyAssistantFirstOrderingFix: true,
       validateGeminiTurns: true,
       validateAnthropicTurns: true,
+      dropReasoningFromHistory: true,
     });
   });
 
@@ -243,17 +247,23 @@ describe("minimax provider hooks", () => {
     } as never);
 
     expect(webSearchProviders).toHaveLength(1);
-    expect(webSearchProviders[0]).toMatchObject({
-      id: "minimax",
-      label: "MiniMax Search",
-      onboardingScopes: ["text-inference"],
-      envVars: [
-        "MINIMAX_CODE_PLAN_KEY",
-        "MINIMAX_CODING_API_KEY",
-        "MINIMAX_OAUTH_TOKEN",
-        "MINIMAX_API_KEY",
-      ],
-    });
+    const provider = webSearchProviders[0] as
+      | {
+          id?: unknown;
+          label?: unknown;
+          onboardingScopes?: unknown;
+          envVars?: unknown;
+        }
+      | undefined;
+    expect(provider?.id).toBe("minimax");
+    expect(provider?.label).toBe("MiniMax Search");
+    expect(provider?.onboardingScopes).toEqual(["text-inference"]);
+    expect(provider?.envVars).toEqual([
+      "MINIMAX_CODE_PLAN_KEY",
+      "MINIMAX_CODING_API_KEY",
+      "MINIMAX_OAUTH_TOKEN",
+      "MINIMAX_API_KEY",
+    ]);
   });
 
   it("prefers minimax-portal oauth when resolving MiniMax usage auth", async () => {
@@ -348,10 +358,11 @@ describe("minimax provider hooks", () => {
       openUrl: vi.fn(async () => undefined),
     } as never);
 
-    expect(result?.configPatch?.models?.providers?.["minimax-portal"]).toMatchObject({
+    expect(result?.configPatch?.models?.providers?.["minimax-portal"]).toEqual({
       baseUrl: "https://api.minimax.io/anthropic",
       api: "anthropic-messages",
       authHeader: true,
+      models: [],
     });
   });
 });

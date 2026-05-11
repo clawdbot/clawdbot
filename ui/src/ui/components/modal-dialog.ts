@@ -22,7 +22,7 @@ export class OpenClawModalDialog extends LitElement {
   private previouslyFocused: Element | null = null;
   private opened = false;
 
-  static styles = css`
+  static override styles = css`
     :host {
       position: fixed;
       inset: 0;

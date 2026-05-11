@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
@@ -92,6 +92,28 @@ function runWrappedPayloadCase(params: {
   };
 }
 
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  expect(value).toBeTypeOf("object");
+  expect(value).not.toBeNull();
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
+function expectCatalogEntry(entries: unknown, id: string, expected: Record<string, unknown>): void {
+  expect(Array.isArray(entries)).toBe(true);
+  const entry = (entries as Array<Record<string, unknown>>).find(
+    (candidate) => candidate.id === id,
+  );
+  expectFields(entry, expected);
+}
+
+function expectNoCatalogEntry(entries: unknown, id: string): void {
+  expect(Array.isArray(entries)).toBe(true);
+  expect((entries as Array<Record<string, unknown>>).some((entry) => entry.id === id)).toBe(false);
+}
+
 describe("buildOpenAIProvider", () => {
   beforeEach(() => {
     mocks.openAIResponsesTransportStreamFn.mockReset();
@@ -104,7 +126,7 @@ describe("buildOpenAIProvider", () => {
     const provider = buildOpenAIProvider();
     const apiKey = provider.auth.find((method) => method.id === "api-key");
 
-    expect(apiKey?.wizard).toMatchObject({
+    expectFields(apiKey?.wizard, {
       choiceLabel: "OpenAI API Key",
       groupId: "openai",
       groupLabel: "OpenAI",
@@ -162,7 +184,7 @@ describe("buildOpenAIProvider", () => {
       modelRegistry: registry as never,
     });
 
-    expect(mini).toMatchObject({
+    expectFields(mini, {
       provider: "openai",
       id: "gpt-5.4-mini",
       api: "openai-responses",
@@ -170,7 +192,7 @@ describe("buildOpenAIProvider", () => {
       contextWindow: 400_000,
       maxTokens: 128_000,
     });
-    expect(nano).toMatchObject({
+    expectFields(nano, {
       provider: "openai",
       id: "gpt-5.4-nano",
       api: "openai-responses",
@@ -208,26 +230,22 @@ describe("buildOpenAIProvider", () => {
       ],
     } as never);
 
-    expect(entries).toContainEqual(
-      expect.objectContaining({
-        provider: "openai",
-        id: "gpt-5.4-mini",
-        name: "gpt-5.4-mini",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 400_000,
-      }),
-    );
-    expect(entries).toContainEqual(
-      expect.objectContaining({
-        provider: "openai",
-        id: "gpt-5.4-nano",
-        name: "gpt-5.4-nano",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 400_000,
-      }),
-    );
+    expectCatalogEntry(entries, "gpt-5.4-mini", {
+      provider: "openai",
+      id: "gpt-5.4-mini",
+      name: "gpt-5.4-mini",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 400_000,
+    });
+    expectCatalogEntry(entries, "gpt-5.4-nano", {
+      provider: "openai",
+      id: "gpt-5.4-nano",
+      name: "gpt-5.4-nano",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 400_000,
+    });
   });
 
   it("owns native reasoning output mode for OpenAI and Azure OpenAI responses", () => {
@@ -264,7 +282,7 @@ describe("buildOpenAIProvider", () => {
       modelRegistry: { find: () => null },
     } as never);
 
-    expect(openaiModel).toMatchObject({
+    expectFields(openaiModel, {
       provider: "openai",
       id: "gpt-5.4",
       api: "openai-responses",
@@ -272,7 +290,7 @@ describe("buildOpenAIProvider", () => {
       contextWindow: 1_050_000,
       maxTokens: 128_000,
     });
-    expect(codexModel).toMatchObject({
+    expectFields(codexModel, {
       provider: "openai-codex",
       id: "gpt-5.4",
       api: "openai-codex-responses",
@@ -307,7 +325,7 @@ describe("buildOpenAIProvider", () => {
       } as never,
     });
 
-    expect(model).toMatchObject({
+    expectFields(model, {
       provider: "openai",
       id: "chat-latest",
       api: "openai-responses",
@@ -325,7 +343,7 @@ describe("buildOpenAIProvider", () => {
       modelRegistry: { find: () => null },
     } as never);
 
-    expect(fallback).toMatchObject({
+    expectFields(fallback, {
       provider: "openai",
       id: "chat-latest",
       api: "openai-responses",
@@ -383,7 +401,7 @@ describe("buildOpenAIProvider", () => {
     });
 
     expect(model).toBeUndefined();
-    expect(pro).toMatchObject({
+    expectFields(pro, {
       provider: "openai",
       id: "gpt-5.5-pro",
       api: "openai-responses",
@@ -411,18 +429,8 @@ describe("buildOpenAIProvider", () => {
       entries: [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.4" }],
     } as never);
 
-    expect(entries).not.toContainEqual(
-      expect.objectContaining({
-        provider: "openai",
-        id: "gpt-5.5",
-      }),
-    );
-    expect(entries).not.toContainEqual(
-      expect.objectContaining({
-        provider: "openai",
-        id: "chat-latest",
-      }),
-    );
+    expectNoCatalogEntry(entries, "gpt-5.5");
+    expectNoCatalogEntry(entries, "chat-latest");
   });
 
   it("keeps modern live selection on OpenAI 5.2+ and current Codex models", () => {
@@ -573,7 +581,7 @@ describe("buildOpenAIProvider", () => {
       },
     });
 
-    expect(extraParams).toMatchObject({
+    expectFields(extraParams, {
       transport: "sse",
     });
     expect(result.payload.store).toBe(true);
@@ -880,7 +888,7 @@ describe("buildOpenAIProvider", () => {
     });
 
     expect(mocks.openAIResponsesTransportStreamFn).not.toHaveBeenCalled();
-    expect(result.options?.headers).toMatchObject({
+    expectFields(result.options?.headers, {
       originator: "openclaw",
       "User-Agent": expect.stringMatching(/^openclaw\//u),
     });

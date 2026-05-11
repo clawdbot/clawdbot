@@ -56,11 +56,12 @@ describe("createQQWSClient", () => {
 
     expect(webSocketCtorMock).toHaveBeenCalledTimes(1);
     expect(proxyAgentCtorMock).not.toHaveBeenCalled();
-    const [, options] = webSocketCtorMock.mock.calls[0] ?? [];
-    expect(options).toMatchObject({
-      headers: { "User-Agent": "openclaw-qqbot-test" },
-    });
-    expect(options).not.toHaveProperty("agent");
+    expect(webSocketCtorMock.mock.calls[0]).toEqual([
+      "wss://qq.example.test/ws",
+      {
+        headers: { "User-Agent": "openclaw-qqbot-test" },
+      },
+    ]);
   });
 
   it("creates a ws proxy agent when lowercase https_proxy is set", async () => {
@@ -73,11 +74,13 @@ describe("createQQWSClient", () => {
 
     expect(webSocketCtorMock).toHaveBeenCalledTimes(1);
     expect(proxyAgentCtorMock).toHaveBeenCalledTimes(1);
-    const [, options] = webSocketCtorMock.mock.calls[0] ?? [];
-    expect(options).toMatchObject({
-      headers: { "User-Agent": "openclaw-qqbot-test" },
-      agent: { proxied: true },
-    });
+    expect(webSocketCtorMock.mock.calls[0]).toEqual([
+      "wss://qq.example.test/ws",
+      {
+        agent: { proxied: true },
+        headers: { "User-Agent": "openclaw-qqbot-test" },
+      },
+    ]);
   });
 
   it("creates a ws proxy agent when uppercase HTTPS_PROXY is set", async () => {
@@ -90,11 +93,13 @@ describe("createQQWSClient", () => {
 
     expect(webSocketCtorMock).toHaveBeenCalledTimes(1);
     expect(proxyAgentCtorMock).toHaveBeenCalledTimes(1);
-    const [, options] = webSocketCtorMock.mock.calls[0] ?? [];
-    expect(options).toMatchObject({
-      headers: { "User-Agent": "openclaw-qqbot-test" },
-      agent: { proxied: true },
-    });
+    expect(webSocketCtorMock.mock.calls[0]).toEqual([
+      "wss://qq.example.test/ws",
+      {
+        agent: { proxied: true },
+        headers: { "User-Agent": "openclaw-qqbot-test" },
+      },
+    ]);
   });
 
   it("falls back to HTTP_PROXY for ws proxy agent creation", async () => {
@@ -107,10 +112,12 @@ describe("createQQWSClient", () => {
 
     expect(webSocketCtorMock).toHaveBeenCalledTimes(1);
     expect(proxyAgentCtorMock).toHaveBeenCalledTimes(1);
-    const [, options] = webSocketCtorMock.mock.calls[0] ?? [];
-    expect(options).toMatchObject({
-      headers: { "User-Agent": "openclaw-qqbot-test" },
-      agent: { proxied: true },
-    });
+    expect(webSocketCtorMock.mock.calls[0]).toEqual([
+      "wss://qq.example.test/ws",
+      {
+        agent: { proxied: true },
+        headers: { "User-Agent": "openclaw-qqbot-test" },
+      },
+    ]);
   });
 });

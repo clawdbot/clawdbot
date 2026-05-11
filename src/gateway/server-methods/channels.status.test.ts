@@ -65,6 +65,27 @@ function createOptions(
   } as unknown as GatewayRequestHandlerOptions;
 }
 
+function requireRecord(value: unknown): Record<string, unknown> {
+  expect(value).toBeTruthy();
+  expect(typeof value).toBe("object");
+  expect(Array.isArray(value)).toBe(false);
+  return value as Record<string, unknown>;
+}
+
+function requireFirstCallArg(mock: { mock: { calls: readonly (readonly unknown[])[] } }) {
+  const call = mock.mock.calls[0];
+  expect(call).toBeTruthy();
+  return call?.[0];
+}
+
+function requireRespondPayload(respond: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const call = respond.mock.calls[0];
+  expect(call).toBeTruthy();
+  expect(call?.[0]).toBe(true);
+  expect(call?.[2]).toBeUndefined();
+  return requireRecord(call?.[1]);
+}
+
 describe("channelsHandlers channels.status", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -116,23 +137,13 @@ describe("channelsHandlers channels.status", () => {
       config: {},
       env: process.env,
     });
-    expect(mocks.buildChannelAccountSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: autoEnabledConfig,
-        accountId: "default",
-      }),
-    );
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        channels: {
-          whatsapp: expect.objectContaining({
-            configured: true,
-          }),
-        },
-      }),
-      undefined,
-    );
+    const snapshotArgs = requireRecord(requireFirstCallArg(mocks.buildChannelAccountSnapshot));
+    expect(snapshotArgs.cfg).toBe(autoEnabledConfig);
+    expect(snapshotArgs.accountId).toBe("default");
+    const payload = requireRespondPayload(respond);
+    const channels = requireRecord(payload.channels);
+    const whatsapp = requireRecord(channels.whatsapp);
+    expect(whatsapp.configured).toBe(true);
   });
 
   it("caps probe timeout before passing it to channel plugins", async () => {
@@ -156,12 +167,9 @@ describe("channelsHandlers channels.status", () => {
 
     await channelsHandlers["channels.status"](createOptions({ probe: true, timeoutMs: 999_999 }));
 
-    expect(probeAccount).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeoutMs: 30_000,
-        cfg: autoEnabledConfig,
-      }),
-    );
+    const probeArgs = requireRecord(requireFirstCallArg(probeAccount));
+    expect(probeArgs.timeoutMs).toBe(30_000);
+    expect(probeArgs.cfg).toBe(autoEnabledConfig);
   });
 
   it("returns a partial snapshot when a channel probe exceeds the status budget", async () => {
@@ -192,21 +200,12 @@ describe("channelsHandlers channels.status", () => {
       await vi.advanceTimersByTimeAsync(1000);
       await run;
 
-      expect(mocks.buildChannelAccountSnapshot).toHaveBeenCalledWith(
-        expect.objectContaining({
-          probe: expect.objectContaining({
-            timedOut: true,
-          }),
-        }),
-      );
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          partial: true,
-          warnings: [expect.stringContaining("whatsapp:default probe timed out after 1000ms")],
-        }),
-        undefined,
-      );
+      const snapshotArgs = requireRecord(requireFirstCallArg(mocks.buildChannelAccountSnapshot));
+      const probe = requireRecord(snapshotArgs.probe);
+      expect(probe.timedOut).toBe(true);
+      const payload = requireRespondPayload(respond);
+      expect(payload.partial).toBe(true);
+      expect(payload.warnings).toEqual(["whatsapp:default probe timed out after 1000ms"]);
     } finally {
       vi.useRealTimers();
     }
@@ -252,19 +251,11 @@ describe("channelsHandlers channels.status", () => {
       ),
     );
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        eventLoop,
-        channelAccounts: {
-          whatsapp: [
-            expect.objectContaining({
-              healthState: "stale-socket",
-            }),
-          ],
-        },
-      }),
-      undefined,
-    );
+    const payload = requireRespondPayload(respond);
+    expect(payload.eventLoop).toBe(eventLoop);
+    const channelAccounts = requireRecord(payload.channelAccounts);
+    expect(Array.isArray(channelAccounts.whatsapp)).toBe(true);
+    const [whatsappAccount] = channelAccounts.whatsapp as unknown[];
+    expect(requireRecord(whatsappAccount).healthState).toBe("stale-socket");
   });
 });

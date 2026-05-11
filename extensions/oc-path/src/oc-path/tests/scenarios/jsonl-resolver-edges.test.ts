@@ -1,10 +1,25 @@
 import { describe, expect, it } from "vitest";
+import type { JsoncValue } from "../../jsonc/ast.js";
 import { parseJsonl } from "../../jsonl/parse.js";
 import { resolveJsonlOcPath } from "../../jsonl/resolve.js";
 import { parseOcPath } from "../../oc-path.js";
 
 function rs(raw: string, ocPath: string) {
   return resolveJsonlOcPath(parseJsonl(raw).ast, parseOcPath(ocPath));
+}
+
+function expectNumberValue(node: JsoncValue, value: number) {
+  expect(node.kind).toBe("number");
+  if (node.kind === "number") {
+    expect(node.value).toBe(value);
+  }
+}
+
+function expectStringValue(node: JsoncValue, value: string) {
+  expect(node.kind).toBe("string");
+  if (node.kind === "string") {
+    expect(node.value).toBe(value);
+  }
 }
 
 describe("jsonl resolver edges", () => {
@@ -25,7 +40,7 @@ describe("jsonl resolver edges", () => {
     const m = rs('{"a":1}\n{"a":2}\n{"a":3}\n', "oc://log/$last/a");
     expect(m?.kind).toBe("object-entry");
     if (m?.kind === "object-entry") {
-      expect(m.node.value).toMatchObject({ kind: "number", value: 3 });
+      expectNumberValue(m.node.value, 3);
     }
   });
 
@@ -33,7 +48,7 @@ describe("jsonl resolver edges", () => {
     const m = rs('{"a":1}\n\n\n', "oc://log/$last/a");
     expect(m?.kind).toBe("object-entry");
     if (m?.kind === "object-entry") {
-      expect(m.node.value).toMatchObject({ kind: "number", value: 1 });
+      expectNumberValue(m.node.value, 1);
     }
   });
 
@@ -76,7 +91,7 @@ describe("jsonl resolver edges", () => {
     const m = rs('{"r":{"ok":true,"d":"x"}}\n', "oc://log/L1/r.d");
     expect(m?.kind).toBe("object-entry");
     if (m?.kind === "object-entry") {
-      expect(m.node.value).toMatchObject({ kind: "string", value: "x" });
+      expectStringValue(m.node.value, "x");
     }
   });
 
@@ -84,14 +99,14 @@ describe("jsonl resolver edges", () => {
     const m = rs('{"items":["a","b","c"]}\n', "oc://log/L1/items.2");
     expect(m?.kind).toBe("value");
     if (m?.kind === "value") {
-      expect(m.node).toMatchObject({ kind: "string", value: "c" });
+      expectStringValue(m.node, "c");
     }
   });
 
   it("line numbers are 1-indexed", () => {
     const m = rs('{"a":1}\n{"a":2}\n', "oc://log/L1/a");
     if (m?.kind === "object-entry") {
-      expect(m.node.value).toMatchObject({ kind: "number", value: 1 });
+      expectNumberValue(m.node.value, 1);
     }
   });
 
@@ -99,7 +114,7 @@ describe("jsonl resolver edges", () => {
     const m = rs('{"a":1}\n\nbroken\n{"a":4}\n', "oc://log/L4/a");
     expect(m?.kind).toBe("object-entry");
     if (m?.kind === "object-entry") {
-      expect(m.node.value).toMatchObject({ kind: "number", value: 4 });
+      expectNumberValue(m.node.value, 4);
     }
   });
 

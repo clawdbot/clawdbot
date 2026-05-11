@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyXaiModelCompat,
   buildProviderToolCompatFamilyHooks,
   findOpenAIStrictSchemaViolations,
   inspectGeminiToolSchemas,
   inspectOpenAIToolSchemas,
   normalizeGeminiToolSchemas,
   normalizeOpenAIToolSchemas,
-  resolveXaiModelCompatPatch,
 } from "./provider-tools.js";
 
 describe("buildProviderToolCompatFamilyHooks", () => {
@@ -287,34 +285,5 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     });
 
     expect(diagnostics).toStrictEqual([]);
-  });
-
-  it("covers the shared xAI tool compat patch", () => {
-    const patch = resolveXaiModelCompatPatch();
-
-    expect(patch).toMatchObject({
-      toolSchemaProfile: "xai",
-      nativeWebSearchTool: true,
-      toolCallArgumentsEncoding: "html-entities",
-    });
-    expect(patch.unsupportedToolSchemaKeywords).toEqual(
-      expect.arrayContaining(["minLength", "maxLength", "minItems", "maxItems"]),
-    );
-
-    expect(
-      applyXaiModelCompat({
-        id: "grok-4",
-        compat: {
-          supportsUsageInStreaming: true,
-        },
-      }),
-    ).toMatchObject({
-      compat: {
-        supportsUsageInStreaming: true,
-        toolSchemaProfile: "xai",
-        nativeWebSearchTool: true,
-        toolCallArgumentsEncoding: "html-entities",
-      },
-    });
   });
 });

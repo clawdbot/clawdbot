@@ -84,6 +84,8 @@ describe("Slack subteam mentions", () => {
         log,
       }),
     ).resolves.toBe(false);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("missing_scope"));
+    expect(log).toHaveBeenCalledWith(
+      "slack: failed to resolve user-group mention S123: missing_scope",
+    );
   });
 });

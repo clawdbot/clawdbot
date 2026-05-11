@@ -263,23 +263,32 @@ describe("handleFeishuCommentEvent", () => {
       typeof vi.fn
     >;
 
-    expect(finalizeInboundContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        From: "feishu:ou_sender",
-        To: "comment:docx:doc_token_1:comment_1",
-        Surface: "feishu-comment",
-        OriginatingChannel: "feishu",
-        OriginatingTo: "comment:docx:doc_token_1:comment_1",
-        MessageSid: "drive-comment:evt_1",
-        MessageThreadId: "reply_1",
-      }),
-    );
+    expect(finalizeInboundContext).toHaveBeenCalledTimes(1);
+    const finalizedContext = finalizeInboundContext.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect({
+      from: finalizedContext?.From,
+      to: finalizedContext?.To,
+      surface: finalizedContext?.Surface,
+      originatingChannel: finalizedContext?.OriginatingChannel,
+      originatingTo: finalizedContext?.OriginatingTo,
+      messageSid: finalizedContext?.MessageSid,
+      messageThreadId: finalizedContext?.MessageThreadId,
+    }).toEqual({
+      from: "feishu:ou_sender",
+      to: "comment:docx:doc_token_1:comment_1",
+      surface: "feishu-comment",
+      originatingChannel: "feishu",
+      originatingTo: "comment:docx:doc_token_1:comment_1",
+      messageSid: "drive-comment:evt_1",
+      messageThreadId: "reply_1",
+    });
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
-    expect(recordInboundSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:feishu:direct:comment-doc:docx:doc_token_1",
-      }),
-    );
+    const recordArgs = recordInboundSession.mock.calls[0]?.[0] as
+      | { sessionKey?: string }
+      | undefined;
+    expect(recordArgs?.sessionKey).toBe("agent:main:feishu:direct:comment-doc:docx:doc_token_1");
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
@@ -342,12 +351,12 @@ describe("handleFeishuCommentEvent", () => {
       } as never,
     });
 
-    expect(maybeCreateDynamicAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        senderOpenId: "ou_sender",
-        configWritesAllowed: false,
-      }),
-    );
+    expect(maybeCreateDynamicAgentMock).toHaveBeenCalledTimes(1);
+    const dynamicAgentArgs = maybeCreateDynamicAgentMock.mock.calls[0]?.[0] as
+      | { configWritesAllowed?: boolean; senderOpenId?: string }
+      | undefined;
+    expect(dynamicAgentArgs?.senderOpenId).toBe("ou_sender");
+    expect(dynamicAgentArgs?.configWritesAllowed).toBe(false);
     const dispatchReplyFromConfig = runtime.channel.reply.dispatchReplyFromConfig as ReturnType<
       typeof vi.fn
     >;
@@ -377,15 +386,30 @@ describe("handleFeishuCommentEvent", () => {
       } as never,
     });
 
-    expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        file_token: "doc_token_1",
-        file_type: "docx",
-        comment_id: "comment_1",
-        is_whole_comment: false,
-      }),
-    );
+    expect(deliverCommentThreadTextMock).toHaveBeenCalledTimes(1);
+    const [pairingClient, pairingReply] = deliverCommentThreadTextMock.mock.calls[0] ?? [];
+    expect(pairingClient).toBe(createFeishuClientMock.mock.results[0]?.value);
+    expect(pairingReply).toEqual({
+      file_token: "doc_token_1",
+      file_type: "docx",
+      comment_id: "comment_1",
+      content: [
+        "OpenClaw: access not configured.",
+        "",
+        "Your Feishu user id: ou_sender",
+        "Pairing code:",
+        "```",
+        "TESTCODE",
+        "```",
+        "",
+        "Ask the bot owner to approve with:",
+        "openclaw pairing approve feishu TESTCODE",
+        "```",
+        "openclaw pairing approve feishu TESTCODE",
+        "```",
+      ].join("\n"),
+      is_whole_comment: false,
+    });
     const dispatchReplyFromConfig = runtime.channel.reply.dispatchReplyFromConfig as ReturnType<
       typeof vi.fn
     >;
@@ -424,15 +448,21 @@ describe("handleFeishuCommentEvent", () => {
       } as never,
     });
 
-    expect(createFeishuCommentReplyDispatcherMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        commentId: "comment_whole",
-        fileToken: "doc_token_1",
-        fileType: "docx",
-        replyId: "reply_whole",
-        isWholeComment: true,
-      }),
-    );
+    expect(createFeishuCommentReplyDispatcherMock).toHaveBeenCalledTimes(1);
+    const dispatcherArgs = createFeishuCommentReplyDispatcherMock.mock.calls[0]?.[0] as
+      | {
+          commentId?: string;
+          fileToken?: string;
+          fileType?: string;
+          isWholeComment?: boolean;
+          replyId?: string;
+        }
+      | undefined;
+    expect(dispatcherArgs?.commentId).toBe("comment_whole");
+    expect(dispatcherArgs?.fileToken).toBe("doc_token_1");
+    expect(dispatcherArgs?.fileType).toBe("docx");
+    expect(dispatcherArgs?.replyId).toBe("reply_whole");
+    expect(dispatcherArgs?.isWholeComment).toBe(true);
   });
 
   it("always finalizes comment typing cleanup even when dispatch fails", async () => {

@@ -27,7 +27,11 @@ async function expectMessageHookCall(params: {
       params.event as PluginHookMessageSendingEvent,
       params.channelCtx,
     );
-    expect(result).toEqual(expect.objectContaining(params.expectedResult ?? {}));
+    if (params.expectedResult === undefined) {
+      expect(result).toBeUndefined();
+    } else {
+      expect(result).toEqual(params.expectedResult);
+    }
   } else {
     await runner.runMessageSent(params.event as PluginHookMessageSentEvent, params.channelCtx);
   }

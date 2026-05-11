@@ -479,8 +479,10 @@ describe("copyBundledPluginMetadata", () => {
           "utf8",
         ),
       ),
-    ).toMatchObject({
+    ).toEqual({
       name: "@openclaw/image-generation-core",
+      version: "0.0.1",
+      private: true,
       type: "module",
     });
   });

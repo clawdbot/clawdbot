@@ -17,7 +17,7 @@ export function buildPlatformRuntimeLogHints(params: {
     const logs = resolveGatewayLogPaths(env);
     return [
       `Launchd stdout (if installed): ${toDarwinDisplayPath(logs.stdoutPath)}`,
-      `Launchd stderr (if installed): ${toDarwinDisplayPath(logs.stderrPath)}`,
+      "Launchd stderr (if installed): suppressed",
       `Restart attempts: ${toDarwinDisplayPath(resolveGatewayRestartLogPath(env))}`,
     ];
   }

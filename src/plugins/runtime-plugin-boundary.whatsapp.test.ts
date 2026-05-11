@@ -181,7 +181,7 @@ describe("runtime plugin boundary whatsapp seam", () => {
       loadPluginBoundaryModule<{ ok: boolean; loadedVia: string }>(modulePath, loaders, {
         origin: "workspace",
       }),
-    ).toMatchObject({ ok: true, loadedVia: "jiti-source-package" });
+    ).toEqual({ ok: true, loadedVia: "jiti-source-package" });
     expect(loaders.size).toBe(1);
   });
 });

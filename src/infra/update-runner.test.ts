@@ -323,7 +323,7 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("skipped");
     expect(result.reason).toBe("dirty");
-    expect(calls).not.toEqual(expect.arrayContaining([expect.stringContaining("rebase")]));
+    expect(calls.some((call) => call.includes("rebase"))).toBe(false);
   });
 
   it.each([
@@ -366,7 +366,7 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("rebase-failed");
-    expect(calls).toEqual(expect.arrayContaining([expect.stringContaining("rebase --abort")]));
+    expect(calls.some((call) => call.includes("rebase --abort"))).toBe(true);
   });
 
   it("returns error and stops early when deps install fails", async () => {
@@ -438,7 +438,7 @@ describe("runGatewayUpdate", () => {
         if (key === "pnpm --version") {
           const envPath = options?.env?.PATH ?? options?.env?.Path ?? "";
           if (envPath.includes("openclaw-update-pnpm-")) {
-            return { stdout: "10.0.0" };
+            return { stdout: "11.0.0" };
           }
           throw new Error("spawn pnpm ENOENT");
         }
@@ -448,7 +448,7 @@ describe("runGatewayUpdate", () => {
         if (key === "npm --version") {
           return { stdout: "10.0.0" };
         }
-        if (key.startsWith("npm install --prefix ") && key.endsWith(" pnpm@10")) {
+        if (key.startsWith("npm install --prefix ") && key.endsWith(" pnpm@11")) {
           return { stdout: "added 1 package" };
         }
         return undefined;
@@ -550,7 +550,7 @@ describe("runGatewayUpdate", () => {
         const envPath = options?.env?.PATH ?? options?.env?.Path ?? "";
         if (envPath.includes("openclaw-update-pnpm-")) {
           pnpmEnvPaths.push(envPath);
-          return { stdout: "10.0.0", stderr: "", code: 0 };
+          return { stdout: "11.0.0", stderr: "", code: 0 };
         }
         throw new Error("spawn pnpm ENOENT");
       }
@@ -560,7 +560,7 @@ describe("runGatewayUpdate", () => {
       if (key === "npm --version") {
         return { stdout: "10.0.0", stderr: "", code: 0 };
       }
-      if (key.startsWith("npm install --prefix ") && key.endsWith(" pnpm@10")) {
+      if (key.startsWith("npm install --prefix ") && key.endsWith(" pnpm@11")) {
         return { stdout: "added 1 package", stderr: "", code: 0 };
       }
       if (
@@ -612,16 +612,12 @@ describe("runGatewayUpdate", () => {
     const result = await runWithCommand(runCommand, { channel: "dev" });
 
     expect(result.status).toBe("ok");
-    expect(calls).toEqual(
-      expect.arrayContaining([expect.stringMatching(/^npm install --prefix /)]),
-    );
+    expect(calls.some((call) => call.startsWith("npm install --prefix "))).toBe(true);
     expect(calls).toContain("pnpm install");
     expect(calls).toContain("pnpm build");
     expect(calls).not.toContain("pnpm lint");
     expect(calls).toContain("pnpm ui:build");
-    expect(pnpmEnvPaths).toEqual(
-      expect.arrayContaining([expect.stringContaining("openclaw-update-pnpm-")]),
-    );
+    expect(pnpmEnvPaths.some((envPath) => envPath.includes("openclaw-update-pnpm-"))).toBe(true);
   });
 
   it("runs dev preflight lint in constrained mode when explicitly enabled", async () => {
@@ -713,11 +709,9 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("ok");
     expect(calls).toContain("pnpm lint");
     expect(lintEnv).toHaveLength(1);
-    expect(lintEnv[0]).toMatchObject({
-      OPENCLAW_LOCAL_CHECK: "1",
-      OPENCLAW_LOCAL_CHECK_MODE: "throttled",
-      OPENCLAW_OXLINT_SHARDS_SERIAL: "1",
-    });
+    expect(lintEnv[0]?.OPENCLAW_LOCAL_CHECK).toBe("1");
+    expect(lintEnv[0]?.OPENCLAW_LOCAL_CHECK_MODE).toBe("throttled");
+    expect(lintEnv[0]?.OPENCLAW_OXLINT_SHARDS_SERIAL).toBe("1");
   });
 
   it("retries windows pnpm git installs with --ignore-scripts for dev updates", async () => {
@@ -1418,7 +1412,7 @@ describe("runGatewayUpdate", () => {
       if (key === "npm --version") {
         return { stdout: "10.0.0", stderr: "", code: 0 };
       }
-      if (key.startsWith("npm install --prefix ") && key.endsWith(" pnpm@10")) {
+      if (key.startsWith("npm install --prefix ") && key.endsWith(" pnpm@11")) {
         return { stdout: "", stderr: "network exploded", code: 1 };
       }
       return { stdout: "", stderr: "", code: 0 };
@@ -1668,11 +1662,10 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("error");
     expect(result.reason).toBe("doctor-failed");
     expect(calls).toContain(doctorCommand);
-    expect(result.steps.at(-1)).toMatchObject({
-      name: "openclaw doctor",
-      exitCode: 1,
-      stderrTail: "doctor refused migration",
-    });
+    const lastStep = result.steps.at(-1);
+    expect(lastStep?.name).toBe("openclaw doctor");
+    expect(lastStep?.exitCode).toBe(1);
+    expect(lastStep?.stderrTail).toBe("doctor refused migration");
   });
 
   it("falls back to global npm update when git is missing from PATH", async () => {
@@ -1910,7 +1903,7 @@ describe("runGatewayUpdate", () => {
     expect(npmPrefixedGlobalInstallCalls.length).toBeGreaterThan(0);
     expect(pnpmAddGlobalCalls).toStrictEqual([]);
     expect(result.steps.map((step) => step.name)).toEqual(["global update", "global install swap"]);
-    await expect(fs.access(staleInstallChunk)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(staleInstallChunk)).rejects.toHaveProperty("code", "ENOENT");
   });
 
   it("uses OPENCLAW_UPDATE_PACKAGE_SPEC for global package updates", async () => {
@@ -1973,9 +1966,7 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("not-openclaw-root");
-    expect(calls).not.toEqual(
-      expect.arrayContaining([expect.stringContaining("status --porcelain")]),
-    );
+    expect(calls.some((call) => call.includes("status --porcelain"))).toBe(false);
   });
 
   it("fails with a clear reason when openclaw.mjs is missing", async () => {

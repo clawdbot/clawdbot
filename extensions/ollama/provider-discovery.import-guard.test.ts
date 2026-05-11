@@ -21,7 +21,6 @@ describe("ollama provider discovery import surface", () => {
       "./src/embedding-provider",
       "./src/memory-embedding-adapter",
       "./src/web-search-provider",
-      "openclaw/plugin-sdk/text-runtime",
       "openclaw/plugin-sdk/plugin-entry",
     ]) {
       expect(source, `provider discovery must not import ${forbidden}`).not.toContain(forbidden);

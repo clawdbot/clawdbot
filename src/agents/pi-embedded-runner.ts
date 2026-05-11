@@ -19,6 +19,7 @@ export {
   isEmbeddedPiRunStreaming as isEmbeddedAgentRunStreaming,
   queueEmbeddedPiMessage,
   queueEmbeddedPiMessage as queueEmbeddedAgentMessage,
+  queueEmbeddedPiMessageWithOutcome,
   resolveActiveEmbeddedRunSessionId,
   resolveActiveEmbeddedRunSessionId as resolveActiveEmbeddedAgentRunSessionId,
   waitForEmbeddedPiRunEnd,

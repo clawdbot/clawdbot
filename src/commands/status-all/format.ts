@@ -464,6 +464,7 @@ export function buildGatewayStatusJsonPayload(params: {
     | {
         connectLatencyMs?: number | null;
         error?: string | null;
+        health?: unknown;
       }
     | null
     | undefined;
@@ -488,6 +489,13 @@ export function buildGatewayStatusJsonPayload(params: {
     self: params.gatewaySelf ?? null,
     error: params.gatewayProbe?.error ?? null,
     authWarning: params.gatewayProbeAuthWarning ?? null,
+    ...(params.gatewayProbe?.health &&
+    typeof params.gatewayProbe.health === "object" &&
+    "modelPricing" in params.gatewayProbe.health
+      ? {
+          modelPricing: (params.gatewayProbe.health as { modelPricing?: unknown }).modelPricing,
+        }
+      : {}),
   };
 }
 

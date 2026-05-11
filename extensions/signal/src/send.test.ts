@@ -48,25 +48,34 @@ describe("sendMessageSignal receipts", () => {
       cfg: SIGNAL_TEST_CFG,
     });
 
-    expect(result).toMatchObject({
-      messageId: "1234567890",
-      timestamp: 1234567890,
-      receipt: {
-        primaryPlatformMessageId: "1234567890",
-        platformMessageIds: ["1234567890"],
-        parts: [
-          expect.objectContaining({
-            platformMessageId: "1234567890",
-            kind: "text",
-            raw: expect.objectContaining({
-              channel: "signal",
-              toJid: "+15551234567",
-              timestamp: 1234567890,
-            }),
-          }),
-        ],
+    expect(result.messageId).toBe("1234567890");
+    expect(result.timestamp).toBe(1234567890);
+    expect(result.receipt.primaryPlatformMessageId).toBe("1234567890");
+    expect(result.receipt.platformMessageIds).toEqual(["1234567890"]);
+    expect(result.receipt.raw).toEqual([
+      {
+        channel: "signal",
+        messageId: "1234567890",
+        toJid: "+15551234567",
+        timestamp: 1234567890,
+        meta: { targetType: "recipient" },
       },
-    });
+    ]);
+    expect(result.receipt.parts).toEqual([
+      {
+        index: 0,
+        platformMessageId: "1234567890",
+        kind: "text",
+        raw: {
+          channel: "signal",
+          messageId: "1234567890",
+          toJid: "+15551234567",
+          timestamp: 1234567890,
+          meta: { targetType: "recipient" },
+        },
+      },
+    ]);
+    expect(result.receipt.sentAt).toBeGreaterThan(0);
   });
 
   it("attaches a media receipt for attachment sends", async () => {
@@ -79,23 +88,34 @@ describe("sendMessageSignal receipts", () => {
     });
 
     expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalled();
-    expect(result).toMatchObject({
-      messageId: "1234567891",
-      receipt: {
-        primaryPlatformMessageId: "1234567891",
-        platformMessageIds: ["1234567891"],
-        parts: [
-          expect.objectContaining({
-            platformMessageId: "1234567891",
-            kind: "media",
-            raw: expect.objectContaining({
-              channel: "signal",
-              chatId: "group-1",
-            }),
-          }),
-        ],
+    expect(result.messageId).toBe("1234567891");
+    expect(result.timestamp).toBe(1234567891);
+    expect(result.receipt.primaryPlatformMessageId).toBe("1234567891");
+    expect(result.receipt.platformMessageIds).toEqual(["1234567891"]);
+    expect(result.receipt.raw).toEqual([
+      {
+        channel: "signal",
+        messageId: "1234567891",
+        chatId: "group-1",
+        timestamp: 1234567891,
+        meta: { targetType: "group" },
       },
-    });
+    ]);
+    expect(result.receipt.parts).toEqual([
+      {
+        index: 0,
+        platformMessageId: "1234567891",
+        kind: "media",
+        raw: {
+          channel: "signal",
+          messageId: "1234567891",
+          chatId: "group-1",
+          timestamp: 1234567891,
+          meta: { targetType: "group" },
+        },
+      },
+    ]);
+    expect(result.receipt.sentAt).toBeGreaterThan(0);
   });
 
   it("does not invent platform ids when signal-cli omits a timestamp", async () => {

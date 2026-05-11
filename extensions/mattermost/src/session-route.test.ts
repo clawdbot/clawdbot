@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
 
+function expectRoute(route: ReturnType<typeof resolveMattermostOutboundSessionRoute>) {
+  if (!route) {
+    throw new Error("Expected Mattermost route");
+  }
+  return route;
+}
+
 describe("mattermost session route", () => {
   it("builds direct-message routes for user targets", () => {
     const route = resolveMattermostOutboundSessionRoute({
@@ -10,14 +17,11 @@ describe("mattermost session route", () => {
       target: "@user123",
     });
 
-    expect(route).toMatchObject({
-      peer: {
-        kind: "direct",
-        id: "user123",
-      },
-      from: "mattermost:user123",
-      to: "user:user123",
-    });
+    const directRoute = expectRoute(route);
+    expect(directRoute.peer.kind).toBe("direct");
+    expect(directRoute.peer.id).toBe("user123");
+    expect(directRoute.from).toBe("mattermost:user123");
+    expect(directRoute.to).toBe("user:user123");
   });
 
   it("builds threaded channel routes for channel targets", () => {
@@ -29,16 +33,13 @@ describe("mattermost session route", () => {
       threadId: "thread456",
     });
 
-    expect(route).toMatchObject({
-      peer: {
-        kind: "channel",
-        id: "chan123",
-      },
-      from: "mattermost:channel:chan123",
-      to: "channel:chan123",
-      threadId: "thread456",
-    });
-    expect(route?.sessionKey).toContain("thread456");
+    const channelRoute = expectRoute(route);
+    expect(channelRoute.peer.kind).toBe("channel");
+    expect(channelRoute.peer.id).toBe("chan123");
+    expect(channelRoute.from).toBe("mattermost:channel:chan123");
+    expect(channelRoute.to).toBe("channel:chan123");
+    expect(channelRoute.threadId).toBe("thread456");
+    expect(channelRoute.sessionKey).toContain("thread456");
   });
 
   it("recovers channel thread routes from currentSessionKey", () => {
@@ -50,11 +51,12 @@ describe("mattermost session route", () => {
       currentSessionKey: "agent:main:mattermost:channel:chan123:thread:root-post",
     });
 
-    expect(route).toMatchObject({
-      sessionKey: "agent:main:mattermost:channel:chan123:thread:root-post",
-      baseSessionKey: "agent:main:mattermost:channel:chan123",
-      threadId: "root-post",
-    });
+    const recoveredRoute = expectRoute(route);
+    expect(recoveredRoute.sessionKey).toBe(
+      "agent:main:mattermost:channel:chan123:thread:root-post",
+    );
+    expect(recoveredRoute.baseSessionKey).toBe("agent:main:mattermost:channel:chan123");
+    expect(recoveredRoute.threadId).toBe("root-post");
   });
 
   it("keeps explicit replyToId ahead of recovered currentSessionKey thread", () => {
@@ -67,10 +69,11 @@ describe("mattermost session route", () => {
       currentSessionKey: "agent:main:mattermost:channel:chan123:thread:root-post",
     });
 
-    expect(route).toMatchObject({
-      sessionKey: "agent:main:mattermost:channel:chan123:thread:explicit-root",
-      threadId: "explicit-root",
-    });
+    const replyRoute = expectRoute(route);
+    expect(replyRoute.sessionKey).toBe(
+      "agent:main:mattermost:channel:chan123:thread:explicit-root",
+    );
+    expect(replyRoute.threadId).toBe("explicit-root");
   });
 
   it('does not recover currentSessionKey threads for shared dmScope "main" DMs', () => {
@@ -82,11 +85,10 @@ describe("mattermost session route", () => {
       currentSessionKey: "agent:main:main:thread:root-post",
     });
 
-    expect(route).toMatchObject({
-      sessionKey: "agent:main:main",
-      baseSessionKey: "agent:main:main",
-    });
-    expect(route?.threadId).toBeUndefined();
+    const dmRoute = expectRoute(route);
+    expect(dmRoute.sessionKey).toBe("agent:main:main");
+    expect(dmRoute.baseSessionKey).toBe("agent:main:main");
+    expect(dmRoute.threadId).toBeUndefined();
   });
 
   it("returns null when the target is empty after normalization", () => {

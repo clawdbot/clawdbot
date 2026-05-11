@@ -14,11 +14,10 @@ import { detectMime } from "openclaw/plugin-sdk/media-mime";
 import { isTruthyEnvValue, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
-  ensureDir,
   lowercasePreservingWhitespace,
   normalizeOptionalString,
-  resolveUserPath,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { type WebSocket, WebSocketServer } from "ws";
 import {
   CANVAS_HOST_PATH,

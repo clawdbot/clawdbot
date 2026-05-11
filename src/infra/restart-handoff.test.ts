@@ -47,7 +47,7 @@ describe("gateway restart handoff", () => {
   it("writes a supervisor handoff for an exited gateway process", () => {
     const env = createHandoffEnv();
 
-    const handoff = writeGatewayRestartHandoffSync({
+    const handoff = expectWrittenHandoff({
       env,
       pid: 12_345,
       processInstanceId: "gateway-instance-1",
@@ -57,23 +57,20 @@ describe("gateway restart handoff", () => {
       createdAt: 1_000,
     });
 
-    expect(handoff).toMatchObject({
-      kind: GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND,
-      version: 1,
-      pid: 12_345,
-      processInstanceId: "gateway-instance-1",
-      reason: "plugin source changed",
-      source: "plugin-change",
-      restartKind: "full-process",
-      supervisorMode: "launchd",
-      createdAt: 1_000,
-      expiresAt: 61_000,
-    });
+    expect(handoff.kind).toBe(GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND);
+    expect(handoff.version).toBe(1);
+    expect(handoff.pid).toBe(12_345);
+    expect(handoff.processInstanceId).toBe("gateway-instance-1");
+    expect(handoff.reason).toBe("plugin source changed");
+    expect(handoff.source).toBe("plugin-change");
+    expect(handoff.restartKind).toBe("full-process");
+    expect(handoff.supervisorMode).toBe("launchd");
+    expect(handoff.createdAt).toBe(1_000);
+    expect(handoff.expiresAt).toBe(61_000);
     expect(fs.statSync(handoffPath(env)).mode & 0o777).toBe(0o600);
-    expect(readGatewayRestartHandoffSync(env, 1_500)).toMatchObject({
-      pid: 12_345,
-      reason: "plugin source changed",
-    });
+    const persisted = readGatewayRestartHandoffSync(env, 1_500);
+    expect(persisted?.pid).toBe(12_345);
+    expect(persisted?.reason).toBe("plugin source changed");
   });
 
   it("consumes a fresh handoff by exited pid instead of current process pid", () => {
@@ -88,18 +85,15 @@ describe("gateway restart handoff", () => {
       createdAt: 2_000,
     });
 
-    expect(
-      consumeGatewayRestartHandoffForExitedProcessSync({
-        env,
-        exitedPid: process.pid + 1,
-        now: 2_001,
-      }),
-    ).toMatchObject({
-      pid: process.pid + 1,
-      source: "gateway-update",
-      restartKind: "update-process",
-      supervisorMode: "systemd",
+    const consumed = consumeGatewayRestartHandoffForExitedProcessSync({
+      env,
+      exitedPid: process.pid + 1,
+      now: 2_001,
     });
+    expect(consumed?.pid).toBe(process.pid + 1);
+    expect(consumed?.source).toBe("gateway-update");
+    expect(consumed?.restartKind).toBe("update-process");
+    expect(consumed?.supervisorMode).toBe("systemd");
     expect(fs.existsSync(handoffPath(env))).toBe(false);
   });
 
@@ -247,8 +241,8 @@ describe("gateway restart handoff", () => {
       consumeGatewayRestartHandoffForExitedProcessSync({
         env,
         exitedPid: 12_345,
-      }),
-    ).toMatchObject({ pid: 12_345 });
+      })?.pid,
+    ).toBe(12_345);
   });
 
   it("formats a concise diagnostic line for status surfaces", () => {

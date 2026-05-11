@@ -15,6 +15,24 @@ function collectLegacyExtendedLevelIds(levels: readonly { id: string }[] | undef
   return ids;
 }
 
+const OPENAI_XHIGH_LEVELS = [
+  { id: "off" },
+  { id: "minimal" },
+  { id: "low" },
+  { id: "medium" },
+  { id: "high" },
+  { id: "xhigh" },
+];
+
+const CLAUDE_ADAPTIVE_LEVELS = [
+  { id: "off" },
+  { id: "minimal" },
+  { id: "low" },
+  { id: "medium" },
+  { id: "high" },
+  { id: "adaptive" },
+];
+
 describe("vercel ai gateway thinking profile", () => {
   async function getProvider() {
     const { providers } = await registerProviderPlugin({
@@ -33,7 +51,7 @@ describe("vercel ai gateway thinking profile", () => {
       modelId: "openai/gpt-5.4",
     });
 
-    expect(profile?.levels).toEqual(expect.arrayContaining([{ id: "xhigh" }]));
+    expect(profile).toStrictEqual({ levels: OPENAI_XHIGH_LEVELS });
   });
 
   it("exposes Codex xhigh through the OpenAI upstream prefix", async () => {
@@ -44,7 +62,7 @@ describe("vercel ai gateway thinking profile", () => {
       modelId: "openai/gpt-5.3-codex-spark",
     });
 
-    expect(profile?.levels).toEqual(expect.arrayContaining([{ id: "xhigh" }]));
+    expect(profile).toStrictEqual({ levels: OPENAI_XHIGH_LEVELS });
   });
 
   it("reuses Claude thinking defaults for trusted Anthropic upstream refs", async () => {
@@ -55,8 +73,8 @@ describe("vercel ai gateway thinking profile", () => {
       modelId: "anthropic/claude-opus-4.6",
     });
 
-    expect(profile).toMatchObject({
-      levels: expect.arrayContaining([{ id: "adaptive" }]),
+    expect(profile).toStrictEqual({
+      levels: CLAUDE_ADAPTIVE_LEVELS,
       defaultLevel: "adaptive",
     });
     expect(collectLegacyExtendedLevelIds(profile?.levels)).toStrictEqual([]);

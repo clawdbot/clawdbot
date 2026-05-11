@@ -1,3 +1,8 @@
+/**
+ * @deprecated Compatibility subpath. Import logger/runtime helpers from
+ * `openclaw/plugin-sdk/runtime` instead.
+ */
+
 import { format } from "node:util";
 import type { OutputRuntimeEnv, RuntimeEnv } from "../runtime.js";
 
@@ -7,7 +12,7 @@ type LoggerLike = {
   error: (message: string) => void;
 };
 
-/** Adapt a simple logger into the RuntimeEnv contract used by shared plugin SDK helpers. */
+/** @deprecated Import from `openclaw/plugin-sdk/runtime` instead. */
 export function createLoggerBackedRuntime(params: {
   logger: LoggerLike;
   exitError?: (code: number) => Error;
@@ -31,7 +36,7 @@ export function createLoggerBackedRuntime(params: {
   };
 }
 
-/** Reuse an existing runtime when present, otherwise synthesize one from the provided logger. */
+/** @deprecated Import from `openclaw/plugin-sdk/runtime` instead. */
 export function resolveRuntimeEnv(params: {
   runtime: RuntimeEnv;
   logger: LoggerLike;
@@ -50,7 +55,7 @@ export function resolveRuntimeEnv(params: {
   return params.runtime ?? createLoggerBackedRuntime(params);
 }
 
-/** Resolve a runtime that treats exit requests as unsupported errors instead of process termination. */
+/** @deprecated Import from `openclaw/plugin-sdk/runtime` instead. */
 export function resolveRuntimeEnvWithUnavailableExit(params: {
   runtime: RuntimeEnv;
   logger: LoggerLike;

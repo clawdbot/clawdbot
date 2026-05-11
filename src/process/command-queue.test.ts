@@ -62,6 +62,22 @@ function enqueueBlockedMainTask<T = void>(
   return { task, release: deferred.resolve };
 }
 
+function expectLaneSnapshotFields(
+  lane: string,
+  fields: Partial<ReturnType<CommandQueueModule["getCommandLaneSnapshot"]>>,
+): void {
+  const snapshot = getCommandLaneSnapshot(lane);
+  for (const [key, value] of Object.entries(fields)) {
+    expect(snapshot[key as keyof typeof snapshot]).toBe(value);
+  }
+}
+
+function diagnosticDebugMessages(): string[] {
+  return diagnosticMocks.diag.debug.mock.calls
+    .map(([message]) => message)
+    .filter((message): message is string => typeof message === "string");
+}
+
 describe("command queue", () => {
   beforeAll(async () => {
     ({
@@ -184,9 +200,11 @@ describe("command queue", () => {
     ).rejects.toBe(error);
 
     expect(diagnosticMocks.diag.error).not.toHaveBeenCalled();
-    expect(diagnosticMocks.diag.debug).toHaveBeenCalledWith(
-      expect.stringContaining("lane task interrupted: lane=nested"),
-    );
+    expect(
+      diagnosticDebugMessages().some((message) =>
+        message.includes("lane task interrupted: lane=nested"),
+      ),
+    ).toBe(true);
   });
 
   it("getActiveTaskCount returns count of currently executing tasks", async () => {
@@ -342,7 +360,7 @@ describe("command queue", () => {
       });
 
       expect(secondRan).toBe(false);
-      expect(getCommandLaneSnapshot(lane)).toMatchObject({
+      expectLaneSnapshotFields(lane, {
         activeCount: 1,
         queuedCount: 1,
       });
@@ -352,7 +370,7 @@ describe("command queue", () => {
       await firstRejected;
       await expect(second).resolves.toBe("second");
       expect(secondRan).toBe(true);
-      expect(getCommandLaneSnapshot(lane)).toMatchObject({
+      expectLaneSnapshotFields(lane, {
         activeCount: 0,
         queuedCount: 0,
       });
@@ -373,7 +391,7 @@ describe("command queue", () => {
 
     await Promise.resolve();
     expect(ran).toBe(false);
-    expect(getCommandLaneSnapshot(lane)).toMatchObject({
+    expectLaneSnapshotFields(lane, {
       activeCount: 0,
       queuedCount: 1,
       maxConcurrent: 0,
@@ -383,7 +401,7 @@ describe("command queue", () => {
 
     await expect(task).resolves.toBe("resumed");
     expect(ran).toBe(true);
-    expect(getCommandLaneSnapshot(lane)).toMatchObject({
+    expectLaneSnapshotFields(lane, {
       activeCount: 0,
       queuedCount: 0,
       maxConcurrent: 1,
@@ -401,7 +419,7 @@ describe("command queue", () => {
     });
     const second = enqueueCommandInLane(lane, async () => "second");
 
-    expect(getCommandLaneSnapshot(lane)).toMatchObject({
+    expectLaneSnapshotFields(lane, {
       lane,
       activeCount: 1,
       queuedCount: 1,
@@ -436,10 +454,12 @@ describe("command queue", () => {
       (snapshot) => snapshot.lane === alphaLane || snapshot.lane === betaLane,
     );
     expect(snapshots.map((snapshot) => snapshot.lane)).toEqual([alphaLane, betaLane]);
-    expect(snapshots).toEqual([
-      expect.objectContaining({ lane: alphaLane, activeCount: 1, queuedCount: 0 }),
-      expect.objectContaining({ lane: betaLane, activeCount: 1, queuedCount: 0 }),
-    ]);
+    expect(snapshots[0]?.lane).toBe(alphaLane);
+    expect(snapshots[0]?.activeCount).toBe(1);
+    expect(snapshots[0]?.queuedCount).toBe(0);
+    expect(snapshots[1]?.lane).toBe(betaLane);
+    expect(snapshots[1]?.activeCount).toBe(1);
+    expect(snapshots[1]?.queuedCount).toBe(0);
 
     alphaBlocker.resolve();
     betaBlocker.resolve();

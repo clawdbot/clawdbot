@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { SettingsManager } from "@mariozechner/pi-coding-agent";
+import type { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";

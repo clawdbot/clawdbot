@@ -33,6 +33,8 @@ type EnvSnapshot = {
   OPENCLAW_HOME?: string;
   OPENCLAW_STATE_DIR?: string;
   OPENCLAW_OAUTH_DIR?: string;
+  OPENCLAW_AGENT_DIR?: string;
+  PI_CODING_AGENT_DIR?: string;
 };
 
 function captureEnv(): EnvSnapshot {
@@ -41,6 +43,8 @@ function captureEnv(): EnvSnapshot {
     OPENCLAW_HOME: process.env.OPENCLAW_HOME,
     OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
     OPENCLAW_OAUTH_DIR: process.env.OPENCLAW_OAUTH_DIR,
+    OPENCLAW_AGENT_DIR: process.env.OPENCLAW_AGENT_DIR,
+    PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
   };
 }
 
@@ -156,6 +160,8 @@ describe("doctor state integrity oauth dir checks", () => {
     process.env.OPENCLAW_HOME = tempHome;
     process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
     delete process.env.OPENCLAW_OAUTH_DIR;
+    delete process.env.OPENCLAW_AGENT_DIR;
+    delete process.env.PI_CODING_AGENT_DIR;
     fs.mkdirSync(process.env.OPENCLAW_STATE_DIR, { recursive: true, mode: 0o700 });
     noteMock.mockClear();
   });
@@ -242,6 +248,40 @@ describe("doctor state integrity oauth dir checks", () => {
     const text = await runStateIntegrityText({
       agents: {
         list: [{ id: "main", default: true }, { id: "ops" }],
+      },
+    });
+
+    expect(text).not.toContain("without a matching agents.list entry");
+    expect(text).not.toContain("Examples:");
+  });
+
+  it("does not warn when the live compatibility main agent dir is missing from agents.list", async () => {
+    createAgentDir("main");
+
+    const text = await runStateIntegrityText({
+      agents: {
+        list: [{ id: "jeremiah", default: true }],
+      },
+    });
+
+    expect(text).not.toContain("without a matching agents.list entry");
+    expect(text).not.toContain("Examples:");
+  });
+
+  it("does not warn when OPENCLAW_AGENT_DIR points at the live compatibility agent dir", async () => {
+    createAgentDir("legacy");
+    const legacyAgentDir = path.join(
+      process.env.OPENCLAW_STATE_DIR ?? "",
+      "agents",
+      "legacy",
+      "agent",
+    );
+    process.env.OPENCLAW_AGENT_DIR = legacyAgentDir;
+    process.env.PI_CODING_AGENT_DIR = legacyAgentDir;
+
+    const text = await runStateIntegrityText({
+      agents: {
+        list: [{ id: "main", default: true }],
       },
     });
 

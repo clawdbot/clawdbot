@@ -22,6 +22,39 @@ import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireMockCallArg(
+  mock: { mock: { calls: unknown[][] } },
+  index: number,
+): Record<string, unknown> {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected mock call ${index}`);
+  }
+  return requireRecord(call[0], `mock call ${index} arg`);
+}
+
+function expectLogIncludes(mock: { mock: { calls: unknown[][] } }, fragment: string) {
+  expect(mock.mock.calls.some((call) => String(call[0]).includes(fragment))).toBe(true);
+}
+
+function expectLogExcludes(mock: { mock: { calls: unknown[][] } }, fragment: string) {
+  expect(mock.mock.calls.some((call) => String(call[0]).includes(fragment))).toBe(false);
+}
+
+function expectRetryContinuesFromTranscript() {
+  const retryParams = requireMockCallArg(mockedRunEmbeddedAttempt, 1);
+  expect(String(retryParams.prompt)).toContain("Continue from the current transcript");
+  expect(retryParams.suppressNextUserMessagePersistence).toBe(true);
+  expect(retryParams.prompt).not.toBe(baseParams.prompt);
+}
+
 describe("overflow compaction in run loop", () => {
   beforeAll(async () => {
     ({ runEmbeddedPiAgent } = await loadRunOverflowCompactionHarness());
@@ -80,20 +113,16 @@ describe("overflow compaction in run loop", () => {
     const result = await runEmbeddedPiAgent(baseParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedCompactDirect).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimeContext: expect.objectContaining({ authProfileId: "test-profile" }),
-      }),
+    const compactArg = requireMockCallArg(mockedCompactDirect, 0);
+    expect(requireRecord(compactArg.runtimeContext, "runtime context").authProfileId).toBe(
+      "test-profile",
     );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(mockedLog.warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "context overflow detected (attempt 1/3); attempting auto-compaction",
-      ),
+    expectLogIncludes(
+      mockedLog.warn,
+      "context overflow detected (attempt 1/3); attempting auto-compaction",
     );
-    expect(mockedLog.info).toHaveBeenCalledWith(
-      expect.stringContaining("auto-compaction succeeded"),
-    );
+    expectLogIncludes(mockedLog.info, "auto-compaction succeeded");
     // Should not be an error result
     expect(result.meta.error).toBeUndefined();
   });
@@ -127,17 +156,7 @@ describe("overflow compaction in run loop", () => {
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        prompt: expect.stringContaining("Continue from the current transcript"),
-        suppressNextUserMessagePersistence: true,
-      }),
-    );
-    expect(mockedRunEmbeddedAttempt).not.toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ prompt: baseParams.prompt }),
-    );
+    expectRetryContinuesFromTranscript();
     expect(result.meta.error).toBeUndefined();
   });
 
@@ -171,13 +190,9 @@ describe("overflow compaction in run loop", () => {
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        prompt: baseParams.prompt,
-        suppressNextUserMessagePersistence: false,
-      }),
-    );
+    const retryParams = requireMockCallArg(mockedRunEmbeddedAttempt, 1);
+    expect(retryParams.prompt).toBe(baseParams.prompt);
+    expect(retryParams.suppressNextUserMessagePersistence).toBe(false);
     expect(result.meta.error).toBeUndefined();
   });
 
@@ -200,7 +215,7 @@ describe("overflow compaction in run loop", () => {
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("source=promptError"));
+    expectLogIncludes(mockedLog.warn, "source=promptError");
     expect(result.meta.error).toBeUndefined();
   });
 
@@ -221,7 +236,7 @@ describe("overflow compaction in run loop", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(result.meta.error?.kind).toBe("context_overflow");
     expect(result.payloads?.[0]?.isError).toBe(true);
-    expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("auto-compaction failed"));
+    expectLogIncludes(mockedLog.warn, "auto-compaction failed");
   });
 
   it("falls back to tool-result truncation and retries when oversized results are detected", async () => {
@@ -242,16 +257,14 @@ describe("overflow compaction in run loop", () => {
     const result = await runEmbeddedPiAgent(baseParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedSessionLikelyHasOversizedToolResults).toHaveBeenCalledWith(
-      expect.objectContaining({ contextWindowTokens: 200000 }),
-    );
-    expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionFile: "/tmp/session.json" }),
+    expect(
+      requireMockCallArg(mockedSessionLikelyHasOversizedToolResults, 0).contextWindowTokens,
+    ).toBe(200000);
+    expect(requireMockCallArg(mockedTruncateOversizedToolResultsInSession, 0).sessionFile).toBe(
+      "/tmp/session.json",
     );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(mockedLog.info).toHaveBeenCalledWith(
-      expect.stringContaining("Truncated 1 tool result(s)"),
-    );
+    expectLogIncludes(mockedLog.info, "Truncated 1 tool result(s)");
     expect(result.meta.error).toBeUndefined();
   });
 
@@ -292,22 +305,14 @@ describe("overflow compaction in run loop", () => {
     const result = await runEmbeddedPiAgent(baseParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedSessionLikelyHasOversizedToolResults).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messages: expect.arrayContaining([
-          expect.objectContaining({ role: "toolResult" }),
-          expect.objectContaining({ role: "toolResult" }),
-          expect.objectContaining({ role: "toolResult" }),
-        ]),
-      }),
-    );
-    expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionFile: "/tmp/session.json" }),
+    const oversizedArgs = requireMockCallArg(mockedSessionLikelyHasOversizedToolResults, 0);
+    const messages = oversizedArgs.messages as Array<{ role?: string }>;
+    expect(messages.filter((message) => message.role === "toolResult")).toHaveLength(3);
+    expect(requireMockCallArg(mockedTruncateOversizedToolResultsInSession, 0).sessionFile).toBe(
+      "/tmp/session.json",
     );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(mockedLog.info).toHaveBeenCalledWith(
-      expect.stringContaining("Truncated 2 tool result(s)"),
-    );
+    expectLogIncludes(mockedLog.info, "Truncated 2 tool result(s)");
     expect(result.meta.error).toBeUndefined();
   });
 
@@ -330,9 +335,7 @@ describe("overflow compaction in run loop", () => {
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(mockedTruncateOversizedToolResultsInSession).not.toHaveBeenCalled();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(mockedLog.info).toHaveBeenCalledWith(
-      expect.stringContaining("early recovery route=truncate_tool_results_only"),
-    );
+    expectLogIncludes(mockedLog.info, "early recovery route=truncate_tool_results_only");
     expect(result.meta.error).toBeUndefined();
   });
 
@@ -355,20 +358,8 @@ describe("overflow compaction in run loop", () => {
 
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        prompt: expect.stringContaining("Continue from the current transcript"),
-        suppressNextUserMessagePersistence: true,
-      }),
-    );
-    expect(mockedRunEmbeddedAttempt).not.toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ prompt: baseParams.prompt }),
-    );
-    expect(mockedLog.info).toHaveBeenCalledWith(
-      expect.stringContaining("retrying from current transcript"),
-    );
+    expectRetryContinuesFromTranscript();
+    expectLogIncludes(mockedLog.info, "retrying from current transcript");
     expect(result.meta.error).toBeUndefined();
   });
 
@@ -397,10 +388,9 @@ describe("overflow compaction in run loop", () => {
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedTruncateOversizedToolResultsInSession).not.toHaveBeenCalled();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(mockedLog.warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "context overflow detected (attempt 1/3); attempting auto-compaction",
-      ),
+    expectLogIncludes(
+      mockedLog.warn,
+      "context overflow detected (attempt 1/3); attempting auto-compaction",
     );
     expect(result.meta.error).toBeUndefined();
   });
@@ -430,17 +420,7 @@ describe("overflow compaction in run loop", () => {
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        prompt: expect.stringContaining("Continue from the current transcript"),
-        suppressNextUserMessagePersistence: true,
-      }),
-    );
-    expect(mockedRunEmbeddedAttempt).not.toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ prompt: baseParams.prompt }),
-    );
+    expectRetryContinuesFromTranscript();
     expect(result.meta.error).toBeUndefined();
   });
 
@@ -471,13 +451,11 @@ describe("overflow compaction in run loop", () => {
     const result = await runEmbeddedPiAgent(baseParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionFile: "/tmp/session.json" }),
+    expect(requireMockCallArg(mockedTruncateOversizedToolResultsInSession, 0).sessionFile).toBe(
+      "/tmp/session.json",
     );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(mockedLog.info).toHaveBeenCalledWith(
-      expect.stringContaining("post-compaction tool-result truncation succeeded"),
-    );
+    expectLogIncludes(mockedLog.info, "post-compaction tool-result truncation succeeded");
     expect(result.meta.error).toBeUndefined();
   });
 
@@ -596,7 +574,7 @@ describe("overflow compaction in run loop", () => {
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
+    expectLogIncludes(mockedLog.warn, "source=assistantError");
     expect(result.meta.error).toBeUndefined();
   });
 
@@ -614,9 +592,7 @@ describe("overflow compaction in run loop", () => {
     await expect(runEmbeddedPiAgent(baseParams)).rejects.toThrow("transport disconnected");
 
     expect(mockedCompactDirect).not.toHaveBeenCalled();
-    expect(mockedLog.warn).not.toHaveBeenCalledWith(
-      expect.stringContaining("source=assistantError"),
-    );
+    expectLogExcludes(mockedLog.warn, "source=assistantError");
   });
 
   it("returns an explicit timeout payload when the run times out before producing any reply", async () => {

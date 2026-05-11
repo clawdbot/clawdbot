@@ -205,7 +205,7 @@ export type SessionConfig = {
   /** Session transcript write-lock acquisition policy. */
   writeLock?: SessionWriteLockConfig;
   agentToAgent?: {
-    /** Max ping-pong turns between requester/target (0–5). Default: 5. */
+    /** Max ping-pong turns between requester/target (0-20). Default: 5. */
     maxPingPongTurns?: number;
   };
   /** Shared defaults for thread-bound session routing across channels/providers. */

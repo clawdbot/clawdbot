@@ -65,6 +65,35 @@ function buildPluginsParams(commandBodyNormalized: string, workspaceDir: string)
   });
 }
 
+function mockCall(mock: unknown, index = 0): Array<unknown> {
+  const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
+  const call = calls.at(index);
+  expect(call, `mock call ${index + 1}`).toBeDefined();
+  return call as Array<unknown>;
+}
+
+function mockFirstObjectArg(mock: unknown): Record<string, unknown> {
+  const [arg] = mockCall(mock);
+  expect(arg).toBeTypeOf("object");
+  expect(arg).not.toBeNull();
+  return arg as Record<string, unknown>;
+}
+
+function expectObjectFields(value: unknown, expected: Record<string, unknown>): void {
+  expect(value).toBeTypeOf("object");
+  expect(value).not.toBeNull();
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
+function expectPersistedInstall(pluginId: string, expectedInstall: Record<string, unknown>): void {
+  const persisted = mockFirstObjectArg(persistPluginInstallMock);
+  expect(persisted.pluginId).toBe(pluginId);
+  expectObjectFields(persisted.install, expectedInstall);
+}
+
 describe("handleCommands /plugins install", () => {
   afterEach(async () => {
     installPluginFromNpmSpecMock.mockReset();
@@ -96,22 +125,13 @@ describe("handleCommands /plugins install", () => {
         throw new Error("expected plugin install result");
       }
       expect(result.reply?.text).toContain('Installed plugin "path-install-plugin"');
-      expect(installPluginFromPathMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          path: pluginDir,
-        }),
-      );
-      expect(persistPluginInstallMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          pluginId: "path-install-plugin",
-          install: expect.objectContaining({
-            source: "path",
-            sourcePath: pluginDir,
-            installPath: "/tmp/path-install-plugin",
-            version: "0.0.1",
-          }),
-        }),
-      );
+      expect(mockFirstObjectArg(installPluginFromPathMock).path).toBe(pluginDir);
+      expectPersistedInstall("path-install-plugin", {
+        source: "path",
+        sourcePath: pluginDir,
+        installPath: "/tmp/path-install-plugin",
+        version: "0.0.1",
+      });
     });
   });
 
@@ -147,25 +167,18 @@ describe("handleCommands /plugins install", () => {
         throw new Error("expected plugin install result");
       }
       expect(result.reply?.text).toContain('Installed plugin "clawhub-demo"');
-      expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          spec: "clawhub:@openclaw/clawhub-demo@1.2.3",
-        }),
+      expect(mockFirstObjectArg(installPluginFromClawHubMock).spec).toBe(
+        "clawhub:@openclaw/clawhub-demo@1.2.3",
       );
-      expect(persistPluginInstallMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          pluginId: "clawhub-demo",
-          install: expect.objectContaining({
-            source: "clawhub",
-            spec: "clawhub:@openclaw/clawhub-demo@1.2.3",
-            installPath: "/tmp/clawhub-demo",
-            version: "1.2.3",
-            integrity: "sha512-demo",
-            clawhubPackage: "@openclaw/clawhub-demo",
-            clawhubChannel: "official",
-          }),
-        }),
-      );
+      expectPersistedInstall("clawhub-demo", {
+        source: "clawhub",
+        spec: "clawhub:@openclaw/clawhub-demo@1.2.3",
+        installPath: "/tmp/clawhub-demo",
+        version: "1.2.3",
+        integrity: "sha512-demo",
+        clawhubPackage: "@openclaw/clawhub-demo",
+        clawhubChannel: "official",
+      });
     });
   });
 
@@ -225,25 +238,18 @@ describe("handleCommands /plugins install", () => {
         throw new Error("expected plugin install result");
       }
       expect(result.reply?.text).toContain('Installed plugin "git-demo"');
-      expect(installPluginFromGitSpecMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          spec: "git:github.com/acme/git-demo@v1.2.3",
-        }),
+      expect(mockFirstObjectArg(installPluginFromGitSpecMock).spec).toBe(
+        "git:github.com/acme/git-demo@v1.2.3",
       );
-      expect(persistPluginInstallMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          pluginId: "git-demo",
-          install: expect.objectContaining({
-            source: "git",
-            spec: "git:github.com/acme/git-demo@v1.2.3",
-            installPath: "/tmp/git-demo",
-            version: "1.2.3",
-            gitUrl: "https://github.com/acme/git-demo.git",
-            gitRef: "v1.2.3",
-            gitCommit: "abc123",
-          }),
-        }),
-      );
+      expectPersistedInstall("git-demo", {
+        source: "git",
+        spec: "git:github.com/acme/git-demo@v1.2.3",
+        installPath: "/tmp/git-demo",
+        version: "1.2.3",
+        gitUrl: "https://github.com/acme/git-demo.git",
+        gitRef: "v1.2.3",
+        gitCommit: "abc123",
+      });
     });
   });
 
@@ -279,10 +285,8 @@ describe("handleCommands /plugins install", () => {
         throw new Error("expected plugin install result");
       }
       expect(result.reply?.text).toContain('Installed plugin "alias-demo"');
-      expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          spec: "clawhub:@openclaw/alias-demo@1.0.0",
-        }),
+      expect(mockFirstObjectArg(installPluginFromClawHubMock).spec).toBe(
+        "clawhub:@openclaw/alias-demo@1.0.0",
       );
     });
   });
@@ -315,31 +319,21 @@ describe("handleCommands /plugins install", () => {
         throw new Error("expected plugin install result");
       }
       expect(result.reply?.text).toContain('Installed plugin "wecom-openclaw-plugin"');
-      expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          spec: "@wecom/wecom-openclaw-plugin@latest",
-          expectedPluginId: "wecom-openclaw-plugin",
-          trustedSourceLinkedOfficialInstall: true,
-        }),
-      );
-      expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-        expect.not.objectContaining({
-          expectedIntegrity: expect.any(String),
-        }),
-      );
-      expect(persistPluginInstallMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          pluginId: "wecom-openclaw-plugin",
-          install: expect.objectContaining({
-            source: "npm",
-            spec: "@wecom/wecom-openclaw-plugin@latest",
-            installPath: "/tmp/wecom-openclaw-plugin",
-            version: "2026.4.23",
-            resolvedName: "@wecom/wecom-openclaw-plugin",
-            resolvedVersion: "2026.4.23",
-          }),
-        }),
-      );
+      const npmInstallArgs = mockFirstObjectArg(installPluginFromNpmSpecMock);
+      expectObjectFields(npmInstallArgs, {
+        spec: "@wecom/wecom-openclaw-plugin@latest",
+        expectedPluginId: "wecom-openclaw-plugin",
+        trustedSourceLinkedOfficialInstall: true,
+      });
+      expect(npmInstallArgs.expectedIntegrity).toBeUndefined();
+      expectPersistedInstall("wecom-openclaw-plugin", {
+        source: "npm",
+        spec: "@wecom/wecom-openclaw-plugin@latest",
+        installPath: "/tmp/wecom-openclaw-plugin",
+        version: "2026.4.23",
+        resolvedName: "@wecom/wecom-openclaw-plugin",
+        resolvedVersion: "2026.4.23",
+      });
     });
   });
 });

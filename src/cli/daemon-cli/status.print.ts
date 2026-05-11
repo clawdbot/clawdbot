@@ -132,6 +132,14 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
         );
       }
     }
+    if (status.config.cli.warnings?.length) {
+      defaultRuntime.error(warnText("Config warnings:"));
+      for (const warning of status.config.cli.warnings.slice(0, 5)) {
+        defaultRuntime.error(
+          warnText(formatConfigIssueLine(warning, "-", { normalizeRoot: true })),
+        );
+      }
+    }
     if (status.config.daemon) {
       const daemonCfg = `${shortenHomePath(status.config.daemon.path)}${status.config.daemon.exists ? "" : " (missing)"}${status.config.daemon.valid ? "" : " (invalid)"}`;
       defaultRuntime.log(`${label("Config (service):")} ${infoText(daemonCfg)}`);
@@ -139,6 +147,18 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
         for (const issue of status.config.daemon.issues.slice(0, 5)) {
           defaultRuntime.error(
             `${errorText("Service config issue:")} ${formatConfigIssueLine(issue, "", { normalizeRoot: true })}`,
+          );
+        }
+      }
+      if (status.config.daemon !== status.config.cli && status.config.daemon.warnings?.length) {
+        const warningsLabel =
+          status.config.daemon.path === status.config.cli.path
+            ? "Config warnings:"
+            : "Service config warnings:";
+        defaultRuntime.error(warnText(warningsLabel));
+        for (const warning of status.config.daemon.warnings.slice(0, 5)) {
+          defaultRuntime.error(
+            warnText(formatConfigIssueLine(warning, "-", { normalizeRoot: true })),
           );
         }
       }

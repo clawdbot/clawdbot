@@ -331,10 +331,11 @@ describe("installPluginFromNpmSpec e2e", () => {
     ) as {
       packages?: Record<string, unknown>;
     };
-    expect(rawLock.packages?.["node_modules/openclaw"]).toMatchObject({
-      peer: true,
-      version: "2026.0.0",
-    });
+    const rawOpenClawLockEntry = rawLock.packages?.["node_modules/openclaw"] as
+      | { peer?: unknown; version?: unknown }
+      | undefined;
+    expect(rawOpenClawLockEntry?.peer).toBe(true);
+    expect(rawOpenClawLockEntry?.version).toBe("2026.0.0");
 
     const result = await installPluginFromNpmSpec({
       spec: `${packageName}@1.0.0`,
@@ -350,9 +351,10 @@ describe("installPluginFromNpmSpec e2e", () => {
       packages?: Record<string, unknown>;
     };
     expect(lock.packages?.["node_modules/openclaw"]).toBeUndefined();
-    await expect(fs.lstat(path.join(npmRoot, "node_modules", "openclaw"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expect(fs.lstat(path.join(npmRoot, "node_modules", "openclaw"))).rejects.toHaveProperty(
+      "code",
+      "ENOENT",
+    );
     await expect(
       fs
         .lstat(path.join(result.targetDir, "node_modules", "openclaw"))
@@ -448,9 +450,10 @@ describe("installPluginFromNpmSpec e2e", () => {
       packages?: Record<string, unknown>;
     };
     expect(lock.packages?.["node_modules/openclaw"]).toBeUndefined();
-    await expect(fs.lstat(path.join(npmRoot, "node_modules", "openclaw"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expect(fs.lstat(path.join(npmRoot, "node_modules", "openclaw"))).rejects.toHaveProperty(
+      "code",
+      "ENOENT",
+    );
     await expect(
       fs
         .lstat(path.join(npmRoot, "node_modules", codexName, "node_modules", "openclaw"))
@@ -569,9 +572,8 @@ describe("installPluginFromNpmSpec e2e", () => {
     const lock = JSON.parse(await fs.readFile(path.join(npmRoot, "package-lock.json"), "utf8")) as {
       packages?: Record<string, { integrity?: string; version?: string }>;
     };
-    expect(lock.packages?.[`node_modules/${packageName}`]).toMatchObject({
-      integrity: versions[0]?.integrity,
-      version: "1.0.0",
-    });
+    const installedLockEntry = lock.packages?.[`node_modules/${packageName}`];
+    expect(installedLockEntry?.integrity).toBe(versions[0]?.integrity);
+    expect(installedLockEntry?.version).toBe("1.0.0");
   });
 });

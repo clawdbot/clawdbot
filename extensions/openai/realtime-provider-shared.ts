@@ -4,7 +4,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { captureWsEvent } from "openclaw/plugin-sdk/proxy-capture";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const trimToUndefined = normalizeOptionalString;
 

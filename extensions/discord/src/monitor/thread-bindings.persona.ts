@@ -1,4 +1,4 @@
-import { SYSTEM_MARK } from "openclaw/plugin-sdk/text-runtime";
+import { SYSTEM_MARK } from "openclaw/plugin-sdk/text-chunking";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
 const THREAD_BINDING_PERSONA_MAX_CHARS = 80;

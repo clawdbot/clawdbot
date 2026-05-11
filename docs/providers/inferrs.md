@@ -86,6 +86,60 @@ This example uses Gemma 4 on a local `inferrs` server.
 }
 ```
 
+## On-demand startup
+
+Inferrs can also be started by OpenClaw only when an `inferrs/...` model is
+selected. Add `localService` to the same provider entry:
+
+```json5
+{
+  models: {
+    providers: {
+      inferrs: {
+        baseUrl: "http://127.0.0.1:8080/v1",
+        apiKey: "inferrs-local",
+        api: "openai-completions",
+        timeoutSeconds: 300,
+        localService: {
+          command: "/opt/homebrew/bin/inferrs",
+          args: [
+            "serve",
+            "google/gemma-4-E2B-it",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8080",
+            "--device",
+            "metal",
+          ],
+          healthUrl: "http://127.0.0.1:8080/v1/models",
+          readyTimeoutMs: 180000,
+          idleStopMs: 0,
+        },
+        models: [
+          {
+            id: "google/gemma-4-E2B-it",
+            name: "Gemma 4 E2B (inferrs)",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 131072,
+            maxTokens: 4096,
+            compat: {
+              requiresStringContent: true,
+            },
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+`command` must be absolute. Use `which inferrs` on the Gateway host and put that
+path in config. For the full field reference, see
+[Local model services](/gateway/local-model-services).
+
 ## Advanced configuration
 
 <AccordionGroup>
@@ -205,6 +259,9 @@ For general help, see [Troubleshooting](/help/troubleshooting) and [FAQ](/help/f
 <CardGroup cols={2}>
   <Card title="Local models" href="/gateway/local-models" icon="server">
     Running OpenClaw against local model servers.
+  </Card>
+  <Card title="Local model services" href="/gateway/local-model-services" icon="play">
+    Starting local model servers on demand for configured providers.
   </Card>
   <Card title="Gateway troubleshooting" href="/gateway/troubleshooting#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail" icon="wrench">
     Debugging local OpenAI-compatible backends that pass probes but fail agent runs.

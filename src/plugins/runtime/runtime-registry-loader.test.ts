@@ -28,6 +28,38 @@ const mocks = vi.hoisted(() => ({
 let ensurePluginRegistryLoaded: typeof import("./runtime-registry-loader.js").ensurePluginRegistryLoaded;
 let resetPluginRegistryLoadedForTests: typeof import("./runtime-registry-loader.js").__testing.resetPluginRegistryLoadedForTests;
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).toBeTypeOf("object");
+  expect(value, label).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+function loadOptions(index = 0) {
+  return requireRecord(mocks.loadOpenClawPlugins.mock.calls[index]?.[0], `load options ${index}`);
+}
+
+function configuredChannelOptions(index = 0) {
+  return requireRecord(
+    mocks.resolveConfiguredChannelPluginIds.mock.calls[index]?.[0],
+    `configured channel options ${index}`,
+  );
+}
+
+function scopedChannelOptions(index = 0) {
+  return requireRecord(
+    mocks.resolveDiscoverableScopedChannelPluginIds.mock.calls[index]?.[0],
+    `scoped channel options ${index}`,
+  );
+}
+
+function pluginsConfig(config: Record<string, unknown>) {
+  return requireRecord(config.plugins, "plugins config");
+}
+
+function pluginEntries(config: Record<string, unknown>) {
+  return requireRecord(pluginsConfig(config).entries, "plugin entries");
+}
+
 vi.mock("../loader.js", () => ({
   loadOpenClawPlugins: (...args: Parameters<typeof mocks.loadOpenClawPlugins>) =>
     mocks.loadOpenClawPlugins(...args),
@@ -142,46 +174,37 @@ describe("ensurePluginRegistryLoaded", () => {
       activationSourceConfig: { plugins: { allow: ["demo-channel"] } } as never,
     });
 
-    expect(mocks.resolveConfiguredChannelPluginIds).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: resolvedConfig,
-        activationSourceConfig: { plugins: { allow: ["demo-channel"] } },
-        env,
-        workspaceDir: "/resolved-workspace",
-      }),
-    );
+    const channelOptions = configuredChannelOptions();
+    expect(channelOptions.config).toEqual(resolvedConfig);
+    expect(channelOptions.activationSourceConfig).toEqual({ plugins: { allow: ["demo-channel"] } });
+    expect(channelOptions.env).toBe(env);
+    expect(channelOptions.workspaceDir).toBe("/resolved-workspace");
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
       config: rawConfig,
       env,
     });
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          ...resolvedConfig,
-          plugins: expect.objectContaining({
-            entries: expect.objectContaining({
-              demo: { enabled: true },
-              "demo-channel": { enabled: true },
-            }),
-            allow: ["demo-channel"],
-          }),
-        }),
-        activationSourceConfig: {
-          plugins: {
-            allow: ["demo-channel"],
-            entries: {
-              "demo-channel": { enabled: true },
-            },
-          },
+    const load = loadOptions();
+    const loadConfig = requireRecord(load.config, "load config");
+    expect(loadConfig.channels).toEqual(rawConfig.channels);
+    expect(pluginEntries(loadConfig)).toEqual({
+      demo: { enabled: true },
+      "demo-channel": { enabled: true },
+    });
+    expect(pluginsConfig(loadConfig).allow).toEqual(["demo-channel"]);
+    expect(load.activationSourceConfig).toEqual({
+      plugins: {
+        allow: ["demo-channel"],
+        entries: {
+          "demo-channel": { enabled: true },
         },
-        autoEnabledReasons: {
-          demo: ["demo configured"],
-        },
-        workspaceDir: "/resolved-workspace",
-        onlyPluginIds: ["demo-channel"],
-        throwOnLoadError: true,
-      }),
-    );
+      },
+    });
+    expect(load.autoEnabledReasons).toEqual({
+      demo: ["demo configured"],
+    });
+    expect(load.workspaceDir).toBe("/resolved-workspace");
+    expect(load.onlyPluginIds).toEqual(["demo-channel"]);
+    expect(load.throwOnLoadError).toBe(true);
   });
 
   it("temporarily activates configured-channel owners before loading them", () => {
@@ -194,27 +217,14 @@ describe("ensurePluginRegistryLoaded", () => {
       config: rawConfig as never,
     });
 
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            entries: expect.objectContaining({
-              "activation-only-channel": { enabled: true },
-            }),
-            allow: ["activation-only-channel"],
-          }),
-        }),
-        activationSourceConfig: expect.objectContaining({
-          plugins: expect.objectContaining({
-            entries: expect.objectContaining({
-              "activation-only-channel": { enabled: true },
-            }),
-            allow: ["activation-only-channel"],
-          }),
-        }),
-        onlyPluginIds: ["activation-only-channel"],
-      }),
-    );
+    const load = loadOptions();
+    const loadConfig = requireRecord(load.config, "load config");
+    expect(pluginEntries(loadConfig)["activation-only-channel"]).toEqual({ enabled: true });
+    expect(pluginsConfig(loadConfig).allow).toEqual(["activation-only-channel"]);
+    const activation = requireRecord(load.activationSourceConfig, "activation config");
+    expect(pluginEntries(activation)["activation-only-channel"]).toEqual({ enabled: true });
+    expect(pluginsConfig(activation).allow).toEqual(["activation-only-channel"]);
+    expect(load.onlyPluginIds).toEqual(["activation-only-channel"]);
   });
 
   it("does not cache scoped loads by explicit plugin ids", () => {
@@ -230,14 +240,8 @@ describe("ensurePluginRegistryLoaded", () => {
     });
 
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(2);
-    expect(mocks.loadOpenClawPlugins).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ onlyPluginIds: ["demo-a"] }),
-    );
-    expect(mocks.loadOpenClawPlugins).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ onlyPluginIds: ["demo-b"] }),
-    );
+    expect(loadOptions(0).onlyPluginIds).toEqual(["demo-a"]);
+    expect(loadOptions(1).onlyPluginIds).toEqual(["demo-b"]);
   });
 
   it("maps explicit channel scopes to owner plugin ids before loading", () => {
@@ -250,42 +254,21 @@ describe("ensurePluginRegistryLoaded", () => {
       onlyChannelIds: ["external-chat"],
     });
 
-    expect(mocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          ...rawConfig,
-          plugins: expect.objectContaining({
-            entries: expect.objectContaining({
-              demo: { enabled: true },
-            }),
-          }),
-        }),
-        activationSourceConfig: rawConfig,
-        channelIds: ["external-chat"],
-        workspaceDir: "/resolved-workspace",
-      }),
-    );
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            allow: ["external-chat-plugin"],
-            entries: expect.objectContaining({
-              "external-chat-plugin": { enabled: true },
-            }),
-          }),
-        }),
-        activationSourceConfig: expect.objectContaining({
-          plugins: expect.objectContaining({
-            allow: ["external-chat-plugin"],
-            entries: expect.objectContaining({
-              "external-chat-plugin": { enabled: true },
-            }),
-          }),
-        }),
-        onlyPluginIds: ["external-chat-plugin"],
-      }),
-    );
+    const channelOptions = scopedChannelOptions();
+    const channelConfig = requireRecord(channelOptions.config, "scoped channel config");
+    expect(channelConfig.channels).toEqual(rawConfig.channels);
+    expect(pluginEntries(channelConfig).demo).toEqual({ enabled: true });
+    expect(channelOptions.activationSourceConfig).toBe(rawConfig);
+    expect(channelOptions.channelIds).toEqual(["external-chat"]);
+    expect(channelOptions.workspaceDir).toBe("/resolved-workspace");
+    const load = loadOptions();
+    const loadConfig = requireRecord(load.config, "load config");
+    expect(pluginsConfig(loadConfig).allow).toEqual(["external-chat-plugin"]);
+    expect(pluginEntries(loadConfig)["external-chat-plugin"]).toEqual({ enabled: true });
+    const activation = requireRecord(load.activationSourceConfig, "activation config");
+    expect(pluginsConfig(activation).allow).toEqual(["external-chat-plugin"]);
+    expect(pluginEntries(activation)["external-chat-plugin"]).toEqual({ enabled: true });
+    expect(load.onlyPluginIds).toEqual(["external-chat-plugin"]);
   });
 
   it("forwards explicit empty scopes without widening to channel resolution", () => {
@@ -297,11 +280,7 @@ describe("ensurePluginRegistryLoaded", () => {
 
     expect(mocks.resolveConfiguredChannelPluginIds).not.toHaveBeenCalled();
     expect(mocks.resolveChannelPluginIds).not.toHaveBeenCalled();
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: [],
-      }),
-    );
+    expect(loadOptions().onlyPluginIds).toEqual([]);
   });
 
   it("preserves empty configured-channel scopes when no owners are activatable", () => {
@@ -312,11 +291,7 @@ describe("ensurePluginRegistryLoaded", () => {
       config: { channels: { demo: { enabled: true } } } as never,
     });
 
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: [],
-      }),
-    );
+    expect(loadOptions().onlyPluginIds).toEqual([]);
   });
 
   it("does not forward empty channel scopes for broad channel loads", () => {
@@ -327,14 +302,7 @@ describe("ensurePluginRegistryLoaded", () => {
       config: {} as never,
     });
 
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        onlyPluginIds: [],
-      }),
-    );
-    expect(
-      (mocks.loadOpenClawPlugins.mock.calls[0]?.[0] as { onlyPluginIds?: string[] }).onlyPluginIds,
-    ).toBeUndefined();
+    expect(loadOptions().onlyPluginIds).toBeUndefined();
   });
 
   it("derives all-scope runtime loads from effective plugin ids", () => {
@@ -353,21 +321,13 @@ describe("ensurePluginRegistryLoaded", () => {
       env,
       workspaceDir: "/resolved-workspace",
     });
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          ...config,
-          plugins: expect.objectContaining({
-            entries: expect.objectContaining({
-              demo: { enabled: true },
-            }),
-          }),
-        }),
-        onlyPluginIds: ["demo-effective", "demo-hook"],
-        throwOnLoadError: true,
-        workspaceDir: "/resolved-workspace",
-      }),
-    );
+    const load = loadOptions();
+    const loadConfig = requireRecord(load.config, "load config");
+    expect(loadConfig.channels).toEqual(config.channels);
+    expect(pluginEntries(loadConfig).demo).toEqual({ enabled: true });
+    expect(load.onlyPluginIds).toEqual(["demo-effective", "demo-hook"]);
+    expect(load.throwOnLoadError).toBe(true);
+    expect(load.workspaceDir).toBe("/resolved-workspace");
   });
 
   it("preserves empty all-scope loads instead of widening to all discovered plugins", () => {
@@ -378,11 +338,7 @@ describe("ensurePluginRegistryLoaded", () => {
       config: { plugins: { enabled: true } } as never,
     });
 
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: [],
-      }),
-    );
+    expect(loadOptions().onlyPluginIds).toEqual([]);
   });
 
   it("reuses a compatible active registry instead of forcing a broad reload", () => {

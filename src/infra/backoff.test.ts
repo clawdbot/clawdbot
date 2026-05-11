@@ -1,6 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "./backoff.js";
 
+async function expectAbortedSleep(promise: Promise<void>): Promise<Error> {
+  try {
+    await promise;
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error);
+    return error as Error;
+  }
+  throw new Error("expected aborted sleep");
+}
+
 describe("backoff helpers", () => {
   const policy: BackoffPolicy = {
     initialMs: 100,
@@ -38,10 +48,9 @@ describe("backoff helpers", () => {
     const controller = new AbortController();
     controller.abort();
 
-    await expect(sleepWithAbort(5, controller.signal)).rejects.toMatchObject({
-      message: "aborted",
-      cause: expect.anything(),
-    });
+    const error = await expectAbortedSleep(sleepWithAbort(5, controller.signal));
+    expect(error.message).toBe("aborted");
+    expect(error.cause).toBe(controller.signal.reason);
   });
 
   it("advances with fake timers", async () => {
@@ -74,8 +83,8 @@ describe("backoff helpers", () => {
       removeEventListener() {},
     } as unknown as AbortSignal;
 
-    await expect(sleepWithAbort(50, signal)).rejects.toMatchObject({
-      message: "aborted",
-    });
+    const error = await expectAbortedSleep(sleepWithAbort(50, signal));
+    expect(error.message).toBe("aborted");
+    expect(error.cause).toStrictEqual(new Error("listener-registration-race"));
   });
 });

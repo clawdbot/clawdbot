@@ -22,6 +22,7 @@ import {
   laneWeight,
   lanesNeedE2eImageKind,
   lanesNeedOpenClawPackage,
+  normalizeReleaseProfile,
   parseLaneSelection,
   parseLiveMode,
   parseProfile,
@@ -1109,6 +1110,9 @@ async function main() {
     cliArgs.has("--plan-json") || parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_JSON, false);
   const planReleaseAll = parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL, false);
   const profile = parseProfile(process.env.OPENCLAW_DOCKER_ALL_PROFILE);
+  const releaseProfile = normalizeReleaseProfile(
+    process.env.OPENCLAW_DOCKER_ALL_RELEASE_PROFILE || process.env.OPENCLAW_RELEASE_PROFILE,
+  );
   const releaseChunk = process.env.OPENCLAW_DOCKER_ALL_CHUNK || process.env.DOCKER_E2E_CHUNK || "";
   const includeOpenWebUI = parseBool(
     process.env.OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI ?? process.env.INCLUDE_OPENWEBUI,
@@ -1160,6 +1164,7 @@ async function main() {
     planReleaseAll: planJson && planReleaseAll,
     profile,
     releaseChunk,
+    releaseProfile,
     selectedLaneNames,
     timingStore,
     upgradeSurvivorBaselines: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
@@ -1174,6 +1179,9 @@ async function main() {
   await mkdir(logDir, { recursive: true });
   console.log(`==> Docker test logs: ${logDir}`);
   console.log(`==> Profile: ${profile}${releaseChunk ? ` chunk=${releaseChunk}` : ""}`);
+  if (profile === RELEASE_PATH_PROFILE) {
+    console.log(`==> Release profile: ${releaseProfile}`);
+  }
   console.log(`==> Parallelism: ${parallelism}`);
   console.log(`==> Tail parallelism: ${tailParallelism}`);
   console.log(`==> Lane timeout: ${laneTimeoutMs}ms`);

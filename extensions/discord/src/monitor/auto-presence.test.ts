@@ -90,8 +90,22 @@ describe("discord auto presence", () => {
 
     expect(updatePresence).toHaveBeenCalledTimes(2);
     expect(updatePresence.mock.calls).toEqual([
-      [expect.objectContaining({ status: "dnd" })],
-      [expect.objectContaining({ status: "online" })],
+      [
+        {
+          since: null,
+          activities: [{ name: "Custom Status", type: 4, state: "token exhausted" }],
+          status: "dnd",
+          afk: false,
+        },
+      ],
+      [
+        {
+          since: null,
+          activities: [],
+          status: "online",
+          afk: false,
+        },
+      ],
     ]);
   });
 
@@ -124,8 +138,22 @@ describe("discord auto presence", () => {
 
     expect(updatePresence).toHaveBeenCalledTimes(2);
     expect(updatePresence.mock.calls).toEqual([
-      [expect.objectContaining({ status: "online" })],
-      [expect.objectContaining({ status: "online" })],
+      [
+        {
+          since: null,
+          activities: [],
+          status: "online",
+          afk: false,
+        },
+      ],
+      [
+        {
+          since: null,
+          activities: [],
+          status: "online",
+          afk: false,
+        },
+      ],
     ]);
   });
 

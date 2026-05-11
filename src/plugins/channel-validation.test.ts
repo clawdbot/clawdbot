@@ -50,14 +50,25 @@ describe("normalizeRegisteredChannelPlugin", () => {
     });
 
     const telegram = getChatChannelMeta("telegram");
-    expect(normalized?.meta).toMatchObject({
+    expect({
+      label: normalized?.meta.label,
+      selectionLabel: normalized?.meta.selectionLabel,
+      docsPath: normalized?.meta.docsPath,
+      blurb: normalized?.meta.blurb,
+    }).toEqual({
       label: telegram.label,
       selectionLabel: telegram.selectionLabel,
       docsPath: telegram.docsPath,
       blurb: telegram.blurb,
     });
-    expect(diagnostics.map((diag) => diag.message)).toEqual([
-      'channel "telegram" registered incomplete metadata; filled missing label, selectionLabel, docsPath, blurb',
+    expect(diagnostics).toEqual([
+      {
+        level: "warn",
+        pluginId: "demo-plugin",
+        source: "/tmp/demo/index.ts",
+        message:
+          'channel "telegram" registered incomplete metadata; filled missing label, selectionLabel, docsPath, blurb',
+      },
     ]);
   });
 
@@ -77,15 +88,21 @@ describe("normalizeRegisteredChannelPlugin", () => {
     });
 
     expect(normalized?.id).toBe("external-chat");
-    expect(normalized?.meta).toMatchObject({
+    expect(normalized?.meta).toEqual({
       id: "external-chat",
       label: "external-chat",
       selectionLabel: "external-chat",
       docsPath: "/channels/external-chat",
       blurb: "",
     });
-    expect(diagnostics.map((diag) => diag.message)).toEqual([
-      'channel "external-chat" registered incomplete metadata; filled missing label, selectionLabel, docsPath, blurb',
+    expect(diagnostics).toEqual([
+      {
+        level: "warn",
+        pluginId: "demo-plugin",
+        source: "/tmp/demo/index.ts",
+        message:
+          'channel "external-chat" registered incomplete metadata; filled missing label, selectionLabel, docsPath, blurb',
+      },
     ]);
   });
 
@@ -110,8 +127,13 @@ describe("normalizeRegisteredChannelPlugin", () => {
 
     expect(normalized?.id).toBe("demo");
     expect(normalized?.meta.id).toBe("demo");
-    expect(diagnostics.map((diag) => diag.message)).toEqual([
-      'channel "demo" meta.id mismatch ("other-demo"); using registered channel id',
+    expect(diagnostics).toEqual([
+      {
+        level: "warn",
+        pluginId: "demo-plugin",
+        source: "/tmp/demo/index.ts",
+        message: 'channel "demo" meta.id mismatch ("other-demo"); using registered channel id',
+      },
     ]);
   });
 
@@ -130,10 +152,12 @@ describe("normalizeRegisteredChannelPlugin", () => {
 
     expect(normalized).toBeNull();
     expect(diagnostics).toEqual([
-      expect.objectContaining({
+      {
         level: "error",
+        pluginId: "demo-plugin",
+        source: "/tmp/demo/index.ts",
         message: 'channel "broken-channel" registration missing required config helpers',
-      }),
+      },
     ]);
   });
 });

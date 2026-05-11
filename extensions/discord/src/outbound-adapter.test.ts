@@ -13,6 +13,29 @@ await installDiscordOutboundModuleSpies(hoisted);
 let normalizeDiscordOutboundTarget: typeof import("./normalize.js").normalizeDiscordOutboundTarget;
 let discordOutbound: typeof import("./outbound-adapter.js").discordOutbound;
 
+type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
+
+function mockCall(source: MockCallSource, label: string, callIndex = 0): Array<unknown> {
+  const call = source.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex}`);
+  }
+  return call;
+}
+
+function mockObjectArg(
+  source: MockCallSource,
+  label: string,
+  callIndex: number,
+  argIndex: number,
+): Record<string, unknown> {
+  const value = mockCall(source, label, callIndex)[argIndex];
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label} call ${callIndex} argument ${argIndex} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
 beforeAll(async () => {
   ({ normalizeDiscordOutboundTarget } = await import("./normalize.js"));
   ({ discordOutbound } = await import("./outbound-adapter.js"));
@@ -125,16 +148,14 @@ describe("discordOutbound", () => {
       },
     });
 
-    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
-      "channel:123456",
-      "formatted",
-      expect.objectContaining({
-        textLimit: 1234,
-        maxLinesPerMessage: 7,
-        tableMode: "off",
-        chunkMode: "newline",
-      }),
-    );
+    const call = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord");
+    expect(call[0]).toBe("channel:123456");
+    expect(call[1]).toBe("formatted");
+    const options = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2);
+    expect(options.textLimit).toBe(1234);
+    expect(options.maxLinesPerMessage).toBe(7);
+    expect(options.tableMode).toBe("off");
+    expect(options.chunkMode).toBe("newline");
   });
 
   it.each([500, 429])("retries transient Discord text send status %i", async (status) => {
@@ -190,22 +211,22 @@ describe("discordOutbound", () => {
       },
     });
 
-    expect(hoisted.sendWebhookMessageDiscordMock).toHaveBeenCalledWith(
-      "hello from persona",
-      expect.objectContaining({
-        webhookId: "wh-1",
-        webhookToken: "tok-1",
-        accountId: "default",
-        threadId: "thread-1",
-        replyTo: "reply-1",
-        username: "Codex",
-        avatarUrl: "https://example.com/avatar.png",
-      }),
+    const call = mockCall(hoisted.sendWebhookMessageDiscordMock, "sendWebhookMessageDiscord");
+    expect(call[0]).toBe("hello from persona");
+    const options = mockObjectArg(
+      hoisted.sendWebhookMessageDiscordMock,
+      "sendWebhookMessageDiscord",
+      0,
+      1,
     );
-    expect(
-      (hoisted.sendWebhookMessageDiscordMock.mock.calls[0]?.[1] as { cfg?: unknown } | undefined)
-        ?.cfg,
-    ).toBe(cfg);
+    expect(options.webhookId).toBe("wh-1");
+    expect(options.webhookToken).toBe("tok-1");
+    expect(options.accountId).toBe("default");
+    expect(options.threadId).toBe("thread-1");
+    expect(options.replyTo).toBe("reply-1");
+    expect(options.username).toBe("Codex");
+    expect(options.avatarUrl).toBe("https://example.com/avatar.png");
+    expect(options.cfg).toBe(cfg);
     expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
     expect(result).toEqual({
       channel: "discord",
@@ -267,15 +288,14 @@ describe("discordOutbound", () => {
       threadId: "thread-1",
     });
 
-    expect(hoisted.sendPollDiscordMock).toHaveBeenCalledWith(
-      "channel:thread-1",
-      {
-        question: "Best snack?",
-        options: ["banana", "apple"],
-      },
-      expect.objectContaining({
-        accountId: "default",
-      }),
+    const call = mockCall(hoisted.sendPollDiscordMock, "sendPollDiscord");
+    expect(call[0]).toBe("channel:thread-1");
+    expect(call[1]).toEqual({
+      question: "Best snack?",
+      options: ["banana", "apple"],
+    });
+    expect(mockObjectArg(hoisted.sendPollDiscordMock, "sendPollDiscord", 0, 2).accountId).toBe(
+      "default",
     );
     expect(result).toEqual({
       channel: "discord",
@@ -299,31 +319,37 @@ describe("discordOutbound", () => {
       replyToMode: "first",
     });
 
-    expect(hoisted.sendVoiceMessageDiscordMock).toHaveBeenCalledWith(
-      "channel:123456",
-      "https://example.com/voice.ogg",
-      expect.objectContaining({
-        accountId: "default",
-        replyTo: "reply-1",
-      }),
+    const voiceCall = mockCall(hoisted.sendVoiceMessageDiscordMock, "sendVoiceMessageDiscord");
+    expect(voiceCall[0]).toBe("channel:123456");
+    expect(voiceCall[1]).toBe("https://example.com/voice.ogg");
+    const voiceOptions = mockObjectArg(
+      hoisted.sendVoiceMessageDiscordMock,
+      "sendVoiceMessageDiscord",
+      0,
+      2,
     );
-    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
-      "channel:123456",
-      "voice note",
-      expect.objectContaining({
-        accountId: "default",
-        replyTo: undefined,
-      }),
+    expect(voiceOptions.accountId).toBe("default");
+    expect(voiceOptions.replyTo).toBe("reply-1");
+
+    const messageCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0);
+    expect(messageCall[0]).toBe("channel:123456");
+    expect(messageCall[1]).toBe("voice note");
+    const messageOptions = mockObjectArg(
+      hoisted.sendMessageDiscordMock,
+      "sendMessageDiscord",
+      0,
+      2,
     );
-    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
-      "channel:123456",
-      "",
-      expect.objectContaining({
-        accountId: "default",
-        mediaUrl: "https://example.com/extra.png",
-        replyTo: undefined,
-      }),
-    );
+    expect(messageOptions.accountId).toBe("default");
+    expect(messageOptions.replyTo).toBeUndefined();
+
+    const mediaCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1);
+    expect(mediaCall[0]).toBe("channel:123456");
+    expect(mediaCall[1]).toBe("");
+    const mediaOptions = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1, 2);
+    expect(mediaOptions.accountId).toBe("default");
+    expect(mediaOptions.mediaUrl).toBe("https://example.com/extra.png");
+    expect(mediaOptions.replyTo).toBeUndefined();
     expect(result).toEqual({
       channel: "discord",
       messageId: "msg-1",
@@ -393,22 +419,24 @@ describe("discordOutbound", () => {
       replyToId: "reply-1",
     });
 
-    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
-      "channel:123456",
-      "rendered clip",
-      expect.objectContaining({
-        accountId: "default",
-        replyTo: "reply-1",
-      }),
+    const captionCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0);
+    expect(captionCall[0]).toBe("channel:123456");
+    expect(captionCall[1]).toBe("rendered clip");
+    const captionOptions = mockObjectArg(
+      hoisted.sendMessageDiscordMock,
+      "sendMessageDiscord",
+      0,
+      2,
     );
-    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
-      "channel:123456",
-      "",
-      expect.objectContaining({
-        accountId: "default",
-        mediaUrl: "/tmp/render.mp4",
-      }),
-    );
+    expect(captionOptions.accountId).toBe("default");
+    expect(captionOptions.replyTo).toBe("reply-1");
+
+    const mediaCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1);
+    expect(mediaCall[0]).toBe("channel:123456");
+    expect(mediaCall[1]).toBe("");
+    const mediaOptions = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1, 2);
+    expect(mediaOptions.accountId).toBe("default");
+    expect(mediaOptions.mediaUrl).toBe("/tmp/render.mp4");
   });
 
   it("touches bound thread activity after shared outbound delivery succeeds", async () => {
@@ -472,26 +500,39 @@ describe("discordOutbound", () => {
       replyToMode: "first",
     });
 
-    expect(hoisted.sendDiscordComponentMessageMock).toHaveBeenCalledWith(
-      "channel:123456",
-      expect.objectContaining({ text: "hello" }),
-      expect.objectContaining({
-        mediaUrl: "https://example.com/1.png",
-        mediaLocalRoots: ["/tmp/media"],
-        accountId: "default",
-        replyTo: "reply-1",
-      }),
+    const componentCall = mockCall(
+      hoisted.sendDiscordComponentMessageMock,
+      "sendDiscordComponentMessage",
     );
-    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
-      "channel:123456",
-      "",
-      expect.objectContaining({
-        mediaUrl: "https://example.com/2.png",
-        mediaLocalRoots: ["/tmp/media"],
-        accountId: "default",
-        replyTo: undefined,
-      }),
+    expect(componentCall[0]).toBe("channel:123456");
+    expect(
+      mockObjectArg(hoisted.sendDiscordComponentMessageMock, "sendDiscordComponentMessage", 0, 1)
+        .text,
+    ).toBe("hello");
+    const componentOptions = mockObjectArg(
+      hoisted.sendDiscordComponentMessageMock,
+      "sendDiscordComponentMessage",
+      0,
+      2,
     );
+    expect(componentOptions.mediaUrl).toBe("https://example.com/1.png");
+    expect(componentOptions.mediaLocalRoots).toEqual(["/tmp/media"]);
+    expect(componentOptions.accountId).toBe("default");
+    expect(componentOptions.replyTo).toBe("reply-1");
+
+    const messageCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord");
+    expect(messageCall[0]).toBe("channel:123456");
+    expect(messageCall[1]).toBe("");
+    const messageOptions = mockObjectArg(
+      hoisted.sendMessageDiscordMock,
+      "sendMessageDiscord",
+      0,
+      2,
+    );
+    expect(messageOptions.mediaUrl).toBe("https://example.com/2.png");
+    expect(messageOptions.mediaLocalRoots).toEqual(["/tmp/media"]);
+    expect(messageOptions.accountId).toBe("default");
+    expect(messageOptions.replyTo).toBeUndefined();
     expect(result).toEqual({
       channel: "discord",
       messageId: "msg-2",
@@ -560,17 +601,15 @@ describe("discordOutbound", () => {
       replyToId: "reply-1",
     });
 
-    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
-      "channel:123456",
-      "hello",
-      expect.objectContaining({
-        mediaUrl: "https://example.com/photo.png",
-        components: [{ type: 1, components: [] }],
-        filename: "photo.png",
-        accountId: "default",
-        replyTo: "reply-1",
-      }),
-    );
+    const call = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord");
+    expect(call[0]).toBe("channel:123456");
+    expect(call[1]).toBe("hello");
+    const options = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2);
+    expect(options.mediaUrl).toBe("https://example.com/photo.png");
+    expect(options.components).toEqual([{ type: 1, components: [] }]);
+    expect(options.filename).toBe("photo.png");
+    expect(options.accountId).toBe("default");
+    expect(options.replyTo).toBe("reply-1");
   });
 
   it("preserves explicit component payload replies when replyToMode is off", async () => {
@@ -641,14 +680,20 @@ describe("discordOutbound", () => {
       accountId: "default",
     });
 
-    expect(hoisted.sendDiscordComponentMessageMock).toHaveBeenCalledWith(
-      "channel:123456",
-      expect.objectContaining({
-        text: "native component text",
-        blocks: [{ type: "text", text: "Native component body" }],
-      }),
-      expect.objectContaining({ accountId: "default" }),
+    const call = mockCall(hoisted.sendDiscordComponentMessageMock, "sendDiscordComponentMessage");
+    expect(call[0]).toBe("channel:123456");
+    const payload = mockObjectArg(
+      hoisted.sendDiscordComponentMessageMock,
+      "sendDiscordComponentMessage",
+      0,
+      1,
     );
+    expect(payload.text).toBe("native component text");
+    expect(payload.blocks).toEqual([{ type: "text", text: "Native component body" }]);
+    expect(
+      mockObjectArg(hoisted.sendDiscordComponentMessageMock, "sendDiscordComponentMessage", 0, 2)
+        .accountId,
+    ).toBe("default");
     expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
   });
 
@@ -669,13 +714,12 @@ describe("discordOutbound", () => {
       accountId: "default",
     });
 
-    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
-      "channel:123456",
-      "Approval @\u200beveryone <@\u200b123> <#\u200b456>",
-      expect.objectContaining({
-        accountId: "default",
-      }),
-    );
+    const call = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord");
+    expect(call[0]).toBe("channel:123456");
+    expect(call[1]).toBe("Approval @\u200beveryone <@\u200b123> <#\u200b456>");
+    expect(
+      mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2).accountId,
+    ).toBe("default");
   });
 
   it("uses a single implicit reply for chunked approval payload fallbacks", async () => {
@@ -717,12 +761,11 @@ describe("discordOutbound", () => {
       accountId: "default",
     });
 
-    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
-      "channel:123456",
-      "Hello @everyone",
-      expect.objectContaining({
-        accountId: "default",
-      }),
-    );
+    const call = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord");
+    expect(call[0]).toBe("channel:123456");
+    expect(call[1]).toBe("Hello @everyone");
+    expect(
+      mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2).accountId,
+    ).toBe("default");
   });
 });

@@ -85,9 +85,12 @@ describe("runtime conversation binding route", () => {
     expect(touch).toHaveBeenCalledWith("binding-1", undefined);
     expect(result.boundSessionKey).toBe("agent:review:acp:session-1");
     expect(result.boundAgentId).toBe("review");
-    expect(result.route).toMatchObject({
+    expect(result.route).toEqual({
       agentId: "review",
+      accountId: "default",
+      channel: "demo",
       sessionKey: "agent:review:acp:session-1",
+      mainSessionKey: "agent:main:main",
       lastRoutePolicy: "session",
       matchedBy: "binding.channel",
     });

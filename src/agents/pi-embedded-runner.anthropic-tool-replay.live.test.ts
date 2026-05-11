@@ -1,4 +1,4 @@
-import type { Message, Model } from "@mariozechner/pi-ai";
+import type { Message, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   completeSimpleWithLiveTimeout,

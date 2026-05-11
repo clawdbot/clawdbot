@@ -69,6 +69,68 @@ describe("QA Convex credential payload validation", () => {
     expect(normalizeCredentialPayloadForKind("future-kind", payload)).toBe(payload);
   });
 
+  it("normalizes Telegram user credential payloads", () => {
+    const sha256 = "a".repeat(64);
+
+    expect(
+      normalizeCredentialPayloadForKind("telegram-user", {
+        groupId: " -100123 ",
+        sutToken: " sut-token ",
+        testerUserId: " 8709353529 ",
+        testerUsername: " OpenClawTestUser ",
+        telegramApiId: " 123456 ",
+        telegramApiHash: " api-hash ",
+        tdlibDatabaseEncryptionKey: " db-key ",
+        tdlibArchiveBase64: " tdlib-archive ",
+        tdlibArchiveSha256: sha256.toUpperCase(),
+        desktopTdataArchiveBase64: " desktop-archive ",
+        desktopTdataArchiveSha256: sha256,
+        ignored: true,
+      }),
+    ).toEqual({
+      groupId: "-100123",
+      sutToken: "sut-token",
+      testerUserId: "8709353529",
+      testerUsername: "OpenClawTestUser",
+      telegramApiId: "123456",
+      telegramApiHash: "api-hash",
+      tdlibDatabaseEncryptionKey: "db-key",
+      tdlibArchiveBase64: "tdlib-archive",
+      tdlibArchiveSha256: sha256,
+      desktopTdataArchiveBase64: "desktop-archive",
+      desktopTdataArchiveSha256: sha256,
+    });
+  });
+
+  it("rejects malformed Telegram user credential payloads", () => {
+    const validPayload = {
+      groupId: "-100123",
+      sutToken: "sut-token",
+      testerUserId: "8709353529",
+      testerUsername: "OpenClawTestUser",
+      telegramApiId: "123456",
+      telegramApiHash: "api-hash",
+      tdlibDatabaseEncryptionKey: "db-key",
+      tdlibArchiveBase64: "tdlib-archive",
+      tdlibArchiveSha256: "a".repeat(64),
+      desktopTdataArchiveBase64: "desktop-archive",
+      desktopTdataArchiveSha256: "b".repeat(64),
+    };
+
+    expect(() =>
+      normalizeCredentialPayloadForKind("telegram-user", {
+        ...validPayload,
+        testerUserId: "tester",
+      }),
+    ).toThrow(/testerUserId/u);
+    expect(() =>
+      normalizeCredentialPayloadForKind("telegram-user", {
+        ...validPayload,
+        tdlibArchiveSha256: "not-sha",
+      }),
+    ).toThrow(/tdlibArchiveSha256/u);
+  });
+
   it("normalizes WhatsApp credential payloads", () => {
     expect(
       normalizeCredentialPayloadForKind("whatsapp", {

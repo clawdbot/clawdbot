@@ -32,12 +32,15 @@ describe("resolveSlackUserAllowlist", () => {
       client: client as never,
     });
 
-    expect(res[0]).toMatchObject({
-      resolved: true,
-      id: "U2",
-      name: "Person",
+    expect(res[0]).toEqual({
+      deleted: false,
       email: "person@example.com",
+      id: "U2",
+      input: "person@example.com",
       isBot: false,
+      name: "Person",
+      note: "multiple matches; chose best",
+      resolved: true,
     });
   });
 

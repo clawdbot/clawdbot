@@ -72,9 +72,9 @@ struct SettingsTab: View {
                         {
                             GatewayProblemBanner(
                                 problem: gatewayProblem,
-                                primaryActionTitle: "Retry connection",
+                                primaryActionTitle: self.gatewayProblemPrimaryActionTitle(gatewayProblem),
                                 onPrimaryAction: {
-                                    Task { await self.retryGatewayConnectionFromProblem() }
+                                    Task { await self.handleGatewayProblemPrimaryAction(gatewayProblem) }
                                 },
                                 onShowDetails: {
                                     self.showGatewayProblemDetails = true
@@ -433,9 +433,9 @@ struct SettingsTab: View {
                 if let gatewayProblem = self.appModel.lastGatewayProblem {
                     GatewayProblemDetailsSheet(
                         problem: gatewayProblem,
-                        primaryActionTitle: "Retry",
+                        primaryActionTitle: self.gatewayProblemPrimaryActionTitle(gatewayProblem),
                         onPrimaryAction: {
-                            Task { await self.retryGatewayConnectionFromProblem() }
+                            Task { await self.handleGatewayProblemPrimaryAction(gatewayProblem) }
                         })
                 }
             }
@@ -1060,6 +1060,18 @@ struct SettingsTab: View {
             return
         }
         await self.connectLastKnown()
+    }
+
+    private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
+        problem.canTrustRotatedCertificate ? "Trust certificate" : "Retry connection"
+    }
+
+    private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
+        if problem.canTrustRotatedCertificate {
+            _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
+            return
+        }
+        await self.retryGatewayConnectionFromProblem()
     }
 
     private func resetOnboarding() {

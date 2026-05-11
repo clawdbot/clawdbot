@@ -24,6 +24,7 @@
     "CHANGELOG.md",
     "LICENSE",
     "openclaw.mjs",
+    "pnpm-workspace.yaml",
     "README.md",
     "dist/",
     "!dist/.buildstamp",
@@ -213,6 +214,10 @@
     "./plugin-sdk/config-runtime": {
       "types": "./dist/plugin-sdk/config-runtime.d.ts",
       "default": "./dist/plugin-sdk/config-runtime.js"
+    },
+    "./plugin-sdk/config-contracts": {
+      "types": "./dist/plugin-sdk/config-contracts.d.ts",
+      "default": "./dist/plugin-sdk/config-contracts.js"
     },
     "./plugin-sdk/config-types": {
       "types": "./dist/plugin-sdk/config-types.d.ts",
@@ -1262,6 +1267,10 @@
       "types": "./dist/plugin-sdk/text-autolink-runtime.d.ts",
       "default": "./dist/plugin-sdk/text-autolink-runtime.js"
     },
+    "./plugin-sdk/text-utility-runtime": {
+      "types": "./dist/plugin-sdk/text-utility-runtime.d.ts",
+      "default": "./dist/plugin-sdk/text-utility-runtime.js"
+    },
     "./plugin-sdk/tool-payload": {
       "types": "./dist/plugin-sdk/tool-payload.d.ts",
       "default": "./dist/plugin-sdk/tool-payload.js"
@@ -1470,6 +1479,8 @@
     "plugin-sdk:api:check": "node --max-old-space-size=8192 --import tsx scripts/generate-plugin-sdk-api-baseline.ts --check",
     "plugin-sdk:api:gen": "node --max-old-space-size=8192 --import tsx scripts/generate-plugin-sdk-api-baseline.ts --write",
     "plugin-sdk:check-exports": "node scripts/sync-plugin-sdk-exports.mjs --check",
+    "plugin-sdk:surface": "node --max-old-space-size=8192 scripts/plugin-sdk-surface-report.mjs",
+    "plugin-sdk:surface:check": "node --max-old-space-size=8192 scripts/plugin-sdk-surface-report.mjs --check",
     "plugin-sdk:sync-exports": "node scripts/sync-plugin-sdk-exports.mjs",
     "plugin-sdk:usage": "node --import tsx scripts/analyze-plugin-sdk-usage.ts",
     "plugins:boundary-report": "node --import tsx scripts/plugin-boundary-report.ts",
@@ -1506,6 +1517,7 @@
     "qa:lab:up:fast": "node --import tsx scripts/qa-lab-up.ts --use-prebuilt-image --bind-ui-dist --skip-ui-build",
     "qa:lab:watch": "vite build --watch --config extensions/qa-lab/web/vite.config.ts",
     "qa:otel:smoke": "node --import tsx scripts/qa-otel-smoke.ts",
+    "qa:telegram-user:crabbox": "node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts",
     "release-metadata:check": "node scripts/check-release-metadata-only.mjs",
     "release:beta-smoke": "node --import tsx scripts/release-beta-smoke.ts",
     "release:check": "pnpm release:generated:check && node --import tsx scripts/release-check.ts",
@@ -1656,6 +1668,7 @@
     "test:sectriage": "OPENCLAW_GATEWAY_PROJECT_SHARDS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts && node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts --exclude src/daemon/launchd.integration.test.ts --exclude src/process/exec.test.ts",
     "test:serial": "OPENCLAW_TEST_PROJECTS_SERIAL=1 OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/test-projects.mjs",
     "test:stability:gateway": "OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/gateway-stability.test.ts && OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.logging.config.ts src/logging/diagnostic-stability-bundle.test.ts && OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.infra.config.ts src/infra/fatal-error-hooks.test.ts",
+    "test:cli-response:contract": "node scripts/build-all.mjs cliStartup && node scripts/test-cli-startup-bench-budget.mjs --preset response --runs 1 --warmup 0 --timeout-ms 10000 --skip-baseline",
     "test:startup:bench": "node --import tsx scripts/bench-cli-startup.ts",
     "test:startup:bench:check": "node scripts/test-cli-startup-bench-budget.mjs",
     "test:startup:bench:save": "node --import tsx scripts/bench-cli-startup.ts --preset all --runs 5 --warmup 1 --output .artifacts/cli-startup-bench-all.json",
@@ -1670,9 +1683,6 @@
     "test:voicecall:closedloop": "node scripts/test-voicecall-closedloop.mjs",
     "test:watch": "node scripts/test-projects.mjs --watch",
     "test:windows:ci": "node scripts/test-projects.mjs src/shared/runtime-import.test.ts src/plugins/import-specifier.test.ts src/process/exec.windows.test.ts src/process/windows-command.test.ts src/infra/windows-install-roots.test.ts extensions/lobster/src/lobster-runner.test.ts test/scripts/npm-runner.test.ts test/scripts/pnpm-runner.test.ts test/scripts/ui.test.ts test/scripts/vitest-process-group.test.ts",
-    "testbox:claim": "node scripts/blacksmith-testbox-runner.mjs --claim",
-    "testbox:run": "node scripts/blacksmith-testbox-runner.mjs",
-    "testbox:sanity": "node scripts/testbox-sync-sanity.mjs",
     "tool-display:check": "node --import tsx scripts/tool-display.ts --check",
     "tool-display:write": "node --import tsx scripts/tool-display.ts --write",
     "ts-topology": "node --import tsx scripts/ts-topology.ts",
@@ -1709,18 +1719,18 @@
     "@aws/bedrock-token-generator": "^1.1.0",
     "@clack/core": "^1.3.0",
     "@clack/prompts": "^1.3.0",
+    "@earendil-works/pi-agent-core": "0.74.0",
+    "@earendil-works/pi-ai": "0.74.0",
+    "@earendil-works/pi-coding-agent": "0.74.0",
+    "@earendil-works/pi-tui": "0.74.0",
     "@google/genai": "^2.0.1",
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@homebridge/ciao": "^1.3.8",
     "@lydell/node-pty": "1.2.0-beta.12",
-    "@mariozechner/pi-agent-core": "0.73.1",
-    "@mariozechner/pi-ai": "0.73.1",
-    "@mariozechner/pi-coding-agent": "0.73.1",
-    "@mariozechner/pi-tui": "0.73.1",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "^0.6.0",
-    "@openclaw/fs-safe": "github:openclaw/fs-safe#c7ccb99d3058f2acf2ad2758ad2470c7e113a53c",
+    "@openclaw/fs-safe": "^0.2.2",
     "@slack/bolt": "^4.7.2",
     "@slack/types": "^2.21.1",
     "@slack/web-api": "^7.15.2",
@@ -1773,7 +1783,7 @@
     "@types/markdown-it": "^14.1.2",
     "@types/node": "25.6.2",
     "@types/ws": "^8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260509.2",
+    "@typescript/native-preview": "7.0.0-dev.20260510.1",
     "@vitest/coverage-v8": "^4.1.5",
     "jscpd": "4.1.0",
     "jsdom": "^29.1.1",
@@ -1785,6 +1795,7 @@
     "tsdown": "0.22.0",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
+    "unrun": "0.2.37",
     "vitest": "^4.1.5"
   },
   "optionalDependencies": {
@@ -1802,70 +1813,5 @@
   "engines": {
     "node": ">=22.16.0"
   },
-  "packageManager": "pnpm@10.33.2+sha512.a90faf6feeab71ad6c6e57f94e0fe1a12f5dcc22cd754db40ae9593eb6a3e0b6b12e3540218bb37ae083404b1f2ce6db2a4121e979829b4aff94b99f49da1cf8",
-  "pnpm": {
-    "overrides": {
-      "@anthropic-ai/sdk": "0.95.1",
-      "hono": "4.12.18",
-      "@hono/node-server": "1.19.14",
-      "@aws-sdk/client-bedrock-runtime": "3.1045.0",
-      "axios": "1.16.0",
-      "fast-uri": "3.1.2",
-      "follow-redirects": "1.16.0",
-      "defu": "6.1.5",
-      "fast-xml-parser": "5.7.0",
-      "request": "npm:@cypress/request@3.0.10",
-      "request-promise": "npm:@cypress/request-promise@5.0.0",
-      "basic-ftp": "6.0.1",
-      "file-type": "22.0.1",
-      "form-data": "2.5.4",
-      "ip-address": "10.2.0",
-      "minimatch": "10.2.5",
-      "path-to-regexp": "8.4.0",
-      "qs": "6.14.2",
-      "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-      "typebox": "1.1.38",
-      "tar": "7.5.15",
-      "tough-cookie": "4.1.3",
-      "yauzl": "3.2.1",
-      "protobufjs": "7.5.5",
-      "uuid": "14.0.0"
-    },
-    "onlyBuiltDependencies": [
-      "@openclaw/fs-safe",
-      "@google/genai",
-      "@lydell/node-pty",
-      "@matrix-org/matrix-sdk-crypto-nodejs",
-      "@tloncorp/api",
-      "@tloncorp/tlon-skill",
-      "@whiskeysockets/baileys",
-      "@whiskeysockets/libsignal-node",
-      "authenticate-pam",
-      "esbuild",
-      "node-llama-cpp",
-      "protobufjs",
-      "sharp"
-    ],
-    "ignoredBuiltDependencies": [
-      "@discordjs/opus",
-      "koffi",
-      "tree-sitter-bash"
-    ],
-    "packageExtensions": {
-      "@mariozechner/pi-coding-agent": {
-        "dependencies": {
-          "strip-ansi": "^7.2.0"
-        }
-      }
-    },
-    "peerDependencyRules": {
-      "allowedVersions": {
-        "prism-media>opusscript": "^0.0.8 || ^0.1.1"
-      }
-    },
-    "patchedDependencies": {
-      "@whiskeysockets/baileys@7.0.0-rc10": "patches/@whiskeysockets__baileys@7.0.0-rc10.patch",
-      "@agentclientprotocol/claude-agent-acp@0.33.1": "patches/@agentclientprotocol__claude-agent-acp@0.33.1.patch"
-    }
-  }
+  "packageManager": "pnpm@11.0.8+sha512.4c4097e1dd2d42372c4e7fa5a791ff28fc75a484c7ac192e64b1df0fdef17594ba982f9b4fed9adfb3c757846f565b799b2763fb3733d1de1bcb82cf46684912"
 }

@@ -16,22 +16,22 @@
       "class": "core-runtime",
       "risk": ["native", "terminal"]
     },
-    "@mariozechner/pi-agent-core": {
+    "@earendil-works/pi-agent-core": {
       "owner": "capability:agent-runtime-pi",
       "class": "default-runtime-initially",
       "risk": ["large-transitive-cone", "agent-runtime"]
     },
-    "@mariozechner/pi-ai": {
+    "@earendil-works/pi-ai": {
       "owner": "capability:agent-runtime-pi",
       "class": "default-runtime-initially",
       "risk": ["large-transitive-cone", "provider-sdk-fanout"]
     },
-    "@mariozechner/pi-coding-agent": {
+    "@earendil-works/pi-coding-agent": {
       "owner": "capability:agent-runtime-pi",
       "class": "default-runtime-initially",
       "risk": ["large-transitive-cone", "agent-runtime"]
     },
-    "@mariozechner/pi-tui": {
+    "@earendil-works/pi-tui": {
       "owner": "capability:tui-pi",
       "class": "default-runtime-initially",
       "risk": ["tui-runtime"]

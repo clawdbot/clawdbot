@@ -34,6 +34,19 @@ export type BuildChannelTurnContextParams = {
   extra?: Record<string, unknown>;
 };
 
+export type BuiltChannelTurnContext = FinalizedMsgContext & {
+  Body: string;
+  BodyForAgent: string;
+  BodyForCommands: string;
+  ChatType: ConversationFacts["kind"];
+  CommandAuthorized: boolean;
+  CommandBody: string;
+  From: string;
+  RawBody: string;
+  SessionKey: string;
+  To: string;
+};
+
 function compactStrings(values: Array<string | undefined>): string[] | undefined {
   const compacted = values.filter((value): value is string => Boolean(value));
   return compacted.length > 0 ? compacted : undefined;
@@ -111,7 +124,7 @@ function resolveAccessFactsCommandAuthorized(access: AccessFacts | undefined): b
 
 export function buildChannelTurnContext(
   params: BuildChannelTurnContextParams,
-): FinalizedMsgContext {
+): BuiltChannelTurnContext {
   const media = params.media ?? [];
   const supplemental = filterChannelTurnSupplementalContext({
     supplemental: params.supplemental,
@@ -158,12 +171,7 @@ export function buildChannelTurnContext(
     GroupSubject: params.conversation.kind !== "direct" ? params.conversation.label : undefined,
     GroupSpace: params.conversation.spaceId,
     GroupSystemPrompt: supplemental?.groupSystemPrompt,
-    UntrustedStructuredContext: Array.isArray(supplemental?.untrustedContext)
-      ? supplemental.untrustedContext.map((payload, index) => ({
-          label: `context ${index + 1}`,
-          payload,
-        }))
-      : undefined,
+    UntrustedStructuredContext: supplemental?.untrustedContext,
     SenderName: params.sender.name ?? params.sender.displayLabel,
     SenderId: params.sender.id,
     SenderUsername: params.sender.username,
@@ -173,7 +181,7 @@ export function buildChannelTurnContext(
     Provider: params.provider ?? params.channel,
     Surface: params.surface ?? params.provider ?? params.channel,
     WasMentioned: params.access?.mentions?.wasMentioned,
-    CommandAuthorized: resolveAccessFactsCommandAuthorized(params.access),
+    CommandAuthorized: resolveAccessFactsCommandAuthorized(params.access) === true,
     MessageThreadId: params.reply.messageThreadId ?? params.conversation.threadId,
     NativeChannelId: params.reply.nativeChannelId ?? params.conversation.nativeChannelId,
     OriginatingChannel: params.channel,

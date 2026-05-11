@@ -2111,9 +2111,19 @@ describe("gateway healthHandlers.status scope handling", () => {
 
 describe("gateway healthHandlers.health cache freshness", () => {
   let healthHandlers: typeof import("./health.js").healthHandlers;
+  let pricingState: typeof import("../model-pricing-cache-state.js");
 
   beforeAll(async () => {
     ({ healthHandlers } = await import("./health.js"));
+    pricingState = await import("../model-pricing-cache-state.js");
+  });
+
+  beforeEach(() => {
+    pricingState.clearGatewayModelPricingCacheState();
+  });
+
+  afterEach(() => {
+    pricingState.clearGatewayModelPricingCacheState();
   });
 
   it("refreshes cached health when runtime channel lifecycle has changed", async () => {
@@ -2255,6 +2265,56 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(mockCallArg(respond)).toBe(true);
     expectRecordFields(mockCallArg(respond, 0, 1), { eventLoop });
     expect(mockCallArg(respond, 0, 2)).toBeUndefined();
+  });
+
+  it("merges live model-pricing state into cached health responses", async () => {
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      modelPricing: { state: "ok", sources: [] },
+    };
+    pricingState.recordGatewayModelPricingSourceFailure(
+      "openrouter",
+      "OpenRouter pricing fetch failed: TypeError: fetch failed",
+      123,
+    );
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(mockCallArg(respond, 0, 1)).toMatchObject({
+      modelPricing: {
+        state: "degraded",
+        detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
+        sources: [{ source: "openrouter", state: "degraded", lastFailureAt: 123 }],
+      },
+    });
+    expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
   });
 
   it("refreshes cached health when a runtime account is missing from the cached account summary", async () => {

@@ -55,21 +55,29 @@ describe("sendDm", () => {
     });
 
     expect(scot).toHaveBeenCalledWith("ud", 1_700_000_000_000n);
-    expect(poke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        json: expect.objectContaining({
-          channel: expect.objectContaining({
-            action: {
-              post: {
-                reply: expect.objectContaining({
-                  id: "~2024.1.1",
-                }),
+    expect(poke).toHaveBeenCalledWith({
+      app: "channels",
+      mark: "channel-action-1",
+      json: {
+        channel: {
+          nest: "chat/~nec/general",
+          action: {
+            post: {
+              reply: {
+                id: "~2024.1.1",
+                action: {
+                  add: {
+                    content: [{ inline: ["threaded"] }],
+                    author: "~zod",
+                    sent: 1_700_000_000_000,
+                  },
+                },
               },
             },
-          }),
-        }),
-      }),
-    );
+          },
+        },
+      },
+    });
     expect(result.receipt.threadId).toBe("~nec/general");
   });
 });

@@ -156,12 +156,12 @@ describe("Gemini embedding provider", () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent",
     );
-    expect(fetchJsonBody(fetchMock, 0)).toMatchObject({
+    expect(fetchJsonBody(fetchMock, 0)).toEqual({
       outputDimensionality: 768,
       taskType: "SEMANTIC_SIMILARITY",
       content: { parts: [{ text: "test query" }] },
     });
-    expect(fetchJsonBody(fetchMock, 1)).toMatchObject({
+    expect(fetchJsonBody(fetchMock, 1)).toEqual({
       requests: [
         {
           model: "models/gemini-embedding-2-preview",

@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { streamSimple } from "@earendil-works/pi-ai";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 type AnthropicToolSchemaMode = "openai-functions";
 type AnthropicToolChoiceMode = "openai-string-modes";
@@ -124,6 +124,7 @@ function normalizeOpenAiStringModeAnthropicToolChoice(toolChoice: unknown): unkn
   return toolChoice;
 }
 
+/** @deprecated Anthropic-family provider stream helper; do not use from third-party plugins. */
 export function createAnthropicToolPayloadCompatibilityWrapper(
   baseStreamFn: StreamFn | undefined,
   options?: AnthropicToolPayloadCompatibilityOptions,
@@ -160,6 +161,7 @@ export function createAnthropicToolPayloadCompatibilityWrapper(
   };
 }
 
+/** @deprecated Anthropic-family provider stream helper; do not use from third-party plugins. */
 export function createOpenAIAnthropicToolPayloadCompatibilityWrapper(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn {

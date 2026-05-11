@@ -36,16 +36,20 @@ Order of "how early it fires":
 
 ## Configuration
 
+Set the agent-level default:
+
 ```json5
 {
-  agent: {
-    typingMode: "thinking",
-    typingIntervalSeconds: 6,
+  agents: {
+    defaults: {
+      typingMode: "thinking",
+      typingIntervalSeconds: 6,
+    },
   },
 }
 ```
 
-You can override mode or cadence per session:
+Override mode or cadence per session:
 
 ```json5
 {

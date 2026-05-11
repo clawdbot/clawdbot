@@ -1,6 +1,8 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  resolveConfiguredBindingRoute,
   resolveRuntimeConversationBindingRoute,
+  type ConfiguredBindingRouteResult,
   type RuntimeConversationBindingRouteResult,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -22,6 +24,8 @@ type SlackRoutingContext = {
   route: ReturnType<typeof resolveAgentRoute>;
   runtimeBinding: RuntimeConversationBindingRouteResult["bindingRecord"];
   runtimeBoundSessionKey: string | undefined;
+  configuredBinding: ConfiguredBindingRouteResult["bindingResolution"];
+  configuredBindingSessionKey: string;
   chatType: "direct" | "group" | "channel";
   replyToMode: ReturnType<typeof resolveSlackReplyToMode>;
   threadContext: ReturnType<typeof resolveSlackThreadContext>;
@@ -232,14 +236,33 @@ export function resolveSlackRoutingContext(params: {
             conversationId: baseConversationId,
           },
         });
-  route = runtimeRoute.route;
-  const threadKeys = runtimeRoute.boundSessionKey
-    ? { sessionKey: route.sessionKey, parentSessionKey: undefined }
-    : resolveThreadSessionKeys({
-        baseSessionKey: route.sessionKey,
-        threadId: routedThreadId,
-        parentSessionKey: routedThreadId && ctx.threadInheritParent ? route.sessionKey : undefined,
-      });
+  let configuredBinding: ConfiguredBindingRouteResult["bindingResolution"] = null;
+  let configuredBindingSessionKey = "";
+  if (runtimeRoute.boundSessionKey || runtimeRoute.bindingRecord) {
+    route = runtimeRoute.route;
+  } else {
+    const configuredRoute = resolveConfiguredBindingRoute({
+      cfg: ctx.cfg,
+      route,
+      conversation: {
+        channel: "slack",
+        accountId: account.accountId,
+        conversationId: baseConversationId,
+      },
+    });
+    configuredBinding = configuredRoute.bindingResolution;
+    configuredBindingSessionKey = configuredRoute.boundSessionKey ?? "";
+    route = configuredRoute.route;
+  }
+  const threadKeys =
+    runtimeRoute.boundSessionKey || configuredBindingSessionKey
+      ? { sessionKey: route.sessionKey, parentSessionKey: undefined }
+      : resolveThreadSessionKeys({
+          baseSessionKey: route.sessionKey,
+          threadId: routedThreadId,
+          parentSessionKey:
+            routedThreadId && ctx.threadInheritParent ? route.sessionKey : undefined,
+        });
   const sessionKey = threadKeys.sessionKey;
   const historyKey =
     isThreadReply && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
@@ -248,6 +271,8 @@ export function resolveSlackRoutingContext(params: {
     route,
     runtimeBinding: runtimeRoute.bindingRecord,
     runtimeBoundSessionKey: runtimeRoute.boundSessionKey,
+    configuredBinding,
+    configuredBindingSessionKey,
     chatType,
     replyToMode,
     threadContext,

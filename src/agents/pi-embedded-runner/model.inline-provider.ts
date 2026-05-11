@@ -1,8 +1,9 @@
-import type { Api } from "@mariozechner/pi-ai";
+import type { Api } from "@earendil-works/pi-ai";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
+import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
   attachModelProviderRequestTransport,
   resolveProviderRequestConfig,
@@ -27,6 +28,7 @@ export type InlineProviderConfig = {
   authHeader?: boolean;
   timeoutSeconds?: ModelProviderConfig["timeoutSeconds"];
   request?: ModelProviderConfig["request"];
+  localService?: ModelProviderConfig["localService"];
 };
 
 export function normalizeResolvedTransportApi(
@@ -154,24 +156,27 @@ export function buildInlineProviderModels(
         capability: "llm",
         transport: "stream",
       });
-      return attachModelProviderRequestTransport(
-        {
-          ...model,
-          contextWindow: model.contextWindow ?? entry?.contextWindow,
-          contextTokens: model.contextTokens ?? entry?.contextTokens,
-          maxTokens: model.maxTokens ?? entry?.maxTokens,
-          input: resolveProviderModelInput({
+      return attachModelProviderLocalService(
+        attachModelProviderRequestTransport(
+          {
+            ...model,
+            contextWindow: model.contextWindow ?? entry?.contextWindow,
+            contextTokens: model.contextTokens ?? entry?.contextTokens,
+            maxTokens: model.maxTokens ?? entry?.maxTokens,
+            input: resolveProviderModelInput({
+              provider: trimmed,
+              modelId: model.id,
+              modelName: model.name,
+              input: model.input,
+            }),
             provider: trimmed,
-            modelId: model.id,
-            modelName: model.name,
-            input: model.input,
-          }),
-          provider: trimmed,
-          baseUrl: requestConfig.baseUrl ?? transport.baseUrl,
-          api: requestConfig.api ?? model.api,
-          headers: requestConfig.headers,
-        },
-        providerRequest,
+            baseUrl: requestConfig.baseUrl ?? transport.baseUrl,
+            api: requestConfig.api ?? model.api,
+            headers: requestConfig.headers,
+          },
+          providerRequest,
+        ),
+        entry?.localService,
       );
     });
   });

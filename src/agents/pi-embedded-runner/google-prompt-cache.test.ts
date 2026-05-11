@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Model } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Model } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { prepareGooglePromptCacheStreamFn } from "./google-prompt-cache.js";
 
@@ -80,6 +80,30 @@ function createCapturingStreamFn(result = "stream") {
   };
 }
 
+function callArg(mock: { mock: { calls: unknown[][] } }, callIndex: number, argIndex: number) {
+  const call = mock.mock.calls[callIndex];
+  expect(call).toBeDefined();
+  return call?.[argIndex];
+}
+
+function fetchInit(fetchMock: { mock: { calls: unknown[][] } }, callIndex = 0): RequestInit {
+  const init = callArg(fetchMock, callIndex, 1);
+  expect(typeof init).toBe("object");
+  expect(init).not.toBeNull();
+  return init as RequestInit;
+}
+
+function streamContext(streamFn: { mock: { calls: unknown[][] } }, callIndex = 0) {
+  return callArg(streamFn, callIndex, 1) as {
+    systemPrompt?: unknown;
+    tools?: unknown;
+  };
+}
+
+function streamOptions(streamFn: { mock: { calls: unknown[][] } }, callIndex = 0) {
+  return callArg(streamFn, callIndex, 2) as Record<string, unknown>;
+}
+
 function preparePromptCacheStream(params: {
   fetchMock: ReturnType<typeof vi.fn>;
   now: number;
@@ -140,20 +164,16 @@ describe("google prompt cache", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith(
+    expect(callArg(fetchMock, 0, 0)).toBe(
       "https://generativelanguage.googleapis.com/v1beta/cachedContents",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({
-          "x-goog-api-key": "gemini-api-key",
-          "X-Provider": "google",
-        }),
-      }),
     );
-    const createBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<
-      string,
-      unknown
-    >;
+    const createInit = fetchInit(fetchMock);
+    expect(createInit.method).toBe("POST");
+    const createHeaders = createInit.headers as Record<string, string>;
+    expect(createHeaders["x-goog-api-key"]).toBe("gemini-api-key");
+    expect(createHeaders["X-Provider"]).toBe("google");
+    expect(typeof createInit.body).toBe("string");
+    const createBody = JSON.parse(createInit.body as string) as Record<string, unknown>;
     expect(createBody).toEqual({
       model: "models/gemini-3.1-pro-preview",
       ttl: "3600s",
@@ -161,17 +181,11 @@ describe("google prompt cache", () => {
         parts: [{ text: "Follow policy." }],
       },
     });
-    expect(innerStreamFn).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        systemPrompt: undefined,
-        tools: expect.any(Array),
-      }),
-      expect.objectContaining({ temperature: 0.2 }),
-    );
-    expect(getCapturedPayload()).toMatchObject({
-      cachedContent: "cachedContents/system-cache-1",
-    });
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
+    expect(streamContext(innerStreamFn).systemPrompt).toBeUndefined();
+    expect(Array.isArray(streamContext(innerStreamFn).tools)).toBe(true);
+    expect(streamOptions(innerStreamFn).temperature).toBe(0.2);
+    expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-1");
     expect(entries).toHaveLength(1);
     expect(entries[0]?.customType).toBe("openclaw.google-prompt-cache");
     expect((entries[0]?.data as { status?: string; cachedContent?: string })?.status).toBe("ready");
@@ -209,14 +223,10 @@ describe("google prompt cache", () => {
     );
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(innerStreamFn).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ systemPrompt: undefined }),
-      expect.any(Object),
-    );
-    expect(getCapturedPayload()).toMatchObject({
-      cachedContent: "cachedContents/system-cache-2",
-    });
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
+    expect(streamContext(innerStreamFn).systemPrompt).toBeUndefined();
+    expect(typeof streamOptions(innerStreamFn)).toBe("object");
+    expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-2");
   });
 
   it("refreshes an about-to-expire cache entry instead of creating a new one", async () => {
@@ -267,15 +277,11 @@ describe("google prompt cache", () => {
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
       "https://generativelanguage.googleapis.com/v1beta/cachedContents/system-cache-3?updateMask=ttl",
     );
-    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "PATCH" });
-    expect(innerStreamFn).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ systemPrompt: undefined }),
-      expect.any(Object),
-    );
-    expect(getCapturedPayload()).toMatchObject({
-      cachedContent: "cachedContents/system-cache-3",
-    });
+    expect(fetchInit(fetchMock).method).toBe("PATCH");
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
+    expect(streamContext(innerStreamFn).systemPrompt).toBeUndefined();
+    expect(typeof streamOptions(innerStreamFn)).toBe("object");
+    expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-3");
   });
 
   it("stays out of the way when cachedContent is already configured explicitly", async () => {

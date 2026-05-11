@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { capturePluginRegistration } from "./captured-registration.js";
-import type { AnyAgentTool } from "./types.js";
+import type { AnyAgentTool, OpenClawPluginApi } from "./types.js";
 
 describe("captured plugin registration", () => {
   it("keeps a complete plugin API surface available while capturing supported capabilities", () => {
@@ -104,5 +104,51 @@ describe("captured plugin registration", () => {
     expect(captured.agentToolResultMiddlewares).toHaveLength(1);
     expect(captured.agentToolResultMiddlewares[0]?.runtimes).toEqual(["codex"]);
     expect(captured.api.registerMemoryEmbeddingProvider).toBeTypeOf("function");
+  });
+
+  it("returns synthetic scheduled-turn ids independent of human-readable names", async () => {
+    let scheduleSessionTurn: OpenClawPluginApi["scheduleSessionTurn"] | undefined;
+    let registerSessionSchedulerJob: OpenClawPluginApi["registerSessionSchedulerJob"] | undefined;
+    const captured = capturePluginRegistration({
+      id: "captured-custom-plugin",
+      name: "Captured Custom Plugin",
+      register(api) {
+        registerSessionSchedulerJob = api.session.workflow.registerSessionSchedulerJob;
+        scheduleSessionTurn = api.session.workflow.scheduleSessionTurn;
+      },
+    });
+
+    expect(
+      registerSessionSchedulerJob?.({
+        id: "captured-job",
+        sessionKey: "agent:main:main",
+        kind: "session-turn",
+      }),
+    ).toEqual({
+      id: "captured-job",
+      pluginId: "captured-custom-plugin",
+      sessionKey: "agent:main:main",
+      kind: "session-turn",
+    });
+    await expect(
+      scheduleSessionTurn?.({
+        sessionKey: "agent:main:main",
+        message: "wake",
+        delayMs: 1_000,
+        name: "human-readable-name",
+      }),
+    ).resolves.toEqual({
+      id: "captured-session-turn-1",
+      pluginId: "captured-custom-plugin",
+      sessionKey: "agent:main:main",
+      kind: "session-turn",
+    });
+    expect(captured.sessionSchedulerJobs).toEqual([
+      {
+        id: "captured-job",
+        sessionKey: "agent:main:main",
+        kind: "session-turn",
+      },
+    ]);
   });
 });

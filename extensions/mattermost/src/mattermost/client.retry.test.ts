@@ -97,7 +97,10 @@ describe("createMattermostDirectChannelWithRetry", () => {
     expect(retryCall?.[0]).toBe(1);
     expect(retryCall?.[1]).toBeGreaterThanOrEqual(10);
     expect(retryCall?.[1]).toBeLessThanOrEqual(20);
-    expect(retryCall?.[2]).toMatchObject({ message: expect.stringContaining("429") });
+    expect(retryCall?.[2]).toBeInstanceOf(Error);
+    expect((retryCall?.[2] as Error | undefined)?.message).toBe(
+      "Mattermost API 429 undefined: Too many requests",
+    );
   });
 
   it("retries on port 443 connection errors (not misclassified as 4xx)", async () => {

@@ -16,10 +16,19 @@ describe("venice provider plugin", () => {
           },
         },
       } as never),
-    ).toMatchObject({
+    ).toEqual({
+      id: "grok-4",
       compat: {
         supportsUsageInStreaming: true,
         toolSchemaProfile: "xai",
+        unsupportedToolSchemaKeywords: [
+          "minLength",
+          "maxLength",
+          "minItems",
+          "maxItems",
+          "minContains",
+          "maxContains",
+        ],
         nativeWebSearchTool: true,
         toolCallArgumentsEncoding: "html-entities",
       },

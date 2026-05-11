@@ -18,6 +18,28 @@ function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
+function requireRecord(value: unknown): Record<string, unknown> {
+  expect(value).toBeTruthy();
+  expect(typeof value).toBe("object");
+  expect(Array.isArray(value)).toBe(false);
+  return value as Record<string, unknown>;
+}
+
+function channelRecord(cfg: OpenClawConfig, channelKey: string): Record<string, unknown> {
+  return requireRecord(cfg.channels?.[channelKey]);
+}
+
+function accountsRecord(channel: Record<string, unknown>): Record<string, unknown> {
+  return requireRecord(channel.accounts);
+}
+
+function accountRecord(
+  channel: Record<string, unknown>,
+  accountId: string,
+): Record<string, unknown> {
+  return requireRecord(accountsRecord(channel)[accountId]);
+}
+
 const matrixSingleAccountKeysToMove = [
   "allowBots",
   "deviceId",
@@ -112,11 +134,10 @@ describe("applySetupAccountConfigPatch", () => {
       patch: { webhookPath: "/new", botToken: "tok" },
     });
 
-    expect(next.channels?.["demo-setup"]).toMatchObject({
-      enabled: true,
-      webhookPath: "/new",
-      botToken: "tok",
-    });
+    const channel = channelRecord(next, "demo-setup");
+    expect(channel.enabled).toBe(true);
+    expect(channel.webhookPath).toBe("/new");
+    expect(channel.botToken).toBe("tok");
   });
 
   it("patches named account config and preserves existing account enabled flag", () => {
@@ -136,12 +157,11 @@ describe("applySetupAccountConfigPatch", () => {
       patch: { botToken: "new" },
     });
 
-    expect(next.channels?.["demo-setup"]).toMatchObject({
-      enabled: true,
-      accounts: {
-        work: { enabled: false, botToken: "new" },
-      },
-    });
+    const channel = channelRecord(next, "demo-setup");
+    const work = accountRecord(channel, "work");
+    expect(channel.enabled).toBe(true);
+    expect(work.enabled).toBe(false);
+    expect(work.botToken).toBe("new");
   });
 
   it("normalizes account id and preserves other accounts", () => {
@@ -160,12 +180,12 @@ describe("applySetupAccountConfigPatch", () => {
       patch: { botToken: "work-token" },
     });
 
-    expect(next.channels?.["demo-setup"]).toMatchObject({
-      accounts: {
-        personal: { botToken: "personal-token" },
-        "work-team": { enabled: true, botToken: "work-token" },
-      },
-    });
+    const channel = channelRecord(next, "demo-setup");
+    const personal = accountRecord(channel, "personal");
+    const workTeam = accountRecord(channel, "work-team");
+    expect(personal.botToken).toBe("personal-token");
+    expect(workTeam.enabled).toBe(true);
+    expect(workTeam.botToken).toBe("work-token");
   });
 });
 
@@ -182,11 +202,10 @@ describe("createPatchedAccountSetupAdapter", () => {
       input: { name: "Personal", token: "tok" },
     });
 
-    expect(next.channels?.["demo-setup"]).toMatchObject({
-      enabled: true,
-      name: "Personal",
-      botToken: "tok",
-    });
+    const channel = channelRecord(next, "demo-setup");
+    expect(channel.enabled).toBe(true);
+    expect(channel.name).toBe("Personal");
+    expect(channel.botToken).toBe("tok");
   });
 
   it("migrates base name into the default account before patching a named account", () => {
@@ -210,13 +229,15 @@ describe("createPatchedAccountSetupAdapter", () => {
       input: { name: "Work", token: "new" },
     });
 
-    expect(next.channels?.["demo-setup"]).toMatchObject({
-      accounts: {
-        default: { name: "Personal" },
-        work: { botToken: "old" },
-        "work-team": { enabled: true, name: "Work", botToken: "new" },
-      },
-    });
+    const channel = channelRecord(next, "demo-setup");
+    const defaultAccount = accountRecord(channel, "default");
+    const work = accountRecord(channel, "work");
+    const workTeam = accountRecord(channel, "work-team");
+    expect(defaultAccount.name).toBe("Personal");
+    expect(work.botToken).toBe("old");
+    expect(workTeam.enabled).toBe(true);
+    expect(workTeam.name).toBe("Work");
+    expect(workTeam.botToken).toBe("new");
     expect(next.channels?.["demo-setup"]).not.toHaveProperty("name");
   });
 
@@ -233,15 +254,11 @@ describe("createPatchedAccountSetupAdapter", () => {
       input: { name: "Phone", authDir: "/tmp/auth" },
     });
 
-    expect(next.channels?.["demo-accounts"]).toMatchObject({
-      accounts: {
-        default: {
-          enabled: true,
-          name: "Phone",
-          authDir: "/tmp/auth",
-        },
-      },
-    });
+    const channel = channelRecord(next, "demo-accounts");
+    const defaultAccount = accountRecord(channel, "default");
+    expect(defaultAccount.enabled).toBe(true);
+    expect(defaultAccount.name).toBe("Phone");
+    expect(defaultAccount.authDir).toBe("/tmp/auth");
     expect(next.channels?.["demo-accounts"]).not.toHaveProperty("enabled");
     expect(next.channels?.["demo-accounts"]).not.toHaveProperty("authDir");
   });
@@ -263,16 +280,12 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
       channelKey: "matrix",
     });
 
-    expect(next.channels?.matrix).toMatchObject({
-      accounts: {
-        default: {
-          homeserver: "https://matrix.example.org",
-          userId: "@bot:example.org",
-          accessToken: "token",
-          allowBots: "mentions",
-        },
-      },
-    });
+    const channel = channelRecord(next, "matrix");
+    const defaultAccount = accountRecord(channel, "default");
+    expect(defaultAccount.homeserver).toBe("https://matrix.example.org");
+    expect(defaultAccount.userId).toBe("@bot:example.org");
+    expect(defaultAccount.accessToken).toBe("token");
+    expect(defaultAccount.allowBots).toBe("mentions");
     expect(next.channels?.matrix?.allowBots).toBeUndefined();
   });
 
@@ -295,16 +308,12 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
       channelKey: "matrix",
     });
 
-    expect(next.channels?.matrix).toMatchObject({
-      accounts: {
-        main: {
-          enabled: true,
-          homeserver: "https://matrix.example.org",
-          userId: "@bot:example.org",
-          accessToken: "token",
-        },
-      },
-    });
+    const channel = channelRecord(next, "matrix");
+    const main = accountRecord(channel, "main");
+    expect(main.enabled).toBe(true);
+    expect(main.homeserver).toBe("https://matrix.example.org");
+    expect(main.userId).toBe("@bot:example.org");
+    expect(main.accessToken).toBe("token");
     expect(next.channels?.matrix?.accounts?.default).toBeUndefined();
     expect(next.channels?.matrix?.homeserver).toBeUndefined();
     expect(next.channels?.matrix?.userId).toBeUndefined();
@@ -331,17 +340,13 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
       channelKey: "matrix",
     });
 
-    expect(next.channels?.matrix).toMatchObject({
-      defaultAccount: "ops",
-      accounts: {
-        Ops: {
-          enabled: true,
-          homeserver: "https://matrix.example.org",
-          userId: "@ops:example.org",
-          accessToken: "token",
-        },
-      },
-    });
+    const channel = channelRecord(next, "matrix");
+    const ops = accountRecord(channel, "Ops");
+    expect(channel.defaultAccount).toBe("ops");
+    expect(ops.enabled).toBe(true);
+    expect(ops.homeserver).toBe("https://matrix.example.org");
+    expect(ops.userId).toBe("@ops:example.org");
+    expect(ops.accessToken).toBe("token");
     expect(next.channels?.matrix?.accounts?.ops).toBeUndefined();
     expect(next.channels?.matrix?.accounts?.default).toBeUndefined();
     expect(next.channels?.matrix?.homeserver).toBeUndefined();
@@ -402,12 +407,11 @@ describe("prepareScopedSetupConfig", () => {
       migrateBaseName: true,
     });
 
-    expect(next.channels?.["demo-scoped"]).toMatchObject({
-      accounts: {
-        default: { name: "Personal" },
-        "work-team": { name: "Work" },
-      },
-    });
+    const channel = channelRecord(next, "demo-scoped");
+    const defaultAccount = accountRecord(channel, "default");
+    const workTeam = accountRecord(channel, "work-team");
+    expect(defaultAccount.name).toBe("Personal");
+    expect(workTeam.name).toBe("Work");
     expect(next.channels?.["demo-scoped"]).not.toHaveProperty("name");
   });
 
@@ -419,9 +423,8 @@ describe("prepareScopedSetupConfig", () => {
       name: "Libera",
     });
 
-    expect(next.channels?.["demo-base"]).toMatchObject({
-      enabled: true,
-      name: "Libera",
-    });
+    const channel = channelRecord(next, "demo-base");
+    expect(channel.enabled).toBe(true);
+    expect(channel.name).toBe("Libera");
   });
 });

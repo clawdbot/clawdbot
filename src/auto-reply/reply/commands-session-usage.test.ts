@@ -104,6 +104,16 @@ function buildCostTotals(overrides: Partial<CostUsageTotals> = {}): CostUsageTot
   };
 }
 
+function expectSessionCostArgs(): Record<string, unknown> {
+  expect(loadSessionCostSummaryMock).toHaveBeenCalledTimes(1);
+  return (loadSessionCostSummaryMock.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+}
+
+function expectFastModeArgs(): Record<string, unknown> {
+  expect(resolveFastModeStateMock).toHaveBeenCalledTimes(1);
+  return (resolveFastModeStateMock.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+}
+
 describe("handleUsageCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -130,12 +140,9 @@ describe("handleUsageCommand", () => {
     const result = await handleUsageCommand(buildUsageParams(), true);
 
     expect(result?.shouldContinue).toBe(false);
-    expect(loadSessionCostSummaryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "target",
-        sessionId: "session-1",
-      }),
-    );
+    const args = expectSessionCostArgs();
+    expect(args.agentId).toBe("target");
+    expect(args.sessionId).toBe("session-1");
   });
 
   it("prefers the target session entry from sessionStore for /usage cost", async () => {
@@ -155,12 +162,9 @@ describe("handleUsageCommand", () => {
 
     await handleUsageCommand(params, true);
 
-    expect(loadSessionCostSummaryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "target-session",
-        sessionFile: "/tmp/target-session.jsonl",
-      }),
-    );
+    const args = expectSessionCostArgs();
+    expect(args.sessionId).toBe("target-session");
+    expect(args.sessionFile).toBe("/tmp/target-session.jsonl");
   });
 
   it("prefers the target session entry from sessionStore for /usage footer mode", async () => {
@@ -202,13 +206,10 @@ describe("handleFastCommand", () => {
     const result = await handleFastCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
-    expect(resolveFastModeStateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "target",
-        provider: "openai",
-        model: "gpt-5.4",
-      }),
-    );
+    const args = expectFastModeArgs();
+    expect(args.agentId).toBe("target");
+    expect(args.provider).toBe("openai");
+    expect(args.model).toBe("gpt-5.4");
     expect(result?.reply?.text).toContain("Current fast mode: on");
   });
 
@@ -232,14 +233,10 @@ describe("handleFastCommand", () => {
 
     await handleFastCommand(params, true);
 
-    expect(resolveFastModeStateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionEntry: expect.objectContaining({
-          sessionId: "target-session",
-          fastMode: true,
-        }),
-      }),
-    );
+    const args = expectFastModeArgs();
+    const sessionEntry = args.sessionEntry as Record<string, unknown> | undefined;
+    expect(sessionEntry?.sessionId).toBe("target-session");
+    expect(sessionEntry?.fastMode).toBe(true);
   });
 
   it("clears fast mode for /fast default", async () => {

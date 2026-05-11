@@ -8,6 +8,28 @@ import {
   resolveClaudeThinkingProfile,
 } from "./provider-model-shared.js";
 
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  expect(value).toBeTypeOf("object");
+  expect(value).not.toBeNull();
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
+function readLevelIds(profile: unknown): string[] {
+  const levels = (profile as { levels?: Array<{ id?: unknown }> } | undefined)?.levels;
+  expect(Array.isArray(levels)).toBe(true);
+  return (levels ?? []).map((level) => String(level.id));
+}
+
+function expectLevelIdsInclude(profile: unknown, expectedIds: readonly string[]): void {
+  const ids = readLevelIds(profile);
+  for (const id of expectedIds) {
+    expect(ids.includes(id), `level ${id}`).toBe(true);
+  }
+}
+
 describe("buildProviderReplayFamilyHooks", () => {
   it("covers the replay family matrix", () => {
     const cases = [
@@ -22,6 +44,7 @@ describe("buildProviderReplayFamilyHooks", () => {
           sanitizeToolCallIds: true,
           applyAssistantFirstOrderingFix: true,
           validateGeminiTurns: true,
+          dropReasoningFromHistory: true,
         },
         hasSanitizeReplayHistory: false,
         reasoningMode: undefined,
@@ -35,7 +58,6 @@ describe("buildProviderReplayFamilyHooks", () => {
         },
         match: {
           validateAnthropicTurns: true,
-          // Sonnet 4.6 preserves thinking blocks (no dropThinkingBlocks)
         },
         absent: ["dropThinkingBlocks"],
         hasSanitizeReplayHistory: false,
@@ -105,7 +127,6 @@ describe("buildProviderReplayFamilyHooks", () => {
         },
         match: {
           validateAnthropicTurns: true,
-          // Sonnet 4.6 preserves thinking blocks even with flag set
         },
         absent: ["dropThinkingBlocks"],
         hasSanitizeReplayHistory: false,
@@ -124,7 +145,7 @@ describe("buildProviderReplayFamilyHooks", () => {
       );
 
       const policy = hooks.buildReplayPolicy?.(testCase.ctx as never);
-      expect(policy).toMatchObject(testCase.match);
+      expectFields(policy, testCase.match);
       if ((testCase as { absent?: string[] }).absent) {
         for (const key of (testCase as { absent: string[] }).absent) {
           expect(policy).not.toHaveProperty(key);
@@ -159,7 +180,7 @@ describe("buildProviderReplayFamilyHooks", () => {
       },
     } as never);
 
-    expect(sanitized?.[0]).toMatchObject({
+    expectFields(sanitized?.[0], {
       role: "user",
       content: "(session bootstrap)",
     });
@@ -180,29 +201,31 @@ describe("buildProviderReplayFamilyHooks", () => {
   });
 
   it("exposes canonical replay hooks for reused provider families", () => {
-    expect(
+    expectFields(
       OPENAI_COMPATIBLE_REPLAY_HOOKS.buildReplayPolicy?.({
         provider: "xai",
         modelApi: "openai-completions",
         modelId: "google/gemma-4-26b-a4b-it",
       } as never),
-    ).toMatchObject({
-      sanitizeToolCallIds: true,
-      applyAssistantFirstOrderingFix: true,
-      validateGeminiTurns: true,
-      dropReasoningFromHistory: true,
-    });
+      {
+        sanitizeToolCallIds: true,
+        applyAssistantFirstOrderingFix: true,
+        validateGeminiTurns: true,
+        dropReasoningFromHistory: true,
+      },
+    );
 
     const nativeIdsHooks = buildProviderReplayFamilyHooks({
       family: "openai-compatible",
       sanitizeToolCallIds: false,
+      dropReasoningFromHistory: false,
     });
     const nativeIdsPolicy = nativeIdsHooks.buildReplayPolicy?.({
       provider: "moonshot",
       modelApi: "openai-completions",
       modelId: "kimi-k2.6",
     } as never);
-    expect(nativeIdsPolicy).toMatchObject({
+    expectFields(nativeIdsPolicy, {
       applyAssistantFirstOrderingFix: true,
       validateGeminiTurns: true,
       validateAnthropicTurns: true,
@@ -210,66 +233,72 @@ describe("buildProviderReplayFamilyHooks", () => {
     expect(nativeIdsPolicy).not.toHaveProperty("sanitizeToolCallIds");
     expect(nativeIdsPolicy).not.toHaveProperty("toolCallIdMode");
 
-    expect(
+    expectFields(
       PASSTHROUGH_GEMINI_REPLAY_HOOKS.buildReplayPolicy?.({
         provider: "openrouter",
         modelApi: "openai-completions",
         modelId: "gemini-2.5-pro",
       } as never),
-    ).toMatchObject({
-      applyAssistantFirstOrderingFix: false,
-      validateGeminiTurns: false,
-      validateAnthropicTurns: false,
-      sanitizeThoughtSignatures: {
-        allowBase64Only: true,
-        includeCamelCase: true,
+      {
+        applyAssistantFirstOrderingFix: false,
+        validateGeminiTurns: false,
+        validateAnthropicTurns: false,
+        sanitizeThoughtSignatures: {
+          allowBase64Only: true,
+          includeCamelCase: true,
+        },
       },
-    });
+    );
 
-    expect(
+    expectFields(
       ANTHROPIC_BY_MODEL_REPLAY_HOOKS.buildReplayPolicy?.({
         provider: "amazon-bedrock",
         modelApi: "bedrock-converse-stream",
         modelId: "claude-sonnet-4-6",
       } as never),
-    ).toMatchObject({
-      validateAnthropicTurns: true,
-      repairToolUseResultPairing: true,
-    });
+      {
+        validateAnthropicTurns: true,
+        repairToolUseResultPairing: true,
+      },
+    );
 
-    expect(
+    expectFields(
       NATIVE_ANTHROPIC_REPLAY_HOOKS.buildReplayPolicy?.({
         provider: "anthropic",
         modelApi: "anthropic-messages",
         modelId: "claude-sonnet-4-6",
       } as never),
-    ).toMatchObject({
-      preserveNativeAnthropicToolUseIds: true,
-      preserveSignatures: true,
-      validateAnthropicTurns: true,
-    });
+      {
+        preserveNativeAnthropicToolUseIds: true,
+        preserveSignatures: true,
+        validateAnthropicTurns: true,
+      },
+    );
   });
 });
 
 describe("resolveClaudeThinkingProfile", () => {
   it("exposes Opus 4.7 thinking levels for direct and proxied Claude providers", () => {
-    expect(resolveClaudeThinkingProfile("claude-opus-4-7")).toMatchObject({
-      levels: expect.arrayContaining([{ id: "xhigh" }, { id: "adaptive" }, { id: "max" }]),
+    const directProfile = resolveClaudeThinkingProfile("claude-opus-4-7");
+    expectFields(directProfile, {
       defaultLevel: "off",
     });
-    expect(resolveClaudeThinkingProfile("claude-opus-4.7-20260219")).toMatchObject({
-      levels: expect.arrayContaining([{ id: "xhigh" }, { id: "adaptive" }, { id: "max" }]),
+    expectLevelIdsInclude(directProfile, ["xhigh", "adaptive", "max"]);
+
+    const proxiedProfile = resolveClaudeThinkingProfile("claude-opus-4.7-20260219");
+    expectFields(proxiedProfile, {
       defaultLevel: "off",
     });
+    expectLevelIdsInclude(proxiedProfile, ["xhigh", "adaptive", "max"]);
   });
 
   it("keeps adaptive-only Claude variants from advertising xhigh or max", () => {
     const profile = resolveClaudeThinkingProfile("claude-sonnet-4-6");
 
-    expect(profile).toMatchObject({
-      levels: expect.arrayContaining([{ id: "adaptive" }]),
+    expectFields(profile, {
       defaultLevel: "adaptive",
     });
+    expectLevelIdsInclude(profile, ["adaptive"]);
     const fixedBudgetLevels = profile.levels.filter(
       (level) => level.id === "xhigh" || level.id === "max",
     );

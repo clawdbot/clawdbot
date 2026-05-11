@@ -19,44 +19,38 @@ describe("msteams errors", () => {
   });
 
   it("classifies ContentStreamNotAllowed as permanent instead of auth", () => {
-    expect(
-      classifyMSTeamsSendError({
-        statusCode: 403,
-        response: {
-          body: {
-            error: {
-              code: "ContentStreamNotAllowed",
-            },
+    const result = classifyMSTeamsSendError({
+      statusCode: 403,
+      response: {
+        body: {
+          error: {
+            code: "ContentStreamNotAllowed",
           },
         },
-      }),
-    ).toMatchObject({
-      kind: "permanent",
-      statusCode: 403,
-      errorCode: "ContentStreamNotAllowed",
+      },
     });
+    expect(result.kind).toBe("permanent");
+    expect(result.statusCode).toBe(403);
+    expect(result.errorCode).toBe("ContentStreamNotAllowed");
   });
 
   it("classifies throttling errors and parses retry-after", () => {
-    expect(classifyMSTeamsSendError({ statusCode: 429, retryAfter: "1.5" })).toMatchObject({
-      kind: "throttled",
-      statusCode: 429,
-      retryAfterMs: 1500,
-    });
+    const result = classifyMSTeamsSendError({ statusCode: 429, retryAfter: "1.5" });
+    expect(result.kind).toBe("throttled");
+    expect(result.statusCode).toBe(429);
+    expect(result.retryAfterMs).toBe(1500);
   });
 
   it("classifies transient errors", () => {
-    expect(classifyMSTeamsSendError({ statusCode: 503 })).toMatchObject({
-      kind: "transient",
-      statusCode: 503,
-    });
+    const result = classifyMSTeamsSendError({ statusCode: 503 });
+    expect(result.kind).toBe("transient");
+    expect(result.statusCode).toBe(503);
   });
 
   it("classifies permanent 4xx errors", () => {
-    expect(classifyMSTeamsSendError({ statusCode: 400 })).toMatchObject({
-      kind: "permanent",
-      statusCode: 400,
-    });
+    const result = classifyMSTeamsSendError({ statusCode: 400 });
+    expect(result.kind).toBe("permanent");
+    expect(result.statusCode).toBe(400);
   });
 
   it("provides actionable hints for common cases", () => {
@@ -77,18 +71,15 @@ describe("msteams errors", () => {
     });
     const etimedout = Object.assign(new Error("ETIMEDOUT"), { code: "ETIMEDOUT" });
 
-    expect(classifyMSTeamsSendError(econnrefused)).toMatchObject({
-      kind: "network",
-      errorCode: "ECONNREFUSED",
-    });
-    expect(classifyMSTeamsSendError(enotfound)).toMatchObject({
-      kind: "network",
-      errorCode: "ENOTFOUND",
-    });
-    expect(classifyMSTeamsSendError(etimedout)).toMatchObject({
-      kind: "network",
-      errorCode: "ETIMEDOUT",
-    });
+    const econnrefusedResult = classifyMSTeamsSendError(econnrefused);
+    expect(econnrefusedResult.kind).toBe("network");
+    expect(econnrefusedResult.errorCode).toBe("ECONNREFUSED");
+    const enotfoundResult = classifyMSTeamsSendError(enotfound);
+    expect(enotfoundResult.kind).toBe("network");
+    expect(enotfoundResult.errorCode).toBe("ENOTFOUND");
+    const etimedoutResult = classifyMSTeamsSendError(etimedout);
+    expect(etimedoutResult.kind).toBe("network");
+    expect(etimedoutResult.errorCode).toBe("ETIMEDOUT");
 
     // Hints for network errors must mention smba (Connector endpoint) and egress
     expect(formatMSTeamsSendErrorHint({ kind: "network" })).toContain("smba");
@@ -97,7 +88,7 @@ describe("msteams errors", () => {
 
   it("still classifies HTTP errors as unknown when no status code and no network code", () => {
     expect(classifyMSTeamsSendError(new Error("unexpected error")).kind).toBe("unknown");
-    expect(classifyMSTeamsSendError(null)).toMatchObject({ kind: "unknown" });
+    expect(classifyMSTeamsSendError(null).kind).toBe("unknown");
   });
 
   describe("isRevokedProxyError", () => {

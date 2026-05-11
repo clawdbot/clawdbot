@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
+import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./protocol/index.js";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
 const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
@@ -144,6 +145,39 @@ function getLatestWs(): MockWebSocket {
   return ws;
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(
+  value: unknown,
+  expected: Record<string, unknown>,
+  label: string,
+): Record<string, unknown> {
+  const record = requireRecord(value, label);
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], `${label}.${key}`).toEqual(expectedValue);
+  }
+  return record;
+}
+
+async function expectGatewayRequestError(
+  promise: Promise<unknown>,
+  expected: Record<string, unknown>,
+): Promise<void> {
+  let rejected: unknown;
+  try {
+    await promise;
+  } catch (error) {
+    rejected = error;
+  }
+  const error = expectRecordFields(rejected, expected, "gateway request error");
+  expectRecordFields(error.details, { method: "chat.history" }, "gateway request error details");
+}
+
 function createClientWithIdentity(
   deviceId: string,
   onClose: (code: number, reason: string) => void,
@@ -164,12 +198,8 @@ function expectSecurityConnectError(
   onConnectError: ReturnType<typeof vi.fn>,
   params?: { expectTailscaleHint?: boolean },
 ) {
-  expect(onConnectError).toHaveBeenCalledWith(
-    expect.objectContaining({
-      message: expect.stringContaining("SECURITY ERROR"),
-    }),
-  );
   const error = onConnectError.mock.calls[0]?.[0] as Error;
+  expect(error.message).toContain("SECURITY ERROR");
   expect(error.message).toContain("openclaw doctor --fix");
   if (params?.expectTailscaleHint) {
     expect(error.message).toContain("Tailscale Serve/Funnel");
@@ -271,12 +301,14 @@ describe("GatewayClient security checks", () => {
 
     expect(onConnectError).not.toHaveBeenCalled();
     expect(wsInstances.length).toBe(1);
-    expect(getLatestWs().options).not.toMatchObject({ agent: expect.any(Object) });
-    expect((global as Record<string, unknown>)["GLOBAL_AGENT"]).toEqual(
-      expect.objectContaining({
+    expect(requireRecord(getLatestWs().options, "websocket options").agent).toBeUndefined();
+    expectRecordFields(
+      (global as Record<string, unknown>)["GLOBAL_AGENT"],
+      {
         HTTP_PROXY: "http://127.0.0.1:3128",
         HTTPS_PROXY: "http://127.0.0.1:3128",
-      }),
+      },
+      "global agent",
     );
     client.stop();
   });
@@ -299,7 +331,7 @@ describe("GatewayClient security checks", () => {
 
       expect(onConnectError).not.toHaveBeenCalled();
       expect(wsInstances.length).toBe(1);
-      expect(getLatestWs().options).not.toMatchObject({ agent: expect.any(Object) });
+      expect(requireRecord(getLatestWs().options, "websocket options").agent).toBeUndefined();
     } finally {
       client.stop();
       await stopProxy(handle);
@@ -420,12 +452,11 @@ describe("GatewayClient request errors", () => {
       }),
     );
 
-    await expect(requestPromise).rejects.toMatchObject({
+    await expectGatewayRequestError(requestPromise, {
       name: "GatewayClientRequestError",
       gatewayCode: "UNAVAILABLE",
       retryable: true,
       retryAfterMs: 250,
-      details: { method: "chat.history" },
     });
 
     client.stop();
@@ -689,6 +720,8 @@ describe("GatewayClient connect auth payload", () => {
   type ParsedConnectRequest = {
     id?: string;
     params?: {
+      minProtocol?: number;
+      maxProtocol?: number;
       scopes?: string[];
       auth?: {
         token?: string;
@@ -711,6 +744,10 @@ describe("GatewayClient connect auth payload", () => {
     return parseConnectRequest(ws).params?.auth ?? {};
   }
 
+  function expectConnectAuthFields(ws: MockWebSocket, expected: Record<string, unknown>): void {
+    expectRecordFields(connectFrameFrom(ws), expected, "connect auth");
+  }
+
   function connectScopesFrom(ws: MockWebSocket) {
     return parseConnectRequest(ws).params?.scopes ?? [];
   }
@@ -718,6 +755,19 @@ describe("GatewayClient connect auth payload", () => {
   function connectRequestFrom(ws: MockWebSocket) {
     return parseConnectRequest(ws);
   }
+
+  it("advertises the default protocol compatibility range", () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: null,
+    });
+
+    const { connect } = startClientAndConnect({ client });
+
+    expect(connect.params?.minProtocol).toBe(MIN_CLIENT_PROTOCOL_VERSION);
+    expect(connect.params?.maxProtocol).toBe(PROTOCOL_VERSION);
+    client.stop();
+  });
 
   function emitConnectChallenge(ws: MockWebSocket, nonce = "nonce-1") {
     ws.emitMessage(
@@ -823,9 +873,7 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expect(connectFrameFrom(ws)).toMatchObject({
-      token: "shared-token",
-    });
+    expectConnectAuthFields(ws, { token: "shared-token" });
     expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
     client.stop();
   });
@@ -838,9 +886,7 @@ describe("GatewayClient connect auth payload", () => {
 
     const { ws, connect } = startClientWithEarlyChallenge({ client });
 
-    expect(connectFrameFrom(ws)).toMatchObject({
-      token: "shared-token",
-    });
+    expectConnectAuthFields(ws, { token: "shared-token" });
     emitHelloOk(ws, connect.id);
     client.stop();
   });
@@ -857,11 +903,10 @@ describe("GatewayClient connect auth payload", () => {
     ws.autoCloseOnClose = false;
     client.stop();
 
-    await vi.waitFor(() =>
-      expect(onConnectError).toHaveBeenCalledWith(
-        expect.objectContaining({ message: "gateway client stopped" }),
-      ),
-    );
+    await vi.waitFor(() => {
+      const error = onConnectError.mock.calls[0]?.[0] as Error | undefined;
+      expect(error?.message).toBe("gateway client stopped");
+    });
     expect(logDebugMock).toHaveBeenCalledWith(
       "gateway connect failed: Error: gateway client stopped",
     );
@@ -883,9 +928,7 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expect(connectFrameFrom(ws)).toMatchObject({
-      password: "shared-password", // pragma: allowlist secret
-    });
+    expectConnectAuthFields(ws, { password: "shared-password" }); // pragma: allowlist secret
     expect(connectFrameFrom(ws).token).toBeUndefined();
     expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
     client.stop();
@@ -903,9 +946,7 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expect(connectFrameFrom(ws)).toMatchObject({
-      password: "shared-password", // pragma: allowlist secret
-    });
+    expectConnectAuthFields(ws, { password: "shared-password" }); // pragma: allowlist secret
     expect(connectFrameFrom(ws).bootstrapToken).toBeUndefined();
     expect(connectFrameFrom(ws).token).toBeUndefined();
     client.stop();
@@ -925,7 +966,7 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expect(connectFrameFrom(ws)).toMatchObject({
+    expectConnectAuthFields(ws, {
       token: "stored-device-token",
       deviceToken: "stored-device-token",
     });
@@ -948,7 +989,7 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expect(connectFrameFrom(ws)).toMatchObject({
+    expectConnectAuthFields(ws, {
       token: "stored-device-token",
       deviceToken: "stored-device-token",
     });
@@ -975,14 +1016,16 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expect(loadDeviceAuthTokenMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deviceId: expect.any(String),
+    const loadTokenParams = expectRecordFields(
+      loadDeviceAuthTokenMock.mock.calls[0]?.[0],
+      {
         role: "operator",
         env,
-      }),
+      },
+      "load device token params",
     );
-    expect(connectFrameFrom(ws)).toMatchObject({
+    expect(loadTokenParams.deviceId).toBeTypeOf("string");
+    expectConnectAuthFields(ws, {
       token: "stored-device-token",
       deviceToken: "stored-device-token",
     });
@@ -1001,9 +1044,7 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expect(connectFrameFrom(ws)).toMatchObject({
-      bootstrapToken: "bootstrap-token",
-    });
+    expectConnectAuthFields(ws, { bootstrapToken: "bootstrap-token" });
     expect(connectFrameFrom(ws).token).toBeUndefined();
     expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
     client.stop();
@@ -1025,7 +1066,7 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expect(connectFrameFrom(ws)).toMatchObject({
+    expectConnectAuthFields(ws, {
       token: "explicit-device-token",
       deviceToken: "explicit-device-token",
     });
@@ -1048,7 +1089,7 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expect(connectFrameFrom(ws)).toMatchObject({
+    expectConnectAuthFields(ws, {
       token: "stored-device-token",
       deviceToken: "stored-device-token",
     });
@@ -1075,10 +1116,14 @@ describe("GatewayClient connect auth payload", () => {
       connectId: firstConnect.id,
       failureDetails: { code: "AUTH_TOKEN_MISMATCH", canRetryWithDeviceToken: true },
     });
-    expect(retriedAuth).toMatchObject({
-      token: "shared-token",
-      deviceToken: "stored-device-token",
-    });
+    expectRecordFields(
+      retriedAuth,
+      {
+        token: "shared-token",
+        deviceToken: "stored-device-token",
+      },
+      "retried connect auth",
+    );
     const ws = getLatestWs();
     expect(connectScopesFrom(ws)).toEqual(["operator.read"]);
     client.stop();
@@ -1097,10 +1142,14 @@ describe("GatewayClient connect auth payload", () => {
       connectId: firstConnect.id,
       failureDetails: { code: "AUTH_UNAUTHORIZED", recommendedNextStep: "retry_with_device_token" },
     });
-    expect(retriedAuth).toMatchObject({
-      token: "shared-token",
-      deviceToken: "stored-device-token",
-    });
+    expectRecordFields(
+      retriedAuth,
+      {
+        token: "shared-token",
+        deviceToken: "stored-device-token",
+      },
+      "retried connect auth",
+    );
     client.stop();
   });
 
@@ -1145,10 +1194,12 @@ describe("GatewayClient connect auth payload", () => {
       connectId: firstConnect.id,
       failureDetails: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
     });
-    expect(clearDeviceAuthTokenMock).toHaveBeenCalledWith({
-      deviceId: expect.any(String),
-      role: "operator",
-    });
+    const clearTokenParams = expectRecordFields(
+      clearDeviceAuthTokenMock.mock.calls[0]?.[0],
+      { role: "operator" },
+      "clear device token params",
+    );
+    expect(clearTokenParams.deviceId).toBeTypeOf("string");
     expect(onReconnectPaused).toHaveBeenCalledWith({
       code: 1008,
       reason: "connect failed",

@@ -95,9 +95,13 @@ describe("applyGroupGating audio preflight mention text", () => {
 
     expect(result).toEqual({ shouldProcess: false });
     expect(groupHistories.get("whatsapp:group:1203630")).toEqual([
-      expect.objectContaining({
+      {
+        sender: "Alice (+15550000002)",
         body: "please summarize the thread",
-      }),
+        timestamp: 1700000000,
+        id: "msg-1",
+        senderJid: undefined,
+      },
     ]);
   });
 });

@@ -116,16 +116,20 @@ function buildManifestCatalogModelInput(model: ModelCatalogModel): ModelDefiniti
   return model.input?.filter((item): item is "text" | "image" => item !== "document") ?? ["text"];
 }
 
-function buildManifestCatalogModel(model: ModelCatalogModel): ModelDefinitionConfig {
+function buildManifestCatalogModel(
+  providerId: string,
+  model: ModelCatalogModel,
+): ModelDefinitionConfig {
   if (model.contextWindow === undefined) {
     throw new Error(`Manifest modelCatalog row ${model.id} is missing contextWindow`);
   }
   if (model.maxTokens === undefined) {
     throw new Error(`Manifest modelCatalog row ${model.id} is missing maxTokens`);
   }
+  const id = normalizeConfiguredProviderCatalogModelId(providerId, model.id);
   return {
-    id: model.id,
-    name: model.name ?? model.id,
+    id,
+    name: model.name ?? id,
     ...(model.api ? { api: model.api } : {}),
     ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
     reasoning: model.reasoning ?? false,
@@ -161,7 +165,7 @@ export function buildManifestModelProviderConfig(params: {
     baseUrl: catalog.baseUrl,
     ...(catalog.api ? { api: catalog.api } : {}),
     ...(catalog.headers ? { headers: { ...catalog.headers } } : {}),
-    models: catalog.models.map(buildManifestCatalogModel),
+    models: catalog.models.map((model) => buildManifestCatalogModel(params.providerId, model)),
   };
 }
 

@@ -645,14 +645,19 @@
 .chat-tool-msg-summary__label {
   font-weight: 600;
   color: var(--text);
-  flex-shrink: 0;
+  flex: 1 1 50%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-tool-msg-summary__names {
   font-family: var(--mono);
   font-size: 11px;
   opacity: 0.85;
-  flex: 1 1 0;
+  flex: 0 1 auto;
+  max-width: 42%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

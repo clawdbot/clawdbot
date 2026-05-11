@@ -647,19 +647,12 @@ async function handleCodexDiagnosticsFeedback(
       text: await previewCodexDiagnosticsFeedbackApproval(deps, ctx, parsed.note),
     };
   }
-  return await requestCodexDiagnosticsFeedbackApproval(
-    deps,
-    ctx,
-    pluginConfig,
-    parsed.note,
-    commandPrefix,
-  );
+  return await requestCodexDiagnosticsFeedbackApproval(deps, ctx, parsed.note, commandPrefix);
 }
 
 async function requestCodexDiagnosticsFeedbackApproval(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
-  pluginConfig: unknown,
   note: string,
   commandPrefix: string,
 ): Promise<PluginCommandResult> {

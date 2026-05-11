@@ -28,13 +28,53 @@ afterEach(() => {
   __testing.clearNativeHookRelaysForTests();
 });
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`Expected ${label} to be an object`);
+  }
+  return value;
+}
+
+function readRecordField(record: Record<string, unknown>, key: string, label: string) {
+  const value = record[key];
+  if (!isRecord(value)) {
+    throw new Error(`Expected ${label} to be an object`);
+  }
+  return value;
+}
+
+function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+function getMockCallArg(
+  mock: { mock: { calls: readonly (readonly unknown[])[] } },
+  callIndex: number,
+  argIndex: number,
+  label: string,
+) {
+  return requireRecord(mock.mock.calls[callIndex]?.[argIndex], label);
+}
+
+function getOnlyNativeHookRelayInvocation() {
+  const invocations = __testing.getNativeHookRelayInvocationsForTests();
+  expect(invocations).toHaveLength(1);
+  return requireRecord(invocations[0], "native hook relay invocation");
+}
+
 async function waitForNativeHookRelayBridgeRecord(
   relayId: string,
 ): Promise<Record<string, unknown>> {
   let record: Record<string, unknown> | undefined;
   await vi.waitFor(() => {
     record = __testing.getNativeHookRelayBridgeRecordForTests(relayId);
-    expect(record).toMatchObject({ relayId });
+    expect(isRecord(record) ? record.relayId : undefined).toBe(relayId);
   });
   return record as Record<string, unknown>;
 }
@@ -56,12 +96,18 @@ describe("native hook relay registry", () => {
       },
     });
 
-    expect(__testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toMatchObject({
-      provider: "codex",
-      sessionId: "session-1",
-      runId: "run-1",
-      allowedEvents: ["pre_tool_use"],
-    });
+    expectRecordFields(
+      requireRecord(
+        __testing.getNativeHookRelayRegistrationForTests(relay.relayId),
+        "native hook relay registration",
+      ),
+      {
+        provider: "codex",
+        sessionId: "session-1",
+        runId: "run-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+    );
     expect(relay.commandForEvent("pre_tool_use")).toBe(
       "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
         `${relay.relayId} --event pre_tool_use --timeout 1234`,
@@ -86,10 +132,16 @@ describe("native hook relay registry", () => {
     });
 
     expect(second.relayId).toBe(first.relayId);
-    expect(__testing.getNativeHookRelayRegistrationForTests(first.relayId)).toMatchObject({
-      runId: "run-2",
-      allowedEvents: ["post_tool_use"],
-    });
+    expectRecordFields(
+      requireRecord(
+        __testing.getNativeHookRelayRegistrationForTests(first.relayId),
+        "native hook relay registration",
+      ),
+      {
+        runId: "run-2",
+        allowedEvents: ["post_tool_use"],
+      },
+    );
   });
 
   it("exposes registered relays through the direct hook bridge", async () => {
@@ -114,13 +166,11 @@ describe("native hook relay registry", () => {
     });
 
     expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
-    expect(__testing.getNativeHookRelayInvocationsForTests()).toEqual([
-      expect.objectContaining({
-        relayId: relay.relayId,
-        event: "pre_tool_use",
-        runId: "run-1",
-      }),
-    ]);
+    expectRecordFields(getOnlyNativeHookRelayInvocation(), {
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      runId: "run-1",
+    });
   });
 
   it("keeps direct bridge registry files private and loopback-only", async () => {
@@ -284,24 +334,23 @@ describe("native hook relay registry", () => {
     });
 
     expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
-    expect(__testing.getNativeHookRelayInvocationsForTests()).toEqual([
-      expect.objectContaining({
-        provider: "codex",
-        relayId: relay.relayId,
-        event: "pre_tool_use",
-        nativeEventName: "PreToolUse",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        runId: "run-1",
-        cwd: "/repo",
-        model: "gpt-5.4",
-        toolName: "Bash",
-        toolUseId: "call-1",
-        rawPayload: expect.objectContaining({
-          tool_input: { command: "pnpm test" },
-        }),
-      }),
-    ]);
+    const invocation = getOnlyNativeHookRelayInvocation();
+    expectRecordFields(invocation, {
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      nativeEventName: "PreToolUse",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      cwd: "/repo",
+      model: "gpt-5.4",
+      toolName: "Bash",
+      toolUseId: "call-1",
+    });
+    expect(readRecordField(invocation, "rawPayload", "invocation raw payload").tool_input).toEqual({
+      command: "pnpm test",
+    });
   });
 
   it("retains bounded payload snapshots in invocation history", async () => {
@@ -327,9 +376,12 @@ describe("native hook relay registry", () => {
 
     const [recorded] = __testing.getNativeHookRelayInvocationsForTests();
     expect(JSON.stringify(recorded?.rawPayload).length).toBeLessThan(25_000);
-    expect(recorded?.rawPayload).toMatchObject({
-      tool_response: expect.stringContaining("[truncated]"),
-    });
+    const rawPayload = readRecordField(
+      requireRecord(recorded, "native hook relay invocation"),
+      "rawPayload",
+      "invocation raw payload",
+    );
+    expect(String(rawPayload.tool_response)).toContain("[truncated]");
   });
 
   it("removes retained invocations when a relay is unregistered", async () => {
@@ -385,7 +437,7 @@ describe("native hook relay registry", () => {
     const invocations = __testing.getNativeHookRelayInvocationsForTests();
     expect(invocations).toHaveLength(200);
     expect(invocations.map((invocation) => invocation.toolUseId)).not.toContain("call-0");
-    expect(invocations.at(-1)).toEqual(expect.objectContaining({ toolUseId: "call-209" }));
+    expect(invocations.at(-1)?.toolUseId).toBe("call-209");
   });
 
   it("rejects missing, wrong-provider, and disallowed-event invocations", async () => {
@@ -619,22 +671,22 @@ describe("native hook relay registry", () => {
       },
     });
     expect(response.exitCode).toBe(0);
-    expect(beforeToolCall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "exec",
-        params: { command: "rm -rf dist" },
-        runId: "run-1",
-        toolCallId: "native-call-1",
-      }),
-      expect.objectContaining({
-        agentId: "agent-1",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        runId: "run-1",
-        toolName: "exec",
-        toolCallId: "native-call-1",
-      }),
-    );
+    const event = getMockCallArg(beforeToolCall, 0, 0, "before tool call event");
+    expectRecordFields(event, {
+      toolName: "exec",
+      params: { command: "rm -rf dist" },
+      runId: "run-1",
+      toolCallId: "native-call-1",
+    });
+    const context = getMockCallArg(beforeToolCall, 0, 1, "before tool call context");
+    expectRecordFields(context, {
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      toolName: "exec",
+      toolCallId: "native-call-1",
+    });
   });
 
   it("passes config to trusted policies for native pre-tool session extension reads", async () => {
@@ -681,15 +733,14 @@ describe("native hook relay registry", () => {
           updatedAt: Date.now(),
         } as SessionEntry;
       });
-      await expect(
-        patchPluginSessionExtension({
-          cfg: config as never,
-          sessionKey: "agent:main:session-1",
-          pluginId: "policy-plugin",
-          namespace: "policy",
-          value: { block: true },
-        }),
-      ).resolves.toMatchObject({ ok: true });
+      const patchResult = await patchPluginSessionExtension({
+        cfg: config as never,
+        sessionKey: "agent:main:session-1",
+        pluginId: "policy-plugin",
+        namespace: "policy",
+        value: { block: true },
+      });
+      expect(patchResult.ok).toBe(true);
 
       const relay = registerNativeHookRelay({
         provider: "codex",
@@ -755,21 +806,21 @@ describe("native hook relay registry", () => {
     });
 
     expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
-    expect(beforeToolCall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "apply_patch",
-        params: { input: patch },
-        derivedPaths: [path.join(cwd, "src/new.ts")],
-      }),
-      expect.objectContaining({
-        agentId: "agent-1",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        runId: "run-1",
-        toolName: "apply_patch",
-        toolCallId: "native-patch-1",
-      }),
-    );
+    const event = getMockCallArg(beforeToolCall, 0, 0, "before tool call event");
+    expectRecordFields(event, {
+      toolName: "apply_patch",
+      params: { input: patch },
+      derivedPaths: [path.join(cwd, "src/new.ts")],
+    });
+    const context = getMockCallArg(beforeToolCall, 0, 1, "before tool call context");
+    expectRecordFields(context, {
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      toolName: "apply_patch",
+      toolCallId: "native-patch-1",
+    });
   });
 
   it("does not rewrite Codex native tool input when before_tool_call adjusts params", async () => {
@@ -828,23 +879,23 @@ describe("native hook relay registry", () => {
     });
 
     expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
-    expect(afterToolCall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "exec",
-        params: { command: "pnpm test" },
-        runId: "run-1",
-        toolCallId: "native-call-1",
-        result: { output: "ok", exit_code: 0 },
-      }),
-      expect.objectContaining({
-        agentId: "agent-1",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        runId: "run-1",
-        toolName: "exec",
-        toolCallId: "native-call-1",
-      }),
-    );
+    const event = getMockCallArg(afterToolCall, 0, 0, "after tool call event");
+    expectRecordFields(event, {
+      toolName: "exec",
+      params: { command: "pnpm test" },
+      runId: "run-1",
+      toolCallId: "native-call-1",
+      result: { output: "ok", exit_code: 0 },
+    });
+    const context = getMockCallArg(afterToolCall, 0, 1, "after tool call context");
+    expectRecordFields(context, {
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      toolName: "exec",
+      toolCallId: "native-call-1",
+    });
   });
 
   it("maps Codex MCP PreToolUse to OpenClaw before_tool_call and can block", async () => {
@@ -886,20 +937,20 @@ describe("native hook relay registry", () => {
         permissionDecisionReason: "MCP writes require review",
       },
     });
-    expect(beforeToolCall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "mcp__memory__create_entities",
-        params: {
-          entities: [{ name: "OpenClaw", entityType: "project", observations: ["test"] }],
-        },
-        runId: "run-1",
-        toolCallId: "mcp-call-1",
-      }),
-      expect.objectContaining({
-        toolName: "mcp__memory__create_entities",
-        toolCallId: "mcp-call-1",
-      }),
-    );
+    const event = getMockCallArg(beforeToolCall, 0, 0, "before tool call event");
+    expectRecordFields(event, {
+      toolName: "mcp__memory__create_entities",
+      params: {
+        entities: [{ name: "OpenClaw", entityType: "project", observations: ["test"] }],
+      },
+      runId: "run-1",
+      toolCallId: "mcp-call-1",
+    });
+    const context = getMockCallArg(beforeToolCall, 0, 1, "before tool call context");
+    expectRecordFields(context, {
+      toolName: "mcp__memory__create_entities",
+      toolCallId: "mcp-call-1",
+    });
   });
 
   it("lets security-style plugins block native MCP calls by scanning tool params", async () => {
@@ -946,19 +997,19 @@ describe("native hook relay registry", () => {
         permissionDecisionReason: "Blocked by security policy: destructive MCP command detected",
       },
     });
-    expect(beforeToolCall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "mcp__shell__run_command",
-        params: {
-          command: "rm -rf /tmp/openclaw-important-state",
-        },
-        toolCallId: "mcp-call-security",
-      }),
-      expect.objectContaining({
-        toolName: "mcp__shell__run_command",
-        toolCallId: "mcp-call-security",
-      }),
-    );
+    const event = getMockCallArg(beforeToolCall, 0, 0, "before tool call event");
+    expectRecordFields(event, {
+      toolName: "mcp__shell__run_command",
+      params: {
+        command: "rm -rf /tmp/openclaw-important-state",
+      },
+      toolCallId: "mcp-call-security",
+    });
+    const context = getMockCallArg(beforeToolCall, 0, 1, "before tool call context");
+    expectRecordFields(context, {
+      toolName: "mcp__shell__run_command",
+      toolCallId: "mcp-call-security",
+    });
   });
 
   it("maps Codex MCP PostToolUse to OpenClaw after_tool_call observation", async () => {
@@ -991,22 +1042,22 @@ describe("native hook relay registry", () => {
     });
 
     expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
-    expect(afterToolCall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "mcp__filesystem__read_file",
-        params: { path: "/repo/package.json" },
-        runId: "run-1",
-        toolCallId: "mcp-call-2",
-        result: {
-          content: [{ type: "text", text: '{ "name": "openclaw" }' }],
-          structuredContent: { bytes: 22 },
-        },
-      }),
-      expect.objectContaining({
-        toolName: "mcp__filesystem__read_file",
-        toolCallId: "mcp-call-2",
-      }),
-    );
+    const event = getMockCallArg(afterToolCall, 0, 0, "after tool call event");
+    expectRecordFields(event, {
+      toolName: "mcp__filesystem__read_file",
+      params: { path: "/repo/package.json" },
+      runId: "run-1",
+      toolCallId: "mcp-call-2",
+      result: {
+        content: [{ type: "text", text: '{ "name": "openclaw" }' }],
+        structuredContent: { bytes: 22 },
+      },
+    });
+    const context = getMockCallArg(afterToolCall, 0, 1, "after tool call context");
+    expectRecordFields(context, {
+      toolName: "mcp__filesystem__read_file",
+      toolCallId: "mcp-call-2",
+    });
   });
 
   it("routes Codex MCP PermissionRequest payloads through OpenClaw approval policy", async () => {
@@ -1044,18 +1095,17 @@ describe("native hook relay registry", () => {
         decision: { behavior: "allow" },
       },
     });
-    expect(approvalRequester).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "codex",
-        toolName: "mcp__github__create_issue",
-        toolCallId: "mcp-call-3",
-        toolInput: {
-          owner: "openclaw",
-          repo: "openclaw",
-          title: "Test issue",
-        },
-      }),
-    );
+    const request = getMockCallArg(approvalRequester, 0, 0, "approval request");
+    expectRecordFields(request, {
+      provider: "codex",
+      toolName: "mcp__github__create_issue",
+      toolCallId: "mcp-call-3",
+      toolInput: {
+        owner: "openclaw",
+        repo: "openclaw",
+        title: "Test issue",
+      },
+    });
   });
 
   it("maps Codex Stop to before_agent_finalize revision output", async () => {
@@ -1101,28 +1151,28 @@ describe("native hook relay registry", () => {
       stderr: "",
       exitCode: 0,
     });
-    expect(beforeAgentFinalize).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-1",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        turnId: "turn-1",
-        provider: "codex",
-        model: "gpt-5.4",
-        cwd: "/repo",
-        transcriptPath: "/tmp/session.jsonl",
-        stopHookActive: true,
-        lastAssistantMessage: "done",
-      }),
-      expect.objectContaining({
-        agentId: "agent-1",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        runId: "run-1",
-        workspaceDir: "/repo",
-        modelId: "gpt-5.4",
-      }),
-    );
+    const event = getMockCallArg(beforeAgentFinalize, 0, 0, "before finalize event");
+    expectRecordFields(event, {
+      runId: "run-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      turnId: "turn-1",
+      provider: "codex",
+      model: "gpt-5.4",
+      cwd: "/repo",
+      transcriptPath: "/tmp/session.jsonl",
+      stopHookActive: true,
+      lastAssistantMessage: "done",
+    });
+    const context = getMockCallArg(beforeAgentFinalize, 0, 1, "before finalize context");
+    expectRecordFields(context, {
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      workspaceDir: "/repo",
+      modelId: "gpt-5.4",
+    });
   });
 
   it("maps before_agent_finalize finalize output to Codex continue false", async () => {
@@ -1209,19 +1259,18 @@ describe("native hook relay registry", () => {
         decision: { behavior: "deny", message: "Denied by user" },
       },
     });
-    expect(approvalRequester).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "codex",
-        agentId: "agent-1",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        runId: "run-1",
-        toolName: "exec",
-        cwd: "/repo",
-        model: "gpt-5.4",
-        toolInput: { command: "git push" },
-      }),
-    );
+    const request = getMockCallArg(approvalRequester, 0, 0, "approval request");
+    expectRecordFields(request, {
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      toolName: "exec",
+      cwd: "/repo",
+      model: "gpt-5.4",
+      toolInput: { command: "git push" },
+    });
   });
 
   it("reuses allow-always PermissionRequest approvals for identical relay content", async () => {
@@ -1331,15 +1380,13 @@ describe("native hook relay registry", () => {
     });
 
     expect(approvalRequester).toHaveBeenCalledTimes(2);
-    expect(approvalRequester).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        agentId: "agent-1",
-        sessionId: "session-2",
-        sessionKey: "agent:main:session-2",
-        toolInput: { command: "browserforce tabs" },
-      }),
-    );
+    const request = getMockCallArg(approvalRequester, 1, 0, "second approval request");
+    expectRecordFields(request, {
+      agentId: "agent-1",
+      sessionId: "session-2",
+      sessionKey: "agent:main:session-2",
+      toolInput: { command: "browserforce tabs" },
+    });
   });
 
   it("keeps allow-always PermissionRequest reuse scoped to matching cwd and input", async () => {

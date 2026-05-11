@@ -91,20 +91,18 @@ describe("gateway auth", () => {
   }
 
   it("resolves token/password from OPENCLAW gateway env vars", () => {
-    expect(
-      resolveGatewayAuth({
-        authConfig: {},
-        env: {
-          OPENCLAW_GATEWAY_TOKEN: "env-token",
-          OPENCLAW_GATEWAY_PASSWORD: "env-password",
-        } as NodeJS.ProcessEnv,
-      }),
-    ).toMatchObject({
-      mode: "password",
-      modeSource: "password",
-      token: "env-token",
-      password: "env-password",
+    const auth = resolveGatewayAuth({
+      authConfig: {},
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+        OPENCLAW_GATEWAY_PASSWORD: "env-password",
+      } as NodeJS.ProcessEnv,
     });
+
+    expect(auth.mode).toBe("password");
+    expect(auth.modeSource).toBe("password");
+    expect(auth.token).toBe("env-token");
+    expect(auth.password).toBe("env-password");
   });
 
   it("resolves the active shared token auth only", () => {
@@ -184,69 +182,61 @@ describe("gateway auth", () => {
   });
 
   it("keeps gateway auth config values ahead of env overrides", () => {
-    expect(
-      resolveGatewayAuth({
-        authConfig: {
-          token: "config-token",
-          password: "config-password", // pragma: allowlist secret
-        },
-        env: {
-          OPENCLAW_GATEWAY_TOKEN: "env-token",
-          OPENCLAW_GATEWAY_PASSWORD: "env-password",
-        } as NodeJS.ProcessEnv,
-      }),
-    ).toMatchObject({
-      token: "config-token",
-      password: "config-password", // pragma: allowlist secret
+    const auth = resolveGatewayAuth({
+      authConfig: {
+        token: "config-token",
+        password: "config-password", // pragma: allowlist secret
+      },
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+        OPENCLAW_GATEWAY_PASSWORD: "env-password",
+      } as NodeJS.ProcessEnv,
     });
+
+    expect(auth.token).toBe("config-token");
+    expect(auth.password).toBe("config-password"); // pragma: allowlist secret
   });
 
   it("treats env-template auth secrets as SecretRefs instead of plaintext", () => {
-    expect(
-      resolveGatewayAuth({
-        authConfig: {
-          token: "${OPENCLAW_GATEWAY_TOKEN}",
-          password: "${OPENCLAW_GATEWAY_PASSWORD}",
-        },
-        env: {
-          OPENCLAW_GATEWAY_TOKEN: "env-token",
-          OPENCLAW_GATEWAY_PASSWORD: "env-password",
-        } as NodeJS.ProcessEnv,
-      }),
-    ).toMatchObject({
-      token: "env-token",
-      password: "env-password",
-      mode: "password",
+    const auth = resolveGatewayAuth({
+      authConfig: {
+        token: "${OPENCLAW_GATEWAY_TOKEN}",
+        password: "${OPENCLAW_GATEWAY_PASSWORD}",
+      },
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+        OPENCLAW_GATEWAY_PASSWORD: "env-password",
+      } as NodeJS.ProcessEnv,
     });
+
+    expect(auth.token).toBe("env-token");
+    expect(auth.password).toBe("env-password");
+    expect(auth.mode).toBe("password");
   });
 
   it("resolves explicit auth mode none from config", () => {
-    expect(
-      resolveGatewayAuth({
-        authConfig: { mode: "none" },
-        env: {} as NodeJS.ProcessEnv,
-      }),
-    ).toMatchObject({
-      mode: "none",
-      modeSource: "config",
-      token: undefined,
-      password: undefined,
+    const auth = resolveGatewayAuth({
+      authConfig: { mode: "none" },
+      env: {} as NodeJS.ProcessEnv,
     });
+
+    expect(auth.mode).toBe("none");
+    expect(auth.modeSource).toBe("config");
+    expect(auth.token).toBeUndefined();
+    expect(auth.password).toBeUndefined();
   });
 
   it("marks mode source as override when runtime mode override is provided", () => {
-    expect(
-      resolveGatewayAuth({
-        authConfig: { mode: "password", password: "config-password" }, // pragma: allowlist secret
-        authOverride: { mode: "token" },
-        env: {} as NodeJS.ProcessEnv,
-      }),
-    ).toMatchObject({
-      mode: "token",
-      modeSource: "override",
-      token: undefined,
-      password: "config-password", // pragma: allowlist secret
+    const auth = resolveGatewayAuth({
+      authConfig: { mode: "password", password: "config-password" }, // pragma: allowlist secret
+      authOverride: { mode: "token" },
+      env: {} as NodeJS.ProcessEnv,
     });
+
+    expect(auth.mode).toBe("token");
+    expect(auth.modeSource).toBe("override");
+    expect(auth.token).toBeUndefined();
+    expect(auth.password).toBe("config-password"); // pragma: allowlist secret
   });
 
   it("authorizes matching token auth when req is missing socket", async () => {
@@ -298,11 +288,9 @@ describe("gateway auth", () => {
       authConfig: { mode: "none", token: "configured-token" },
       env: {} as NodeJS.ProcessEnv,
     });
-    expect(auth).toMatchObject({
-      mode: "none",
-      modeSource: "config",
-      token: "configured-token",
-    });
+    expect(auth.mode).toBe("none");
+    expect(auth.modeSource).toBe("config");
+    expect(auth.token).toBe("configured-token");
 
     const res = await authorizeGatewayConnect({
       auth,
@@ -646,65 +634,61 @@ describe("trusted-proxy auth", () => {
   });
 
   it("accepts trusted-proxy HTTP requests from allowed origins", async () => {
-    await expect(
-      authorizeHttpGatewayConnect({
-        auth: {
-          mode: "trusted-proxy",
-          allowTailscale: false,
-          trustedProxy: trustedProxyConfig,
-        },
-        connectAuth: null,
-        trustedProxies: ["10.0.0.1"],
-        req: {
-          socket: { remoteAddress: "10.0.0.1" },
-          headers: {
-            host: "gateway.example.com",
-            origin: "https://control.example.com",
-            "x-forwarded-user": "nick@example.com",
-            "x-forwarded-proto": "https",
-          },
-        } as never,
-        browserOriginPolicy: {
-          requestHost: "gateway.example.com",
+    const res = await authorizeHttpGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: trustedProxyConfig,
+      },
+      connectAuth: null,
+      trustedProxies: ["10.0.0.1"],
+      req: {
+        socket: { remoteAddress: "10.0.0.1" },
+        headers: {
+          host: "gateway.example.com",
           origin: "https://control.example.com",
-          allowedOrigins: ["https://control.example.com"],
+          "x-forwarded-user": "nick@example.com",
+          "x-forwarded-proto": "https",
         },
-      }),
-    ).resolves.toMatchObject({
-      ok: true,
-      method: "trusted-proxy",
-      user: "nick@example.com",
+      } as never,
+      browserOriginPolicy: {
+        requestHost: "gateway.example.com",
+        origin: "https://control.example.com",
+        allowedOrigins: ["https://control.example.com"],
+      },
     });
+
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("trusted-proxy");
+    expect(res.user).toBe("nick@example.com");
   });
 
   it("keeps origin-less trusted-proxy HTTP requests working", async () => {
-    await expect(
-      authorizeHttpGatewayConnect({
-        auth: {
-          mode: "trusted-proxy",
-          allowTailscale: false,
-          trustedProxy: trustedProxyConfig,
+    const res = await authorizeHttpGatewayConnect({
+      auth: {
+        mode: "trusted-proxy",
+        allowTailscale: false,
+        trustedProxy: trustedProxyConfig,
+      },
+      connectAuth: null,
+      trustedProxies: ["10.0.0.1"],
+      req: {
+        socket: { remoteAddress: "10.0.0.1" },
+        headers: {
+          host: "gateway.example.com",
+          "x-forwarded-user": "nick@example.com",
+          "x-forwarded-proto": "https",
         },
-        connectAuth: null,
-        trustedProxies: ["10.0.0.1"],
-        req: {
-          socket: { remoteAddress: "10.0.0.1" },
-          headers: {
-            host: "gateway.example.com",
-            "x-forwarded-user": "nick@example.com",
-            "x-forwarded-proto": "https",
-          },
-        } as never,
-        browserOriginPolicy: {
-          requestHost: "gateway.example.com",
-          allowedOrigins: ["https://control.example.com"],
-        },
-      }),
-    ).resolves.toMatchObject({
-      ok: true,
-      method: "trusted-proxy",
-      user: "nick@example.com",
+      } as never,
+      browserOriginPolicy: {
+        requestHost: "gateway.example.com",
+        allowedOrigins: ["https://control.example.com"],
+      },
     });
+
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("trusted-proxy");
+    expect(res.user).toBe("nick@example.com");
   });
 
   it("rejects request from untrusted source", async () => {

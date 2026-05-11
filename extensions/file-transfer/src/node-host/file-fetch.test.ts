@@ -11,6 +11,28 @@ import {
 
 let tmpRoot: string;
 
+type FileFetchResult = Awaited<ReturnType<typeof handleFileFetch>>;
+type FileFetchSuccess = Extract<FileFetchResult, { ok: true }>;
+type FileFetchFailure = Extract<FileFetchResult, { ok: false }>;
+
+function expectFailureCode(
+  result: FileFetchResult,
+  code: string,
+): asserts result is FileFetchFailure {
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    throw new Error(`expected failure ${code}`);
+  }
+  expect(result.code).toBe(code);
+}
+
+function expectSuccess(result: FileFetchResult): asserts result is FileFetchSuccess {
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    throw new Error(`expected ok, got ${result.code}: ${result.message}`);
+  }
+}
+
 beforeEach(async () => {
   // realpath the mkdtemp result — on macOS /tmp/foo and /var/folders/... are
   // symlinks to /private/{tmp,var/folders}, and the new SYMLINK_REDIRECT
@@ -27,29 +49,20 @@ afterEach(async () => {
 
 describe("handleFileFetch — input validation", () => {
   it("returns INVALID_PATH for empty / non-string path", async () => {
-    expect(await handleFileFetch({ path: "" })).toMatchObject({
-      ok: false,
-      code: "INVALID_PATH",
-    });
-    expect(await handleFileFetch({ path: undefined })).toMatchObject({
-      ok: false,
-      code: "INVALID_PATH",
-    });
-    expect(await handleFileFetch({ path: 42 as unknown })).toMatchObject({
-      ok: false,
-      code: "INVALID_PATH",
-    });
+    expectFailureCode(await handleFileFetch({ path: "" }), "INVALID_PATH");
+    expectFailureCode(await handleFileFetch({ path: undefined }), "INVALID_PATH");
+    expectFailureCode(await handleFileFetch({ path: 42 as unknown }), "INVALID_PATH");
   });
 
   it("rejects relative paths", async () => {
     const r = await handleFileFetch({ path: "relative/file.txt" });
-    expect(r).toMatchObject({ ok: false, code: "INVALID_PATH" });
+    expectFailureCode(r, "INVALID_PATH");
     expect(r.ok ? "" : r.message).toMatch(/absolute/);
   });
 
   it("rejects paths with NUL bytes", async () => {
     const r = await handleFileFetch({ path: "/tmp/foo\0bar" });
-    expect(r).toMatchObject({ ok: false, code: "INVALID_PATH" });
+    expectFailureCode(r, "INVALID_PATH");
     expect(r.ok ? "" : r.message).toMatch(/NUL/);
   });
 });
@@ -57,15 +70,12 @@ describe("handleFileFetch — input validation", () => {
 describe("handleFileFetch — fs errors", () => {
   it("returns NOT_FOUND for a missing file", async () => {
     const target = path.join(tmpRoot, "missing.txt");
-    expect(await handleFileFetch({ path: target })).toMatchObject({
-      ok: false,
-      code: "NOT_FOUND",
-    });
+    expectFailureCode(await handleFileFetch({ path: target }), "NOT_FOUND");
   });
 
   it("returns IS_DIRECTORY when the path resolves to a directory", async () => {
     const r = await handleFileFetch({ path: tmpRoot });
-    expect(r).toMatchObject({ ok: false, code: "IS_DIRECTORY" });
+    expectFailureCode(r, "IS_DIRECTORY");
     // canonical path is reported back so the caller can re-check policy
     if (r.ok) {
       throw new Error("expected directory fetch to fail");
@@ -116,14 +126,12 @@ describe("handleFileFetch — happy path", () => {
 
     const r = await handleFileFetch({ path: target, preflightOnly: true });
 
-    expect(r).toMatchObject({
-      ok: true,
-      path: target,
-      size: 12,
-      base64: "",
-      sha256: "",
-      preflightOnly: true,
-    });
+    expectSuccess(r);
+    expect(r.path).toBe(target);
+    expect(r.size).toBe(12);
+    expect(r.base64).toBe("");
+    expect(r.sha256).toBe("");
+    expect(r.preflightOnly).toBe(true);
     expect(readFileSpy).not.toHaveBeenCalled();
   });
 
@@ -192,7 +200,7 @@ describe("handleFileFetch — size enforcement", () => {
     await fs.writeFile(target, data);
 
     const r = await handleFileFetch({ path: target, maxBytes: 1024 });
-    expect(r).toMatchObject({ ok: false, code: "FILE_TOO_LARGE" });
+    expectFailureCode(r, "FILE_TOO_LARGE");
   });
 
   it("clamps maxBytes to the hard ceiling", async () => {
@@ -210,13 +218,9 @@ describe("handleFileFetch — size enforcement", () => {
   it("uses default cap when maxBytes is not finite or non-positive", async () => {
     const target = path.join(tmpRoot, "small.bin");
     await fs.writeFile(target, Buffer.from([0xff]));
-    expect(await handleFileFetch({ path: target, maxBytes: -1 })).toMatchObject({ ok: true });
-    expect(await handleFileFetch({ path: target, maxBytes: Number.NaN })).toMatchObject({
-      ok: true,
-    });
-    expect(await handleFileFetch({ path: target, maxBytes: "8" as unknown })).toMatchObject({
-      ok: true,
-    });
+    expectSuccess(await handleFileFetch({ path: target, maxBytes: -1 }));
+    expectSuccess(await handleFileFetch({ path: target, maxBytes: Number.NaN }));
+    expectSuccess(await handleFileFetch({ path: target, maxBytes: "8" as unknown }));
   });
 });
 
@@ -228,7 +232,7 @@ describe("handleFileFetch — symlink handling", () => {
     await fs.symlink(real, link);
 
     const r = await handleFileFetch({ path: link });
-    expect(r).toMatchObject({ ok: false, code: "SYMLINK_REDIRECT" });
+    expectFailureCode(r, "SYMLINK_REDIRECT");
     // Caller learns the canonical target so the operator can update the
     // allowlist or set followSymlinks=true.
     expect(r.ok ? null : r.canonicalPath).toBe(real);

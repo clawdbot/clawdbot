@@ -1,5 +1,5 @@
 import { rm } from "node:fs/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
@@ -80,6 +80,59 @@ async function loadEnvelopeTimestampHelpers() {
 
 async function loadInboundContextContract() {
   return await import("./test-support/inbound-context-contract.js");
+}
+
+type MockCallSource = {
+  mock: {
+    calls: ArrayLike<ReadonlyArray<unknown>>;
+  };
+};
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).toBeTypeOf("object");
+  expect(value, label).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+function requireArray(value: unknown, label: string): unknown[] {
+  expect(Array.isArray(value), label).toBe(true);
+  return value as unknown[];
+}
+
+function mockArg(source: MockCallSource, callIndex: number, argIndex: number, label: string) {
+  const call = source.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected mock call: ${label}`);
+  }
+  return call[argIndex];
+}
+
+function execApprovalCall(index = 0) {
+  return requireRecord(
+    mockArg(resolveExecApprovalSpy as unknown as MockCallSource, index, 0, "exec approval call"),
+    "exec approval call",
+  );
+}
+
+function execApprovalTelegramConfig(call = execApprovalCall()) {
+  return requireRecord(
+    requireRecord(requireRecord(call.cfg, "approval cfg").channels, "approval channels").telegram,
+    "telegram config",
+  );
+}
+
+function execApprovalTargetConfig(call = execApprovalCall()) {
+  return requireRecord(
+    requireRecord(requireRecord(call.cfg, "approval cfg").approvals, "approvals").exec,
+    "exec approvals target config",
+  );
+}
+
+function systemEventOptions(index = 0) {
+  return requireRecord(
+    mockArg(enqueueSystemEventSpy as unknown as MockCallSource, index, 1, "system event options"),
+    "system event options",
+  );
 }
 
 const ORIGINAL_TZ = process.env.TZ;
@@ -503,23 +556,18 @@ describe("createTelegramBot", () => {
     expect(chatId).toBe(1234);
     expect(messageId).toBe(21);
     expect(replyMarkup).toEqual({ reply_markup: { inline_keyboard: [] } });
-    expect(resolveExecApprovalSpy).toHaveBeenCalledWith({
-      cfg: expect.objectContaining({
-        channels: expect.objectContaining({
-          telegram: expect.objectContaining({
-            execApprovals: expect.objectContaining({
-              enabled: true,
-              approvers: ["9"],
-              target: "dm",
-            }),
-          }),
-        }),
-      }),
-      approvalId: "138e9b8c",
-      decision: "allow-once",
-      allowPluginFallback: true,
-      senderId: "9",
-    });
+    const approvalCall = execApprovalCall();
+    const execApprovals = requireRecord(
+      execApprovalTelegramConfig(approvalCall).execApprovals,
+      "telegram exec approvals",
+    );
+    expect(execApprovals.enabled).toBe(true);
+    expect(execApprovals.approvers).toEqual(["9"]);
+    expect(execApprovals.target).toBe("dm");
+    expect(approvalCall.approvalId).toBe("138e9b8c");
+    expect(approvalCall.decision).toBe("allow-once");
+    expect(approvalCall.allowPluginFallback).toBe(true);
+    expect(approvalCall.senderId).toBe("9");
     expect(replySpy).not.toHaveBeenCalled();
     expect(editMessageTextSpy).not.toHaveBeenCalled();
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-style");
@@ -616,23 +664,18 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(resolveExecApprovalSpy).toHaveBeenCalledWith({
-      cfg: expect.objectContaining({
-        channels: expect.objectContaining({
-          telegram: expect.objectContaining({
-            execApprovals: expect.objectContaining({
-              enabled: true,
-              approvers: ["9"],
-              target: "dm",
-            }),
-          }),
-        }),
-      }),
-      approvalId: "plugin:138e9b8c",
-      decision: "allow-once",
-      allowPluginFallback: true,
-      senderId: "9",
-    });
+    const approvalCall = execApprovalCall();
+    const execApprovals = requireRecord(
+      execApprovalTelegramConfig(approvalCall).execApprovals,
+      "telegram exec approvals",
+    );
+    expect(execApprovals.enabled).toBe(true);
+    expect(execApprovals.approvers).toEqual(["9"]);
+    expect(execApprovals.target).toBe("dm");
+    expect(approvalCall.approvalId).toBe("plugin:138e9b8c");
+    expect(approvalCall.decision).toBe("allow-once");
+    expect(approvalCall.allowPluginFallback).toBe(true);
+    expect(approvalCall.senderId).toBe("9");
     expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-plugin-approve");
   });
@@ -779,20 +822,14 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(resolveExecApprovalSpy).toHaveBeenCalledWith({
-      cfg: expect.objectContaining({
-        approvals: expect.objectContaining({
-          exec: expect.objectContaining({
-            enabled: true,
-            mode: "targets",
-          }),
-        }),
-      }),
-      approvalId: "138e9b8c",
-      decision: "allow-once",
-      allowPluginFallback: false,
-      senderId: "9",
-    });
+    const approvalCall = execApprovalCall();
+    const execApprovals = execApprovalTargetConfig(approvalCall);
+    expect(execApprovals.enabled).toBe(true);
+    expect(execApprovals.mode).toBe("targets");
+    expect(approvalCall.approvalId).toBe("138e9b8c");
+    expect(approvalCall.decision).toBe("allow-once");
+    expect(approvalCall.allowPluginFallback).toBe(false);
+    expect(approvalCall.senderId).toBe("9");
     expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-target");
   });
@@ -847,20 +884,14 @@ describe("createTelegramBot", () => {
       }),
     ).rejects.toThrow("unknown or expired approval id");
 
-    expect(resolveExecApprovalSpy).toHaveBeenCalledWith({
-      cfg: expect.objectContaining({
-        approvals: expect.objectContaining({
-          exec: expect.objectContaining({
-            enabled: true,
-            mode: "targets",
-          }),
-        }),
-      }),
-      approvalId: "138e9b8c",
-      decision: "allow-once",
-      allowPluginFallback: false,
-      senderId: "9",
-    });
+    const approvalCall = execApprovalCall();
+    const execApprovals = execApprovalTargetConfig(approvalCall);
+    expect(execApprovals.enabled).toBe(true);
+    expect(execApprovals.mode).toBe("targets");
+    expect(approvalCall.approvalId).toBe("138e9b8c");
+    expect(approvalCall.decision).toBe("allow-once");
+    expect(approvalCall.allowPluginFallback).toBe(false);
+    expect(approvalCall.senderId).toBe("9");
     expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
     expect(replySpy).not.toHaveBeenCalled();
     expect(sendMessageSpy).not.toHaveBeenCalled();
@@ -944,10 +975,17 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(listSkillCommandsForAgents).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
-      agentIds: ["main"],
-    });
+    const listCall = requireRecord(
+      mockArg(
+        listSkillCommandsForAgents as unknown as MockCallSource,
+        0,
+        0,
+        "list skill commands call",
+      ),
+      "list skill commands call",
+    );
+    expect(listCall.cfg).toBeTypeOf("object");
+    expect(listCall.agentIds).toEqual(["main"]);
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     const [chatId, messageId, text, params] = editMessageTextSpy.mock.calls[0] ?? [];
     expect(chatId).toBe(1234);
@@ -993,10 +1031,17 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(listSkillCommandsForAgents).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
-      agentIds: ["main"],
-    });
+    const listCall = requireRecord(
+      mockArg(
+        listSkillCommandsForAgents as unknown as MockCallSource,
+        0,
+        0,
+        "list skill commands call",
+      ),
+      "list skill commands call",
+    );
+    expect(listCall.cfg).toBeTypeOf("object");
+    expect(listCall.agentIds).toEqual(["main"]);
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -1323,12 +1368,13 @@ describe("createTelegramBot", () => {
 
       expect(replySpy).not.toHaveBeenCalled();
       expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-      expect(editMessageTextSpy).toHaveBeenCalledWith(
-        1234,
-        17,
+      const editCall = editMessageTextSpy.mock.calls[0];
+      expect(editCall?.[0]).toBe(1234);
+      expect(editCall?.[1]).toBe(17);
+      expect(editCall?.[2]).toBe(
         `${CHECK_MARK_EMOJI} Model changed to <b>openai/gpt-5.4</b>\n\nSession-only model selection. Runtime unchanged. Use /model openai/gpt-5.4 --runtime &lt;runtime&gt; to switch harnesses. The agent default in openclaw.json is unchanged; /reset or a new session may return to that default.`,
-        expect.objectContaining({ parse_mode: "HTML" }),
       );
+      expect(requireRecord(editCall?.[3], "edit params").parse_mode).toBe("HTML");
 
       const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
       expect(entry?.providerOverride).toBe("openai");
@@ -1614,40 +1660,122 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
-    expect(payload.UntrustedStructuredContext).toEqual([
-      expect.objectContaining({
-        label: "Nearby reply target window",
-        payload: expect.objectContaining({
-          relation: "around_reply_target",
-          messages: expect.arrayContaining([
-            expect.objectContaining({
-              message_id: "100",
-              sender: "Assistant",
-              body: "Earlier deployment answer",
-              is_reply_target: true,
-            }),
-          ]),
-        }),
-      }),
-      expect.objectContaining({
-        label: "Current local chat window",
-        payload: expect.objectContaining({
-          relation: "before_current_message",
-          messages: expect.arrayContaining([
-            expect.objectContaining({
-              message_id: "200",
-              sender: "Sam",
-              body: "Lunch after standup?",
-            }),
-            expect.objectContaining({
-              message_id: "201",
-              sender: "Riley",
-              body: "After the incident review.",
-            }),
-          ]),
-        }),
-      }),
-    ]);
+    const [conversationContext] = requireArray(
+      payload.UntrustedStructuredContext,
+      "structured context",
+    );
+    const contextRecord = requireRecord(conversationContext, "conversation context");
+    expect(contextRecord.label).toBe("Conversation context");
+    const contextPayload = requireRecord(contextRecord.payload, "conversation context payload");
+    expect(contextPayload.relation).toBe("selected_for_current_message");
+    const messages = requireArray(contextPayload.messages, "conversation context messages").map(
+      (message, index) => requireRecord(message, `conversation context message ${index + 1}`),
+    );
+    const messagesById = new Map(messages.map((message) => [message.message_id, message]));
+    expect(messagesById.get("100")?.sender).toBe("Assistant");
+    expect(messagesById.get("100")?.body).toBe("Earlier deployment answer");
+    expect(messagesById.get("100")?.is_reply_target).toBe(true);
+    expect(messagesById.get("200")?.sender).toBe("Sam");
+    expect(messagesById.get("200")?.body).toBe("Lunch after standup?");
+    expect(messagesById.get("201")?.sender).toBe("Riley");
+    expect(messagesById.get("201")?.body).toBe("After the incident review.");
+  });
+
+  it("updates cached bot messages from Telegram edit updates", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const editedHandler = getOnHandler("edited_message") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    const baseCtx = {
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+    const chat = { id: 42, type: "group", title: "Ops" };
+    const question = {
+      chat,
+      text: "/ask which bikes can reach 383kmph",
+      date: 1778474813,
+      message_id: 35014,
+      from: { id: 201, is_bot: false, first_name: "Kesava" },
+    };
+    const fullAnswer =
+      "Kawasaki Ninja H2R (claimed 400 km/h) and MTT 420RR turbine (claimed up to 439 km/h) exceed 383 km/h. Dodge Tomahawk reaches higher but is a 4-wheeled concept, not a standard bike.";
+
+    await handler({
+      ...baseCtx,
+      message: question,
+    });
+    await handler({
+      ...baseCtx,
+      message: {
+        chat,
+        text: "K",
+        date: 1778474823,
+        message_id: 35016,
+        from: { id: 777, is_bot: true, first_name: "Super Serious Bot" },
+        reply_to_message: question,
+      },
+    });
+
+    replySpy.mockClear();
+    await editedHandler({
+      ...baseCtx,
+      editedMessage: {
+        chat,
+        text: fullAnswer,
+        date: 1778474823,
+        edit_date: 1778474824,
+        message_id: 35016,
+        from: { id: 777, is_bot: true, first_name: "Super Serious Bot" },
+        reply_to_message: question,
+      },
+    });
+    expect(replySpy).not.toHaveBeenCalled();
+
+    await handler({
+      ...baseCtx,
+      message: {
+        chat,
+        text: "wtf",
+        date: 1778474850,
+        message_id: 35018,
+        from: { id: 202, is_bot: false, first_name: "Kesava" },
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    const [conversationContext] = requireArray(
+      payload.UntrustedStructuredContext,
+      "structured context",
+    );
+    const contextRecord = requireRecord(conversationContext, "conversation context");
+    const contextPayload = requireRecord(contextRecord.payload, "conversation context payload");
+    const messages = requireArray(contextPayload.messages, "conversation context messages").map(
+      (message, index) => requireRecord(message, `conversation context message ${index + 1}`),
+    );
+    const messagesById = new Map(messages.map((message) => [message.message_id, message]));
+    expect(messagesById.get("35016")?.sender).toBe("Super Serious Bot");
+    expect(messagesById.get("35016")?.body).toBe(fullAnswer);
+    expect(messagesById.get("35016")?.body).not.toBe("K");
   });
 
   it("uses quote text when a Telegram partial reply is received", async () => {
@@ -1871,17 +1999,12 @@ describe("createTelegramBot", () => {
         replyToId?: string;
       }>;
     };
-    expect(payload.ReplyChain).toEqual([
-      expect.objectContaining({
-        messageId: "9001",
-        body: "r u back from hermes",
-        replyToId: "9000",
-      }),
-      expect.objectContaining({
-        messageId: "9000",
-        mediaRef: "telegram:file/root-photo-1",
-      }),
-    ]);
+    expect(payload.ReplyChain).toHaveLength(2);
+    expect(payload.ReplyChain?.[0]?.messageId).toBe("9001");
+    expect(payload.ReplyChain?.[0]?.body).toBe("r u back from hermes");
+    expect(payload.ReplyChain?.[0]?.replyToId).toBe("9000");
+    expect(payload.ReplyChain?.[1]?.messageId).toBe("9000");
+    expect(payload.ReplyChain?.[1]?.mediaRef).toBe("telegram:file/root-photo-1");
     expect(payload.ReplyChain?.[1]?.mediaPath).toBeTypeOf("string");
     expect(payload.ReplyChain?.[1]?.mediaPath).not.toBe("");
     expect(getFileSpy).toHaveBeenCalledWith("root-photo-1");
@@ -2896,12 +3019,10 @@ describe("createTelegramBot", () => {
     });
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEventSpy).toHaveBeenCalledWith(
+    expect(enqueueSystemEventSpy.mock.calls[0]?.[0]).toBe(
       `Telegram reaction added: ${THUMBS_UP_EMOJI} by Ada (@ada_bot) on msg 42`,
-      expect.objectContaining({
-        contextKey: expect.stringContaining("telegram:reaction:add:1234:42:9"),
-      }),
     );
+    expect(String(systemEventOptions().contextKey)).toContain("telegram:reaction:add:1234:42:9");
   });
 
   it.each([
@@ -3126,10 +3247,10 @@ describe("createTelegramBot", () => {
     });
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEventSpy).toHaveBeenCalledWith(
+    expect(enqueueSystemEventSpy.mock.calls[0]?.[0]).toBe(
       `Telegram reaction added: ${PARTY_EMOJI} by Ada on msg 99`,
-      expect.any(Object),
     );
+    expect(enqueueSystemEventSpy.mock.calls[0]?.[1]).toBeTypeOf("object");
   });
 
   it("skips reaction in own mode when message is not sent by bot", async () => {
@@ -3323,13 +3444,11 @@ describe("createTelegramBot", () => {
     });
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEventSpy).toHaveBeenCalledWith(
+    expect(enqueueSystemEventSpy.mock.calls[0]?.[0]).toBe(
       `Telegram reaction added: ${FIRE_EMOJI} by Bob (@bob_user) on msg 100`,
-      expect.objectContaining({
-        sessionKey: expect.stringContaining("telegram:group:5678:topic:1"),
-        contextKey: expect.stringContaining("telegram:reaction:add:5678:100:10"),
-      }),
     );
+    expect(String(systemEventOptions().sessionKey)).toContain("telegram:group:5678:topic:1");
+    expect(String(systemEventOptions().contextKey)).toContain("telegram:reaction:add:5678:100:10");
   });
 
   it("uses correct session key for forum group reactions in general topic", async () => {
@@ -3361,13 +3480,11 @@ describe("createTelegramBot", () => {
     });
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEventSpy).toHaveBeenCalledWith(
+    expect(enqueueSystemEventSpy.mock.calls[0]?.[0]).toBe(
       `Telegram reaction added: ${EYES_EMOJI} by Bob on msg 101`,
-      expect.objectContaining({
-        sessionKey: expect.stringContaining("telegram:group:5678:topic:1"),
-        contextKey: expect.stringContaining("telegram:reaction:add:5678:101:10"),
-      }),
     );
+    expect(String(systemEventOptions().sessionKey)).toContain("telegram:group:5678:topic:1");
+    expect(String(systemEventOptions().contextKey)).toContain("telegram:reaction:add:5678:101:10");
   });
 
   it("uses correct session key for regular group reactions without topic", async () => {
@@ -3398,13 +3515,11 @@ describe("createTelegramBot", () => {
     });
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEventSpy).toHaveBeenCalledWith(
+    expect(enqueueSystemEventSpy.mock.calls[0]?.[0]).toBe(
       `Telegram reaction added: ${HEART_EMOJI} by Charlie on msg 200`,
-      expect.objectContaining({
-        sessionKey: expect.stringContaining("telegram:group:9999"),
-        contextKey: expect.stringContaining("telegram:reaction:add:9999:200:11"),
-      }),
     );
+    expect(String(systemEventOptions().sessionKey)).toContain("telegram:group:9999");
+    expect(String(systemEventOptions().contextKey)).toContain("telegram:reaction:add:9999:200:11");
     // Verify session key does NOT contain :topic:
     const eventOptions = enqueueSystemEventSpy.mock.calls[0]?.[1] as {
       sessionKey?: string;

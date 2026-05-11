@@ -126,24 +126,24 @@ describe("Security: DM Allowlist", () => {
     });
 
     it("uses the ingress command gate for owner-only command authorization", async () => {
-      await expect(
-        resolveTlonCommandAuthorizationWithIngress({
-          senderShip: "~zod",
-          ownerShip: "zod",
-          useAccessGroups: true,
-        }),
-      ).resolves.toMatchObject({
-        commandAccess: { authorized: true },
+      const authorized = await resolveTlonCommandAuthorizationWithIngress({
+        senderShip: "~zod",
+        ownerShip: "zod",
+        useAccessGroups: true,
       });
-      await expect(
-        resolveTlonCommandAuthorizationWithIngress({
-          senderShip: "~nec",
-          ownerShip: "~zod",
-          useAccessGroups: true,
-        }),
-      ).resolves.toMatchObject({
-        commandAccess: { authorized: false },
+      expect(authorized.commandAccess.requested).toBe(true);
+      expect(authorized.commandAccess.authorized).toBe(true);
+      expect(authorized.commandAccess.shouldBlockControlCommand).toBe(false);
+      expect(authorized.commandAccess.reasonCode).toBe("command_authorized");
+
+      const unauthorized = await resolveTlonCommandAuthorizationWithIngress({
+        senderShip: "~nec",
+        ownerShip: "~zod",
+        useAccessGroups: true,
       });
+      expect(unauthorized.commandAccess.requested).toBe(true);
+      expect(unauthorized.commandAccess.authorized).toBe(false);
+      expect(unauthorized.commandAccess.shouldBlockControlCommand).toBe(false);
     });
   });
 });

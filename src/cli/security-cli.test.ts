@@ -75,6 +75,16 @@ function primeDeepAuditConfig(sourceConfig = { gateway: { mode: "local" } }) {
   return sourceConfig;
 }
 
+function lastSecretResolverOptions(): Record<string, unknown> | undefined {
+  return resolveCommandSecretRefsViaGateway.mock.calls.at(-1)?.[0] as
+    | Record<string, unknown>
+    | undefined;
+}
+
+function lastSecurityAuditOptions(): Record<string, unknown> | undefined {
+  return runSecurityAudit.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined;
+}
+
 describe("security CLI", () => {
   beforeEach(() => {
     runtimeLogs.length = 0;
@@ -138,23 +148,17 @@ describe("security CLI", () => {
 
     await createProgram().parseAsync(["security", "audit", "--json"], { from: "user" });
 
-    expect(resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: sourceConfig,
-        commandName: "security audit",
-        mode: "read_only_status",
-        targetIds: expect.any(Set),
-      }),
-    );
-    expect(runSecurityAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: resolvedConfig,
-        sourceConfig,
-        deep: false,
-        includeFilesystem: true,
-        includeChannelSecurity: true,
-      }),
-    );
+    const resolverOptions = lastSecretResolverOptions();
+    expect(resolverOptions?.config).toBe(sourceConfig);
+    expect(resolverOptions?.commandName).toBe("security audit");
+    expect(resolverOptions?.mode).toBe("read_only_status");
+    expect(resolverOptions?.targetIds).toBeInstanceOf(Set);
+    const auditOptions = lastSecurityAuditOptions();
+    expect(auditOptions?.config).toBe(resolvedConfig);
+    expect(auditOptions?.sourceConfig).toBe(sourceConfig);
+    expect(auditOptions?.deep).toBe(false);
+    expect(auditOptions?.includeFilesystem).toBe(true);
+    expect(auditOptions?.includeChannelSecurity).toBe(true);
     const payload = JSON.parse(String(runtimeLogs.at(-1)));
     expect(payload.secretDiagnostics).toEqual([
       "security audit: gateway secrets.resolve unavailable (gateway closed); resolved command secrets locally.",
@@ -187,16 +191,8 @@ describe("security CLI", () => {
       from: "user",
     });
 
-    expect(resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: "read_only_status",
-      }),
-    );
-    expect(runSecurityAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deep: true,
-        deepProbeAuth,
-      }),
-    );
+    expect(lastSecretResolverOptions()?.mode).toBe("read_only_status");
+    expect(lastSecurityAuditOptions()?.deep).toBe(true);
+    expect(lastSecurityAuditOptions()?.deepProbeAuth).toEqual(deepProbeAuth);
   });
 });

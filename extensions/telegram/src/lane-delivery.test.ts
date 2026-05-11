@@ -103,11 +103,10 @@ describe("createLaneTextDeliverer", () => {
 
     const result = await deliverFinalAnswer(harness, HELLO_FINAL);
 
-    expect(expectPreviewFinalized(result)).toMatchObject({
-      content: HELLO_FINAL,
-      messageId: 999,
-      receipt: { primaryPlatformMessageId: "999" },
-    });
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.content).toBe(HELLO_FINAL);
+    expect(delivery.messageId).toBe(999);
+    expect(delivery.receipt?.primaryPlatformMessageId).toBe("999");
     expect(harness.answer?.update).toHaveBeenCalledWith(HELLO_FINAL);
     expect(harness.stopDraftLane).toHaveBeenCalledTimes(1);
     expect(harness.sendPayload).not.toHaveBeenCalled();
@@ -127,10 +126,9 @@ describe("createLaneTextDeliverer", () => {
     const finalResult = await deliverFinalAnswer(harness, "done");
 
     expect(blockResult.kind).toBe("preview-updated");
-    expect(expectPreviewFinalized(finalResult)).toMatchObject({
-      content: "done",
-      messageId: 999,
-    });
+    const delivery = expectPreviewFinalized(finalResult);
+    expect(delivery.content).toBe("done");
+    expect(delivery.messageId).toBe(999);
     expect(harness.answer?.update).toHaveBeenNthCalledWith(1, "working");
     expect(harness.answer?.update).toHaveBeenNthCalledWith(2, "done");
     expect(harness.flushDraftLane).toHaveBeenCalledTimes(1);
@@ -195,10 +193,9 @@ describe("createLaneTextDeliverer", () => {
 
     const result = await deliverFinalAnswer(harness, "Hello world again");
 
-    expect(expectPreviewFinalized(result)).toMatchObject({
-      content: "Hello world again",
-      messageId: 999,
-    });
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.content).toBe("Hello world again");
+    expect(delivery.messageId).toBe(999);
     expect(harness.answer?.update).toHaveBeenCalledWith("Hello");
     expect(harness.sendPayload).toHaveBeenCalledTimes(2);
     expect(harness.sendPayload).toHaveBeenNthCalledWith(1, { text: " world" });
@@ -231,10 +228,9 @@ describe("createLaneTextDeliverer", () => {
       buttons,
     });
 
-    expect(expectPreviewFinalized(result)).toMatchObject({
-      content: HELLO_FINAL,
-      messageId: 999,
-    });
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.content).toBe(HELLO_FINAL);
+    expect(delivery.messageId).toBe(999);
     expect(harness.editStreamMessage).toHaveBeenCalledWith({
       laneName: "answer",
       messageId: 999,
@@ -257,10 +253,9 @@ describe("createLaneTextDeliverer", () => {
       buttons,
     });
 
-    expect(expectPreviewFinalized(result)).toMatchObject({
-      content: HELLO_FINAL,
-      messageId: 999,
-    });
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.content).toBe(HELLO_FINAL);
+    expect(delivery.messageId).toBe(999);
     expect(harness.sendPayload).not.toHaveBeenCalled();
     expect(harness.log).toHaveBeenCalledWith(
       "telegram: answer stream button edit failed: Error: 400: button rejected",

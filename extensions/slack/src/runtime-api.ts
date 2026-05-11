@@ -12,8 +12,8 @@ export type {
   OpenClawPluginApi,
   PluginRuntime,
 } from "openclaw/plugin-sdk/channel-plugin-common";
-export type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-export type { SlackAccountConfig } from "openclaw/plugin-sdk/config-types";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+export type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 export {
   emptyPluginConfigSchema,
   formatPairingApproveHint,

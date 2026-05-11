@@ -3,15 +3,20 @@ import { resolveThinkingProfile } from "./provider-policy-api.js";
 
 describe("amazon-bedrock provider-policy-api", () => {
   it("exposes adaptive thinking for Bedrock Claude 4.6 before runtime registration", () => {
-    expect(
-      resolveThinkingProfile({
-        provider: "amazon-bedrock",
-        modelId: "amazon-bedrock/global.anthropic.claude-opus-4-6-v1",
-      }),
-    ).toMatchObject({
-      levels: expect.arrayContaining([{ id: "adaptive" }]),
-      defaultLevel: "adaptive",
+    const profile = resolveThinkingProfile({
+      provider: "amazon-bedrock",
+      modelId: "amazon-bedrock/global.anthropic.claude-opus-4-6-v1",
     });
+
+    expect(profile?.levels.map((level) => level.id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "adaptive",
+    ]);
+    expect(profile?.defaultLevel).toBe("adaptive");
   });
 
   it("exposes max thinking for Bedrock Claude Opus 4.7 refs", () => {

@@ -202,14 +202,14 @@ describe("chat header controls (browser)", () => {
 
     const sessionRows = container.querySelectorAll(".chat-controls__session-row");
     expect(sessionRows).toHaveLength(1);
-    expect(
-      Array.from(container.querySelectorAll("select")).map((select) => select.dataset),
-    ).toEqual([
-      expect.objectContaining({ chatAgentFilter: "true" }),
-      expect.objectContaining({ chatSessionSelect: "true" }),
-      expect.objectContaining({ chatModelSelect: "true" }),
-      expect.objectContaining({ chatThinkingSelect: "true" }),
-    ]);
+    const selectDatasets = Array.from(container.querySelectorAll("select")).map(
+      (select) => select.dataset,
+    );
+    expect(selectDatasets).toHaveLength(4);
+    expect(selectDatasets[0]?.chatAgentFilter).toBe("true");
+    expect(selectDatasets[1]?.chatSessionSelect).toBe("true");
+    expect(selectDatasets[2]?.chatModelSelect).toBe("true");
+    expect(selectDatasets[3]?.chatThinkingSelect).toBe("true");
   });
 
   it("renders the mobile dropdown from state instead of mutating DOM classes", async () => {

@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __testing, createFeishuThreadBindingManager } from "./thread-bindings.js";
 
 const baseCfg = {
@@ -10,6 +10,10 @@ const baseCfg = {
 describe("Feishu thread bindings", () => {
   beforeEach(() => {
     __testing.resetFeishuThreadBindingsForTests();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("registers current-placement adapter capabilities for Feishu", () => {
@@ -29,6 +33,7 @@ describe("Feishu thread bindings", () => {
   });
 
   it("binds and resolves a Feishu topic conversation", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
 
     const binding = await getSessionBindingService().bind({
@@ -48,18 +53,34 @@ describe("Feishu thread bindings", () => {
     });
 
     expect(binding.conversation.conversationId).toBe("oc_group_chat:topic:om_topic_root");
-    expect(
-      getSessionBindingService().resolveByConversation({
+    const resolved = getSessionBindingService().resolveByConversation({
+      channel: "feishu",
+      accountId: "default",
+      conversationId: "oc_group_chat:topic:om_topic_root",
+    });
+    expect(resolved).toEqual({
+      bindingId: "default:oc_group_chat:topic:om_topic_root",
+      targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+      targetKind: "session",
+      conversation: {
         channel: "feishu",
         accountId: "default",
         conversationId: "oc_group_chat:topic:om_topic_root",
-      }),
-    )?.toMatchObject({
-      targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-      metadata: expect.objectContaining({
+        parentConversationId: "oc_group_chat",
+      },
+      status: "active",
+      boundAt: 1_700_000_000_000,
+      expiresAt: 1_700_086_400_000,
+      metadata: {
         agentId: "codex",
         label: "codex-main",
-      }),
+        boundBy: undefined,
+        deliveryTo: undefined,
+        deliveryThreadId: undefined,
+        lastActivityAt: 1_700_000_000_000,
+        idleTimeoutMs: 86_400_000,
+        maxAgeMs: 0,
+      },
     });
   });
 
@@ -93,6 +114,7 @@ describe("Feishu thread bindings", () => {
   });
 
   it("preserves delivery routing metadata when rebinding the same conversation", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_700_000_100_000);
     const manager = createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
 
     manager.bindConversation({
@@ -130,14 +152,29 @@ describe("Feishu thread bindings", () => {
         accountId: "default",
         conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
       }),
-    ).toMatchObject({
-      metadata: expect.objectContaining({
+    ).toEqual({
+      bindingId: "default:oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
+      targetSessionKey: "agent:main:subagent:child",
+      targetKind: "subagent",
+      conversation: {
+        channel: "feishu",
+        accountId: "default",
+        conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
+        parentConversationId: "oc_group_chat",
+      },
+      status: "active",
+      boundAt: 1_700_000_100_000,
+      expiresAt: 1_700_086_500_000,
+      metadata: {
         agentId: "codex",
         label: "child",
         boundBy: "system",
         deliveryTo: "user:ou_sender_1",
         deliveryThreadId: "om_topic_root",
-      }),
+        lastActivityAt: 1_700_000_100_000,
+        idleTimeoutMs: 86_400_000,
+        maxAgeMs: 0,
+      },
     });
   });
 });

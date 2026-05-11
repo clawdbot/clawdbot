@@ -99,29 +99,48 @@ describe("openrouter speech provider", () => {
       timeoutMs: 12_345,
     });
 
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openrouter",
-        capability: "audio",
-        baseUrl: "https://openrouter.ai/api/v1",
-        defaultHeaders: expect.objectContaining({
-          "Content-Type": "application/json",
-        }),
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://openrouter.ai/api/v1/audio/speech",
-        timeoutMs: 12_345,
-        body: {
-          model: "openai/gpt-4o-mini-tts-2025-12-15",
-          input: "hello",
-          voice: "nova",
-          response_format: "mp3",
-          speed: 1.2,
-        },
-      }),
-    );
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledOnce();
+    expect(resolveProviderHttpRequestConfigMock.mock.calls[0]?.[0]).toEqual({
+      baseUrl: "https://openrouter.ai/api/v1",
+      defaultBaseUrl: "https://openrouter.ai/api/v1",
+      allowPrivateNetwork: false,
+      defaultHeaders: {
+        Authorization: "Bearer sk-openrouter",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://openclaw.ai",
+        "X-OpenRouter-Title": "OpenClaw",
+      },
+      provider: "openrouter",
+      capability: "audio",
+      transport: "http",
+    });
+    expect(postJsonRequestMock).toHaveBeenCalledOnce();
+    const request = postJsonRequestMock.mock.calls[0]?.[0];
+    if (!request) {
+      throw new Error("expected OpenRouter speech request");
+    }
+    expect(request.headers).toBeInstanceOf(Headers);
+    expect(Object.fromEntries(request.headers.entries())).toEqual({
+      authorization: "Bearer sk-openrouter",
+      "content-type": "application/json",
+      "http-referer": "https://openclaw.ai",
+      "x-openrouter-title": "OpenClaw",
+    });
+    expect(request).toEqual({
+      url: "https://openrouter.ai/api/v1/audio/speech",
+      headers: request.headers,
+      body: {
+        model: "openai/gpt-4o-mini-tts-2025-12-15",
+        input: "hello",
+        voice: "nova",
+        response_format: "mp3",
+        speed: 1.2,
+      },
+      timeoutMs: 12_345,
+      fetchFn: fetch,
+      allowPrivateNetwork: false,
+      dispatcherPolicy: undefined,
+    });
     expect(result.audioBuffer).toEqual(Buffer.from([1, 2, 3]));
     expect(result.outputFormat).toBe("mp3");
     expect(result.fileExtension).toBe(".mp3");
@@ -134,9 +153,11 @@ describe("openrouter speech provider", () => {
 
     expect(
       provider.resolveConfig?.({ cfg: {} as never, rawConfig: {}, timeoutMs: 30_000 }),
-    ).toMatchObject({
+    ).toEqual({
       model: "hexgrad/kokoro-82m",
       voice: "af_alloy",
+      responseFormat: undefined,
+      provider: undefined,
     });
   });
 

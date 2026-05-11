@@ -30,6 +30,16 @@ export class CommandLaneTaskTimeoutError extends Error {
   }
 }
 
+export function isCommandLaneTaskTimeoutError(err: unknown, lane?: string): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  if (!(err instanceof CommandLaneTaskTimeoutError || err.name === "CommandLaneTaskTimeoutError")) {
+    return false;
+  }
+  return lane === undefined || err.message.includes(`Command lane "${lane}" task timed out`);
+}
+
 /**
  * Dedicated error type thrown when a new command is rejected because the
  * gateway is currently draining for restart.

@@ -706,6 +706,37 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain("codex agent runtime configured, enabled automatically.");
   });
 
+  it("auto-enables an opt-in plugin when a default model runtime is configured", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": {
+                agentRuntime: {
+                  id: "codex",
+                },
+              },
+            },
+          },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "codex",
+          channels: [],
+          activation: {
+            onAgentHarnesses: ["codex"],
+          },
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
+    expect(result.changes).toContain("codex agent runtime configured, enabled automatically.");
+  });
+
   it("auto-enables a CLI backend owner when a provider runtime is configured", () => {
     const result = applyPluginAutoEnable({
       config: {

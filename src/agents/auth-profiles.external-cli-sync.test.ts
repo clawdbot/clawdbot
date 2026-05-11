@@ -53,6 +53,16 @@ function expectSingleProfileCredential(
   return profiles[0]?.credential as Record<string, unknown>;
 }
 
+function expectSingleProfile(
+  profiles: ReturnType<typeof resolveExternalCliAuthProfiles>,
+  profileId: string,
+) {
+  expect(profiles).toHaveLength(1);
+  expect(profiles[0]?.profileId).toBe(profileId);
+  expect(profiles[0]?.credential).toBeTruthy();
+  return profiles[0];
+}
+
 function expectCredentialFields(
   credential: Record<string, unknown> | undefined,
   expected: Record<string, unknown>,
@@ -352,7 +362,9 @@ describe("external cli oauth resolution", () => {
       providerIds: ["claude-cli"],
     });
 
-    expectCredentialFields(expectSingleProfileCredential(profiles, CLAUDE_CLI_PROFILE_ID), {
+    const profile = expectSingleProfile(profiles, CLAUDE_CLI_PROFILE_ID);
+    expect(profile?.persistence).toBe("persisted");
+    expectCredentialFields(profile?.credential as Record<string, unknown>, {
       type: "oauth",
       provider: "claude-cli",
       access: "claude-cli-access",
@@ -405,10 +417,35 @@ describe("external cli oauth resolution", () => {
       }),
     );
 
-    expectCredentialFields(expectSingleProfileCredential(profiles, CLAUDE_CLI_PROFILE_ID), {
+    const profile = expectSingleProfile(profiles, CLAUDE_CLI_PROFILE_ID);
+    expect(profile?.persistence).toBe("persisted");
+    expectCredentialFields(profile?.credential as Record<string, unknown>, {
       provider: "claude-cli",
       access: "claude-cli-fresh-access",
     });
+  });
+
+  it("does not reread external CLI credentials for a usable stored managed profile", () => {
+    mocks.readClaudeCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "anthropic",
+      access: "external-access",
+      refresh: "external-refresh",
+      expires: Date.now() + 5 * 24 * 60 * 60_000,
+    });
+
+    const profiles = resolveExternalCliAuthProfiles(
+      makeStore(CLAUDE_CLI_PROFILE_ID, {
+        type: "oauth",
+        provider: "claude-cli",
+        access: "usable-local-access",
+        refresh: "usable-local-refresh",
+        expires: Date.now() + 10 * 60_000,
+      }),
+    );
+
+    expect(profiles).toStrictEqual([]);
+    expect(mocks.readClaudeCliCredentialsCached).not.toHaveBeenCalled();
   });
 
   it("passes non-prompting keychain policy to scoped Claude CLI credential reads", () => {
@@ -425,7 +462,9 @@ describe("external cli oauth resolution", () => {
       allowKeychainPrompt: false,
     });
 
-    expectCredentialFields(expectSingleProfileCredential(profiles, CLAUDE_CLI_PROFILE_ID), {
+    const profile = expectSingleProfile(profiles, CLAUDE_CLI_PROFILE_ID);
+    expect(profile?.persistence).toBe("persisted");
+    expectCredentialFields(profile?.credential as Record<string, unknown>, {
       type: "oauth",
       provider: "claude-cli",
     });

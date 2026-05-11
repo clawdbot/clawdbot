@@ -1,4 +1,4 @@
-import type { CreateAgentSessionOptions } from "@mariozechner/pi-coding-agent";
+import type { CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
 
 export type EmbeddedAgentSessionOptions = {
   cwd: string;

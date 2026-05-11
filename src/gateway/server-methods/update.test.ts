@@ -232,11 +232,12 @@ describe("update.run timeout normalization", () => {
   it("enforces a 1000ms minimum timeout for tiny values", async () => {
     await invokeUpdateRun({ timeoutMs: 1 });
 
-    expect(runGatewayUpdateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeoutMs: 1000,
-      }),
-    );
+    expect(runGatewayUpdateMock).toHaveBeenCalledTimes(1);
+    const updateCall = runGatewayUpdateMock.mock.calls[0] as unknown as
+      | [{ timeoutMs?: number }]
+      | undefined;
+    const updateParams = updateCall?.[0];
+    expect(updateParams?.timeoutMs).toBe(1000);
   });
 });
 
@@ -305,12 +306,8 @@ describe("update.run restart scheduling", () => {
     });
 
     expect(payload?.ok).toBe(false);
-    expect(payload?.result).toEqual(
-      expect.objectContaining({
-        status,
-        reason,
-      }),
-    );
+    expect(payload?.result?.status).toBe(status);
+    expect(payload?.result?.reason).toBe(reason);
   });
 
   it("forces an immediate restart after successful package-manager updates", async () => {
@@ -330,14 +327,15 @@ describe("update.run restart scheduling", () => {
     });
 
     expect(runGatewayUpdateMock).toHaveBeenCalledTimes(1);
-    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        delayMs: 0,
-        reason: "update.run",
-        skipCooldown: true,
-        skipDeferral: true,
-      }),
-    );
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    const restartCall = scheduleGatewaySigusr1RestartMock.mock.calls[0] as unknown as
+      | [{ delayMs?: number; reason?: string; skipCooldown?: boolean; skipDeferral?: boolean }]
+      | undefined;
+    const restartParams = restartCall?.[0];
+    expect(restartParams?.delayMs).toBe(0);
+    expect(restartParams?.reason).toBe("update.run");
+    expect(restartParams?.skipCooldown).toBe(true);
+    expect(restartParams?.skipDeferral).toBe(true);
     expect(payload?.ok).toBe(true);
   });
 
@@ -361,16 +359,10 @@ describe("update.run restart scheduling", () => {
 
     expect(runGatewayUpdateMock).not.toHaveBeenCalled();
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
-    expect(payload).toEqual(
-      expect.objectContaining({
-        ok: false,
-        result: expect.objectContaining({
-          status: "skipped",
-          reason: "restart-unavailable",
-          mode: "npm",
-        }),
-      }),
-    );
+    expect(payload?.ok).toBe(false);
+    expect(payload?.result?.status).toBe("skipped");
+    expect(payload?.result?.reason).toBe("restart-unavailable");
+    expect(payload?.result?.mode).toBe("npm");
   });
 });
 
@@ -392,11 +384,12 @@ describe("update.status", () => {
       respond,
     } as never);
 
-    expect(respond).toHaveBeenCalledWith(true, {
-      sentinel: expect.objectContaining({
-        kind: "update",
-        status: "ok",
-      }),
-    });
+    expect(respond).toHaveBeenCalledTimes(1);
+    const response = respond.mock.calls[0]?.[1] as
+      | { sentinel?: { kind?: string; status?: string } }
+      | undefined;
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(response?.sentinel?.kind).toBe("update");
+    expect(response?.sentinel?.status).toBe("ok");
   });
 });

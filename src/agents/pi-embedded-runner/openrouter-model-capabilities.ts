@@ -270,6 +270,8 @@ function ensureOpenRouterModelCache(): void {
  * Known cached entries return immediately. Unknown entries wait for at most
  * one catalog fetch, then leave sync resolution to read from the populated
  * cache on the same request.
+ *
+ * @deprecated OpenRouter provider-owned catalog helper; do not use from third-party plugins.
  */
 export async function loadOpenRouterModelCapabilities(modelId: string): Promise<void> {
   ensureOpenRouterModelCache();
@@ -292,6 +294,8 @@ export async function loadOpenRouterModelCapabilities(modelId: string): Promise<
  *
  * If a model is not found but the cache exists, a background refresh is
  * triggered in case it's a newly added model not yet in the cache.
+ *
+ * @deprecated OpenRouter provider-owned catalog helper; do not use from third-party plugins.
  */
 export function getOpenRouterModelCapabilities(
   modelId: string,

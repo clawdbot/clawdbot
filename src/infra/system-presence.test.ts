@@ -57,11 +57,13 @@ describe("system-presence", () => {
     });
 
     const entry = listSystemPresence().find((e) => e.deviceId === deviceId);
-    expect(entry?.roles).toEqual(expect.arrayContaining(["operator", "node"]));
-    expect(entry?.scopes).toEqual(expect.arrayContaining(["operator.admin", "system.run"]));
+    expect(entry?.roles).toEqual(["operator", "node"]);
+    expect(entry?.scopes).toEqual(["operator.admin", "system.run"]);
   });
 
   it("parses node presence text and normalizes the update key", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-11T04:00:00.000Z"));
     const update = updateSystemPresence({
       text: "Node: Relay-Host (10.0.0.9) · app 2.1.0 · last input 7s ago · mode ui · reason beacon",
       instanceId: "  Mixed-Case-Node  ",
@@ -69,14 +71,28 @@ describe("system-presence", () => {
 
     expect(update.key).toBe("mixed-case-node");
     expect(update.changedKeys).toEqual(["host", "ip", "version", "mode", "reason"]);
-    expect(update.next).toMatchObject({
-      host: "Relay-Host",
-      ip: "10.0.0.9",
-      version: "2.1.0",
-      lastInputSeconds: 7,
-      mode: "ui",
-      reason: "beacon",
-      text: "Node: Relay-Host (10.0.0.9) · app 2.1.0 · last input 7s ago · mode ui · reason beacon",
+    expect(update).toEqual({
+      key: "mixed-case-node",
+      previous: undefined,
+      changedKeys: ["host", "ip", "version", "mode", "reason"],
+      changes: {
+        host: "Relay-Host",
+        ip: "10.0.0.9",
+        version: "2.1.0",
+        mode: "ui",
+        reason: "beacon",
+      },
+      next: {
+        instanceId: "  Mixed-Case-Node  ",
+        lastInputSeconds: 7,
+        text: "Node: Relay-Host (10.0.0.9) · app 2.1.0 · last input 7s ago · mode ui · reason beacon",
+        ts: 1_778_472_000_000,
+        host: "Relay-Host",
+        ip: "10.0.0.9",
+        version: "2.1.0",
+        mode: "ui",
+        reason: "beacon",
+      },
     });
   });
 

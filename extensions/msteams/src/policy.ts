@@ -1,7 +1,6 @@
 import type {
   AllowlistMatch,
   ChannelGroupContext,
-  GroupPolicy,
   GroupToolPolicyConfig,
   MSTeamsChannelConfig,
   MSTeamsConfig,

@@ -152,7 +152,16 @@ describe("update-startup", () => {
   }
 
   async function expectPathMissing(targetPath: string): Promise<void> {
-    await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+    let statError: NodeJS.ErrnoException | undefined;
+    try {
+      await fs.stat(targetPath);
+    } catch (error) {
+      statError = error as NodeJS.ErrnoException;
+    }
+    expect(statError).toBeInstanceOf(Error);
+    expect(statError?.code).toBe("ENOENT");
+    expect(statError?.path).toBe(targetPath);
+    expect(statError?.syscall).toBe("stat");
   }
 
   function createAutoUpdateSuccessMock() {
@@ -390,13 +399,16 @@ describe("update-startup", () => {
     });
 
     expect(runAutoUpdate).not.toHaveBeenCalled();
-    expect(log.info).toHaveBeenCalledWith(
+    const disabledLogCall = log.info.mock.calls.find(
+      ([message]) => message === "auto-update disabled by OPENCLAW_NO_AUTO_UPDATE",
+    );
+    expect(disabledLogCall).toEqual([
       "auto-update disabled by OPENCLAW_NO_AUTO_UPDATE",
-      expect.objectContaining({
+      {
         version: "2.0.0-beta.1",
         tag: "beta",
-      }),
-    );
+      },
+    ]);
   });
 
   it("uses current runtime + entrypoint for default auto-update command execution", async () => {
@@ -421,23 +433,23 @@ describe("update-startup", () => {
       process.argv = originalArgv;
     }
 
-    expect(runCommandWithTimeout).toHaveBeenCalledWith(
-      [
-        process.execPath,
-        "/opt/openclaw/dist/entry.js",
-        "update",
-        "--yes",
-        "--channel",
-        "beta",
-        "--json",
-      ],
-      expect.objectContaining({
-        timeoutMs: 45 * 60 * 1000,
-        env: expect.objectContaining({
-          OPENCLAW_AUTO_UPDATE: "1",
-        }),
-      }),
-    );
+    expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
+    const [argv, options] = vi.mocked(runCommandWithTimeout).mock.calls[0] ?? [];
+    expect(argv).toEqual([
+      process.execPath,
+      "/opt/openclaw/dist/entry.js",
+      "update",
+      "--yes",
+      "--channel",
+      "beta",
+      "--json",
+    ]);
+    expect(options).toEqual({
+      timeoutMs: 45 * 60 * 1000,
+      env: {
+        OPENCLAW_AUTO_UPDATE: "1",
+      },
+    });
   });
 
   it("scheduleGatewayUpdateCheck returns a cleanup function", () => {

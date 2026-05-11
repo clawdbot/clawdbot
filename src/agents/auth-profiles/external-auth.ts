@@ -1,8 +1,11 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderExternalAuthProfile } from "../../plugins/provider-external-auth.types.js";
 import { resolveExternalAuthProfilesWithPlugins } from "../../plugins/provider-runtime.js";
+import { cloneAuthProfileStore } from "./clone.js";
+import { CLAUDE_CLI_PROFILE_ID, MINIMAX_CLI_PROFILE_ID } from "./constants.js";
 import * as externalCliSync from "./external-cli-sync.js";
 import {
+  areOAuthCredentialsEquivalent,
   overlayRuntimeExternalOAuthProfiles,
   shouldPersistRuntimeExternalOAuthProfile,
   type RuntimeExternalOAuthProfile,
@@ -73,7 +76,7 @@ function resolveExternalAuthProfileMap(params: {
     resolved.set(profile.profileId, {
       profileId: profile.profileId,
       credential: profile.credential,
-      persistence: "runtime-only",
+      persistence: profile.persistence ?? "runtime-only",
     });
   }
   for (const rawProfile of profiles) {
@@ -100,6 +103,22 @@ function listRuntimeExternalAuthProfiles(params: {
       externalCli: params.externalCli,
     }).values(),
   );
+}
+
+function hasPersistableExternalCliSyncCandidate(
+  store: AuthProfileStore,
+  params?: ExternalCliOverlayOptions,
+): boolean {
+  if (params?.externalCliProviderIds || params?.externalCliProfileIds) {
+    return true;
+  }
+  for (const profileId of [CLAUDE_CLI_PROFILE_ID, MINIMAX_CLI_PROFILE_ID]) {
+    const credential = store.profiles[profileId];
+    if (credential?.type === "oauth") {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function overlayExternalAuthProfiles(
@@ -140,6 +159,37 @@ export function shouldPersistExternalAuthProfile(params: {
     credential: params.credential,
     profiles,
   });
+}
+
+export function syncPersistedExternalCliAuthProfiles(
+  store: AuthProfileStore,
+  params?: { agentDir?: string; env?: NodeJS.ProcessEnv } & ExternalCliOverlayOptions,
+): AuthProfileStore {
+  if (!hasPersistableExternalCliSyncCandidate(store, params)) {
+    return store;
+  }
+  const cliProfiles =
+    externalCliSync.resolveExternalCliAuthProfiles?.(store, {
+      allowKeychainPrompt: params?.allowKeychainPrompt,
+      providerIds: params?.externalCliProviderIds,
+      profileIds: params?.externalCliProfileIds,
+    }) ?? [];
+  const persistedProfiles = cliProfiles.filter((profile) => profile.persistence === "persisted");
+  if (persistedProfiles.length === 0) {
+    return store;
+  }
+
+  let next: AuthProfileStore | undefined;
+  for (const profile of persistedProfiles) {
+    const target = next ?? store;
+    const existing = target.profiles[profile.profileId];
+    if (existing?.type === "oauth" && areOAuthCredentialsEquivalent(existing, profile.credential)) {
+      continue;
+    }
+    next ??= cloneAuthProfileStore(store);
+    next.profiles[profile.profileId] = profile.credential;
+  }
+  return next ?? store;
 }
 
 // Compat aliases while file/function naming catches up.

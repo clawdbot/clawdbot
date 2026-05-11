@@ -29,7 +29,19 @@ describe("exa web search provider", () => {
     }
     const applied = contractProvider.applySelectionConfig({});
 
-    expect(contractProvider).toMatchObject({
+    expect({
+      id: contractProvider.id,
+      label: contractProvider.label,
+      hint: contractProvider.hint,
+      onboardingScopes: contractProvider.onboardingScopes,
+      credentialLabel: contractProvider.credentialLabel,
+      envVars: contractProvider.envVars,
+      placeholder: contractProvider.placeholder,
+      signupUrl: contractProvider.signupUrl,
+      docsUrl: contractProvider.docsUrl,
+      autoDetectOrder: contractProvider.autoDetectOrder,
+      credentialPath: contractProvider.credentialPath,
+    }).toEqual({
       id: provider.id,
       label: provider.label,
       hint: provider.hint,
@@ -64,9 +76,12 @@ describe("exa web search provider", () => {
     expect(__testing.resolveExaSearchEndpoint({ baseUrl: "proxy.example/exa/search/" })).toEqual({
       endpoint: "https://proxy.example/exa/search",
     });
-    expect(__testing.resolveExaSearchEndpoint({ baseUrl: "ftp://proxy.example/exa" })).toEqual(
-      expect.objectContaining({ error: "invalid_base_url" }),
-    );
+    expect(__testing.resolveExaSearchEndpoint({ baseUrl: "ftp://proxy.example/exa" })).toEqual({
+      docs: "https://docs.openclaw.ai/tools/exa-search",
+      error: "invalid_base_url",
+      message:
+        "plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL. Got: ftp://proxy.example/exa",
+    });
   });
 
   it("partitions Exa cache keys by resolved endpoint", () => {
@@ -134,8 +149,10 @@ describe("exa web search provider", () => {
       __testing.parseExaContents({
         highlights: { numSentences: 0 },
       }),
-    ).toMatchObject({
+    ).toEqual({
       error: "invalid_contents",
+      message: "contents.highlights.numSentences must be a positive integer.",
+      docs: "https://docs.openclaw.ai/tools/web",
     });
   });
 
@@ -185,8 +202,11 @@ describe("exa web search provider", () => {
       date_after: "2026-03-01",
     });
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       error: "conflicting_time_filters",
+      message:
+        "freshness cannot be combined with date_after or date_before. Use one time-filter mode.",
+      docs: "https://docs.openclaw.ai/tools/web",
     });
   });
 
@@ -205,8 +225,10 @@ describe("exa web search provider", () => {
       date_after: "2026-02-31",
     });
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       error: "invalid_date",
+      message: "date_after must be YYYY-MM-DD format.",
+      docs: "https://docs.openclaw.ai/tools/web",
     });
   });
 });

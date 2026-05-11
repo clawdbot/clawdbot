@@ -104,7 +104,8 @@ provenance. The receiving agent should treat them as tool-routed data, not as a
 direct end-user-authored instruction.
 
 After the target responds, OpenClaw can run a **reply-back loop** where the
-agents alternate messages (up to 5 turns). The target agent can reply
+agents alternate messages (up to `session.agentToAgent.maxPingPongTurns`, range
+0-20, default 5). The target agent can reply
 `REPLY_SKIP` to stop early.
 
 ## Status and orchestration helpers

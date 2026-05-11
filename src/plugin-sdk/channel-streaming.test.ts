@@ -274,7 +274,7 @@ describe("channel-streaming", () => {
       lines: line ? [line] : [],
     });
 
-    expect(text).toBe("Shelling\n🛠️ Exec: run node script…that/keeps/going/and/going/index…");
+    expect(text).toBe("Shelling\n🛠️ run node script…th/that/keeps/going/and/going/index…");
     expect(text.match(/`/g) ?? []).toHaveLength(0);
   });
 
@@ -323,14 +323,14 @@ describe("channel-streaming", () => {
         },
         { detailMode: "raw" },
       ),
-    ).toBe("🛠️ Exec: run tests, `pnpm test -- --watch=false`");
+    ).toBe("🛠️ run tests, `pnpm test -- --watch=false`");
     expect(
       formatChannelProgressDraftLine({
         event: "tool",
         name: "bash",
         args: { command: "sed -n '1,80p' extensions/discord/src/draft-stream.ts" },
       }),
-    ).toBe("🛠️ Bash: print lines 1-80 from extensions/discord/src/draft-stream.ts");
+    ).toBe("🛠️ print lines 1-80 from extensions/discord/src/draft-stream.ts");
     expect(
       formatChannelProgressDraftLine({
         event: "tool",
@@ -345,7 +345,7 @@ describe("channel-streaming", () => {
         name: "exec",
         progressText: "raw command output",
       }),
-    ).toBe("🛠️ Exec: raw command output");
+    ).toBe("🛠️ raw command output");
     expect(
       formatChannelProgressDraftLine(
         {

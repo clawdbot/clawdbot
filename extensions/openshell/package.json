@@ -5,7 +5,8 @@
   "description": "OpenClaw OpenShell sandbox backend",
   "type": "module",
   "dependencies": {
-    "openshell": "0.1.0"
+    "openshell": "0.1.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

@@ -9,7 +9,8 @@
   "type": "module",
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.63.1",
-    "typebox": "1.1.38"
+    "typebox": "1.1.38",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

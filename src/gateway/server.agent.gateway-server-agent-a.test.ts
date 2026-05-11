@@ -414,32 +414,20 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-attachments",
     });
     expect(
-      res,
+      res.ok,
       `agent RPC failed before forwarding image attachment: ${JSON.stringify(res)}`,
-    ).toMatchObject({ ok: true });
+    ).toBe(true);
 
     const call = await waitForAgentCommandCall("idem-agent-attachments");
     expect(call.sessionKey).toBe("agent:main:main");
     expectChannels(call, "webchat");
     expect(typeof call.message).toBe("string");
     expect(call.message).toContain("what is in the image?");
-
-    expect(
-      {
-        rpcResult: res,
-        commandImages: call.images,
-      },
-      "agent command should include one forwarded image attachment",
-    ).toEqual({
-      rpcResult: expect.objectContaining({ ok: true }),
-      commandImages: [
-        expect.objectContaining({
-          type: "image",
-          mimeType: "image/png",
-          data: BASE_IMAGE_PNG,
-        }),
-      ],
-    });
+    const images = call.images as Array<Record<string, unknown>> | undefined;
+    expect(images, "agent command should include one forwarded image attachment").toHaveLength(1);
+    expect(images?.[0]?.type).toBe("image");
+    expect(images?.[0]?.mimeType).toBe("image/png");
+    expect(images?.[0]?.data).toBe(BASE_IMAGE_PNG);
   });
 
   test("agent validates first image attachment against per-agent model for fresh sessions", async () => {
@@ -490,19 +478,17 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-vision-first-image",
     });
     expect(
-      res,
+      res.ok,
       `agent RPC should accept image using per-agent vision model: ${JSON.stringify(res)}`,
-    ).toMatchObject({ ok: true });
+    ).toBe(true);
 
     const call = await waitForAgentCommandCall("idem-agent-vision-first-image");
     expect(call.sessionKey).toBe("agent:vision:main");
-    expect(call.images).toEqual([
-      expect.objectContaining({
-        type: "image",
-        mimeType: "image/png",
-        data: BASE_IMAGE_PNG,
-      }),
-    ]);
+    const images = call.images as Array<Record<string, unknown>> | undefined;
+    expect(images).toHaveLength(1);
+    expect(images?.[0]?.type).toBe("image");
+    expect(images?.[0]?.mimeType).toBe("image/png");
+    expect(images?.[0]?.data).toBe(BASE_IMAGE_PNG);
   });
 
   test("agent errors when delivery requested and no last channel exists", async () => {

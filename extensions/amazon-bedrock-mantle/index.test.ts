@@ -7,6 +7,38 @@ describe("amazon-bedrock-mantle provider plugin", () => {
     vi.restoreAllMocks();
   });
 
+  it("uses live plugin config to disable catalog discovery", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("unexpected fetch"));
+    const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
+    const catalog = provider.catalog;
+    if (!catalog) {
+      throw new Error("catalog registration missing");
+    }
+
+    const result = await catalog.run({
+      config: {
+        plugins: {
+          entries: {
+            "amazon-bedrock-mantle": {
+              config: {
+                discovery: { enabled: false },
+              },
+            },
+          },
+        },
+      },
+      env: {
+        AWS_BEARER_TOKEN_BEDROCK: "test-token",
+        AWS_REGION: "us-east-1",
+      },
+    } as never);
+
+    expect(result).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("registers with correct provider ID and label", async () => {
     const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
     expect(provider.id).toBe("amazon-bedrock-mantle");

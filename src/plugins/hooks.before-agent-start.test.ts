@@ -27,6 +27,15 @@ function addBeforeAgentStartHook(
 }
 
 const stubCtx = TEST_PLUGIN_AGENT_CTX;
+const EMPTY_BEFORE_AGENT_START_RESULT = {
+  appendContext: undefined,
+  appendSystemContext: undefined,
+  modelOverride: undefined,
+  prependContext: undefined,
+  prependSystemContext: undefined,
+  providerOverride: undefined,
+  systemPrompt: undefined,
+} satisfies PluginHookBeforeAgentStartResult;
 
 describe("before_agent_start hook merger", () => {
   let registry: PluginRegistry;
@@ -53,10 +62,10 @@ describe("before_agent_start hook merger", () => {
       result: PluginHookBeforeAgentStartResult;
       priority?: number;
     }>,
-    expected: Partial<PluginHookBeforeAgentStartResult>,
+    expected: PluginHookBeforeAgentStartResult,
   ) => {
     const result = await runWithHooks(hooks);
-    expect(result).toEqual(expect.objectContaining(expected));
+    expect(result).toEqual(expected);
     return result;
   };
 
@@ -80,6 +89,7 @@ describe("before_agent_start hook merger", () => {
       "returns modelOverride from a single plugin",
       { modelOverride: "llama3.3:8b" },
       {
+        ...EMPTY_BEFORE_AGENT_START_RESULT,
         modelOverride: "llama3.3:8b",
       },
     ],
@@ -87,6 +97,7 @@ describe("before_agent_start hook merger", () => {
       "returns providerOverride from a single plugin",
       { providerOverride: "ollama" },
       {
+        ...EMPTY_BEFORE_AGENT_START_RESULT,
         providerOverride: "ollama",
       },
     ],
@@ -97,6 +108,7 @@ describe("before_agent_start hook merger", () => {
         providerOverride: "ollama",
       },
       {
+        ...EMPTY_BEFORE_AGENT_START_RESULT,
         modelOverride: "llama3.3:8b",
         providerOverride: "ollama",
       },
@@ -109,6 +121,7 @@ describe("before_agent_start hook merger", () => {
         providerOverride: "ollama",
       },
       {
+        ...EMPTY_BEFORE_AGENT_START_RESULT,
         systemPrompt: "You are a helpful assistant",
         modelOverride: "llama3.3:8b",
         providerOverride: "ollama",
@@ -124,7 +137,7 @@ describe("before_agent_start hook merger", () => {
         { pluginId: "low-priority", result: { modelOverride: "gpt-5.4" }, priority: 1 },
         { pluginId: "high-priority", result: { modelOverride: "llama3.3:8b" }, priority: 10 },
       ],
-      { modelOverride: "llama3.3:8b" },
+      { ...EMPTY_BEFORE_AGENT_START_RESULT, modelOverride: "llama3.3:8b" },
     );
     expect(result?.modelOverride).toBe("llama3.3:8b");
   });
@@ -204,6 +217,6 @@ describe("before_agent_start hook merger", () => {
     const runner = createHookRunner(registry);
     await runner.runBeforeAgentStart({ prompt: "test" }, stubCtx);
 
-    expect(capturedCtx).toMatchObject({ runId: "test-run-id" });
+    expect(capturedCtx).toBe(stubCtx);
   });
 });

@@ -22,9 +22,20 @@ describe("resolveSystemRunApprovalRequestContext", () => {
         },
       },
       expected: {
+        plan: {
+          argv: ["./env", "sh", "-c", "jq --version"],
+          cwd: "/tmp",
+          commandText: './env sh -c "jq --version"',
+          commandPreview: "jq --version",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        },
         commandText: './env sh -c "jq --version"',
         commandPreview: "jq --version",
         commandArgv: ["./env", "sh", "-c", "jq --version"],
+        cwd: "/tmp",
+        agentId: "main",
+        sessionKey: "agent:main:main",
       },
     },
     {
@@ -41,12 +52,24 @@ describe("resolveSystemRunApprovalRequestContext", () => {
         },
       },
       expected: {
+        plan: {
+          argv: ["./env", "sh", "-c", "jq --version"],
+          cwd: "/tmp",
+          commandText: './env sh -c "jq --version"',
+          commandPreview: "jq --version",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        },
         commandText: './env sh -c "jq --version"',
         commandPreview: "jq --version",
+        commandArgv: ["./env", "sh", "-c", "jq --version"],
+        cwd: "/tmp",
+        agentId: "main",
+        sessionKey: "agent:main:main",
       },
     },
   ])("$name", ({ params, expected }) => {
-    expect(resolveSystemRunApprovalRequestContext(params)).toMatchObject(expected);
+    expect(resolveSystemRunApprovalRequestContext(params)).toEqual(expected);
   });
 
   test("falls back to explicit request params for non-node hosts", () => {

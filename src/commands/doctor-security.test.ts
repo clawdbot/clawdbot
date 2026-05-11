@@ -26,6 +26,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
   let prevToken: string | undefined;
   let prevPassword: string | undefined;
   let prevHome: string | undefined;
+  let prevServiceKind: string | undefined;
 
   beforeEach(() => {
     note.mockClear();
@@ -35,8 +36,10 @@ describe("noteSecurityWarnings gateway exposure", () => {
     prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     prevPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
     prevHome = process.env.HOME;
+    prevServiceKind = process.env.OPENCLAW_SERVICE_KIND;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_SERVICE_KIND;
   });
 
   afterEach(() => {
@@ -54,6 +57,11 @@ describe("noteSecurityWarnings gateway exposure", () => {
       delete process.env.HOME;
     } else {
       process.env.HOME = prevHome;
+    }
+    if (prevServiceKind === undefined) {
+      delete process.env.OPENCLAW_SERVICE_KIND;
+    } else {
+      process.env.OPENCLAW_SERVICE_KIND = prevServiceKind;
     }
   });
 
@@ -151,7 +159,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).not.toContain("CRITICAL");
   });
 
-  it("warns when OPENCLAW_GATEWAY_TOKEN env overrides gateway.auth.token config (#74271)", async () => {
+  it("warns when OPENCLAW_GATEWAY_TOKEN env conflicts with gateway.auth.token config (#74271)", async () => {
     process.env.OPENCLAW_GATEWAY_TOKEN = "env-token-123";
     const cfg = {
       gateway: {
@@ -162,8 +170,9 @@ describe("noteSecurityWarnings gateway exposure", () => {
     } as OpenClawConfig;
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
-    expect(message).toContain("OPENCLAW_GATEWAY_TOKEN overrides");
-    expect(message).toContain("env-first precedence");
+    expect(message).toContain("OPENCLAW_GATEWAY_TOKEN conflicts with gateway.auth.token");
+    expect(message).toContain("Direct local Gateway clients commonly prefer the env token");
+    expect(message).toContain("~/.openclaw/.env");
   });
 
   it("does not warn when only env token is set without config token", async () => {
@@ -172,6 +181,21 @@ describe("noteSecurityWarnings gateway exposure", () => {
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
     expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN overrides");
+  });
+
+  it("does not warn inside the managed gateway service credential context", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token-123";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+    const cfg = {
+      gateway: {
+        auth: {
+          token: "config-token-456",
+        },
+      },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN conflicts");
   });
 
   it("does not warn when config token uses OPENCLAW_GATEWAY_TOKEN SecretRef", async () => {

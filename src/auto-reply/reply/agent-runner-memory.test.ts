@@ -34,6 +34,78 @@ function createReplyOperation() {
   } as never;
 }
 
+type RefreshQueuedFollowupSessionParams = {
+  key?: string;
+  previousSessionId?: string;
+  nextSessionId?: string;
+  nextSessionFile?: string;
+};
+
+type ModelFallbackParams = {
+  provider?: string;
+  model?: string;
+  fallbacksOverride?: unknown[];
+};
+
+type EmbeddedPiAgentParams = {
+  provider?: string;
+  model?: string;
+  authProfileId?: unknown;
+  authProfileIdSource?: unknown;
+  prompt?: string;
+  transcriptPrompt?: string;
+  memoryFlushWritePath?: string;
+  silentExpected?: boolean;
+  extraSystemPrompt?: string;
+  bootstrapPromptWarningSignaturesSeen?: string[];
+  bootstrapPromptWarningSignature?: string;
+};
+
+type CompactEmbeddedPiSessionParams = {
+  sessionKey?: string;
+  sandboxSessionKey?: string;
+  currentTokenCount?: number;
+  sessionFile?: string;
+  sessionId?: string;
+  trigger?: string;
+};
+
+function requireRefreshQueuedFollowupSessionCall(index = 0) {
+  const call = refreshQueuedFollowupSessionMock.mock.calls[index]?.[0] as
+    | RefreshQueuedFollowupSessionParams
+    | undefined;
+  if (!call) {
+    throw new Error(`refreshQueuedFollowupSession call ${index} missing`);
+  }
+  return call;
+}
+
+function requireModelFallbackCall(index = 0) {
+  const call = runWithModelFallbackMock.mock.calls[index]?.[0] as ModelFallbackParams | undefined;
+  if (!call) {
+    throw new Error(`runWithModelFallback call ${index} missing`);
+  }
+  return call;
+}
+
+function requireEmbeddedPiAgentCall(index = 0) {
+  const call = runEmbeddedPiAgentMock.mock.calls[index]?.[0] as EmbeddedPiAgentParams | undefined;
+  if (!call) {
+    throw new Error(`runEmbeddedPiAgent call ${index} missing`);
+  }
+  return call;
+}
+
+function requireCompactEmbeddedPiSessionCall(index = 0) {
+  const call = compactEmbeddedPiSessionMock.mock.calls[index]?.[0] as
+    | CompactEmbeddedPiSessionParams
+    | undefined;
+  if (!call) {
+    throw new Error(`compactEmbeddedPiSession call ${index} missing`);
+  }
+  return call;
+}
+
 describe("runMemoryFlushIfNeeded", () => {
   let rootDir = "";
 
@@ -157,23 +229,18 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(entry?.sessionId).toBe("session-rotated");
     expect(followupRun.run.sessionId).toBe("session-rotated");
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const flushCall = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
-      prompt?: string;
-      transcriptPrompt?: string;
-      memoryFlushWritePath?: string;
-      silentExpected?: boolean;
-    };
+    const flushCall = requireEmbeddedPiAgentCall();
     expect(flushCall.prompt).toContain("Pre-compaction memory flush.");
     expect(flushCall.transcriptPrompt).toBe("");
     expect(flushCall.prompt).not.toBe(flushCall.transcriptPrompt);
     expect(flushCall.memoryFlushWritePath).toMatch(/^memory\/\d{4}-\d{2}-\d{2}\.md$/);
     expect(flushCall.silentExpected).toBe(true);
-    expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
-      key: sessionKey,
-      previousSessionId: "session",
-      nextSessionId: "session-rotated",
-      nextSessionFile: expect.stringContaining("session-rotated.jsonl"),
-    });
+    expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledTimes(1);
+    const refreshCall = requireRefreshQueuedFollowupSessionCall();
+    expect(refreshCall.key).toBe(sessionKey);
+    expect(refreshCall.previousSessionId).toBe("session");
+    expect(refreshCall.nextSessionId).toBe("session-rotated");
+    expect(refreshCall.nextSessionFile).toContain("session-rotated.jsonl");
 
     const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
       main: SessionEntry;
@@ -229,21 +296,17 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    expect(runWithModelFallbackMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "ollama",
-        model: "qwen3:8b",
-        fallbacksOverride: [],
-      }),
-    );
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "ollama",
-        model: "qwen3:8b",
-        authProfileId: undefined,
-        authProfileIdSource: undefined,
-      }),
-    );
+    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(1);
+    const fallbackCall = requireModelFallbackCall();
+    expect(fallbackCall.provider).toBe("ollama");
+    expect(fallbackCall.model).toBe("qwen3:8b");
+    expect(fallbackCall.fallbacksOverride).toEqual([]);
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const agentCall = requireEmbeddedPiAgentCall();
+    expect(agentCall.provider).toBe("ollama");
+    expect(agentCall.model).toBe("qwen3:8b");
+    expect(agentCall.authProfileId).toBeUndefined();
+    expect(agentCall.authProfileIdSource).toBeUndefined();
   });
 
   it("skips memory flush for CLI providers", async () => {
@@ -356,12 +419,10 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        sandboxSessionKey: "agent:main:telegram:default:direct:12345",
-      }),
-    );
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
+    const compactCall = requireCompactEmbeddedPiSessionCall();
+    expect(compactCall.sessionKey).toBe("agent:main:main");
+    expect(compactCall.sandboxSessionKey).toBe("agent:main:telegram:default:direct:12345");
   });
 
   it("updates the active preflight run after transcript rotation", async () => {
@@ -529,12 +590,10 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "session",
-        sessionFile: expect.stringContaining("active-run-session.jsonl"),
-      }),
-    );
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
+    const compactCall = requireCompactEmbeddedPiSessionCall();
+    expect(compactCall.sessionId).toBe("session");
+    expect(compactCall.sessionFile).toContain("active-run-session.jsonl");
   });
 
   it("keeps preflight compaction conservative for content appended after latest usage", async () => {
@@ -829,19 +888,10 @@ describe("runMemoryFlushIfNeeded", () => {
 
     expect(entry?.compactionCount).toBe(1);
     expect(replyOperation.setPhase).toHaveBeenCalledWith("preflight_compacting");
-    const compactCall = compactEmbeddedPiSessionMock.mock.calls[0]?.[0] as {
-      currentTokenCount?: number;
-      sessionFile?: string;
-      sessionId?: string;
-      trigger?: string;
-    };
-    expect(compactCall).toEqual(
-      expect.objectContaining({
-        sessionId: "session",
-        trigger: "budget",
-        currentTokenCount: 10,
-      }),
-    );
+    const compactCall = requireCompactEmbeddedPiSessionCall();
+    expect(compactCall.sessionId).toBe("session");
+    expect(compactCall.trigger).toBe("budget");
+    expect(compactCall.currentTokenCount).toBe(10);
     expect(compactCall.sessionFile).toContain("large-session.jsonl");
   });
 
@@ -936,15 +986,7 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    const flushCall = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
-      prompt?: string;
-      transcriptPrompt?: string;
-      extraSystemPrompt?: string;
-      bootstrapPromptWarningSignaturesSeen?: string[];
-      bootstrapPromptWarningSignature?: string;
-      memoryFlushWritePath?: string;
-      silentExpected?: boolean;
-    };
+    const flushCall = requireEmbeddedPiAgentCall();
     expect(flushCall.prompt).toContain("Write notes.");
     expect(flushCall.prompt).toContain("NO_REPLY");
     expect(flushCall.prompt).toContain("MEMORY.md");

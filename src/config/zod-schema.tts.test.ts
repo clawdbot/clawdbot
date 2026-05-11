@@ -3,96 +3,91 @@ import { TtsConfigSchema } from "./zod-schema.core.js";
 
 describe("TtsConfigSchema openai speed and instructions", () => {
   it("accepts speed and instructions in openai section", () => {
-    expect(
-      TtsConfigSchema.safeParse({
-        providers: {
-          openai: {
-            voice: "alloy",
-            speed: 1.5,
-            instructions: "Speak in a cheerful tone",
-          },
+    const result = TtsConfigSchema.safeParse({
+      providers: {
+        openai: {
+          voice: "alloy",
+          speed: 1.5,
+          instructions: "Speak in a cheerful tone",
         },
-      }),
-    ).toMatchObject({ success: true });
+      },
+    });
+    expect(result.success).toBe(true);
   });
 
   it("accepts openai extraBody objects for compatible TTS endpoints", () => {
-    expect(
-      TtsConfigSchema.safeParse({
-        providers: {
-          openai: {
-            baseUrl: "http://localhost:8880/v1",
-            model: "kokoro",
-            voice: "em_alex",
-            extraBody: {
-              lang: "e",
-              speed: 1.2,
-            },
+    const result = TtsConfigSchema.safeParse({
+      providers: {
+        openai: {
+          baseUrl: "http://localhost:8880/v1",
+          model: "kokoro",
+          voice: "em_alex",
+          extraBody: {
+            lang: "e",
+            speed: 1.2,
           },
         },
-      }),
-    ).toMatchObject({ success: true });
+      },
+    });
+    expect(result.success).toBe(true);
   });
 
   it("accepts out-of-range openai speed for provider passthrough", () => {
-    expect(
-      TtsConfigSchema.safeParse({
-        providers: {
-          openai: {
-            speed: 5.0,
-          },
+    const result = TtsConfigSchema.safeParse({
+      providers: {
+        openai: {
+          speed: 5.0,
         },
-      }),
-    ).toMatchObject({ success: true });
+      },
+    });
+    expect(result.success).toBe(true);
   });
 
   it("accepts openai speed below minimum for provider passthrough", () => {
-    expect(
-      TtsConfigSchema.safeParse({
-        providers: {
-          openai: {
-            speed: 0.1,
-          },
+    const result = TtsConfigSchema.safeParse({
+      providers: {
+        openai: {
+          speed: 0.1,
         },
-      }),
-    ).toMatchObject({ success: true });
+      },
+    });
+    expect(result.success).toBe(true);
   });
 
   it("accepts provider-specific persona bindings and structured prompt fields", () => {
-    expect(
-      TtsConfigSchema.safeParse({
-        persona: "alfred",
-        personas: {
-          alfred: {
-            label: "Alfred",
-            description: "Dry, warm British butler narrator.",
-            provider: "google",
-            fallbackPolicy: "preserve-persona",
-            prompt: {
-              profile: "A brilliant British butler.",
-              scene: "A quiet late-night study.",
-              sampleContext: "The speaker is answering a trusted operator.",
-              style: "Refined and lightly amused.",
-              accent: "British English.",
-              pacing: "Measured.",
-              constraints: ["Do not read configuration values aloud."],
+    const result = TtsConfigSchema.safeParse({
+      persona: "alfred",
+      personas: {
+        alfred: {
+          label: "Alfred",
+          description: "Dry, warm British butler narrator.",
+          provider: "google",
+          fallbackPolicy: "preserve-persona",
+          prompt: {
+            profile: "A brilliant British butler.",
+            scene: "A quiet late-night study.",
+            sampleContext: "The speaker is answering a trusted operator.",
+            style: "Refined and lightly amused.",
+            accent: "British English.",
+            pacing: "Measured.",
+            constraints: ["Do not read configuration values aloud."],
+          },
+          providers: {
+            google: {
+              model: "gemini-3.1-flash-tts-preview",
+              voiceName: "Algieba",
+              promptTemplate: "audio-profile-v1",
             },
-            providers: {
-              google: {
-                model: "gemini-3.1-flash-tts-preview",
-                voiceName: "Algieba",
-                promptTemplate: "audio-profile-v1",
-              },
-              openai: {
-                model: "gpt-4o-mini-tts",
-                voice: "cedar",
-                instructions: "Speak with dry warmth.",
-              },
+            openai: {
+              model: "gpt-4o-mini-tts",
+              voice: "cedar",
+              instructions: "Speak with dry warmth.",
             },
           },
         },
-      }),
-    ).toMatchObject({ success: true });
+      },
+    });
+    expect(result.success).toBe(true);
   });
 
   it("rejects persona rewrite config until runtime behavior exists", () => {
@@ -106,14 +101,15 @@ describe("TtsConfigSchema openai speed and instructions", () => {
       },
     });
 
-    expect(result).toMatchObject({ success: false });
+    expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.issues).toContainEqual(
-        expect.objectContaining({
-          keys: ["rewrite"],
-          path: ["personas", "alfred"],
-        }),
+      const rewriteIssue = result.error.issues.find(
+        (issue) =>
+          Array.isArray((issue as { keys?: unknown }).keys) &&
+          (issue as { keys?: unknown[] }).keys?.[0] === "rewrite",
       );
+      expect((rewriteIssue as { keys?: unknown[] } | undefined)?.keys).toEqual(["rewrite"]);
+      expect(rewriteIssue?.path).toEqual(["personas", "alfred"]);
     }
   });
 });

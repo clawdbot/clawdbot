@@ -882,6 +882,11 @@ export async function startGatewayServer(
     gatewayMethods: listActiveGatewayMethods(baseGatewayMethods),
   });
   deps.cron = runtimeState.cronState.cron;
+  const pluginHostServices = {
+    get cron() {
+      return runtimeState.cronState.cron;
+    },
+  };
 
   let closePreludeStarted = false;
   let postReadyMaintenanceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1177,6 +1182,7 @@ export async function startGatewayServer(
         workspaceDir: defaultWorkspaceDir,
         log,
         coreGatewayMethodNames: baseMethods,
+        hostServices: pluginHostServices,
         baseMethods,
         pluginLookUpTable: nextPluginLookUpTable,
       });
@@ -1307,6 +1313,7 @@ export async function startGatewayServer(
           workspaceDir: defaultWorkspaceDir,
           log,
           coreGatewayMethodNames: baseMethods,
+          hostServices: pluginHostServices,
           baseMethods,
           pluginIds: startupPluginIds,
           pluginLookUpTable,
@@ -1415,6 +1422,7 @@ export async function startGatewayServer(
                   workspaceDir: defaultWorkspaceDir,
                   log,
                   baseMethods,
+                  hostServices: pluginHostServices,
                   startupPluginIds,
                   pluginLookUpTable,
                   startupTrace,

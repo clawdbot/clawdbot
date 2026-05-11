@@ -139,6 +139,28 @@ function approvalResolveCalls(request: ReturnType<typeof vi.fn>) {
   return request.mock.calls.filter(([method]) => method === "exec.approval.resolve");
 }
 
+function requireRecord(value: unknown): Record<string, unknown> {
+  expect(value).toBeTruthy();
+  expect(typeof value).toBe("object");
+  expect(Array.isArray(value)).toBe(false);
+  return value as Record<string, unknown>;
+}
+
+function firstCallArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  return requireRecord(mock.mock.calls[0]?.[0]);
+}
+
+function requestPermissionPayload(mock: ReturnType<typeof vi.fn>): {
+  payload: Record<string, unknown>;
+  toolCall: Record<string, unknown>;
+  rawInput: Record<string, unknown>;
+} {
+  const payload = firstCallArg(mock);
+  const toolCall = requireRecord(payload.toolCall);
+  const rawInput = requireRecord(toolCall.rawInput);
+  return { payload, toolCall, rawInput };
+}
+
 describe("ACP translator permission relay", () => {
   it.each([
     ["allow-once", "allow-once"],
@@ -158,20 +180,13 @@ describe("ACP translator permission relay", () => {
       expect(approvalResolveCalls(harness.request)).toHaveLength(1);
     });
 
-    expect(harness.requestPermission).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: SESSION_ID,
-        toolCall: expect.objectContaining({
-          toolCallId: "exec:approval-1",
-          kind: "execute",
-          rawInput: expect.objectContaining({
-            name: "exec",
-            command: "echo hydrated",
-            approvalId: "approval-1",
-          }),
-        }),
-      }),
-    );
+    const { payload, toolCall, rawInput } = requestPermissionPayload(harness.requestPermission);
+    expect(payload.sessionId).toBe(SESSION_ID);
+    expect(toolCall.toolCallId).toBe("exec:approval-1");
+    expect(toolCall.kind).toBe("execute");
+    expect(rawInput.name).toBe("exec");
+    expect(rawInput.command).toBe("echo hydrated");
+    expect(rawInput.approvalId).toBe("approval-1");
     expect(harness.request).toHaveBeenCalledWith("exec.approval.get", { id: "approval-1" });
     expect(harness.request).toHaveBeenCalledWith("exec.approval.resolve", {
       id: "approval-1",
@@ -212,17 +227,10 @@ describe("ACP translator permission relay", () => {
       expect(approvalResolveCalls(harness.request)).toHaveLength(1);
     });
 
-    expect(harness.requestPermission).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolCall: expect.objectContaining({
-          toolCallId: "exec:approval-raw",
-          rawInput: expect.objectContaining({
-            approvalId,
-            command: "echo hydrated",
-          }),
-        }),
-      }),
-    );
+    const { toolCall, rawInput } = requestPermissionPayload(harness.requestPermission);
+    expect(toolCall.toolCallId).toBe("exec:approval-raw");
+    expect(rawInput.approvalId).toBe(approvalId);
+    expect(rawInput.command).toBe("echo hydrated");
     expect(harness.request).toHaveBeenCalledWith("exec.approval.resolve", {
       id: approvalId,
       decision: "allow-once",
@@ -285,11 +293,7 @@ describe("ACP translator permission relay", () => {
       expect(approvalResolveCalls(request)).toHaveLength(1);
     });
 
-    expect(requestPermission).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: SECOND_SESSION_ID,
-      }),
-    );
+    expect(firstCallArg(requestPermission).sessionId).toBe(SECOND_SESSION_ID);
     expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
       id: approvalId,
       decision: "allow-once",
@@ -436,16 +440,12 @@ describe("ACP translator permission relay", () => {
     } as EventFrame);
 
     expect(harness.requestPermission).not.toHaveBeenCalled();
-    expect(harness.connection.__sessionUpdateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: SESSION_ID,
-        update: expect.objectContaining({
-          sessionUpdate: "tool_call",
-          toolCallId: "tool-1",
-          status: "in_progress",
-        }),
-      }),
-    );
+    const sessionUpdate = firstCallArg(harness.connection.__sessionUpdateMock);
+    const update = requireRecord(sessionUpdate.update);
+    expect(sessionUpdate.sessionId).toBe(SESSION_ID);
+    expect(update.sessionUpdate).toBe("tool_call");
+    expect(update.toolCallId).toBe("tool-1");
+    expect(update.status).toBe("in_progress");
 
     await cleanupHarness(harness);
   });

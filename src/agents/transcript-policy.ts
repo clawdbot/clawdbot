@@ -7,10 +7,7 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import type { ProviderReplayPolicy } from "../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./model-selection.js";
-import {
-  isGemma4ModelRequiringReasoningStrip,
-  isGoogleModelApi,
-} from "./pi-embedded-helpers/google.js";
+import { isGoogleModelApi } from "./pi-embedded-helpers/google.js";
 import type { ToolCallIdMode } from "./tool-call-id.js";
 
 export type TranscriptSanitizeMode = "full" | "images-only";
@@ -146,9 +143,7 @@ function buildUnownedProviderTransportReplayFallback(params: {
     ...(isAnthropic && modelDisablesReasoningEffort(params.model)
       ? { dropThinkingBlocks: true }
       : {}),
-    ...(isStrictOpenAiCompatible && isGemma4ModelRequiringReasoningStrip(modelId)
-      ? { dropReasoningFromHistory: true }
-      : {}),
+    ...(isStrictOpenAiCompatible ? { dropReasoningFromHistory: true } : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { applyAssistantFirstOrderingFix: true } : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { validateGeminiTurns: true } : {}),
     ...(isAnthropic || isStrictOpenAiCompatible || isClaudeOpenAiResponses

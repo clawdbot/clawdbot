@@ -7,9 +7,14 @@ read_when:
   - You are implementing or debugging tool discovery for PI runs
 ---
 
-Tool Search gives PI agents one compact way to discover and call large tool
-catalogs. It is useful when the run has many available tools but the model is
-likely to need only a few of them.
+Tool Search is an experimental OpenClaw PI-agent feature. It gives PI agents one
+compact way to discover and call large tool catalogs. It is useful when the run
+has many available tools but the model is likely to need only a few of them.
+
+This page documents OpenClaw PI Tool Search. It is not the Codex-native tool
+search or dynamic-tools surface. Codex-native code mode, tool search, deferred
+dynamic tools, and nested tool calls are stable Codex harness surfaces and do
+not depend on `tools.toolSearch`.
 
 When enabled for PI, the model receives one `tool_search_code` tool by default.
 That tool runs a short JavaScript body in an isolated Node subprocess with an
@@ -29,9 +34,10 @@ client-provided tools. The model does not see every full schema up front.
 Instead, it searches compact descriptors, describes one selected tool when it
 needs the exact schema, and calls that tool through OpenClaw.
 
-Codex harness runs do not receive these OpenClaw Tool Search controls. OpenClaw
-passes product capabilities to Codex as dynamic tools, and Codex owns native
-code mode, native tool search, deferred dynamic tools, and nested tool calls.
+Codex harness runs do not receive these experimental OpenClaw Tool Search
+controls. OpenClaw passes product capabilities to Codex as dynamic tools, and
+Codex owns the stable native code mode, native tool search, deferred dynamic
+tools, and nested tool calls.
 
 ## How a turn runs
 
@@ -63,6 +69,9 @@ Both modes use the same catalog and execution path. The only difference is the
 shape the model sees. If the current runtime cannot launch the isolated Node
 code-mode child process, the default `code` mode falls back to `tools` before
 catalog compaction.
+
+Both modes are experimental. Prefer direct tool exposure for small PI tool
+catalogs, and prefer the Codex-native stable surfaces for Codex harness runs.
 
 There is no separate source-selection config. When Tool Search is enabled, the
 catalog includes eligible OpenClaw, MCP, and client tools after normal policy

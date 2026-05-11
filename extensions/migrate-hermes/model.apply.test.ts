@@ -11,6 +11,58 @@ import {
   writeFile,
 } from "./test/provider-helpers.js";
 
+const HERMES_REASON_BLOCKED_BY_APPLY_CONFLICT = "blocked by earlier apply conflict";
+
+const openaiProviderPatchValue = {
+  openai: {
+    baseUrl: "",
+    apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+    api: "openai-completions",
+    models: [
+      {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        api: "openai-responses",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 8192,
+        metadataSource: "models-add",
+      },
+    ],
+  },
+};
+
+function defaultModelItem(status: "migrated" | "conflict") {
+  return {
+    id: "config:default-model",
+    kind: "config",
+    action: "update",
+    target: "agents.defaults.model",
+    status,
+    ...(status === "conflict" ? { reason: HERMES_REASON_DEFAULT_MODEL_CONFIGURED } : {}),
+    details: { model: "openai/gpt-5.4" },
+  };
+}
+
+function modelProvidersItem(status: "migrated" | "skipped") {
+  return {
+    id: "config:model-providers",
+    kind: "config",
+    action: "merge",
+    source: undefined,
+    target: "models.providers",
+    status,
+    ...(status === "skipped" ? { reason: HERMES_REASON_BLOCKED_BY_APPLY_CONFLICT } : {}),
+    message: "Import Hermes provider and custom endpoint config.",
+    details: {
+      path: ["models", "providers"],
+      value: openaiProviderPatchValue,
+    },
+  };
+}
+
 describe("Hermes migration model apply", () => {
   afterEach(async () => {
     await cleanupTempRoots();
@@ -56,14 +108,7 @@ describe("Hermes migration model apply", () => {
       }),
     );
 
-    expect(result.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "config:default-model",
-          status: "migrated",
-        }),
-      ]),
-    );
+    expect(result.items).toEqual([defaultModelItem("migrated"), modelProvidersItem("migrated")]);
     expect(writtenConfig?.agents?.defaults?.model).toEqual({
       primary: "openai/gpt-5.4",
       fallbacks: ["openrouter/anthropic/claude-opus-4.6"],
@@ -120,14 +165,7 @@ describe("Hermes migration model apply", () => {
       }),
     );
 
-    expect(result.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "config:default-model",
-          status: "migrated",
-        }),
-      ]),
-    );
+    expect(result.items).toEqual([defaultModelItem("migrated"), modelProvidersItem("migrated")]);
     expect(writtenConfig?.agents?.list?.[0]?.model).toEqual({
       primary: "openai/gpt-5.4",
       fallbacks: ["openrouter/anthropic/claude-opus-4.6"],
@@ -161,15 +199,7 @@ describe("Hermes migration model apply", () => {
 
     const result = await provider.apply(ctx, plan);
 
-    expect(result.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "config:default-model",
-          status: "conflict",
-          reason: HERMES_REASON_DEFAULT_MODEL_CONFIGURED,
-        }),
-      ]),
-    );
+    expect(result.items).toEqual([defaultModelItem("conflict"), modelProvidersItem("skipped")]);
     expect(result.summary.conflicts).toBe(1);
     expect(lateConfig.agents?.defaults?.model).toBe("anthropic/claude-sonnet-4.6");
   });

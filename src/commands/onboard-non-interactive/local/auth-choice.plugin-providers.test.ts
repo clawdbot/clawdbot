@@ -56,6 +56,38 @@ function createRuntime() {
   };
 }
 
+type MockCalls = { mock: { calls: Array<Array<unknown>> } };
+
+function mockCall(mock: MockCalls, callIndex = 0): Array<unknown> {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected mock call ${callIndex}`);
+  }
+  return call;
+}
+
+function mockArg(mock: MockCalls, callIndex = 0, argIndex = 0): Record<string, unknown> {
+  const arg = mockCall(mock, callIndex)[argIndex];
+  if (!arg || typeof arg !== "object") {
+    throw new Error(`expected mock arg at call ${callIndex}, arg ${argIndex}`);
+  }
+  return arg as Record<string, unknown>;
+}
+
+function expectWorkspaceDir(value: unknown) {
+  expect(typeof value).toBe("string");
+  expect((value as string).length).toBeGreaterThan(0);
+}
+
+function expectConfigDefaults(value: unknown) {
+  const config = value as { agents?: unknown };
+  expect(config.agents).toEqual({ defaults: {} });
+}
+
+function expectRuntimeErrorIncludes(runtime: ReturnType<typeof createRuntime>, text: string) {
+  expect(runtime.error.mock.calls.some(([message]) => String(message).includes(text))).toBe(true);
+}
+
 describe("applyNonInteractivePluginProviderChoice", () => {
   it("loads plugin providers for provider-plugin auth choices", async () => {
     const runtime = createRuntime();
@@ -79,18 +111,11 @@ describe("applyNonInteractivePluginProviderChoice", () => {
 
     expect(resolveOwningPluginIdsForProvider).toHaveBeenCalledOnce();
     expect(resolvePreferredProviderForAuthChoice).not.toHaveBeenCalled();
-    expect(resolveOwningPluginIdsForProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "vllm",
-      }),
-    );
+    expect(mockArg(resolveOwningPluginIdsForProvider).provider).toBe("vllm");
     expect(resolvePluginProviders).toHaveBeenCalledOnce();
-    expect(resolvePluginProviders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["vllm"],
-        includeUntrustedWorkspacePlugins: false,
-      }),
-    );
+    const providersInput = mockArg(resolvePluginProviders);
+    expect(providersInput.onlyPluginIds).toEqual(["vllm"]);
+    expect(providersInput.includeUntrustedWorkspacePlugins).toBe(false);
     expect(resolveProviderPluginChoice).toHaveBeenCalledOnce();
     expect(runNonInteractive).toHaveBeenCalledOnce();
     expect(result).toEqual({ plugins: { allow: ["vllm"] } });
@@ -111,10 +136,9 @@ describe("applyNonInteractivePluginProviderChoice", () => {
 
     expect(result).toBeNull();
     expect(resolvePreferredProviderForAuthChoice).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Auth choice "provider-plugin:workspace-provider:api-key" was not matched to a trusted provider plugin.',
-      ),
+    expectRuntimeErrorIncludes(
+      runtime,
+      'Auth choice "provider-plugin:workspace-provider:api-key" was not matched to a trusted provider plugin.',
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
@@ -138,33 +162,22 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     });
 
     expect(result).toBeNull();
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Auth choice "workspace-provider-api-key" matched a provider plugin that is not trusted or enabled for setup.',
-      ),
+    expectRuntimeErrorIncludes(
+      runtime,
+      'Auth choice "workspace-provider-api-key" matched a provider plugin that is not trusted or enabled for setup.',
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(resolvePluginProviders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        includeUntrustedWorkspacePlugins: false,
-      }),
-    );
+    expect(mockArg(resolvePluginProviders).includeUntrustedWorkspacePlugins).toBe(false);
     expect(resolveProviderPluginChoice).toHaveBeenCalledTimes(1);
     expect(resolvePluginProviders).toHaveBeenCalledTimes(1);
-    expect(resolveManifestProviderAuthChoice).toHaveBeenCalledWith(
-      "workspace-provider-api-key",
-      expect.objectContaining({
-        includeUntrustedWorkspacePlugins: false,
-      }),
-    );
-    expect(resolveManifestProviderAuthChoice).toHaveBeenCalledWith(
-      "workspace-provider-api-key",
-      expect.objectContaining({
-        config: expect.objectContaining({ agents: { defaults: {} } }),
-        workspaceDir: expect.any(String),
-        includeUntrustedWorkspacePlugins: true,
-      }),
-    );
+    expect(mockCall(resolveManifestProviderAuthChoice, 0)[0]).toBe("workspace-provider-api-key");
+    const trustedManifestInput = mockArg(resolveManifestProviderAuthChoice, 0, 1);
+    expect(trustedManifestInput.includeUntrustedWorkspacePlugins).toBe(false);
+    expect(mockCall(resolveManifestProviderAuthChoice, 1)[0]).toBe("workspace-provider-api-key");
+    const untrustedManifestInput = mockArg(resolveManifestProviderAuthChoice, 1, 1);
+    expectConfigDefaults(untrustedManifestInput.config);
+    expectWorkspaceDir(untrustedManifestInput.workspaceDir);
+    expect(untrustedManifestInput.includeUntrustedWorkspacePlugins).toBe(true);
   });
 
   it("limits setup-provider resolution to owning plugin ids without pre-enabling them", async () => {
@@ -189,13 +202,10 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       toApiKeyCredential: vi.fn(),
     });
 
-    expect(resolvePluginProviders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({ agents: { defaults: {} } }),
-        onlyPluginIds: ["demo-plugin"],
-        includeUntrustedWorkspacePlugins: false,
-      }),
-    );
+    const providersInput = mockArg(resolvePluginProviders);
+    expectConfigDefaults(providersInput.config);
+    expect(providersInput.onlyPluginIds).toEqual(["demo-plugin"]);
+    expect(providersInput.includeUntrustedWorkspacePlugins).toBe(false);
     expect(runNonInteractive).toHaveBeenCalledOnce();
     expect(result).toEqual({ plugins: { allow: ["demo-plugin"] } });
   });
@@ -214,17 +224,10 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       toApiKeyCredential: vi.fn(),
     });
 
-    expect(resolvePreferredProviderForAuthChoice).toHaveBeenCalledWith(
-      expect.objectContaining({
-        choice: "openai-api-key",
-        includeUntrustedWorkspacePlugins: false,
-      }),
-    );
-    expect(resolvePluginProviders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        includeUntrustedWorkspacePlugins: false,
-      }),
-    );
+    const preferenceInput = mockArg(resolvePreferredProviderForAuthChoice);
+    expect(preferenceInput.choice).toBe("openai-api-key");
+    expect(preferenceInput.includeUntrustedWorkspacePlugins).toBe(false);
+    expect(mockArg(resolvePluginProviders).includeUntrustedWorkspacePlugins).toBe(false);
   });
 
   it("ensures Codex after a non-interactive OpenAI provider choice sets the default model", async () => {
@@ -260,14 +263,11 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     });
 
     expect(runNonInteractive).toHaveBeenCalledOnce();
-    expect(ensureCodexRuntimePluginForModelSelection).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: selectedConfig,
-        model: "openai/gpt-5.5",
-        runtime,
-        workspaceDir: expect.any(String),
-      }),
-    );
+    const ensureInput = mockArg(ensureCodexRuntimePluginForModelSelection);
+    expect(ensureInput.cfg).toBe(selectedConfig);
+    expect(ensureInput.model).toBe("openai/gpt-5.5");
+    expect(ensureInput.runtime).toBe(runtime);
+    expectWorkspaceDir(ensureInput.workspaceDir);
     expect(result).toBe(installedConfig);
   });
 });

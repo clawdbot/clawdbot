@@ -373,21 +373,19 @@ describe("launchd runtime state", () => {
     state.files.set(resolveLaunchAgentPlistPath(env), "<plist/>");
     state.serviceLoaded = false;
 
-    await expect(readLaunchAgentRuntime(env)).resolves.toMatchObject({
-      status: "unknown",
-      missingSupervision: true,
-      detail: "Could not find service",
-    });
+    const runtime = await readLaunchAgentRuntime(env);
+    expect(runtime.status).toBe("unknown");
+    expect(runtime.missingSupervision).toBe(true);
+    expect(runtime.detail).toBe("Could not find service");
   });
 
   it("marks a missing unit when launchd has no job and no plist exists", async () => {
     const env = createDefaultLaunchdEnv();
     state.serviceLoaded = false;
 
-    await expect(readLaunchAgentRuntime(env)).resolves.toMatchObject({
-      status: "unknown",
-      missingUnit: true,
-    });
+    const runtime = await readLaunchAgentRuntime(env);
+    expect(runtime.status).toBe("unknown");
+    expect(runtime.missingUnit).toBe(true);
   });
 });
 
@@ -470,11 +468,12 @@ describe("launchd bootstrap repair", () => {
 
     const repair = await repairLaunchAgentBootstrap({ env });
 
-    expect(repair).toMatchObject({
-      ok: false,
-      status: "bootstrap-failed",
-      detail: expect.stringContaining("Could not find specified service"),
-    });
+    expect(repair.ok).toBe(false);
+    if (repair.ok) {
+      throw new Error("expected bootstrap repair to fail");
+    }
+    expect(repair.status).toBe("bootstrap-failed");
+    expect(repair.detail).toContain("Could not find specified service");
     expect(launchctlCommandNames()).not.toContain("kickstart");
   });
 
@@ -540,14 +539,10 @@ describe("launchd install", () => {
 
     const command = await readLaunchAgentProgramArguments(env);
     expect(command?.programArguments).toEqual(defaultProgramArguments);
-    expect(command?.environment).toMatchObject({
-      TMPDIR: tmpDir,
-      OPENAI_API_KEY: apiKey,
-    });
-    expect(command?.environmentValueSources).toMatchObject({
-      TMPDIR: "file",
-      OPENAI_API_KEY: "file",
-    });
+    expect(command?.environment?.TMPDIR).toBe(tmpDir);
+    expect(command?.environment?.OPENAI_API_KEY).toBe(apiKey);
+    expect(command?.environmentValueSources?.TMPDIR).toBe("file");
+    expect(command?.environmentValueSources?.OPENAI_API_KEY).toBe("file");
   });
 
   it("creates the LaunchAgent TMPDIR before bootstrap", async () => {
@@ -619,6 +614,7 @@ describe("launchd install", () => {
     const plist = state.files.get(plistPath) ?? "";
     expect(plist).toContain("<key>StandardOutPath</key>");
     expect(plist).toContain("<key>StandardErrorPath</key>");
+    expect(plist).toContain("<string>/dev/null</string>");
     expect(plist).toContain("<key>KeepAlive</key>");
     expect(plist).toContain("<string>node</string>");
     const rewriteIndex = state.fileWrites.findIndex((write) => write.path === plistPath);

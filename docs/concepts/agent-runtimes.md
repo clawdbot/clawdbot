@@ -94,7 +94,9 @@ This is the agent-facing decision tree:
    `agentRuntime.id: "pi"`. A selected `openai-codex` auth profile is routed
    internally through PI's legacy Codex-auth transport.
 4. If legacy config still contains **`openai-codex/*` model refs**, repair it to
-   `openai/<model>` with `openclaw doctor --fix`.
+   `openai/<model>` with `openclaw doctor --fix`; doctor keeps the Codex auth
+   route by adding provider/model-scoped `agentRuntime.id: "codex"` where the
+   old model ref implied it.
 5. If the user explicitly says **ACP**, **acpx**, or **Codex ACP adapter**, use
    ACP with `runtime: "acp"` and `agentId: "codex"`.
 6. If the request is for **Claude Code, Gemini CLI, OpenCode, Cursor, Droid, or

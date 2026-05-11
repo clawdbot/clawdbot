@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "../bundled-plugin-paths.mjs";
-import { pluginSdkEntrypoints } from "../plugin-sdk-entries.mjs";
+import { publicPluginSdkEntrypoints } from "../plugin-sdk-entries.mjs";
 import type { ConsumerScope, PublicEntrypoint, TopologyScope, UsageBucket } from "./types.js";
 
 function isTestFile(relPath: string): boolean {
@@ -121,7 +121,7 @@ function buildScopeFromEntrypoints(
 }
 
 export function createPluginSdkScope(_repoRoot: string): TopologyScope {
-  const entrypoints = pluginSdkEntrypoints.map((entrypoint) => ({
+  const entrypoints = publicPluginSdkEntrypoints.map((entrypoint) => ({
     entrypoint,
     sourcePath: `src/plugin-sdk/${entrypoint}.ts`,
     importSpecifier:

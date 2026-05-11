@@ -95,14 +95,21 @@ describe("signalRpcRequest", () => {
       res.end("not-json");
     });
 
-    await expect(
-      signalRpcRequest("version", undefined, {
+    let thrown: unknown;
+    try {
+      await signalRpcRequest("version", undefined, {
         baseUrl,
-      }),
-    ).rejects.toMatchObject({
-      message: "Signal RPC returned malformed JSON (status 502)",
-      cause: expect.any(SyntaxError),
-    });
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    if (!(thrown instanceof Error)) {
+      throw new Error("expected malformed JSON request to throw an Error");
+    }
+    expect(thrown.message).toBe("Signal RPC returned malformed JSON (status 502)");
+    expect(thrown.cause).toBeInstanceOf(SyntaxError);
   });
 
   it("throws when RPC response envelope has neither result nor error", async () => {

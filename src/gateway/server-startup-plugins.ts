@@ -4,6 +4,7 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginRegistryParams } from "../plugins/registry-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
@@ -151,6 +152,7 @@ export async function loadGatewayStartupPluginRuntime(params: {
   workspaceDir: string;
   log: GatewayPluginBootstrapLog;
   baseMethods: string[];
+  hostServices?: PluginRegistryParams["hostServices"];
   startupPluginIds: string[];
   pluginLookUpTable?: ReturnType<typeof loadPluginLookUpTable>;
   preferSetupRuntimeForChannelPlugins?: boolean;
@@ -165,6 +167,9 @@ export async function loadGatewayStartupPluginRuntime(params: {
     log: params.log,
     coreGatewayMethodNames: params.baseMethods,
     baseMethods: params.baseMethods,
+    ...(params.hostServices !== undefined && {
+      hostServices: params.hostServices,
+    }),
     pluginIds: params.startupPluginIds,
     pluginLookUpTable: params.pluginLookUpTable,
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,

@@ -13,8 +13,18 @@ describe("npm project install env", () => {
         createNpmProjectInstallEnv({
           PATH: "/tmp/openclaw-npm-global/bin",
         }),
-      ).toMatchObject({
+      ).toEqual({
         NPM_CONFIG_SCRIPT_SHELL: "/bin/sh",
+        PATH: "/tmp/openclaw-npm-global/bin",
+        npm_config_dry_run: "false",
+        npm_config_fetch_retries: "5",
+        npm_config_fetch_retry_maxtimeout: "120000",
+        npm_config_fetch_retry_mintimeout: "10000",
+        npm_config_fetch_timeout: "300000",
+        npm_config_global: "false",
+        npm_config_location: "project",
+        npm_config_package_lock: "false",
+        npm_config_save: "false",
       });
     } finally {
       existsSyncSpy.mockRestore();
@@ -29,14 +39,32 @@ describe("npm project install env", () => {
         createNpmProjectInstallEnv({
           NPM_CONFIG_SCRIPT_SHELL: "/custom/sh",
         }),
-      ).toMatchObject({
+      ).toEqual({
         NPM_CONFIG_SCRIPT_SHELL: "/custom/sh",
+        npm_config_dry_run: "false",
+        npm_config_fetch_retries: "5",
+        npm_config_fetch_retry_maxtimeout: "120000",
+        npm_config_fetch_retry_mintimeout: "10000",
+        npm_config_fetch_timeout: "300000",
+        npm_config_global: "false",
+        npm_config_location: "project",
+        npm_config_package_lock: "false",
+        npm_config_save: "false",
       });
       expect(
         createNpmProjectInstallEnv({
           npm_config_script_shell: "/custom/lower-sh",
         }),
-      ).toMatchObject({
+      ).toEqual({
+        npm_config_dry_run: "false",
+        npm_config_fetch_retries: "5",
+        npm_config_fetch_retry_maxtimeout: "120000",
+        npm_config_fetch_retry_mintimeout: "10000",
+        npm_config_fetch_timeout: "300000",
+        npm_config_global: "false",
+        npm_config_location: "project",
+        npm_config_package_lock: "false",
+        npm_config_save: "false",
         npm_config_script_shell: "/custom/lower-sh",
       });
     } finally {

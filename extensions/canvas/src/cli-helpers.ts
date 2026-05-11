@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import * as path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/security-runtime";
-import { asRecord, readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import { asRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type CanvasSnapshotPayload = {
   format: string;

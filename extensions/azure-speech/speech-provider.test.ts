@@ -98,21 +98,28 @@ describe("buildAzureSpeechProvider", () => {
       },
     });
 
-    expect(canonical).toEqual(
-      expect.objectContaining({
-        apiKey: "key",
-        region: "eastus",
-        baseUrl: "https://eastus.tts.speech.microsoft.com",
-        voice: "en-US-AriaNeural",
-      }),
-    );
-    expect(alias).toEqual(
-      expect.objectContaining({
-        apiKey: "alias-key",
-        endpoint: "https://westus.tts.speech.microsoft.com/cognitiveservices/v1",
-        baseUrl: "https://westus.tts.speech.microsoft.com",
-      }),
-    );
+    expect(canonical).toEqual({
+      apiKey: "key",
+      region: "eastus",
+      endpoint: undefined,
+      baseUrl: "https://eastus.tts.speech.microsoft.com",
+      voice: "en-US-AriaNeural",
+      lang: "en-US",
+      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+      voiceNoteOutputFormat: "ogg-24khz-16bit-mono-opus",
+      timeoutMs: undefined,
+    });
+    expect(alias).toEqual({
+      apiKey: "alias-key",
+      region: undefined,
+      endpoint: "https://westus.tts.speech.microsoft.com/cognitiveservices/v1",
+      baseUrl: "https://westus.tts.speech.microsoft.com",
+      voice: "en-US-JennyNeural",
+      lang: "en-US",
+      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+      voiceNoteOutputFormat: "ogg-24khz-16bit-mono-opus",
+      timeoutMs: undefined,
+    });
   });
 
   it("parses provider-specific TTS directives", () => {

@@ -13,6 +13,7 @@ import {
 import { log } from "./constants.js";
 import {
   areOAuthCredentialsEquivalent,
+  hasUsableOAuthCredential,
   isSafeToAdoptBootstrapOAuthIdentity,
   shouldBootstrapFromExternalCliCredential,
 } from "./oauth-shared.js";
@@ -30,6 +31,7 @@ export {
 export type ExternalCliResolvedProfile = {
   profileId: string;
   credential: OAuthCredential;
+  persistence?: "runtime-only" | "persisted";
 };
 
 export type ExternalCliAuthProfileOptions = {
@@ -143,6 +145,12 @@ function resolveExternalCliSyncProvider(params: {
   return provider;
 }
 
+function hasInlineOAuthTokenMaterial(credential: OAuthCredential): boolean {
+  return [credential.access, credential.refresh, credential.idToken].some(
+    (value) => typeof value === "string" && value.trim().length > 0,
+  );
+}
+
 export function readExternalCliBootstrapCredential(params: {
   profileId: string;
   credential: OAuthCredential;
@@ -151,11 +159,7 @@ export function readExternalCliBootstrapCredential(params: {
   if (!provider) {
     return null;
   }
-  // bootstrapOnly providers must not replace an existing local credential
-  // during runtime refresh. The oauth-manager only calls this hook when a
-  // local credential is already present, so returning null here keeps the
-  // locally stored refresh token canonical.
-  if (provider.bootstrapOnly) {
+  if (provider.bootstrapOnly && hasInlineOAuthTokenMaterial(params.credential)) {
     return null;
   }
   return provider.readCredentials();
@@ -232,12 +236,6 @@ export function resolveExternalCliAuthProfiles(
     if (!isExternalCliProviderInScope({ providerConfig, store, options })) {
       continue;
     }
-    const creds = providerConfig.readCredentials({
-      allowKeychainPrompt: options?.allowKeychainPrompt,
-    });
-    if (!creds) {
-      continue;
-    }
     const existing = store.profiles[providerConfig.profileId];
     const existingOAuth =
       existing?.type === "oauth" && existing.provider === providerConfig.provider
@@ -252,11 +250,28 @@ export function resolveExternalCliAuthProfiles(
       });
       continue;
     }
-    if (providerConfig.bootstrapOnly && existingOAuth) {
+    if (
+      providerConfig.bootstrapOnly &&
+      existingOAuth &&
+      hasInlineOAuthTokenMaterial(existingOAuth)
+    ) {
       log.debug("kept local oauth over external cli bootstrap-only provider", {
         profileId: providerConfig.profileId,
         provider: providerConfig.provider,
       });
+      continue;
+    }
+    if (
+      existingOAuth &&
+      !providerConfig.bootstrapOnly &&
+      hasUsableOAuthCredential(existingOAuth, now)
+    ) {
+      continue;
+    }
+    const creds = providerConfig.readCredentials({
+      allowKeychainPrompt: options?.allowKeychainPrompt,
+    });
+    if (!creds) {
       continue;
     }
     if (existingOAuth && !isSafeToUseExternalCliCredential(existingOAuth, creds)) {
@@ -303,6 +318,7 @@ export function resolveExternalCliAuthProfiles(
     profiles.push({
       profileId: providerConfig.profileId,
       credential: creds,
+      persistence: providerConfig.bootstrapOnly ? "runtime-only" : "persisted",
     });
   }
   return profiles;

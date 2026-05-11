@@ -183,10 +183,10 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
       "test realtime transcription connection timeout",
     );
     expect(session.isConnected()).toBe(false);
-    expect(onError).toHaveBeenCalledWith(expect.any(Error));
-    expect(onError.mock.calls[0]?.[0]).toMatchObject({
-      message: "test realtime transcription connection timeout",
-    });
+    expect(onError).toHaveBeenCalledTimes(1);
+    const timeoutError = onError.mock.calls[0]?.[0];
+    expect(timeoutError).toBeInstanceOf(Error);
+    expect(timeoutError.message).toBe("test realtime transcription connection timeout");
   });
 
   it("does not open a socket when closed while async connection resolves", async () => {

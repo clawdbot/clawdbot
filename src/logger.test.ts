@@ -9,6 +9,7 @@ import {
   stripRedundantSubsystemPrefixForConsole,
 } from "./logging.js";
 import type { RuntimeEnv } from "./runtime.js";
+import { theme } from "./terminal/theme.js";
 import { withTempDirSync } from "./test-helpers/temp-dir.js";
 
 describe("logger helpers", () => {
@@ -106,7 +107,7 @@ describe("globals", () => {
     setVerbose(true);
     logVerbose("shown");
     expect(isVerbose()).toBe(true);
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("shown"));
+    expect(logSpy).toHaveBeenCalledWith(theme.muted("shown"));
   });
 
   it("stores yes flag", () => {

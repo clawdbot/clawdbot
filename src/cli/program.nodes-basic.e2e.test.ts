@@ -7,6 +7,11 @@ installBaseProgramMocks();
 
 let registerNodesCli: typeof import("./nodes-cli.js").registerNodesCli;
 
+type GatewayCallRequest = {
+  method?: string;
+  params?: unknown;
+};
+
 function formatRuntimeLogCallArg(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -41,6 +46,18 @@ describe("cli program (nodes basics)", () => {
 
   function getRuntimeOutput() {
     return runtime.log.mock.calls.map((c) => formatRuntimeLogCallArg(c[0])).join("\n");
+  }
+
+  function gatewayRequests(): GatewayCallRequest[] {
+    return callGateway.mock.calls.map(([request]) => request as GatewayCallRequest);
+  }
+
+  function expectGatewayRequest(method: string, params?: unknown): void {
+    const request = gatewayRequests().find((candidate) => candidate.method === method);
+    expect(request?.method).toBe(method);
+    if (arguments.length > 1) {
+      expect(request?.params).toEqual(params);
+    }
   }
 
   function mockGatewayWithIosNodeListAnd(method: "node.describe" | "node.invoke", result: unknown) {
@@ -121,31 +138,50 @@ describe("cli program (nodes basics)", () => {
 
     await runProgram(["nodes", "list", "--json"]);
 
-    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "node.pair.list" }));
-    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "node.list" }));
-    expect(runtime.writeJson).toHaveBeenCalledWith({
-      pending: [{ requestId: "r1", nodeId: "pending-node", ts: now - 10_000 }],
-      paired: [
-        expect.objectContaining({
-          nodeId: "paired-store",
-          displayName: "Effective paired name",
-          remoteIp: "10.0.0.2",
-          lastConnectedAtMs: now - 5_000,
-          connected: true,
-        }),
-        expect.objectContaining({
-          nodeId: "catalog-only",
-          displayName: "Catalog Only",
-          paired: true,
-        }),
-        expect.objectContaining({
-          nodeId: "pair-only",
-          displayName: "Pair Only",
-        }),
-      ],
-    });
-    expect(JSON.stringify(runtime.writeJson.mock.calls[0]?.[0])).not.toContain("paired-token");
-    expect(JSON.stringify(runtime.writeJson.mock.calls[0]?.[0])).not.toContain("pair-only-token");
+    expectGatewayRequest("node.pair.list", {});
+    expectGatewayRequest("node.list", {});
+    const json = runtime.writeJson.mock.calls[0]?.[0] as {
+      pending?: unknown[];
+      paired?: Array<Record<string, unknown>>;
+    };
+    expect(json.pending).toEqual([{ requestId: "r1", nodeId: "pending-node", ts: now - 10_000 }]);
+    expect(
+      json.paired?.map((node) => ({
+        nodeId: node.nodeId,
+        displayName: node.displayName,
+        remoteIp: node.remoteIp,
+        lastConnectedAtMs: node.lastConnectedAtMs,
+        connected: node.connected,
+        paired: node.paired,
+      })),
+    ).toEqual([
+      {
+        nodeId: "paired-store",
+        displayName: "Effective paired name",
+        remoteIp: "10.0.0.2",
+        lastConnectedAtMs: now - 5_000,
+        connected: true,
+        paired: undefined,
+      },
+      {
+        nodeId: "catalog-only",
+        displayName: "Catalog Only",
+        remoteIp: "10.0.0.3",
+        lastConnectedAtMs: undefined,
+        connected: false,
+        paired: true,
+      },
+      {
+        nodeId: "pair-only",
+        displayName: "Pair Only",
+        remoteIp: undefined,
+        lastConnectedAtMs: undefined,
+        connected: undefined,
+        paired: undefined,
+      },
+    ]);
+    expect(JSON.stringify(json)).not.toContain("paired-token");
+    expect(JSON.stringify(json)).not.toContain("pair-only-token");
     const output = getRuntimeOutput();
     expect(output).toContain("Pending: 1 · Paired: 3");
     expect(output).not.toContain("Effective Only Unknown");
@@ -222,21 +258,15 @@ describe("cli program (nodes basics)", () => {
     runtime.log.mockClear();
     await runProgram(["nodes", "list", "--json"]);
 
-    expect(runtime.writeJson).toHaveBeenCalledWith({
-      pending: [
-        expect.objectContaining({
-          requestId: "request\u001b[2K-1",
-          displayName: "Pending\u001b[1A\nNode",
-        }),
-      ],
-      paired: [
-        expect.objectContaining({
-          nodeId: "paired-node",
-          displayName: "Paired\u001b[2K\nNode",
-          remoteIp: "10.0.0.5\rrewritten",
-        }),
-      ],
-    });
+    const json = runtime.writeJson.mock.calls.at(-1)?.[0] as {
+      pending?: Array<Record<string, unknown>>;
+      paired?: Array<Record<string, unknown>>;
+    };
+    expect(json.pending?.[0]?.requestId).toBe("request\u001b[2K-1");
+    expect(json.pending?.[0]?.displayName).toBe("Pending\u001b[1A\nNode");
+    expect(json.paired?.[0]?.nodeId).toBe("paired-node");
+    expect(json.paired?.[0]?.displayName).toBe("Paired\u001b[2K\nNode");
+    expect(json.paired?.[0]?.remoteIp).toBe("10.0.0.5\rrewritten");
   });
 
   it("runs nodes list --connected and filters to connected nodes", async () => {
@@ -274,7 +304,7 @@ describe("cli program (nodes basics)", () => {
     });
     await runProgram(["nodes", "list", "--connected"]);
 
-    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "node.list" }));
+    expectGatewayRequest("node.list", {});
     const output = getRuntimeOutput();
     expect(output).toContain("One");
     expect(output).not.toContain("Two");
@@ -306,7 +336,7 @@ describe("cli program (nodes basics)", () => {
     });
     await runProgram(["nodes", "status", "--last-connected", "24h"]);
 
-    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "node.pair.list" }));
+    expectGatewayRequest("node.pair.list", {});
     const output = getRuntimeOutput();
     expect(output).toContain("One");
     expect(output).not.toContain("Two");
@@ -373,9 +403,7 @@ describe("cli program (nodes basics)", () => {
     });
     await runProgram(["nodes", "status"]);
 
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ method: "node.list", params: {} }),
-    );
+    expectGatewayRequest("node.list", {});
 
     const output = getRuntimeOutput();
     for (const expected of expectedOutput) {
@@ -395,15 +423,8 @@ describe("cli program (nodes basics)", () => {
 
     await runProgram(["nodes", "describe", "--node", "ios-node"]);
 
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ method: "node.list", params: {} }),
-    );
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "node.describe",
-        params: { nodeId: "ios-node" },
-      }),
-    );
+    expectGatewayRequest("node.list", {});
+    expectGatewayRequest("node.describe", { nodeId: "ios-node" });
 
     const out = getRuntimeOutput();
     expect(out).toContain("Commands");
@@ -416,12 +437,7 @@ describe("cli program (nodes basics)", () => {
       node: { nodeId: "n1", token: "t1" },
     });
     await runProgram(["nodes", "approve", "r1"]);
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "node.pair.approve",
-        params: { requestId: "r1" },
-      }),
-    );
+    expectGatewayRequest("node.pair.approve", { requestId: "r1" });
   });
 
   it("runs nodes remove and calls node.pair.remove", async () => {
@@ -445,12 +461,7 @@ describe("cli program (nodes basics)", () => {
     });
 
     await runProgram(["nodes", "remove", "--node", "iOS Node"]);
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "node.pair.remove",
-        params: { nodeId: "ios-node" },
-      }),
-    );
+    expectGatewayRequest("node.pair.remove", { nodeId: "ios-node" });
   });
 
   it("runs nodes invoke and calls node.invoke", async () => {
@@ -472,20 +483,13 @@ describe("cli program (nodes basics)", () => {
       '{"javaScript":"1+1"}',
     ]);
 
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ method: "node.list", params: {} }),
-    );
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "node.invoke",
-        params: {
-          nodeId: "ios-node",
-          command: "canvas.eval",
-          params: { javaScript: "1+1" },
-          timeoutMs: 15000,
-          idempotencyKey: "idem-test",
-        },
-      }),
-    );
+    expectGatewayRequest("node.list", {});
+    expectGatewayRequest("node.invoke", {
+      nodeId: "ios-node",
+      command: "canvas.eval",
+      params: { javaScript: "1+1" },
+      timeoutMs: 15000,
+      idempotencyKey: "idem-test",
+    });
   });
 });

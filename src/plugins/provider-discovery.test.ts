@@ -412,12 +412,29 @@ describe("runProviderStaticCatalog", () => {
       },
     });
 
-    expect(seenContexts).toEqual([
-      expect.objectContaining({
-        config: {},
-        env: {},
-      }),
-    ]);
+    expect(seenContexts).toHaveLength(1);
+    const sterileContext = seenContexts[0] as {
+      config: Record<string, never>;
+      env: Record<string, never>;
+      resolveProviderApiKey: () => { apiKey: string | undefined };
+      resolveProviderAuth: () => {
+        apiKey: string | undefined;
+        mode: "none";
+        source: "none";
+      };
+    };
+    expect(sterileContext).toEqual({
+      config: {},
+      env: {},
+      resolveProviderApiKey: sterileContext.resolveProviderApiKey,
+      resolveProviderAuth: sterileContext.resolveProviderAuth,
+    });
+    expect(sterileContext.resolveProviderApiKey()).toEqual({ apiKey: undefined });
+    expect(sterileContext.resolveProviderAuth()).toEqual({
+      apiKey: undefined,
+      mode: "none",
+      source: "none",
+    });
     expect(seenContexts[0]).not.toHaveProperty("agentDir");
     expect(seenContexts[0]).not.toHaveProperty("workspaceDir");
   });

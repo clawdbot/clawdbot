@@ -31,10 +31,14 @@ describe("Synology Chat security audit findings", () => {
       accountId: "default",
       orderedAccountIds: [] as string[],
       hasExplicitAccountPath: false,
-      expectedMatch: {
+      expectedFinding: {
         checkId: "channels.synology-chat.reply.dangerous_name_matching_enabled",
         severity: "info",
         title: "Synology Chat dangerous name matching is enabled",
+        detail:
+          "dangerouslyAllowNameMatching=true re-enables mutable username/nickname matching for reply delivery. This is a break-glass compatibility mode, not a hardened default.",
+        remediation:
+          "Prefer stable numeric Synology Chat user IDs for reply delivery, then disable dangerouslyAllowNameMatching.",
       },
     },
     {
@@ -42,10 +46,14 @@ describe("Synology Chat security audit findings", () => {
       accountId: "beta",
       orderedAccountIds: ["alpha", "beta"],
       hasExplicitAccountPath: true,
-      expectedMatch: {
+      expectedFinding: {
         checkId: "channels.synology-chat.reply.dangerous_name_matching_enabled",
         severity: "info",
-        title: expect.stringContaining("(account: beta)"),
+        title: "Synology Chat dangerous name matching is enabled (account: beta)",
+        detail:
+          "dangerouslyAllowNameMatching=true re-enables mutable username/nickname matching for reply delivery. This is a break-glass compatibility mode, not a hardened default.",
+        remediation:
+          "Prefer stable numeric Synology Chat user IDs for reply delivery, then disable dangerouslyAllowNameMatching.",
       },
     },
   ])("$name", (testCase) => {
@@ -59,8 +67,6 @@ describe("Synology Chat security audit findings", () => {
       hasExplicitAccountPath: testCase.hasExplicitAccountPath,
     });
 
-    expect(findings).toEqual(
-      expect.arrayContaining([expect.objectContaining(testCase.expectedMatch)]),
-    );
+    expect(findings).toEqual([testCase.expectedFinding]);
   });
 });

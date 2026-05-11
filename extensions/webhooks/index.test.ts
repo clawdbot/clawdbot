@@ -56,13 +56,11 @@ describe("webhooks plugin registration", () => {
 
     expect(result).toBeUndefined();
     expect(registerHttpRoute).toHaveBeenCalledTimes(1);
-    expect(registerHttpRoute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: "/plugins/webhooks/zapier",
-        auth: "plugin",
-        match: "exact",
-        replaceExisting: true,
-      }),
-    );
+    const route = registerHttpRoute.mock.calls[0]?.[0];
+    expect(route?.path).toBe("/plugins/webhooks/zapier");
+    expect(route?.auth).toBe("plugin");
+    expect(route?.match).toBe("exact");
+    expect(route?.replaceExisting).toBe(true);
+    expect(route?.handler).toBeTypeOf("function");
   });
 });

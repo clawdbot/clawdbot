@@ -275,6 +275,39 @@ describe("provider-catalog-shared manifest provider configs", () => {
     });
   });
 
+  it("normalizes retired nested Gemini ids before emitting manifest provider config", () => {
+    const catalog: ModelCatalogProvider = {
+      baseUrl: "https://api.kilo.ai/api/gateway/",
+      api: "openai-completions",
+      models: [
+        {
+          id: "google/gemini-3-pro-preview",
+          name: "Gemini 3 Pro Preview",
+          input: ["text", "image"],
+          reasoning: true,
+          contextWindow: 1_048_576,
+          maxTokens: 65_536,
+        },
+      ],
+    };
+
+    expect(buildManifestModelProviderConfig({ providerId: "kilocode", catalog })).toEqual({
+      baseUrl: "https://api.kilo.ai/api/gateway/",
+      api: "openai-completions",
+      models: [
+        {
+          id: "google/gemini-3.1-pro-preview",
+          name: "Gemini 3 Pro Preview",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1_048_576,
+          maxTokens: 65_536,
+        },
+      ],
+    });
+  });
+
   it("rejects incomplete manifest rows before building provider runtime config", () => {
     expect(() =>
       buildManifestModelProviderConfig({

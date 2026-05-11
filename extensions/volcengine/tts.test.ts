@@ -114,8 +114,12 @@ describe("Volcengine speech provider", () => {
     }
     const voices = await listVoices({});
     expect(voices.length).toBeGreaterThan(0);
-    expect(voices[0]).toMatchObject({ locale: "en-US" });
-    expect(voices[0].gender).toMatch(/^(female|male)$/u);
+    expect(voices[0]).toEqual({
+      id: "en_female_anna_mars_bigtts",
+      name: "anna",
+      locale: "en-US",
+      gender: "female",
+    });
   });
 
   it("sends the documented Seed Speech API key payload and returns voice-note Opus metadata", async () => {
@@ -145,25 +149,34 @@ describe("Volcengine speech provider", () => {
     expect(result.voiceCompatible).toBe(true);
 
     const call = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
-    expect(call).toMatchObject({
+    expect(call).toEqual({
       url: "https://voice.ap-southeast-1.bytepluses.com/api/v3/tts/unidirectional",
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Connection: "keep-alive",
+          "X-Api-Key": "test-api-key",
+          "X-Api-Resource-Id": "seed-tts-1.0",
+          "X-Api-App-Key": "aGjiRDfUWi",
+        },
+        body: JSON.stringify({
+          user: { uid: "openclaw" },
+          req_params: {
+            text: "hello",
+            speaker: "zh_male_aojiao_mars_bigtts",
+            audio_params: {
+              format: "ogg_opus",
+              sample_rate: 24000,
+            },
+            speed_ratio: 0.9,
+            emotion: "happy",
+          },
+        }),
+      },
       timeoutMs: 1234,
       policy: { hostnameAllowlist: ["voice.ap-southeast-1.bytepluses.com"] },
       auditContext: "volcengine.tts",
-    });
-    expect(call.init.headers["X-Api-Key"]).toBe("test-api-key");
-    expect(call.init.headers["X-Api-Resource-Id"]).toBe("seed-tts-1.0");
-    expect(call.init.headers["X-Api-App-Key"]).toBe("aGjiRDfUWi");
-    const body = JSON.parse(call.init.body);
-    expect(body.req_params).toMatchObject({
-      text: "hello",
-      speaker: "zh_male_aojiao_mars_bigtts",
-      speed_ratio: 0.9,
-      emotion: "happy",
-      audio_params: {
-        format: "ogg_opus",
-        sample_rate: 24000,
-      },
     });
     expect(release).toHaveBeenCalledTimes(1);
   });

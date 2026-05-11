@@ -1,7 +1,6 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { streamSimple } from "@earendil-works/pi-ai";
 import { streamWithPayloadPatch } from "../agents/pi-embedded-runner/stream-payload-utils.js";
-import { visitObjectContentBlocks } from "../shared/message-content-blocks.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
 
@@ -21,6 +20,7 @@ export function composeProviderStreamWrappers(
   );
 }
 
+/** @deprecated Bundled provider stream helper; do not use from third-party plugins. */
 export function defaultToolStreamExtraParams(
   extraParams?: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -30,100 +30,6 @@ export function defaultToolStreamExtraParams(
   return {
     ...extraParams,
     tool_stream: true,
-  };
-}
-
-const HTML_ENTITY_RE = /&(?:amp|lt|gt|quot|apos|#39|#x[0-9a-f]+|#\d+);/i;
-
-function decodeHtmlEntities(value: string): string {
-  return value
-    .replace(/&amp;/gi, "&")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/&apos;/gi, "'")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(Number.parseInt(hex, 16)))
-    .replace(/&#(\d+);/gi, (_, dec) => String.fromCodePoint(Number.parseInt(dec, 10)));
-}
-
-export function decodeHtmlEntitiesInObject(value: unknown): unknown {
-  if (typeof value === "string") {
-    return HTML_ENTITY_RE.test(value) ? decodeHtmlEntities(value) : value;
-  }
-  if (Array.isArray(value)) {
-    return value.map(decodeHtmlEntitiesInObject);
-  }
-  if (value && typeof value === "object") {
-    const result: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-      result[key] = decodeHtmlEntitiesInObject(entry);
-    }
-    return result;
-  }
-  return value;
-}
-
-function decodeToolCallArgumentsHtmlEntitiesInMessage(message: unknown): void {
-  visitObjectContentBlocks(message, (block) => {
-    const typedBlock = block as { type?: unknown; arguments?: unknown };
-    if (typedBlock.type !== "toolCall" || !typedBlock.arguments) {
-      return;
-    }
-    if (typeof typedBlock.arguments === "object") {
-      typedBlock.arguments = decodeHtmlEntitiesInObject(typedBlock.arguments);
-    }
-  });
-}
-
-export function wrapStreamMessageObjects(
-  stream: ReturnType<typeof streamSimple>,
-  transformMessage: (message: unknown) => void,
-): ReturnType<typeof streamSimple> {
-  const originalResult = stream.result.bind(stream);
-  stream.result = async () => {
-    const message = await originalResult();
-    transformMessage(message);
-    return message;
-  };
-
-  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
-    function () {
-      const iterator = originalAsyncIterator();
-      return {
-        async next() {
-          const result = await iterator.next();
-          if (!result.done && result.value && typeof result.value === "object") {
-            const event = result.value as { partial?: unknown; message?: unknown };
-            transformMessage(event.partial);
-            transformMessage(event.message);
-          }
-          return result;
-        },
-        async return(value?: unknown) {
-          return iterator.return?.(value) ?? { done: true as const, value: undefined };
-        },
-        async throw(error?: unknown) {
-          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
-        },
-      };
-    };
-  return stream;
-}
-
-export function createHtmlEntityToolCallArgumentDecodingWrapper(
-  baseStreamFn: StreamFn | undefined,
-): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    const maybeStream = underlying(model, context, options);
-    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamMessageObjects(stream, decodeToolCallArgumentsHtmlEntitiesInMessage),
-      );
-    }
-    return wrapStreamMessageObjects(maybeStream, decodeToolCallArgumentsHtmlEntitiesInMessage);
   };
 }
 
@@ -179,7 +85,7 @@ function assistantMessageHasAnthropicToolUse(message: Record<string, unknown>): 
   );
 }
 
-export function stripTrailingAssistantPrefillMessages(payload: Record<string, unknown>): number {
+function stripTrailingAssistantPrefillMessages(payload: Record<string, unknown>): number {
   if (!Array.isArray(payload.messages)) {
     return 0;
   }
@@ -202,6 +108,7 @@ export function stripTrailingAssistantPrefillMessages(payload: Record<string, un
   return stripped;
 }
 
+/** @deprecated Anthropic-family provider stream helper; do not use from third-party plugins. */
 export function stripTrailingAnthropicAssistantPrefillWhenThinking(
   payload: Record<string, unknown>,
 ): number {
@@ -211,6 +118,7 @@ export function stripTrailingAnthropicAssistantPrefillWhenThinking(
   return stripTrailingAssistantPrefillMessages(payload);
 }
 
+/** @deprecated Anthropic-family provider stream helper; do not use from third-party plugins. */
 export function createAnthropicThinkingPrefillPayloadWrapper(
   baseStreamFn: StreamFn | undefined,
   onStripped?: (stripped: number) => void,
@@ -228,8 +136,10 @@ export function createAnthropicThinkingPrefillPayloadWrapper(
   );
 }
 
+/** @deprecated OpenAI-compatible provider stream helper; do not use from third-party plugins. */
 export type OpenAICompatibleThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
 
+/** @deprecated OpenAI-compatible provider stream helper; do not use from third-party plugins. */
 export function isOpenAICompatibleThinkingEnabled(params: {
   thinkingLevel: OpenAICompatibleThinkingLevel;
   options: Parameters<StreamFn>[2];
@@ -243,7 +153,9 @@ export function isOpenAICompatibleThinkingEnabled(params: {
   return normalized !== "off" && normalized !== "none";
 }
 
+/** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */
 export type DeepSeekV4ThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
+/** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */
 export type DeepSeekV4ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 function isDisabledDeepSeekV4ThinkingLevel(thinkingLevel: DeepSeekV4ThinkingLevel): boolean {
@@ -287,6 +199,7 @@ function ensureDeepSeekV4AssistantReasoningContent(payload: Record<string, unkno
   }
 }
 
+/** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */
 export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
   baseStreamFn: StreamFn | undefined;
   thinkingLevel: DeepSeekV4ThinkingLevel;
@@ -319,7 +232,9 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
   };
 }
 
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export type GoogleThinkingLevel = "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export type GoogleThinkingInputLevel =
   | "off"
   | "minimal"
@@ -332,28 +247,34 @@ export type GoogleThinkingInputLevel =
 
 // Gemini 2.5 Pro only works in thinking mode and rejects thinkingBudget=0 with
 // "Budget 0 is invalid. This model only works in thinking mode."
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function isGoogleThinkingRequiredModel(modelId: string): boolean {
   return normalizeLowercaseStringOrEmpty(modelId).includes("gemini-2.5-pro");
 }
 
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function isGoogleGemini25ThinkingBudgetModel(modelId: string): boolean {
   return /(?:^|\/)gemini-2\.5-/.test(normalizeLowercaseStringOrEmpty(modelId));
 }
 
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function isGoogleGemini3ProModel(modelId: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return /(?:^|\/)gemini-(?:3(?:\.\d+)?-pro|pro-latest)(?:-|$)/.test(normalized);
 }
 
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function isGoogleGemini3FlashModel(modelId: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return /(?:^|\/)gemini-(?:3(?:\.\d+)?-flash|flash(?:-lite)?-latest)(?:-|$)/.test(normalized);
 }
 
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function isGoogleGemini3ThinkingLevelModel(modelId: string): boolean {
   return isGoogleGemini3ProModel(modelId) || isGoogleGemini3FlashModel(modelId);
 }
 
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function resolveGoogleGemini3ThinkingLevel(params: {
   modelId?: string;
   thinkingLevel?: GoogleThinkingInputLevel;
@@ -424,6 +345,7 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
   return "HIGH";
 }
 
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function stripInvalidGoogleThinkingBudget(params: {
   thinkingConfig: Record<string, unknown>;
   modelId?: string;
@@ -479,6 +401,7 @@ function normalizeGemma4ThinkingLevel(value: unknown): "MINIMAL" | "HIGH" | unde
   }
 }
 
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function sanitizeGoogleThinkingPayload(params: {
   payload: unknown;
   modelId?: string;
@@ -605,6 +528,7 @@ function sanitizeGoogleThinkingConfigContainer(params: {
   }
 }
 
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function createGoogleThinkingPayloadWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel?: GoogleThinkingInputLevel,
@@ -620,6 +544,7 @@ export function createGoogleThinkingPayloadWrapper(
   });
 }
 
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function createGoogleThinkingStreamWrapper(
   ctx: ProviderWrapStreamFnContext,
 ): NonNullable<ProviderWrapStreamFnContext["streamFn"]> {
@@ -630,15 +555,7 @@ export {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "../agents/anthropic-payload-policy.js";
-export {
-  buildCopilotDynamicHeaders,
-  hasCopilotVisionInput,
-} from "../agents/copilot-dynamic-headers.js";
 export { applyAnthropicEphemeralCacheControlMarkers } from "../agents/pi-embedded-runner/anthropic-cache-control-payload.js";
-export {
-  createBedrockNoCacheWrapper,
-  isAnthropicBedrockModel,
-} from "../agents/pi-embedded-runner/bedrock-stream-wrappers.js";
 export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,

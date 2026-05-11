@@ -1,7 +1,15 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveAcpxPluginConfig, resolveAcpxPluginRoot } from "./config.js";
+
+const requireFromTest = createRequire(import.meta.url);
+const TSX_IMPORT = requireFromTest.resolve("tsx");
+
+function expectedSourceMcpServerArgs(entrypoint: string): string[] {
+  return ["--import", TSX_IMPORT, path.resolve(entrypoint)];
+}
 
 describe("embedded acpx plugin config", () => {
   it("resolves workspace stateDir and cwd by default", () => {
@@ -154,13 +162,10 @@ describe("embedded acpx plugin config", () => {
     });
 
     const server = resolved.mcpServers["openclaw-plugin-tools"];
-    expect(server).toMatchObject({
+    expect(server).toEqual({
       command: process.execPath,
-      args: expect.any(Array),
+      args: expectedSourceMcpServerArgs("src/mcp/plugin-tools-serve.ts"),
     });
-    expect(server.command).toBe(process.execPath);
-    expect(Array.isArray(server.args)).toBe(true);
-    expect(server.args?.length).toBeGreaterThan(0);
   });
 
   it("injects the built-in OpenClaw tools MCP server only when explicitly enabled", () => {
@@ -172,13 +177,10 @@ describe("embedded acpx plugin config", () => {
     });
 
     const server = resolved.mcpServers["openclaw-tools"];
-    expect(server).toMatchObject({
+    expect(server).toEqual({
       command: process.execPath,
-      args: expect.any(Array),
+      args: expectedSourceMcpServerArgs("src/mcp/openclaw-tools-serve.ts"),
     });
-    expect(server.command).toBe(process.execPath);
-    expect(Array.isArray(server.args)).toBe(true);
-    expect(server.args?.length).toBeGreaterThan(0);
   });
 
   it("resolves the plugin root from shared dist chunk paths", () => {
@@ -194,20 +196,90 @@ describe("embedded acpx plugin config", () => {
       fs.readFileSync(path.join(pluginRoot, "openclaw.plugin.json"), "utf8"),
     ) as { configSchema?: unknown };
 
-    expect(manifest.configSchema).toMatchObject({
+    expect(manifest.configSchema).toStrictEqual({
       type: "object",
       additionalProperties: false,
-      properties: expect.objectContaining({
-        cwd: expect.any(Object),
-        stateDir: expect.any(Object),
-        probeAgent: expect.any(Object),
-        timeoutSeconds: expect.objectContaining({
+      properties: {
+        cwd: {
+          type: "string",
+          minLength: 1,
+        },
+        stateDir: {
+          type: "string",
+          minLength: 1,
+        },
+        permissionMode: {
+          type: "string",
+          enum: ["approve-all", "approve-reads", "deny-all"],
+        },
+        nonInteractivePermissions: {
+          type: "string",
+          enum: ["deny", "fail"],
+        },
+        pluginToolsMcpBridge: {
+          type: "boolean",
+        },
+        openClawToolsMcpBridge: {
+          type: "boolean",
+        },
+        strictWindowsCmdWrapper: {
+          type: "boolean",
+        },
+        timeoutSeconds: {
+          type: "number",
+          minimum: 0.001,
           default: 120,
-        }),
-        agents: expect.any(Object),
-        mcpServers: expect.any(Object),
-        openClawToolsMcpBridge: expect.any(Object),
-      }),
+        },
+        queueOwnerTtlSeconds: {
+          type: "number",
+          minimum: 0,
+        },
+        probeAgent: {
+          type: "string",
+          minLength: 1,
+        },
+        mcpServers: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            properties: {
+              command: {
+                type: "string",
+                minLength: 1,
+                description: "Command to run the MCP server",
+              },
+              args: {
+                type: "array",
+                items: { type: "string" },
+                description: "Arguments to pass to the command",
+              },
+              env: {
+                type: "object",
+                additionalProperties: { type: "string" },
+                description: "Environment variables for the MCP server",
+              },
+            },
+            required: ["command"],
+          },
+        },
+        agents: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            properties: {
+              command: {
+                type: "string",
+                minLength: 1,
+              },
+              args: {
+                type: "array",
+                items: { type: "string" },
+              },
+            },
+            required: ["command"],
+          },
+        },
+      },
     });
   });
 });

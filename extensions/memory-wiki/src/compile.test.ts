@@ -27,7 +27,32 @@ describe("compileMemoryWikiVault", () => {
   }
 
   async function expectPathMissing(targetPath: string): Promise<void> {
-    await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+    let error: unknown;
+    try {
+      await fs.access(targetPath);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+  }
+
+  function expectDigestPage<T extends { path: string }>(pages: T[], pagePath: string): T {
+    const page = pages.find((candidate) => candidate.path === pagePath);
+    expect(page).toBeDefined();
+    if (!page) {
+      throw new Error(`Expected digest page ${pagePath}`);
+    }
+    return page;
+  }
+
+  function expectDigestCluster<T extends { key: string }>(clusters: T[], key: string): T {
+    const cluster = clusters.find((candidate) => candidate.key === key);
+    expect(cluster).toBeDefined();
+    if (!cluster) {
+      throw new Error(`Expected digest contradiction cluster ${key}`);
+    }
+    return cluster;
   }
 
   it("writes root and directory indexes for native markdown", async () => {
@@ -77,13 +102,11 @@ describe("compileMemoryWikiVault", () => {
       pages: Array<{ path: string; claimCount: number; topClaims: Array<{ text: string }> }>;
     };
     expect(agentDigest.claimCount).toBe(1);
-    expect(agentDigest.pages).toContainEqual(
-      expect.objectContaining({
-        path: "sources/alpha.md",
-        claimCount: 1,
-        topClaims: [expect.objectContaining({ text: "Alpha is the canonical source page." })],
-      }),
-    );
+    const alphaPage = expectDigestPage(agentDigest.pages, "sources/alpha.md");
+    expect(alphaPage.claimCount).toBe(1);
+    expect(alphaPage.topClaims.map((claim) => claim.text)).toEqual([
+      "Alpha is the canonical source page.",
+    ]);
     await expect(
       fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), "utf8"),
     ).resolves.toContain('"text":"Alpha is the canonical source page."');
@@ -341,8 +364,8 @@ describe("compileMemoryWikiVault", () => {
     };
     expect(agentDigest.claimHealth.missingEvidence).toBeGreaterThanOrEqual(1);
     expect(agentDigest.claimHealth.freshness.unknown).toBeGreaterThanOrEqual(1);
-    expect(agentDigest.contradictionClusters).toContainEqual(
-      expect.objectContaining({ key: "claim.alpha.db" }),
+    expect(expectDigestCluster(agentDigest.contradictionClusters, "claim.alpha.db").key).toBe(
+      "claim.alpha.db",
     );
   });
 
@@ -456,15 +479,11 @@ describe("compileMemoryWikiVault", () => {
         relationshipCount?: number;
       }>;
     };
-    expect(agentDigest.pages).toContainEqual(
-      expect.objectContaining({
-        path: "entities/brad.md",
-        canonicalId: "maintainer.brad-groux",
-        aliases: ["brad"],
-        personCard: expect.objectContaining({ lane: "Microsoft Teams" }),
-        relationshipCount: 1,
-      }),
-    );
+    const bradPage = expectDigestPage(agentDigest.pages, "entities/brad.md");
+    expect(bradPage.canonicalId).toBe("maintainer.brad-groux");
+    expect(bradPage.aliases).toEqual(["brad"]);
+    expect(bradPage.personCard?.lane).toBe("Microsoft Teams");
+    expect(bradPage.relationshipCount).toBe(1);
     await expect(
       fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), "utf8"),
     ).resolves.toContain('"evidenceKinds":["maintainer-whois"]');

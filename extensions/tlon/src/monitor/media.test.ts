@@ -54,14 +54,14 @@ describe("tlon monitor media", () => {
 
     const result = await downloadMedia("https://example.com/photo.png");
 
-    expect(fetchRemoteMediaMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://example.com/photo.png",
-        maxBytes: MAX_IMAGE_BYTES,
-        readIdleTimeoutMs: 30_000,
-        requestInit: { method: "GET" },
-      }),
-    );
+    expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1);
+    expect(fetchRemoteMediaMock).toHaveBeenCalledWith({
+      url: "https://example.com/photo.png",
+      maxBytes: MAX_IMAGE_BYTES,
+      readIdleTimeoutMs: 30_000,
+      ssrfPolicy: undefined,
+      requestInit: { method: "GET" },
+    });
     expect(saveMediaBufferMock).toHaveBeenCalledWith(
       Buffer.from("image-data"),
       "image/png",

@@ -3,10 +3,11 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import YAML from "yaml";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
-const packageJsonPath = join(repoRoot, "package.json");
+const pnpmWorkspacePath = join(repoRoot, "pnpm-workspace.yaml");
 
 function collapseDockerContinuations(dockerfile: string): string {
   return dockerfile.replace(/\\\r?\n[ \t]*/g, " ");
@@ -21,7 +22,7 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       'ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:24-bookworm-slim@sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"',
     );
-    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS ext-deps");
+    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS workspace-deps");
     expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build");
     expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime");
     expect(dockerfile).toContain("FROM base-runtime");
@@ -37,7 +38,7 @@ describe("Dockerfile", () => {
       "FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime",
     );
     const caInstallIndex = collapsed.indexOf(
-      "ca-certificates procps hostname curl git lsof openssl python3",
+      "ca-certificates curl git hostname lsof openssl procps python3",
     );
 
     expect(runtimeIndex).toBeGreaterThan(-1);
@@ -53,14 +54,14 @@ describe("Dockerfile", () => {
       "FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime",
     );
     const pythonInstallIndex = dockerfile.indexOf(
-      "ca-certificates procps hostname curl git lsof openssl python3",
+      "ca-certificates curl git hostname lsof openssl procps python3",
     );
 
     expect(runtimeIndex).toBeGreaterThan(-1);
     expect(pythonInstallIndex).toBeGreaterThan(runtimeIndex);
     expect(pythonInstallIndex).toBeLessThan(dockerfile.indexOf("RUN chown node:node /app"));
     expect(dockerfile).toContain(
-      "ca-certificates procps hostname curl git lsof openssl python3 tini",
+      "ca-certificates curl git hostname lsof openssl procps python3 tini",
     );
     expect(dockerfile).toContain('ENTRYPOINT ["tini", "-s", "--"]');
   });
@@ -79,6 +80,20 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain("apt-get install -y --no-install-recommends xvfb");
   });
 
+  it("uses the Docker target platform for pnpm install and prune", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+
+    expect(dockerfile).toContain("pnpm install --frozen-lockfile \\");
+    expect(dockerfile).toContain("CI=true pnpm prune --prod \\");
+    expect(dockerfile).toContain("--config.offline=true");
+    expect(dockerfile.split("--config.supportedArchitectures.os=linux").length - 1).toBe(2);
+    expect(
+      dockerfile.split("--config.supportedArchitectures.cpu=\"$(node -p 'process.arch')\"").length -
+        1,
+    ).toBe(2);
+    expect(dockerfile.split("--config.supportedArchitectures.libc=glibc").length - 1).toBe(2);
+  });
+
   it("verifies matrix-sdk-crypto native addons without hardcoded pnpm virtual-store paths", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain("Verifying critical native addons");
@@ -92,24 +107,49 @@ describe("Dockerfile", () => {
     );
   });
 
-  it("copies postinstall helper imports before pnpm install", async () => {
+  it("copies install workspace manifests before pnpm install", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
     const postinstallIndex = dockerfile.indexOf("COPY scripts/postinstall-bundled-plugins.mjs");
     const distImportHelperIndex = dockerfile.indexOf(
       "COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs",
     );
+    const packageManifestIndex = dockerfile.indexOf(
+      "COPY --from=workspace-deps /out/packages/ ./packages/",
+    );
+    const extensionManifestIndex = dockerfile.indexOf(
+      "COPY --from=workspace-deps /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/",
+    );
 
     expect(postinstallIndex).toBeGreaterThan(-1);
     expect(distImportHelperIndex).toBeGreaterThan(-1);
+    expect(packageManifestIndex).toBeGreaterThan(-1);
+    expect(extensionManifestIndex).toBeGreaterThan(-1);
+    expect(dockerfile).toContain("for manifest in /tmp/packages/*/package.json");
+    expect(dockerfile).toContain(
+      `if [ -f "/tmp/\${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" ]; then`,
+    );
     expect(postinstallIndex).toBeLessThan(installIndex);
     expect(distImportHelperIndex).toBeLessThan(installIndex);
+    expect(packageManifestIndex).toBeLessThan(installIndex);
+    expect(extensionManifestIndex).toBeLessThan(installIndex);
+  });
+
+  it("does not let pnpm resync the full source workspace during Docker build scripts", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+
+    expect(dockerfile).toContain(
+      "NODE_OPTIONS=--max-old-space-size=8192 pnpm_config_verify_deps_before_run=false pnpm build:docker",
+    );
+    expect(dockerfile).toContain(
+      "pnpm_config_verify_deps_before_run=false pnpm canvas:a2ui:bundle",
+    );
+    expect(dockerfile).toContain("pnpm_config_verify_deps_before_run=false pnpm ui:build");
+    expect(dockerfile).toContain("pnpm_config_verify_deps_before_run=false pnpm qa:lab:build");
   });
 
   it("prunes runtime dependencies after the build stage", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    const normalizedExtensionLoop =
-      "for ext in $(printf '%s\\n' \"$OPENCLAW_EXTENSIONS\" | tr ',' ' '); do \\";
     expect(dockerfile).toContain("FROM build AS runtime-assets");
     expect(dockerfile).toContain("ARG OPENCLAW_EXTENSIONS");
     expect(dockerfile).toContain("ARG OPENCLAW_BUNDLED_PLUGIN_DIR");
@@ -119,14 +159,25 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       'Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,matrix" .',
     );
-    expect(dockerfile.split(normalizedExtensionLoop).length - 1).toBe(2);
-    expect(dockerfile).toContain("pnpm-workspace.runtime.yaml");
-    expect(dockerfile).toContain("  - ui\\n");
-    expect(dockerfile).toContain("CI=true NPM_CONFIG_FROZEN_LOCKFILE=false pnpm prune --prod");
+    expect(dockerfile).toContain(
+      "RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \\",
+    );
+    expect(dockerfile).toContain("COPY --from=workspace-deps /out/packages/ ./packages/");
+    expect(dockerfile).toContain(
+      "COPY --from=workspace-deps /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/",
+    );
+    expect(dockerfile).toContain("CI=true pnpm prune --prod \\");
+    expect(dockerfile).toContain("--config.offline=true");
+    expect(dockerfile).toContain("--config.supportedArchitectures.os=linux");
+    expect(dockerfile).toContain(
+      "--config.supportedArchitectures.cpu=\"$(node -p 'process.arch')\"",
+    );
+    expect(dockerfile).toContain("--config.supportedArchitectures.libc=glibc");
     expect(dockerfile).toContain(
       'OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" node scripts/prune-docker-plugin-dist.mjs',
     );
-    expect(dockerfile).toContain("prune must not rediscover unrelated workspaces");
+    expect(dockerfile).not.toContain("pnpm-workspace.runtime.yaml");
+    expect(dockerfile).not.toContain("write-runtime-pnpm-workspace");
     expect(dockerfile).not.toContain(
       `npm install --prefix "${BUNDLED_PLUGIN_ROOT_DIR}/$ext" --omit=dev --silent`,
     );
@@ -134,17 +185,28 @@ describe("Dockerfile", () => {
       "COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules",
     );
     expect(dockerfile).toContain(
+      "COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .",
+    );
+    expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
     );
   });
 
   it("keeps package manager patch files in runtime images", async () => {
-    const dockerfile = await readFile(dockerfilePath, "utf8");
-    const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
-      pnpm?: { patchedDependencies?: Record<string, string> };
+    const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
+    const pnpmWorkspace = YAML.parse(await readFile(pnpmWorkspacePath, "utf8")) as {
+      patchedDependencies?: Record<string, string>;
     };
+    const pruneProd = "CI=true pnpm prune --prod";
+    const finalWorkspaceCopy =
+      "COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .";
 
-    expect(Object.keys(packageJson.pnpm?.patchedDependencies ?? {})).not.toHaveLength(0);
+    expect(Object.keys(pnpmWorkspace.patchedDependencies ?? {})).not.toHaveLength(0);
+    expect(dockerfile).not.toContain("pnpm-workspace.runtime.yaml");
+    expect(dockerfile).not.toContain("write-runtime-pnpm-workspace");
+    expect(dockerfile).not.toContain("pnpm_config_frozen_lockfile=false");
+    expect(dockerfile).toContain(finalWorkspaceCopy);
+    expect(dockerfile.indexOf(pruneProd)).toBeLessThan(dockerfile.indexOf(finalWorkspaceCopy));
     expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
     );

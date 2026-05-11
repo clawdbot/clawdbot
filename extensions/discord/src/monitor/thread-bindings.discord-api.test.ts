@@ -1,5 +1,5 @@
 import { ChannelType } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as discordClientModule from "../client.js";
 import * as discordSendModule from "../send.js";
@@ -223,13 +223,17 @@ describe("maybeSendBindingMessage", () => {
     });
 
     expect(sendWebhookMessageDiscord).toHaveBeenCalledTimes(1);
-    expect(sendWebhookMessageDiscord.mock.calls[0]?.[1]).toMatchObject({
-      cfg,
-      webhookId: "wh_1",
-      webhookToken: "tok_1",
-      accountId: "default",
-      threadId: "thread-1",
-    });
+    expect(sendWebhookMessageDiscord.mock.calls[0]).toEqual([
+      "hello webhook",
+      {
+        cfg,
+        webhookId: "wh_1",
+        webhookToken: "tok_1",
+        accountId: "default",
+        threadId: "thread-1",
+        username: "⚙️ main",
+      },
+    ]);
     expect(sendMessageDiscord).not.toHaveBeenCalled();
   });
 });

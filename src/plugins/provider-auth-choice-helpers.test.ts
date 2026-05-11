@@ -154,6 +154,65 @@ describe("applyProviderAuthConfigPatch", () => {
       "google/gemini-3.1-pro-preview": {},
     });
   });
+
+  it("normalizes retired Google Gemini provider catalog rows from provider config patches", () => {
+    const patch = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+            api: "openai-completions",
+            apiKey: "GOOGLE_API_KEY",
+            models: [
+              {
+                id: "google/gemini-3-pro-preview",
+                name: "Gemini 3 Pro Preview",
+                input: ["text", "image"],
+                reasoning: true,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1_048_576,
+                maxTokens: 65_536,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyProviderAuthConfigPatch({}, patch);
+
+    expect(next.models?.providers?.google?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
+    expect(next.models?.providers?.google?.api).toBe("openai-completions");
+  });
+
+  it("normalizes nested retired Gemini provider catalog rows from proxy config patches", () => {
+    const patch = {
+      models: {
+        providers: {
+          kilocode: {
+            baseUrl: "https://proxy.example/v1",
+            api: "openai-completions",
+            apiKey: "KILOCODE_API_KEY",
+            models: [
+              {
+                id: "google/gemini-3-pro-preview",
+                name: "Gemini via Kilo",
+                input: ["text", "image"],
+                reasoning: true,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1_048_576,
+                maxTokens: 65_536,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyProviderAuthConfigPatch({}, patch);
+
+    expect(next.models?.providers?.kilocode?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
+  });
 });
 
 describe("applyDefaultModel", () => {

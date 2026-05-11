@@ -39,11 +39,16 @@ describe("telegram channel message adapter", () => {
         text: "hello",
         deps: { sendTelegram: sendMessageTelegramMock },
       });
-      expect(sendMessageTelegramMock).toHaveBeenLastCalledWith(
-        "12345",
-        "hello",
-        expect.objectContaining({ verbose: false }),
-      );
+      expect(sendMessageTelegramMock).toHaveBeenLastCalledWith("12345", "hello", {
+        cfg: {},
+        verbose: false,
+        textMode: "html",
+        messageThreadId: undefined,
+        replyToMessageId: undefined,
+        accountId: undefined,
+        silent: undefined,
+        gatewayClientScopes: undefined,
+      });
       expect(result.receipt.platformMessageIds).toEqual(["tg-text"]);
     };
 
@@ -57,14 +62,20 @@ describe("telegram channel message adapter", () => {
         mediaLocalRoots: ["/tmp/media"],
         deps: { sendTelegram: sendMessageTelegramMock },
       });
-      expect(sendMessageTelegramMock).toHaveBeenLastCalledWith(
-        "12345",
-        "caption",
-        expect.objectContaining({
-          mediaUrl: "https://example.com/a.png",
-          mediaLocalRoots: ["/tmp/media"],
-        }),
-      );
+      expect(sendMessageTelegramMock).toHaveBeenLastCalledWith("12345", "caption", {
+        cfg: {},
+        verbose: false,
+        textMode: "html",
+        messageThreadId: undefined,
+        replyToMessageId: undefined,
+        accountId: undefined,
+        silent: undefined,
+        gatewayClientScopes: undefined,
+        mediaUrl: "https://example.com/a.png",
+        mediaLocalRoots: ["/tmp/media"],
+        mediaReadFile: undefined,
+        forceDocument: false,
+      });
       expect(result.receipt.parts[0]?.kind).toBe("media");
     };
 
@@ -77,11 +88,21 @@ describe("telegram channel message adapter", () => {
         payload: { text: "payload" },
         deps: { sendTelegram: sendMessageTelegramMock },
       });
-      expect(sendMessageTelegramMock).toHaveBeenLastCalledWith(
-        "12345",
-        "payload",
-        expect.objectContaining({ verbose: false }),
-      );
+      expect(sendMessageTelegramMock).toHaveBeenLastCalledWith("12345", "payload", {
+        cfg: {},
+        verbose: false,
+        textMode: "html",
+        messageThreadId: undefined,
+        replyToMessageId: undefined,
+        accountId: undefined,
+        silent: undefined,
+        gatewayClientScopes: undefined,
+        mediaLocalRoots: undefined,
+        mediaReadFile: undefined,
+        forceDocument: false,
+        quoteText: undefined,
+        buttons: undefined,
+      });
       expect(result.receipt.platformMessageIds).toEqual(["tg-payload"]);
     };
 
@@ -96,15 +117,16 @@ describe("telegram channel message adapter", () => {
         silent: true,
         deps: { sendTelegram: sendMessageTelegramMock },
       });
-      expect(sendMessageTelegramMock).toHaveBeenLastCalledWith(
-        "12345",
-        "threaded",
-        expect.objectContaining({
-          replyToMessageId: 900,
-          messageThreadId: 12,
-          silent: true,
-        }),
-      );
+      expect(sendMessageTelegramMock).toHaveBeenLastCalledWith("12345", "threaded", {
+        cfg: {},
+        verbose: false,
+        textMode: "html",
+        messageThreadId: 12,
+        replyToMessageId: 900,
+        accountId: undefined,
+        silent: true,
+        gatewayClientScopes: undefined,
+      });
     };
 
     const proveBatch = async () => {
@@ -126,12 +148,41 @@ describe("telegram channel message adapter", () => {
       expect(batchCalls[0]).toEqual([
         "12345",
         "batch",
-        expect.objectContaining({ mediaUrl: "https://example.com/a.png" }),
+        {
+          cfg: {},
+          verbose: false,
+          textMode: "html",
+          messageThreadId: undefined,
+          replyToMessageId: undefined,
+          accountId: undefined,
+          silent: undefined,
+          gatewayClientScopes: undefined,
+          mediaLocalRoots: undefined,
+          mediaReadFile: undefined,
+          forceDocument: false,
+          quoteText: undefined,
+          mediaUrl: "https://example.com/a.png",
+          buttons: undefined,
+        },
       ]);
       expect(batchCalls[1]).toEqual([
         "12345",
         "",
-        expect.objectContaining({ mediaUrl: "https://example.com/b.png" }),
+        {
+          cfg: {},
+          verbose: false,
+          textMode: "html",
+          messageThreadId: undefined,
+          replyToMessageId: undefined,
+          accountId: undefined,
+          silent: undefined,
+          gatewayClientScopes: undefined,
+          mediaLocalRoots: undefined,
+          mediaReadFile: undefined,
+          forceDocument: false,
+          quoteText: undefined,
+          mediaUrl: "https://example.com/b.png",
+        },
       ]);
     };
 

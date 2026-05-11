@@ -10,7 +10,8 @@
   "dependencies": {
     "commander": "^14.0.3",
     "typebox": "1.1.38",
-    "ws": "^8.20.0"
+    "ws": "^8.20.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

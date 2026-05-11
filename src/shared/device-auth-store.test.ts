@@ -40,7 +40,12 @@ describe("device-auth-store", () => {
         deviceId: "device-1",
         role: "  operator  ",
       }),
-    ).toMatchObject({ token: "secret" });
+    ).toEqual({
+      token: "secret",
+      role: "operator",
+      scopes: ["operator.read"],
+      updatedAtMs: 1,
+    });
     expect(
       loadDeviceAuthTokenFromStore({
         adapter,
@@ -126,6 +131,7 @@ describe("device-auth-store", () => {
   });
 
   it("replaces stale stores from other devices instead of merging them", () => {
+    vi.spyOn(Date, "now").mockReturnValue(3456);
     const { adapter, readStore } = createAdapter({
       version: 1,
       deviceId: "device-2",
@@ -154,7 +160,7 @@ describe("device-auth-store", () => {
           token: "node-token",
           role: "node",
           scopes: [],
-          updatedAtMs: expect.any(Number),
+          updatedAtMs: 3456,
         },
       },
     });

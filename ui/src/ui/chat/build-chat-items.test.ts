@@ -27,6 +27,23 @@ function firstMessageContent(group: MessageGroup): unknown[] {
   return Array.isArray(message.content) ? message.content : [];
 }
 
+function requireRecord(value: unknown): Record<string, unknown> {
+  expect(value).toBeTruthy();
+  expect(typeof value).toBe("object");
+  expect(Array.isArray(value)).toBe(false);
+  return value as Record<string, unknown>;
+}
+
+function requireGroup(value: unknown): MessageGroup {
+  const record = requireRecord(value);
+  expect(record.kind).toBe("group");
+  return value as MessageGroup;
+}
+
+function messageRecord(group: MessageGroup, index = 0): Record<string, unknown> {
+  return requireRecord(group.messages[index]?.message);
+}
+
 describe("buildChatItems", () => {
   it("keeps consecutive user messages from different senders in separate groups", () => {
     const groups = messageGroups({
@@ -61,7 +78,7 @@ describe("buildChatItems", () => {
 
     expect(groups).toHaveLength(1);
     expect(groups[0].messages).toHaveLength(1);
-    expect(groups[0].messages[0]).toMatchObject({ duplicateCount: 3 });
+    expect(groups[0].messages[0].duplicateCount).toBe(3);
   });
 
   it("suppresses assistant HEARTBEAT_OK acknowledgements before rendering history", () => {
@@ -77,9 +94,9 @@ describe("buildChatItems", () => {
     expect(groups).toHaveLength(2);
     expect(groups[0].role).toBe("user");
     expect(groups[1].role).toBe("assistant");
-    expect(groups[1].messages[0].message).toMatchObject({
-      content: [{ type: "text", text: "Visible reply" }],
-    });
+    expect(messageRecord(groups[1]).content).toStrictEqual([
+      { type: "text", text: "Visible reply" },
+    ]);
   });
 
   it("suppresses assistant HEARTBEAT_OK acknowledgements that carry hidden thinking blocks", () => {
@@ -118,12 +135,10 @@ describe("buildChatItems", () => {
 
     expect(groups).toHaveLength(1);
     expect(groups[0].messages).toHaveLength(1);
-    expect(groups[0].messages[0].message).toMatchObject({
-      content: [
-        { type: "thinking", thinking: "Useful hidden reasoning." },
-        { type: "text", text: "Visible reply" },
-      ],
-    });
+    expect(messageRecord(groups[0]).content).toStrictEqual([
+      { type: "thinking", thinking: "Useful hidden reasoning." },
+      { type: "text", text: "Visible reply" },
+    ]);
   });
 
   it("keeps HEARTBEAT_OK turns that carry visible non-text content", () => {
@@ -211,24 +226,14 @@ describe("buildChatItems", () => {
 
     const groups = items.filter((item) => item.kind === "group");
 
-    expect(items[0]).toMatchObject({
-      kind: "group",
-      messages: [
-        expect.objectContaining({
-          message: expect.objectContaining({
-            role: "system",
-            content: "Showing last 100 messages (5 hidden).",
-          }),
-        }),
-      ],
-    });
+    const noticeGroup = requireGroup(items[0]);
+    expect(noticeGroup.messages).toHaveLength(1);
+    const noticeMessage = messageRecord(noticeGroup);
+    expect(noticeMessage.role).toBe("system");
+    expect(noticeMessage.content).toBe("Showing last 100 messages (5 hidden).");
     expect(groups).toHaveLength(101);
-    expect(groups[1].messages[0].message).toMatchObject({
-      content: "message 5",
-    });
-    expect(groups.at(-1)?.messages[0].message).toMatchObject({
-      content: "message 104",
-    });
+    expect(messageRecord(groups[1]).content).toBe("message 5");
+    expect(messageRecord(groups[groups.length - 1]).content).toBe("message 104");
   });
 
   it("does not collapse duplicate text messages separated by another message", () => {
@@ -435,12 +440,10 @@ describe("buildChatItems", () => {
 
     const canvasBlocks = canvasBlocksIn(groups[0]);
     expect(canvasBlocks).toHaveLength(1);
-    expect(canvasBlocks[0]).toMatchObject({
-      preview: {
-        viewId: "cv_streamed_artifact",
-        title: "Streamed demo",
-      },
-    });
+    const canvasBlock = requireRecord(canvasBlocks[0]);
+    const preview = requireRecord(canvasBlock.preview);
+    expect(preview.viewId).toBe("cv_streamed_artifact");
+    expect(preview.title).toBe("Streamed demo");
   });
 
   it("explains compaction boundaries and exposes the checkpoint action", () => {
@@ -460,16 +463,15 @@ describe("buildChatItems", () => {
     );
 
     expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({
-      kind: "divider",
-      label: "Compacted history",
-      description:
-        "Earlier turns are preserved in a compaction checkpoint. Open session checkpoints to branch or restore that pre-compaction view.",
-      action: {
-        kind: "session-checkpoints",
-        label: "Open checkpoints",
-      },
-    });
+    const divider = requireRecord(items[0]);
+    expect(divider.kind).toBe("divider");
+    expect(divider.label).toBe("Compacted history");
+    expect(divider.description).toBe(
+      "Earlier turns are preserved in a compaction checkpoint. Open session checkpoints to branch or restore that pre-compaction view.",
+    );
+    const action = requireRecord(divider.action);
+    expect(action.kind).toBe("session-checkpoints");
+    expect(action.label).toBe("Open checkpoints");
   });
 });
 

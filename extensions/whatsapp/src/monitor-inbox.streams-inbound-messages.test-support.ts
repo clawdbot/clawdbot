@@ -38,6 +38,12 @@ function createSocketRef(): NonNullable<InboxMonitorOptions["socketRef"]> {
   return { current: null };
 }
 
+function inboundMessage(onMessage: ReturnType<typeof vi.fn>, index = 0): Record<string, unknown> {
+  const msg = onMessage.mock.calls[index]?.[0];
+  expect(msg).toBeDefined();
+  return msg as Record<string, unknown>;
+}
+
 async function primeInboundReplyHandle(params: {
   onMessage: ReturnType<typeof vi.fn>;
   socketRef: NonNullable<InboxMonitorOptions["socketRef"]>;
@@ -115,30 +121,26 @@ describe("web monitor inbox", () => {
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
 
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replyToId: "q1",
-        replyToBody: "original",
-        replyToSender: "+111",
-        sender: expect.objectContaining({
-          e164: "+999",
-          name: "Tester",
-        }),
-        replyTo: expect.objectContaining({
-          id: "q1",
-          body: "original",
-          sender: expect.objectContaining({
-            jid: "111@s.whatsapp.net",
-            e164: "+111",
-            label: "+111",
-          }),
-        }),
-        self: expect.objectContaining({
-          jid: "123@s.whatsapp.net",
-          e164: "+123",
-        }),
-      }),
-    );
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.replyToId).toBe("q1");
+    expect(inbound.replyToBody).toBe("original");
+    expect(inbound.replyToSender).toBe("+111");
+    const sender = inbound.sender as { e164?: string; name?: string };
+    expect(sender.e164).toBe("+999");
+    expect(sender.name).toBe("Tester");
+    const replyTo = inbound.replyTo as {
+      body?: string;
+      id?: string;
+      sender?: { e164?: string; jid?: string; label?: string };
+    };
+    expect(replyTo.id).toBe("q1");
+    expect(replyTo.body).toBe("original");
+    expect(replyTo.sender?.jid).toBe("111@s.whatsapp.net");
+    expect(replyTo.sender?.e164).toBe("+111");
+    expect(replyTo.sender?.label).toBe("+111");
+    const self = inbound.self as { e164?: string; jid?: string };
+    expect(self.jid).toBe("123@s.whatsapp.net");
+    expect(self.e164).toBe("+123");
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
       text: "pong",
     });
@@ -166,9 +168,10 @@ describe("web monitor inbox", () => {
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
 
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ body: "ping", from: "+999", to: "+123" }),
-    );
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.body).toBe("ping");
+    expect(inbound.from).toBe("+999");
+    expect(inbound.to).toBe("+123");
     expect(sock.readMessages).toHaveBeenCalledWith([
       {
         remoteJid: "999@s.whatsapp.net",
@@ -258,15 +261,12 @@ describe("web monitor inbox", () => {
     );
 
     await waitForMessageCalls(onMessage, 1);
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: "ping",
-        from: "123@g.us",
-        groupSubject: "Recovered Group",
-        senderE164: "+444",
-        chatType: "group",
-      }),
-    );
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.body).toBe("ping");
+    expect(inbound.from).toBe("123@g.us");
+    expect(inbound.groupSubject).toBe("Recovered Group");
+    expect(inbound.senderE164).toBe("+444");
+    expect(inbound.chatType).toBe("group");
     expect(onMessage.mock.calls[0]?.[0].groupParticipants).toBeUndefined();
 
     await second.listener.close();
@@ -453,11 +453,7 @@ describe("web monitor inbox", () => {
       await listener.close();
       await vi.advanceTimersByTimeAsync(50);
       await waitForMessageCalls(onMessage, 1);
-      expect(onMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          body: "first\nsecond",
-        }),
-      );
+      expect(inboundMessage(onMessage).body).toBe("first\nsecond");
     } finally {
       vi.useRealTimers();
     }
@@ -594,9 +590,10 @@ describe("web monitor inbox", () => {
     await waitForMessageCalls(onMessage, 1);
 
     expect(getPNForLID).toHaveBeenCalledWith("999@lid");
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ body: "ping", from: "+999", to: "+123" }),
-    );
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.body).toBe("ping");
+    expect(inbound.from).toBe("+999");
+    expect(inbound.to).toBe("+123");
 
     await listener.close();
   });
@@ -623,9 +620,10 @@ describe("web monitor inbox", () => {
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
 
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ body: "ping", from: "+1555", to: "+123" }),
-    );
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.body).toBe("ping");
+    expect(inbound.from).toBe("+1555");
+    expect(inbound.to).toBe("+123");
     expect(getPNForLID).not.toHaveBeenCalled();
 
     await listener.close();
@@ -651,14 +649,11 @@ describe("web monitor inbox", () => {
     await waitForMessageCalls(onMessage, 1);
 
     expect(getPNForLID).toHaveBeenCalledWith("444@lid");
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: "ping",
-        from: "123@g.us",
-        senderE164: "+444",
-        chatType: "group",
-      }),
-    );
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.body).toBe("ping");
+    expect(inbound.from).toBe("123@g.us");
+    expect(inbound.senderE164).toBe("+444");
+    expect(inbound.chatType).toBe("group");
 
     await listener.close();
   });

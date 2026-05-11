@@ -41,16 +41,11 @@ describe("config boundary guard", () => {
     );
 
     const violations = collectDeprecatedInternalConfigApiViolations({ repoRoot });
-    expect(violations).toEqual(
-      expect.arrayContaining([
-        "extensions/telegram/src/index.ts:1 use runtime.config.current() or pass the already loaded config",
-        "extensions/telegram/src/index.ts:1 use runtime.config.current(), getRuntimeConfig(), or passed config",
-        "extensions/telegram/src/index.ts:1 use a passed cfg, context.getRuntimeConfig(), or getRuntimeConfig() at an explicit process boundary",
-      ]),
-    );
-    expect(
-      violations.every((violation) => violation.startsWith("extensions/telegram/src/index.ts:")),
-    ).toBe(true);
+    expect(violations).toEqual([
+      "extensions/telegram/src/index.ts:1 use runtime.config.current() or pass the already loaded config",
+      "extensions/telegram/src/index.ts:1 use runtime.config.current(), getRuntimeConfig(), or passed config",
+      "extensions/telegram/src/index.ts:1 use a passed cfg, context.getRuntimeConfig(), or getRuntimeConfig() at an explicit process boundary",
+    ]);
   });
 
   it("flags loadConfig in runtime channel action helpers only", () => {
@@ -90,13 +85,11 @@ describe("config boundary guard", () => {
       ].join("\n"),
     );
 
-    expect(collectDeprecatedInternalConfigApiViolations({ repoRoot })).toEqual(
-      expect.arrayContaining([
-        "extensions/telegram/src/index.ts:1 use narrow plugin-sdk config subpaths instead of openclaw/plugin-sdk/config-runtime",
-        "extensions/telegram/src/index.ts:2 use narrow plugin-sdk config subpaths instead of openclaw/plugin-sdk/config-runtime",
-        "extensions/telegram/src/index.ts:3 use narrow plugin-sdk config subpaths instead of openclaw/plugin-sdk/config-runtime",
-      ]),
-    );
+    expect(collectDeprecatedInternalConfigApiViolations({ repoRoot })).toEqual([
+      "extensions/telegram/src/index.ts:1 use narrow plugin-sdk config subpaths instead of openclaw/plugin-sdk/config-runtime",
+      "extensions/telegram/src/index.ts:2 use narrow plugin-sdk config subpaths instead of openclaw/plugin-sdk/config-runtime",
+      "extensions/telegram/src/index.ts:3 use narrow plugin-sdk config subpaths instead of openclaw/plugin-sdk/config-runtime",
+    ]);
   });
 
   it("flags broad config-runtime test mocks outside compat guard fixtures", () => {
@@ -118,7 +111,7 @@ describe("config boundary guard", () => {
       repoRoot,
       "extensions/telegram/src/index.ts",
       [
-        'import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";',
+        'import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";',
         'import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";',
         'type Loader = typeof import("openclaw/plugin-sdk/runtime-config-snapshot").getRuntimeConfig;',
         'export const load = (cfg: OpenClawConfig) => requireRuntimeConfig(cfg, "telegram");',

@@ -45,7 +45,7 @@ describe("Codex plugin inventory", () => {
           ]);
         }
         if (method === "plugin/read") {
-          expect(params).toMatchObject({
+          expect(params).toEqual({
             marketplacePath: "/marketplaces/openai-curated",
             pluginName: "google-calendar",
           });
@@ -56,13 +56,21 @@ describe("Codex plugin inventory", () => {
     });
 
     expect(inventory.records).toHaveLength(1);
-    expect(inventory.records[0]).toMatchObject({
-      policy: { pluginName: "google-calendar" },
-      summary: { installed: true, enabled: true },
-      appOwnership: "proven",
-      ownedAppIds: ["google-calendar-app"],
-      apps: [{ id: "google-calendar-app", accessible: true, enabled: true }],
-    });
+    const record = inventory.records[0];
+    expect(record?.policy.pluginName).toBe("google-calendar");
+    expect(record?.summary.installed).toBe(true);
+    expect(record?.summary.enabled).toBe(true);
+    expect(record?.appOwnership).toBe("proven");
+    expect(record?.ownedAppIds).toStrictEqual(["google-calendar-app"]);
+    expect(record?.apps).toStrictEqual([
+      {
+        id: "google-calendar-app",
+        name: "google-calendar-app",
+        accessible: true,
+        enabled: true,
+        needsAuth: false,
+      },
+    ]);
     expect(calls).toEqual(["plugin/list", "plugin/read"]);
   });
 
@@ -108,7 +116,7 @@ describe("Codex plugin inventory", () => {
           return listed;
         }
         if (method === "plugin/read") {
-          expect(params).toMatchObject({
+          expect(params).toEqual({
             marketplacePath: "/marketplaces/openai-curated",
             pluginName: "github",
           });
@@ -119,14 +127,15 @@ describe("Codex plugin inventory", () => {
     });
 
     expect(inventory.records).toHaveLength(1);
-    expect(inventory.records[0]).toMatchObject({
-      policy: { pluginName: "github" },
-      summary: { id: "openai-curated/github", installed: true, enabled: true },
-      appOwnership: "proven",
-      ownedAppIds: ["github-app"],
-    });
-    expect(inventory.diagnostics).not.toContainEqual(
-      expect.objectContaining({ code: "plugin_missing" }),
+    const record = inventory.records[0];
+    expect(record?.policy.pluginName).toBe("github");
+    expect(record?.summary.id).toBe("openai-curated/github");
+    expect(record?.summary.installed).toBe(true);
+    expect(record?.summary.enabled).toBe(true);
+    expect(record?.appOwnership).toBe("proven");
+    expect(record?.ownedAppIds).toStrictEqual(["github-app"]);
+    expect(inventory.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain(
+      "plugin_missing",
     );
   });
 
@@ -166,19 +175,19 @@ describe("Codex plugin inventory", () => {
       },
     });
 
-    expect(inventory.records[0]).toMatchObject({
-      appOwnership: "proven",
-      authRequired: true,
-      ownedAppIds: ["google-calendar-app"],
-      apps: [
-        {
-          id: "google-calendar-app",
-          accessible: false,
-          enabled: false,
-          needsAuth: true,
-        },
-      ],
-    });
+    const record = inventory.records[0];
+    expect(record?.appOwnership).toBe("proven");
+    expect(record?.authRequired).toBe(true);
+    expect(record?.ownedAppIds).toStrictEqual(["google-calendar-app"]);
+    expect(record?.apps).toStrictEqual([
+      {
+        id: "google-calendar-app",
+        name: "google-calendar-app",
+        accessible: false,
+        enabled: false,
+        needsAuth: true,
+      },
+    ]);
   });
 
   it("marks display-name-only app matches ambiguous instead of exposing app ids", async () => {
@@ -229,9 +238,9 @@ describe("Codex plugin inventory", () => {
 
     expect(inventory.records[0]?.appOwnership).toBe("ambiguous");
     expect(inventory.records[0]?.ownedAppIds).toStrictEqual([]);
-    expect(inventory.diagnostics).toContainEqual(
-      expect.objectContaining({ code: "app_ownership_ambiguous" }),
-    );
+    expect(inventory.diagnostics.map((diagnostic) => diagnostic.code)).toStrictEqual([
+      "app_ownership_ambiguous",
+    ]);
   });
 
   it("fails closed when the app inventory cache is missing", async () => {
@@ -267,9 +276,9 @@ describe("Codex plugin inventory", () => {
     expect(inventory.appInventory?.state).toBe("missing");
     expect(inventory.records[0]?.ownedAppIds).toEqual(["google-calendar-app"]);
     expect(inventory.records[0]?.apps).toStrictEqual([]);
-    expect(inventory.diagnostics).toContainEqual(
-      expect.objectContaining({ code: "app_inventory_missing" }),
-    );
+    expect(inventory.diagnostics.map((diagnostic) => diagnostic.code)).toStrictEqual([
+      "app_inventory_missing",
+    ]);
   });
 });
 

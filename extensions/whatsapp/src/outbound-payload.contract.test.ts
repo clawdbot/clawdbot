@@ -55,13 +55,17 @@ describe("WhatsApp outbound payload contract", () => {
     });
 
     expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-    expect(sendWhatsApp).toHaveBeenCalledWith(
-      "5511999999999@c.us",
-      "caption",
-      expect.objectContaining({
-        mediaUrl: "/tmp/voice.ogg",
-      }),
-    );
+    expect(sendWhatsApp).toHaveBeenCalledWith("5511999999999@c.us", "caption", {
+      verbose: false,
+      cfg: {},
+      mediaUrl: "/tmp/voice.ogg",
+      mediaAccess: undefined,
+      mediaLocalRoots: undefined,
+      mediaReadFile: undefined,
+      accountId: undefined,
+      gifPlayback: undefined,
+      quotedMessageKey: undefined,
+    });
   });
 
   it("backs declared durable final capabilities with delivery proofs", async () => {
@@ -75,11 +79,13 @@ describe("WhatsApp outbound payload contract", () => {
         text: " hello ",
         deps: { whatsapp: sendWhatsApp },
       });
-      expect(sendWhatsApp).toHaveBeenLastCalledWith(
-        "5511999999999@c.us",
-        "hello",
-        expect.any(Object),
-      );
+      expect(sendWhatsApp).toHaveBeenLastCalledWith("5511999999999@c.us", "hello", {
+        verbose: false,
+        cfg: {},
+        accountId: undefined,
+        gifPlayback: undefined,
+        quotedMessageKey: undefined,
+      });
     };
     const proveReplyTo = async () => {
       await whatsappOutbound.sendText!({
@@ -89,16 +95,19 @@ describe("WhatsApp outbound payload contract", () => {
         replyToId: "msg-1",
         deps: { whatsapp: sendWhatsApp },
       });
-      expect(sendWhatsApp).toHaveBeenLastCalledWith(
-        "5511999999999@c.us",
-        "reply",
-        expect.objectContaining({
-          quotedMessageKey: expect.objectContaining({
-            id: "msg-1",
-            remoteJid: "5511999999999@c.us",
-          }),
-        }),
-      );
+      expect(sendWhatsApp).toHaveBeenLastCalledWith("5511999999999@c.us", "reply", {
+        verbose: false,
+        cfg: {},
+        accountId: undefined,
+        gifPlayback: undefined,
+        quotedMessageKey: {
+          id: "msg-1",
+          remoteJid: "5511999999999@c.us",
+          fromMe: false,
+          participant: undefined,
+          messageText: undefined,
+        },
+      });
     };
 
     await verifyDurableFinalCapabilityProofs({
@@ -131,11 +140,13 @@ describe("WhatsApp outbound payload contract", () => {
           } as Parameters<NonNullable<typeof whatsappMessageAdapter.send.text>>[0] & {
             deps: { whatsapp: typeof sendWhatsApp };
           });
-          expect(sendWhatsApp).toHaveBeenLastCalledWith(
-            "5511999999999@c.us",
-            "hello",
-            expect.any(Object),
-          );
+          expect(sendWhatsApp).toHaveBeenLastCalledWith("5511999999999@c.us", "hello", {
+            verbose: false,
+            cfg: {},
+            accountId: undefined,
+            gifPlayback: undefined,
+            quotedMessageKey: undefined,
+          });
           expect(result?.receipt.platformMessageIds).toEqual(["wa-1"]);
         },
         replyTo: async () => {
@@ -148,16 +159,19 @@ describe("WhatsApp outbound payload contract", () => {
           } as Parameters<NonNullable<typeof whatsappMessageAdapter.send.text>>[0] & {
             deps: { whatsapp: typeof sendWhatsApp };
           });
-          expect(sendWhatsApp).toHaveBeenLastCalledWith(
-            "5511999999999@c.us",
-            "reply",
-            expect.objectContaining({
-              quotedMessageKey: expect.objectContaining({
-                id: "msg-1",
-                remoteJid: "5511999999999@c.us",
-              }),
-            }),
-          );
+          expect(sendWhatsApp).toHaveBeenLastCalledWith("5511999999999@c.us", "reply", {
+            verbose: false,
+            cfg: {},
+            accountId: undefined,
+            gifPlayback: undefined,
+            quotedMessageKey: {
+              id: "msg-1",
+              remoteJid: "5511999999999@c.us",
+              fromMe: false,
+              participant: undefined,
+              messageText: undefined,
+            },
+          });
           expect(result?.receipt.platformMessageIds).toEqual(["wa-1"]);
         },
         messageSendingHooks: () => {

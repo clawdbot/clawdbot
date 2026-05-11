@@ -430,8 +430,8 @@ describe("gateway hot reload", () => {
   }) {
     await expect(params.applyReload()).rejects.toThrow(params.expectedError);
     const degradedEvents = drainSystemEvents(params.sessionKey);
-    expect(degradedEvents).toEqual(
-      expect.arrayContaining([expect.stringContaining("[SECRETS_RELOADER_DEGRADED]")]),
+    expect(degradedEvents.some((event) => event.includes("[SECRETS_RELOADER_DEGRADED]"))).toBe(
+      true,
     );
 
     await expect(params.applyReload()).rejects.toThrow(params.expectedError);
@@ -444,8 +444,8 @@ describe("gateway hot reload", () => {
   }) {
     await expect(params.applyReload()).resolves.toBeUndefined();
     const recoveredEvents = drainSystemEvents(params.sessionKey);
-    expect(recoveredEvents).toEqual(
-      expect.arrayContaining([expect.stringContaining("[SECRETS_RELOADER_RECOVERED]")]),
+    expect(recoveredEvents.some((event) => event.includes("[SECRETS_RELOADER_RECOVERED]"))).toBe(
+      true,
     );
   }
 
@@ -704,13 +704,21 @@ describe("gateway hot reload", () => {
       );
 
       expect(hoisted.stopGmailWatcher).toHaveBeenCalled();
-      expect(hoisted.startGmailWatcher).toHaveBeenCalledWith(expect.objectContaining(nextConfig));
+      const restartedGmailCall = hoisted.startGmailWatcher.mock.calls.at(-1) as
+        | [typeof nextConfig]
+        | undefined;
+      const restartedGmailConfig = restartedGmailCall?.[0];
+      expect(restartedGmailConfig?.hooks).toEqual(nextConfig.hooks);
+      expect(restartedGmailConfig?.channels).toEqual(nextConfig.channels);
 
       expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
       expect(hoisted.heartbeatUpdateConfig).toHaveBeenCalledTimes(1);
-      expect(hoisted.heartbeatUpdateConfig).toHaveBeenCalledWith(
-        expect.objectContaining(nextConfig),
-      );
+      const heartbeatUpdateCall = hoisted.heartbeatUpdateConfig.mock.calls.at(-1) as
+        | [typeof nextConfig]
+        | undefined;
+      const heartbeatConfig = heartbeatUpdateCall?.[0];
+      expect(heartbeatConfig?.agents).toEqual(nextConfig.agents);
+      expect(heartbeatConfig?.web).toEqual(nextConfig.web);
 
       await vi.waitFor(() => {
         expect(hoisted.cronInstances.length).toBeGreaterThanOrEqual(1);

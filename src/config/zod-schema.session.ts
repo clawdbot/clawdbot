@@ -64,7 +64,7 @@ export const SessionSchema = z
       .optional(),
     agentToAgent: z
       .object({
-        maxPingPongTurns: z.number().int().min(0).max(5).optional(),
+        maxPingPongTurns: z.number().int().min(0).max(20).optional(),
       })
       .strict()
       .optional(),

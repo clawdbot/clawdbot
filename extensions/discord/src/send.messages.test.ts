@@ -40,7 +40,7 @@ describe("readMessagesDiscord", () => {
     const result = await readMessagesDiscord("C1", { limit: 5 }, { cfg: {} as never });
 
     expect(result).toEqual(messages);
-    expect(restMock.get).toHaveBeenCalledWith(expect.stringContaining("C1"), { limit: 5 });
+    expect(restMock.get).toHaveBeenCalledWith("/channels/C1/messages", { limit: 5 });
   });
 });
 

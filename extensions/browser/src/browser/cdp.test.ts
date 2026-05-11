@@ -126,19 +126,17 @@ describe("cdp", () => {
     });
 
     expect(created.targetId).toBe("TARGET_123");
-    expect(methods).toEqual(
-      expect.arrayContaining([
-        "Target.createTarget",
-        "Target.attachToTarget",
-        "Page.enable",
-        "Runtime.enable",
-        "Network.enable",
-        "DOM.enable",
-        "Accessibility.enable",
-        "Runtime.runIfWaitingForDebugger",
-        "Target.detachFromTarget",
-      ]),
-    );
+    expect(methods).toEqual([
+      "Target.createTarget",
+      "Target.attachToTarget",
+      "Page.enable",
+      "Runtime.enable",
+      "Network.enable",
+      "DOM.enable",
+      "Accessibility.enable",
+      "Runtime.runIfWaitingForDebugger",
+      "Target.detachFromTarget",
+    ]);
   });
 
   it("creates a target via direct WebSocket URL (skips /json/version)", async () => {

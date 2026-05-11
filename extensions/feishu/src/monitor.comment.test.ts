@@ -8,7 +8,7 @@ import {
   type FeishuDriveCommentNoticeEvent,
 } from "./monitor.comment.js";
 
-const handleFeishuCommentEventMock = vi.hoisted(() => vi.fn(async () => {}));
+const handleFeishuCommentEventMock = vi.hoisted(() => vi.fn(async (_params?: unknown) => {}));
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 
 let lastRuntime = createNonExitingRuntimeEnv();
@@ -710,14 +710,15 @@ describe("resolveDriveCommentEventTurn", () => {
     );
     expect(turn?.prompt).toContain(`file_token: ${TEST_DOC_TOKEN}`);
     expect(turn?.prompt).toContain("Event type: add_reply");
-    expect(client.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "GET",
-        url: expect.stringContaining(
-          `/comments/7623358762119646411/replies?file_type=docx&page_size=100&user_id_type=open_id`,
-        ),
-      }),
-    );
+    const replyLookup = client.request.mock.calls
+      .map(([request]) => request)
+      .find((request) => request.url.includes("/comments/7623358762119646411/replies"));
+    expect(replyLookup).toEqual({
+      method: "GET",
+      url: `/open-apis/drive/v1/files/${TEST_DOC_TOKEN}/comments/7623358762119646411/replies?file_type=docx&page_size=100&user_id_type=open_id`,
+      data: {},
+      timeout: 3000,
+    });
   });
 
   it("retries comment reply lookup when the requested reply is not immediately visible", async () => {
@@ -827,16 +828,17 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
     await onComment(makeDriveCommentEvent());
 
     expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(1);
-    expect(handleFeishuCommentEventMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "default",
-        botOpenId: "ou_bot",
-        event: expect.objectContaining({
-          event_id: "10d9d60b990db39f96a4c2fd357fb877",
-          comment_id: "7623358762119646411",
-        }),
-      }),
-    );
+    const handleArgs = handleFeishuCommentEventMock.mock.calls[0]?.[0] as
+      | {
+          accountId?: string;
+          botOpenId?: string;
+          event?: { comment_id?: string; event_id?: string };
+        }
+      | undefined;
+    expect(handleArgs?.accountId).toBe("default");
+    expect(handleArgs?.botOpenId).toBe("ou_bot");
+    expect(handleArgs?.event?.event_id).toBe("10d9d60b990db39f96a4c2fd357fb877");
+    expect(handleArgs?.event?.comment_id).toBe("7623358762119646411");
   });
 
   it("serializes same-document comment notices before invoking handleFeishuCommentEvent", async () => {
@@ -901,11 +903,7 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
     await onComment(makeDriveCommentEvent());
 
     await vi.waitFor(() => {
-      expect(dedup.recordProcessedFeishuMessage).toHaveBeenCalledWith(
-        "drive-comment:10d9d60b990db39f96a4c2fd357fb877",
-        "default",
-        expect.any(Function),
-      );
+      expect(dedup.recordProcessedFeishuMessage).toHaveBeenCalledTimes(1);
       expect(dedup.releaseFeishuMessageProcessing).toHaveBeenCalledWith(
         "drive-comment:10d9d60b990db39f96a4c2fd357fb877",
         "default",
@@ -914,6 +912,11 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
         expect.stringContaining("error handling drive comment notice: Error: post-send failure"),
       );
     });
+    const [recordedMessageId, recordedNamespace, recordedLogger] =
+      (dedup.recordProcessedFeishuMessage as ReturnType<typeof vi.fn>).mock.calls[0] ?? [];
+    expect(recordedMessageId).toBe("drive-comment:10d9d60b990db39f96a4c2fd357fb877");
+    expect(recordedNamespace).toBe("default");
+    expect(typeof recordedLogger).toBe("function");
   });
 
   it("releases comment replay without recording when failure is explicitly retryable", async () => {

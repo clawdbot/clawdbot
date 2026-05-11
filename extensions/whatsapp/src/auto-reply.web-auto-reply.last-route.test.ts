@@ -1,5 +1,6 @@
 import "./test-helpers.js";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-envelope";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createAcceptedWhatsAppSendResult,
@@ -41,6 +42,7 @@ function makeReplyLogger() {
 
 function createHandlerForTest(opts: { cfg: OpenClawConfig; replyResolver: unknown }) {
   const backgroundTasks = new Set<Promise<unknown>>();
+  const replyLogger = makeReplyLogger();
   const handler = createWebOnMessageHandler({
     cfg: opts.cfg,
     verbose: false,
@@ -54,18 +56,12 @@ function createHandlerForTest(opts: { cfg: OpenClawConfig; replyResolver: unknow
     replyResolver: opts.replyResolver as Parameters<
       typeof createWebOnMessageHandler
     >[0]["replyResolver"],
-    replyLogger: makeReplyLogger(),
+    replyLogger,
     baseMentionConfig: buildMentionConfig(opts.cfg),
     account: {},
   });
 
   return { handler, backgroundTasks };
-}
-
-function createLastRouteHarness(storePath: string) {
-  const replyResolver = vi.fn().mockResolvedValue(undefined);
-  const cfg = makeCfg(storePath);
-  return createHandlerForTest({ cfg, replyResolver });
 }
 
 function buildInboundMessage(params: {
@@ -120,7 +116,11 @@ describe("web auto-reply last-route", () => {
       [mainSessionKey]: { sessionId: "sid", updatedAt: now - 1 },
     });
 
-    const { handler, backgroundTasks } = createLastRouteHarness(store.storePath);
+    const cfg = makeCfg(store.storePath);
+    const { handler, backgroundTasks } = createHandlerForTest({
+      cfg,
+      replyResolver: vi.fn().mockResolvedValue(undefined),
+    });
 
     await handler(
       buildInboundMessage({
@@ -135,12 +135,75 @@ describe("web auto-reply last-route", () => {
 
     await awaitBackgroundTasks(backgroundTasks);
 
-    expect(updateLastRouteInBackgroundMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "whatsapp",
-        to: "+1000",
-      }),
-    );
+    expect(updateLastRouteInBackgroundMock).toHaveBeenCalledTimes(1);
+    const updateParams = updateLastRouteInBackgroundMock.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(updateParams?.cfg).toBe(cfg);
+    expect(updateParams?.backgroundTasks).toBe(backgroundTasks);
+    expect(updateParams?.warn).toBeTypeOf("function");
+    const {
+      cfg: _cfg,
+      backgroundTasks: _backgroundTasks,
+      warn: _warn,
+      ctx,
+      ...routeParams
+    } = updateParams ?? {};
+    expect(routeParams).toEqual({
+      storeAgentId: "main",
+      sessionKey: mainSessionKey,
+      channel: "whatsapp",
+      to: "+1000",
+      accountId: "default",
+    });
+    const body = formatInboundEnvelope({
+      channel: "WhatsApp",
+      from: "+1000",
+      timestamp: now,
+      body: "hello",
+      chatType: "direct",
+      sender: {
+        e164: "+1000",
+        id: "+1000",
+      },
+    });
+    expect(ctx).toEqual({
+      From: "+1000",
+      To: "+2000",
+      SessionKey: mainSessionKey,
+      AccountId: "default",
+      ChatType: "direct",
+      CommandAuthorized: undefined,
+      ConversationLabel: "+1000",
+      GroupMembers: "+1000",
+      GroupSubject: undefined,
+      GroupSystemPrompt: undefined,
+      InboundHistory: undefined,
+      MediaPath: undefined,
+      MediaTranscribedIndexes: undefined,
+      MediaType: undefined,
+      MediaUrl: undefined,
+      MessageSid: "m1",
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "+1000",
+      ReplyThreading: undefined,
+      ReplyToBody: undefined,
+      ReplyToId: undefined,
+      ReplyToSender: undefined,
+      SenderE164: "+1000",
+      SenderId: "+1000",
+      SenderName: undefined,
+      Transcript: undefined,
+      UntrustedStructuredContext: undefined,
+      WasMentioned: undefined,
+      RawBody: "hello",
+      Body: body,
+      BodyForAgent: "hello",
+      CommandBody: "hello",
+      Timestamp: now,
+    });
 
     await store.cleanup();
   });
@@ -152,7 +215,11 @@ describe("web auto-reply last-route", () => {
       [groupSessionKey]: { sessionId: "sid", updatedAt: now - 1 },
     });
 
-    const { handler, backgroundTasks } = createLastRouteHarness(store.storePath);
+    const cfg = makeCfg(store.storePath);
+    const { handler, backgroundTasks } = createHandlerForTest({
+      cfg,
+      replyResolver: vi.fn().mockResolvedValue(undefined),
+    });
 
     await handler(
       buildInboundMessage({
@@ -171,13 +238,43 @@ describe("web auto-reply last-route", () => {
 
     await awaitBackgroundTasks(backgroundTasks);
 
-    expect(updateLastRouteInBackgroundMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "whatsapp",
-        to: "123@g.us",
-        accountId: "work",
-      }),
-    );
+    expect(updateLastRouteInBackgroundMock).toHaveBeenCalledTimes(1);
+    const updateParams = updateLastRouteInBackgroundMock.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(updateParams?.cfg).toBe(cfg);
+    expect(updateParams?.backgroundTasks).toBe(backgroundTasks);
+    expect(updateParams?.warn).toBeTypeOf("function");
+    const {
+      cfg: _cfg,
+      backgroundTasks: _backgroundTasks,
+      warn: _warn,
+      ctx,
+      ...routeParams
+    } = updateParams ?? {};
+    expect(routeParams).toEqual({
+      storeAgentId: "main",
+      sessionKey: `${groupSessionKey}:thread:whatsapp-account-work`,
+      channel: "whatsapp",
+      to: "123@g.us",
+      accountId: "work",
+    });
+    expect(ctx).toEqual({
+      From: "123@g.us",
+      To: "+2000",
+      SessionKey: `${groupSessionKey}:thread:whatsapp-account-work`,
+      AccountId: "work",
+      ChatType: "group",
+      ConversationLabel: "123@g.us",
+      GroupSubject: undefined,
+      SenderName: "Alice",
+      SenderId: "+1000",
+      SenderE164: "+1000",
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "123@g.us",
+    });
 
     await store.cleanup();
   });

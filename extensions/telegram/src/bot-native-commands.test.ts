@@ -1,4 +1,4 @@
-import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -82,6 +82,43 @@ function collectCallbackData(replyMarkup: TelegramInlineKeyboardReplyMarkup | un
     }
   }
   return callbackData;
+}
+
+function firstCall(mock: { mock: { calls: Array<Array<unknown>> } }) {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected first mock call");
+  }
+  return call;
+}
+
+function firstCallArg(mock: { mock: { calls: Array<Array<unknown>> } }, argIndex = 0) {
+  const arg = firstCall(mock)[argIndex];
+  if (!arg || typeof arg !== "object") {
+    throw new Error(`expected first mock call arg ${argIndex}`);
+  }
+  return arg as Record<string, unknown>;
+}
+
+function firstDeliverRepliesParams() {
+  return firstCallArg(deliverReplies as unknown as { mock: { calls: Array<Array<unknown>> } });
+}
+
+function firstExecutePluginCommandParams() {
+  return firstCallArg(
+    pluginCommandMocks.executePluginCommand as unknown as {
+      mock: { calls: Array<Array<unknown>> };
+    },
+  );
+}
+
+function replyAt(params: Record<string, unknown>, index = 0) {
+  const replies = params.replies as Array<Record<string, unknown>> | undefined;
+  const reply = replies?.[index];
+  if (!reply) {
+    throw new Error(`expected reply ${index}`);
+  }
+  return reply;
 }
 
 function registerCustomTelegramCommandMenu(
@@ -252,9 +289,9 @@ describe("registerTelegramNativeCommands", () => {
       expect(TELEGRAM_COMMAND_NAME_PATTERN.test(entry.command)).toBe(true);
     }
 
-    expect(registeredCommandNames).toEqual(
-      expect.arrayContaining(["export_session", "custom_backup", "plugin_status"]),
-    );
+    expect(registeredCommandNames).toContain("export_session");
+    expect(registeredCommandNames).toContain("custom_backup");
+    expect(registeredCommandNames).toContain("plugin_status");
     expect(registeredCommandNames).not.toContain("plugin-status");
     expect(registeredCommandNames).not.toContain("custom-bad");
   });
@@ -306,13 +343,10 @@ describe("registerTelegramNativeCommands", () => {
 
     await handler(createPrivateCommandContext());
 
-    const firstDeliverRepliesCall = deliverReplies.mock.calls.at(0) as [unknown] | undefined;
-    expect(firstDeliverRepliesCall?.[0]).toEqual(
-      expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([
-          expect.stringMatching(/[\\/]\.openclaw[\\/]workspace-work$/),
-        ]),
-      }),
+    const deliverParams = firstDeliverRepliesParams();
+    const mediaLocalRoots = deliverParams.mediaLocalRoots as Array<string> | undefined;
+    expect(mediaLocalRoots?.some((root) => /[\\/]\.openclaw[\\/]workspace-work$/.test(root))).toBe(
+      true,
     );
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
   });
@@ -337,11 +371,12 @@ describe("registerTelegramNativeCommands", () => {
       },
     });
 
-    expect(sendMessage).toHaveBeenCalledWith(
-      -1001234567890,
-      "Command not found.",
-      expect.objectContaining({ message_thread_id: 77 }),
-    );
+    expect(sendMessage.mock.calls[0]?.[0]).toBe(-1001234567890);
+    expect(sendMessage.mock.calls[0]?.[1]).toBe("Command not found.");
+    expect(
+      (sendMessage.mock.calls[0]?.[2] as { message_thread_id?: number } | undefined)
+        ?.message_thread_id,
+    ).toBe(77);
   });
 
   it("uses nested streaming.block.enabled for native command block-streaming behavior", () => {
@@ -385,29 +420,25 @@ describe("registerTelegramNativeCommands", () => {
       }),
     );
 
-    expect(sendMessage).toHaveBeenCalledWith(
-      100,
-      expect.stringContaining("Running this command now"),
-      undefined,
+    expect(sendMessage.mock.calls[0]?.[0]).toBe(100);
+    expect(String(sendMessage.mock.calls[0]?.[1])).toContain("Running this command now");
+    expect(sendMessage.mock.calls[0]?.[2]).toBeUndefined();
+    const editCall = firstCall(
+      editMessageTelegram as unknown as { mock: { calls: Array<Array<unknown>> } },
     );
-    expect(editMessageTelegram).toHaveBeenCalledWith(
-      100,
-      999,
-      expect.stringContaining("Command completed successfully"),
-      expect.objectContaining({
-        accountId: "default",
-      }),
-    );
+    expect(editCall[0]).toBe(100);
+    expect(editCall[1]).toBe(999);
+    expect(String(editCall[2])).toContain("Command completed successfully");
+    expect((editCall[3] as { accountId?: string } | undefined)?.accountId).toBe("default");
     expect(deleteMessage).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
-    expect(emitTelegramMessageSentHooks).toHaveBeenCalledWith(
-      expect.objectContaining({
-        chatId: "100",
-        content: "Command completed successfully",
-        messageId: 999,
-        success: true,
-      }),
+    const hookParams = firstCallArg(
+      emitTelegramMessageSentHooks as unknown as { mock: { calls: Array<Array<unknown>> } },
     );
+    expect(hookParams.chatId).toBe("100");
+    expect(hookParams.content).toBe("Command completed successfully");
+    expect(hookParams.messageId).toBe(999);
+    expect(hookParams.success).toBe(true);
   });
 
   it("preserves Telegram buttons when editing a metadata-driven progress placeholder", async () => {
@@ -429,14 +460,15 @@ describe("registerTelegramNativeCommands", () => {
     await handler(createPrivateCommandContext({ match: "now" }));
 
     expect(sendMessage).toHaveBeenCalledWith(100, "Working on it...", undefined);
-    expect(editMessageTelegram).toHaveBeenCalledWith(
-      100,
-      999,
-      "Choose an option",
-      expect.objectContaining({
-        buttons: [[{ text: "Approve", callback_data: "approve" }]],
-      }),
+    const editCall = firstCall(
+      editMessageTelegram as unknown as { mock: { calls: Array<Array<unknown>> } },
     );
+    expect(editCall[0]).toBe(100);
+    expect(editCall[1]).toBe(999);
+    expect(editCall[2]).toBe("Choose an option");
+    expect((editCall[3] as { buttons?: unknown } | undefined)?.buttons).toEqual([
+      [{ text: "Approve", callback_data: "approve" }],
+    ]);
     expect(deleteMessage).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
   });
@@ -462,11 +494,7 @@ describe("registerTelegramNativeCommands", () => {
     expect(sendMessage).toHaveBeenCalledWith(100, "Working on it...", undefined);
     expect(editMessageTelegram).not.toHaveBeenCalled();
     expect(deleteMessage).toHaveBeenCalledWith(100, 999);
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [expect.objectContaining({ mediaUrl: "/tmp/render.png" })],
-      }),
-    );
+    expect(replyAt(firstDeliverRepliesParams()).mediaUrl).toBe("/tmp/render.png");
   });
 
   it("cleans up the progress placeholder before falling back after an edit failure", async () => {
@@ -486,11 +514,7 @@ describe("registerTelegramNativeCommands", () => {
     expect(sendMessage).toHaveBeenCalledWith(100, "Working on it...", undefined);
     expect(editMessageTelegram).toHaveBeenCalledTimes(1);
     expect(deleteMessage).toHaveBeenCalledWith(100, 999);
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [expect.objectContaining({ text: "Command completed successfully" })],
-      }),
-    );
+    expect(replyAt(firstDeliverRepliesParams()).text).toBe("Command completed successfully");
   });
 
   it("cleans up the progress placeholder when Telegram suppresses a local exec approval reply", async () => {
@@ -550,13 +574,9 @@ describe("registerTelegramNativeCommands", () => {
 
     await handler(createPrivateCommandContext());
 
-    const firstDeliverRepliesCall = deliverReplies.mock.calls.at(0) as [unknown] | undefined;
-    expect(firstDeliverRepliesCall?.[0]).toEqual(
-      expect.objectContaining({
-        silent: true,
-        replies: [expect.objectContaining({ isError: true })],
-      }),
-    );
+    const deliverParams = firstDeliverRepliesParams();
+    expect(deliverParams.silent).toBe(true);
+    expect(replyAt(deliverParams).isError).toBe(true);
   });
 
   it("forwards topic-scoped binding context to Telegram plugin commands", async () => {
@@ -578,15 +598,12 @@ describe("registerTelegramNativeCommands", () => {
       },
     });
 
-    expect(pluginCommandMocks.executePluginCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        accountId: "default",
-        from: "telegram:group:-1001234567890:topic:77",
-        to: "telegram:-1001234567890",
-        messageThreadId: 77,
-      }),
-    );
+    const commandParams = firstExecutePluginCommandParams();
+    expect(commandParams.channel).toBe("telegram");
+    expect(commandParams.accountId).toBe("default");
+    expect(commandParams.from).toBe("telegram:group:-1001234567890:topic:77");
+    expect(commandParams.to).toBe("telegram:-1001234567890");
+    expect(commandParams.messageThreadId).toBe(77);
   });
 
   it("treats Telegram forum #General commands as topic 1 when Telegram omits topic metadata", async () => {
@@ -610,14 +627,11 @@ describe("registerTelegramNativeCommands", () => {
     });
 
     expect(getChat).toHaveBeenCalledWith(-1001234567890);
-    expect(pluginCommandMocks.executePluginCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "default",
-        from: "telegram:group:-1001234567890:topic:1",
-        to: "telegram:-1001234567890",
-        messageThreadId: 1,
-      }),
-    );
+    const commandParams = firstExecutePluginCommandParams();
+    expect(commandParams.accountId).toBe("default");
+    expect(commandParams.from).toBe("telegram:group:-1001234567890:topic:1");
+    expect(commandParams.to).toBe("telegram:-1001234567890");
+    expect(commandParams.messageThreadId).toBe(1);
   });
 
   it("forwards direct-message binding context to Telegram plugin commands", async () => {
@@ -625,14 +639,11 @@ describe("registerTelegramNativeCommands", () => {
 
     await handler(createPrivateCommandContext({ chatId: 100, userId: 200 }));
 
-    expect(pluginCommandMocks.executePluginCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        accountId: "default",
-        from: "telegram:100",
-        to: "telegram:100",
-        messageThreadId: undefined,
-      }),
-    );
+    const commandParams = firstExecutePluginCommandParams();
+    expect(commandParams.channel).toBe("telegram");
+    expect(commandParams.accountId).toBe("default");
+    expect(commandParams.from).toBe("telegram:100");
+    expect(commandParams.to).toBe("telegram:100");
+    expect(commandParams.messageThreadId).toBeUndefined();
   });
 });

@@ -24,9 +24,13 @@ async function readLastLogLine(filePath: string): Promise<string | null> {
   }
 }
 
-export async function readLastGatewayErrorLine(env: NodeJS.ProcessEnv): Promise<string | null> {
+export async function readLastGatewayErrorLine(
+  env: NodeJS.ProcessEnv,
+  options?: { platform?: NodeJS.Platform },
+): Promise<string | null> {
+  const readStderr = (options?.platform ?? process.platform) !== "darwin";
   const { stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
-  const stderrRaw = await fs.readFile(stderrPath, "utf8").catch(() => "");
+  const stderrRaw = readStderr ? await fs.readFile(stderrPath, "utf8").catch(() => "") : "";
   const stdoutRaw = await fs.readFile(stdoutPath, "utf8").catch(() => "");
   const lines = [...stderrRaw.split(/\r?\n/), ...stdoutRaw.split(/\r?\n/)].map((line) =>
     line.trim(),
@@ -40,5 +44,7 @@ export async function readLastGatewayErrorLine(env: NodeJS.ProcessEnv): Promise<
       return line;
     }
   }
-  return (await readLastLogLine(stderrPath)) ?? (await readLastLogLine(stdoutPath));
+  return readStderr
+    ? ((await readLastLogLine(stderrPath)) ?? (await readLastLogLine(stdoutPath)))
+    : await readLastLogLine(stdoutPath);
 }

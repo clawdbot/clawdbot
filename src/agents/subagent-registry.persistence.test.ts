@@ -46,6 +46,15 @@ vi.mock("./subagent-orphan-recovery.js", () => ({
   scheduleOrphanRecovery: vi.fn(),
 }));
 
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  expect(value).toBeTypeOf("object");
+  expect(value).not.toBeNull();
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
 describe("subagent registry persistence", () => {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
   let tempStateDir: string | null = null;
@@ -288,11 +297,13 @@ describe("subagent registry persistence", () => {
 
     // announce should NOT be called since cleanupHandled was true
     const calls = (announceSpy.mock.calls as unknown as Array<[unknown]>).map((call) => call[0]);
-    expect(calls).not.toContainEqual(
-      expect.objectContaining({
-        childSessionKey: "agent:main:subagent:two",
-      }),
-    );
+    expect(
+      calls.some(
+        (call) =>
+          (call as { childSessionKey?: unknown } | undefined)?.childSessionKey ===
+          "agent:main:subagent:two",
+      ),
+    ).toBe(false);
   });
 
   it("maps legacy announce fields into cleanup state", async () => {
@@ -366,10 +377,8 @@ describe("subagent registry persistence", () => {
     }
     const second = loadSubagentRegistryFromDisk();
 
-    expect(second.get("run-cached")).toMatchObject({
-      requesterOrigin: { accountId: "cached-account" },
-      outcome: { status: "ok" },
-    });
+    expectFields(second.get("run-cached")?.requesterOrigin, { accountId: "cached-account" });
+    expectFields(second.get("run-cached")?.outcome, { status: "ok" });
     expect(second.get("run-cached")?.endedAt).toBeUndefined();
     expect(second.get("run-cached")?.cleanupHandled).toBeUndefined();
 
@@ -428,7 +437,7 @@ describe("subagent registry persistence", () => {
 
     const restored = loadSubagentRegistryFromDisk();
     const restoredEntry = restored.get("run-spaced");
-    expect(restoredEntry).toMatchObject({
+    expectFields(restoredEntry, {
       childSessionKey: "agent:main:subagent:spaced-child",
       controllerSessionKey: "agent:main:subagent:controller",
       requesterSessionKey: "agent:main:main",
@@ -436,12 +445,10 @@ describe("subagent registry persistence", () => {
 
     resetSubagentRegistryForTests({ persist: false });
     addSubagentRunForTests(restoredEntry as never);
-    expect(listSubagentRunsForRequester("agent:main:main")).toEqual([
-      expect.objectContaining({
-        runId: "run-spaced",
-      }),
-    ]);
-    expect(getSubagentRunByChildSessionKey("agent:main:subagent:spaced-child")).toMatchObject({
+    const restoredRuns = listSubagentRunsForRequester("agent:main:main");
+    expect(restoredRuns).toHaveLength(1);
+    expectFields(restoredRuns[0], { runId: "run-spaced" });
+    expectFields(getSubagentRunByChildSessionKey("agent:main:subagent:spaced-child"), {
       runId: "run-spaced",
     });
 
@@ -463,15 +470,15 @@ describe("subagent registry persistence", () => {
       cleanup: "keep",
     });
 
-    expect(listSubagentRunsForRequester("agent:main:main")).toEqual([
-      expect.objectContaining({
-        runId: "run-live",
-        childSessionKey: "agent:main:subagent:live-child",
-        controllerSessionKey: "agent:main:subagent:live-controller",
-        requesterSessionKey: "agent:main:main",
-      }),
-    ]);
-    expect(getSubagentRunByChildSessionKey("agent:main:subagent:live-child")).toMatchObject({
+    const liveRuns = listSubagentRunsForRequester("agent:main:main");
+    expect(liveRuns).toHaveLength(1);
+    expectFields(liveRuns[0], {
+      runId: "run-live",
+      childSessionKey: "agent:main:subagent:live-child",
+      controllerSessionKey: "agent:main:subagent:live-controller",
+      requesterSessionKey: "agent:main:main",
+    });
+    expectFields(getSubagentRunByChildSessionKey("agent:main:subagent:live-child"), {
       runId: "run-live",
     });
   });
@@ -672,9 +679,11 @@ describe("subagent registry persistence", () => {
 
   it("keeps stale unended restored runs with abortedLastRun for restart recovery", async () => {
     vi.mocked(callGateway).mockImplementationOnce(async (request) => {
-      expect(request).toMatchObject({
+      expectFields(request, {
         method: "agent.wait",
-        params: { runId: "run-stale-aborted-restore" },
+      });
+      expectFields((request as { params?: unknown }).params, {
+        runId: "run-stale-aborted-restore",
       });
       return {
         status: "pending",
@@ -711,12 +720,10 @@ describe("subagent registry persistence", () => {
     restartRegistry();
     await waitForRegistryWork(() => vi.mocked(callGateway).mock.calls.length > 0);
 
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "agent.wait",
-        params: expect.objectContaining({ runId }),
-      }),
-    );
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    const [request] = vi.mocked(callGateway).mock.calls[0] ?? [];
+    expectFields(request, { method: "agent.wait" });
+    expectFields((request as { params?: unknown } | undefined)?.params, { runId });
     expect(
       listSubagentRunsForRequester("agent:main:main").some((entry) => entry.runId === runId),
     ).toBe(true);
@@ -755,7 +762,7 @@ describe("subagent registry persistence", () => {
       }
     });
 
-    await expect(fs.access(attachmentsDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(attachmentsDir)).rejects.toHaveProperty("code", "ENOENT");
     const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
       runs?: Record<string, unknown>;
     };
@@ -801,7 +808,7 @@ describe("subagent registry persistence", () => {
       getSubagentRunByChildSessionKey(childSessionKey),
     );
 
-    expect(resolved).toMatchObject({
+    expectFields(resolved, {
       runId: "run-active",
       childSessionKey,
     });
@@ -847,7 +854,7 @@ describe("subagent registry persistence", () => {
       getLatestSubagentRunByChildSessionKey(childSessionKey),
     );
 
-    expect(resolved).toMatchObject({
+    expectFields(resolved, {
       runId: "run-current-ended",
       childSessionKey,
     });

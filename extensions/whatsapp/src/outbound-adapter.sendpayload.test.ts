@@ -38,16 +38,12 @@ describe("whatsappOutbound sendPayload", () => {
       deps: { sendWhatsApp },
     });
 
-    expect(sendWhatsApp).toHaveBeenCalledWith(
-      "5511999999999@c.us",
-      "Before\n\nAfter\n",
-      expect.objectContaining({
-        verbose: false,
-        cfg: {},
-        accountId: undefined,
-        gifPlayback: undefined,
-      }),
-    );
+    expect(sendWhatsApp).toHaveBeenCalledWith("5511999999999@c.us", "Before\n\nAfter\n", {
+      verbose: false,
+      cfg: {},
+      accountId: undefined,
+      gifPlayback: undefined,
+    });
   });
 
   it("trims leading whitespace for direct media captions", async () => {

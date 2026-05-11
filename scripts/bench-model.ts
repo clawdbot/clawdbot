@@ -1,4 +1,4 @@
-import { completeSimple, getModel, type Api, type Model } from "@mariozechner/pi-ai";
+import { completeSimple, getModel, type Api, type Model } from "@earendil-works/pi-ai";
 
 type Usage = {
   input?: number;

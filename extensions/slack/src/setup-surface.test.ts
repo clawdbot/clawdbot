@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createTestWizardPrompter,
   runSetupWizardPrepare,
@@ -95,7 +95,7 @@ describe("slackSetupWizard.prepare", () => {
       cfg: { channels: { slack: {} } } as OpenClawConfig,
       prompter: createTestWizardPrompter({
         plain,
-        note: note as WizardPrompter["note"],
+        note,
       }),
     });
 
@@ -103,9 +103,78 @@ describe("slackSetupWizard.prepare", () => {
     expect(note).not.toHaveBeenCalled();
     const manifest = plain.mock.calls[0]?.[0];
     expect(typeof manifest).toBe("string");
-    expect(JSON.parse(manifest)).toMatchObject({
-      display_information: { name: "OpenClaw" },
-      settings: { socket_mode_enabled: true },
+    expect(JSON.parse(manifest)).toEqual({
+      display_information: {
+        name: "OpenClaw",
+        description: "OpenClaw connector for OpenClaw",
+      },
+      features: {
+        bot_user: {
+          display_name: "OpenClaw",
+          always_online: true,
+        },
+        app_home: {
+          home_tab_enabled: true,
+          messages_tab_enabled: true,
+          messages_tab_read_only_enabled: false,
+        },
+        slash_commands: [
+          {
+            command: "/openclaw",
+            description: "Send a message to OpenClaw",
+            should_escape: false,
+          },
+        ],
+      },
+      oauth_config: {
+        scopes: {
+          bot: [
+            "app_mentions:read",
+            "assistant:write",
+            "channels:history",
+            "channels:read",
+            "chat:write",
+            "commands",
+            "emoji:read",
+            "files:read",
+            "files:write",
+            "groups:history",
+            "groups:read",
+            "im:history",
+            "im:read",
+            "im:write",
+            "mpim:history",
+            "mpim:read",
+            "mpim:write",
+            "pins:read",
+            "pins:write",
+            "reactions:read",
+            "reactions:write",
+            "usergroups:read",
+            "users:read",
+          ],
+        },
+      },
+      settings: {
+        socket_mode_enabled: true,
+        event_subscriptions: {
+          bot_events: [
+            "app_home_opened",
+            "app_mention",
+            "channel_rename",
+            "member_joined_channel",
+            "member_left_channel",
+            "message.channels",
+            "message.groups",
+            "message.im",
+            "message.mpim",
+            "pin_added",
+            "pin_removed",
+            "reaction_added",
+            "reaction_removed",
+          ],
+        },
+      },
     });
   });
 

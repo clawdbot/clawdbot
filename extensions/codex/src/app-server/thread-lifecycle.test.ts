@@ -47,6 +47,41 @@ function createAppServerOptions() {
   } as const;
 }
 
+describe("Codex app-server native code mode config", () => {
+  it("enables Codex code-mode-only on thread/start without clobbering other config", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+      config: {
+        "features.codex_hooks": true,
+        apps: { _default: { enabled: false } },
+      },
+    });
+
+    expect(request.config).toEqual({
+      "features.codex_hooks": true,
+      apps: { _default: { enabled: false } },
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
+  });
+
+  it("enables Codex code-mode-only on thread/resume", () => {
+    const request = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request.config).toEqual({
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
+  });
+});
+
 describe("Codex app-server model provider selection", () => {
   it.each(["openai", "openai-codex"])(
     "omits public %s modelProvider when forwarding native Codex auth on thread/start",

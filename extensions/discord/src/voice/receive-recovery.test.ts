@@ -12,7 +12,9 @@ describe("voice receive recovery", () => {
       analyzeVoiceReceiveError(
         new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
       ),
-    ).toMatchObject({
+    ).toEqual({
+      message: "Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)",
+      isAbortLike: false,
       shouldAttemptPassthrough: true,
       countsAsDecryptFailure: true,
     });

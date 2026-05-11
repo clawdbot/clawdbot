@@ -161,6 +161,7 @@ vi.mock("./openrouter-model-capabilities.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
+import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
 import {
@@ -466,6 +467,38 @@ describe("resolveModel", () => {
       baseUrl: "http://127.0.0.1:3000/v1",
     });
     expect(getModelProviderRequestTransport(model)).toBeUndefined();
+  });
+
+  it("attaches provider localService metadata to configured fallback models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ds4: {
+            baseUrl: "http://127.0.0.1:18000/v1",
+            api: "openai-completions",
+            localService: {
+              command: "/opt/ds4/ds4-server",
+              args: ["--port", "18000"],
+              healthUrl: "http://127.0.0.1:18000/v1/models",
+              readyTimeoutMs: 180_000,
+              idleStopMs: 0,
+            },
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ds4", "deepseek-v4-flash", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expect(getModelProviderLocalService(model)).toEqual({
+      command: "/opt/ds4/ds4-server",
+      args: ["--port", "18000"],
+      healthUrl: "http://127.0.0.1:18000/v1/models",
+      readyTimeoutMs: 180_000,
+      idleStopMs: 0,
+    });
   });
 
   it("resolves explicitly configured qwen3.6-plus before Coding Plan built-in suppression", () => {

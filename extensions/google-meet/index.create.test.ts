@@ -99,6 +99,51 @@ async function runCreateMeetBrowserScript(params: { buttonText: string }) {
   return { button, result: await fn() };
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).toBeTypeOf("object");
+  expect(value, label).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+function mockCalls(mock: unknown, label: string): Array<Array<unknown>> {
+  const mockState = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock;
+  expect(mockState, `${label}.mock`).toBeDefined();
+  expect(Array.isArray(mockState?.calls), `${label}.mock.calls`).toBe(true);
+  return mockState?.calls ?? [];
+}
+
+function findMockCall(mock: unknown, label: string, predicate: (call: Array<unknown>) => boolean) {
+  const call = mockCalls(mock, label).find(predicate);
+  expect(call, label).toBeDefined();
+  return call as Array<unknown>;
+}
+
+function responsePayload(respond: unknown): Record<string, unknown> {
+  const calls = mockCalls(respond, "respond");
+  expect(calls[0]?.[0]).toBe(true);
+  return requireRecord(calls[0]?.[1], "response payload");
+}
+
+function responseErrorPayload(respond: unknown): Record<string, unknown> {
+  const calls = mockCalls(respond, "respond");
+  expect(calls[0]?.[0]).toBe(false);
+  return requireRecord(calls[0]?.[1], "response payload");
+}
+
+function findNodeInvokeParams(
+  nodesInvoke: unknown,
+  label: string,
+  predicate: (params: Record<string, unknown>) => boolean,
+) {
+  const call = findMockCall(nodesInvoke, label, ([value]) => {
+    if (!value || typeof value !== "object") {
+      return false;
+    }
+    return predicate(value as Record<string, unknown>);
+  });
+  return requireRecord(call[0], label);
+}
+
 describe("google-meet create flow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -164,12 +209,15 @@ describe("google-meet create flow", () => {
       );
       expect(stdout.output()).toContain("meeting uri: https://meet.google.com/new-abcd-xyz");
       expect(stdout.output()).toContain("space: spaces/new-space");
-      expect(fetchMock).toHaveBeenCalledWith(
-        "https://meet.googleapis.com/v2/spaces",
-        expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({ config: { accessType: "OPEN", entryPointAccess: "ALL" } }),
-        }),
+      const createSpaceCall = findMockCall(
+        fetchMock,
+        "create space fetch",
+        ([url]) => url === "https://meet.googleapis.com/v2/spaces",
+      );
+      const createSpaceInit = requireRecord(createSpaceCall[1], "create space init");
+      expect(createSpaceInit.method).toBe("POST");
+      expect(createSpaceInit.body).toBe(
+        JSON.stringify({ config: { accessType: "OPEN", entryPointAccess: "ALL" } }),
       );
     } finally {
       stdout.restore();
@@ -228,22 +276,27 @@ describe("google-meet create flow", () => {
 
     await handler?.({ params: { join: false }, respond });
 
-    expect(respond.mock.calls[0]?.[0]).toBe(true);
-    expect(respond.mock.calls[0]?.[1]).toMatchObject({
-      source: "browser",
-      meetingUri: "https://meet.google.com/browser-made-url",
-      joined: false,
-      browser: { nodeId: "node-1", targetId: "tab-1" },
+    const payload = responsePayload(respond);
+    expect(payload.source).toBe("browser");
+    expect(payload.meetingUri).toBe("https://meet.google.com/browser-made-url");
+    expect(payload.joined).toBe(false);
+    const browser = requireRecord(payload.browser, "browser payload");
+    expect(browser.nodeId).toBe("node-1");
+    expect(browser.targetId).toBe("tab-1");
+    findNodeInvokeParams(nodesInvoke, "open create tab", (params) => {
+      if (params.command !== "browser.proxy") {
+        return false;
+      }
+      if (!params.params || typeof params.params !== "object") {
+        return false;
+      }
+      const proxy = params.params as Record<string, unknown>;
+      if (!proxy.body || typeof proxy.body !== "object") {
+        return false;
+      }
+      const body = proxy.body as Record<string, unknown>;
+      return proxy.path === "/tabs/open" && body.url === "https://meet.google.com/new";
     });
-    expect(nodesInvoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "browser.proxy",
-        params: expect.objectContaining({
-          path: "/tabs/open",
-          body: { url: "https://meet.google.com/new" },
-        }),
-      }),
-    );
   });
 
   it("rejects access policy flags when tool create would use browser fallback", async () => {
@@ -322,23 +375,22 @@ describe("google-meet create flow", () => {
 
     await handler?.({ params: {}, respond });
 
-    expect(respond.mock.calls[0]?.[0]).toBe(false);
-    expect(respond.mock.calls[0]?.[1]).toMatchObject({
-      source: "browser",
-      error:
-        "google-login-required: Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
-      manualActionRequired: true,
-      manualActionReason: "google-login-required",
-      manualActionMessage:
-        "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
-      browser: {
-        nodeId: "node-1",
-        targetId: "login-tab",
-        browserUrl: "https://accounts.google.com/signin",
-        browserTitle: "Sign in - Google Accounts",
-        notes: ["Sign-in page detected."],
-      },
-    });
+    const payload = responseErrorPayload(respond);
+    expect(payload.source).toBe("browser");
+    expect(payload.error).toBe(
+      "google-login-required: Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
+    );
+    expect(payload.manualActionRequired).toBe(true);
+    expect(payload.manualActionReason).toBe("google-login-required");
+    expect(payload.manualActionMessage).toBe(
+      "Sign in to Google in the OpenClaw browser profile, then retry meeting creation.",
+    );
+    const browser = requireRecord(payload.browser, "browser payload");
+    expect(browser.nodeId).toBe("node-1");
+    expect(browser.targetId).toBe("login-tab");
+    expect(browser.browserUrl).toBe("https://accounts.google.com/signin");
+    expect(browser.browserTitle).toBe("Sign in - Google Accounts");
+    expect(browser.notes).toEqual(["Sign-in page detected."]);
   });
 
   it("creates and joins a Meet through the create tool action by default", async () => {
@@ -412,28 +464,32 @@ describe("google-meet create flow", () => {
         id: string,
         params: unknown,
       ) => Promise<{
-        details: { joined?: boolean; meetingUri?: string; join?: { session: { url: string } } };
+        details: {
+          source?: string;
+          joined?: boolean;
+          meetingUri?: string;
+          join?: { session: { url: string } };
+        };
       }>;
     };
 
     const result = await tool.execute("id", { action: "create" });
 
-    expect(result.details).toMatchObject({
-      source: "browser",
-      joined: true,
-      meetingUri: "https://meet.google.com/new-abcd-xyz",
-      join: { session: { url: "https://meet.google.com/new-abcd-xyz" } },
+    expect(result.details.source).toBe("browser");
+    expect(result.details.joined).toBe(true);
+    expect(result.details.meetingUri).toBe("https://meet.google.com/new-abcd-xyz");
+    expect(result.details.join?.session.url).toBe("https://meet.google.com/new-abcd-xyz");
+    findNodeInvokeParams(nodesInvoke, "googlemeet chrome start", (params) => {
+      if (params.command !== "googlemeet.chrome") {
+        return false;
+      }
+      const chromeParams = requireRecord(params.params, "chrome params");
+      return (
+        chromeParams.action === "start" &&
+        chromeParams.url === "https://meet.google.com/new-abcd-xyz" &&
+        chromeParams.launch === false
+      );
     });
-    expect(nodesInvoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "googlemeet.chrome",
-        params: expect.objectContaining({
-          action: "start",
-          url: "https://meet.google.com/new-abcd-xyz",
-          launch: false,
-        }),
-      }),
-    );
   });
 
   it("returns structured manual action from the create tool action", async () => {
@@ -486,19 +542,17 @@ describe("google-meet create flow", () => {
 
     const result = await tool.execute("id", { action: "create" });
 
-    expect(result.details).toMatchObject({
-      source: "browser",
-      manualActionRequired: true,
-      manualActionReason: "meet-permission-required",
-      manualActionMessage:
-        "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry meeting creation.",
-      browser: {
-        nodeId: "node-1",
-        targetId: "permission-tab",
-        browserUrl: "https://meet.google.com/new",
-        browserTitle: "Meet",
-      },
-    });
+    expect(result.details.source).toBe("browser");
+    expect(result.details.manualActionRequired).toBe(true);
+    expect(result.details.manualActionReason).toBe("meet-permission-required");
+    expect(result.details.manualActionMessage).toBe(
+      "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry meeting creation.",
+    );
+    const browser = requireRecord(result.details.browser, "browser details");
+    expect(browser.nodeId).toBe("node-1");
+    expect(browser.targetId).toBe("permission-tab");
+    expect(browser.browserUrl).toBe("https://meet.google.com/new");
+    expect(browser.browserTitle).toBe("Meet");
   });
 
   it("reuses an existing browser create tab instead of opening duplicates", async () => {
@@ -557,25 +611,35 @@ describe("google-meet create flow", () => {
 
     await handler?.({ params: { join: false }, respond });
 
-    expect(respond.mock.calls[0]?.[0]).toBe(true);
-    expect(respond.mock.calls[0]?.[1]).toMatchObject({
-      source: "browser",
-      meetingUri: "https://meet.google.com/reu-sedx-tab",
-      browser: { nodeId: "node-1", targetId: "existing-create-tab" },
+    const payload = responsePayload(respond);
+    expect(payload.source).toBe("browser");
+    expect(payload.meetingUri).toBe("https://meet.google.com/reu-sedx-tab");
+    const browser = requireRecord(payload.browser, "browser payload");
+    expect(browser.nodeId).toBe("node-1");
+    expect(browser.targetId).toBe("existing-create-tab");
+    findNodeInvokeParams(nodesInvoke, "focus existing tab", (params) => {
+      if (!params.params || typeof params.params !== "object") {
+        return false;
+      }
+      const proxy = params.params as Record<string, unknown>;
+      if (!proxy.body || typeof proxy.body !== "object") {
+        return false;
+      }
+      const body = proxy.body as Record<string, unknown>;
+      return proxy.path === "/tabs/focus" && body.targetId === "existing-create-tab";
     });
-    expect(nodesInvoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({
-          path: "/tabs/focus",
-          body: { targetId: "existing-create-tab" },
-        }),
-      }),
-    );
-    expect(nodesInvoke).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({ path: "/tabs/open" }),
-      }),
-    );
+    const openedCreateTab = mockCalls(nodesInvoke, "nodes invoke").some(([value]) => {
+      if (!value || typeof value !== "object") {
+        return false;
+      }
+      const params = value as Record<string, unknown>;
+      if (!params.params || typeof params.params !== "object") {
+        return false;
+      }
+      const proxy = params.params as Record<string, unknown>;
+      return proxy.path === "/tabs/open";
+    });
+    expect(openedCreateTab).toBe(false);
   });
 
   it.each([
@@ -589,10 +653,8 @@ describe("google-meet create flow", () => {
     async (buttonText, note) => {
       const { button, result } = await runCreateMeetBrowserScript({ buttonText });
 
-      expect(result).toMatchObject({
-        retryAfterMs: 1000,
-        notes: [note],
-      });
+      expect(result.retryAfterMs).toBe(1000);
+      expect(result.notes).toEqual([note]);
       expect(button.click).toHaveBeenCalledTimes(1);
       expect(result.meetingUri).toBeUndefined();
       expect(result.manualActionReason).toBeUndefined();

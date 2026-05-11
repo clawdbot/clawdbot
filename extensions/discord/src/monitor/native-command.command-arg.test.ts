@@ -1,6 +1,6 @@
 import type { ChatCommandDefinition } from "openclaw/plugin-sdk/command-auth";
 import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDiscordCommandArgFallbackButton,
@@ -89,11 +89,12 @@ describe("discord command argument fallback", () => {
       user: "owner",
     } satisfies CommandArgData);
 
-    expect(dispatchSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        prompt: "/think high",
-        responseEphemeral: false,
-      }),
-    );
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    const dispatchCall = dispatchSpy.mock.calls[0]?.[0];
+    expect(dispatchCall?.prompt).toBe("/think high");
+    expect(dispatchCall?.responseEphemeral).toBe(false);
+    expect(dispatchCall?.accountId).toBe("default");
+    expect(dispatchCall?.sessionPrefix).toBe("discord:slash");
+    expect(dispatchCall?.preferFollowUp).toBe(true);
   });
 });

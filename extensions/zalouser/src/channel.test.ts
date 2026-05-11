@@ -107,24 +107,70 @@ describe("zalouser outbound", () => {
       accountId: "default",
     } as never);
 
-    expect(mockSendMessage).toHaveBeenCalledWith(
-      "123456",
-      "hello world\nthis is a test",
-      expect.objectContaining({
-        profile: "default",
-        isGroup: true,
-        textMode: "markdown",
-        textChunkMode: "newline",
-        textChunkLimit: 10,
-      }),
-    );
-    expect(result).toEqual(
-      expect.objectContaining({
-        channel: "zalouser",
-        messageId: "mid-1",
-        ok: true,
-      }),
-    );
+    expect(mockSendMessage).toHaveBeenCalledWith("123456", "hello world\nthis is a test", {
+      profile: "default",
+      isGroup: true,
+      textMode: "markdown",
+      textChunkMode: "newline",
+      textChunkLimit: 10,
+    });
+    expect(result).toEqual({
+      channel: "zalouser",
+      messageId: "mid-1",
+      ok: true,
+    });
+  });
+
+  it("uses the selected account profile for direct outbound messages", async () => {
+    const sendText = requireZalouserSendText();
+
+    const result = await sendText({
+      cfg: {
+        channels: {
+          zalouser: {
+            accounts: {
+              work: {
+                profile: "work-profile",
+              },
+            },
+          },
+        },
+      } as never,
+      to: "user:987654",
+      text: "hello user",
+      accountId: "work",
+    } as never);
+
+    expect(mockSendMessage).toHaveBeenCalledWith("987654", "hello user", {
+      profile: "work-profile",
+      isGroup: false,
+      textMode: "markdown",
+      textChunkMode: "newline",
+      textChunkLimit: 10,
+    });
+    expect(result).toEqual({
+      channel: "zalouser",
+      messageId: "mid-1",
+      ok: true,
+    });
+  });
+
+  it("keeps the default account profile for unscoped outbound messages", async () => {
+    const sendText = requireZalouserSendText();
+
+    await sendText({
+      cfg: { channels: { zalouser: { enabled: true } } } as never,
+      to: "user:111222",
+      text: "hello default",
+    } as never);
+
+    expect(mockSendMessage).toHaveBeenCalledWith("111222", "hello default", {
+      profile: "default",
+      isGroup: false,
+      textMode: "markdown",
+      textChunkMode: "newline",
+      textChunkLimit: 10,
+    });
   });
 });
 
@@ -322,12 +368,13 @@ describe("zalouser account resolution", () => {
 
     expect(listZaloFriendsMatchingMock).toHaveBeenCalledWith("work-profile", "Work User");
     expect(result).toEqual([
-      expect.objectContaining({
+      {
         input: "Work User",
         resolved: true,
         id: "42",
         name: "Work User",
-      }),
+        note: undefined,
+      },
     ]);
   });
 

@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function elide(text?: string, limit = 400) {
   if (!text) {
@@ -55,7 +55,6 @@ export function isLikelyWhatsAppCryptoError(reason: unknown) {
     return false;
   }
   return (
-    haystack.includes("@whiskeysockets/baileys") ||
     haystack.includes("baileys") ||
     haystack.includes("noise-handler") ||
     haystack.includes("aesdecryptgcm")

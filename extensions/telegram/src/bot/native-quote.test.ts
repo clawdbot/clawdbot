@@ -8,13 +8,10 @@ describe("Telegram native quote candidates", () => {
       maxLength: 10,
     });
 
-    expect(candidate).toEqual(
-      expect.objectContaining({
-        text: "  quoted c",
-        position: 0,
-      }),
-    );
-    expect(candidate).not.toHaveProperty("entities");
+    expect(candidate).toEqual({
+      text: "  quoted c",
+      position: 0,
+    });
   });
 
   it("does not split UTF-16 surrogate pairs at the quote cap", () => {

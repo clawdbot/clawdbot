@@ -53,18 +53,16 @@ describe("vydra speech provider", () => {
       timeoutMs: 30_000,
     });
 
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "https://www.vydra.ai/api/v1/models/elevenlabs/tts",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          text: "OpenClaw test",
-          voice_id: "21m00Tcm4TlvDq8ikWAM",
-        }),
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://www.vydra.ai/api/v1/models/elevenlabs/tts");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe(
+      JSON.stringify({
+        text: "OpenClaw test",
+        voice_id: "21m00Tcm4TlvDq8ikWAM",
       }),
     );
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const headers = new Headers(init.headers);
     expect(headers.get("authorization")).toBe("Bearer vydra-test-key");
     expect(result.outputFormat).toBe("mp3");

@@ -338,8 +338,47 @@ async function writeCronConfig(config: unknown) {
 async function runCronJobForce(ws: WebSocket, id: string) {
   const response = await rpcReq(ws, "cron.run", { id, mode: "force" }, 20_000);
   expect(response.ok).toBe(true);
-  expect(response.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+  expectEnqueuedRunPayload(response.payload);
   return response;
+}
+
+function expectEnqueuedRunPayload(payload: unknown): string {
+  const record = payload as { ok?: unknown; enqueued?: unknown; runId?: unknown } | null;
+  expect(record?.ok).toBe(true);
+  expect(record?.enqueued).toBe(true);
+  expect(typeof record?.runId).toBe("string");
+  return record?.runId as string;
+}
+
+function expectRecordFields(actual: unknown, expected: Record<string, unknown>): void {
+  const record = actual as Record<string, unknown> | null;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(record?.[key], key).toEqual(value);
+  }
+}
+
+function expectFailureAnnounceCall(params: {
+  jobId: string;
+  channel: string;
+  to?: string;
+  sessionKey: string;
+  message: string;
+}) {
+  expect(sendFailureNotificationAnnounceMock).toHaveBeenCalledTimes(1);
+  const call = sendFailureNotificationAnnounceMock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected failure announcement call");
+  }
+  const args = call as unknown as [unknown, unknown, string, string, unknown, string];
+  expect(typeof args[2]).toBe("string");
+  expect(args[3]).toBe(params.jobId);
+  expect(args[4]).toEqual({
+    channel: params.channel,
+    to: params.to,
+    accountId: undefined,
+    sessionKey: params.sessionKey,
+  });
+  expect(args[5]).toBe(params.message);
 }
 
 async function runCronJobAndWaitForFinished(ws: WebSocket, jobId: string) {
@@ -447,7 +486,7 @@ describe("gateway server cron", () => {
       const runRes = await cronState.cron.run(routeJobId, "force");
       expect(runRes).toEqual({ ok: true, ran: true });
       const events = await waitForSystemEvent();
-      expect(events).toEqual(expect.arrayContaining([expect.stringContaining("cron route check")]));
+      expect(events.some((event) => event.includes("cron route check"))).toBe(true);
 
       const wrappedAtMs = Date.now() + 1000;
       const wrappedRes = await directCronReq(cronState, "cron.add", {
@@ -913,11 +952,11 @@ describe("gateway server cron", () => {
       );
       const runRes = await directCronReq(cronState, "cron.run", { id: jobId, mode: "force" });
       expect(runRes.ok).toBe(true);
-      expect(runRes.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+      expectEnqueuedRunPayload(runRes.payload);
       const manualRunId = (runRes.payload as { runId?: unknown } | null)?.runId;
       expect(typeof manualRunId).toBe("string");
       const finishedPayload = await finishedRun;
-      expect(finishedPayload).toMatchObject({
+      expectRecordFields(finishedPayload, {
         jobId,
         action: "finished",
         status: "ok",
@@ -1061,7 +1100,7 @@ describe("gateway server cron", () => {
       );
       const runRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 1_000);
       expect(runRes.ok).toBe(true);
-      expect(runRes.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+      expectEnqueuedRunPayload(runRes.payload);
       await startedRun;
       expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
 
@@ -1071,7 +1110,7 @@ describe("gateway server cron", () => {
       );
       resolveRun?.({ status: "ok", summary: "background finished" });
       const finishedPayload = await finishedRun;
-      expect(finishedPayload).toMatchObject({
+      expectRecordFields(finishedPayload, {
         jobId,
         action: "finished",
         status: "ok",
@@ -1124,7 +1163,7 @@ describe("gateway server cron", () => {
       );
       const firstRunRes = await rpcReq(ws, "cron.run", { id: "busy-job", mode: "force" }, 1_000);
       expect(firstRunRes.ok).toBe(true);
-      expect(firstRunRes.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+      expectEnqueuedRunPayload(firstRunRes.payload);
       await startedRun;
       expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
 
@@ -1252,7 +1291,7 @@ describe("gateway server cron", () => {
         20_000,
       );
       expect(legacyRunRes.ok).toBe(true);
-      expect(legacyRunRes.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+      expectEnqueuedRunPayload(legacyRunRes.payload);
       await legacyFinished;
       const legacyCall = getWebhookCall(1);
       expect(legacyCall.url).toBe("https://legacy.example.invalid/cron-finished");
@@ -1281,7 +1320,7 @@ describe("gateway server cron", () => {
       );
       const silentRunRes = await rpcReq(ws, "cron.run", { id: silentJobId, mode: "force" }, 20_000);
       expect(silentRunRes.ok).toBe(true);
-      expect(silentRunRes.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+      expectEnqueuedRunPayload(silentRunRes.payload);
       await silentFinished;
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
 
@@ -1395,20 +1434,12 @@ describe("gateway server cron", () => {
       await runCronJobForce(ws, jobId);
       await finished;
 
-      expect(sendFailureNotificationAnnounceMock).toHaveBeenCalledTimes(1);
-      expect(sendFailureNotificationAnnounceMock).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.anything(),
-        expect.any(String),
+      expectFailureAnnounceCall({
         jobId,
-        {
-          channel: "last",
-          to: undefined,
-          accountId: undefined,
-          sessionKey: "agent:main:telegram:direct:123:thread:99",
-        },
-        '⚠️ Cron job "primary delivery fallback" failed: unknown error',
-      );
+        channel: "last",
+        sessionKey: "agent:main:telegram:direct:123:thread:99",
+        message: '⚠️ Cron job "primary delivery fallback" failed: unknown error',
+      });
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
     }
@@ -1455,20 +1486,13 @@ describe("gateway server cron", () => {
       await runCronJobForce(ws, jobId);
       await finished;
 
-      expect(sendFailureNotificationAnnounceMock).toHaveBeenCalledTimes(1);
-      expect(sendFailureNotificationAnnounceMock).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.anything(),
-        expect.any(String),
+      expectFailureAnnounceCall({
         jobId,
-        {
-          channel: "feishu",
-          to: "ou_founder",
-          accountId: undefined,
-          sessionKey: "agent:avery:feishu:direct:ou_founder",
-        },
-        '⚠️ Cron job "session target failure fallback" failed: unknown error',
-      );
+        channel: "feishu",
+        to: "ou_founder",
+        sessionKey: "agent:avery:feishu:direct:ou_founder",
+        message: '⚠️ Cron job "session target failure fallback" failed: unknown error',
+      });
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
     }

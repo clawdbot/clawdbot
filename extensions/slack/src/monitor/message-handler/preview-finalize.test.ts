@@ -70,13 +70,14 @@ describe("finalizeSlackPreviewEdit", () => {
 
     expect(
       client.conversations.replies as unknown as ReturnType<typeof vi.fn>,
-    ).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "C123",
-        ts: "170000.111",
-        latest: "171234.567",
-      }),
-    );
+    ).toHaveBeenCalledWith({
+      token: "xoxb-test",
+      channel: "C123",
+      ts: "170000.111",
+      latest: "171234.567",
+      inclusive: true,
+      limit: 100,
+    });
   });
 
   it("rethrows when readback does not match the expected final text", async () => {

@@ -48,18 +48,21 @@ describe("MatrixAuthedHttpClient", () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expect(performMatrixRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "GET",
-        endpoint: "https://matrix.example.org/_matrix/client/v3/account/whoami",
-        allowAbsoluteEndpoint: true,
-        ssrfPolicy: { allowPrivateNetwork: true },
-        dispatcherPolicy: {
-          mode: "explicit-proxy",
-          proxyUrl: "http://proxy.internal:8080",
-        },
-      }),
-    );
+    expect(performMatrixRequestMock).toHaveBeenCalledWith({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      method: "GET",
+      endpoint: "https://matrix.example.org/_matrix/client/v3/account/whoami",
+      qs: undefined,
+      body: undefined,
+      timeoutMs: 5000,
+      ssrfPolicy: { allowPrivateNetwork: true },
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://proxy.internal:8080",
+      },
+      allowAbsoluteEndpoint: true,
+    });
   });
 
   it("returns plain text when response is not JSON", async () => {

@@ -120,14 +120,10 @@ describe("mattermost monitor resources", () => {
       message: "Pick a model",
     });
 
-    expect(updateMattermostPost).toHaveBeenCalledWith(
-      {},
-      "post-1",
-      expect.objectContaining({
-        message: "Pick a model",
-        props: { attachments: [] },
-      }),
-    );
+    expect(updateMattermostPost).toHaveBeenCalledWith({}, "post-1", {
+      message: "Pick a model",
+      props: { attachments: [] },
+    });
   });
 
   it("proxies typing indicators to the mattermost client helper", async () => {

@@ -281,8 +281,8 @@ function redactKnownPathPrefixesForSupport(
 }
 
 export function redactTextForSupport(value: string): string {
-  let redacted = redactSensitiveTextForSupport(value);
-  redacted = redactCommonCredentialTextForSupport(redacted);
+  let redacted = redactCommonCredentialTextForSupport(value);
+  redacted = redactSensitiveTextForSupport(redacted);
   redacted = redactUrlSecretsForSupport(redacted);
   redacted = redactServiceIdentifiersForSupport(redacted);
   redacted = redactContactIdentifiersForSupport(redacted);

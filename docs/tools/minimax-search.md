@@ -89,10 +89,10 @@ can satisfy the MiniMax Search bearer credential.
 
 ## Supported parameters
 
-MiniMax Search supports:
-
-- `query`
-- `count` (OpenClaw trims the returned result list to the requested count)
+| Parameter | Type    | Constraints | Description                                                                 |
+| --------- | ------- | ----------- | --------------------------------------------------------------------------- |
+| `query`   | string  | required    | Search query string.                                                        |
+| `count`   | integer | 1-10        | Number of results to return. OpenClaw trims the returned list to this size. |
 
 Provider-specific filters are not currently supported.
 

@@ -76,9 +76,9 @@
           }
         },
         "install": {
-          "npmSpec": "openclaw-plugin-yuanbao@2.13.0",
+          "npmSpec": "openclaw-plugin-yuanbao@2.13.1",
           "defaultChoice": "npm",
-          "expectedIntegrity": "sha512-mx6b2gO8oqZxECG9NLLQofScaIZXjmQXqJxevagVx8IKXLGeLrpTWlvnW1P2NP5dqaSMrkvBsgJqtW+rVM7h4w=="
+          "expectedIntegrity": "sha512-lH2I9/nsmrg7l0YJJSQhOSpWMEFBAa6FwKbZcRLDFHDT2+mOZkHa44XE+8KYN4VmorlUdAxHzpZQmVr7C98IuA=="
         }
       }
     },

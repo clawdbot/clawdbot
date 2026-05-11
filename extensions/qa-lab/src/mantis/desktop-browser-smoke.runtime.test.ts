@@ -82,11 +82,11 @@ describe("mantis desktop browser smoke runtime", () => {
     expect(commands.map((entry) => entry.env)).toEqual(commands.map(() => runtimeEnv));
     const rsyncArgs = commands.find((entry) => entry.command === "rsync")?.args ?? [];
     expect(rsyncArgs).not.toContain("--delete");
-    expect(rsyncArgs).toEqual(expect.arrayContaining(["--exclude", "chrome-profile/**"]));
-    expect(rsyncArgs).toEqual(
-      expect.arrayContaining([
-        "crabbox@203.0.113.10:/tmp/openclaw-mantis-desktop-2026-05-04T12-00-00-000Z/",
-      ]),
+    const excludeIndex = rsyncArgs.indexOf("--exclude");
+    expect(excludeIndex).toBeGreaterThanOrEqual(0);
+    expect(rsyncArgs[excludeIndex + 1]).toBe("chrome-profile/**");
+    expect(rsyncArgs).toContain(
+      "crabbox@203.0.113.10:/tmp/openclaw-mantis-desktop-2026-05-04T12-00-00-000Z/",
     );
     const remoteScript = commands
       .find((entry) => entry.command === "/tmp/crabbox" && entry.args[0] === "run")
@@ -114,14 +114,12 @@ describe("mantis desktop browser smoke runtime", () => {
       status: string;
     };
     expect(summary.browserUrl).toMatch(/^file:\/\//u);
-    expect(summary).toMatchObject({
-      htmlFile: path.join(repoRoot, "qa-artifacts", "timeline.html"),
-      crabbox: {
-        id: "cbx_abc123",
-        vncCommand: "/tmp/crabbox vnc --provider hetzner --id cbx_abc123 --open",
-      },
-      status: "pass",
-    });
+    expect(summary.htmlFile).toBe(path.join(repoRoot, "qa-artifacts", "timeline.html"));
+    expect(summary.status).toBe("pass");
+    expect(summary.crabbox.id).toBe("cbx_abc123");
+    expect(summary.crabbox.vncCommand).toBe(
+      "/tmp/crabbox vnc --provider hetzner --id cbx_abc123 --open",
+    );
   });
 
   it("rejects html files outside the repository", async () => {
@@ -164,18 +162,18 @@ describe("mantis desktop browser smoke runtime", () => {
       return { stdout: "", stderr: "" };
     });
 
-    await expect(
-      runMantisDesktopBrowserSmoke({
-        browserProfileArchiveEnv: "MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64",
-        browserProfileDir: "$HOME/.config/openclaw-mantis/discord-viewer-chrome-profile",
-        commandRunner: runner,
-        crabboxBin: "/tmp/crabbox",
-        leaseId: "cbx_existing",
-        outputDir: ".artifacts/qa-e2e/mantis/desktop-browser-profile",
-        repoRoot,
-        videoDurationSeconds: 24,
-      }),
-    ).resolves.toMatchObject({ status: "pass" });
+    const result = await runMantisDesktopBrowserSmoke({
+      browserProfileArchiveEnv: "MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64",
+      browserProfileDir: "$HOME/.config/openclaw-mantis/discord-viewer-chrome-profile",
+      commandRunner: runner,
+      crabboxBin: "/tmp/crabbox",
+      leaseId: "cbx_existing",
+      outputDir: ".artifacts/qa-e2e/mantis/desktop-browser-profile",
+      repoRoot,
+      videoDurationSeconds: 24,
+    });
+
+    expect(result.status).toBe("pass");
 
     const remoteScript = commands
       .find((entry) => entry.command === "/tmp/crabbox" && entry.args[0] === "run")
@@ -260,21 +258,15 @@ describe("mantis desktop browser smoke runtime", () => {
     });
 
     expect(result.status).toBe("pass");
-    expect(commands).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          args: expect.arrayContaining(["--id", "tbx_abc-123_more"]),
-          command: "/tmp/crabbox",
-        }),
-      ]),
+    const commandWithLeaseId = commands.find(
+      (entry) => entry.command === "/tmp/crabbox" && entry.args.includes("tbx_abc-123_more"),
     );
+    expect(commandWithLeaseId?.args).toContain("--id");
     const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
       crabbox: { id: string; provider: string };
     };
-    expect(summary.crabbox).toMatchObject({
-      id: "tbx_abc-123_more",
-      provider: "blacksmith-testbox",
-    });
+    expect(summary.crabbox.id).toBe("tbx_abc-123_more");
+    expect(summary.crabbox.provider).toBe("blacksmith-testbox");
   });
 
   it("keeps an existing lease and writes failure reports when the remote run fails", async () => {

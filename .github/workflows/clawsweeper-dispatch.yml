@@ -183,6 +183,7 @@ jobs:
           ITEM_NUMBER: ${{ github.event.issue.number }}
           COMMENT_ID: ${{ github.event.comment.id }}
           COMMENT_BODY: ${{ github.event.comment.body }}
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
           SOURCE_ACTION: ${{ github.event.action }}
         run: |
           set -euo pipefail
@@ -213,13 +214,33 @@ jobs:
           else
             echo "::notice::Skipping ClawSweeper comment acknowledgement because no target token is configured."
           fi
+          status_comment_id=""
+          if [ -n "$TARGET_TOKEN" ]; then
+            case "$AUTHOR_ASSOCIATION" in
+              OWNER|MEMBER|COLLABORATOR)
+                status_body="$(printf '%s\n' \
+                  "<!-- clawsweeper-command-ack:$COMMENT_ID -->" \
+                  "🦞👀" \
+                  "ClawSweeper picked this up." \
+                  "" \
+                  "Command router queued. I will update this comment with the next step.")"
+                status_payload="$(jq -nc --arg body "$status_body" '{body:$body}')"
+                status_response="$(GH_TOKEN="$TARGET_TOKEN" gh api \
+                  "repos/$TARGET_REPO/issues/$ITEM_NUMBER/comments" \
+                  --method POST \
+                  --input - <<< "$status_payload")"
+                status_comment_id="$(jq -r '.id // empty' <<< "$status_response")"
+                ;;
+            esac
+          fi
           payload="$(jq -nc \
             --arg target_repo "$TARGET_REPO" \
             --argjson item_number "$ITEM_NUMBER" \
             --argjson comment_id "$COMMENT_ID" \
+            --arg status_comment_id "$status_comment_id" \
             --arg source_event "issue_comment" \
             --arg source_action "$SOURCE_ACTION" \
-            '{event_type:"clawsweeper_comment",client_payload:{target_repo:$target_repo,item_number:$item_number,comment_id:$comment_id,source_event:$source_event,source_action:$source_action}}')"
+            '{event_type:"clawsweeper_comment",client_payload:({target_repo:$target_repo,item_number:$item_number,comment_id:$comment_id,source_event:$source_event,source_action:$source_action,max_comments:"1"} + (if $status_comment_id != "" then {status_comment_id:($status_comment_id|tonumber)} else {} end))}')"
           if GH_TOKEN="$DISPATCH_TOKEN" gh api repos/openclaw/clawsweeper/dispatches \
             --method POST \
             --input - <<< "$payload"; then

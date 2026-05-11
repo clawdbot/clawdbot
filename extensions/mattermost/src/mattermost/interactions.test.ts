@@ -857,17 +857,21 @@ describe("createMattermostInteractionHandler", () => {
       post: fetchedPost,
     });
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      expect.stringContaining('Mattermost button click: action="approve"'),
-      expect.objectContaining({ sessionKey: "session:thread:root-9" }),
+      'Mattermost button click: action="approve" by alice in channel chan-1',
+      {
+        sessionKey: "session:thread:root-9",
+        contextKey: "mattermost:interaction:post-1:approve",
+      },
     );
-    expect(dispatchButtonClick).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channelId: "chan-1",
-        userId: "user-1",
-        postId: "post-1",
-        post: fetchedPost,
-      }),
-    );
+    expect(dispatchButtonClick).toHaveBeenCalledWith({
+      channelId: "chan-1",
+      userId: "user-1",
+      userName: "alice",
+      actionId: "approve",
+      actionName: "Approve",
+      postId: "post-1",
+      post: fetchedPost,
+    });
   });
 
   it("lets a custom interaction handler short-circuit generic completion updates", async () => {
@@ -877,28 +881,28 @@ describe("createMattermostInteractionHandler", () => {
       ephemeral_text: "Only the original requester can use this picker.",
     });
     const dispatchButtonClick = vi.fn();
+    const originalPost = createActionPost({
+      actionId: "mdlprov",
+      actionName: "Browse providers",
+    });
     const handler = createMattermostInteractionHandler({
       client: createMattermostClientMock(async (path: string, init?: { method?: string }) => {
         requestLog.push({ path, method: init?.method });
-        return createActionPost({
-          actionId: "mdlprov",
-          actionName: "Browse providers",
-        });
+        return originalPost;
       }),
       botUserId: "bot",
       accountId: "acct",
       handleInteraction,
       dispatchButtonClick,
     });
-
-    const res = await runHandler(handler, {
-      body: createInteractionBody({
-        context,
-        token,
-        userId: "user-2",
-        userName: "alice",
-      }),
+    const body = createInteractionBody({
+      context,
+      token,
+      userId: "user-2",
+      userName: "alice",
     });
+
+    const res = await runHandler(handler, { body });
 
     expect(res.statusCode).toBe(200);
     expect(res.body).toBe(
@@ -907,15 +911,15 @@ describe("createMattermostInteractionHandler", () => {
       }),
     );
     expect(requestLog).toEqual([{ path: "/posts/post-1", method: undefined }]);
-    expect(handleInteraction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        actionId: "mdlprov",
-        actionName: "Browse providers",
-        originalMessage: "Choose",
-        post: expect.objectContaining({ id: "post-1" }),
-        userName: "alice",
-      }),
-    );
+    expect(handleInteraction).toHaveBeenCalledWith({
+      payload: body,
+      userName: "alice",
+      actionId: "mdlprov",
+      actionName: "Browse providers",
+      originalMessage: "Choose",
+      context,
+      post: originalPost,
+    });
     expect(dispatchButtonClick).not.toHaveBeenCalled();
   });
 });

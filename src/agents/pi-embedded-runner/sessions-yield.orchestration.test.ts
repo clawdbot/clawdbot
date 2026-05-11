@@ -11,7 +11,7 @@ import {
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
 } from "./run.overflow-compaction.harness.js";
-import { isEmbeddedPiRunActive, queueEmbeddedPiMessage } from "./runs.js";
+import { isEmbeddedPiRunActive, queueEmbeddedPiMessageWithOutcome } from "./runs.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 
@@ -53,7 +53,10 @@ describe("sessions_yield orchestration", () => {
     expect(isEmbeddedPiRunActive(sessionId)).toBe(false);
 
     // 4. Steer would fail (message delivery must take direct path, not steer)
-    expect(queueEmbeddedPiMessage(sessionId, "subagent result")).toBe(false);
+    expect(queueEmbeddedPiMessageWithOutcome(sessionId, "subagent result")).toMatchObject({
+      queued: false,
+      reason: "no_active_run",
+    });
   });
 
   it("clientToolCalls takes precedence over yieldDetected", async () => {

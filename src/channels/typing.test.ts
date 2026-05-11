@@ -232,7 +232,9 @@ describe("createTypingCallbacks", () => {
 
         // Should auto-stop
         expect(stop).toHaveBeenCalledTimes(1);
-        expect(consoleWarn).toHaveBeenCalledWith(expect.stringContaining("TTL exceeded"));
+        expect(consoleWarn).toHaveBeenCalledWith(
+          "[typing] TTL exceeded (10000ms), auto-stopping typing indicator",
+        );
 
         consoleWarn.mockRestore();
       });

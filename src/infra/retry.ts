@@ -58,12 +58,28 @@ export function resolveRetryConfig(
   return { attempts, minDelayMs, maxDelayMs, jitter };
 }
 
-function applyJitter(delayMs: number, jitter: number): number {
+type JitterMode = "symmetric" | "positive";
+
+function applyJitter(delayMs: number, jitter: number, mode: JitterMode = "symmetric"): number {
   if (jitter <= 0) {
     return delayMs;
   }
-  const offset = (generateSecureFraction() * 2 - 1) * jitter;
-  return Math.max(0, Math.round(delayMs * (1 + offset)));
+  // `symmetric` spreads within ±jitter around the base delay; correct for pure
+  // exponential backoff where going slightly early is harmless. `positive`
+  // only adds to the base delay; use it when the base delay is already a
+  // lower bound the caller must respect (for example a server-supplied
+  // Retry-After) so concurrent clients still spread without ever dipping
+  // below the caller's floor.
+  const fraction = generateSecureFraction();
+  const offset = mode === "positive" ? fraction * jitter : (fraction * 2 - 1) * jitter;
+  const raw = delayMs * (1 + offset);
+  // Rounding choice preserves the mode's contract. `positive` guarantees
+  // `delay >= delayMs`, so a non-integer `delayMs` (e.g. retryAfterMs=1.4)
+  // must round *up* — plain `Math.round(1.4)=1` would drop the delay below
+  // the caller's lower bound and violate the Retry-After invariant the
+  // positive branch exists to enforce. Symmetric has no floor contract so
+  // it stays on `Math.round`.
+  return Math.max(0, mode === "positive" ? Math.ceil(raw) : Math.round(raw));
 }
 
 export async function retryAsync<T>(
@@ -117,7 +133,34 @@ export async function retryAsync<T>(
         ? Math.max(retryAfterMs, minDelayMs)
         : minDelayMs * 2 ** (attempt - 1);
       let delay = Math.min(baseDelay, maxDelayMs);
-      delay = applyJitter(delay, jitter);
+      // Server-supplied Retry-After is a lower-bound contract with the
+      // upstream rate limiter; symmetric jitter would let roughly half the
+      // retries land before the requested time and invite escalation. Use
+      // positive-only jitter in that case so clients still spread but never
+      // dip below the server's hint.
+      //
+      // Exception: when retryAfterMs > maxDelayMs the base is already capped
+      // to maxDelayMs, so positive jitter would be erased by the final clamp
+      // below and every retry would land at exactly maxDelayMs — reintroducing
+      // the thundering herd we are trying to avoid. In that case the server
+      // contract is already unsatisfiable, so fall back to symmetric jitter
+      // to preserve spread.
+      // Use `<=` so the `retryAfterMs === maxDelayMs` boundary keeps the
+      // positive-jitter contract. At the boundary, positive jitter followed by
+      // the final clamp collapses every retry to exactly maxDelayMs — clients
+      // do land in lockstep at that instant, which is thundering-herd-shaped
+      // locally. The trade-off is deliberate: symmetric jitter at the boundary
+      // would schedule roughly half the retries below maxDelayMs (=
+      // retryAfterMs), which is a *Retry-After contract violation* and invites
+      // upstream escalation (429 → extended cooldown / bans on Telegram,
+      // Discord, etc.). A synchronized retry at the exact server-cleared
+      // instant is strictly preferable to a spread that undercuts the server's
+      // hint. Only switch to symmetric when the hint exceeds our local cap
+      // (`retryAfterMs > maxDelayMs`), where the contract is already
+      // unsatisfiable and we gain spread without adding a violation.
+      const canHonorRetryAfter =
+        hasRetryAfter && typeof retryAfterMs === "number" && retryAfterMs <= maxDelayMs;
+      delay = applyJitter(delay, jitter, canHonorRetryAfter ? "positive" : "symmetric");
       delay = Math.min(Math.max(delay, minDelayMs), maxDelayMs);
 
       options.onRetry?.({

@@ -52,10 +52,13 @@ describe("PDF document extractor", () => {
 
   it("declares PDF support", () => {
     const extractor = createPdfDocumentExtractor();
-    expect(extractor).toMatchObject({
+    const { extract, ...descriptor } = extractor;
+    expect(extract).toBeInstanceOf(Function);
+    expect(descriptor).toEqual({
       id: "pdf",
       label: "PDF",
       mimeTypes: ["application/pdf"],
+      autoDetectOrder: 10,
     });
   });
 
@@ -90,20 +93,24 @@ describe("PDF document extractor", () => {
 
     expect(getDocumentMock).toHaveBeenCalledTimes(1);
     const [params] = getDocumentMock.mock.calls[0] ?? [];
-    expect(params).toMatchObject({
+    const { data, standardFontDataUrl, ...stableParams } = params as {
+      data: Uint8Array;
+      disableWorker: boolean;
+      standardFontDataUrl: string;
+    };
+    expect(stableParams).toEqual({
       disableWorker: true,
     });
-    expect(typeof params.standardFontDataUrl).toBe("string");
+    expect(data).toBeInstanceOf(Uint8Array);
+    expect(typeof standardFontDataUrl).toBe("string");
 
     const expectedStandardFontDataUrl =
       path.join(path.dirname(require.resolve("pdfjs-dist/package.json")), "standard_fonts") + "/";
-    expect(params.standardFontDataUrl).toBe(expectedStandardFontDataUrl);
-    expect(path.isAbsolute(params.standardFontDataUrl)).toBe(true);
-    expect(params.standardFontDataUrl.endsWith("/")).toBe(true);
-    expect(params.standardFontDataUrl.startsWith("file://")).toBe(false);
-    expect(existsSync(params.standardFontDataUrl)).toBe(true);
-    expect(existsSync(path.join(params.standardFontDataUrl, "LiberationSans-Regular.ttf"))).toBe(
-      true,
-    );
+    expect(standardFontDataUrl).toBe(expectedStandardFontDataUrl);
+    expect(path.isAbsolute(standardFontDataUrl)).toBe(true);
+    expect(standardFontDataUrl.endsWith("/")).toBe(true);
+    expect(standardFontDataUrl.startsWith("file://")).toBe(false);
+    expect(existsSync(standardFontDataUrl)).toBe(true);
+    expect(existsSync(path.join(standardFontDataUrl, "LiberationSans-Regular.ttf"))).toBe(true);
   });
 });

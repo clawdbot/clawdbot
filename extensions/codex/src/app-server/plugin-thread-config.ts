@@ -196,7 +196,7 @@ export async function buildCodexPluginThreadConfig(
         enabled: true,
         destructive_enabled: record.policy.allowDestructiveActions,
         open_world_enabled: true,
-        default_tools_approval_mode: "prompt",
+        default_tools_approval_mode: "auto",
       };
       apps[app.id] = appConfig;
       policyApps[app.id] = {

@@ -119,6 +119,29 @@ function createSecretsApplyResult(options?: {
   };
 }
 
+function mockCall(mock: unknown, index = 0): Array<unknown> {
+  const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
+  const call = calls.at(index);
+  expect(call, `mock call ${index + 1}`).toBeDefined();
+  return call as Array<unknown>;
+}
+
+function mockFirstObjectArg(mock: unknown): Record<string, unknown> {
+  const [arg] = mockCall(mock);
+  expect(arg).toBeTypeOf("object");
+  expect(arg).not.toBeNull();
+  return arg as Record<string, unknown>;
+}
+
+function expectObjectFields(value: unknown, expected: Record<string, unknown>): void {
+  expect(value).toBeTypeOf("object");
+  expect(value).not.toBeNull();
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
 async function withPlanFile(run: (planPath: string) => Promise<void>) {
   const planPath = path.join(
     os.tmpdir(),
@@ -159,12 +182,11 @@ describe("secrets CLI", () => {
   it("calls secrets.reload and prints human output", async () => {
     callGatewayFromCli.mockResolvedValue({ ok: true, warningCount: 1 });
     await createProgram().parseAsync(["secrets", "reload"], { from: "user" });
-    expect(callGatewayFromCli).toHaveBeenCalledWith(
-      "secrets.reload",
-      expect.anything(),
-      undefined,
-      expect.objectContaining({ expectFinal: false }),
-    );
+    const reloadCall = mockCall(callGatewayFromCli);
+    expect(reloadCall[0]).toBe("secrets.reload");
+    expect(reloadCall[1]).toBeDefined();
+    expect(reloadCall[2]).toBeUndefined();
+    expectObjectFields(reloadCall[3], { expectFinal: false });
     expect(runtimeLogs.at(-1)).toBe("Secrets reloaded with 1 warning(s).");
     expect(runtimeErrors).toHaveLength(0);
   });
@@ -177,7 +199,9 @@ describe("secrets CLI", () => {
 
   it("explains Gateway reload failures without duplicate doctor noise", async () => {
     callGatewayFromCli.mockRejectedValue(
-      new Error("gateway closed (1006 abnormal closure). Run `openclaw doctor` for diagnostics."),
+      new Error(
+        "gateway closed (1006 abnormal closure). Gateway target: ws://127.0.0.1:18789 Source: local loopback Config: /tmp/openclaw.json Bind: loopback Possible causes: - Gateway not yet ready. Run `openclaw doctor` for diagnostics.",
+      ),
     );
 
     await expect(
@@ -188,6 +212,7 @@ describe("secrets CLI", () => {
       "Could not reload secrets because the Gateway did not respond: gateway closed (1006 abnormal closure).",
     );
     expect(runtimeErrors.at(-1)).toContain("openclaw gateway status --deep");
+    expect(runtimeErrors.at(-1)).not.toContain("Gateway target:");
     expect(runtimeErrors.at(-1)).not.toContain("diagnostics..");
   });
 
@@ -214,12 +239,10 @@ describe("secrets CLI", () => {
     await expect(
       createProgram().parseAsync(["secrets", "audit", "--check"], { from: "user" }),
     ).rejects.toThrow("__exit__:2");
-    expect(runSecretsAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowExec: false,
-      }),
-    );
-    expect(resolveSecretsAuditExitCode).toHaveBeenCalledWith(expect.anything(), true);
+    expect(mockFirstObjectArg(runSecretsAudit).allowExec).toBe(false);
+    const exitCodeCall = mockCall(resolveSecretsAuditExitCode);
+    expect(exitCodeCall[0]).toBeDefined();
+    expect(exitCodeCall[1]).toBe(true);
   });
 
   it("forwards --allow-exec to secrets audit", async () => {
@@ -243,11 +266,7 @@ describe("secrets CLI", () => {
     resolveSecretsAuditExitCode.mockReturnValue(0);
 
     await createProgram().parseAsync(["secrets", "audit", "--allow-exec"], { from: "user" });
-    expect(runSecretsAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowExec: true,
-      }),
-    );
+    expect(mockFirstObjectArg(runSecretsAudit).allowExec).toBe(true);
   });
 
   it("runs secrets configure then apply when confirmed", async () => {
@@ -273,19 +292,17 @@ describe("secrets CLI", () => {
 
     await createProgram().parseAsync(["secrets", "configure"], { from: "user" });
     expect(runSecretsConfigureInteractive).toHaveBeenCalled();
-    expect(runSecretsApply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        write: true,
-        plan: expect.objectContaining({
-          targets: expect.arrayContaining([
-            expect.objectContaining({
-              type: "skills.entries.apiKey",
-              path: "skills.entries.qa-secret-test.apiKey",
-            }),
-          ]),
-        }),
-      }),
-    );
+    const applyArgs = mockFirstObjectArg(runSecretsApply);
+    expect(applyArgs.write).toBe(true);
+    expect(applyArgs.plan).toBeTypeOf("object");
+    expect(applyArgs.plan).not.toBeNull();
+    const applyPlan = applyArgs.plan as { targets?: unknown[] };
+    expect(Array.isArray(applyPlan.targets)).toBe(true);
+    const [target] = applyPlan.targets ?? [];
+    expectObjectFields(target, {
+      type: "skills.entries.apiKey",
+      path: "skills.entries.qa-secret-test.apiKey",
+    });
     expect(runtimeLogs.at(-1)).toContain("Secrets applied");
   });
 
@@ -294,12 +311,10 @@ describe("secrets CLI", () => {
     confirm.mockResolvedValue(false);
 
     await createProgram().parseAsync(["secrets", "configure", "--agent", "ops"], { from: "user" });
-    expect(runSecretsConfigureInteractive).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "ops",
-        allowExecInPreflight: false,
-      }),
-    );
+    expectObjectFields(mockFirstObjectArg(runSecretsConfigureInteractive), {
+      agentId: "ops",
+      allowExecInPreflight: false,
+    });
   });
 
   it("forwards --allow-exec to secrets apply dry-run", async () => {
@@ -312,12 +327,10 @@ describe("secrets CLI", () => {
           from: "user",
         },
       );
-      expect(runSecretsApply).toHaveBeenCalledWith(
-        expect.objectContaining({
-          write: false,
-          allowExec: true,
-        }),
-      );
+      expectObjectFields(mockFirstObjectArg(runSecretsApply), {
+        write: false,
+        allowExec: true,
+      });
     });
   });
 
@@ -328,12 +341,10 @@ describe("secrets CLI", () => {
       await createProgram().parseAsync(["secrets", "apply", "--from", planPath, "--allow-exec"], {
         from: "user",
       });
-      expect(runSecretsApply).toHaveBeenCalledWith(
-        expect.objectContaining({
-          write: true,
-          allowExec: true,
-        }),
-      );
+      expectObjectFields(mockFirstObjectArg(runSecretsApply), {
+        write: true,
+        allowExec: true,
+      });
     });
   });
 
@@ -371,16 +382,10 @@ describe("secrets CLI", () => {
     await createProgram().parseAsync(["secrets", "configure", "--apply", "--yes", "--allow-exec"], {
       from: "user",
     });
-    expect(runSecretsConfigureInteractive).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowExecInPreflight: true,
-      }),
-    );
-    expect(runSecretsApply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        write: true,
-        allowExec: true,
-      }),
-    );
+    expect(mockFirstObjectArg(runSecretsConfigureInteractive).allowExecInPreflight).toBe(true);
+    expectObjectFields(mockFirstObjectArg(runSecretsApply), {
+      write: true,
+      allowExec: true,
+    });
   });
 });

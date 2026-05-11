@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   OpenClawPluginApi,
   OpenClawPluginCommandDefinition,
@@ -108,7 +108,9 @@ describe("registerQQBotFrameworkCommands", () => {
     const result = await command.handler(createCommandContext(config, "qqbot:c2c:TRUSTED_OPENID"));
 
     const qqbot = getWrittenQQBotConfig(writes[0]);
-    expect(result).toMatchObject({ text: expect.stringContaining("已开启") });
+    expect(result).toEqual({
+      text: "✅ 流式消息已开启\n\nAI 的回复将以流式形式逐步显示（仅私聊生效）。",
+    });
     expect(writes).toHaveLength(1);
     expect(qqbot?.streaming).toBe(true);
     expect(qqbot?.accounts?.default?.streaming).toBe(true);

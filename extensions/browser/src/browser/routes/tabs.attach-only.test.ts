@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../../test-support.js";
 import "../server-context.chrome-test-harness.js";
+import "../../test-support/browser-security.mock.js";
 import * as chromeModule from "../chrome.js";
 import { createBrowserRouteContext } from "../server-context.js";
 import { makeBrowserServerState } from "../server-context.test-harness.js";

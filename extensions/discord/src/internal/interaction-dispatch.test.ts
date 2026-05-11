@@ -18,10 +18,10 @@ describe("dispatchInteraction", () => {
       await interaction.reply("done");
     });
     class DeferredCommand extends Command {
-      name = "deferred";
-      description = "Deferred command";
-      defer = true;
-      ephemeral = true;
+      override name = "deferred";
+      override description = "Deferred command";
+      override defer = true;
+      override ephemeral = true;
       run = run;
     }
     const client = createInternalTestClient([new DeferredCommand()]);
@@ -54,9 +54,9 @@ describe("dispatchInteraction", () => {
       await interaction.respond([{ name: "alpha", value: "alpha" }]);
     });
     class OptionAutocompleteCommand extends Command {
-      name = "choose";
-      description = "Choose";
-      options = [
+      override name = "choose";
+      override description = "Choose";
+      override options = [
         {
           name: "model",
           description: "Model",
@@ -105,15 +105,15 @@ describe("dispatchInteraction", () => {
       await interaction.reply("joined");
     });
     class JoinCommand extends Command {
-      name = "join";
-      description = "Join";
-      defer = true;
-      ephemeral = true;
+      override name = "join";
+      override description = "Join";
+      override defer = true;
+      override ephemeral = true;
       run = run;
     }
     class VoiceCommand extends CommandWithSubcommands {
-      name = "vc";
-      description = "Voice";
+      override name = "vc";
+      override description = "Voice";
       subcommands = [new JoinCommand()];
     }
     const client = createInternalTestClient([new VoiceCommand()]);

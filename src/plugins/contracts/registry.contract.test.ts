@@ -99,14 +99,26 @@ describe("plugin contract registry", () => {
       const plugin = registry.plugins.find(
         (entry) => entry.origin === "bundled" && entry.id === pluginId,
       );
-      expect(plugin?.providerAuthChoices).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            provider: pluginId,
-            onboardingScopes: ["image-generation"],
-          }),
-        ]),
-      );
+      expect(plugin?.providerAuthChoices).toEqual([
+        {
+          provider: pluginId,
+          method: "api-key",
+          choiceId: pluginId === "alibaba" ? "alibaba-model-studio-api-key" : "runway-api-key",
+          choiceLabel: pluginId === "alibaba" ? "Alibaba Model Studio API key" : "Runway API key",
+          groupId: pluginId,
+          groupLabel: pluginId === "alibaba" ? "Alibaba Model Studio" : "Runway",
+          groupHint: pluginId === "alibaba" ? "DashScope / Model Studio API key" : "API key",
+          onboardingScopes: ["image-generation"],
+          optionKey: pluginId === "alibaba" ? "alibabaModelStudioApiKey" : "runwayApiKey",
+          cliFlag: pluginId === "alibaba" ? "--alibaba-model-studio-api-key" : "--runway-api-key",
+          cliOption:
+            pluginId === "alibaba"
+              ? "--alibaba-model-studio-api-key <key>"
+              : "--runway-api-key <key>",
+          cliDescription:
+            pluginId === "alibaba" ? "Alibaba Model Studio API key" : "Runway API key",
+        },
+      ]);
     }
   });
 
@@ -116,18 +128,22 @@ describe("plugin contract registry", () => {
       (entry) => entry.origin === "bundled" && entry.id === "github-copilot",
     );
 
-    expect(plugin?.providerAuthChoices).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          provider: "github-copilot",
-          method: "device",
-          choiceId: "github-copilot",
-          optionKey: "githubCopilotToken",
-          cliFlag: "--github-copilot-token",
-          cliOption: "--github-copilot-token <token>",
-        }),
-      ]),
-    );
+    expect(plugin?.providerAuthChoices).toEqual([
+      {
+        provider: "github-copilot",
+        method: "device",
+        choiceId: "github-copilot",
+        choiceLabel: "GitHub Copilot",
+        choiceHint: "Device login with your GitHub account",
+        groupId: "copilot",
+        groupLabel: "Copilot",
+        groupHint: "GitHub + local proxy",
+        optionKey: "githubCopilotToken",
+        cliFlag: "--github-copilot-token",
+        cliOption: "--github-copilot-token <token>",
+        cliDescription: "GitHub Copilot OAuth token",
+      },
+    ]);
   });
 
   it("covers every bundled speech plugin discovered from manifests", () => {

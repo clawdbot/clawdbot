@@ -104,13 +104,15 @@ describe("send", () => {
 
       expect(result.ok).toBe(true);
       expect(result.messageId).toBe("twitch-msg-123");
-      expect(result.receipt).toMatchObject({
+      expect(typeof result.receipt.sentAt).toBe("number");
+      expect({ ...result.receipt, sentAt: 0 }).toEqual({
         primaryPlatformMessageId: "twitch-msg-123",
         platformMessageIds: ["twitch-msg-123"],
         parts: [
           {
             platformMessageId: "twitch-msg-123",
             kind: "text",
+            index: 0,
             raw: {
               channel: "twitch",
               conversationId: "testchannel",
@@ -118,6 +120,14 @@ describe("send", () => {
             },
           },
         ],
+        raw: [
+          {
+            channel: "twitch",
+            conversationId: "testchannel",
+            messageId: "twitch-msg-123",
+          },
+        ],
+        sentAt: 0,
       });
     });
 
@@ -318,7 +328,13 @@ describe("send", () => {
         secondaryAccount,
         "secondary-channel",
         "Hello!",
-        expect.any(Object),
+        {
+          channels: {
+            twitch: {
+              defaultAccount: "secondary",
+            },
+          },
+        },
         "secondary",
       );
     });

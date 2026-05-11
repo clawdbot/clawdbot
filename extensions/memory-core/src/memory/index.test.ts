@@ -139,12 +139,11 @@ describe("memory embedding provider registration", () => {
     if (!adapter) {
       throw new Error("expected local embedding provider adapter to be registered");
     }
-    expect(adapter).toEqual(
-      expect.objectContaining({
-        id: "local",
-        defaultModel: DEFAULT_LOCAL_MODEL,
-      }),
-    );
+    expect(adapter.id).toBe("local");
+    expect(adapter.defaultModel).toBe(DEFAULT_LOCAL_MODEL);
+    expect(adapter.transport).toBe("local");
+    expect(adapter.authProviderId).toBeUndefined();
+    expect(adapter.autoSelectPriority).toBe(10);
   });
 });
 
@@ -343,15 +342,13 @@ describe("memory index", () => {
       expect(results.length).toBeGreaterThan(0);
       expect(results[0]?.path).toContain("memory/2026-01-12.md");
       const status = manager.status();
-      expect(status.sourceCounts).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            source: "memory",
-            files: status.files,
-            chunks: status.chunks,
-          }),
-        ]),
-      );
+      expect(status.sourceCounts).toStrictEqual([
+        {
+          source: "memory",
+          files: status.files,
+          chunks: status.chunks,
+        },
+      ]);
     } finally {
       await manager.close?.();
     }
@@ -467,9 +464,13 @@ describe("memory index", () => {
         EMBEDDING_PROBE_CACHE_TTL_MS,
       );
     }
-    await expect(second.probeEmbeddingAvailability()).resolves.toEqual(
-      expect.objectContaining({ ok: true, cached: true }),
-    );
+    await expect(second.probeEmbeddingAvailability()).resolves.toStrictEqual({
+      ok: true,
+      checked: true,
+      cached: true,
+      checkedAtMs: cachedBeforeProbe?.checkedAtMs,
+      cacheExpiresAtMs: cachedBeforeProbe?.cacheExpiresAtMs,
+    });
     expect(embedBatchCalls).toBe(1);
 
     const cached = second.getCachedEmbeddingAvailability?.();

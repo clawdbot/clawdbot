@@ -6,7 +6,8 @@
   "type": "module",
   "dependencies": {
     "typebox": "1.1.38",
-    "yaml": "^2.8.4"
+    "yaml": "^2.8.4",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

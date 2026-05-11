@@ -10,7 +10,14 @@ import { asObjectRecord } from "./object.js";
 
 const CHANNEL_CONFIG_META_KEYS = new Set(["defaults", "modelByChannel"]);
 
-type StalePluginSurface = "allow" | "entries" | "slot" | "channel" | "heartbeat" | "modelByChannel";
+type StalePluginSurface =
+  | "allow"
+  | "deny"
+  | "entries"
+  | "slot"
+  | "channel"
+  | "heartbeat"
+  | "modelByChannel";
 
 type StalePluginConfigHit = {
   pluginId: string;
@@ -113,6 +120,23 @@ function scanStalePluginConfigWithState(
       pluginId: rawPluginId,
       pathLabel: "plugins.allow",
       surface: "allow",
+    });
+    staleEvidenceIds.add(pluginId);
+  }
+
+  const deny = Array.isArray(plugins?.deny) ? plugins.deny : [];
+  for (const rawPluginId of deny) {
+    if (typeof rawPluginId !== "string") {
+      continue;
+    }
+    const pluginId = normalizePluginId(rawPluginId);
+    if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
+      continue;
+    }
+    hits.push({
+      pluginId: rawPluginId,
+      pathLabel: "plugins.deny",
+      surface: "deny",
     });
     staleEvidenceIds.add(pluginId);
   }
@@ -261,7 +285,7 @@ function collectDependentChannelConfigHits(
 }
 
 function formatStalePluginHitWarning(hit: StalePluginConfigHit): string {
-  if (hit.surface === "allow" || hit.surface === "entries") {
+  if (hit.surface === "allow" || hit.surface === "deny" || hit.surface === "entries") {
     return `- ${hit.pathLabel}: stale plugin reference "${hit.pluginId}" was found.`;
   }
   if (hit.surface === "slot") {
@@ -328,6 +352,14 @@ export function maybeRepairStalePluginConfig(
     );
   }
 
+  const denyIds = hits.filter((hit) => hit.surface === "deny").map((hit) => hit.pluginId);
+  if (denyIds.length > 0 && Array.isArray(nextPlugins?.deny)) {
+    const staleDenyIds = new Set(denyIds.map((pluginId) => normalizePluginId(pluginId)));
+    nextPlugins.deny = nextPlugins.deny.filter(
+      (pluginId) => typeof pluginId !== "string" || !staleDenyIds.has(normalizePluginId(pluginId)),
+    );
+  }
+
   const entryIds = hits.filter((hit) => hit.surface === "entries").map((hit) => hit.pluginId);
   if (entryIds.length > 0) {
     const entries = asObjectRecord(nextPlugins?.entries);
@@ -363,6 +395,11 @@ export function maybeRepairStalePluginConfig(
   if (allowIds.length > 0) {
     changes.push(
       `- plugins.allow: removed ${allowIds.length} stale plugin id${allowIds.length === 1 ? "" : "s"} (${allowIds.join(", ")})`,
+    );
+  }
+  if (denyIds.length > 0) {
+    changes.push(
+      `- plugins.deny: removed ${denyIds.length} stale plugin id${denyIds.length === 1 ? "" : "s"} (${denyIds.join(", ")})`,
     );
   }
   if (entryIds.length > 0) {

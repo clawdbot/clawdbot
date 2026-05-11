@@ -103,18 +103,48 @@ describe("Ghost reminder bug (issue #13317)", () => {
     } | null,
     reminderText: string,
   ) => {
-    expect(calledCtx).toEqual(
-      expect.objectContaining({
-        Provider: "cron-event",
-        Body: expect.stringContaining("scheduled reminder has been triggered"),
-      }),
-    );
+    expect(calledCtx?.Provider).toBe("cron-event");
     if (calledCtx === null || typeof calledCtx.Body !== "string") {
       throw new Error("Expected cron event prompt body");
     }
+    expect(calledCtx.Body).toContain("scheduled reminder has been triggered");
     expect(calledCtx.Body).toContain(reminderText);
     expect(calledCtx.Body).not.toContain("HEARTBEAT_OK");
     expect(calledCtx.Body).not.toContain("heartbeat poll");
+  };
+
+  const getFirstReplyContext = (
+    replySpy: ReturnType<typeof vi.fn>,
+  ): {
+    SessionKey?: string;
+    MessageThreadId?: number;
+    Body?: string;
+  } => {
+    const ctx = replySpy.mock.calls[0]?.[0];
+    expect(typeof ctx).toBe("object");
+    expect(ctx).not.toBeNull();
+    return ctx as {
+      SessionKey?: string;
+      MessageThreadId?: number;
+      Body?: string;
+    };
+  };
+
+  const expectTelegramSend = (
+    sendTelegram: ReturnType<typeof vi.fn>,
+    params: {
+      to: string;
+      text: string;
+      messageThreadId?: number;
+    },
+  ) => {
+    expect(sendTelegram).toHaveBeenCalledTimes(1);
+    const [to, text, options] = sendTelegram.mock.calls[0] ?? [];
+    expect(to).toBe(params.to);
+    expect(text).toBe(params.text);
+    expect((options as { messageThreadId?: number } | undefined)?.messageThreadId).toBe(
+      params.messageThreadId,
+    );
   };
 
   const runCronReminderCase = async (
@@ -527,12 +557,11 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
 
       expect(result.status).toBe("ran");
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sendTelegram).toHaveBeenCalledWith(
-        "-100155462274",
-        "Restart complete",
-        expect.objectContaining({ messageThreadId: 42 }),
-      );
+      expectTelegramSend(sendTelegram, {
+        to: "-100155462274",
+        text: "Restart complete",
+        messageThreadId: 42,
+      });
     });
   });
 
@@ -569,13 +598,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
 
       expect(result.status).toBe("ran");
-      expect(replySpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          SessionKey: `${sessionKey}:heartbeat`,
-        }),
-        expect.anything(),
-        expect.anything(),
-      );
+      expect(getFirstReplyContext(replySpy).SessionKey).toBe(`${sessionKey}:heartbeat`);
       expect(sendTelegram).toHaveBeenCalledTimes(1);
       expect(sendTelegram.mock.calls[0]?.[0]).toBe("-100155462274");
       const options = sendTelegram.mock.calls[0]?.[2] as { messageThreadId?: number } | undefined;
@@ -640,12 +663,11 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
 
       expect(result.status).toBe("ran");
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sendTelegram).toHaveBeenCalledWith(
-        "telegram:-1003774691294:topic:47",
-        "The review-worker spawn finished successfully.",
-        expect.objectContaining({ messageThreadId: 47 }),
-      );
+      expectTelegramSend(sendTelegram, {
+        to: "telegram:-1003774691294:topic:47",
+        text: "The review-worker spawn finished successfully.",
+        messageThreadId: 47,
+      });
     });
   });
 
@@ -704,13 +726,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
 
       expect(result.status).toBe("ran");
-      expect(getReplySpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          Body: expect.stringContaining("no command output was found"),
-        }),
-        expect.anything(),
-        expect.anything(),
-      );
+      expect(getFirstReplyContext(getReplySpy).Body).toContain("no command output was found");
       expect(sendTelegram).not.toHaveBeenCalled();
     });
   });
@@ -746,20 +762,14 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
 
       expect(result.status).toBe("ran");
-      expect(replySpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          SessionKey: `${sessionKey}:heartbeat`,
-          MessageThreadId: 42,
-        }),
-        expect.anything(),
-        expect.anything(),
-      );
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sendTelegram).toHaveBeenCalledWith(
-        "-100155462274",
-        "Topic heartbeat",
-        expect.objectContaining({ messageThreadId: 42 }),
-      );
+      const replyCtx = getFirstReplyContext(replySpy);
+      expect(replyCtx.SessionKey).toBe(`${sessionKey}:heartbeat`);
+      expect(replyCtx.MessageThreadId).toBe(42);
+      expectTelegramSend(sendTelegram, {
+        to: "-100155462274",
+        text: "Topic heartbeat",
+        messageThreadId: 42,
+      });
     });
   });
 });

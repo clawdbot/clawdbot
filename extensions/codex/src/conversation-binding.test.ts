@@ -92,17 +92,14 @@ describe("codex conversation binding", () => {
       modelProvider: "openai",
     });
 
-    expect(agentRuntimeMocks.resolveAuthProfileOrder).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg: config, provider: "openai-codex" }),
-    );
-    expect(sharedClientMocks.getSharedCodexAppServerClient).toHaveBeenCalledWith(
-      expect.objectContaining({ authProfileId: "openai-codex:default" }),
-    );
+    const authOrderParams = agentRuntimeMocks.resolveAuthProfileOrder.mock.calls[0]?.[0];
+    expect(authOrderParams?.cfg).toBe(config);
+    expect(authOrderParams?.provider).toBe("openai-codex");
+    const sharedClientParams = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0];
+    expect(sharedClientParams?.authProfileId).toBe("openai-codex:default");
     expect(requests).toHaveLength(1);
-    expect(requests[0]).toMatchObject({
-      method: "thread/start",
-      params: expect.objectContaining({ model: "gpt-5.4-mini" }),
-    });
+    expect(requests[0]?.method).toBe("thread/start");
+    expect(requests[0]?.params.model).toBe("gpt-5.4-mini");
     expect(requests[0]?.params).not.toHaveProperty("modelProvider");
     await expect(fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8")).resolves.toContain(
       '"authProfileId": "openai-codex:default"',
@@ -152,14 +149,11 @@ describe("codex conversation binding", () => {
       modelProvider: "openai",
     });
 
-    expect(sharedClientMocks.getSharedCodexAppServerClient).toHaveBeenCalledWith(
-      expect.objectContaining({ authProfileId: "work" }),
-    );
+    const sharedClientParams = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0];
+    expect(sharedClientParams?.authProfileId).toBe("work");
     expect(requests).toHaveLength(1);
-    expect(requests[0]).toMatchObject({
-      method: "thread/start",
-      params: expect.objectContaining({ model: "gpt-5.4-mini" }),
-    });
+    expect(requests[0]?.method).toBe("thread/start");
+    expect(requests[0]?.params.model).toBe("gpt-5.4-mini");
     expect(requests[0]?.params).not.toHaveProperty("modelProvider");
     await expect(fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8")).resolves.toContain(
       '"authProfileId": "work"',
@@ -333,15 +327,12 @@ describe("codex conversation binding", () => {
       "thread/start",
       "turn/start",
     ]);
-    expect(sharedClientMocks.getSharedCodexAppServerClient).toHaveBeenCalledWith(
-      expect.objectContaining({ authProfileId: "work" }),
-    );
-    expect(requests[1]?.params).toMatchObject({
-      model: "gpt-5.4-mini",
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-      serviceTier: "priority",
-    });
+    const sharedClientParams = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0];
+    expect(sharedClientParams?.authProfileId).toBe("work");
+    expect(requests[1]?.params.model).toBe("gpt-5.4-mini");
+    expect(requests[1]?.params.approvalPolicy).toBe("on-request");
+    expect(requests[1]?.params.sandbox).toBe("workspace-write");
+    expect(requests[1]?.params.serviceTier).toBe("priority");
     expect(requests[1]?.params).not.toHaveProperty("modelProvider");
     expect(requests[2]?.params).toMatchObject({
       threadId: "thread-new",

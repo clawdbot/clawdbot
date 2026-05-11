@@ -66,12 +66,9 @@ describe("browser.request local timeout", () => {
     expect(dispatchTask).toBeTypeOf("function");
     expect(timeoutMs).toBe(4321);
     expect(timeoutLabel).toBe("browser request");
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: "Error: browser request timed out",
-      }),
-    );
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "UNAVAILABLE",
+      message: "Error: browser request timed out",
+    });
   });
 });

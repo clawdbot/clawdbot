@@ -298,7 +298,23 @@ describe("Metrics fuzz", () => {
       expect(metrics.emit("relay.connect", 1, { relay: longUrl })).toBeUndefined();
 
       const snapshot = metrics.getSnapshot();
-      expect(snapshot.relays[longUrl]).toEqual(expect.objectContaining({ connects: 1 }));
+      expect(snapshot.relays[longUrl]).toEqual({
+        connects: 1,
+        disconnects: 0,
+        reconnects: 0,
+        errors: 0,
+        messagesReceived: {
+          event: 0,
+          eose: 0,
+          closed: 0,
+          notice: 0,
+          ok: 0,
+          auth: 0,
+        },
+        circuitBreakerState: "closed",
+        circuitBreakerOpens: 0,
+        circuitBreakerCloses: 0,
+      });
     });
   });
 

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { CommandArgValues } from "openclaw/plugin-sdk/native-command-registry";
 
 export type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];

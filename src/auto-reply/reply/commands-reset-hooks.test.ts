@@ -105,6 +105,34 @@ function buildResetParams(
   };
 }
 
+function mockCall(mock: unknown, index = 0): Array<unknown> {
+  const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
+  const call = calls.at(index);
+  expect(call, `mock call ${index + 1}`).toBeDefined();
+  return call as Array<unknown>;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).toBeTypeOf("object");
+  expect(value, label).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+function expectObjectFields(
+  value: unknown,
+  expected: Record<string, unknown>,
+  label = "object",
+): void {
+  const record = requireRecord(value, label);
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], `${label}.${key}`).toEqual(expectedValue);
+  }
+}
+
+function firstHookEvent(): Record<string, unknown> {
+  return requireRecord(mockCall(triggerInternalHookMock)[0], "hook event");
+}
+
 describe("handleCommands reset hooks", () => {
   let clearBootstrapSnapshotSpy: ReturnType<typeof vi.spyOn>;
 
@@ -128,7 +156,7 @@ describe("handleCommands reset hooks", () => {
           commands: { text: true },
           channels: { whatsapp: { allowFrom: ["*"] } },
         } as OpenClawConfig),
-        expectedCall: expect.objectContaining({ type: "command", action: "new" }),
+        expectedEvent: { type: "command", action: "new" },
       },
       {
         name: "native command routed to target session",
@@ -154,20 +182,24 @@ describe("handleCommands reset hooks", () => {
           params.sessionKey = "agent:main:telegram:direct:123";
           return params;
         })(),
-        expectedCall: expect.objectContaining({
+        expectedEvent: {
           type: "command",
           action: "new",
           sessionKey: "agent:main:telegram:direct:123",
-          context: expect.objectContaining({
-            workspaceDir: "/tmp/openclaw-commands",
-          }),
-        }),
+        },
+        expectedContext: {
+          workspaceDir: "/tmp/openclaw-commands",
+        },
       },
     ] as const;
 
     for (const testCase of cases) {
       await maybeHandleResetCommand(testCase.params);
-      expect(triggerInternalHookMock, testCase.name).toHaveBeenCalledWith(testCase.expectedCall);
+      const event = firstHookEvent();
+      expectObjectFields(event, testCase.expectedEvent, testCase.name);
+      if ("expectedContext" in testCase) {
+        expectObjectFields(event.context, testCase.expectedContext, `${testCase.name}.context`);
+      }
       triggerInternalHookMock.mockClear();
     }
   });
@@ -191,8 +223,13 @@ describe("handleCommands reset hooks", () => {
 
     const result = await maybeHandleResetCommand(params);
 
-    expect(resetMocks.resetConfiguredBindingTargetInPlace).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
+    const resetArgs = requireRecord(
+      mockCall(resetMocks.resetConfiguredBindingTargetInPlace)[0],
+      "reset args",
+    );
+    expect(resetArgs.cfg).toBeTypeOf("object");
+    expect(resetArgs.cfg).not.toBeNull();
+    expectObjectFields(resetArgs, {
       sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
       reason: "reset",
       commandSource: "discord:native",
@@ -253,15 +290,13 @@ describe("handleCommands reset hooks", () => {
 
     const result = await maybeHandleResetCommand(params);
 
-    expect(routeReplyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requesterSenderId: "id:whatsapp:123",
-        requesterSenderName: "Alice",
-        requesterSenderUsername: "alice_u",
-        requesterSenderE164: "+15551234567",
-        threadId: "thread-1",
-      }),
-    );
+    expectObjectFields(mockCall(routeReplyMock)[0], {
+      requesterSenderId: "id:whatsapp:123",
+      requesterSenderName: "Alice",
+      requesterSenderUsername: "alice_u",
+      requesterSenderE164: "+15551234567",
+      threadId: "thread-1",
+    });
     expect(result).toEqual({ shouldContinue: false });
   });
 
@@ -283,15 +318,9 @@ describe("handleCommands reset hooks", () => {
 
     await maybeHandleResetCommand(params);
 
-    expect(triggerInternalHookMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        context: expect.objectContaining({
-          sessionEntry: expect.objectContaining({
-            sessionId: "target-session",
-          }),
-        }),
-      }),
-    );
+    const event = firstHookEvent();
+    const context = requireRecord(event.context, "hook context");
+    expectObjectFields(context.sessionEntry, { sessionId: "target-session" }, "session entry");
   });
 
   it("marks soft reset turns and emits reset hooks", async () => {
@@ -315,17 +344,10 @@ describe("handleCommands reset hooks", () => {
     const result = await maybeHandleResetCommand(params);
 
     expect(result).toBeNull();
-    expect(triggerInternalHookMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "command",
-        action: "reset",
-        context: expect.objectContaining({
-          previousSessionEntry: expect.objectContaining({
-            sessionId: "session-1",
-          }),
-        }),
-      }),
-    );
+    const event = firstHookEvent();
+    expectObjectFields(event, { type: "command", action: "reset" }, "hook event");
+    const context = requireRecord(event.context, "hook context");
+    expectObjectFields(context.previousSessionEntry, { sessionId: "session-1" }, "session entry");
     expect(params.command.resetHookTriggered).toBe(true);
     expect(params.command.softResetTriggered).toBe(true);
     expect(params.command.softResetTail).toBe("");
@@ -444,9 +466,7 @@ describe("handleCommands reset hooks", () => {
       shouldContinue: false,
       reply: { text: "✅ Session reset." },
     });
-    expect(triggerInternalHookMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "command", action: "reset" }),
-    );
+    expectObjectFields(firstHookEvent(), { type: "command", action: "reset" }, "hook event");
   });
 
   it("acknowledges bare /new without falling through to model execution", async () => {
@@ -461,9 +481,7 @@ describe("handleCommands reset hooks", () => {
       shouldContinue: false,
       reply: { text: "✅ New session started." },
     });
-    expect(triggerInternalHookMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "command", action: "new" }),
-    );
+    expectObjectFields(firstHookEvent(), { type: "command", action: "new" }, "hook event");
   });
 
   it("keeps reset tails falling through so the model receives the user input", async () => {
@@ -475,8 +493,6 @@ describe("handleCommands reset hooks", () => {
     const result = await maybeHandleResetCommand(params);
 
     expect(result).toBeNull();
-    expect(triggerInternalHookMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "command", action: "new" }),
-    );
+    expectObjectFields(firstHookEvent(), { type: "command", action: "new" }, "hook event");
   });
 });

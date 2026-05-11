@@ -1,6 +1,6 @@
 import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";
 import { resolveChannelAllowFromPath } from "openclaw/plugin-sdk/channel-pairing-paths";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { statRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
 import { resolveDefaultTelegramAccountId } from "./account-selection.js";
 

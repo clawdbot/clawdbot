@@ -22,7 +22,7 @@ export type {
   OpenClawConfig,
   GroupToolPolicyConfig,
   MarkdownTableMode,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
 export type {
   PluginRuntime,
   AnyAgentTool,

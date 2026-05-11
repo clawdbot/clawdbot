@@ -1,4 +1,4 @@
-import type { AccessGroupsConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { AccessGroupsConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 

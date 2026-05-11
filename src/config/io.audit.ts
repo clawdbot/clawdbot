@@ -1,5 +1,5 @@
 import path from "node:path";
-import { redactToolPayloadText } from "../logging/redact.js";
+import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import { resolveStateDir } from "./paths.js";
 
 const CONFIG_AUDIT_ARGV_CAP = 8;
@@ -432,10 +432,10 @@ type ConfigAuditAppendParams = ConfigAuditAppendContext &
 
 function resolveConfigAuditAppendRecord(params: ConfigAuditAppendParams): ConfigAuditRecord {
   if ("record" in params) {
-    return params.record;
+    return redactSecrets(params.record);
   }
   const { fs: _fs, env: _env, homedir: _homedir, ...record } = params;
-  return record as ConfigAuditRecord;
+  return redactSecrets(record as ConfigAuditRecord);
 }
 
 export async function appendConfigAuditRecord(params: ConfigAuditAppendParams): Promise<void> {

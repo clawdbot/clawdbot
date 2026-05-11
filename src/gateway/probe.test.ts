@@ -162,6 +162,24 @@ vi.mock("./event-loop-ready.js", () => ({
 
 const { clampProbeTimeoutMs, probeGateway } = await import("./probe.js");
 
+function expectProbeResultFields(
+  result: Awaited<ReturnType<typeof probeGateway>>,
+  fields: Partial<Awaited<ReturnType<typeof probeGateway>>>,
+): void {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(result[key as keyof typeof result]).toEqual(value);
+  }
+}
+
+function expectProbeAuthFields(
+  result: Awaited<ReturnType<typeof probeGateway>>,
+  fields: Partial<Awaited<ReturnType<typeof probeGateway>>["auth"]>,
+): void {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(result.auth[key as keyof typeof result.auth]).toEqual(value);
+  }
+}
+
 describe("probeGateway", () => {
   beforeEach(() => {
     deviceIdentityState.throwOnLoad = false;
@@ -231,15 +249,15 @@ describe("probeGateway", () => {
       includeDetails: false,
     });
 
-    expect(result).toMatchObject({
+    expectProbeResultFields(result, {
       ok: false,
       error: "timeout",
       close: null,
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "unknown",
-      },
+    });
+    expectProbeAuthFields(result, {
+      role: null,
+      scopes: [],
+      capability: "unknown",
     });
     expect(eventLoopReadyState.calls).toHaveLength(1);
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(250);
@@ -263,7 +281,7 @@ describe("probeGateway", () => {
       "config.get",
     ]);
     expect(result.ok).toBe(true);
-    expect(result.auth).toMatchObject({
+    expectProbeAuthFields(result, {
       role: "operator",
       scopes: ["operator.read"],
       capability: "read_only",
@@ -297,7 +315,7 @@ describe("probeGateway", () => {
         env,
       },
     ]);
-    expect(gatewayClientState.options).toEqual(expect.objectContaining({ env }));
+    expect(gatewayClientState.options?.env).toBe(env);
   });
 
   it("keeps device identity enabled for remote probes", async () => {
@@ -423,12 +441,12 @@ describe("probeGateway", () => {
       includeDetails: false,
     });
 
-    expect(result).toMatchObject({
+    expectProbeResultFields(result, {
       ok: false,
       error: "gateway closed (1008): pairing required",
       close: { code: 1008, reason: "pairing required" },
-      auth: { capability: "pairing_pending" },
     });
+    expectProbeAuthFields(result, { capability: "pairing_pending" });
     expect(gatewayClientState.requests).toStrictEqual([]);
   });
 
@@ -445,7 +463,7 @@ describe("probeGateway", () => {
       includeDetails: false,
     });
 
-    expect(result.auth).toMatchObject({
+    expectProbeAuthFields(result, {
       scopes: ["operator.write"],
       capability: "write_capable",
     });
@@ -461,7 +479,7 @@ describe("probeGateway", () => {
       includeDetails: false,
     });
 
-    expect(result.auth).toMatchObject({
+    expectProbeAuthFields(result, {
       role: null,
       scopes: [],
       capability: "unknown",
@@ -478,7 +496,7 @@ describe("probeGateway", () => {
       includeDetails: false,
     });
 
-    expect(result.auth).toMatchObject({
+    expectProbeAuthFields(result, {
       role: null,
       scopes: [],
       capability: "connected_no_operator_scope",
@@ -495,7 +513,7 @@ describe("probeGateway", () => {
       includeDetails: false,
     });
 
-    expect(result).toMatchObject({
+    expectProbeResultFields(result, {
       ok: false,
       error: "scope upgrade pending approval (requestId: req-123)",
       close: { code: 1008, reason: "pairing required" },
@@ -512,7 +530,7 @@ describe("probeGateway", () => {
       includeDetails: false,
     });
 
-    expect(result).toMatchObject({
+    expectProbeResultFields(result, {
       ok: true,
       error: null,
       close: null,

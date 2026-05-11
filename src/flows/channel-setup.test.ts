@@ -78,6 +78,22 @@ function makePluginRegistry(overrides: Partial<PluginRegistry> = {}): PluginRegi
   } as unknown as PluginRegistry;
 }
 
+function callArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0, _type?: (value: T) => T): T {
+  const call = mock.mock.calls[index];
+  expect(call).toBeDefined();
+  return call?.[0] as T;
+}
+
+function expectExternalCatalogInstallCall(index = 0) {
+  const input = callArg<{
+    entry?: { id?: string; install?: { npmSpec?: string } };
+    autoConfirmSingleSource?: boolean;
+  }>(ensureChannelSetupPluginInstalled, index);
+  expect(input.entry?.id).toBe("external-chat");
+  expect(input.entry?.install?.npmSpec).toBe("@vendor/external-chat-plugin");
+  expect(input.autoConfirmSingleSource).toBe(true);
+}
+
 const resolveAgentWorkspaceDir = vi.hoisted(() =>
   vi.fn((_cfg?: unknown, _agentId?: unknown) => "/tmp/openclaw-workspace"),
 );
@@ -92,10 +108,12 @@ const getChannelSetupPlugin = vi.hoisted(() => vi.fn((_channel?: unknown) => und
 const listChannelSetupPlugins = vi.hoisted(() => vi.fn((): unknown[] => []));
 const listActiveChannelSetupPlugins = vi.hoisted(() => vi.fn((): unknown[] => []));
 const loadChannelSetupPluginRegistrySnapshotForChannel = vi.hoisted(() =>
-  vi.fn<LoadChannelSetupPluginRegistrySnapshotForChannel>((_params) => makePluginRegistry()),
+  vi.fn((_params: Parameters<LoadChannelSetupPluginRegistrySnapshotForChannel>[0]) =>
+    makePluginRegistry(),
+  ),
 );
 const ensureChannelSetupPluginInstalled = vi.hoisted(() =>
-  vi.fn<EnsureChannelSetupPluginInstalled>(async ({ cfg, entry }) => ({
+  vi.fn(async ({ cfg, entry }: Parameters<EnsureChannelSetupPluginInstalled>[0]) => ({
     cfg,
     installed: true,
     pluginId: entry?.pluginId,
@@ -103,16 +121,20 @@ const ensureChannelSetupPluginInstalled = vi.hoisted(() =>
   })),
 );
 const resolveChannelSetupEntries = vi.hoisted(() =>
-  vi.fn<ResolveChannelSetupEntries>((_params) => ({
-    entries: [],
-    installedCatalogEntries: [],
-    installableCatalogEntries: [],
-    installedCatalogById: new Map(),
-    installableCatalogById: new Map(),
-  })),
+  vi.fn(
+    (
+      _params: Parameters<ResolveChannelSetupEntries>[0],
+    ): ReturnType<ResolveChannelSetupEntries> => ({
+      entries: [],
+      installedCatalogEntries: [],
+      installableCatalogEntries: [],
+      installedCatalogById: new Map(),
+      installableCatalogById: new Map(),
+    }),
+  ),
 );
 const collectChannelStatus = vi.hoisted(() =>
-  vi.fn<CollectChannelStatus>(async (_params) => ({
+  vi.fn(async (_params: Parameters<CollectChannelStatus>[0]) => ({
     installedPlugins: [],
     catalogEntries: [],
     installedCatalogEntries: [],
@@ -237,19 +259,19 @@ describe("setupChannels workspace shadow exclusion", () => {
       } as never,
     );
 
-    expect(listTrustedChannelPluginCatalogEntries).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: {},
-        workspaceDir: "/tmp/openclaw-workspace",
-      }),
+    const trustedInput = callArg<{ cfg?: unknown; workspaceDir?: string }>(
+      listTrustedChannelPluginCatalogEntries,
     );
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "external-chat",
-        pluginId: "@vendor/external-chat-plugin",
-        workspaceDir: "/tmp/openclaw-workspace",
-      }),
-    );
+    expect(trustedInput.cfg).toEqual({});
+    expect(trustedInput.workspaceDir).toBe("/tmp/openclaw-workspace");
+    const registryInput = callArg<{
+      channel?: string;
+      pluginId?: string;
+      workspaceDir?: string;
+    }>(loadChannelSetupPluginRegistrySnapshotForChannel);
+    expect(registryInput.channel).toBe("external-chat");
+    expect(registryInput.pluginId).toBe("@vendor/external-chat-plugin");
+    expect(registryInput.workspaceDir).toBe("/tmp/openclaw-workspace");
   });
 
   it("keeps trusted workspace overrides eligible during preload", async () => {
@@ -271,13 +293,14 @@ describe("setupChannels workspace shadow exclusion", () => {
       } as never,
     );
 
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "external-chat",
-        pluginId: "trusted-external-chat-shadow",
-        workspaceDir: "/tmp/openclaw-workspace",
-      }),
-    );
+    const registryInput = callArg<{
+      channel?: string;
+      pluginId?: string;
+      workspaceDir?: string;
+    }>(loadChannelSetupPluginRegistrySnapshotForChannel);
+    expect(registryInput.channel).toBe("external-chat");
+    expect(registryInput.pluginId).toBe("trusted-external-chat-shadow");
+    expect(registryInput.workspaceDir).toBe("/tmp/openclaw-workspace");
   });
 
   it("defers status and setup-plugin loads until a channel is selected", async () => {
@@ -298,7 +321,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       },
     );
 
-    expect(select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select a channel" }));
+    expect(callArg<{ message?: string }>(select).message).toBe("Select a channel");
     expect(collectChannelStatus).not.toHaveBeenCalled();
     expect(listTrustedChannelPluginCatalogEntries).not.toHaveBeenCalled();
     expect(listChannelSetupPlugins).not.toHaveBeenCalled();
@@ -334,11 +357,9 @@ describe("setupChannels workspace shadow exclusion", () => {
       },
     );
 
-    expect(resolveChannelSetupEntries).toHaveBeenCalledWith(
-      expect.objectContaining({
-        installedPlugins: [activePlugin],
-      }),
-    );
+    expect(
+      callArg<{ installedPlugins?: unknown[] }>(resolveChannelSetupEntries).installedPlugins,
+    ).toEqual([activePlugin]);
     expect(listChannelSetupPlugins).not.toHaveBeenCalled();
     expect(collectChannelStatus).not.toHaveBeenCalled();
   });
@@ -398,11 +419,7 @@ describe("setupChannels workspace shadow exclusion", () => {
     );
 
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
-    expect(setupWizard.configure).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: {},
-      }),
-    );
+    expect(callArg<{ cfg?: unknown }>(setupWizard.configure).cfg).toEqual({});
     expect(next).toEqual({
       channels: {
         "custom-chat": { token: "secret" },
@@ -472,30 +489,27 @@ describe("setupChannels workspace shadow exclusion", () => {
     );
 
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(2);
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        channel: "external-chat",
-        pluginId: "external-chat",
-        workspaceDir: "/tmp/openclaw-workspace",
-        forceSetupOnlyChannelPlugins: true,
-      }),
-    );
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        channel: "external-chat",
-        workspaceDir: "/tmp/openclaw-workspace",
-        forceSetupOnlyChannelPlugins: true,
-      }),
-    );
+    const firstRegistryInput = callArg<{
+      channel?: string;
+      pluginId?: string;
+      workspaceDir?: string;
+      forceSetupOnlyChannelPlugins?: boolean;
+    }>(loadChannelSetupPluginRegistrySnapshotForChannel, 0);
+    expect(firstRegistryInput.channel).toBe("external-chat");
+    expect(firstRegistryInput.pluginId).toBe("external-chat");
+    expect(firstRegistryInput.workspaceDir).toBe("/tmp/openclaw-workspace");
+    expect(firstRegistryInput.forceSetupOnlyChannelPlugins).toBe(true);
+    const secondRegistryInput = callArg<{
+      channel?: string;
+      workspaceDir?: string;
+      forceSetupOnlyChannelPlugins?: boolean;
+    }>(loadChannelSetupPluginRegistrySnapshotForChannel, 1);
+    expect(secondRegistryInput.channel).toBe("external-chat");
+    expect(secondRegistryInput.workspaceDir).toBe("/tmp/openclaw-workspace");
+    expect(secondRegistryInput.forceSetupOnlyChannelPlugins).toBe(true);
     expect(getChannelSetupPlugin).not.toHaveBeenCalled();
     expect(collectChannelStatus).not.toHaveBeenCalled();
-    expect(configure).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: {},
-      }),
-    );
+    expect(callArg<{ cfg?: unknown }>(configure).cfg).toEqual({});
     expect(next).toEqual({
       channels: {
         "external-chat": { token: "secret" },
@@ -747,15 +761,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       );
 
       expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledTimes(1);
-      expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
-        expect.objectContaining({
-          entry: expect.objectContaining({
-            id: "external-chat",
-            install: expect.objectContaining({ npmSpec: "@vendor/external-chat-plugin" }),
-          }),
-          autoConfirmSingleSource: true,
-        }),
-      );
+      expectExternalCatalogInstallCall();
       expect(note).not.toHaveBeenCalledWith("external-chat plugin not available.", "Channel setup");
       expect(configure).toHaveBeenCalledTimes(1);
     },
@@ -909,20 +915,13 @@ describe("setupChannels workspace shadow exclusion", () => {
         },
       );
 
-      expect(getTrustedChannelPluginCatalogEntry).toHaveBeenCalledWith(
-        "external-chat",
-        expect.objectContaining({ workspaceDir: "/tmp/openclaw-workspace" }),
-      );
+      expect(getTrustedChannelPluginCatalogEntry.mock.calls[0]?.[0]).toBe("external-chat");
+      expect(
+        (getTrustedChannelPluginCatalogEntry.mock.calls[0]?.[1] as { workspaceDir?: string })
+          ?.workspaceDir,
+      ).toBe("/tmp/openclaw-workspace");
       expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledTimes(1);
-      expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
-        expect.objectContaining({
-          entry: expect.objectContaining({
-            id: "external-chat",
-            install: expect.objectContaining({ npmSpec: "@vendor/external-chat-plugin" }),
-          }),
-          autoConfirmSingleSource: true,
-        }),
-      );
+      expectExternalCatalogInstallCall();
       expect(note).not.toHaveBeenCalledWith("external-chat plugin not available.", "Channel setup");
       expect(configure).toHaveBeenCalledTimes(1);
     },

@@ -1,6 +1,6 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Api, Context, Model } from "@mariozechner/pi-ai";
-import { streamSimpleOpenAIResponses } from "@mariozechner/pi-ai/openai-responses";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Api, Context, Model } from "@earendil-works/pi-ai";
+import { streamSimpleOpenAIResponses } from "@earendil-works/pi-ai/openai-responses";
 import { describe, expect, it } from "vitest";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import {

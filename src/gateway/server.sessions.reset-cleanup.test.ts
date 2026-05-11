@@ -20,6 +20,40 @@ import {
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
 
+function expectResetAcpState(
+  acp:
+    | {
+        backend?: string;
+        agent?: string;
+        runtimeSessionName?: string;
+        identity?: {
+          state?: string;
+          acpxRecordId?: string;
+          acpxSessionId?: string;
+        };
+        mode?: string;
+        runtimeOptions?: {
+          runtimeMode?: string;
+          timeoutSeconds?: number;
+        };
+        cwd?: string;
+        state?: string;
+      }
+    | undefined,
+) {
+  expect(acp?.backend).toBe("acpx");
+  expect(acp?.agent).toBe("codex");
+  expect(acp?.runtimeSessionName).toBe("runtime:reset");
+  expect(acp?.identity?.state).toBe("pending");
+  expect(acp?.identity?.acpxRecordId).toBe("agent:main:main");
+  expect(acp?.identity?.acpxSessionId).toBeUndefined();
+  expect(acp?.mode).toBe("persistent");
+  expect(acp?.runtimeOptions?.runtimeMode).toBe("auto");
+  expect(acp?.runtimeOptions?.timeoutSeconds).toBe(30);
+  expect(acp?.cwd).toBe("/tmp/acp-session");
+  expect(acp?.state).toBe("idle");
+}
+
 test("sessions.reset aborts active runs and clears queues", async () => {
   await seedActiveMainSession();
   enqueueSystemEvent("stale event via alias", { sessionKey: "main" });
@@ -49,10 +83,11 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   expect(bundleMcpRuntimeMocks.disposeSessionMcpRuntime).toHaveBeenCalledWith("sess-main");
   expect(waitCallCountAtSnapshotClear).toEqual([1]);
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledTimes(1);
-  expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledWith({
-    sessionKeys: expect.arrayContaining(["main", "agent:main:main", "sess-main"]),
-    onWarn: expect.any(Function),
-  });
+  const closeTabsCall = browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mock
+    .calls[0] as unknown as [{ sessionKeys?: string[]; onWarn?: unknown }] | undefined;
+  const closeTabsParams = closeTabsCall?.[0];
+  expect(closeTabsParams?.sessionKeys).toEqual(["main", "agent:main:main", "sess-main"]);
+  expect(typeof closeTabsParams?.onWarn).toBe("function");
   expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
   expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledWith(
     {
@@ -136,31 +171,36 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
     key: "main",
   });
   expect(reset.ok).toBe(true);
-  expect(reset.payload?.entry.acp).toMatchObject({
-    backend: "acpx",
-    agent: "codex",
-    runtimeSessionName: "runtime:reset",
-    identity: {
-      state: "pending",
-      acpxRecordId: "agent:main:main",
-    },
-    mode: "persistent",
-    runtimeOptions: {
-      runtimeMode: "auto",
-      timeoutSeconds: 30,
-    },
-    cwd: "/tmp/acp-session",
-    state: "idle",
-  });
-  expect(reset.payload?.entry.acp?.identity?.acpxSessionId).toBeUndefined();
-  expect(acpManagerMocks.closeSession).toHaveBeenCalledWith({
-    allowBackendUnavailable: true,
-    cfg: expect.any(Object),
-    discardPersistentState: true,
-    requireAcpSession: false,
-    reason: "session-reset",
-    sessionKey: "agent:main:main",
-  });
+  expectResetAcpState(reset.payload?.entry.acp);
+  expect(acpManagerMocks.closeSession).toHaveBeenCalledTimes(1);
+  const closeSessionCall = acpManagerMocks.closeSession.mock.calls[0] as unknown as
+    | [
+        {
+          allowBackendUnavailable?: boolean;
+          cfg?: unknown;
+          discardPersistentState?: boolean;
+          requireAcpSession?: boolean;
+          reason?: string;
+          sessionKey?: string;
+        },
+      ]
+    | undefined;
+  const closeSessionParams = closeSessionCall?.[0] as
+    | {
+        allowBackendUnavailable?: boolean;
+        cfg?: unknown;
+        discardPersistentState?: boolean;
+        requireAcpSession?: boolean;
+        reason?: string;
+        sessionKey?: string;
+      }
+    | undefined;
+  expect(closeSessionParams?.allowBackendUnavailable).toBe(true);
+  expect(closeSessionParams?.cfg).toBeTruthy();
+  expect(closeSessionParams?.discardPersistentState).toBe(true);
+  expect(closeSessionParams?.requireAcpSession).toBe(false);
+  expect(closeSessionParams?.reason).toBe("session-reset");
+  expect(closeSessionParams?.sessionKey).toBe("agent:main:main");
   expect(prepareFreshSession).toHaveBeenCalledWith({
     sessionKey: "agent:main:main",
   });
@@ -186,23 +226,7 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
       };
     }
   >;
-  expect(store["agent:main:main"]?.acp).toMatchObject({
-    backend: "acpx",
-    agent: "codex",
-    runtimeSessionName: "runtime:reset",
-    identity: {
-      state: "pending",
-      acpxRecordId: "agent:main:main",
-    },
-    mode: "persistent",
-    runtimeOptions: {
-      runtimeMode: "auto",
-      timeoutSeconds: 30,
-    },
-    cwd: "/tmp/acp-session",
-    state: "idle",
-  });
-  expect(store["agent:main:main"]?.acp?.identity?.acpxSessionId).toBeUndefined();
+  expectResetAcpState(store["agent:main:main"]?.acp);
 });
 
 test("sessions.reset does not emit lifecycle events when key does not exist", async () => {
@@ -250,12 +274,10 @@ test("sessions.reset emits subagent targetKind for subagent sessions", async () 
   const event = (subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][])[0]?.[0] as
     | { targetKind?: string; targetSessionKey?: string; reason?: string; outcome?: string }
     | undefined;
-  expect(event).toMatchObject({
-    targetSessionKey: "agent:main:subagent:worker",
-    targetKind: "subagent",
-    reason: "session-reset",
-    outcome: "reset",
-  });
+  expect(event?.targetSessionKey).toBe("agent:main:subagent:worker");
+  expect(event?.targetKind).toBe("subagent");
+  expect(event?.reason).toBe("session-reset");
+  expect(event?.outcome).toBe("reset");
   expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
   expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
     targetSessionKey: "agent:main:subagent:worker",

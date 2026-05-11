@@ -1135,7 +1135,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(answerDraftStream.update).toHaveBeenCalledWith(
-      expect.stringMatching(/`🛠️ Exec: git rev-parse --abbrev-ref HEAD`$/),
+      expect.stringMatching(/`🛠️ git rev-parse --abbrev-ref HEAD`$/),
     );
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Branch is up to date");
     expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);

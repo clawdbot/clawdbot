@@ -8,14 +8,21 @@ import {
   MISTRAL_DEFAULT_MODEL_ID,
 } from "./model-definitions.js";
 
+function catalogModelById(models: ReturnType<typeof buildMistralCatalogModels>, id: string) {
+  const model = models.find((candidate) => candidate.id === id);
+  if (!model) {
+    throw new Error(`expected Mistral catalog model ${id}`);
+  }
+  return model;
+}
+
 describe("mistral model definitions", () => {
   it("uses current Pi pricing for the bundled default model", () => {
-    expect(buildMistralModelDefinition()).toMatchObject({
-      id: MISTRAL_DEFAULT_MODEL_ID,
-      contextWindow: MISTRAL_DEFAULT_CONTEXT_WINDOW,
-      maxTokens: MISTRAL_DEFAULT_MAX_TOKENS,
-      cost: MISTRAL_DEFAULT_COST,
-    });
+    const model = buildMistralModelDefinition();
+    expect(model.id).toBe(MISTRAL_DEFAULT_MODEL_ID);
+    expect(model.contextWindow).toBe(MISTRAL_DEFAULT_CONTEXT_WINDOW);
+    expect(model.maxTokens).toBe(MISTRAL_DEFAULT_MAX_TOKENS);
+    expect(model.cost).toEqual(MISTRAL_DEFAULT_COST);
 
     expect(MISTRAL_DEFAULT_COST).toEqual({
       input: 0.5,
@@ -26,42 +33,33 @@ describe("mistral model definitions", () => {
   });
 
   it("publishes a curated set of current Mistral catalog models", () => {
-    expect(buildMistralCatalogModels()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "codestral-latest",
-          input: ["text"],
-          contextWindow: 256000,
-          maxTokens: 4096,
-        }),
-        expect.objectContaining({
-          id: "magistral-small",
-          reasoning: true,
-          input: ["text"],
-          contextWindow: 128000,
-          maxTokens: 40000,
-        }),
-        expect.objectContaining({
-          id: "mistral-medium-3-5",
-          reasoning: true,
-          input: ["text", "image"],
-          contextWindow: 262144,
-          maxTokens: 8192,
-        }),
-        expect.objectContaining({
-          id: "mistral-small-latest",
-          reasoning: true,
-          input: ["text", "image"],
-          contextWindow: 128000,
-          maxTokens: 16384,
-        }),
-        expect.objectContaining({
-          id: "pixtral-large-latest",
-          input: ["text", "image"],
-          contextWindow: 128000,
-          maxTokens: 32768,
-        }),
-      ]),
-    );
+    const models = buildMistralCatalogModels();
+    const codestral = catalogModelById(models, "codestral-latest");
+    expect(codestral.input).toEqual(["text"]);
+    expect(codestral.contextWindow).toBe(256000);
+    expect(codestral.maxTokens).toBe(4096);
+
+    const magistralSmall = catalogModelById(models, "magistral-small");
+    expect(magistralSmall.reasoning).toBe(true);
+    expect(magistralSmall.input).toEqual(["text"]);
+    expect(magistralSmall.contextWindow).toBe(128000);
+    expect(magistralSmall.maxTokens).toBe(40000);
+
+    const medium = catalogModelById(models, "mistral-medium-3-5");
+    expect(medium.reasoning).toBe(true);
+    expect(medium.input).toEqual(["text", "image"]);
+    expect(medium.contextWindow).toBe(262144);
+    expect(medium.maxTokens).toBe(8192);
+
+    const smallLatest = catalogModelById(models, "mistral-small-latest");
+    expect(smallLatest.reasoning).toBe(true);
+    expect(smallLatest.input).toEqual(["text", "image"]);
+    expect(smallLatest.contextWindow).toBe(128000);
+    expect(smallLatest.maxTokens).toBe(16384);
+
+    const pixtralLarge = catalogModelById(models, "pixtral-large-latest");
+    expect(pixtralLarge.input).toEqual(["text", "image"]);
+    expect(pixtralLarge.contextWindow).toBe(128000);
+    expect(pixtralLarge.maxTokens).toBe(32768);
   });
 });

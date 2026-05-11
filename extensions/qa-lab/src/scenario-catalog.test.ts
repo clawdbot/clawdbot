@@ -21,13 +21,14 @@ describe("qa scenario catalog", () => {
       "qa/scenarios/media/image-generation-roundtrip.md",
     );
     const scenarioIds = pack.scenarios.map((scenario) => scenario.id);
-    expect(scenarioIds).toEqual(
-      expect.arrayContaining([
-        "image-generation-roundtrip",
-        "character-vibes-gollum",
-        "character-vibes-c3po",
-      ]),
-    );
+    const requiredScenarioIds = [
+      "image-generation-roundtrip",
+      "character-vibes-gollum",
+      "character-vibes-c3po",
+    ].toSorted();
+    expect(
+      scenarioIds.filter((scenarioId) => requiredScenarioIds.includes(scenarioId)).toSorted(),
+    ).toEqual(requiredScenarioIds);
     expect(
       pack.scenarios
         .filter((scenario) => scenario.execution?.kind !== "flow")

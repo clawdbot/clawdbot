@@ -56,23 +56,21 @@ describe("matrix reaction actions", () => {
 
     expect(doRequest).toHaveBeenCalledWith(
       "GET",
-      expect.stringContaining("/rooms/!room%3Aexample.org/relations/%24msg/"),
-      expect.objectContaining({ limit: 2 }),
+      "/_matrix/client/v1/rooms/!room%3Aexample.org/relations/%24msg/m.annotation/m.reaction",
+      { dir: "b", limit: 2 },
     );
-    expect(result).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          key: "👍",
-          count: 2,
-          users: expect.arrayContaining(["@alice:example.org", "@bob:example.org"]),
-        }),
-        expect.objectContaining({
-          key: "👎",
-          count: 1,
-          users: ["@alice:example.org"],
-        }),
-      ]),
-    );
+    expect(result).toStrictEqual([
+      {
+        key: "👍",
+        count: 2,
+        users: ["@alice:example.org", "@bob:example.org"],
+      },
+      {
+        key: "👎",
+        count: 1,
+        users: ["@alice:example.org"],
+      },
+    ]);
   });
 
   it("removes only current-user reactions matching emoji filter", async () => {

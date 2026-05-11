@@ -26,147 +26,131 @@ describe("filterSupportedLanguageHints", () => {
 
 describe("normalizeDiffViewerPayloadLanguages", () => {
   it("rewrites stale patch payload language overrides to plain text", async () => {
-    await expect(
-      normalizeDiffViewerPayloadLanguages({
-        prerenderedHTML: "<div>diff</div>",
-        options: {
-          theme: {
-            light: "pierre-light",
-            dark: "pierre-dark",
-          },
-          diffStyle: "unified",
-          diffIndicators: "bars",
-          disableLineNumbers: false,
-          expandUnchanged: false,
-          themeType: "dark",
-          backgroundEnabled: true,
-          overflow: "wrap",
-          unsafeCSS: "",
+    const result = await normalizeDiffViewerPayloadLanguages({
+      prerenderedHTML: "<div>diff</div>",
+      options: {
+        theme: {
+          light: "pierre-light",
+          dark: "pierre-dark",
         },
-        langs: ["not-a-real-language" as never],
-        fileDiff: {
-          name: "foo.txt",
-          lang: "not-a-real-language" as never,
-        } as unknown as FileDiffMetadata,
-      }),
-    ).resolves.toMatchObject({
-      langs: ["text"],
-      fileDiff: {
-        lang: "text",
+        diffStyle: "unified",
+        diffIndicators: "bars",
+        disableLineNumbers: false,
+        expandUnchanged: false,
+        themeType: "dark",
+        backgroundEnabled: true,
+        overflow: "wrap",
+        unsafeCSS: "",
       },
+      langs: ["not-a-real-language" as never],
+      fileDiff: {
+        name: "foo.txt",
+        lang: "not-a-real-language" as never,
+      } as unknown as FileDiffMetadata,
     });
+
+    expect(result.langs).toEqual(["text"]);
+    expect(result.fileDiff?.lang).toBe("text");
   });
 
   it("keeps valid hydrated languages and only downgrades invalid sides", async () => {
-    await expect(
-      normalizeDiffViewerPayloadLanguages({
-        prerenderedHTML: "<div>diff</div>",
-        options: {
-          theme: {
-            light: "pierre-light",
-            dark: "pierre-dark",
-          },
-          diffStyle: "split",
-          diffIndicators: "classic",
-          disableLineNumbers: true,
-          expandUnchanged: true,
-          themeType: "light",
-          backgroundEnabled: false,
-          overflow: "scroll",
-          unsafeCSS: "",
+    const result = await normalizeDiffViewerPayloadLanguages({
+      prerenderedHTML: "<div>diff</div>",
+      options: {
+        theme: {
+          light: "pierre-light",
+          dark: "pierre-dark",
         },
-        langs: ["typescript", "not-a-real-language" as never],
-        oldFile: {
-          name: "before.unknown",
-          contents: "before",
-          lang: "not-a-real-language" as never,
-        },
-        newFile: {
-          name: "after.ts",
-          contents: "after",
-          lang: "typescript",
-        },
-      }),
-    ).resolves.toMatchObject({
-      langs: ["typescript", "text"],
+        diffStyle: "split",
+        diffIndicators: "classic",
+        disableLineNumbers: true,
+        expandUnchanged: true,
+        themeType: "light",
+        backgroundEnabled: false,
+        overflow: "scroll",
+        unsafeCSS: "",
+      },
+      langs: ["typescript", "not-a-real-language" as never],
       oldFile: {
-        lang: "text",
+        name: "before.unknown",
+        contents: "before",
+        lang: "not-a-real-language" as never,
       },
       newFile: {
+        name: "after.ts",
+        contents: "after",
         lang: "typescript",
       },
     });
+
+    expect(result.langs).toEqual(["typescript", "text"]);
+    expect(result.oldFile?.lang).toBe("text");
+    expect(result.newFile?.lang).toBe("typescript");
   });
 
   it("rewrites blank explicit language overrides to plain text", async () => {
-    await expect(
-      normalizeDiffViewerPayloadLanguages({
-        prerenderedHTML: "<div>diff</div>",
-        options: {
-          theme: {
-            light: "pierre-light",
-            dark: "pierre-dark",
-          },
-          diffStyle: "unified",
-          diffIndicators: "bars",
-          disableLineNumbers: false,
-          expandUnchanged: false,
-          themeType: "dark",
-          backgroundEnabled: true,
-          overflow: "wrap",
-          unsafeCSS: "",
+    const result = await normalizeDiffViewerPayloadLanguages({
+      prerenderedHTML: "<div>diff</div>",
+      options: {
+        theme: {
+          light: "pierre-light",
+          dark: "pierre-dark",
         },
-        langs: ["   " as never],
-        oldFile: {
-          name: "before.unknown",
-          contents: "before",
-          lang: "   " as never,
-        },
-        newFile: {
-          name: "after.txt",
-          contents: "after",
-        },
-      }),
-    ).resolves.toMatchObject({
-      langs: ["text"],
+        diffStyle: "unified",
+        diffIndicators: "bars",
+        disableLineNumbers: false,
+        expandUnchanged: false,
+        themeType: "dark",
+        backgroundEnabled: true,
+        overflow: "wrap",
+        unsafeCSS: "",
+      },
+      langs: ["   " as never],
       oldFile: {
-        lang: "text",
+        name: "before.unknown",
+        contents: "before",
+        lang: "   " as never,
+      },
+      newFile: {
+        name: "after.txt",
+        contents: "after",
       },
     });
+
+    expect(result.langs).toEqual(["text"]);
+    expect(result.oldFile?.lang).toBe("text");
   });
 
   it("does not inject text when a valid file language is the only supported hint", async () => {
-    await expect(
-      normalizeDiffViewerPayloadLanguages({
-        prerenderedHTML: "<div>diff</div>",
-        options: {
-          theme: {
-            light: "pierre-light",
-            dark: "pierre-dark",
-          },
-          diffStyle: "unified",
-          diffIndicators: "bars",
-          disableLineNumbers: false,
-          expandUnchanged: false,
-          themeType: "dark",
-          backgroundEnabled: true,
-          overflow: "wrap",
-          unsafeCSS: "",
+    const result = await normalizeDiffViewerPayloadLanguages({
+      prerenderedHTML: "<div>diff</div>",
+      options: {
+        theme: {
+          light: "pierre-light",
+          dark: "pierre-dark",
         },
-        langs: [],
-        oldFile: {
-          name: "before.ts",
-          contents: "before",
-          lang: "typescript",
-        },
-        newFile: {
-          name: "after.ts",
-          contents: "after",
-          lang: "typescript",
-        },
-      }),
-    ).resolves.toMatchObject({
-      langs: ["typescript"],
+        diffStyle: "unified",
+        diffIndicators: "bars",
+        disableLineNumbers: false,
+        expandUnchanged: false,
+        themeType: "dark",
+        backgroundEnabled: true,
+        overflow: "wrap",
+        unsafeCSS: "",
+      },
+      langs: [],
+      oldFile: {
+        name: "before.ts",
+        contents: "before",
+        lang: "typescript",
+      },
+      newFile: {
+        name: "after.ts",
+        contents: "after",
+        lang: "typescript",
+      },
     });
+
+    expect(result.langs).toEqual(["typescript"]);
   });
 });

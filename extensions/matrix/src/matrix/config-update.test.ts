@@ -47,12 +47,11 @@ describe("updateMatrixAccountConfig", () => {
       encryption: false,
     });
 
-    expect(updated.channels?.["matrix"]?.accounts?.default).toMatchObject({
-      accessToken: "new-token",
-      encryption: false,
-    });
-    expect(updated.channels?.["matrix"]?.accounts?.default?.password).toBeUndefined();
-    expect(updated.channels?.["matrix"]?.accounts?.default?.userId).toBeUndefined();
+    const account = updated.channels?.["matrix"]?.accounts?.default;
+    expect(account?.accessToken).toBe("new-token");
+    expect(account?.encryption).toBe(false);
+    expect(account?.password).toBeUndefined();
+    expect(account?.userId).toBeUndefined();
   });
 
   it("preserves SecretRef auth inputs when updating config", () => {
@@ -96,11 +95,10 @@ describe("updateMatrixAccountConfig", () => {
       proxy: null,
     });
 
-    expect(updated.channels?.["matrix"]?.accounts?.default).toMatchObject({
-      allowBots: "mentions",
-    });
-    expect(updated.channels?.["matrix"]?.accounts?.default?.network).toBeUndefined();
-    expect(updated.channels?.["matrix"]?.accounts?.default?.proxy).toBeUndefined();
+    const account = updated.channels?.["matrix"]?.accounts?.default;
+    expect(account?.allowBots).toBe("mentions");
+    expect(account?.network).toBeUndefined();
+    expect(account?.proxy).toBeUndefined();
   });
 
   it("stores and clears Matrix invite auto-join settings", () => {
@@ -121,10 +119,12 @@ describe("updateMatrixAccountConfig", () => {
       autoJoin: "allowlist",
       autoJoinAllowlist: ["!ops-room:example.org", "#ops:example.org"],
     });
-    expect(allowlistUpdated.channels?.matrix?.accounts?.default).toMatchObject({
-      autoJoin: "allowlist",
-      autoJoinAllowlist: ["!ops-room:example.org", "#ops:example.org"],
-    });
+    const allowlistAccount = allowlistUpdated.channels?.matrix?.accounts?.default;
+    expect(allowlistAccount?.autoJoin).toBe("allowlist");
+    expect(allowlistAccount?.autoJoinAllowlist).toEqual([
+      "!ops-room:example.org",
+      "#ops:example.org",
+    ]);
 
     const offUpdated = updateMatrixAccountConfig(cfg, "default", {
       autoJoin: "off",
@@ -147,11 +147,10 @@ describe("updateMatrixAccountConfig", () => {
       homeserver: "https://matrix.example.org",
     });
 
-    expect(updated.channels?.["matrix"]?.accounts?.["main-bot"]).toMatchObject({
-      name: "Main Bot",
-      homeserver: "https://matrix.example.org",
-      enabled: true,
-    });
+    const account = updated.channels?.["matrix"]?.accounts?.["main-bot"];
+    expect(account?.name).toBe("Main Bot");
+    expect(account?.homeserver).toBe("https://matrix.example.org");
+    expect(account?.enabled).toBe(true);
   });
 
   it("updates nested access config for named accounts without touching top-level defaults", () => {
@@ -194,18 +193,17 @@ describe("updateMatrixAccountConfig", () => {
     expect(updated.channels?.["matrix"]?.groups).toEqual({
       "!default:example.org": { enabled: true },
     });
-    expect(updated.channels?.["matrix"]?.accounts?.ops).toMatchObject({
-      dm: {
-        enabled: true,
-        policy: "allowlist",
-        allowFrom: ["@alice:example.org"],
-      },
-      groupPolicy: "allowlist",
-      groups: {
-        "!ops-room:example.org": { enabled: true },
-      },
+    const account = updated.channels?.["matrix"]?.accounts?.ops;
+    expect(account?.dm).toEqual({
+      enabled: true,
+      policy: "allowlist",
+      allowFrom: ["@alice:example.org"],
     });
-    expect(updated.channels?.["matrix"]?.accounts?.ops?.rooms).toBeUndefined();
+    expect(account?.groupPolicy).toBe("allowlist");
+    expect(account?.groups).toEqual({
+      "!ops-room:example.org": { enabled: true },
+    });
+    expect(account?.rooms).toBeUndefined();
   });
 
   it("reuses and canonicalizes non-normalized account entries when updating", () => {
@@ -227,11 +225,10 @@ describe("updateMatrixAccountConfig", () => {
     });
 
     expect(updated.channels?.["matrix"]?.accounts?.Ops).toBeUndefined();
-    expect(updated.channels?.["matrix"]?.accounts?.ops).toMatchObject({
-      homeserver: "https://matrix.ops.example.org",
-      accessToken: "ops-token",
-      deviceName: "Ops Bot",
-      enabled: true,
-    });
+    const account = updated.channels?.["matrix"]?.accounts?.ops;
+    expect(account?.homeserver).toBe("https://matrix.ops.example.org");
+    expect(account?.accessToken).toBe("ops-token");
+    expect(account?.deviceName).toBe("Ops Bot");
+    expect(account?.enabled).toBe(true);
   });
 });

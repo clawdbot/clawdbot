@@ -282,6 +282,82 @@ function createMockReplyOperation(): {
   };
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(typeof value).toBe("object");
+  expect(value).not.toBeNull();
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`${label} was not an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+function requireMockCall(mock: unknown, index: number, label: string): unknown[] {
+  const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.[index];
+  expect(call).toBeDefined();
+  if (!call) {
+    throw new Error(`missing ${label} call ${index + 1}`);
+  }
+  return call;
+}
+
+function expectMockCallArgFields(
+  mock: unknown,
+  index: number,
+  label: string,
+  fields: Record<string, unknown>,
+) {
+  expectRecordFields(requireRecord(requireMockCall(mock, index, label)[0], label), fields);
+}
+
+function expectNoMockCallWithFields(mock: unknown, fields: Record<string, unknown>) {
+  const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls ?? [];
+  const hasMatchingCall = calls.some((call) => {
+    const value = call[0];
+    if (typeof value !== "object" || value === null) {
+      return false;
+    }
+    const record = value as Record<string, unknown>;
+    return Object.entries(fields).every(([key, expected]) => record[key] === expected);
+  });
+  expect(hasMatchingCall).toBe(false);
+}
+
+function requireMockCallArgWithFields(
+  mock: unknown,
+  fields: Record<string, unknown>,
+  label: string,
+) {
+  const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls ?? [];
+  const found = calls
+    .map((call) => call[0])
+    .find((value) => {
+      if (typeof value !== "object" || value === null) {
+        return false;
+      }
+      const record = value as Record<string, unknown>;
+      return Object.entries(fields).every(([key, expected]) => record[key] === expected);
+    });
+  expect(found).toBeDefined();
+  if (!found) {
+    throw new Error(`missing ${label}`);
+  }
+  return requireRecord(found, label);
+}
+
+function expectBlockReplyCall(
+  onBlockReply: unknown,
+  index: number,
+  fields: Record<string, unknown>,
+) {
+  expectMockCallArgFields(onBlockReply, index, "block reply payload", fields);
+}
+
 function createMinimalRunAgentTurnParams(overrides?: {
   followupRun?: FollowupRun;
   opts?: GetReplyOptions;
@@ -460,15 +536,13 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(state.runCliAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        extraSystemPrompt: "dynamic inbound metadata\n\nstable group prompt",
-        extraSystemPromptStatic: "stable group prompt",
-        trigger: "user",
-        messageChannel: "telegram",
-        messageProvider: "telegram",
-      }),
-    );
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      extraSystemPrompt: "dynamic inbound metadata\n\nstable group prompt",
+      extraSystemPromptStatic: "stable group prompt",
+      trigger: "user",
+      messageChannel: "telegram",
+      messageProvider: "telegram",
+    });
   });
 
   it("bridges CLI assistant agent events into onPartialReply for live preview (#76869)", async () => {
@@ -716,12 +790,10 @@ describe("runAgentTurnWithFallback", () => {
       resolvedVerboseLevel: "off",
     });
 
-    expect(state.runCliAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messageChannel: undefined,
-        messageProvider: "discord",
-      }),
-    );
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      messageChannel: undefined,
+      messageProvider: "discord",
+    });
   });
 
   it("does not pass CLI runtime overrides as embedded harness ids for fallback providers", async () => {
@@ -809,7 +881,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
     expect(typingSignals.signalTextDelta).not.toHaveBeenCalled();
     expect(onToolResult).toHaveBeenCalledTimes(1);
-    expect(onToolResult.mock.calls[0]?.[0]).toMatchObject({
+    expectMockCallArgFields(onToolResult, 0, "tool result payload", {
       mediaUrls: ["/tmp/generated.png"],
     });
     expect(onToolResult.mock.calls[0]?.[0]?.text).toBeUndefined();
@@ -921,15 +993,14 @@ describe("runAgentTurnWithFallback", () => {
       const first = (await params.run("openai-codex", "gpt-5.4")) as {
         payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }>;
       };
-      expect(
-        await params.classifyResult?.({
-          result: first,
-          provider: "openai-codex",
-          model: "gpt-5.4",
-          attempt: 1,
-          total: 2,
-        }),
-      ).toMatchObject({
+      const classification = await params.classifyResult?.({
+        result: first,
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        attempt: 1,
+        total: 2,
+      });
+      expectRecordFields(requireRecord(classification, "fallback classification"), {
         reason: "format",
         code: "planning_only_result",
       });
@@ -1077,15 +1148,14 @@ describe("runAgentTurnWithFallback", () => {
   it("classifies final GPT-5 terminal-empty results instead of silently succeeding", async () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const result = { payloads: [], meta: {} };
-      expect(
-        await params.classifyResult?.({
-          result,
-          provider: "openai-codex",
-          model: "gpt-5.4",
-          attempt: 1,
-          total: 1,
-        }),
-      ).toMatchObject({
+      const classification = await params.classifyResult?.({
+        result,
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        attempt: 1,
+        total: 1,
+      });
+      expectRecordFields(requireRecord(classification, "fallback classification"), {
         reason: "format",
         code: "empty_result",
       });
@@ -1119,15 +1189,14 @@ describe("runAgentTurnWithFallback", () => {
       const failedResult = await params.run("openai-codex", "gpt-5.4");
       expect(sessionEntry.providerOverride).toBe("openai-codex");
       expect(sessionEntry.modelOverride).toBe("gpt-5.4");
-      expect(
-        await params.classifyResult?.({
-          result: failedResult as { payloads?: [] },
-          provider: "openai-codex",
-          model: "gpt-5.4",
-          attempt: 1,
-          total: 2,
-        }),
-      ).toMatchObject({
+      const classification = await params.classifyResult?.({
+        result: failedResult as { payloads?: [] },
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        attempt: 1,
+        total: 2,
+      });
+      expectRecordFields(requireRecord(classification, "fallback classification"), {
         code: "empty_result",
       });
       expect(sessionEntry.providerOverride).toBeUndefined();
@@ -1566,12 +1635,10 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(emitAgentEvent).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-codex",
-        stream: "codex_app_server.guardian",
-      }),
-    );
+    expectNoMockCallWithFields(emitAgentEvent, {
+      runId: "run-codex",
+      stream: "codex_app_server.guardian",
+    });
   });
 
   it("emits an embedded lifecycle terminal backstop when the runner returns without one", async () => {
@@ -1614,19 +1681,28 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(emitAgentEvent).toHaveBeenCalledWith({
+    const lifecycleEvent = requireRecord(
+      requireMockCallArgWithFields(
+        emitAgentEvent,
+        { runId: "run-timeout", sessionKey: "main", stream: "lifecycle" },
+        "agent event",
+      ),
+      "agent event",
+    );
+    expectRecordFields(lifecycleEvent, {
       runId: "run-timeout",
       sessionKey: "main",
       stream: "lifecycle",
-      data: {
-        phase: "end",
-        startedAt: 1_000,
-        endedAt: expect.any(Number),
-        aborted: true,
-        livenessState: "blocked",
-        replayInvalid: true,
-      },
     });
+    const lifecycleData = requireRecord(lifecycleEvent.data, "lifecycle data");
+    expectRecordFields(lifecycleData, {
+      phase: "end",
+      startedAt: 1_000,
+      aborted: true,
+      livenessState: "blocked",
+      replayInvalid: true,
+    });
+    expect(typeof lifecycleData.endedAt).toBe("number");
   });
 
   it("does not duplicate embedded lifecycle terminal events already reported by the runner", async () => {
@@ -1670,12 +1746,10 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(emitAgentEvent).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-complete",
-        stream: "lifecycle",
-      }),
-    );
+    expectNoMockCallWithFields(emitAgentEvent, {
+      runId: "run-complete",
+      stream: "lifecycle",
+    });
   });
 
   it("trims chatty GPT ack-turn final prose", async () => {
@@ -2047,14 +2121,12 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("success");
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "🧹 Compacting context...",
-        replyToId: "msg",
-        replyToCurrent: true,
-        isCompactionNotice: true,
-      }),
-    );
+    expectBlockReplyCall(onBlockReply, 0, {
+      text: "🧹 Compacting context...",
+      replyToId: "msg",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
   });
 
   it("emits a compaction completion notice when notifyUser is enabled", async () => {
@@ -2105,24 +2177,18 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(onBlockReply).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        text: "🧹 Compacting context...",
-        replyToId: "msg",
-        replyToCurrent: true,
-        isCompactionNotice: true,
-      }),
-    );
-    expect(onBlockReply).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        text: "🧹 Compaction complete",
-        replyToId: "msg",
-        replyToCurrent: true,
-        isCompactionNotice: true,
-      }),
-    );
+    expectBlockReplyCall(onBlockReply, 0, {
+      text: "🧹 Compacting context...",
+      replyToId: "msg",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expectBlockReplyCall(onBlockReply, 1, {
+      text: "🧹 Compaction complete",
+      replyToId: "msg",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
   });
 
   it("delivers compaction hook messages without duplicating notifyUser notices", async () => {
@@ -2177,24 +2243,18 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("success");
     expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expect(onBlockReply).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        text: "Hook before",
-        replyToId: "msg",
-        replyToCurrent: true,
-        isCompactionNotice: true,
-      }),
-    );
-    expect(onBlockReply).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        text: "Hook after",
-        replyToId: "msg",
-        replyToCurrent: true,
-        isCompactionNotice: true,
-      }),
-    );
+    expectBlockReplyCall(onBlockReply, 0, {
+      text: "Hook before",
+      replyToId: "msg",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expectBlockReplyCall(onBlockReply, 1, {
+      text: "Hook after",
+      replyToId: "msg",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
   });
 
   it("prefers onCompactionEnd callback over default notice when notifyUser is enabled", async () => {
@@ -2250,12 +2310,10 @@ describe("runAgentTurnWithFallback", () => {
     // The start notice still fires (no onCompactionStart callback provided),
     // but the completion notice is suppressed in favor of the callback.
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "🧹 Compacting context...",
-        isCompactionNotice: true,
-      }),
-    );
+    expectBlockReplyCall(onBlockReply, 0, {
+      text: "🧹 Compacting context...",
+      isCompactionNotice: true,
+    });
   });
 
   it("emits an incomplete compaction notice when compaction ends without completing", async () => {
@@ -2306,20 +2364,14 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(onBlockReply).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        text: "🧹 Compacting context...",
-        isCompactionNotice: true,
-      }),
-    );
-    expect(onBlockReply).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        text: "🧹 Compaction incomplete",
-        isCompactionNotice: true,
-      }),
-    );
+    expectBlockReplyCall(onBlockReply, 0, {
+      text: "🧹 Compacting context...",
+      isCompactionNotice: true,
+    });
+    expectBlockReplyCall(onBlockReply, 1, {
+      text: "🧹 Compaction incomplete",
+      isCompactionNotice: true,
+    });
   });
 
   it("does not show a rate-limit countdown for mixed-cause fallback exhaustion", async () => {
@@ -2420,7 +2472,7 @@ describe("runAgentTurnWithFallback", () => {
     if (result.kind === "final") {
       expect(result.payload.text).toBe(`⚠️ ${codexMessage}`);
       expect(result.payload.text).not.toContain("All models failed");
-      expect(getReplyPayloadMetadata(result.payload)).toMatchObject({
+      expectRecordFields(requireRecord(getReplyPayloadMetadata(result.payload), "reply metadata"), {
         deliverDespiteSourceReplySuppression: true,
       });
     }
@@ -2459,7 +2511,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(`⚠️ ${codexMessage}`);
-      expect(getReplyPayloadMetadata(result.payload)).toMatchObject({
+      expectRecordFields(requireRecord(getReplyPayloadMetadata(result.payload), "reply metadata"), {
         deliverDespiteSourceReplySuppression: true,
       });
     }
@@ -2572,7 +2624,9 @@ describe("runAgentTurnWithFallback", () => {
         "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
       );
     }
-    expect(failMock).toHaveBeenCalledWith("gateway_draining", expect.any(GatewayDrainingError));
+    const failCall = requireMockCall(failMock, 0, "reply operation fail");
+    expect(failCall[0]).toBe("gateway_draining");
+    expect(failCall[1]).toBeInstanceOf(GatewayDrainingError);
   });
 
   it("surfaces gateway restart text when fallback exhaustion wraps a cleared lane error", async () => {
@@ -2624,10 +2678,9 @@ describe("runAgentTurnWithFallback", () => {
         "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
       );
     }
-    expect(failMock).toHaveBeenCalledWith(
-      "command_lane_cleared",
-      expect.any(CommandLaneClearedError),
-    );
+    const failCall = requireMockCall(failMock, 0, "reply operation fail");
+    expect(failCall[0]).toBe("command_lane_cleared");
+    expect(failCall[1]).toBeInstanceOf(CommandLaneClearedError);
   });
 
   it("surfaces gateway restart text when the reply operation was aborted for restart", async () => {
@@ -3475,7 +3528,7 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("success");
     expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(state.runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+    expectMockCallArgFields(state.runEmbeddedPiAgentMock, 0, "embedded run params", {
       provider: "openai-codex",
       model: "gpt-5.4",
       authProfileId: undefined,
@@ -3647,7 +3700,7 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(updated).toBe(true);
-    expect(entry).toMatchObject({
+    expectRecordFields(entry as unknown as Record<string, unknown>, {
       updatedAt: 123,
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet",
@@ -3684,7 +3737,7 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(updated).toBe(true);
-    expect(entry).toMatchObject({
+    expectRecordFields(entry as unknown as Record<string, unknown>, {
       updatedAt: 123,
       providerOverride: "openrouter",
       modelOverride: "fallback-c",

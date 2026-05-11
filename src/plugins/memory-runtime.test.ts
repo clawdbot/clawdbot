@@ -71,31 +71,26 @@ function createMemoryRuntimeFixture() {
 }
 
 function expectMemoryRuntimeLoaded(
-  rawConfig: unknown,
-  autoEnabledConfig: unknown,
+  config: unknown,
   pluginIds: readonly string[] = ["memory-core"],
 ) {
-  void rawConfig;
-  void autoEnabledConfig;
-  expect(getLoadedRuntimePluginRegistryMock).toHaveBeenCalledWith(
-    expect.objectContaining({
-      requiredPluginIds: pluginIds,
-    }),
-  );
-  expect(ensureStandaloneRuntimePluginRegistryLoadedMock).toHaveBeenCalledWith(
-    expect.objectContaining({
-      requiredPluginIds: pluginIds,
-      loadOptions: expect.objectContaining({
-        onlyPluginIds: pluginIds,
-        workspaceDir: "/resolved-workspace",
-      }),
-    }),
-  );
+  expect(getLoadedRuntimePluginRegistryMock).toHaveBeenCalledWith({
+    requiredPluginIds: pluginIds,
+  });
+  expect(ensureStandaloneRuntimePluginRegistryLoadedMock).toHaveBeenCalledWith({
+    requiredPluginIds: pluginIds,
+    loadOptions: {
+      config,
+      onlyPluginIds: pluginIds,
+      workspaceDir: "/resolved-workspace",
+    },
+  });
 }
 
 function expectMemoryAutoEnableApplied(rawConfig: unknown, autoEnabledConfig: unknown) {
   expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();
-  expectMemoryRuntimeLoaded(rawConfig, autoEnabledConfig);
+  expectMemoryRuntimeLoaded(rawConfig);
+  expect(rawConfig).not.toBe(autoEnabledConfig);
 }
 
 function setAutoEnabledMemoryRuntime() {
@@ -216,7 +211,7 @@ describe("memory runtime auto-enable loading", () => {
       agentId: "main",
     });
 
-    expectMemoryRuntimeLoaded(rawConfig, rawConfig, ["memory-lancedb"]);
+    expectMemoryRuntimeLoaded(rawConfig, ["memory-lancedb"]);
   });
 
   it("does not fall back to broad plugin loading when the memory slot is disabled", async () => {

@@ -210,11 +210,9 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     expect(res.statusCode).toBe(200);
     const parsed = parseJsonBody(res);
     expect(parsed.ok).toBe(true);
-    expect(parsed.result.flow).toMatchObject({
-      syncMode: "managed",
-      controllerId: "webhooks/zapier",
-      goal: "Review inbound queue",
-    });
+    expect(parsed.result.flow.syncMode).toBe("managed");
+    expect(parsed.result.flow.controllerId).toBe("webhooks/zapier");
+    expect(parsed.result.flow.goal).toBe("Review inbound queue");
     expect(parsed.result.flow.ownerKey).toBeUndefined();
     expect(parsed.result.flow.requesterOrigin).toBeUndefined();
     expect(target.taskFlow.get(parsed.result.flow.flowId)?.flowId).toBe(parsed.result.flow.flowId);
@@ -246,11 +244,9 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     const parsed = parseJsonBody(res);
     expect(parsed.ok).toBe(true);
     expect(parsed.result.created).toBe(true);
-    expect(parsed.result.task).toMatchObject({
-      parentFlowId: flow.flowId,
-      childSessionKey: "agent:main:subagent:child",
-      runtime: "acp",
-    });
+    expect(parsed.result.task.parentFlowId).toBe(flow.flowId);
+    expect(parsed.result.task.childSessionKey).toBe("agent:main:subagent:child");
+    expect(parsed.result.task.runtime).toBe("acp");
     expect(parsed.result.task.ownerKey).toBeUndefined();
     expect(parsed.result.task.requesterSessionKey).toBeUndefined();
   });
@@ -270,15 +266,11 @@ describe("createTaskFlowWebhookRequestHandler", () => {
 
     expect(res.statusCode).toBe(404);
     const parsed = parseJsonBody(res);
-    expect(parsed).toMatchObject({
-      ok: false,
-      code: "not_found",
-      error: "TaskFlow not found.",
-      result: {
-        applied: false,
-        code: "not_found",
-      },
-    });
+    expect(parsed.ok).toBe(false);
+    expect(parsed.code).toBe("not_found");
+    expect(parsed.error).toBe("TaskFlow not found.");
+    expect(parsed.result.applied).toBe(false);
+    expect(parsed.result.code).toBe("not_found");
   });
 
   it("returns 409 for revision conflicts", async () => {
@@ -300,18 +292,12 @@ describe("createTaskFlowWebhookRequestHandler", () => {
 
     expect(res.statusCode).toBe(409);
     const parsed = parseJsonBody(res);
-    expect(parsed).toMatchObject({
-      ok: false,
-      code: "revision_conflict",
-      result: {
-        applied: false,
-        code: "revision_conflict",
-        current: {
-          flowId: flow.flowId,
-          revision: flow.revision,
-        },
-      },
-    });
+    expect(parsed.ok).toBe(false);
+    expect(parsed.code).toBe("revision_conflict");
+    expect(parsed.result.applied).toBe(false);
+    expect(parsed.result.code).toBe("revision_conflict");
+    expect(parsed.result.current.flowId).toBe(flow.flowId);
+    expect(parsed.result.current.revision).toBe(flow.revision);
   });
 
   it("rejects internal runtimes and running-only metadata from external callers", async () => {
@@ -333,10 +319,9 @@ describe("createTaskFlowWebhookRequestHandler", () => {
       },
     });
     expect(runtimeRes.statusCode).toBe(400);
-    expect(parseJsonBody(runtimeRes)).toMatchObject({
-      ok: false,
-      code: "invalid_request",
-    });
+    const runtimeParsed = parseJsonBody(runtimeRes);
+    expect(runtimeParsed.ok).toBe(false);
+    expect(runtimeParsed.code).toBe("invalid_request");
 
     const queuedMetadataRes = await dispatchJsonRequest({
       handler,
@@ -351,12 +336,12 @@ describe("createTaskFlowWebhookRequestHandler", () => {
       },
     });
     expect(queuedMetadataRes.statusCode).toBe(400);
-    expect(parseJsonBody(queuedMetadataRes)).toMatchObject({
-      ok: false,
-      code: "invalid_request",
-      error:
-        "status: status must be running when startedAt, lastEventAt, or progressSummary is provided",
-    });
+    const queuedMetadataParsed = parseJsonBody(queuedMetadataRes);
+    expect(queuedMetadataParsed.ok).toBe(false);
+    expect(queuedMetadataParsed.code).toBe("invalid_request");
+    expect(queuedMetadataParsed.error).toBe(
+      "status: status must be running when startedAt, lastEventAt, or progressSummary is provided",
+    );
   });
 
   it("reuses the same task record when retried with the same runId", async () => {
@@ -424,15 +409,12 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     });
 
     expect(res.statusCode).toBe(409);
-    expect(parseJsonBody(res)).toMatchObject({
-      ok: false,
-      code: "terminal",
-      error: "Flow is already succeeded.",
-      result: {
-        found: true,
-        cancelled: false,
-        reason: "Flow is already succeeded.",
-      },
-    });
+    const parsed = parseJsonBody(res);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.code).toBe("terminal");
+    expect(parsed.error).toBe("Flow is already succeeded.");
+    expect(parsed.result.found).toBe(true);
+    expect(parsed.result.cancelled).toBe(false);
+    expect(parsed.result.reason).toBe("Flow is already succeeded.");
   });
 });

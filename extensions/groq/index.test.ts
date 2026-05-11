@@ -8,12 +8,17 @@ describe("groq provider compat", () => {
     expect(resolveGroqReasoningCompatPatch("qwen/qwen3-32b")).toEqual({
       supportsReasoningEffort: true,
       supportedReasoningEfforts: ["none", "default"],
-      reasoningEffortMap: expect.objectContaining({
+      reasoningEffortMap: {
+        adaptive: "default",
+        high: "default",
         off: "none",
+        none: "none",
+        minimal: "default",
         low: "default",
         medium: "default",
-        high: "default",
-      }),
+        max: "default",
+        xhigh: "default",
+      },
     });
   });
 
@@ -30,7 +35,21 @@ describe("groq provider compat", () => {
         modelId: "qwen/qwen3-32b",
         model: { api: "openai-completions", provider: "groq" },
       }),
-    ).toMatchObject({ supportedReasoningEfforts: ["none", "default"] });
+    ).toEqual({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "default"],
+      reasoningEffortMap: {
+        adaptive: "default",
+        high: "default",
+        off: "none",
+        none: "none",
+        minimal: "default",
+        low: "default",
+        medium: "default",
+        max: "default",
+        xhigh: "default",
+      },
+    });
     expect(
       contributeGroqResolvedModelCompat({
         modelId: "qwen/qwen3-32b",
@@ -41,16 +60,31 @@ describe("groq provider compat", () => {
 
   it("registers Groq model and media providers", () => {
     const captured = capturePluginRegistration(plugin);
-    expect(captured.providers[0]).toMatchObject({
+    const [provider] = captured.providers;
+    if (!provider) {
+      throw new Error("Expected Groq provider");
+    }
+    const { contributeResolvedModelCompat, ...providerMetadata } = provider;
+    expect(providerMetadata).toEqual({
+      auth: [],
+      docsPath: "/providers/groq",
+      envVars: ["GROQ_API_KEY"],
       id: "groq",
       label: "Groq",
-      envVars: ["GROQ_API_KEY"],
     });
+    expect(contributeResolvedModelCompat).toBeTypeOf("function");
     expect(captured.mediaUnderstandingProviders).toHaveLength(1);
     const [mediaProvider] = captured.mediaUnderstandingProviders;
     if (!mediaProvider) {
       throw new Error("Expected Groq media understanding provider");
     }
-    expect(mediaProvider.id).toBe("groq");
+    const { transcribeAudio, ...mediaProviderMetadata } = mediaProvider;
+    expect(mediaProviderMetadata).toEqual({
+      autoPriority: { audio: 20 },
+      capabilities: ["audio"],
+      defaultModels: { audio: "whisper-large-v3-turbo" },
+      id: "groq",
+    });
+    expect(transcribeAudio).toBeTypeOf("function");
   });
 });

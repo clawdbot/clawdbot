@@ -1,16 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 
-function collectLegacyExtendedLevelIds(levels: readonly { id: string }[] | undefined): string[] {
-  const ids: string[] = [];
-  for (const level of levels ?? []) {
-    if (level.id === "xhigh" || level.id === "max") {
-      ids.push(level.id);
-    }
-  }
-  return ids;
-}
-
 describe("opencode provider policy public artifact", () => {
   it("exposes Claude Opus 4.7 thinking levels without loading the full provider plugin", () => {
     expect(
@@ -18,8 +8,17 @@ describe("opencode provider policy public artifact", () => {
         provider: "opencode",
         modelId: "claude-opus-4-7",
       }),
-    ).toMatchObject({
-      levels: expect.arrayContaining([{ id: "xhigh" }, { id: "adaptive" }, { id: "max" }]),
+    ).toEqual({
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "xhigh" },
+        { id: "adaptive" },
+        { id: "max" },
+      ],
       defaultLevel: "off",
     });
   });
@@ -30,10 +29,16 @@ describe("opencode provider policy public artifact", () => {
       modelId: "claude-opus-4-6",
     });
 
-    expect(profile).toMatchObject({
-      levels: expect.arrayContaining([{ id: "adaptive" }]),
+    expect(profile).toEqual({
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "adaptive" },
+      ],
       defaultLevel: "adaptive",
     });
-    expect(collectLegacyExtendedLevelIds(profile.levels)).toStrictEqual([]);
   });
 });

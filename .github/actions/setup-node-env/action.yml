@@ -10,11 +10,11 @@ inputs:
   cache-key-suffix:
     description: Suffix appended to the pnpm store cache key.
     required: false
-    default: "node24"
+    default: "node24-pnpm11"
   pnpm-version:
     description: pnpm version for corepack.
     required: false
-    default: "10.33.0"
+    default: "11.0.8"
   install-bun:
     description: Whether to install Bun alongside Node.
     required: false

@@ -26,7 +26,16 @@ describe("movePathWithCopyFallback", () => {
         ).rejects.toThrow("Hardlinked source file is not allowed");
 
         await expect(fs.readFile(sourceFile, "utf8")).resolves.toBe("hello");
-        await expect(fs.stat(targetDir)).rejects.toMatchObject({ code: "ENOENT" });
+        let statError: NodeJS.ErrnoException | undefined;
+        try {
+          await fs.stat(targetDir);
+        } catch (error) {
+          statError = error as NodeJS.ErrnoException;
+        }
+        expect(statError).toBeInstanceOf(Error);
+        expect(statError?.code).toBe("ENOENT");
+        expect(statError?.path).toBe(targetDir);
+        expect(statError?.syscall).toBe("stat");
       });
     },
   );

@@ -18,7 +18,7 @@ describe("fireAndForgetHook", () => {
       logger,
     );
     await Promise.resolve();
-    expect(logger).toHaveBeenCalledWith(expect.stringMatching(/^hook failed: boom forged secret/));
+    expect(logger).toHaveBeenCalledWith("hook failed: boom forged secret ***");
     const message = requireFirstLog(logger);
     expect(message).not.toContain("\n");
     expect(message).not.toContain("sk-test1234567890");

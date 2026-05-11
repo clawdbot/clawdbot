@@ -26,6 +26,87 @@ const useTwoAuthProfiles = () => {
   }));
 };
 
+type CompactRuntimeContext = {
+  promptCache?: {
+    retention?: string;
+    lastCallUsage?: {
+      input?: number;
+      cacheRead?: number;
+    };
+    observation?: {
+      broke?: boolean;
+      cacheRead?: number;
+    };
+    lastCacheTouchAt?: number;
+  };
+  trigger?: string;
+  attempt?: number;
+  maxAttempts?: number;
+  messageChannel?: string;
+  messageProvider?: string;
+  agentAccountId?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  currentMessageId?: string;
+  senderId?: string;
+  senderIsOwner?: boolean;
+  authProfileId?: string;
+};
+
+type CompactParams = {
+  sessionId?: string;
+  sessionFile?: string;
+  tokenBudget?: number;
+  force?: boolean;
+  compactionTarget?: string;
+  runtimeContext?: CompactRuntimeContext;
+};
+
+type AttemptParams = {
+  sessionId?: string;
+  sessionFile?: string;
+  authProfileId?: string;
+};
+
+type HookEvent = {
+  messageCount?: number;
+  compactedCount?: number;
+  tokenCount?: number;
+  sessionFile?: string;
+};
+
+type HookContext = {
+  sessionKey?: string;
+};
+
+function compactCallAt(index: number): CompactParams {
+  const call = mockedCompactDirect.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected compact call ${index + 1}`);
+  }
+  return call[0] as CompactParams;
+}
+
+function attemptCallAt(index: number): AttemptParams {
+  const call = mockedRunEmbeddedAttempt.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected embedded attempt call ${index + 1}`);
+  }
+  return call[0] as AttemptParams;
+}
+
+function hookCallAt(index: number, kind: "before" | "after"): [HookEvent, HookContext] {
+  const mock =
+    kind === "before"
+      ? mockedGlobalHookRunner.runBeforeCompaction
+      : mockedGlobalHookRunner.runAfterCompaction;
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected ${kind} compaction hook call ${index + 1}`);
+  }
+  return call as unknown as [HookEvent, HookContext];
+}
+
 describe("timeout-triggered compaction", () => {
   beforeAll(async () => {
     ({ runEmbeddedPiAgent } = await loadRunOverflowCompactionHarness());
@@ -72,32 +153,21 @@ describe("timeout-triggered compaction", () => {
     const result = await runEmbeddedPiAgent(overflowBaseRunParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedCompactDirect).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "test-session",
-        sessionFile: "/tmp/session.json",
-        tokenBudget: 200000,
-        force: true,
-        compactionTarget: "budget",
-        runtimeContext: expect.objectContaining({
-          promptCache: expect.objectContaining({
-            retention: "short",
-            lastCallUsage: expect.objectContaining({
-              input: 150000,
-              cacheRead: 32000,
-            }),
-            observation: expect.objectContaining({
-              broke: false,
-              cacheRead: 32000,
-            }),
-            lastCacheTouchAt: 1_700_000_000_000,
-          }),
-          trigger: "timeout_recovery",
-          attempt: 1,
-          maxAttempts: 2,
-        }),
-      }),
-    );
+    const compactParams = compactCallAt(0);
+    expect(compactParams.sessionId).toBe("test-session");
+    expect(compactParams.sessionFile).toBe("/tmp/session.json");
+    expect(compactParams.tokenBudget).toBe(200000);
+    expect(compactParams.force).toBe(true);
+    expect(compactParams.compactionTarget).toBe("budget");
+    expect(compactParams.runtimeContext?.promptCache?.retention).toBe("short");
+    expect(compactParams.runtimeContext?.promptCache?.lastCallUsage?.input).toBe(150000);
+    expect(compactParams.runtimeContext?.promptCache?.lastCallUsage?.cacheRead).toBe(32000);
+    expect(compactParams.runtimeContext?.promptCache?.observation?.broke).toBe(false);
+    expect(compactParams.runtimeContext?.promptCache?.observation?.cacheRead).toBe(32000);
+    expect(compactParams.runtimeContext?.promptCache?.lastCacheTouchAt).toBe(1_700_000_000_000);
+    expect(compactParams.runtimeContext?.trigger).toBe("timeout_recovery");
+    expect(compactParams.runtimeContext?.attempt).toBe(1);
+    expect(compactParams.runtimeContext?.maxAttempts).toBe(2);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.meta.error).toBeUndefined();
     expect(result.meta.agentMeta?.compactionTokensAfter).toBe(80_000);
@@ -136,13 +206,9 @@ describe("timeout-triggered compaction", () => {
 
     // Verify the loop continued (retry happened)
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        sessionId: "timeout-rotated-session",
-        sessionFile: "/tmp/timeout-rotated-session.json",
-      }),
-    );
+    const retryParams = attemptCallAt(1);
+    expect(retryParams.sessionId).toBe("timeout-rotated-session");
+    expect(retryParams.sessionFile).toBe("/tmp/timeout-rotated-session.json");
     expect(mockedRunPostCompactionSideEffects).not.toHaveBeenCalled();
     expect(result.meta.error).toBeUndefined();
   });
@@ -177,20 +243,16 @@ describe("timeout-triggered compaction", () => {
       senderIsOwner: true,
     });
 
-    expect(mockedCompactDirect).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimeContext: expect.objectContaining({
-          messageChannel: "slack",
-          messageProvider: "slack",
-          agentAccountId: "acct-1",
-          currentChannelId: "channel-1",
-          currentThreadTs: "thread-1",
-          currentMessageId: "message-1",
-          senderId: "sender-1",
-          senderIsOwner: true,
-        }),
-      }),
-    );
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    const compactParams = compactCallAt(0);
+    expect(compactParams.runtimeContext?.messageChannel).toBe("slack");
+    expect(compactParams.runtimeContext?.messageProvider).toBe("slack");
+    expect(compactParams.runtimeContext?.agentAccountId).toBe("acct-1");
+    expect(compactParams.runtimeContext?.currentChannelId).toBe("channel-1");
+    expect(compactParams.runtimeContext?.currentThreadTs).toBe("thread-1");
+    expect(compactParams.runtimeContext?.currentMessageId).toBe("message-1");
+    expect(compactParams.runtimeContext?.senderId).toBe("sender-1");
+    expect(compactParams.runtimeContext?.senderIsOwner).toBe(true);
   });
 
   it("falls through to normal handling when timeout compaction fails", async () => {
@@ -448,23 +510,17 @@ describe("timeout-triggered compaction", () => {
 
     await runEmbeddedPiAgent(overflowBaseRunParams);
 
-    expect(mockedGlobalHookRunner.runBeforeCompaction).toHaveBeenCalledWith(
-      { messageCount: -1, sessionFile: "/tmp/session.json" },
-      expect.objectContaining({
-        sessionKey: "test-key",
-      }),
-    );
-    expect(mockedGlobalHookRunner.runAfterCompaction).toHaveBeenCalledWith(
-      {
-        messageCount: -1,
-        compactedCount: -1,
-        tokenCount: 70,
-        sessionFile: "/tmp/session.json",
-      },
-      expect.objectContaining({
-        sessionKey: "test-key",
-      }),
-    );
+    const [beforeEvent, beforeContext] = hookCallAt(0, "before");
+    expect(beforeEvent).toEqual({ messageCount: -1, sessionFile: "/tmp/session.json" });
+    expect(beforeContext.sessionKey).toBe("test-key");
+    const [afterEvent, afterContext] = hookCallAt(0, "after");
+    expect(afterEvent).toEqual({
+      messageCount: -1,
+      compactedCount: -1,
+      tokenCount: 70,
+      sessionFile: "/tmp/session.json",
+    });
+    expect(afterContext.sessionKey).toBe("test-key");
     expect(mockedRunPostCompactionSideEffects).toHaveBeenCalledTimes(1);
   });
 
@@ -506,26 +562,14 @@ describe("timeout-triggered compaction", () => {
     const result = await runEmbeddedPiAgent(overflowBaseRunParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(2);
-    expect(mockedCompactDirect).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        runtimeContext: expect.objectContaining({
-          authProfileId: "profile-a",
-          attempt: 1,
-          maxAttempts: 2,
-        }),
-      }),
-    );
-    expect(mockedCompactDirect).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        runtimeContext: expect.objectContaining({
-          authProfileId: "profile-b",
-          attempt: 2,
-          maxAttempts: 2,
-        }),
-      }),
-    );
+    const firstCompact = compactCallAt(0);
+    expect(firstCompact.runtimeContext?.authProfileId).toBe("profile-a");
+    expect(firstCompact.runtimeContext?.attempt).toBe(1);
+    expect(firstCompact.runtimeContext?.maxAttempts).toBe(2);
+    const secondCompact = compactCallAt(1);
+    expect(secondCompact.runtimeContext?.authProfileId).toBe("profile-b");
+    expect(secondCompact.runtimeContext?.attempt).toBe(2);
+    expect(secondCompact.runtimeContext?.maxAttempts).toBe(2);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
@@ -562,14 +606,8 @@ describe("timeout-triggered compaction", () => {
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(2);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ authProfileId: "profile-a" }),
-    );
-    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ authProfileId: "profile-b" }),
-    );
+    expect(attemptCallAt(0).authProfileId).toBe("profile-a");
+    expect(attemptCallAt(1).authProfileId).toBe("profile-b");
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
   });

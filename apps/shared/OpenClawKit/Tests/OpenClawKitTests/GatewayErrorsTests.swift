@@ -107,6 +107,10 @@ import Testing
         #expect(problem?.retryable == false)
         #expect(problem?.pauseReconnect == true)
         #expect(problem?.actionLabel == "Review certificate")
+        #expect(problem?.canTrustRotatedCertificate == true)
+        #expect(problem?.tlsStoreKey == "gateway.example.ts.net:443")
+        #expect(problem?.tlsExpectedFingerprint == "old")
+        #expect(problem?.tlsObservedFingerprint == "new")
     }
 
     @Test func untrustedTLSCertificatePausesReconnect() {
@@ -125,5 +129,22 @@ import Testing
         #expect(problem?.kind == .tlsCertificateUntrusted)
         #expect(problem?.retryable == false)
         #expect(problem?.pauseReconnect == true)
+    }
+
+    @Test func untrustedTLSMismatchCannotBeRecoveredInApp() {
+        let error = GatewayTLSValidationError(
+            failure: GatewayTLSValidationFailure(
+                kind: .pinMismatch,
+                host: "gateway.example.ts.net",
+                storeKey: "gateway.example.ts.net:443",
+                expectedFingerprint: "old",
+                observedFingerprint: "new",
+                systemTrustOk: false),
+            context: "connect to gateway")
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .tlsPinMismatch)
+        #expect(problem?.canTrustRotatedCertificate == false)
     }
 }

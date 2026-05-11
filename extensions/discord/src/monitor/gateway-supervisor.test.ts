@@ -85,8 +85,10 @@ describe("createDiscordGatewaySupervisor", () => {
     emitter.emit("error", new Error("Max reconnect attempts (0) reached after close code 1006"));
 
     expect(seen).toEqual(["disallowed-intents", "fatal"]);
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("suppressed late gateway reconnect-exhausted error during teardown"),
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(runtime.error.mock.calls[0]).toHaveLength(1);
+    expect(String(runtime.error.mock.calls[0]?.[0])).toContain(
+      "suppressed late gateway reconnect-exhausted error during teardown",
     );
   });
 
@@ -116,8 +118,10 @@ describe("createDiscordGatewaySupervisor", () => {
     supervisor.dispose();
 
     emitter.emit("error", new Error("Max reconnect attempts (0) reached after close code 1005"));
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("suppressed late gateway reconnect-exhausted error after dispose"),
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(runtime.error.mock.calls[0]).toHaveLength(1);
+    expect(String(runtime.error.mock.calls[0]?.[0])).toContain(
+      "suppressed late gateway reconnect-exhausted error after dispose",
     );
   });
 
@@ -139,10 +143,9 @@ describe("createDiscordGatewaySupervisor", () => {
     emitter.emit("error", second);
 
     expect(runtime.error).toHaveBeenCalledTimes(1);
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "suppressed late gateway fatal error after dispose: TypeError @ gatewayCrash (discord-gateway.js:12:34)",
-      ),
+    expect(runtime.error.mock.calls[0]).toHaveLength(1);
+    expect(String(runtime.error.mock.calls[0]?.[0])).toContain(
+      "suppressed late gateway fatal error after dispose: TypeError @ gatewayCrash (discord-gateway.js:12:34)",
     );
   });
 });

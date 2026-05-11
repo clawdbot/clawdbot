@@ -1,5 +1,5 @@
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 
@@ -54,19 +54,35 @@ describe("discordMessageActions", () => {
 
     expect(discovery?.capabilities).toEqual(["presentation"]);
     expect(discovery?.schema).toBeUndefined();
-    expect(discovery?.actions).toEqual(
-      expect.arrayContaining([
-        "send",
-        "upload-file",
-        "poll",
-        "react",
-        "reactions",
-        "emoji-list",
-        "permissions",
-      ]),
-    );
-    expect(discovery?.actions).not.toContain("channel-create");
-    expect(discovery?.actions).not.toContain("role-add");
+    expect(discovery?.actions).toEqual([
+      "send",
+      "poll",
+      "react",
+      "reactions",
+      "emoji-list",
+      "upload-file",
+      "read",
+      "edit",
+      "delete",
+      "pin",
+      "unpin",
+      "list-pins",
+      "permissions",
+      "thread-create",
+      "thread-list",
+      "thread-reply",
+      "search",
+      "sticker",
+      "member-info",
+      "role-info",
+      "emoji-upload",
+      "sticker-upload",
+      "channel-info",
+      "channel-list",
+      "voice-status",
+      "event-list",
+      "event-create",
+    ]);
   });
 
   it("describes actions when the Discord token is an unresolved SecretRef", () => {
@@ -85,9 +101,42 @@ describe("discordMessageActions", () => {
     });
 
     expect(discovery?.capabilities).toEqual(["presentation"]);
-    expect(discovery?.actions).toEqual(
-      expect.arrayContaining(["send", "poll", "react", "reactions", "emoji-list"]),
-    );
+    expect(discovery?.actions).toEqual([
+      "send",
+      "poll",
+      "react",
+      "reactions",
+      "emoji-list",
+      "upload-file",
+      "read",
+      "edit",
+      "delete",
+      "pin",
+      "unpin",
+      "list-pins",
+      "permissions",
+      "thread-create",
+      "thread-list",
+      "thread-reply",
+      "search",
+      "sticker",
+      "member-info",
+      "role-info",
+      "emoji-upload",
+      "sticker-upload",
+      "channel-info",
+      "channel-list",
+      "channel-create",
+      "channel-edit",
+      "channel-delete",
+      "channel-move",
+      "category-create",
+      "category-edit",
+      "category-delete",
+      "voice-status",
+      "event-list",
+      "event-create",
+    ]);
   });
 
   it("describes scoped account actions when only the account token is an unresolved SecretRef", () => {
@@ -114,10 +163,41 @@ describe("discordMessageActions", () => {
       accountId: "ops",
     });
 
-    expect(discovery?.actions).toEqual(
-      expect.arrayContaining(["send", "react", "reactions", "emoji-list"]),
-    );
-    expect(discovery?.actions).not.toContain("poll");
+    expect(discovery?.actions).toEqual([
+      "send",
+      "react",
+      "reactions",
+      "emoji-list",
+      "upload-file",
+      "read",
+      "edit",
+      "delete",
+      "pin",
+      "unpin",
+      "list-pins",
+      "permissions",
+      "thread-create",
+      "thread-list",
+      "thread-reply",
+      "search",
+      "sticker",
+      "member-info",
+      "role-info",
+      "emoji-upload",
+      "sticker-upload",
+      "channel-info",
+      "channel-list",
+      "channel-create",
+      "channel-edit",
+      "channel-delete",
+      "channel-move",
+      "category-create",
+      "category-edit",
+      "category-delete",
+      "voice-status",
+      "event-list",
+      "event-create",
+    ]);
   });
 
   it("honors account-scoped action gates during discovery", () => {
@@ -151,13 +231,74 @@ describe("discordMessageActions", () => {
       accountId: "work",
     });
 
-    expect(defaultDiscovery?.actions).toEqual(expect.arrayContaining(["send", "poll"]));
-    expect(defaultDiscovery?.actions).toContain("upload-file");
-    expect(defaultDiscovery?.actions).not.toContain("react");
-    expect(workDiscovery?.actions).toEqual(
-      expect.arrayContaining(["send", "upload-file", "react", "reactions", "emoji-list"]),
-    );
-    expect(workDiscovery?.actions).not.toContain("poll");
+    expect(defaultDiscovery?.actions).toEqual([
+      "send",
+      "poll",
+      "upload-file",
+      "read",
+      "edit",
+      "delete",
+      "pin",
+      "unpin",
+      "list-pins",
+      "permissions",
+      "thread-create",
+      "thread-list",
+      "thread-reply",
+      "search",
+      "sticker",
+      "member-info",
+      "role-info",
+      "emoji-upload",
+      "sticker-upload",
+      "channel-info",
+      "channel-list",
+      "channel-create",
+      "channel-edit",
+      "channel-delete",
+      "channel-move",
+      "category-create",
+      "category-edit",
+      "category-delete",
+      "voice-status",
+      "event-list",
+      "event-create",
+    ]);
+    expect(workDiscovery?.actions).toEqual([
+      "send",
+      "react",
+      "reactions",
+      "emoji-list",
+      "upload-file",
+      "read",
+      "edit",
+      "delete",
+      "pin",
+      "unpin",
+      "list-pins",
+      "permissions",
+      "thread-create",
+      "thread-list",
+      "thread-reply",
+      "search",
+      "sticker",
+      "member-info",
+      "role-info",
+      "emoji-upload",
+      "sticker-upload",
+      "channel-info",
+      "channel-list",
+      "channel-create",
+      "channel-edit",
+      "channel-delete",
+      "channel-move",
+      "category-create",
+      "category-edit",
+      "category-delete",
+      "voice-status",
+      "event-list",
+      "event-create",
+    ]);
   });
 
   it("hides upload-file when Discord message actions are disabled", () => {
@@ -253,12 +394,20 @@ describe("discordMessageActions", () => {
       payload: { text: "hello", mediaUrl: "/tmp/photo.png" },
     });
 
-    expect(prepared).toMatchObject({
+    expect(prepared).toEqual({
       text: "hello",
       mediaUrl: "/tmp/photo.png",
       channelData: {
         discord: {
-          components: expect.objectContaining({ text: "Choose" }),
+          components: {
+            text: "Choose",
+            blocks: [
+              {
+                type: "actions",
+                buttons: [{ label: "Yes", callbackData: "yes" }],
+              },
+            ],
+          },
           filename: "photo.png",
         },
       },

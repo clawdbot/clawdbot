@@ -340,6 +340,21 @@ telegram-live`) or directly from a pull request comment:
 @Mantis telegram scenarios=telegram-status-command,telegram-mentioned-message-reply
 ```
 
+`Mantis Telegram Desktop Proof` is the agentic native Telegram Desktop
+before/after wrapper for PR visual proof. Start it from the Actions UI with
+freeform `instructions`, through `Mantis Scenario` (`scenario_id:
+telegram-desktop-proof`), or from a PR comment:
+
+```text
+@Mantis telegram desktop proof
+```
+
+The Mantis agent reads the PR, decides what Telegram-visible behavior proves the
+change, runs the real-user Crabbox Telegram Desktop proof lane on baseline and
+candidate refs, iterates until the native GIFs are useful, writes a paired
+`motionPreview` manifest, and posts the same 2-column GIF table through the
+Mantis GitHub App when `pr_number` is set.
+
 - `pnpm openclaw qa mantis telegram-desktop-builder`
   - Leases or reuses a Crabbox Linux desktop, installs native Telegram Desktop, configures OpenClaw with a leased Telegram SUT bot token, starts the gateway, and records screenshot/MP4 evidence from the visible VNC desktop.
   - Defaults to `--credential-source convex` so workflows only need the Convex broker secret. Use `--credential-source env` with the same `OPENCLAW_QA_TELEGRAM_*` variables as `pnpm openclaw qa telegram`.
@@ -404,6 +419,9 @@ Default endpoint contract (`OPENCLAW_QA_CONVEX_SITE_URL` + `/qa-credentials/v1`)
   - Request: `{ kind, ownerId, actorRole, leaseTtlMs, heartbeatIntervalMs }`
   - Success: `{ status: "ok", credentialId, leaseToken, payload, leaseTtlMs?, heartbeatIntervalMs? }`
   - Exhausted/retryable: `{ status: "error", code: "POOL_EXHAUSTED" | "NO_CREDENTIAL_AVAILABLE", ... }`
+- `POST /payload-chunk`
+  - Request: `{ kind, ownerId, actorRole, credentialId, leaseToken, index }`
+  - Success: `{ status: "ok", index, data }`
 - `POST /heartbeat`
   - Request: `{ kind, ownerId, actorRole, credentialId, leaseToken, leaseTtlMs }`
   - Success: `{ status: "ok" }` (or empty `2xx`)
@@ -426,6 +444,76 @@ Payload shape for Telegram kind:
 - `{ groupId: string, driverToken: string, sutToken: string }`
 - `groupId` must be a numeric Telegram chat id string.
 - `admin/add` validates this shape for `kind: "telegram"` and rejects malformed payloads.
+
+Payload shape for Telegram real-user kind:
+
+- `{ groupId: string, sutToken: string, testerUserId: string, testerUsername: string, telegramApiId: string, telegramApiHash: string, tdlibDatabaseEncryptionKey: string, tdlibArchiveBase64: string, tdlibArchiveSha256: string, desktopTdataArchiveBase64: string, desktopTdataArchiveSha256: string }`
+- `groupId`, `testerUserId`, and `telegramApiId` must be numeric strings.
+- `tdlibArchiveSha256` and `desktopTdataArchiveSha256` must be SHA-256 hex strings.
+- `kind: "telegram-user"` represents one Telegram burner account. Treat the lease as account-wide: the TDLib CLI driver and Telegram Desktop visual witness restore from the same payload, and only one job should hold the lease at a time.
+
+Telegram real-user lease restore:
+
+```bash
+tmp=$(mktemp -d /tmp/openclaw-telegram-user.XXXXXX)
+node --import tsx scripts/e2e/telegram-user-credential.ts lease-restore \
+  --user-driver-dir "$tmp/user-driver" \
+  --desktop-workdir "$tmp/desktop" \
+  --lease-file "$tmp/lease.json"
+TELEGRAM_USER_DRIVER_STATE_DIR="$tmp/user-driver" \
+  uv run ~/.codex/skills/custom/telegram-e2e-bot-to-bot/scripts/user-driver.py status --json
+node --import tsx scripts/e2e/telegram-user-credential.ts release --lease-file "$tmp/lease.json"
+```
+
+Use the restored Desktop profile with `Telegram -workdir "$tmp/desktop"` when a visual recording is needed. In local operator environments, `scripts/e2e/telegram-user-credential.ts` reads `~/.codex/skills/custom/telegram-e2e-bot-to-bot/convex.local.env` by default if process env vars are absent.
+
+Agent-driven Crabbox session:
+
+```bash
+pnpm qa:telegram-user:crabbox -- start \
+  --tdlib-url http://artifacts.openclaw.ai/tdlib-v1.8.0-linux-x64.tgz \
+  --output-dir .artifacts/qa-e2e/telegram-user-crabbox/pr-review
+pnpm qa:telegram-user:crabbox -- send \
+  --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json \
+  --text /status
+pnpm qa:telegram-user:crabbox -- finish \
+  --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json
+```
+
+`start` leases the `telegram-user` credential, restores the same account into
+TDLib and Telegram Desktop on a Crabbox Linux desktop, starts a local mock SUT
+gateway from the current checkout, opens the visible Telegram chat, starts
+desktop recording, and writes a private `session.json`. While the session is
+alive, an agent can keep testing until satisfied:
+
+- `send --session <file> --text <message>` sends through the real TDLib user and waits for the SUT reply.
+- `run --session <file> -- <remote command>` runs an arbitrary command on the Crabbox and saves its output, for example `bash -lc 'source /tmp/openclaw-telegram-user-crabbox/env.sh && python3 /tmp/openclaw-telegram-user-crabbox/user-driver.py transcript --limit 20 --json'`.
+- `screenshot --session <file>` captures the current visible desktop.
+- `status --session <file>` prints the lease and WebVNC command.
+- `finish --session <file>` stops the recorder, captures screenshot/video/motion-trim artifacts, releases the Convex credential, stops local SUT processes, and stops the Crabbox lease unless `--keep-box` is passed.
+- `publish --session <file> --pr <number>` publishes a GIF-only PR comment by default. Pass `--full-artifacts` only when logs or JSON artifacts are intentionally needed.
+
+For deterministic visual repros, pass `--mock-response-file <path>` to `start`
+or to the one-command `probe` shorthand. The runner defaults to a standard
+Crabbox class, 24fps recording, 24fps motion GIF previews, and 1920px GIF
+width. Override with `--class`, `--record-fps`, `--preview-fps`, and
+`--preview-width` only when the proof needs different capture settings.
+
+One-command Crabbox proof:
+
+```bash
+pnpm qa:telegram-user:crabbox -- --text /status
+```
+
+The default `probe` command is shorthand for one start/send/finish cycle. Use
+it for a quick `/status` smoke. Use the session commands for PR review,
+bug-reproduction work, or any case where the agent needs minutes of arbitrary
+experimentation before deciding the proof is complete. Use `--id <cbx_...>` to
+reuse a warm desktop lease, `--keep-box` to keep VNC open after finish,
+`--desktop-chat-title <name>` to pick the visible chat, and `--tdlib-url <tgz>`
+when using a prebaked Linux `libtdjson.so` archive instead of building TDLib on
+a fresh box. The runner verifies `--tdlib-url` with `--tdlib-sha256 <hex>` or,
+by default, a sibling `<url>.sha256` file.
 
 Broker-validated multi-channel payloads:
 
@@ -465,8 +553,8 @@ Think of the suites as "increasing realism" (and increasing flakiness/cost):
 
 Native dependency policy:
 
-- Default test installs skip optional native Discord opus builds. Discord voice receive uses the pure-JS `opusscript` decoder, and `@discordjs/opus` stays in `ignoredBuiltDependencies` so local tests and Testbox lanes do not compile the native addon.
-- Use a dedicated Discord voice performance or live lane if you intentionally need to compare a native opus build. Do not add `@discordjs/opus` back to the default `onlyBuiltDependencies`; that makes unrelated install/test loops compile native code.
+- Default test installs skip optional native Discord opus builds. Discord voice receive uses the pure-JS `opusscript` decoder, and `@discordjs/opus` stays disabled in `allowBuilds` so local tests and Testbox lanes do not compile the native addon.
+- Use a dedicated Discord voice performance or live lane if you intentionally need to compare a native opus build. Do not set `@discordjs/opus` to `true` in the default `allowBuilds`; that makes unrelated install/test loops compile native code.
 
 <AccordionGroup>
   <Accordion title="Projects, shards, and scoped lanes">

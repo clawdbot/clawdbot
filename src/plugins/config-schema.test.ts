@@ -20,7 +20,7 @@ function expectJsonSchema(
   result: ReturnType<typeof buildPluginConfigSchema>,
   expected: Record<string, unknown>,
 ) {
-  expect(result.jsonSchema).toMatchObject(expected);
+  expect(result.jsonSchema).toEqual(expected);
 }
 
 describe("buildPluginConfigSchema", () => {

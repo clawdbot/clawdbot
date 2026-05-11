@@ -107,7 +107,7 @@ describe("createDiscordDraftStream", () => {
     await stream.flush();
 
     expect(rest.post).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("discord stream preview stopped"));
+    expect(warn).toHaveBeenCalledWith("discord stream preview stopped (text length 6 > 5)");
     expect(stream.messageId()).toBeUndefined();
   });
 

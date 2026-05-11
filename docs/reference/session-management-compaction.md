@@ -200,7 +200,7 @@ The store is safe to edit, but the Gateway is the authority: it may rewrite or r
 
 ## Transcript structure (`*.jsonl`)
 
-Transcripts are managed by `@mariozechner/pi-coding-agent`'s `SessionManager`.
+Transcripts are managed by `@earendil-works/pi-coding-agent`'s `SessionManager`.
 
 The file is JSONL:
 
@@ -376,6 +376,7 @@ You can observe compaction and session state via:
 - `/status` (in any chat session)
 - `openclaw status` (CLI)
 - `openclaw sessions` / `sessions --json`
+- Gateway logs (`pnpm gateway:watch` or `openclaw logs --follow`): `embedded run auto-compaction start` + `complete`
 - Verbose mode: `🧹 Auto-compaction complete` + compaction count
 
 ---

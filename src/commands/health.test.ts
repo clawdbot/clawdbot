@@ -130,6 +130,35 @@ describe("healthCommand", () => {
     expect(gatewayRequest?.password).toBe("setup-password");
   });
 
+  it("prints degraded model-pricing health without failing the command", async () => {
+    const snapshot = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    snapshot.modelPricing = {
+      state: "degraded",
+      sources: [
+        {
+          source: "openrouter",
+          state: "degraded",
+          lastFailureAt: Date.now(),
+          detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
+        },
+      ],
+      detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
+      lastFailureAt: Date.now(),
+    };
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime as never);
+
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(stripAnsi(runtime.log.mock.calls.flat().join("\n"))).toContain(
+      "Model pricing: degraded (OpenRouter pricing fetch failed: TypeError: fetch failed)",
+    );
+  });
+
   it("formats per-account probe timings", () => {
     const summary = createHealthSummary({
       channels: {

@@ -1,13 +1,21 @@
 import { createHash, randomBytes } from "node:crypto";
 
-/** Encode a flat object as application/x-www-form-urlencoded form data. */
+/**
+ * Encode a flat object as application/x-www-form-urlencoded form data.
+ *
+ * @deprecated OAuth provider-owned helper; keep this local to provider plugins instead.
+ */
 export function toFormUrlEncoded(data: Record<string, string>): string {
   return Object.entries(data)
     .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
     .join("&");
 }
 
-/** Generate a PKCE verifier/challenge pair suitable for OAuth authorization flows. */
+/**
+ * Generate a PKCE verifier/challenge pair suitable for OAuth authorization flows.
+ *
+ * @deprecated OAuth provider-owned helper; keep this local to provider plugins instead.
+ */
 export function generatePkceVerifierChallenge(): { verifier: string; challenge: string } {
   const verifier = randomBytes(32).toString("base64url");
   const challenge = createHash("sha256").update(verifier).digest("base64url");

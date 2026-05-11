@@ -23,6 +23,29 @@ function buildParams(commandBody: string) {
   return buildCommandTestParams(commandBody, cfg, undefined, { workspaceDir: "/tmp/workspace" });
 }
 
+function mockCall(mock: unknown, index = 0): Array<unknown> {
+  const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
+  const call = calls.at(index);
+  expect(call, `mock call ${index + 1}`).toBeDefined();
+  return call as Array<unknown>;
+}
+
+function mockFirstObjectArg(mock: unknown): Record<string, unknown> {
+  const [arg] = mockCall(mock);
+  expect(arg).toBeTypeOf("object");
+  expect(arg).not.toBeNull();
+  return arg as Record<string, unknown>;
+}
+
+function expectObjectFields(value: unknown, expected: Record<string, unknown>): void {
+  expect(value).toBeTypeOf("object");
+  expect(value).not.toBeNull();
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
 describe("handleBtwCommand", () => {
   beforeEach(() => {
     runBtwSideQuestionMock.mockReset();
@@ -83,14 +106,12 @@ describe("handleBtwCommand", () => {
 
     const result = await handleBtwCommand(params, true);
 
-    expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        question: "what changed?",
-        sessionEntry: params.sessionEntry,
-        resolvedThinkLevel: "off",
-        resolvedReasoningLevel: "off",
-      }),
-    );
+    expectObjectFields(mockFirstObjectArg(runBtwSideQuestionMock), {
+      question: "what changed?",
+      sessionEntry: params.sessionEntry,
+      resolvedThinkLevel: "off",
+      resolvedReasoningLevel: "off",
+    });
     expect(result).toEqual({
       shouldContinue: false,
       reply: { text: "snapshot answer", btw: { question: "what changed?" } },
@@ -124,15 +145,14 @@ describe("handleBtwCommand", () => {
 
     const result = await handleBtwCommand(params, true);
 
-    expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        question: "what changed?",
-        agentDir: expect.stringContaining("/agents/main/agent"),
-        sessionEntry: params.sessionEntry,
-        resolvedThinkLevel: "off",
-        resolvedReasoningLevel: "off",
-      }),
-    );
+    const runnerArgs = mockFirstObjectArg(runBtwSideQuestionMock);
+    expectObjectFields(runnerArgs, {
+      question: "what changed?",
+      sessionEntry: params.sessionEntry,
+      resolvedThinkLevel: "off",
+      resolvedReasoningLevel: "off",
+    });
+    expect(String(runnerArgs.agentDir)).toContain("/agents/main/agent");
     expect(result).toEqual({
       shouldContinue: false,
       reply: { text: "nothing important", btw: { question: "what changed?" } },
@@ -150,11 +170,7 @@ describe("handleBtwCommand", () => {
 
     const result = await handleBtwCommand(params, true);
 
-    expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        question: "what changed?",
-      }),
-    );
+    expect(mockFirstObjectArg(runBtwSideQuestionMock).question).toBe("what changed?");
     expect(result).toEqual({
       shouldContinue: false,
       reply: { text: "alias answer", btw: { question: "what changed?" } },
@@ -174,10 +190,8 @@ describe("handleBtwCommand", () => {
 
     const result = await handleBtwCommand(params, true);
 
-    expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDir: expect.stringContaining("/agents/worker-1/agent"),
-      }),
+    expect(String(mockFirstObjectArg(runBtwSideQuestionMock).agentDir)).toContain(
+      "/agents/worker-1/agent",
     );
     expect(result).toEqual({
       shouldContinue: false,
@@ -199,14 +213,12 @@ describe("handleBtwCommand", () => {
 
     const result = await handleBtwCommand(params, true);
 
-    expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
-      sessionKey: "agent:worker-1:whatsapp:direct:12345",
-      config: expect.any(Object),
-    });
-    expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDir: expect.stringContaining("/agents/worker-1/agent"),
-      }),
+    const sessionAgentArgs = mockFirstObjectArg(resolveSessionAgentIdMock);
+    expect(sessionAgentArgs.sessionKey).toBe("agent:worker-1:whatsapp:direct:12345");
+    expect(sessionAgentArgs.config).toBeTypeOf("object");
+    expect(sessionAgentArgs.config).not.toBeNull();
+    expect(String(mockFirstObjectArg(runBtwSideQuestionMock).agentDir)).toContain(
+      "/agents/worker-1/agent",
     );
     expect(result).toEqual({
       shouldContinue: false,
@@ -229,16 +241,15 @@ describe("handleBtwCommand", () => {
 
     const result = await handleBtwCommand(params, true);
 
-    expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
-      sessionKey: "agent:worker-1:whatsapp:direct:12345",
-      config: expect.any(Object),
-    });
-    expect(resolveAgentDirMock).toHaveBeenCalledWith(expect.any(Object), "worker-1");
-    expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDir: "/tmp/worker-1-agent",
-      }),
-    );
+    const canonicalAgentArgs = mockFirstObjectArg(resolveSessionAgentIdMock);
+    expect(canonicalAgentArgs.sessionKey).toBe("agent:worker-1:whatsapp:direct:12345");
+    expect(canonicalAgentArgs.config).toBeTypeOf("object");
+    expect(canonicalAgentArgs.config).not.toBeNull();
+    const resolveDirCall = mockCall(resolveAgentDirMock);
+    expect(resolveDirCall[0]).toBeTypeOf("object");
+    expect(resolveDirCall[0]).not.toBeNull();
+    expect(resolveDirCall[1]).toBe("worker-1");
+    expect(mockFirstObjectArg(runBtwSideQuestionMock).agentDir).toBe("/tmp/worker-1-agent");
     expect(result).toEqual({
       shouldContinue: false,
       reply: { text: "resolved fallback", btw: { question: "what changed?" } },
@@ -262,13 +273,8 @@ describe("handleBtwCommand", () => {
 
     const result = await handleBtwCommand(params, true);
 
-    expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionEntry: expect.objectContaining({
-          sessionId: "target-session",
-        }),
-      }),
-    );
+    const sideQuestionArgs = mockFirstObjectArg(runBtwSideQuestionMock);
+    expectObjectFields(sideQuestionArgs.sessionEntry, { sessionId: "target-session" });
     expect(result).toEqual({
       shouldContinue: false,
       reply: { text: "target context", btw: { question: "what changed?" } },

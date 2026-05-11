@@ -56,6 +56,30 @@ function getConfigPatchRawPayload(request: ReturnType<typeof vi.fn>): Record<str
   return JSON.parse(String(requestPayload.raw)) as Record<string, unknown>;
 }
 
+function getRequestPayload(
+  request: ReturnType<typeof vi.fn>,
+  method: string,
+): Record<string, unknown> {
+  const call = request.mock.calls.find((entry) => entry[0] === method);
+  if (!call) {
+    throw new Error(`Expected ${method} request`);
+  }
+  const payload = call[1];
+  if (
+    payload === undefined ||
+    payload === null ||
+    typeof payload !== "object" ||
+    Array.isArray(payload)
+  ) {
+    throw new Error(`Expected ${method} payload object`);
+  }
+  return payload as Record<string, unknown>;
+}
+
+function hasRequestMethodCall(request: ReturnType<typeof vi.fn>, method: string): boolean {
+  return request.mock.calls.some((entry) => entry[0] === method);
+}
+
 describe("dreaming controller", () => {
   it("loads and normalizes dreaming status from doctor.memory.status", async () => {
     const { state, request } = createState();
@@ -163,35 +187,26 @@ describe("dreaming controller", () => {
     await loadDreamingStatus(state);
 
     expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
-    expect(state.dreamingStatus).toEqual(
-      expect.objectContaining({
-        enabled: true,
-        shortTermCount: 8,
-        groundedSignalCount: 5,
-        totalSignalCount: 20,
-        phaseSignalCount: 11,
-        promotedToday: 2,
-        shortTermEntries: [
-          expect.objectContaining({
-            snippet: "Emma prefers shorter, lower-pressure check-ins.",
-            totalSignalCount: 3,
-            groundedCount: 1,
-            phaseHitCount: 3,
-          }),
-        ],
-        promotedEntries: [
-          expect.objectContaining({
-            snippet: "Use the Happy Together calendar for flights.",
-          }),
-        ],
-        phases: expect.objectContaining({
-          deep: expect.objectContaining({
-            minScore: 0.8,
-            nextRunAtMs: 23456,
-          }),
-        }),
-      }),
+    const status = state.dreamingStatus;
+    expect(status?.enabled).toBe(true);
+    expect(status?.shortTermCount).toBe(8);
+    expect(status?.groundedSignalCount).toBe(5);
+    expect(status?.totalSignalCount).toBe(20);
+    expect(status?.phaseSignalCount).toBe(11);
+    expect(status?.promotedToday).toBe(2);
+    expect(status?.shortTermEntries).toHaveLength(1);
+    expect(status?.shortTermEntries[0]?.snippet).toBe(
+      "Emma prefers shorter, lower-pressure check-ins.",
     );
+    expect(status?.shortTermEntries[0]?.totalSignalCount).toBe(3);
+    expect(status?.shortTermEntries[0]?.groundedCount).toBe(1);
+    expect(status?.shortTermEntries[0]?.phaseHitCount).toBe(3);
+    expect(status?.promotedEntries).toHaveLength(1);
+    expect(status?.promotedEntries[0]?.snippet).toBe(
+      "Use the Happy Together calendar for flights.",
+    );
+    expect(status?.phases?.deep?.minScore).toBe(0.8);
+    expect(status?.phases?.deep?.nextRunAtMs).toBe(23456);
     expect(state.dreamingStatusLoading).toBe(false);
     expect(state.dreamingStatusError).toBeNull();
   });
@@ -219,11 +234,7 @@ describe("dreaming controller", () => {
 
     await loadDreamingStatus(state);
 
-    expect(state.dreamingStatus).toEqual(
-      expect.objectContaining({
-        enabled: true,
-      }),
-    );
+    expect(state.dreamingStatus?.enabled).toBe(true);
     expect(state.dreamingStatus?.phases).toBeUndefined();
     expect(state.dreamingStatusError).toBeNull();
   });
@@ -289,19 +300,12 @@ describe("dreaming controller", () => {
     await loadWikiImportInsights(state);
 
     expect(request).toHaveBeenCalledWith("wiki.importInsights", {});
-    expect(state.wikiImportInsights).toEqual(
-      expect.objectContaining({
-        totalItems: 2,
-        totalClusters: 1,
-        clusters: [
-          expect.objectContaining({
-            key: "topic/travel",
-            itemCount: 2,
-            withheldCount: 1,
-          }),
-        ],
-      }),
-    );
+    expect(state.wikiImportInsights?.totalItems).toBe(2);
+    expect(state.wikiImportInsights?.totalClusters).toBe(1);
+    expect(state.wikiImportInsights?.clusters).toHaveLength(1);
+    expect(state.wikiImportInsights?.clusters[0]?.key).toBe("topic/travel");
+    expect(state.wikiImportInsights?.clusters[0]?.itemCount).toBe(2);
+    expect(state.wikiImportInsights?.clusters[0]?.withheldCount).toBe(1);
     expect(state.wikiImportInsightsError).toBeNull();
     expect(state.wikiImportInsightsLoading).toBe(false);
   });
@@ -330,12 +334,8 @@ describe("dreaming controller", () => {
     await loadWikiImportInsights(state);
 
     expect(request).toHaveBeenCalledWith("wiki.importInsights", {});
-    expect(state.wikiImportInsights).toEqual(
-      expect.objectContaining({
-        totalItems: 1,
-        totalClusters: 1,
-      }),
-    );
+    expect(state.wikiImportInsights?.totalItems).toBe(1);
+    expect(state.wikiImportInsights?.totalClusters).toBe(1);
     expect(state.wikiImportInsightsError).toBeNull();
     expect(state.wikiImportInsightsLoading).toBe(false);
   });
@@ -454,24 +454,16 @@ describe("dreaming controller", () => {
     await loadWikiMemoryPalace(state);
 
     expect(request).toHaveBeenCalledWith("wiki.palace", {});
-    expect(state.wikiMemoryPalace).toEqual(
-      expect.objectContaining({
-        totalItems: 2,
-        totalClaims: 3,
-        clusters: [
-          expect.objectContaining({
-            key: "synthesis",
-            label: "Syntheses",
-            items: [
-              expect.objectContaining({
-                title: "Travel system",
-                claims: ["prefers direct receipts"],
-              }),
-            ],
-          }),
-        ],
-      }),
-    );
+    expect(state.wikiMemoryPalace?.totalItems).toBe(2);
+    expect(state.wikiMemoryPalace?.totalClaims).toBe(3);
+    expect(state.wikiMemoryPalace?.clusters).toHaveLength(1);
+    expect(state.wikiMemoryPalace?.clusters[0]?.key).toBe("synthesis");
+    expect(state.wikiMemoryPalace?.clusters[0]?.label).toBe("Syntheses");
+    expect(state.wikiMemoryPalace?.clusters[0]?.items).toHaveLength(1);
+    expect(state.wikiMemoryPalace?.clusters[0]?.items[0]?.title).toBe("Travel system");
+    expect(state.wikiMemoryPalace?.clusters[0]?.items[0]?.claims).toEqual([
+      "prefers direct receipts",
+    ]);
     expect(state.wikiMemoryPalaceError).toBeNull();
     expect(state.wikiMemoryPalaceLoading).toBe(false);
   });
@@ -501,12 +493,8 @@ describe("dreaming controller", () => {
     await loadWikiMemoryPalace(state);
 
     expect(request).toHaveBeenCalledWith("wiki.palace", {});
-    expect(state.wikiMemoryPalace).toEqual(
-      expect.objectContaining({
-        totalItems: 1,
-        totalClaims: 2,
-      }),
-    );
+    expect(state.wikiMemoryPalace?.totalItems).toBe(1);
+    expect(state.wikiMemoryPalace?.totalClaims).toBe(2);
     expect(state.wikiMemoryPalaceError).toBeNull();
     expect(state.wikiMemoryPalaceLoading).toBe(false);
   });
@@ -599,13 +587,9 @@ describe("dreaming controller", () => {
     const ok = await updateDreamingEnabled(state, false);
 
     expect(ok).toBe(true);
-    expect(request).toHaveBeenCalledWith(
-      "config.patch",
-      expect.objectContaining({
-        baseHash: "hash-1",
-        sessionKey: "main",
-      }),
-    );
+    const patchPayload = getRequestPayload(request, "config.patch");
+    expect(patchPayload.baseHash).toBe("hash-1");
+    expect(patchPayload.sessionKey).toBe("main");
     expect(getConfigPatchRawPayload(request)).toEqual({
       plugins: {
         entries: {
@@ -692,7 +676,7 @@ describe("dreaming controller", () => {
     expect(request).toHaveBeenCalledWith("config.schema.lookup", {
       path: "plugins.entries.memory-lancedb.config",
     });
-    expect(request).not.toHaveBeenCalledWith("config.patch", expect.anything());
+    expect(hasRequestMethodCall(request, "config.patch")).toBe(false);
     expect(state.dreamingStatusError).toContain("memory-lancedb");
     expect(state.dreamingStatusError).toContain("does not support dreaming settings");
   });

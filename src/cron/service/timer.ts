@@ -54,8 +54,8 @@ export { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
 const MAX_TIMER_DELAY_MS = 60_000;
 const CRON_TIMEOUT_CLEANUP_GUARD_MS = 20_000;
 const CRON_AGENT_SETUP_WATCHDOG_MS = 60_000;
-const CRON_AGENT_PRE_MODEL_WATCHDOG_MS = 60_000;
-const CRON_AGENT_PRE_MODEL_MIN_WATCHDOG_MS = 1_000;
+const CRON_AGENT_PRE_EXECUTION_WATCHDOG_MS = 60_000;
+const CRON_AGENT_PRE_EXECUTION_MIN_WATCHDOG_MS = 1_000;
 
 /**
  * Minimum gap between consecutive fires of the same cron job.  This is a
@@ -120,9 +120,10 @@ export async function executeJobCoreWithTimeout(
   const runAbortController = new AbortController();
   let timeoutId: NodeJS.Timeout | undefined;
   let setupTimeoutId: NodeJS.Timeout | undefined;
-  let preModelTimeoutId: NodeJS.Timeout | undefined;
+  let preExecutionTimeoutId: NodeJS.Timeout | undefined;
   let activeExecution: CronAgentExecutionStarted | undefined;
-  let modelCallStarted = false;
+  let runnerStarted = false;
+  let executionStarted = false;
   let timeoutReason: string | undefined;
   const timeoutMarker = Symbol("cron-timeout");
   let resolveTimeout: ((value: typeof timeoutMarker) => void) | undefined;
@@ -148,11 +149,13 @@ export async function executeJobCoreWithTimeout(
     }
   };
   const startSetupTimeout = () => {
-    if (setupTimeoutId) {
+    if (setupTimeoutId || runnerStarted) {
       return;
     }
     setupTimeoutId = setTimeout(() => {
-      triggerTimeout(setupTimeoutErrorMessage(activeExecution));
+      if (!runnerStarted) {
+        triggerTimeout(setupTimeoutErrorMessage(activeExecution));
+      }
     }, CRON_AGENT_SETUP_WATCHDOG_MS);
   };
   const clearSetupTimeout = () => {
@@ -162,37 +165,38 @@ export async function executeJobCoreWithTimeout(
     clearTimeout(setupTimeoutId);
     setupTimeoutId = undefined;
   };
-  const startPreModelTimeout = () => {
-    if (preModelTimeoutId || modelCallStarted) {
+  const startPreExecutionTimeout = () => {
+    if (preExecutionTimeoutId || executionStarted) {
       return;
     }
-    preModelTimeoutId = setTimeout(() => {
-      if (!modelCallStarted) {
-        triggerTimeout(preModelTimeoutErrorMessage(activeExecution));
+    preExecutionTimeoutId = setTimeout(() => {
+      if (!executionStarted) {
+        triggerTimeout(preExecutionTimeoutErrorMessage(activeExecution));
       }
-    }, resolveCronAgentPreModelWatchdogMs(jobTimeoutMs));
+    }, resolveCronAgentPreExecutionWatchdogMs(jobTimeoutMs));
   };
-  const clearPreModelTimeout = () => {
-    if (!preModelTimeoutId) {
+  const clearPreExecutionTimeout = () => {
+    if (!preExecutionTimeoutId) {
       return;
     }
-    clearTimeout(preModelTimeoutId);
-    preModelTimeoutId = undefined;
+    clearTimeout(preExecutionTimeoutId);
+    preExecutionTimeoutId = undefined;
   };
   const noteExecutionProgress = (info?: CronAgentExecutionStarted) => {
     if (info) {
       activeExecution = { ...activeExecution, ...info };
-      if (info.phase === "model_call_started" || info.firstModelCallStarted) {
-        modelCallStarted = true;
-        clearPreModelTimeout();
+      if (isCronAgentExecutionStarted(info)) {
+        executionStarted = true;
+        clearPreExecutionTimeout();
       }
     }
   };
   const onExecutionStarted = (info?: CronAgentExecutionStarted) => {
+    runnerStarted = true;
     noteExecutionProgress(info);
     clearSetupTimeout();
     startTimeout();
-    startPreModelTimeout();
+    startPreExecutionTimeout();
   };
   const onExecutionPhase = (info: CronAgentExecutionPhaseUpdate) => {
     noteExecutionProgress(info);
@@ -233,7 +237,7 @@ export async function executeJobCoreWithTimeout(
       clearTimeout(timeoutId);
     }
     clearSetupTimeout();
-    clearPreModelTimeout();
+    clearPreExecutionTimeout();
   }
 }
 
@@ -288,22 +292,38 @@ function setupTimeoutErrorMessage(execution?: CronAgentExecutionStarted): string
   return `cron: isolated agent setup timed out before runner start (last phase: ${phase})`;
 }
 
-function preModelTimeoutErrorMessage(execution?: CronAgentExecutionStarted): string {
+function preExecutionTimeoutErrorMessage(execution?: CronAgentExecutionStarted): string {
   const phase = formatCronAgentExecutionPhase(execution);
   if (!phase) {
-    return "cron: isolated agent run stalled before first model call";
+    return "cron: isolated agent run stalled before execution start";
   }
-  return `cron: isolated agent run stalled before first model call (last phase: ${phase})`;
+  return `cron: isolated agent run stalled before execution start (last phase: ${phase})`;
 }
 
 function formatCronAgentExecutionPhase(execution?: CronAgentExecutionStarted): string | undefined {
   return execution?.phase?.replaceAll("_", "-");
 }
 
-function resolveCronAgentPreModelWatchdogMs(jobTimeoutMs: number): number {
+function isCronAgentExecutionStarted(info: CronAgentExecutionStarted): boolean {
+  if (info.firstModelCallStarted) {
+    return true;
+  }
+  switch (info.phase) {
+    case "turn_accepted":
+    case "process_spawned":
+    case "tool_execution_started":
+    case "assistant_output_started":
+    case "model_call_started":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function resolveCronAgentPreExecutionWatchdogMs(jobTimeoutMs: number): number {
   return Math.max(
-    CRON_AGENT_PRE_MODEL_MIN_WATCHDOG_MS,
-    Math.min(CRON_AGENT_PRE_MODEL_WATCHDOG_MS, Math.floor(jobTimeoutMs / 2)),
+    CRON_AGENT_PRE_EXECUTION_MIN_WATCHDOG_MS,
+    Math.min(CRON_AGENT_PRE_EXECUTION_WATCHDOG_MS, Math.floor(jobTimeoutMs / 2)),
   );
 }
 

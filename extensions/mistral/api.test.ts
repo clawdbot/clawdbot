@@ -32,22 +32,33 @@ function reasoningEffortMap(model: unknown): Record<string, string> | undefined 
   return readCompat<{ reasoningEffortMap?: Record<string, string> }>(model)?.reasoningEffortMap;
 }
 
+const MISTRAL_REASONING_EFFORT_MAP = {
+  off: "none",
+  minimal: "none",
+  low: "high",
+  medium: "high",
+  high: "high",
+  xhigh: "high",
+  adaptive: "high",
+  max: "high",
+};
+
 describe("resolveMistralCompatPatch", () => {
   it("enables reasoning_effort mapping for mistral-small-latest", () => {
-    expect(resolveMistralCompatPatch({ id: MISTRAL_SMALL_LATEST_ID })).toMatchObject({
+    expect(resolveMistralCompatPatch({ id: MISTRAL_SMALL_LATEST_ID })).toEqual({
       supportsStore: false,
       supportsReasoningEffort: true,
       maxTokensField: "max_tokens",
-      reasoningEffortMap: expect.objectContaining({ high: "high", off: "none" }),
+      reasoningEffortMap: MISTRAL_REASONING_EFFORT_MAP,
     });
   });
 
   it("enables reasoning_effort mapping for mistral-medium-3-5", () => {
-    expect(resolveMistralCompatPatch({ id: MISTRAL_MEDIUM_3_5_ID })).toMatchObject({
+    expect(resolveMistralCompatPatch({ id: MISTRAL_MEDIUM_3_5_ID })).toEqual({
       supportsStore: false,
       supportsReasoningEffort: true,
       maxTokensField: "max_tokens",
-      reasoningEffortMap: expect.objectContaining({ high: "high", off: "none" }),
+      reasoningEffortMap: MISTRAL_REASONING_EFFORT_MAP,
     });
   });
 

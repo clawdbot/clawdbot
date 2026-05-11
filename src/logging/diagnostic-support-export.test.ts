@@ -232,10 +232,8 @@ describe("diagnostic support export", () => {
 
     expect(result.path).toBe(outputPath);
     expect(result.bytes).toBeGreaterThan(0);
-    expect(requestedLogTail).toMatchObject({
-      limit: 5000,
-      maxBytes: 1_000_000,
-    });
+    expect(requestedLogTail?.limit).toBe(5000);
+    expect(requestedLogTail?.maxBytes).toBe(1_000_000);
 
     const entries = await readZipTextEntries(outputPath);
     expect(Object.keys(entries).toSorted()).toEqual([
@@ -341,10 +339,8 @@ describe("diagnostic support export", () => {
       gateway?: { mode?: string; authMode?: string };
       channels?: { ids?: string[] };
     };
-    expect(configShape.gateway).toMatchObject({
-      mode: "local",
-      authMode: "token",
-    });
+    expect(configShape.gateway?.mode).toBe("local");
+    expect(configShape.gateway?.authMode).toBe("token");
     expect(configShape.channels?.ids).toEqual(["telegram"]);
 
     const sanitizedConfig = JSON.parse(entries["config/sanitized.json"] ?? "{}") as {
@@ -369,17 +365,16 @@ describe("diagnostic support export", () => {
       };
       agents?: Array<{ name?: string; instructions?: string }>;
     };
-    expect(sanitizedConfig.gateway).toMatchObject({
+    expect(sanitizedConfig.gateway).toEqual({
       mode: "local",
+      bind: "loopback",
       port: 18789,
       auth: {
         mode: "token",
         token: "<redacted>",
       },
     });
-    expect(sanitizedConfig.logging).toMatchObject({
-      redactSensitive: "off",
-    });
+    expect(sanitizedConfig.logging?.redactSensitive).toBe("off");
     expect(Object.keys(sanitizedConfig.channels?.telegram?.accounts ?? {})).toEqual([
       "<redacted-account-1>",
     ]);

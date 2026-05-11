@@ -1,4 +1,4 @@
-import { getModel, type Api, type Model } from "@mariozechner/pi-ai";
+import { getModel, type Api, type Model } from "@earendil-works/pi-ai";
 import OpenAI from "openai";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";

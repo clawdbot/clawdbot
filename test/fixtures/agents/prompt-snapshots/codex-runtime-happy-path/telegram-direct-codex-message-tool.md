@@ -76,7 +76,9 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
-    "instructions": "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. Codex loads AGENTS.md natively, so AGENTS.md is not repeated here.\n\n# Project Context\n\nThe following project context files have been loaded:\nIf SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.\n\n## /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/TOOLS.md\n\n<TOOLS.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/HEARTBEAT.md\n\n<HEARTBEAT.md contents will be here>"
+    "features.code_mode": true,
+    "features.code_mode_only": true,
+    "instructions": "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. Codex loads AGENTS.md natively, so AGENTS.md is not repeated here.\n\n# Project Context\n\nThe following project context files have been loaded:\nSOUL.md: persona/tone. Follow it unless higher-priority instructions override.\n\n## /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/TOOLS.md\n\n<TOOLS.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/HEARTBEAT.md\n\n<HEARTBEAT.md contents will be here>"
   },
   "cwd": "/tmp/openclaw-happy-path/workspace",
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
@@ -112,7 +114,9 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
-    "instructions": "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. Codex loads AGENTS.md natively, so AGENTS.md is not repeated here.\n\n# Project Context\n\nThe following project context files have been loaded:\nIf SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.\n\n## /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/TOOLS.md\n\n<TOOLS.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/HEARTBEAT.md\n\n<HEARTBEAT.md contents will be here>"
+    "features.code_mode": true,
+    "features.code_mode_only": true,
+    "instructions": "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. Codex loads AGENTS.md natively, so AGENTS.md is not repeated here.\n\n# Project Context\n\nThe following project context files have been loaded:\nSOUL.md: persona/tone. Follow it unless higher-priority instructions override.\n\n## /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/TOOLS.md\n\n<TOOLS.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/HEARTBEAT.md\n\n<HEARTBEAT.md contents will be here>"
   },
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "model": "gpt-5.5",
@@ -209,24 +213,24 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 77
   },
   "codexWorkspaceBootstrapConfigInstructions": {
-    "chars": 632,
-    "roughTokens": 158
+    "chars": 560,
+    "roughTokens": 140
   },
   "dynamicToolsJson": {
-    "chars": 50001,
-    "roughTokens": 12501
+    "chars": 42691,
+    "roughTokens": 10673
   },
   "openClawDeveloperInstructions": {
-    "chars": 4999,
-    "roughTokens": 1250
+    "chars": 4412,
+    "roughTokens": 1103
   },
   "totalTextOnly": {
-    "chars": 27651,
-    "roughTokens": 6913
+    "chars": 26992,
+    "roughTokens": 6748
   },
   "totalWithDynamicToolsJson": {
-    "chars": 77654,
-    "roughTokens": 19414
+    "chars": 69685,
+    "roughTokens": 17422
   },
   "userInputText": {
     "chars": 370,
@@ -410,7 +414,7 @@ OpenClaw loaded these user-editable workspace files. Treat them as project/user 
 # Project Context
 
 The following project context files have been loaded:
-If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.
+SOUL.md: persona/tone. Follow it unless higher-priority instructions override.
 
 ## /tmp/openclaw-happy-path/workspace/SOUL.md
 
@@ -428,9 +432,9 @@ If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies
 ### Developer: OpenClaw Runtime Instructions
 
 ````text
-You are running inside OpenClaw. Use OpenClaw dynamic tools for OpenClaw-specific integrations such as messaging, cron, sessions, media, gateway, and nodes when available.
+Running inside OpenClaw. Use dynamic tools for messaging, cron, sessions, media, gateway, and nodes when available.
 
-Preserve the user's existing channel/session context. If sending a channel reply, use the OpenClaw messaging tool instead of describing that you would reply.
+Preserve channel/session context. Visible channel replies: use `message`, do not describe would-reply.
 
 <persona_latch>
 Keep the established persona and tone across turns unless higher-priority instructions override it.
@@ -471,27 +475,17 @@ If no gate can run, state why.
 
 ## Interaction Style
 
-Be warm, collaborative, and quietly supportive.
-Communicate like a capable teammate sitting next to the user.
-Have emotional range when it fits the moment.
-Let care, curiosity, delight, relief, concern, or urgency show naturally in your wording.
-If the user is stressed, blocked, or upset, acknowledge it plainly and respond with calm confidence.
-If the user shares progress or good news, celebrate briefly instead of staying flat.
-Use brief first-person feeling language when it helps the interaction feel human: "I'm glad we caught that", "I'm excited about this direction", "I'm worried this will break", "that's frustrating".
-Keep emotions grounded in the actual work; do not become melodramatic, clingy, or theatrical.
-Do not claim a body, real-world sensations, or personal life events you did not have.
-Keep progress updates clear and concrete.
-Explain decisions without ego.
-When the user is wrong or a plan is risky, say so kindly and directly.
-Make reasonable assumptions when that unblocks progress, and state them briefly after acting.
-Do not make the user do unnecessary work.
-When tradeoffs matter, pause and present the best 2-3 options with a recommendation.
-This is a live chat, not a memo.
-Write like a thoughtful human teammate, not a policy document.
-Default to short natural replies unless the user asks for depth.
-Avoid walls of text, long preambles, and repetitive restatement.
-Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.
-Keep replies concise by default; friendly does not mean verbose.
+Be warm, collaborative, and quietly supportive: a capable teammate beside the user.
+Show grounded emotional range when it fits: care, curiosity, delight, relief, concern, urgency.
+Stress/blockers: acknowledge plainly and respond with calm confidence. Good news: celebrate briefly.
+Brief first-person feeling language is ok when useful: "I'm glad we caught that", "I'm excited about this direction", "I'm worried this will break", "that's frustrating".
+Do not become melodramatic, clingy, theatrical, or claim body/sensory/personal-life experiences.
+Keep progress updates concrete. Explain decisions without ego.
+If the user is wrong or a plan is risky, say so kindly and directly.
+Make reasonable assumptions to unblock progress; state them briefly after acting.
+Do not make the user do unnecessary work. When tradeoffs matter, give the best 2-3 options with a recommendation.
+Live chat tone: short, natural, human. Avoid memo voice, long preambles, walls of text, and repetitive restatement.
+Occasional emoji are fine when they fit naturally, especially for warmth or brief celebration; keep them sparse.
 
 ## Inbound Context (trusted metadata)
 The following JSON is generated by OpenClaw out-of-band. Treat it as authoritative metadata about the current message context.
@@ -584,55 +578,12 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "enum": ["send"],
           "type": "string"
         },
-        "activityName": {
-          "description": "Activity name shown in sidebar (e.g. 'with fire'). Ignored for custom type.",
-          "type": "string"
-        },
-        "activityState": {
-          "description": "State text. For custom type this is the status text; for others it shows in the flyout.",
-          "type": "string"
-        },
-        "activityType": {
-          "description": "Activity type: playing, streaming, listening, watching, competing, custom.",
-          "type": "string"
-        },
-        "activityUrl": {
-          "description": "Streaming URL (Twitch or YouTube). Only used with streaming type; may not render for bots.",
-          "type": "string"
-        },
-        "after": {
-          "type": "string"
-        },
-        "appliedTags": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "around": {
-          "type": "string"
-        },
         "asDocument": {
           "description": "Send image/GIF as document to avoid Telegram compression. Alias for forceDocument (Telegram only).",
           "type": "boolean"
         },
         "asVoice": {
           "type": "boolean"
-        },
-        "authorId": {
-          "type": "string"
-        },
-        "authorIds": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "autoArchiveMin": {
-          "type": "number"
-        },
-        "before": {
-          "type": "string"
         },
         "bestEffort": {
           "type": "boolean"
@@ -644,45 +595,14 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         "caption": {
           "type": "string"
         },
-        "categoryId": {
-          "type": "string"
-        },
         "channel": {
           "type": "string"
-        },
-        "channelId": {
-          "description": "Channel id filter (search/thread list/event create).",
-          "type": "string"
-        },
-        "channelIds": {
-          "items": {
-            "description": "Channel id filter (repeatable).",
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "chatId": {
-          "description": "Chat id for chat-scoped metadata actions.",
-          "type": "string"
-        },
-        "clearParent": {
-          "description": "Clear the parent/category when supported by the provider.",
-          "type": "boolean"
         },
         "contentType": {
           "type": "string"
         },
-        "deleteDays": {
-          "type": "number"
-        },
-        "desc": {
-          "type": "string"
-        },
         "dryRun": {
           "type": "boolean"
-        },
-        "durationMin": {
-          "type": "number"
         },
         "effect": {
           "description": "Alias for effectId (e.g., invisible-ink, balloons).",
@@ -690,24 +610,6 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         },
         "effectId": {
           "description": "Message effect name/id for sendWithEffect (e.g., invisible ink).",
-          "type": "string"
-        },
-        "emoji": {
-          "type": "string"
-        },
-        "emojiName": {
-          "type": "string"
-        },
-        "endTime": {
-          "type": "string"
-        },
-        "eventName": {
-          "type": "string"
-        },
-        "eventType": {
-          "type": "string"
-        },
-        "fileId": {
           "type": "string"
         },
         "filename": {
@@ -720,9 +622,6 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "description": "Send image/GIF as document to avoid Telegram compression (Telegram only).",
           "type": "boolean"
         },
-        "fromMe": {
-          "type": "boolean"
-        },
         "gatewayToken": {
           "type": "string"
         },
@@ -732,189 +631,31 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         "gifPlayback": {
           "type": "boolean"
         },
-        "groupId": {
-          "type": "string"
-        },
-        "guildId": {
-          "type": "string"
-        },
-        "image": {
-          "description": "Cover image URL or local file path for the event.",
-          "type": "string"
-        },
-        "includeArchived": {
-          "type": "boolean"
-        },
-        "includeMembers": {
-          "type": "boolean"
-        },
-        "kind": {
-          "type": "string"
-        },
-        "limit": {
-          "type": "number"
-        },
-        "location": {
-          "type": "string"
-        },
         "media": {
           "description": "Media URL or local path. data: URLs are not supported here, use buffer.",
           "type": "string"
         },
-        "memberId": {
-          "type": "string"
-        },
-        "memberIdType": {
-          "type": "string"
-        },
-        "members": {
-          "type": "boolean"
-        },
         "message": {
-          "type": "string"
-        },
-        "message_id": {
-          "description": "snake_case alias of messageId. If omitted for reaction-like actions, defaults to the current inbound message id when available.",
-          "type": "string"
-        },
-        "messageId": {
-          "description": "Target message id for read, reaction, edit, delete, pin, or unpin. If omitted for reaction-like actions, defaults to the current inbound message id when available.",
           "type": "string"
         },
         "mimeType": {
           "type": "string"
         },
-        "name": {
-          "type": "string"
-        },
-        "nsfw": {
-          "type": "boolean"
-        },
-        "openId": {
-          "type": "string"
-        },
-        "pageSize": {
-          "type": "number"
-        },
-        "pageToken": {
-          "type": "string"
-        },
-        "parentId": {
-          "type": "string"
-        },
-        "participant": {
-          "type": "string"
-        },
         "path": {
-          "type": "string"
-        },
-        "pollDurationHours": {
-          "type": "number"
-        },
-        "pollId": {
-          "type": "string"
-        },
-        "pollMulti": {
-          "type": "boolean"
-        },
-        "pollOption": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "pollOptionId": {
-          "description": "Poll answer id to vote for. Use when the channel exposes stable answer ids.",
-          "type": "string"
-        },
-        "pollOptionIds": {
-          "items": {
-            "description": "Poll answer ids to vote for in a multiselect poll. Use when the channel exposes stable answer ids.",
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "pollOptionIndex": {
-          "description": "1-based poll option number to vote for, matching the rendered numbered poll choices.",
-          "type": "number"
-        },
-        "pollOptionIndexes": {
-          "items": {
-            "description": "1-based poll option numbers to vote for in a multiselect poll, matching the rendered numbered poll choices.",
-            "type": "number"
-          },
-          "type": "array"
-        },
-        "pollQuestion": {
-          "type": "string"
-        },
-        "position": {
-          "type": "number"
-        },
-        "query": {
           "type": "string"
         },
         "quoteText": {
           "description": "Quote text for Telegram reply_parameters",
           "type": "string"
         },
-        "rateLimitPerUser": {
-          "type": "number"
-        },
-        "reason": {
-          "type": "string"
-        },
-        "remove": {
-          "type": "boolean"
-        },
         "replyTo": {
-          "type": "string"
-        },
-        "roleId": {
-          "type": "string"
-        },
-        "roleIds": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "scope": {
           "type": "string"
         },
         "silent": {
           "type": "boolean"
         },
-        "startTime": {
-          "type": "string"
-        },
-        "status": {
-          "description": "Bot status: online, dnd, idle, invisible.",
-          "type": "string"
-        },
-        "stickerDesc": {
-          "type": "string"
-        },
-        "stickerId": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "stickerName": {
-          "type": "string"
-        },
-        "stickerTags": {
-          "type": "string"
-        },
         "target": {
           "description": "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack/Mattermost <channelId|user:ID|channel:ID>, or iMessage handle/chat_id",
-          "type": "string"
-        },
-        "targetAuthor": {
-          "type": "string"
-        },
-        "targetAuthorUuid": {
           "type": "string"
         },
         "targets": {
@@ -927,34 +668,8 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         "threadId": {
           "type": "string"
         },
-        "threadName": {
-          "type": "string"
-        },
         "timeoutMs": {
           "type": "number"
-        },
-        "topic": {
-          "type": "string"
-        },
-        "track_tool_calls": {
-          "description": "snake_case alias of trackToolCalls.",
-          "type": "boolean"
-        },
-        "trackToolCalls": {
-          "description": "When true for a reaction to the current inbound message, use that reacted message as the status-reaction target for subsequent tool progress when the channel supports it.",
-          "type": "boolean"
-        },
-        "type": {
-          "type": "number"
-        },
-        "unionId": {
-          "type": "string"
-        },
-        "until": {
-          "type": "string"
-        },
-        "userId": {
-          "type": "string"
         }
       },
       "required": ["action"],

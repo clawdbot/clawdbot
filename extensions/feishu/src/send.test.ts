@@ -28,8 +28,8 @@ vi.mock("openclaw/plugin-sdk/markdown-table-runtime", () => ({
   resolveMarkdownTableMode: mockResolveMarkdownTableMode,
 }));
 
-vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
+vi.mock("openclaw/plugin-sdk/text-chunking", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-chunking")>();
   return {
     ...actual,
     convertMarkdownTables: mockConvertMarkdownTables,
@@ -77,7 +77,7 @@ describe("getMessageFeishu", () => {
 
   afterAll(() => {
     vi.doUnmock("openclaw/plugin-sdk/markdown-table-runtime");
-    vi.doUnmock("openclaw/plugin-sdk/text-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/text-chunking");
     vi.doUnmock("./client.js");
     vi.doUnmock("./accounts.js");
     vi.doUnmock("./runtime.js");
@@ -137,8 +137,39 @@ describe("getMessageFeishu", () => {
       channel: "feishu",
     });
     expect(mockConvertMarkdownTables).toHaveBeenCalledWith("hello", "preserve");
-    expect(result).toMatchObject({ messageId: "om_send", chatId: "oc_send" });
-    expect(result.receipt.primaryPlatformMessageId).toBe("om_send");
+    expect(typeof result.receipt.sentAt).toBe("number");
+    expect(result).toEqual({
+      messageId: "om_send",
+      chatId: "oc_send",
+      receipt: {
+        primaryPlatformMessageId: "om_send",
+        platformMessageIds: ["om_send"],
+        parts: [
+          {
+            platformMessageId: "om_send",
+            kind: "text",
+            index: 0,
+            raw: {
+              channel: "feishu",
+              messageId: "om_send",
+              chatId: "oc_send",
+              conversationId: "oc_send",
+            },
+            threadId: "oc_send",
+          },
+        ],
+        threadId: "oc_send",
+        sentAt: result.receipt.sentAt,
+        raw: [
+          {
+            channel: "feishu",
+            messageId: "om_send",
+            chatId: "oc_send",
+            conversationId: "oc_send",
+          },
+        ],
+      },
+    });
   });
 
   it("extracts text content from interactive card elements", async () => {
@@ -168,14 +199,18 @@ describe("getMessageFeishu", () => {
       messageId: "om_1",
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        messageId: "om_1",
-        chatId: "oc_1",
-        contentType: "interactive",
-        content: "hello markdown\nhello div",
-      }),
-    );
+    expect(result).toEqual({
+      messageId: "om_1",
+      chatId: "oc_1",
+      chatType: undefined,
+      senderId: undefined,
+      senderOpenId: undefined,
+      senderType: undefined,
+      content: "hello markdown\nhello div",
+      contentType: "interactive",
+      createTime: undefined,
+      threadId: undefined,
+    });
   });
 
   it("falls through empty interactive card element arrays and locale variants", async () => {
@@ -217,14 +252,18 @@ describe("getMessageFeishu", () => {
       messageId: "om_i18n_card",
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        messageId: "om_i18n_card",
-        chatId: "oc_i18n_card",
-        contentType: "interactive",
-        content: "hello 2 tasks {{metadata}}",
-      }),
-    );
+    expect(result).toEqual({
+      messageId: "om_i18n_card",
+      chatId: "oc_i18n_card",
+      chatType: undefined,
+      senderId: undefined,
+      senderOpenId: undefined,
+      senderType: undefined,
+      content: "hello 2 tasks {{metadata}}",
+      contentType: "interactive",
+      createTime: undefined,
+      threadId: undefined,
+    });
   });
 
   it("falls back to post-format content when interactive card elements are empty", async () => {
@@ -257,14 +296,18 @@ describe("getMessageFeishu", () => {
       messageId: "om_post_card",
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        messageId: "om_post_card",
-        chatId: "oc_post_card",
-        contentType: "interactive",
-        content: "Card summary\n\n**fallback** body",
-      }),
-    );
+    expect(result).toEqual({
+      messageId: "om_post_card",
+      chatId: "oc_post_card",
+      chatType: undefined,
+      senderId: undefined,
+      senderOpenId: undefined,
+      senderType: undefined,
+      content: "Card summary\n\n**fallback** body",
+      contentType: "interactive",
+      createTime: undefined,
+      threadId: undefined,
+    });
   });
 
   it("extracts text content from post messages", async () => {
@@ -294,14 +337,18 @@ describe("getMessageFeishu", () => {
       messageId: "om_post",
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        messageId: "om_post",
-        chatId: "oc_post",
-        contentType: "post",
-        content: "Summary\n\npost body",
-      }),
-    );
+    expect(result).toEqual({
+      messageId: "om_post",
+      chatId: "oc_post",
+      chatType: undefined,
+      senderId: undefined,
+      senderOpenId: undefined,
+      senderType: undefined,
+      content: "Summary\n\npost body",
+      contentType: "post",
+      createTime: undefined,
+      threadId: undefined,
+    });
   });
 
   it("returns text placeholder instead of raw JSON for unsupported message types", async () => {
@@ -326,14 +373,18 @@ describe("getMessageFeishu", () => {
       messageId: "om_file",
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        messageId: "om_file",
-        chatId: "oc_file",
-        contentType: "file",
-        content: "[file message]",
-      }),
-    );
+    expect(result).toEqual({
+      messageId: "om_file",
+      chatId: "oc_file",
+      chatType: undefined,
+      senderId: undefined,
+      senderOpenId: undefined,
+      senderType: undefined,
+      content: "[file message]",
+      contentType: "file",
+      createTime: undefined,
+      threadId: undefined,
+    });
   });
 
   it("supports single-object response shape from Feishu API", async () => {
@@ -354,14 +405,18 @@ describe("getMessageFeishu", () => {
       messageId: "om_single",
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        messageId: "om_single",
-        chatId: "oc_single",
-        contentType: "text",
-        content: "single payload",
-      }),
-    );
+    expect(result).toEqual({
+      messageId: "om_single",
+      chatId: "oc_single",
+      chatType: undefined,
+      senderId: undefined,
+      senderOpenId: undefined,
+      senderType: undefined,
+      content: "single payload",
+      contentType: "text",
+      createTime: undefined,
+      threadId: undefined,
+    });
   });
 
   it("reuses the same content parsing for thread history messages", async () => {
@@ -415,16 +470,22 @@ describe("getMessageFeishu", () => {
     });
 
     expect(result).toEqual([
-      expect.objectContaining({
+      {
         messageId: "om_file",
+        senderId: "ou_1",
+        senderType: "user",
         contentType: "file",
         content: "[file message]",
-      }),
-      expect.objectContaining({
+        createTime: 1710000001000,
+      },
+      {
         messageId: "om_card",
+        senderId: "app_1",
+        senderType: "app",
         contentType: "interactive",
         content: "hello from card 2.0",
-      }),
+        createTime: 1710000000000,
+      },
     ]);
   });
 });
@@ -547,13 +608,14 @@ describe("buildStructuredCard", () => {
       },
     });
 
-    expect(card).toEqual(
-      expect.objectContaining({
-        header: {
-          title: { tag: "plain_text", content: "Agent" },
-          template: "blue",
-        },
-      }),
-    );
+    expect(card).toEqual({
+      schema: "2.0",
+      config: { width_mode: "fill" },
+      body: { elements: [{ tag: "markdown", content: "hello" }] },
+      header: {
+        title: { tag: "plain_text", content: "Agent" },
+        template: "blue",
+      },
+    });
   });
 });

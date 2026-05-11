@@ -1,7 +1,7 @@
 import { messagingApi } from "@line/bot-sdk";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/text-runtime";
+import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 interface DownloadResult {
   path: string;

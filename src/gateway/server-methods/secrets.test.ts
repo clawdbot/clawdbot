@@ -42,6 +42,31 @@ async function invokeSecretsResolve(params: {
   });
 }
 
+function requireRecord(value: unknown): Record<string, unknown> {
+  expect(value).toBeTruthy();
+  expect(typeof value).toBe("object");
+  expect(Array.isArray(value)).toBe(false);
+  return value as Record<string, unknown>;
+}
+
+function expectRespondError(
+  respond: ReturnType<typeof vi.fn>,
+  expected: { code: string; message?: string },
+): void {
+  const call = respond.mock.calls[0];
+  expect(call?.[0]).toBe(false);
+  expect(call?.[1]).toBeUndefined();
+  const error = requireRecord(call?.[2]);
+  expect(error.code).toBe(expected.code);
+  if (expected.message !== undefined) {
+    expect(error.message).toBe(expected.message);
+  }
+}
+
+function expectWarnMessageWith(warn: ReturnType<typeof vi.fn>, text: string): void {
+  expect(warn.mock.calls.some(([message]) => String(message).includes(text))).toBe(true);
+}
+
 describe("secrets handlers", () => {
   function createHandlers(overrides?: {
     reloadSecrets?: () => Promise<{ warningCount: number }>;
@@ -84,15 +109,11 @@ describe("secrets handlers", () => {
     });
     const respond = vi.fn();
     await invokeSecretsReload({ handlers, respond });
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message: "secrets.reload failed",
-      }),
-    );
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("disk full"));
+    expectRespondError(respond, {
+      code: "UNAVAILABLE",
+      message: "secrets.reload failed",
+    });
+    expectWarnMessageWith(warn, "disk full");
   });
 
   it("resolves requested command secret assignments from the active snapshot", async () => {
@@ -142,13 +163,7 @@ describe("secrets handlers", () => {
       commandName: "",
       targetIds: "bad",
     });
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-      }),
-    );
+    expectRespondError(respond, { code: "INVALID_REQUEST" });
   });
 
   it("rejects secrets.resolve params when targetIds entries are not strings", async () => {
@@ -162,14 +177,10 @@ describe("secrets handlers", () => {
       targetIds: ["talk.providers.*.apiKey", 12],
     });
     expect(resolveSecrets).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: "invalid secrets.resolve params: targetIds",
-      }),
-    );
+    expectRespondError(respond, {
+      code: "INVALID_REQUEST",
+      message: "invalid secrets.resolve params: targetIds",
+    });
   });
 
   it("rejects unknown secrets.resolve target ids", async () => {
@@ -183,14 +194,10 @@ describe("secrets handlers", () => {
       targetIds: ["unknown.target"],
     });
     expect(resolveSecrets).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: 'invalid secrets.resolve params: unknown target id "unknown.target"',
-      }),
-    );
+    expectRespondError(respond, {
+      code: "INVALID_REQUEST",
+      message: 'invalid secrets.resolve params: unknown target id "unknown.target"',
+    });
   });
 
   it("returns unavailable when secrets.resolve handler returns an invalid payload shape", async () => {
@@ -208,17 +215,11 @@ describe("secrets handlers", () => {
       commandName: "memory status",
       targetIds: ["talk.providers.*.apiKey"],
     });
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message: "secrets.resolve failed",
-      }),
-    );
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("secrets.resolve returned invalid payload."),
-    );
+    expectRespondError(respond, {
+      code: "UNAVAILABLE",
+      message: "secrets.resolve failed",
+    });
+    expectWarnMessageWith(warn, "secrets.resolve returned invalid payload.");
   });
 
   it("logs error details when secrets.resolve throws", async () => {
@@ -234,14 +235,10 @@ describe("secrets handlers", () => {
       commandName: "memory status",
       targetIds: ["talk.providers.*.apiKey"],
     });
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message: "secrets.resolve failed",
-      }),
-    );
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("EACCES: permission denied"));
+    expectRespondError(respond, {
+      code: "UNAVAILABLE",
+      message: "secrets.resolve failed",
+    });
+    expectWarnMessageWith(warn, "EACCES: permission denied");
   });
 });

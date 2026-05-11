@@ -44,6 +44,7 @@ import {
   type ConnectParams,
   type EventFrame,
   type HelloOk,
+  MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   type RequestFrame,
   validateEventFrame,
@@ -545,7 +546,7 @@ export class GatewayClient {
       };
     })();
     const params: ConnectParams = {
-      minProtocol: this.opts.minProtocol ?? PROTOCOL_VERSION,
+      minProtocol: this.opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: this.opts.maxProtocol ?? PROTOCOL_VERSION,
       client: {
         id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,

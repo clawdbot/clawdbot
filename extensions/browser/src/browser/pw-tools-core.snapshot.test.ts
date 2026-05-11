@@ -52,12 +52,12 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(result).toEqual({ nodes: formattedNodes });
     expect(getPageForTargetId).toHaveBeenCalledTimes(1);
     expect(ensurePageState).toHaveBeenCalledWith(page);
-    expect(withPageScopedCdpClient).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:9222",
-      page,
-      targetId: "tab-1",
-      fn: expect.any(Function),
-    });
+    expect(withPageScopedCdpClient).toHaveBeenCalledTimes(1);
+    const scopedClientOptions = withPageScopedCdpClient.mock.calls[0]?.[0];
+    expect(scopedClientOptions?.cdpUrl).toBe("http://127.0.0.1:9222");
+    expect(scopedClientOptions?.page).toBe(page);
+    expect(scopedClientOptions?.targetId).toBe("tab-1");
+    expect(typeof scopedClientOptions?.fn).toBe("function");
     expect(markBackendDomRefsOnPage).toHaveBeenCalledWith({
       page,
       refs: [{ ref: "ax1", backendDOMNodeId: 42 }],

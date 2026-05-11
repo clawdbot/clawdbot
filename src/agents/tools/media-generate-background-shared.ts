@@ -1,10 +1,10 @@
 import crypto from "node:crypto";
+import { completionRequiresMessageToolDelivery } from "../../auto-reply/reply/completion-delivery-policy.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
 import {
   completeTaskRunByRunId,
   createRunningTaskRun,
@@ -245,39 +245,6 @@ function buildMediaGenerationReplyInstruction(params: {
   ].join(" ");
 }
 
-function inferMediaGenerationCompletionChatType(
-  handle: MediaGenerationTaskHandle,
-): "direct" | "group" | "channel" | "unknown" {
-  const sessionKeyChatType = deriveSessionChatTypeFromKey(handle.requesterSessionKey);
-  if (sessionKeyChatType !== "unknown") {
-    return sessionKeyChatType;
-  }
-  const to = handle.requesterOrigin?.to?.trim().toLowerCase();
-  if (to?.startsWith("group:")) {
-    return "group";
-  }
-  if (to?.startsWith("channel:")) {
-    return "channel";
-  }
-  if (to?.startsWith("dm:") || to?.startsWith("direct:")) {
-    return "direct";
-  }
-  return "unknown";
-}
-
-function mediaGenerationCompletionRequiresMessageToolDelivery(params: {
-  config?: OpenClawConfig;
-  handle: MediaGenerationTaskHandle;
-}): boolean {
-  const chatType = inferMediaGenerationCompletionChatType(params.handle);
-  if (chatType === "group" || chatType === "channel") {
-    const configuredMode =
-      params.config?.messages?.groupChat?.visibleReplies ?? params.config?.messages?.visibleReplies;
-    return configuredMode !== "automatic";
-  }
-  return params.config?.messages?.visibleReplies === "message_tool";
-}
-
 async function wakeMediaGenerationTaskCompletion(params: {
   config?: OpenClawConfig;
   handle: MediaGenerationTaskHandle | null;
@@ -311,9 +278,10 @@ async function wakeMediaGenerationTaskCompletion(params: {
       replyInstruction: buildMediaGenerationReplyInstruction({
         status: params.status,
         completionLabel: params.completionLabel,
-        requiresMessageToolDelivery: mediaGenerationCompletionRequiresMessageToolDelivery({
-          config: params.config,
-          handle: params.handle,
+        requiresMessageToolDelivery: completionRequiresMessageToolDelivery({
+          cfg: params.config ?? {},
+          requesterSessionKey: params.handle.requesterSessionKey,
+          directOrigin: params.handle.requesterOrigin,
         }),
       }),
     },

@@ -22,8 +22,10 @@ describe("pw-role-snapshot", () => {
     expect(res.snapshot).toContain('- button "Submit" [ref=e1]');
     expect(res.snapshot).toContain('- link "Learn more" [ref=e2]');
     expect(Object.keys(res.refs)).toEqual(["e1", "e2"]);
-    expect(res.refs.e1).toMatchObject({ role: "button", name: "Submit" });
-    expect(res.refs.e2).toMatchObject({ role: "link", name: "Learn more" });
+    expect(res.refs.e1?.role).toBe("button");
+    expect(res.refs.e1?.name).toBe("Submit");
+    expect(res.refs.e2?.role).toBe("link");
+    expect(res.refs.e2?.name).toBe("Learn more");
   });
 
   it("uses nth only when duplicates exist", () => {
@@ -84,8 +86,10 @@ describe("pw-role-snapshot", () => {
     expect(res.snapshot).not.toContain("navigation");
     expect(res.snapshot).not.toContain("heading");
     expect(Object.keys(res.refs).toSorted()).toEqual(["e5", "e7"]);
-    expect(res.refs.e5).toMatchObject({ role: "link", name: "Home" });
-    expect(res.refs.e7).toMatchObject({ role: "button", name: "Save" });
+    expect(res.refs.e5?.role).toBe("link");
+    expect(res.refs.e5?.name).toBe("Home");
+    expect(res.refs.e7?.role).toBe("button");
+    expect(res.refs.e7?.name).toBe("Save");
   });
 
   it("preserves numeric Playwright AI snapshot refs", () => {
@@ -98,7 +102,9 @@ describe("pw-role-snapshot", () => {
     const res = buildRoleSnapshotFromAiSnapshot(ai, { interactive: true });
     expect(res.snapshot).toContain("[ref=5]");
     expect(Object.keys(res.refs).toSorted()).toEqual(["5", "7"]);
-    expect(res.refs["5"]).toMatchObject({ role: "link", name: "Home" });
-    expect(res.refs["7"]).toMatchObject({ role: "button", name: "Save" });
+    expect(res.refs["5"]?.role).toBe("link");
+    expect(res.refs["5"]?.name).toBe("Home");
+    expect(res.refs["7"]?.role).toBe("button");
+    expect(res.refs["7"]?.name).toBe("Save");
   });
 });

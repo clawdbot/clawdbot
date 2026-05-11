@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Context, Model } from "@earendil-works/pi-ai";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { describe, expect, it } from "vitest";
@@ -20,37 +20,59 @@ function createGlm47Template() {
   };
 }
 
+function expectReplayPolicyFields(
+  policy: Record<string, unknown> | undefined,
+  fields: Record<string, unknown>,
+): void {
+  expect(policy).toBeDefined();
+  for (const [key, value] of Object.entries(fields)) {
+    expect(policy?.[key]).toEqual(value);
+  }
+}
+
+function expectModelFields(
+  model: Record<string, unknown> | undefined,
+  fields: Record<string, unknown>,
+): void {
+  expect(model).toBeDefined();
+  for (const [key, value] of Object.entries(fields)) {
+    expect(model?.[key]).toEqual(value);
+  }
+}
+
 describe("zai provider plugin", () => {
   it("owns replay policy for OpenAI-compatible Z.ai transports", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
-    expect(
+    expectReplayPolicyFields(
       provider.buildReplayPolicy?.({
         provider: "zai",
         modelApi: "openai-completions",
         modelId: "glm-5.1",
-      } as never),
-    ).toMatchObject({
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      applyAssistantFirstOrderingFix: true,
-      validateGeminiTurns: true,
-      validateAnthropicTurns: true,
-    });
+      } as never) as Record<string, unknown> | undefined,
+      {
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+        applyAssistantFirstOrderingFix: true,
+        validateGeminiTurns: true,
+        validateAnthropicTurns: true,
+      },
+    );
 
-    expect(
+    expectReplayPolicyFields(
       provider.buildReplayPolicy?.({
         provider: "zai",
         modelApi: "openai-responses",
         modelId: "glm-5.1",
-      } as never),
-    ).toMatchObject({
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      applyAssistantFirstOrderingFix: false,
-      validateGeminiTurns: false,
-      validateAnthropicTurns: false,
-    });
+      } as never) as Record<string, unknown> | undefined,
+      {
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+        applyAssistantFirstOrderingFix: false,
+        validateGeminiTurns: false,
+        validateAnthropicTurns: false,
+      },
+    );
   });
 
   it("resolves persisted GLM-5 family models with provider-owned metadata", async () => {
@@ -79,15 +101,14 @@ describe("zai provider plugin", () => {
     ] as const;
 
     for (const testCase of cases) {
-      expect(
-        provider.resolveDynamicModel?.({
-          provider: "zai",
-          modelId: testCase.modelId,
-          modelRegistry: {
-            find: (_provider: string, modelId: string) => (modelId === "glm-4.7" ? template : null),
-          },
-        } as never),
-      ).toMatchObject({
+      const resolved = provider.resolveDynamicModel?.({
+        provider: "zai",
+        modelId: testCase.modelId,
+        modelRegistry: {
+          find: (_provider: string, modelId: string) => (modelId === "glm-4.7" ? template : null),
+        },
+      } as never) as Record<string, unknown> | undefined;
+      expectModelFields(resolved, {
         provider: "zai",
         api: "openai-completions",
         baseUrl: "https://api.z.ai/api/paas/v4",
@@ -129,15 +150,14 @@ describe("zai provider plugin", () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const template = createGlm47Template();
 
-    expect(
-      provider.resolveDynamicModel?.({
-        provider: "zai",
-        modelId: "glm-5-turbo",
-        modelRegistry: {
-          find: (_provider: string, modelId: string) => (modelId === "glm-4.7" ? template : null),
-        },
-      } as never),
-    ).toMatchObject({
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "zai",
+      modelId: "glm-5-turbo",
+      modelRegistry: {
+        find: (_provider: string, modelId: string) => (modelId === "glm-4.7" ? template : null),
+      },
+    } as never) as Record<string, unknown> | undefined;
+    expectModelFields(resolved, {
       id: "glm-5-turbo",
       name: "GLM-5 Turbo",
       provider: "zai",
@@ -175,9 +195,7 @@ describe("zai provider plugin", () => {
       {},
     );
 
-    expect(capturedPayload).toMatchObject({
-      tool_stream: true,
-    });
+    expect(capturedPayload?.tool_stream).toBe(true);
 
     const disabledWrapped = provider.wrapStreamFn?.({
       provider: "zai",
@@ -227,10 +245,8 @@ describe("zai provider plugin", () => {
       {},
     );
 
-    expect(capturedPayload).toMatchObject({
-      tool_stream: true,
-      thinking: { type: "disabled" },
-    });
+    expect(capturedPayload?.tool_stream).toBe(true);
+    expect(capturedPayload?.thinking).toEqual({ type: "disabled" });
   });
 
   it("enables Z.AI preserved thinking only when requested", async () => {
@@ -261,7 +277,7 @@ describe("zai provider plugin", () => {
       {},
     );
 
-    expect(capturedPayload).toMatchObject({ tool_stream: true });
+    expect(capturedPayload?.tool_stream).toBe(true);
     expect(capturedPayload).not.toHaveProperty("thinking");
 
     const wrappedWithPreserve = provider.wrapStreamFn?.({
@@ -282,10 +298,8 @@ describe("zai provider plugin", () => {
       {},
     );
 
-    expect(capturedPayload).toMatchObject({
-      tool_stream: true,
-      thinking: { type: "enabled", clear_thinking: false },
-    });
+    expect(capturedPayload?.tool_stream).toBe(true);
+    expect(capturedPayload?.thinking).toEqual({ type: "enabled", clear_thinking: false });
   });
 
   it("preserves replayed reasoning_content for Z.AI preserved thinking", async () => {
@@ -352,14 +366,11 @@ describe("zai provider plugin", () => {
 
     void wrapped?.(model, context, {});
 
-    expect(capturedPayload).toMatchObject({
-      thinking: { type: "enabled", clear_thinking: false },
-    });
-    expect((capturedPayload?.messages as Array<Record<string, unknown>>)[1]).toMatchObject({
-      role: "assistant",
-      content: "visible reply",
-      reasoning_content: "prior reasoning",
-    });
+    expect(capturedPayload?.thinking).toEqual({ type: "enabled", clear_thinking: false });
+    const assistantMessage = (capturedPayload?.messages as Array<Record<string, unknown>>)[1];
+    expect(assistantMessage?.role).toBe("assistant");
+    expect(assistantMessage?.content).toBe("visible reply");
+    expect(assistantMessage?.reasoning_content).toBe("prior reasoning");
   });
 
   it("defaults tool_stream extra params but preserves explicit values", async () => {

@@ -114,7 +114,7 @@ describe("happy path prompt snapshots", () => {
       generatedSnapshots,
       "telegram-heartbeat-codex-tool.md",
     );
-    const heartbeatPhrase = "The purpose of heartbeats is to make you feel magical and proactive.";
+    const heartbeatPhrase = "Use heartbeats to create useful proactive progress";
 
     expect(direct).toContain('"collaborationMode": {');
     expect(direct).toContain('"developer_instructions": null');

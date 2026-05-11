@@ -240,17 +240,14 @@ describe("Codex app-server elicitation bridge", () => {
       content: null,
       _meta: null,
     });
-    expect(mockCallGatewayTool).toHaveBeenCalledWith(
-      "plugin.approval.request",
-      expect.any(Object),
-      expect.objectContaining({
-        description: expect.stringContaining("App: GitHub"),
-      }),
-      { expectFinal: false },
-    );
-    const approvalRequest = mockCallGatewayTool.mock.calls[0]?.[2] as {
+    const approvalRequestCall = mockCallGatewayTool.mock.calls[0];
+    expect(approvalRequestCall?.[0]).toBe("plugin.approval.request");
+    expect(approvalRequestCall?.[1]).toStrictEqual({ timeoutMs: 130_000 });
+    expect(approvalRequestCall?.[3]).toStrictEqual({ expectFinal: false });
+    const approvalRequest = approvalRequestCall?.[2] as {
       description: string;
     };
+    expect(approvalRequest.description).toContain("App: GitHub");
     expect(approvalRequest.description).toContain("Tool: Create pull request");
     expect(approvalRequest.description).toContain("Repository: openclaw/openclaw");
   });
@@ -811,19 +808,16 @@ describe("Codex app-server elicitation bridge", () => {
       },
       _meta: null,
     });
-    expect(mockCallGatewayTool).toHaveBeenCalledWith(
-      "plugin.approval.request",
-      expect.any(Object),
-      expect.objectContaining({
-        title: expect.any(String),
-        description: expect.any(String),
-      }),
-      { expectFinal: false },
-    );
-    const approvalRequest = mockCallGatewayTool.mock.calls[0]?.[2] as {
+    const approvalRequestCall = mockCallGatewayTool.mock.calls[0];
+    expect(approvalRequestCall?.[0]).toBe("plugin.approval.request");
+    expect(approvalRequestCall?.[1]).toStrictEqual({ timeoutMs: 130_000 });
+    expect(approvalRequestCall?.[3]).toStrictEqual({ expectFinal: false });
+    const approvalRequest = approvalRequestCall?.[2] as {
       title: string;
       description: string;
     };
+    expect(typeof approvalRequest.title).toBe("string");
+    expect(typeof approvalRequest.description).toBe("string");
     expect(approvalRequest.title.length).toBeLessThanOrEqual(80);
     expect(approvalRequest.description.length).toBeLessThanOrEqual(256);
   });
@@ -905,13 +899,14 @@ describe("Codex app-server elicitation bridge", () => {
       content: null,
       _meta: null,
     });
-    expect(warn).toHaveBeenCalledWith(
+    const [warningMessage, warningDetails] = warn.mock.calls[0] ?? [];
+    expect(warningMessage).toBe(
       "codex MCP approval elicitation approved without a mappable response",
-      expect.objectContaining({
-        approvalKind: "mcp_tool_call",
-        fields: ["confirmChoice"],
-        outcome: "approved-once",
-      }),
     );
+    expect(warningDetails).toStrictEqual({
+      approvalKind: "mcp_tool_call",
+      fields: ["confirmChoice"],
+      outcome: "approved-once",
+    });
   });
 });

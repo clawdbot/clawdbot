@@ -104,6 +104,29 @@ function expectElement<T extends Element>(
   return element;
 }
 
+function requireFetchCall(fetchMock: ReturnType<typeof vi.fn>, index = 0) {
+  const call = fetchMock.mock.calls[index] as unknown as [string, RequestInit?] | undefined;
+  if (!call) {
+    throw new Error(`Expected fetch call ${index}`);
+  }
+  return call;
+}
+
+function requireFetchCallForUrl(fetchMock: ReturnType<typeof vi.fn>, expectedUrl: string) {
+  const call = fetchMock.mock.calls.find(([url]) => url === expectedUrl) as
+    | [string, RequestInit?]
+    | undefined;
+  if (!call) {
+    throw new Error(`Expected fetch call for ${expectedUrl}`);
+  }
+  return call;
+}
+
+function expectSameOriginGet(init: RequestInit | undefined) {
+  expect(init?.credentials).toBe("same-origin");
+  expect(init?.method).toBe("GET");
+}
+
 function renderAssistantMessage(
   container: HTMLElement,
   message: unknown,
@@ -735,7 +758,7 @@ describe("grouped chat rendering", () => {
 
     expectElement(container, ".chat-bubble--tool-shell", HTMLElement);
     const summary = container.querySelector<HTMLElement>(".chat-tool-msg-summary");
-    expect(summary?.textContent).toContain("Tool call");
+    expect(summary?.textContent).toContain("sessions_spawn");
     expect(container.textContent).not.toContain('"thread": true');
 
     renderAssistantMessage(container, message, {
@@ -1046,13 +1069,12 @@ describe("grouped chat rendering", () => {
       },
       { interval: 1, timeout: 100 },
     );
-    expect(fetchMock).toHaveBeenCalledWith(
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [fetchUrl, fetchInit] = requireFetchCall(fetchMock);
+    expect(fetchUrl).toBe(
       "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
-      expect.objectContaining({
-        method: "GET",
-        credentials: "same-origin",
-      }),
     );
+    expectSameOriginGet(fetchInit);
   });
 
   it("does not send auth to cross-origin managed-image-looking URLs", () => {
@@ -1189,10 +1211,11 @@ describe("grouped chat rendering", () => {
     expect(container.textContent).toContain("Checking...");
     await flushAssistantAttachmentAvailabilityChecks();
 
-    expect(fetchMock).toHaveBeenCalledWith(
+    const [, fetchInit] = requireFetchCallForUrl(
+      fetchMock,
       "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&meta=1",
-      expect.objectContaining({ credentials: "same-origin", method: "GET" }),
     );
+    expectSameOriginGet(fetchInit);
 
     const image = container.querySelector<HTMLImageElement>(".chat-message-image");
     const docLink = container.querySelector<HTMLAnchorElement>(
@@ -1308,16 +1331,16 @@ describe("grouped chat rendering", () => {
     await flushAssistantAttachmentAvailabilityChecks();
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
+    const [firstFetchUrl, firstFetchInit] = requireFetchCall(fetchMock, 0);
+    expect(firstFetchUrl).toBe(
       "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&meta=1",
-      expect.objectContaining({ credentials: "same-origin", method: "GET" }),
     );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
+    expectSameOriginGet(firstFetchInit);
+    const [secondFetchUrl, secondFetchInit] = requireFetchCall(fetchMock, 1);
+    expect(secondFetchUrl).toBe(
       "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&meta=1",
-      expect.objectContaining({ credentials: "same-origin", method: "GET" }),
     );
+    expectSameOriginGet(secondFetchInit);
     expectElement(container, ".chat-message-image", HTMLImageElement);
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
@@ -1455,11 +1478,11 @@ describe("grouped chat rendering", () => {
 
     await flushAssistantAttachmentAvailabilityChecks();
 
-    for (const expectedUrl of cases) {
-      expect(fetchMock).toHaveBeenCalledWith(
-        expectedUrl,
-        expect.objectContaining({ credentials: "same-origin", method: "GET" }),
-      );
+    expect(fetchMock).toHaveBeenCalledTimes(cases.length);
+    for (const [index, expectedUrl] of cases.entries()) {
+      const [fetchUrl, fetchInit] = requireFetchCall(fetchMock, index);
+      expect(fetchUrl).toBe(expectedUrl);
+      expectSameOriginGet(fetchInit);
     }
     expect(container.textContent).not.toContain("Outside allowed folders");
     vi.unstubAllGlobals();
@@ -1744,10 +1767,8 @@ describe("grouped chat rendering", () => {
     sidebarButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(container.querySelector(".chat-tool-card__preview-frame")).toBeNull();
-    expect(onOpenSidebar).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "markdown",
-      }),
-    );
+    expect(onOpenSidebar).toHaveBeenCalledTimes(1);
+    const sidebarPayload = onOpenSidebar.mock.calls[0]?.[0] as { kind?: string } | undefined;
+    expect(sidebarPayload?.kind).toBe("markdown");
   });
 });

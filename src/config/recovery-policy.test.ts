@@ -17,7 +17,7 @@ function snapshot(params: Partial<PolicySnapshot>): PolicySnapshot {
 }
 
 describe("config recovery policy", () => {
-  it("skips whole-file recovery for issues scoped only to plugin entries", () => {
+  it("skips whole-file recovery for issues scoped only to stale plugin refs", () => {
     const current = snapshot({
       issues: [
         {
@@ -27,6 +27,14 @@ describe("config recovery policy", () => {
         {
           path: "plugins.entries.lossless-claw.config.cacheAwareCompaction",
           message: "invalid config: must NOT have additional properties",
+        },
+        {
+          path: "plugins.allow",
+          message: "plugin not found: acpx",
+        },
+        {
+          path: "plugins.deny",
+          message: "plugin not found: missing-deny",
         },
       ],
     });
@@ -54,6 +62,17 @@ describe("config recovery policy", () => {
 
     expect(isPluginLocalInvalidConfigSnapshot(current)).toBe(false);
     expect(shouldAttemptLastKnownGoodRecovery(current)).toBe(true);
+  });
+
+  it("keeps recovery enabled for malformed plugin policy values", () => {
+    for (const path of ["plugins.allow", "plugins.deny"]) {
+      const current = snapshot({
+        issues: [{ path, message: "Invalid input: expected array, received string" }],
+      });
+
+      expect(isPluginLocalInvalidConfigSnapshot(current)).toBe(false);
+      expect(shouldAttemptLastKnownGoodRecovery(current)).toBe(true);
+    }
   });
 
   it("keeps recovery enabled when legacy config issues are present", () => {

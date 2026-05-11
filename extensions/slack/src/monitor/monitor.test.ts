@@ -1,9 +1,37 @@
 import type { App } from "@slack/bolt";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it } from "vitest";
 import { resolveSlackChannelConfig } from "./channel-config.js";
 import { createSlackMonitorContext, normalizeSlackChannelType } from "./context.js";
+
+type SlackChannelConfigResult = ReturnType<typeof resolveSlackChannelConfig>;
+
+function expectSlackChannelConfig(
+  res: SlackChannelConfigResult,
+  expected: {
+    allowed?: boolean;
+    requireMention?: boolean;
+    matchKey?: string;
+    matchSource?: "direct" | "wildcard";
+  },
+) {
+  if (!res) {
+    throw new Error("expected Slack channel config result");
+  }
+  if (expected.allowed !== undefined) {
+    expect(res.allowed).toBe(expected.allowed);
+  }
+  if (expected.requireMention !== undefined) {
+    expect(res.requireMention).toBe(expected.requireMention);
+  }
+  if (expected.matchKey !== undefined) {
+    expect(res.matchKey).toBe(expected.matchKey);
+  }
+  if (expected.matchSource !== undefined) {
+    expect(res.matchSource).toBe(expected.matchSource);
+  }
+}
 
 describe("resolveSlackChannelConfig", () => {
   it("uses defaultRequireMention when channels config is empty", () => {
@@ -29,7 +57,7 @@ describe("resolveSlackChannelConfig", () => {
       channels: { "*": { requireMention: true } },
       defaultRequireMention: false,
     });
-    expect(res).toMatchObject({ requireMention: true });
+    expectSlackChannelConfig(res, { requireMention: true });
   });
 
   it("uses wildcard entries when no direct channel config exists", () => {
@@ -38,7 +66,7 @@ describe("resolveSlackChannelConfig", () => {
       channels: { "*": { enabled: true, requireMention: false } },
       defaultRequireMention: true,
     });
-    expect(res).toMatchObject({
+    expectSlackChannelConfig(res, {
       allowed: true,
       requireMention: false,
       matchKey: "*",
@@ -52,7 +80,7 @@ describe("resolveSlackChannelConfig", () => {
       channels: { C1: { enabled: true, requireMention: false } },
       defaultRequireMention: true,
     });
-    expect(res).toMatchObject({
+    expectSlackChannelConfig(res, {
       matchKey: "C1",
       matchSource: "direct",
     });
@@ -66,7 +94,7 @@ describe("resolveSlackChannelConfig", () => {
       channels: { c0abc12345: { enabled: true, requireMention: false } },
       defaultRequireMention: true,
     });
-    expect(res).toMatchObject({ allowed: true, requireMention: false });
+    expectSlackChannelConfig(res, { allowed: true, requireMention: false });
   });
 
   it("matches channel config key stored in uppercase when user types lowercase channel ID", () => {
@@ -76,7 +104,7 @@ describe("resolveSlackChannelConfig", () => {
       channels: { C0ABC12345: { enabled: true, requireMention: false } },
       defaultRequireMention: true,
     });
-    expect(res).toMatchObject({ allowed: true, requireMention: false });
+    expectSlackChannelConfig(res, { allowed: true, requireMention: false });
   });
 
   it("matches channel-prefixed config keys when Slack delivers a bare channel ID", () => {
@@ -85,7 +113,7 @@ describe("resolveSlackChannelConfig", () => {
       channels: { "channel:C0AJYR3BVTJ": { enabled: true, requireMention: false } },
       defaultRequireMention: true,
     });
-    expect(res).toMatchObject({
+    expectSlackChannelConfig(res, {
       allowed: true,
       requireMention: false,
       matchKey: "channel:C0AJYR3BVTJ",
@@ -99,7 +127,7 @@ describe("resolveSlackChannelConfig", () => {
       channels: { "channel:c0ajyr3bvtj": { enabled: true, requireMention: false } },
       defaultRequireMention: true,
     });
-    expect(res).toMatchObject({
+    expectSlackChannelConfig(res, {
       allowed: true,
       requireMention: false,
       matchKey: "channel:c0ajyr3bvtj",
@@ -114,7 +142,7 @@ describe("resolveSlackChannelConfig", () => {
       channels: { "ops-room": { enabled: true, requireMention: false } },
       defaultRequireMention: true,
     });
-    expect(res).toMatchObject({ allowed: false, requireMention: true });
+    expectSlackChannelConfig(res, { allowed: false, requireMention: true });
   });
 
   it("allows channel-name route matches when dangerous name matching is enabled", () => {
@@ -125,7 +153,7 @@ describe("resolveSlackChannelConfig", () => {
       defaultRequireMention: true,
       allowNameMatching: true,
     });
-    expect(res).toMatchObject({
+    expectSlackChannelConfig(res, {
       allowed: true,
       requireMention: false,
       matchKey: "ops-room",

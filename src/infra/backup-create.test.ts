@@ -391,22 +391,17 @@ describe("createBackupArchive", () => {
         const entries = await listArchiveEntries(result.archivePath);
 
         const entrySuffixes = entries.map((entry) => entry.replace(/^.*\/state\//, "/state/"));
-        expect(entrySuffixes).toEqual(
-          expect.arrayContaining([
-            "/state/extensions/demo/openclaw.plugin.json",
-            "/state/extensions/demo/src/index.js",
-            "/state/node_modules/root-dep/index.js",
-          ]),
-        );
+        expect(entrySuffixes).toContain("/state/extensions/demo/openclaw.plugin.json");
+        expect(entrySuffixes).toContain("/state/extensions/demo/src/index.js");
+        expect(entrySuffixes).toContain("/state/node_modules/root-dep/index.js");
         const pluginNodeModuleEntries = entries.filter((entry) =>
           entry.includes("/state/extensions/demo/node_modules/"),
         );
         expect(pluginNodeModuleEntries).toStrictEqual([]);
 
         const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-        await expect(
-          backupVerifyCommand(runtime, { archive: result.archivePath }),
-        ).resolves.toMatchObject({ ok: true });
+        const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
+        expect(verification.ok).toBe(true);
       },
     );
   });
@@ -439,9 +434,8 @@ describe("createBackupArchive", () => {
           expect(rootManifestEntries).toHaveLength(1);
 
           const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-          await expect(
-            backupVerifyCommand(runtime, { archive: result.archivePath }),
-          ).resolves.toMatchObject({ ok: true });
+          const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
+          expect(verification.ok).toBe(true);
         } finally {
           tmpdirSpy.mockRestore();
         }
@@ -474,9 +468,8 @@ describe("createBackupArchive", () => {
           expect(rootManifestEntries).toHaveLength(1);
 
           const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-          await expect(
-            backupVerifyCommand(runtime, { archive: result.archivePath }),
-          ).resolves.toMatchObject({ ok: true });
+          const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
+          expect(verification.ok).toBe(true);
         } finally {
           tmpdirSpy.mockRestore();
         }

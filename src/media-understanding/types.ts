@@ -169,6 +169,47 @@ export type ImagesDescriptionResult = {
   model?: string;
 };
 
+export type StructuredExtractionTextInput = {
+  type: "text";
+  text: string;
+};
+
+export type StructuredExtractionImageInput = {
+  type: "image";
+  buffer: Buffer;
+  fileName: string;
+  mime?: string;
+};
+
+export type StructuredExtractionInput =
+  | StructuredExtractionTextInput
+  | StructuredExtractionImageInput;
+
+export type StructuredExtractionRequest = {
+  /** Image-first extraction input; callers must include at least one image. */
+  input: StructuredExtractionInput[];
+  instructions: string;
+  schemaName?: string;
+  jsonSchema?: unknown;
+  jsonMode?: boolean;
+  timeoutMs: number;
+  profile?: string;
+  preferredProfile?: string;
+  authStore?: AuthProfileStore;
+  agentDir: string;
+  cfg: OpenClawConfig;
+  model: string;
+  provider: string;
+};
+
+export type StructuredExtractionResult = {
+  text: string;
+  parsed?: unknown;
+  model?: string;
+  provider?: string;
+  contentType?: "json" | "text";
+};
+
 export type MediaUnderstandingProvider = {
   id: string;
   capabilities?: MediaUnderstandingCapability[];
@@ -179,4 +220,5 @@ export type MediaUnderstandingProvider = {
   describeVideo?: (req: VideoDescriptionRequest) => Promise<VideoDescriptionResult>;
   describeImage?: (req: ImageDescriptionRequest) => Promise<ImageDescriptionResult>;
   describeImages?: (req: ImagesDescriptionRequest) => Promise<ImagesDescriptionResult>;
+  extractStructured?: (req: StructuredExtractionRequest) => Promise<StructuredExtractionResult>;
 };

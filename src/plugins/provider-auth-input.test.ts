@@ -7,6 +7,8 @@ import {
   normalizeTokenProviderInput,
 } from "./provider-auth-input.js";
 
+const acceptAnyApiKeyInput = () => undefined;
+
 const resolveEnvApiKey = vi.hoisted(() =>
   vi.fn((provider: string, env?: NodeJS.ProcessEnv) => {
     if (provider !== "minimax") {
@@ -123,7 +125,7 @@ async function ensureMinimaxApiKeyInternal(params: {
     envLabel: "MINIMAX_API_KEY",
     promptMessage: "Enter key",
     normalize: (value) => value.trim(),
-    validate: () => undefined,
+    validate: acceptAnyApiKeyInput,
     prompter: params.prompter,
     secretInputMode: params.secretInputMode,
     setCredential: params.setCredential,
@@ -273,11 +275,12 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
 
     expect(result).toBe("prompted-key");
     expect(setCredential).toHaveBeenCalledWith("prompted-key", "plaintext");
-    expect(text).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Enter key",
-      }),
-    );
+    expect(text).toHaveBeenCalledWith({
+      message: "Enter key",
+      placeholder: "API key",
+      validate: acceptAnyApiKeyInput,
+      sensitive: true,
+    });
   });
 
   it("uses explicit inline env ref when secret-input-mode=ref selects existing env key", async () => {

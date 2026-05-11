@@ -116,7 +116,7 @@ function toPortablePath(filePath, repoRoot = REPO_ROOT) {
 
 function rewriteRule(rule, params) {
   const originalId = String(rule.id ?? "rule");
-  const metadata = { ...(rule.metadata ?? {}) };
+  const metadata = { ...rule.metadata };
   const sourceId = sourceIdFromMetadata(metadata);
   if (!sourceId) {
     throw new Error(
@@ -183,7 +183,7 @@ async function listYamlFiles(dir) {
     }
   }
   await walk(dir);
-  return out.toSorted();
+  return out.toSorted((a, b) => a.localeCompare(b));
 }
 
 async function compile(opts) {

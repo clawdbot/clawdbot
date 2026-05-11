@@ -110,6 +110,41 @@ export type PluginControlUiDescriptor = {
   requiredScopes?: OperatorScope[];
 };
 
+export type PluginSessionActionContext = {
+  pluginId: string;
+  actionId: string;
+  sessionKey?: string;
+  payload?: PluginJsonValue;
+  client?: {
+    connId?: string;
+    scopes: string[];
+  };
+};
+
+export type PluginSessionActionResult =
+  | {
+      ok?: true;
+      result?: PluginJsonValue;
+      reply?: PluginJsonValue;
+      continueAgent?: boolean;
+    }
+  | {
+      ok: false;
+      error: string;
+      code?: string;
+      details?: PluginJsonValue;
+    };
+
+export type PluginSessionActionRegistration = {
+  id: string;
+  description?: string;
+  schema?: PluginJsonValue;
+  requiredScopes?: OperatorScope[];
+  handler: (
+    ctx: PluginSessionActionContext,
+  ) => PluginSessionActionResult | void | Promise<PluginSessionActionResult | void>;
+};
+
 export type PluginRuntimeLifecycleRegistration = {
   id: string;
   description?: string;
@@ -136,6 +171,17 @@ export type PluginAgentEventSubscriptionRegistration = {
     },
   ) => void | Promise<void>;
 };
+
+export type PluginAgentEventEmitParams = {
+  runId: string;
+  stream: AgentEventStream;
+  data: PluginJsonValue;
+  sessionKey?: string;
+};
+
+export type PluginAgentEventEmitResult =
+  | { emitted: true; stream: AgentEventStream }
+  | { emitted: false; reason: string };
 
 export type PluginRunContextPatch = {
   runId: string;
@@ -166,6 +212,87 @@ export type PluginSessionSchedulerJobHandle = {
   pluginId: string;
   sessionKey: string;
   kind: string;
+};
+
+export type PluginSessionAttachmentFile = {
+  path: string;
+};
+
+export type PluginAttachmentChannelHints = {
+  telegram?: {
+    parseMode?: "HTML";
+    disableNotification?: boolean;
+    /**
+     * Require host-side detection to match this MIME before forcing document delivery.
+     * Mismatched files are rejected before the outbound adapter is called.
+     */
+    forceDocumentMime?: string;
+  };
+  slack?: {
+    threadTs?: string;
+  };
+};
+
+export type PluginSessionAttachmentCaptionFormat = "plain" | "html" | "markdown";
+
+export type PluginSessionAttachmentParams = {
+  sessionKey: string;
+  files: PluginSessionAttachmentFile[];
+  text?: string;
+  threadId?: string | number;
+  forceDocument?: boolean;
+  maxBytes?: number;
+  captionFormat?: PluginSessionAttachmentCaptionFormat;
+  channelHints?: PluginAttachmentChannelHints;
+};
+
+export type PluginSessionAttachmentResult =
+  | {
+      ok: true;
+      channel: string;
+      deliveredTo: string;
+      count: number;
+    }
+  | { ok: false; error: string };
+
+export type PluginSessionTurnSchedule =
+  | { at: string | number | Date }
+  | { delayMs: number }
+  | { cron: string; tz?: string };
+
+type PluginSessionTurnScheduleCommonParams = {
+  sessionKey: string;
+  message: string;
+  agentId?: string;
+  deliveryMode?: "none" | "announce";
+  name?: string;
+  /** Optional cleanup tag. Reserved cron-name delimiters like `:` are rejected. */
+  tag?: string;
+};
+
+export type PluginSessionTurnScheduleParams =
+  | ({
+      at: string | number | Date;
+      deleteAfterRun?: boolean;
+    } & PluginSessionTurnScheduleCommonParams)
+  | ({
+      delayMs: number;
+      deleteAfterRun?: boolean;
+    } & PluginSessionTurnScheduleCommonParams)
+  | ({
+      cron: string;
+      tz?: string;
+      deleteAfterRun?: false;
+    } & PluginSessionTurnScheduleCommonParams);
+
+export type PluginSessionTurnUnscheduleByTagParams = {
+  sessionKey: string;
+  tag: string;
+};
+
+export type PluginSessionTurnUnscheduleByTagResult = {
+  removed: number;
+  failed: number;
 };
 
 export function normalizePluginHostHookId(value: string | undefined): string {

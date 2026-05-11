@@ -50,10 +50,11 @@ describe("doctor stale plugin config helpers", () => {
     vi.restoreAllMocks();
   });
 
-  it("finds stale plugins.allow and plugins.entries refs", () => {
+  it("finds stale plugin policy and entry refs", () => {
     const hits = scanStalePluginConfig({
       plugins: {
         allow: ["discord", "acpx"],
+        deny: ["openai", "missing-deny"],
         entries: {
           "voice-call": { enabled: true },
           acpx: { enabled: true },
@@ -68,6 +69,11 @@ describe("doctor stale plugin config helpers", () => {
         surface: "allow",
       },
       {
+        pluginId: "missing-deny",
+        pathLabel: "plugins.deny",
+        surface: "deny",
+      },
+      {
         pluginId: "acpx",
         pathLabel: "plugins.entries.acpx",
         surface: "entries",
@@ -75,10 +81,11 @@ describe("doctor stale plugin config helpers", () => {
     ]);
   });
 
-  it("removes stale plugin ids from allow and entries without changing valid refs", () => {
+  it("removes stale plugin ids from policy lists and entries without changing valid refs", () => {
     const result = maybeRepairStalePluginConfig({
       plugins: {
         allow: ["discord", "acpx", "voice-call"],
+        deny: ["openai", "missing-deny"],
         entries: {
           "voice-call": { enabled: true },
           acpx: { enabled: true },
@@ -88,9 +95,11 @@ describe("doctor stale plugin config helpers", () => {
 
     expect(result.changes).toEqual([
       "- plugins.allow: removed 1 stale plugin id (acpx)",
+      "- plugins.deny: removed 1 stale plugin id (missing-deny)",
       "- plugins.entries: removed 1 stale plugin entry (acpx)",
     ]);
     expect(result.config.plugins?.allow).toEqual(["discord", "voice-call"]);
+    expect(result.config.plugins?.deny).toEqual(["openai"]);
     expect(result.config.plugins?.entries).toEqual({
       "voice-call": { enabled: true },
     });
@@ -168,6 +177,7 @@ describe("doctor stale plugin config helpers", () => {
     const result = maybeRepairStalePluginConfig({
       plugins: {
         allow: ["telegram", "whatsapp", "acpx"],
+        deny: ["openai", "missing-deny"],
         entries: {
           telegram: { enabled: true },
           whatsapp: { enabled: true },
@@ -184,9 +194,11 @@ describe("doctor stale plugin config helpers", () => {
 
     expect(result.changes).toEqual([
       "- plugins.allow: removed 1 stale plugin id (acpx)",
+      "- plugins.deny: removed 1 stale plugin id (missing-deny)",
       "- plugins.entries: removed 1 stale plugin entry (acpx)",
     ]);
     expect(result.config.plugins?.allow).toEqual(["telegram", "whatsapp"]);
+    expect(result.config.plugins?.deny).toEqual(["openai"]);
     expect(result.config.plugins?.entries).toEqual({
       telegram: { enabled: true },
       whatsapp: { enabled: true },

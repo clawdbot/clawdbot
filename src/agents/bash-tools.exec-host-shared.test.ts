@@ -139,31 +139,36 @@ describe("sendExecApprovalFollowupResult", () => {
           bashElevated?: unknown;
         }
       | undefined;
-    expect(call?.internalRuntimeHandoffId).toEqual(expect.any(String));
-    expect(call?.idempotencyKey).toMatch(/^exec-approval-followup:approval-elevated-75832:nonce:/);
-    expect(call?.idempotencyKey).not.toContain(call?.internalRuntimeHandoffId ?? "");
+    if (!call) {
+      throw new Error("Expected elevated exec approval followup call");
+    }
+    expect(call.internalRuntimeHandoffId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(call.idempotencyKey).toMatch(/^exec-approval-followup:approval-elevated-75832:nonce:/);
+    expect(call.idempotencyKey).not.toContain(call.internalRuntimeHandoffId ?? "");
     expect(call).not.toHaveProperty("bashElevated");
     expect(call).not.toHaveProperty("execApprovalFollowupToken");
     expect(
       consumeExecApprovalFollowupRuntimeHandoff({
-        handoffId: call?.internalRuntimeHandoffId ?? "",
+        handoffId: call.internalRuntimeHandoffId ?? "",
         approvalId: "approval-elevated-75832",
-        idempotencyKey: call?.idempotencyKey ?? "",
+        idempotencyKey: call.idempotencyKey ?? "",
         sessionKey: "agent:main:telegram:direct:wrong",
       }),
     ).toBeUndefined();
     expect(
       consumeExecApprovalFollowupRuntimeHandoff({
-        handoffId: call?.internalRuntimeHandoffId ?? "",
+        handoffId: call.internalRuntimeHandoffId ?? "",
         approvalId: "approval-elevated-75832",
-        idempotencyKey: call?.idempotencyKey ?? "",
+        idempotencyKey: call.idempotencyKey ?? "",
         sessionKey: "agent:main:telegram:direct:123",
       }),
     ).toEqual({
       kind: "exec-approval-followup",
       approvalId: "approval-elevated-75832",
       sessionKey: "agent:main:telegram:direct:123",
-      idempotencyKey: call?.idempotencyKey,
+      idempotencyKey: call.idempotencyKey,
       bashElevated,
     });
   });

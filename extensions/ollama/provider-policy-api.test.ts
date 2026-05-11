@@ -27,7 +27,7 @@ describe("ollama provider policy public artifact", () => {
         provider: "ollama",
         providerConfig: {},
       }),
-    ).toMatchObject({
+    ).toStrictEqual({
       baseUrl: OLLAMA_DEFAULT_BASE_URL,
       models: [],
     });
@@ -44,7 +44,7 @@ describe("ollama provider policy public artifact", () => {
           models,
         },
       }),
-    ).toMatchObject({
+    ).toStrictEqual({
       baseUrl: "http://ollama.internal:11434",
       models,
     });

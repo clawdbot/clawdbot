@@ -33,15 +33,13 @@ function expectRequireApprovalResult(
     block?: boolean;
     blockReason?: string;
     params?: Record<string, unknown>;
-    requireApproval?: Record<string, unknown>;
+    requireApproval?: PluginHookBeforeToolCallResult["requireApproval"];
   },
 ) {
   expect(result?.block).toBe(expected.block);
   expect(result?.blockReason).toBe(expected.blockReason);
   expect(result?.params).toEqual(expected.params);
-  expect(result?.requireApproval).toEqual(
-    expected.requireApproval ? expect.objectContaining(expected.requireApproval) : undefined,
-  );
+  expect(result?.requireApproval).toEqual(expected.requireApproval);
 }
 
 describe("before_tool_call hook merger — requireApproval", () => {
@@ -90,6 +88,9 @@ describe("before_tool_call hook merger — requireApproval", () => {
         },
       ],
       expectedApproval: {
+        id: "a1",
+        title: "T",
+        description: "D",
         pluginId: "my-plugin",
       },
     },
@@ -119,6 +120,7 @@ describe("before_tool_call hook merger — requireApproval", () => {
       ],
       expectedApproval: {
         title: "First",
+        description: "First plugin",
         pluginId: "plugin-a",
       },
     },
@@ -137,6 +139,8 @@ describe("before_tool_call hook merger — requireApproval", () => {
         },
       ],
       expectedApproval: {
+        title: "T",
+        description: "D",
         pluginId: "actual-plugin",
       },
     },
@@ -201,7 +205,11 @@ describe("before_tool_call hook merger — requireApproval", () => {
         },
       ],
       expected: {
-        requireApproval: { pluginId: "approver" },
+        requireApproval: {
+          title: "Needs approval",
+          description: "Approval needed",
+          pluginId: "approver",
+        },
         params: { source: "approver", safe: true },
       },
     },
@@ -232,7 +240,11 @@ describe("before_tool_call hook merger — requireApproval", () => {
       expected: {
         block: true,
         blockReason: "blocked",
-        requireApproval: { pluginId: "approver" },
+        requireApproval: {
+          title: "Needs approval",
+          description: "Approval needed",
+          pluginId: "approver",
+        },
         params: { source: "approver", safe: true },
       },
     },

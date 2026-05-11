@@ -19,42 +19,41 @@ afterEach(async () => {
   await fs.rm(tmpRoot, { recursive: true, force: true });
 });
 
+async function expectDirListError(
+  input: Parameters<typeof handleDirList>[0],
+  code: "INVALID_PATH" | "IS_FILE" | "NOT_FOUND",
+) {
+  const result = await handleDirList(input);
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.code).toBe(code);
+  }
+}
+
 describe("handleDirList — input validation", () => {
   it("rejects empty / non-string path", async () => {
-    expect(await handleDirList({ path: "" })).toMatchObject({ ok: false, code: "INVALID_PATH" });
-    expect(await handleDirList({ path: undefined })).toMatchObject({
-      ok: false,
-      code: "INVALID_PATH",
-    });
+    await expectDirListError({ path: "" }, "INVALID_PATH");
+    await expectDirListError({ path: undefined }, "INVALID_PATH");
   });
 
   it("rejects relative paths", async () => {
-    expect(await handleDirList({ path: "relative" })).toMatchObject({
-      ok: false,
-      code: "INVALID_PATH",
-    });
+    await expectDirListError({ path: "relative" }, "INVALID_PATH");
   });
 
   it("rejects paths with NUL bytes", async () => {
-    expect(await handleDirList({ path: "/tmp/foo\0bar" })).toMatchObject({
-      ok: false,
-      code: "INVALID_PATH",
-    });
+    await expectDirListError({ path: "/tmp/foo\0bar" }, "INVALID_PATH");
   });
 });
 
 describe("handleDirList — fs errors", () => {
   it("returns NOT_FOUND for a missing directory", async () => {
-    expect(await handleDirList({ path: path.join(tmpRoot, "does-not-exist") })).toMatchObject({
-      ok: false,
-      code: "NOT_FOUND",
-    });
+    await expectDirListError({ path: path.join(tmpRoot, "does-not-exist") }, "NOT_FOUND");
   });
 
   it("returns IS_FILE when path resolves to a regular file", async () => {
     const f = path.join(tmpRoot, "f.txt");
     await fs.writeFile(f, "x");
-    expect(await handleDirList({ path: f })).toMatchObject({ ok: false, code: "IS_FILE" });
+    await expectDirListError({ path: f }, "IS_FILE");
   });
 });
 

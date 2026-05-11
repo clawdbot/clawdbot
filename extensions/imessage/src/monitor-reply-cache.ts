@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const REPLY_CACHE_MAX = 2000;
 const REPLY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;

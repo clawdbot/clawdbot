@@ -127,11 +127,12 @@ describe("CDP screenshot params", () => {
       timeoutMs: 12_345,
     });
 
-    expect(withCdpSocket).toHaveBeenCalledWith(
-      "ws://localhost:9222/devtools/page/X",
-      expect.any(Function),
-      { commandTimeoutMs: 12_345 },
-    );
+    const [wsUrl, sendCallback, options] =
+      (withCdpSocket as unknown as { mock: { calls: Array<Array<unknown>> } }).mock.calls.at(-1) ??
+      [];
+    expect(wsUrl).toBe("ws://localhost:9222/devtools/page/X");
+    expect(typeof sendCallback).toBe("function");
+    expect(options).toEqual({ commandTimeoutMs: 12_345 });
   });
 
   it("fullPage on emulated tab: clears, detects drift, re-applies saved emulation", async () => {

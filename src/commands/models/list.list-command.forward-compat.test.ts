@@ -119,6 +119,35 @@ function requireRow<T extends { key: string }>(rows: T[], key: string): T {
   return row;
 }
 
+function expectRowKeys(rows: Array<{ key: string }>, keys: string[]) {
+  expect(rows.map((row) => row.key)).toEqual(keys);
+}
+
+function expectRowFields(
+  rows: Array<{ key: string } & Record<string, unknown>>,
+  key: string,
+  fields: Record<string, unknown>,
+) {
+  const row = requireRow(rows, key);
+  for (const [field, value] of Object.entries(fields)) {
+    expect(row[field]).toEqual(value);
+  }
+}
+
+function modelRegistryOptions(index = 0): Record<string, unknown> {
+  const options = mocks.loadModelRegistry.mock.calls[index]?.[1];
+  expect(options).toBeTypeOf("object");
+  expect(options).not.toBeNull();
+  return options as Record<string, unknown>;
+}
+
+function providerCatalogOptions(index = 0): Record<string, unknown> {
+  const options = mocks.loadProviderCatalogModelsForList.mock.calls[index]?.[0];
+  expect(options).toBeTypeOf("object");
+  expect(options).not.toBeNull();
+  return options as Record<string, unknown>;
+}
+
 let modelsListCommand: typeof import("./list.list-command.js").modelsListCommand;
 let listRowsModule: typeof import("./list.rows.js");
 let listRegistryModule: typeof import("./list.registry.js");
@@ -315,9 +344,7 @@ describe("modelsListCommand forward-compat", () => {
 
       expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
       expect(runtime.log).not.toHaveBeenCalledWith("No models found.");
-      expect(lastPrintedRows<{ key: string }>()).toEqual([
-        expect.objectContaining({ key: "moonshot/kimi-k2.6" }),
-      ]);
+      expectRowKeys(lastPrintedRows<{ key: string }>(), ["moonshot/kimi-k2.6"]);
     });
 
     it("keeps catalog metadata when provider-filtered configured entries overlap", async () => {
@@ -351,13 +378,12 @@ describe("modelsListCommand forward-compat", () => {
       await modelsListCommand({ json: true, provider: "moonshot" }, runtime as never);
 
       expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
-      expect(lastPrintedRows<{ key: string; name: string; tags: string[] }>()).toEqual([
-        expect.objectContaining({
-          key: "moonshot/kimi-k2.6",
-          name: "Kimi K2.6",
-          tags: ["configured"],
-        }),
-      ]);
+      const rows = lastPrintedRows<{ key: string; name: string; tags: string[] }>();
+      expectRowKeys(rows, ["moonshot/kimi-k2.6"]);
+      expectRowFields(rows, "moonshot/kimi-k2.6", {
+        name: "Kimi K2.6",
+        tags: ["configured"],
+      });
     });
 
     it("falls back to registry rows for unknown provider filters without --all", async () => {
@@ -399,9 +425,7 @@ describe("modelsListCommand forward-compat", () => {
 
       expect(mocks.loadModelRegistry).toHaveBeenCalled();
       expect(runtime.log).not.toHaveBeenCalledWith("No models found.");
-      expect(lastPrintedRows<{ key: string }>()).toEqual([
-        expect.objectContaining({ key: "google/gemini-2.5-pro" }),
-      ]);
+      expectRowKeys(lastPrintedRows<{ key: string }>(), ["google/gemini-2.5-pro"]);
     });
 
     it("keeps scoped provider fallback rows filtered by model suppression", async () => {
@@ -433,9 +457,7 @@ describe("modelsListCommand forward-compat", () => {
 
       await modelsListCommand({ json: true, provider: "openai" }, runtime as never);
 
-      expect(lastPrintedRows<{ key: string }>()).toEqual([
-        expect.objectContaining({ key: "openai/gpt-5.5" }),
-      ]);
+      expectRowKeys(lastPrintedRows<{ key: string }>(), ["openai/gpt-5.5"]);
     });
 
     it("uses provider static catalog rows for provider filters without --all", async () => {
@@ -459,15 +481,9 @@ describe("modelsListCommand forward-compat", () => {
       await modelsListCommand({ json: true, provider: "google" }, runtime as never);
 
       expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
-      expect(mocks.loadProviderCatalogModelsForList).toHaveBeenCalledWith(
-        expect.objectContaining({
-          providerFilter: "google",
-          staticOnly: true,
-        }),
-      );
-      expect(lastPrintedRows<{ key: string }>()).toEqual([
-        expect.objectContaining({ key: "google/gemini-2.5-pro" }),
-      ]);
+      expect(providerCatalogOptions().providerFilter).toBe("google");
+      expect(providerCatalogOptions().staticOnly).toBe(true);
+      expectRowKeys(lastPrintedRows<{ key: string }>(), ["google/gemini-2.5-pro"]);
     });
 
     it("uses provider-index catalog rows for provider filters without --all", async () => {
@@ -492,9 +508,7 @@ describe("modelsListCommand forward-compat", () => {
       await modelsListCommand({ json: true, provider: "moonshot" }, runtime as never);
 
       expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
-      expect(lastPrintedRows<{ key: string }>()).toEqual([
-        expect.objectContaining({ key: "moonshot/kimi-k2.6" }),
-      ]);
+      expectRowKeys(lastPrintedRows<{ key: string }>(), ["moonshot/kimi-k2.6"]);
     });
 
     it("includes configured provider model rows for provider-filtered lists", async () => {
@@ -535,18 +549,15 @@ describe("modelsListCommand forward-compat", () => {
 
       expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
       const rows = lastPrintedRows<{ key: string; name: string; tags: string[] }>();
-      expect(rows).toEqual([
-        expect.objectContaining({
-          key: "ollama/qwen2.5:7b",
-          name: "Qwen 2.5 7B",
-          tags: ["default"],
-        }),
-        expect.objectContaining({
-          key: "ollama/llama3.2:3b",
-          name: "Llama 3.2 3B",
-          tags: [],
-        }),
-      ]);
+      expectRowKeys(rows, ["ollama/qwen2.5:7b", "ollama/llama3.2:3b"]);
+      expectRowFields(rows, "ollama/qwen2.5:7b", {
+        name: "Qwen 2.5 7B",
+        tags: ["default"],
+      });
+      expectRowFields(rows, "ollama/llama3.2:3b", {
+        name: "Llama 3.2 3B",
+        tags: [],
+      });
     });
 
     it("includes configured provider and auth-backed catalog rows in configured-mode lists", async () => {
@@ -607,15 +618,17 @@ describe("modelsListCommand forward-compat", () => {
 
       expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
       const rows = lastPrintedRows<{ key: string; name: string; available: boolean }>();
-      expect(rows).toEqual([
-        expect.objectContaining({ key: "xiaomi/mimo-v2.5-pro", name: "MiMo V2.5 Pro" }),
-        expect.objectContaining({ key: "xiaomi/mimo-v2.5", name: "MiMo V2.5" }),
-        expect.objectContaining({
-          key: "google/gemini-3.1-flash-lite-preview",
-          name: "Gemini 3.1 Flash Lite Preview",
-          available: true,
-        }),
+      expectRowKeys(rows, [
+        "xiaomi/mimo-v2.5-pro",
+        "xiaomi/mimo-v2.5",
+        "google/gemini-3.1-flash-lite-preview",
       ]);
+      expectRowFields(rows, "xiaomi/mimo-v2.5-pro", { name: "MiMo V2.5 Pro" });
+      expectRowFields(rows, "xiaomi/mimo-v2.5", { name: "MiMo V2.5" });
+      expectRowFields(rows, "google/gemini-3.1-flash-lite-preview", {
+        name: "Gemini 3.1 Flash Lite Preview",
+        available: true,
+      });
     });
 
     it("does not mark configured codex model as missing when forward-compat can build a fallback", async () => {
@@ -724,11 +737,7 @@ describe("modelsListCommand forward-compat", () => {
       await modelsListCommand({ json: true, local: true }, runtime as never);
 
       expect(mocks.printModelTable).toHaveBeenCalled();
-      expect(lastPrintedRows<{ key: string }>()).toEqual([
-        expect.objectContaining({
-          key: "openai/gpt-5.4",
-        }),
-      ]);
+      expectRowKeys(lastPrintedRows<{ key: string }>(), ["openai/gpt-5.4"]);
     });
   });
 
@@ -750,11 +759,12 @@ describe("modelsListCommand forward-compat", () => {
       await modelsListCommand({ json: true }, runtime as never);
 
       expect(mocks.printModelTable).toHaveBeenCalled();
-      expect(lastPrintedRows<{ key: string; available: boolean }>()).toContainEqual(
-        expect.objectContaining({
-          key: "openai-codex/gpt-5.4",
+      expectRowFields(
+        lastPrintedRows<{ key: string; available: boolean }>(),
+        "openai-codex/gpt-5.4",
+        {
           available: true,
-        }),
+        },
       );
     });
 
@@ -814,12 +824,9 @@ describe("modelsListCommand forward-compat", () => {
         providerFilter: "codex",
         staticOnly: true,
       });
-      expect(lastPrintedRows<{ key: string; available: boolean }>()).toEqual([
-        expect.objectContaining({
-          key: "codex/gpt-5.4",
-          available: true,
-        }),
-      ]);
+      const rows = lastPrintedRows<{ key: string; available: boolean }>();
+      expectRowKeys(rows, ["codex/gpt-5.4"]);
+      expectRowFields(rows, "codex/gpt-5.4", { available: true });
     });
 
     it("uses manifest catalog rows before provider runtime catalog rows", async () => {
@@ -846,11 +853,7 @@ describe("modelsListCommand forward-compat", () => {
       expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
       expect(mocks.hasProviderStaticCatalogForFilter).not.toHaveBeenCalled();
       expect(mocks.loadProviderCatalogModelsForList).not.toHaveBeenCalled();
-      expect(lastPrintedRows<{ key: string }>()).toEqual([
-        expect.objectContaining({
-          key: "moonshot/kimi-k2.6",
-        }),
-      ]);
+      expectRowKeys(lastPrintedRows<{ key: string }>(), ["moonshot/kimi-k2.6"]);
     });
 
     it("keeps refreshable manifest catalog rows on the registry-backed provider path", async () => {
@@ -909,17 +912,10 @@ describe("modelsListCommand forward-compat", () => {
 
       await modelsListCommand({ all: true, provider: "openai", json: true }, runtime as never);
 
-      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(
-        mocks.resolvedConfig,
-        expect.objectContaining({
-          providerFilter: "openai",
-          normalizeModels: true,
-        }),
-      );
-      expect(lastPrintedRows<{ key: string }>()).toEqual([
-        expect.objectContaining({ key: "openai/gpt-5.4" }),
-        expect.objectContaining({ key: "openai/gpt-5.5-pro" }),
-      ]);
+      expect(mocks.loadModelRegistry.mock.calls[0]?.[0]).toBe(mocks.resolvedConfig);
+      expect(modelRegistryOptions().providerFilter).toBe("openai");
+      expect(modelRegistryOptions().normalizeModels).toBe(true);
+      expectRowKeys(lastPrintedRows<{ key: string }>(), ["openai/gpt-5.4", "openai/gpt-5.5-pro"]);
     });
 
     it("uses provider index preview rows when an installable provider is not installed", async () => {
@@ -946,11 +942,7 @@ describe("modelsListCommand forward-compat", () => {
       expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
       expect(mocks.hasProviderStaticCatalogForFilter).not.toHaveBeenCalled();
       expect(mocks.loadProviderCatalogModelsForList).not.toHaveBeenCalled();
-      expect(lastPrintedRows<{ key: string }>()).toEqual([
-        expect.objectContaining({
-          key: "moonshot/kimi-k2.6",
-        }),
-      ]);
+      expectRowKeys(lastPrintedRows<{ key: string }>(), ["moonshot/kimi-k2.6"]);
     });
 
     it("does not load broad provider runtime catalogs for unfiltered all-model lists", async () => {
@@ -982,23 +974,15 @@ describe("modelsListCommand forward-compat", () => {
 
       await modelsListCommand({ all: true, json: true }, runtime as never);
 
-      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(
-        mocks.resolvedConfig,
-        expect.objectContaining({
-          providerFilter: undefined,
-          normalizeModels: false,
-        }),
-      );
+      expect(mocks.loadModelRegistry.mock.calls[0]?.[0]).toBe(mocks.resolvedConfig);
+      expect(modelRegistryOptions().providerFilter).toBeUndefined();
+      expect(modelRegistryOptions().normalizeModels).toBe(false);
       expect(mocks.loadProviderCatalogModelsForList).not.toHaveBeenCalled();
       expect(mocks.resolveModelWithRegistry).not.toHaveBeenCalled();
       expect(mocks.loadModelCatalog).not.toHaveBeenCalled();
-      expect(lastPrintedRows<{ key: string }>()).toEqual([
-        expect.objectContaining({
-          key: "openai-codex/gpt-5.4",
-        }),
-        expect.objectContaining({
-          key: "moonshot/kimi-k2.6",
-        }),
+      expectRowKeys(lastPrintedRows<{ key: string }>(), [
+        "openai-codex/gpt-5.4",
+        "moonshot/kimi-k2.6",
       ]);
     });
 
@@ -1020,13 +1004,9 @@ describe("modelsListCommand forward-compat", () => {
         runtime as never,
       );
 
-      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(
-        mocks.resolvedConfig,
-        expect.objectContaining({
-          providerFilter: "openai-codex",
-          normalizeModels: true,
-        }),
-      );
+      expect(mocks.loadModelRegistry.mock.calls[0]?.[0]).toBe(mocks.resolvedConfig);
+      expect(modelRegistryOptions().providerFilter).toBe("openai-codex");
+      expect(modelRegistryOptions().normalizeModels).toBe(true);
       expect(mocks.loadProviderCatalogModelsForList).toHaveBeenNthCalledWith(1, {
         cfg: mocks.resolvedConfig,
         agentDir: "/tmp/openclaw-agent",
@@ -1039,12 +1019,9 @@ describe("modelsListCommand forward-compat", () => {
         providerFilter: "openai-codex",
         staticOnly: undefined,
       });
-      expect(lastPrintedRows<{ key: string; available: boolean }>()).toEqual([
-        expect.objectContaining({
-          key: "openai-codex/gpt-5.4",
-          available: true,
-        }),
-      ]);
+      const rows = lastPrintedRows<{ key: string; available: boolean }>();
+      expectRowKeys(rows, ["openai-codex/gpt-5.4"]);
+      expectRowFields(rows, "openai-codex/gpt-5.4", { available: true });
     });
 
     it("falls back to registry rows for provider filters without catalog coverage", async () => {
@@ -1085,19 +1062,11 @@ describe("modelsListCommand forward-compat", () => {
 
       await modelsListCommand({ all: true, provider: "anthropic", json: true }, runtime as never);
 
-      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(
-        mocks.resolvedConfig,
-        expect.objectContaining({
-          providerFilter: "anthropic",
-          normalizeModels: false,
-          loadAvailability: false,
-        }),
-      );
-      expect(lastPrintedRows<{ key: string }>()).toEqual([
-        expect.objectContaining({
-          key: "anthropic/claude-opus-4-7",
-        }),
-      ]);
+      expect(mocks.loadModelRegistry.mock.calls[0]?.[0]).toBe(mocks.resolvedConfig);
+      expect(modelRegistryOptions().providerFilter).toBe("anthropic");
+      expect(modelRegistryOptions().normalizeModels).toBe(false);
+      expect(modelRegistryOptions().loadAvailability).toBe(false);
+      expectRowKeys(lastPrintedRows<{ key: string }>(), ["anthropic/claude-opus-4-7"]);
     });
 
     it("includes provider-owned supplemental catalog rows with provider filters", async () => {
@@ -1139,11 +1108,7 @@ describe("modelsListCommand forward-compat", () => {
 
       await modelsListCommand({ all: true, provider: "opencode-go", json: true }, runtime as never);
 
-      expect(lastPrintedRows<{ key: string }>()).toEqual([
-        expect.objectContaining({
-          key: "opencode-go/deepseek-v4-pro",
-        }),
-      ]);
+      expectRowKeys(lastPrintedRows<{ key: string }>(), ["opencode-go/deepseek-v4-pro"]);
     });
 
     it("includes synthetic codex gpt-5.4 in --all output when catalog supports it", async () => {
@@ -1182,12 +1147,10 @@ describe("modelsListCommand forward-compat", () => {
             : undefined,
       );
       const rows = await buildAllOpenAiCodexRows();
-      expect(rows).toEqual([
-        expect.objectContaining({
-          key: "openai-codex/gpt-5.4",
-          available: true,
-        }),
-      ]);
+      expectRowKeys(rows as Array<{ key: string }>, ["openai-codex/gpt-5.4"]);
+      expectRowFields(rows as Array<{ key: string; available: boolean }>, "openai-codex/gpt-5.4", {
+        available: true,
+      });
     });
 
     it("uses provider runtime metadata for discovered codex gpt-5.5 rows", async () => {
@@ -1248,15 +1211,16 @@ describe("modelsListCommand forward-compat", () => {
         runtime as never,
       );
 
-      expect(
-        lastPrintedRows<{ key: string; contextWindow: number; contextTokens?: number }>(),
-      ).toEqual([
-        expect.objectContaining({
-          key: "openai-codex/gpt-5.5",
-          contextWindow: 400000,
-          contextTokens: 272000,
-        }),
-      ]);
+      const rows = lastPrintedRows<{
+        key: string;
+        contextWindow: number;
+        contextTokens?: number;
+      }>();
+      expectRowKeys(rows, ["openai-codex/gpt-5.5"]);
+      expectRowFields(rows, "openai-codex/gpt-5.5", {
+        contextWindow: 400000,
+        contextTokens: 272000,
+      });
     });
 
     it("suppresses direct openai gpt-5.3-codex-spark rows in --all output", async () => {
@@ -1302,11 +1266,7 @@ describe("modelsListCommand forward-compat", () => {
         } as never,
       });
 
-      expect(rows).toEqual([
-        expect.objectContaining({
-          key: "openai-codex/gpt-5.4",
-        }),
-      ]);
+      expectRowKeys(rows as Array<{ key: string }>, ["openai-codex/gpt-5.4"]);
     });
   });
 
@@ -1351,11 +1311,7 @@ describe("modelsListCommand forward-compat", () => {
       await modelsListCommand({ all: true, provider: "z-ai", json: true }, runtime as never);
 
       expect(mocks.printModelTable).toHaveBeenCalled();
-      expect(lastPrintedRows<{ key: string }>()).toEqual([
-        expect.objectContaining({
-          key: "z.ai/glm-4.5",
-        }),
-      ]);
+      expectRowKeys(lastPrintedRows<{ key: string }>(), ["z.ai/glm-4.5"]);
     });
   });
 });

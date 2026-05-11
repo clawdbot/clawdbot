@@ -75,7 +75,8 @@ describe("transcribeOpenAiAudio", () => {
     expect(form.get("language")).toBe("en");
     expect(form.get("prompt")).toBe("hello");
     const file = form.get("file") as Blob | { type?: string; name?: string } | null;
-    expect(file).toEqual(expect.objectContaining({ type: "audio/wav" }));
+    expect(file).not.toBeNull();
+    expect(file?.type).toBe("audio/wav");
     if (file && "name" in file && typeof file.name === "string") {
       expect(file.name).toBe("voice.wav");
     }

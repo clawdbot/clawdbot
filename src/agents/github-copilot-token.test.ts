@@ -77,6 +77,8 @@ describe("resolveCopilotApiToken", () => {
   });
 
   it("refreshes legacy cached tokens without the vscode-chat integration identity", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-02T03:04:05.000Z"));
     const fetchImpl = vi.fn(async () => ({
       ok: true,
       json: async () => ({
@@ -86,25 +88,29 @@ describe("resolveCopilotApiToken", () => {
     }));
     const saveJsonFileImpl = vi.fn();
 
-    const result = await resolveCopilotApiToken({
-      githubToken: "github-token",
-      cachePath: "/tmp/github-copilot-token-test.json",
-      loadJsonFileImpl: () => ({
-        token: "legacy-copilot-token",
-        expiresAt: Date.now() + 60 * 60 * 1000,
-        updatedAt: Date.now(),
-      }),
-      saveJsonFileImpl,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-    });
+    try {
+      const result = await resolveCopilotApiToken({
+        githubToken: "github-token",
+        cachePath: "/tmp/github-copilot-token-test.json",
+        loadJsonFileImpl: () => ({
+          token: "legacy-copilot-token",
+          expiresAt: Date.now() + 60 * 60 * 1000,
+          updatedAt: Date.now(),
+        }),
+        saveJsonFileImpl,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
 
-    expect(result.token).toBe("fresh-copilot-token");
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(saveJsonFileImpl).toHaveBeenCalledWith("/tmp/github-copilot-token-test.json", {
-      token: "fresh-copilot-token",
-      expiresAt: expect.any(Number),
-      updatedAt: expect.any(Number),
-      integrationId: COPILOT_INTEGRATION_ID,
-    });
+      expect(result.token).toBe("fresh-copilot-token");
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(saveJsonFileImpl).toHaveBeenCalledWith("/tmp/github-copilot-token-test.json", {
+        token: "fresh-copilot-token",
+        expiresAt: 1_767_326_645_000,
+        updatedAt: 1_767_323_045_000,
+        integrationId: COPILOT_INTEGRATION_ID,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

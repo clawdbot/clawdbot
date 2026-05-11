@@ -49,7 +49,7 @@ const DEFAULT_LIVE_PARENT_MODEL = "openai/gpt-5.4";
 type LiveAcpAgent = "claude" | "codex" | "droid" | "gemini" | "opencode";
 
 class AcpBindSkipError extends Error {
-  readonly name = "AcpBindSkipError";
+  override readonly name = "AcpBindSkipError";
 }
 
 function createSlackCurrentConversationBindingRegistry() {

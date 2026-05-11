@@ -44,10 +44,10 @@ const makeConfig = (overrides: Record<string, unknown>) =>
     },
     session: { store: sessionStorePath },
     ...overrides,
-  }) as unknown as import("openclaw/plugin-sdk/config-types").OpenClawConfig;
+  }) as unknown as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
 
 async function runGroupGating(params: {
-  cfg: import("openclaw/plugin-sdk/config-types").OpenClawConfig;
+  cfg: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
   msg: WebInboundMsg;
   conversationId?: string;
   agentId?: string;

@@ -25,8 +25,11 @@ import type { PluginRegistrySnapshot } from "../plugins/plugin-registry.js";
 import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
 import {
   clearGatewayModelPricingCacheState,
+  clearGatewayModelPricingFailures,
+  clearGatewayModelPricingSourceFailure,
   getCachedGatewayModelPricing,
   getGatewayModelPricingCacheMeta as getGatewayModelPricingCacheMetaState,
+  recordGatewayModelPricingSourceFailure,
   replaceGatewayModelPricingCache,
   type CachedModelPricing,
   type CachedPricingTier,
@@ -1122,7 +1125,11 @@ function scheduleRefresh(
       return;
     }
     void refreshGatewayModelPricingCache(params).catch((error: unknown) => {
-      log.warn(`pricing refresh failed: ${String(error)}`);
+      const message = `pricing refresh failed: ${String(error)}`;
+      log.warn(message);
+      if (!params.signal?.aborted) {
+        recordGatewayModelPricingSourceFailure("refresh", message);
+      }
     });
   }, CACHE_TTL_MS);
   refreshTimer.unref?.();
@@ -1161,6 +1168,7 @@ export async function refreshGatewayModelPricingCache(
 ): Promise<void> {
   if (!isGatewayModelPricingEnabled(params.config)) {
     clearRefreshTimer();
+    clearGatewayModelPricingFailures();
     return;
   }
   if (params.signal?.aborted) {
@@ -1215,6 +1223,7 @@ export async function refreshGatewayModelPricingCache(
         return;
       }
       replaceGatewayModelPricingCache(seededPricing);
+      clearGatewayModelPricingFailures();
       clearRefreshTimer();
       return;
     }
@@ -1224,16 +1233,34 @@ export async function refreshGatewayModelPricingCache(
     let openRouterFailed = false;
     let litellmFailed = false;
     const [catalogById, litellmCatalog] = await Promise.all([
-      fetchOpenRouterPricingCatalog(fetchImpl, params.signal).catch((error: unknown) => {
-        log.warn(formatPricingFetchFailure("OpenRouter", error));
-        openRouterFailed = true;
-        return new Map<string, OpenRouterPricingEntry>();
-      }),
-      fetchLiteLLMPricingCatalog(fetchImpl, params.signal).catch((error: unknown) => {
-        log.warn(formatPricingFetchFailure("LiteLLM", error));
-        litellmFailed = true;
-        return new Map<string, CachedModelPricing>() as LiteLLMPricingCatalog;
-      }),
+      fetchOpenRouterPricingCatalog(fetchImpl, params.signal)
+        .then((catalog) => {
+          clearGatewayModelPricingSourceFailure("openrouter");
+          return catalog;
+        })
+        .catch((error: unknown) => {
+          const message = formatPricingFetchFailure("OpenRouter", error);
+          log.warn(message);
+          openRouterFailed = true;
+          if (!params.signal?.aborted) {
+            recordGatewayModelPricingSourceFailure("openrouter", message);
+          }
+          return new Map<string, OpenRouterPricingEntry>();
+        }),
+      fetchLiteLLMPricingCatalog(fetchImpl, params.signal)
+        .then((catalog) => {
+          clearGatewayModelPricingSourceFailure("litellm");
+          return catalog;
+        })
+        .catch((error: unknown) => {
+          const message = formatPricingFetchFailure("LiteLLM", error);
+          log.warn(message);
+          litellmFailed = true;
+          if (!params.signal?.aborted) {
+            recordGatewayModelPricingSourceFailure("litellm", message);
+          }
+          return new Map<string, CachedModelPricing>() as LiteLLMPricingCatalog;
+        }),
     ]);
 
     if (params.signal?.aborted) {
@@ -1316,6 +1343,8 @@ export async function refreshGatewayModelPricingCache(
     if (params.signal?.aborted) {
       return;
     }
+    clearGatewayModelPricingSourceFailure("bootstrap");
+    clearGatewayModelPricingSourceFailure("refresh");
     replaceGatewayModelPricingCache(nextPricing);
     scheduleRefresh({ ...params, fetchImpl });
   })();
@@ -1332,6 +1361,7 @@ export function startGatewayModelPricingRefresh(
 ): () => void {
   if (!isGatewayModelPricingEnabled(params.config)) {
     clearRefreshTimer();
+    clearGatewayModelPricingFailures();
     return () => {};
   }
   let stopped = false;
@@ -1342,7 +1372,11 @@ export function startGatewayModelPricingRefresh(
     }
     void refreshGatewayModelPricingCache({ ...params, signal: abortController.signal }).catch(
       (error: unknown) => {
-        log.warn(`pricing bootstrap failed: ${String(error)}`);
+        const message = `pricing bootstrap failed: ${String(error)}`;
+        log.warn(message);
+        if (!abortController.signal.aborted) {
+          recordGatewayModelPricingSourceFailure("bootstrap", message);
+        }
       },
     );
   });

@@ -15,6 +15,26 @@ vi.mock("./proxy.js", () => ({
 
 import { sendMessageZalo, sendPhotoZalo } from "./send.js";
 
+type ZaloSendResult = Awaited<ReturnType<typeof sendMessageZalo>>;
+
+function requireSuccessfulSend(result: ZaloSendResult, expectedMessageId: string) {
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    throw new Error(`expected successful Zalo send: ${result.error}`);
+  }
+  expect(result.messageId).toBe(expectedMessageId);
+  return result;
+}
+
+function expectFailedSend(result: ZaloSendResult, expectedError: string) {
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    throw new Error("expected failed Zalo send");
+  }
+  expect(result.error).toBe(expectedError);
+  expect(result.receipt.platformMessageIds).toStrictEqual([]);
+}
+
 describe("zalo send", () => {
   beforeEach(() => {
     sendMessageMock.mockReset();
@@ -42,21 +62,16 @@ describe("zalo send", () => {
       undefined,
     );
     expect(sendPhotoMock).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ ok: true, messageId: "z-msg-1" });
-    expect(result.receipt).toMatchObject({
-      primaryPlatformMessageId: "z-msg-1",
-      platformMessageIds: ["z-msg-1"],
-      parts: [
-        {
-          platformMessageId: "z-msg-1",
-          kind: "text",
-          raw: {
-            channel: "zalo",
-            chatId: "dm-chat-1",
-            messageId: "z-msg-1",
-          },
-        },
-      ],
+    const successful = requireSuccessfulSend(result, "z-msg-1");
+    expect(successful.receipt.primaryPlatformMessageId).toBe("z-msg-1");
+    expect(successful.receipt.platformMessageIds).toEqual(["z-msg-1"]);
+    expect(successful.receipt.parts).toHaveLength(1);
+    expect(successful.receipt.parts[0]?.platformMessageId).toBe("z-msg-1");
+    expect(successful.receipt.parts[0]?.kind).toBe("text");
+    expect(successful.receipt.parts[0]?.raw).toEqual({
+      channel: "zalo",
+      chatId: "dm-chat-1",
+      messageId: "z-msg-1",
     });
   });
 
@@ -82,35 +97,22 @@ describe("zalo send", () => {
       undefined,
     );
     expect(sendMessageMock).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ ok: true, messageId: "z-photo-1" });
-    expect(result.receipt).toMatchObject({
-      primaryPlatformMessageId: "z-photo-1",
-      platformMessageIds: ["z-photo-1"],
-      parts: [
-        {
-          platformMessageId: "z-photo-1",
-          kind: "media",
-        },
-      ],
-    });
+    const successful = requireSuccessfulSend(result, "z-photo-1");
+    expect(successful.receipt.primaryPlatformMessageId).toBe("z-photo-1");
+    expect(successful.receipt.platformMessageIds).toEqual(["z-photo-1"]);
+    expect(successful.receipt.parts).toHaveLength(1);
+    expect(successful.receipt.parts[0]?.platformMessageId).toBe("z-photo-1");
+    expect(successful.receipt.parts[0]?.kind).toBe("media");
   });
 
   it("fails fast for missing token or blank photo URLs", async () => {
     const missingToken = await sendMessageZalo("dm-chat-3", "hello", {});
-    expect(missingToken).toMatchObject({
-      ok: false,
-      error: "No Zalo bot token configured",
-    });
-    expect(missingToken.receipt.platformMessageIds).toStrictEqual([]);
+    expectFailedSend(missingToken, "No Zalo bot token configured");
 
     const blankPhoto = await sendPhotoZalo("dm-chat-4", "   ", {
       token: "zalo-token",
     });
-    expect(blankPhoto).toMatchObject({
-      ok: false,
-      error: "No photo URL provided",
-    });
-    expect(blankPhoto.receipt.platformMessageIds).toStrictEqual([]);
+    expectFailedSend(blankPhoto, "No photo URL provided");
 
     expect(sendMessageMock).not.toHaveBeenCalled();
     expect(sendPhotoMock).not.toHaveBeenCalled();
@@ -142,7 +144,7 @@ describe("zalo send", () => {
       },
       undefined,
     );
-    expect(result).toMatchObject({ ok: true, messageId: "z-photo-2" });
-    expect(result.receipt.platformMessageIds).toEqual(["z-photo-2"]);
+    const successful = requireSuccessfulSend(result, "z-photo-2");
+    expect(successful.receipt.platformMessageIds).toEqual(["z-photo-2"]);
   });
 });

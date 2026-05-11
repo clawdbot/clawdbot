@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
+import { modelKey } from "./model-ref-shared.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
@@ -15,6 +16,8 @@ export type OpenClawPluginToolOptions = {
   workspaceDir?: string;
   config?: OpenClawConfig;
   fsPolicy?: ToolFsPolicy;
+  modelProvider?: string;
+  modelId?: string;
   requesterSenderId?: string | null;
   requesterAgentIdOverride?: string;
   senderIsOwner?: boolean;
@@ -42,6 +45,16 @@ export function resolveOpenClawPluginToolInputs(params: {
       ? undefined
       : resolveAgentWorkspaceDir(resolvedConfig, sessionAgentId);
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir ?? inferredWorkspaceDir);
+  const modelProvider = options?.modelProvider?.trim();
+  const modelId = options?.modelId?.trim();
+  const activeModel =
+    modelProvider || modelId
+      ? {
+          ...(modelProvider ? { provider: modelProvider } : {}),
+          ...(modelId ? { modelId } : {}),
+          ...(modelProvider && modelId ? { modelRef: modelKey(modelProvider, modelId) } : {}),
+        }
+      : undefined;
   const deliveryContext = normalizeDeliveryContext({
     channel: options?.agentChannel,
     to: options?.agentTo,
@@ -60,6 +73,7 @@ export function resolveOpenClawPluginToolInputs(params: {
       agentId: sessionAgentId,
       sessionKey: options?.agentSessionKey,
       sessionId: options?.sessionId,
+      activeModel,
       browser: {
         sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
         allowHostControl: options?.allowHostBrowserControl,

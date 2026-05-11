@@ -24,6 +24,18 @@ describe("sessions_spawn: cron isolated session note suppression", () => {
     ).toBe(SUBAGENT_SPAWN_ACCEPTED_NOTE);
   });
 
+  it("keeps regular run guidance push-based without recommending sessions_yield", () => {
+    expect(SUBAGENT_SPAWN_ACCEPTED_NOTE).toContain("Auto-announce is push-based");
+    expect(SUBAGENT_SPAWN_ACCEPTED_NOTE).toContain("Continue any independent work");
+    expect(SUBAGENT_SPAWN_ACCEPTED_NOTE).toContain(
+      "wait for runtime completion events to arrive as user messages",
+    );
+    expect(SUBAGENT_SPAWN_ACCEPTED_NOTE).toContain(
+      "only answer after completion events for ALL required children arrive",
+    );
+    expect(SUBAGENT_SPAWN_ACCEPTED_NOTE).not.toContain("sessions_yield");
+  });
+
   it("preserves ACCEPTED_NOTE for non-canonical cron-like keys", () => {
     expect(
       resolveSubagentSpawnAcceptedNote({

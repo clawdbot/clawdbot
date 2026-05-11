@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
-import {
-  HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
-  XAI_TOOL_SCHEMA_PROFILE,
-} from "../plugin-sdk/provider-tools.js";
 import { __testing } from "./pi-tools.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
+
+const HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING = "html-entities";
+const XAI_TOOL_SCHEMA_PROFILE = "xai";
 
 const baseTools = [
   { name: "read" },

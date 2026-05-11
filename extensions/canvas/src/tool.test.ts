@@ -82,11 +82,18 @@ describe("Canvas tool", () => {
 
     await tool.execute("tool-call-1", { action: "snapshot" });
 
-    expect(mocks.imageResultFromFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        label: "canvas:snapshot",
-        imageSanitization: { maxDimensionPx: 1600 },
-      }),
-    );
+    expect(mocks.imageResultFromFile).toHaveBeenCalledTimes(1);
+    const imageResultParams = mocks.imageResultFromFile.mock.calls[0]?.[0] as
+      | {
+          label?: string;
+          path?: string;
+          details?: unknown;
+          imageSanitization?: unknown;
+        }
+      | undefined;
+    expect(imageResultParams?.label).toBe("canvas:snapshot");
+    expect(imageResultParams?.path).toMatch(/openclaw-canvas-snapshot-.*\.png$/);
+    expect(imageResultParams?.details).toEqual({ format: "png" });
+    expect(imageResultParams?.imageSanitization).toEqual({ maxDimensionPx: 1600 });
   });
 });

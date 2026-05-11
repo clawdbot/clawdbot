@@ -1,10 +1,4 @@
-/**
- * Detects inbound messages that are reflections of assistant-originated content.
- * These patterns indicate internal metadata leaked into a channel and then
- * bounced back as a new inbound message — creating an echo loop.
- */
-
-import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-runtime";
+import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
 
 const INTERNAL_SEPARATOR_RE = /(?:#\+){2,}#?/;
 const ASSISTANT_ROLE_MARKER_RE = /\bassistant\s+to\s*=\s*\w+/i;

@@ -151,15 +151,69 @@ type MockNodeInvokeParams = {
   params?: Record<string, unknown>;
 };
 
-function expectSystemRunInvoke(params: { invokeTimeoutMs: number; runTimeoutMs: number }) {
-  expect(callGatewayToolMock).toHaveBeenCalledWith(
-    "node.invoke",
-    expect.objectContaining({ timeoutMs: params.invokeTimeoutMs }),
-    expect.objectContaining({
-      command: "system.run",
-      params: expect.objectContaining({ timeoutMs: params.runTimeoutMs }),
-    }),
+type GatewayToolCall = {
+  method: string;
+  options: { timeoutMs?: number };
+  params?: MockNodeInvokeParams;
+  callOptions?: unknown;
+};
+
+function requireGatewayCall(index: number): GatewayToolCall {
+  const call = callGatewayToolMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected gateway call at index ${index}`);
+  }
+  const [method, options, params, callOptions] = call as [
+    string,
+    { timeoutMs?: number },
+    MockNodeInvokeParams | undefined,
+    unknown,
+  ];
+  return { method, options, params, callOptions };
+}
+
+function requireGatewayCommand(command: string): GatewayToolCall {
+  const call = callGatewayToolMock.mock.calls.find(
+    ([method, , params]) =>
+      method === "node.invoke" && (params as MockNodeInvokeParams | undefined)?.command === command,
   );
+  if (!call) {
+    throw new Error(`expected gateway command ${command}`);
+  }
+  const [method, options, params, callOptions] = call as [
+    string,
+    { timeoutMs?: number },
+    MockNodeInvokeParams | undefined,
+    unknown,
+  ];
+  return { method, options, params, callOptions };
+}
+
+function requireRunParams(call: GatewayToolCall): Record<string, unknown> {
+  expect(call.method).toBe("node.invoke");
+  expect(call.params?.command).toBe("system.run");
+  const params = call.params?.params;
+  if (!params) {
+    throw new Error("expected system.run params");
+  }
+  return params;
+}
+
+function requireRegisteredApprovalRequest(): Record<string, unknown> {
+  const calls = registerExecApprovalRequestForHostOrThrowMock.mock.calls as unknown as [
+    Record<string, unknown>,
+  ][];
+  const firstCall = calls[0];
+  if (!firstCall) {
+    throw new Error("expected approval request registration");
+  }
+  return firstCall[0];
+}
+
+function expectSystemRunInvoke(params: { invokeTimeoutMs: number; runTimeoutMs: number }) {
+  const call = requireGatewayCommand("system.run");
+  expect(call.options.timeoutMs).toBe(params.invokeTimeoutMs);
+  expect(requireRunParams(call).timeoutMs).toBe(params.runTimeoutMs);
 }
 
 describe("executeNodeHostCommand", () => {
@@ -278,35 +332,24 @@ describe("executeNodeHostCommand", () => {
     });
 
     expect(result.details?.status).toBe("approval-pending");
-    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        systemRunPlan: preparedPlan,
-      }),
-    );
+    expect(requireRegisteredApprovalRequest().systemRunPlan).toEqual(preparedPlan);
 
     await vi.waitFor(() => {
       expect(callGatewayToolMock).toHaveBeenCalledTimes(3);
     });
 
-    expect(callGatewayToolMock).toHaveBeenNthCalledWith(
-      3,
-      "node.invoke",
-      expect.objectContaining({ timeoutMs: 35_000 }),
-      expect.objectContaining({
-        command: "system.run",
-        params: expect.objectContaining({
-          approved: true,
-          approvalDecision: "allow-once",
-          systemRunPlan: preparedPlan,
-          timeoutMs: 30_000,
-          turnSourceChannel: "telegram",
-          turnSourceTo: "telegram:12345",
-          turnSourceAccountId: "work",
-          turnSourceThreadId: "42",
-        }),
-      }),
-      { scopes: ["operator.write", "operator.approvals"] },
-    );
+    const call = requireGatewayCall(2);
+    expect(call.options.timeoutMs).toBe(35_000);
+    expect(call.callOptions).toEqual({ scopes: ["operator.write", "operator.approvals"] });
+    const runParams = requireRunParams(call);
+    expect(runParams.approved).toBe(true);
+    expect(runParams.approvalDecision).toBe("allow-once");
+    expect(runParams.systemRunPlan).toEqual(preparedPlan);
+    expect(runParams.timeoutMs).toBe(30_000);
+    expect(runParams.turnSourceChannel).toBe("telegram");
+    expect(runParams.turnSourceTo).toBe("telegram:12345");
+    expect(runParams.turnSourceAccountId).toBe("work");
+    expect(runParams.turnSourceThreadId).toBe("42");
   });
 
   it("builds a local systemRunPlan when approval is required and the node omits prepare", async () => {
@@ -347,25 +390,14 @@ describe("executeNodeHostCommand", () => {
       agentId: "requested-agent",
       sessionKey: "requested-session",
     };
-    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        systemRunPlan: expectedPlan,
-      }),
-    );
+    expect(requireRegisteredApprovalRequest().systemRunPlan).toEqual(expectedPlan);
 
     await vi.waitFor(() => {
-      expect(callGatewayToolMock).toHaveBeenCalledWith(
-        "node.invoke",
-        expect.anything(),
-        expect.objectContaining({
-          command: "system.run",
-          params: expect.objectContaining({
-            rawCommand: expectedPlan.commandText,
-            systemRunPlan: expectedPlan,
-          }),
-        }),
-        { scopes: ["operator.write", "operator.approvals"] },
-      );
+      const call = requireGatewayCommand("system.run");
+      expect(call.callOptions).toEqual({ scopes: ["operator.write", "operator.approvals"] });
+      const runParams = requireRunParams(call);
+      expect(runParams.rawCommand).toBe(expectedPlan.commandText);
+      expect(runParams.systemRunPlan).toEqual(expectedPlan);
     });
   });
 
@@ -385,28 +417,14 @@ describe("executeNodeHostCommand", () => {
     });
 
     expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
-    expect(callGatewayToolMock).toHaveBeenCalledWith(
-      "node.invoke",
-      expect.objectContaining({ timeoutMs: 35_000 }),
-      expect.objectContaining({
-        command: "system.run",
-        params: expect.objectContaining({
-          command: ["/bin/sh", "-lc", "bun ./script.ts"],
-          rawCommand: "bun ./script.ts",
-          suppressNotifyOnExit: true,
-          timeoutMs: 30_000,
-        }),
-      }),
-    );
-    expect(callGatewayToolMock).toHaveBeenCalledWith(
-      "node.invoke",
-      expect.anything(),
-      expect.objectContaining({
-        params: expect.not.objectContaining({
-          systemRunPlan: expect.anything(),
-        }),
-      }),
-    );
+    const call = requireGatewayCall(0);
+    expect(call.options.timeoutMs).toBe(35_000);
+    const runParams = requireRunParams(call);
+    expect(runParams.command).toEqual(["/bin/sh", "-lc", "bun ./script.ts"]);
+    expect(runParams.rawCommand).toBe("bun ./script.ts");
+    expect(runParams.suppressNotifyOnExit).toBe(true);
+    expect(runParams.timeoutMs).toBe(30_000);
+    expect(Object.hasOwn(runParams, "systemRunPlan")).toBe(false);
   });
 
   it("rejects disconnected node targets before invoking system.run", async () => {
@@ -471,12 +489,14 @@ describe("executeNodeHostCommand", () => {
     });
 
     expect(result.content).toEqual([{ type: "text", text: "(no output)" }]);
-    expect(result.details).toMatchObject({
-      status: "completed",
-      exitCode: 0,
-      aggregated: "",
-      cwd: "/tmp/work",
-    });
+    const details = result.details;
+    expect(details?.status).toBe("completed");
+    if (details?.status !== "completed") {
+      throw new Error(`expected completed details, got ${details?.status ?? "missing"}`);
+    }
+    expect(details.exitCode).toBe(0);
+    expect(details.aggregated).toBe("");
+    expect(details.cwd).toBe("/tmp/work");
   });
 
   it("forwards explicit timeouts to node system.run", async () => {

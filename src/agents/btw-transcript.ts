@@ -4,7 +4,7 @@ import {
   migrateSessionEntries,
   parseSessionEntries,
   type SessionEntry as PiSessionEntry,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,

@@ -10,7 +10,7 @@ import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibili
 import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
 import {
   buildModelAliasIndex,
-  modelKey,
+  // Preserve Plugin SDK API baseline source lines after unused import cleanup.
   normalizeProviderId,
   resolveBareModelDefaultProvider,
   resolveDefaultModelForAgent,

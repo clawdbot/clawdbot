@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Api, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
-import { streamAnthropic } from "@mariozechner/pi-ai/anthropic";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Api, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { streamAnthropic } from "@earendil-works/pi-ai/anthropic";
 
 const MANTLE_ANTHROPIC_BETA = "fine-grained-tool-streaming-2025-05-14";
 type AnthropicOptions = ConstructorParameters<typeof Anthropic>[0];

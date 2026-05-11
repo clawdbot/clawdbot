@@ -484,6 +484,23 @@ async function runArgMenuAction(
   return respond;
 }
 
+function firstCallPayload(mock: ReturnType<typeof vi.fn>, label: string): Record<string, unknown> {
+  expect(mock).toHaveBeenCalled();
+  const [payload] = mock.mock.calls[0] ?? [];
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error(`expected ${label} payload`);
+  }
+  return payload as Record<string, unknown>;
+}
+
+function responseTexts(mock: ReturnType<typeof vi.fn>): unknown[] {
+  return mock.mock.calls.map(([payload]) =>
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? (payload as { text?: unknown }).text
+      : undefined,
+  );
+}
+
 describe("Slack native command argument menus", () => {
   let harness: ReturnType<typeof createArgMenusHarness>;
   let usageHandler: (args: unknown) => Promise<void>;
@@ -691,10 +708,9 @@ describe("Slack native command argument menus", () => {
     const actionBlocks = (payload.blocks ?? []).filter((block) => block.type === "actions");
     expect(actionBlocks).toHaveLength(1);
     expect(actionBlocks[0]?.elements).toHaveLength(1);
-    expect(actionBlocks[0]?.elements?.[0]).toMatchObject({
-      text: { text: "Valid" },
-    });
-    expect(actionBlocks[0]?.elements?.[0]?.value?.length).toBeLessThanOrEqual(2000);
+    const element = actionBlocks[0]?.elements?.[0];
+    expect(element?.text?.text).toBe("Valid");
+    expect(element?.value?.length).toBeLessThanOrEqual(2000);
   });
 
   it("shows an overflow menu when choices fit compact range", async () => {
@@ -813,7 +829,7 @@ describe("Slack native command argument menus", () => {
       options?: Array<{ text?: { text?: string }; value?: string }>;
     };
     const optionTexts = (optionsPayload.options ?? []).map((option) => option.text?.text ?? "");
-    expect(optionTexts).toEqual(expect.arrayContaining([expect.stringContaining("Period 12")]));
+    expect(optionTexts.some((text) => text.includes("Period 12"))).toBe(true);
   });
 
   it("tracks accepted external_select option requests", async () => {
@@ -904,13 +920,10 @@ describe("Slack native command argument menus", () => {
       includeRespond: false,
     });
 
-    expect(harness.postEphemeral).toHaveBeenCalledWith(
-      expect.objectContaining({
-        token: "bot-token",
-        channel: "C1",
-        user: "U1",
-      }),
-    );
+    const payload = firstCallPayload(harness.postEphemeral, "postEphemeral");
+    expect(payload.token).toBe("bot-token");
+    expect(payload.channel).toBe("C1");
+    expect(payload.user).toBe("U1");
   });
 
   it("treats malformed percent-encoding as an invalid button", async () => {
@@ -919,14 +932,11 @@ describe("Slack native command argument menus", () => {
       includeRespond: false,
     });
 
-    expect(harness.postEphemeral).toHaveBeenCalledWith(
-      expect.objectContaining({
-        token: "bot-token",
-        channel: "C1",
-        user: "U1",
-        text: "Sorry, that button is no longer valid.",
-      }),
-    );
+    const payload = firstCallPayload(harness.postEphemeral, "postEphemeral");
+    expect(payload.token).toBe("bot-token");
+    expect(payload.channel).toBe("C1");
+    expect(payload.user).toBe("U1");
+    expect(payload.text).toBe("Sorry, that button is no longer valid.");
   });
 });
 
@@ -1093,9 +1103,7 @@ describe("slack slash commands channel policy", () => {
     const { respond } = await registerAndRunPolicySlash({ harness });
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(respond).not.toHaveBeenCalledWith(
-      expect.objectContaining({ text: "This channel is not allowed." }),
-    );
+    expect(responseTexts(respond)).not.toContain("This channel is not allowed.");
   });
 
   it("blocks explicitly denied channels when groupPolicy is open", async () => {
@@ -1152,9 +1160,7 @@ describe("slack slash commands access groups", () => {
     });
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(respond).not.toHaveBeenCalledWith(
-      expect.objectContaining({ text: "You are not authorized to use this command." }),
-    );
+    expect(responseTexts(respond)).not.toContain("You are not authorized to use this command.");
     const dispatchArg = dispatchMock.mock.calls[0]?.[0] as {
       ctx?: { CommandAuthorized?: boolean };
     };

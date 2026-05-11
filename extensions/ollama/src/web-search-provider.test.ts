@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createOllamaWebSearchProvider as createContractOllamaWebSearchProvider } from "../web-search-contract-api.js";
 import {
@@ -69,18 +69,71 @@ function createSetupNotes() {
   };
 }
 
+function expectOllamaWebSearchRequest(
+  call: unknown[] | undefined,
+  params: {
+    url: string;
+    query?: string;
+    maxResults?: number;
+    headers?: Record<string, string>;
+    policy: Record<string, unknown>;
+  },
+) {
+  if (!call?.[0] || typeof call[0] !== "object") {
+    throw new Error("Expected fetchWithSsrFGuard call");
+  }
+  const request = call[0] as {
+    url: string;
+    init: {
+      method: string;
+      headers: Record<string, string>;
+      body: string;
+      signal: AbortSignal;
+    };
+    policy: Record<string, unknown>;
+    auditContext: string;
+  };
+  expect(request).toEqual({
+    url: params.url,
+    init: {
+      method: "POST",
+      headers: params.headers ?? { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: params.query ?? "openclaw",
+        max_results: params.maxResults ?? 5,
+      }),
+      signal: request.init.signal,
+    },
+    policy: params.policy,
+    auditContext: "ollama-web-search.search",
+  });
+  expect(request.init.signal).toBeInstanceOf(AbortSignal);
+}
+
+function expectSingleSearchResultUrl(results: unknown, url: string) {
+  if (!Array.isArray(results)) {
+    throw new Error("Expected search results array");
+  }
+  expect(results).toHaveLength(1);
+  const [result] = results;
+  if (!result || typeof result !== "object") {
+    throw new Error("Expected search result object");
+  }
+  expect((result as { url?: unknown }).url).toBe(url);
+}
+
 describe("ollama web search provider", () => {
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockReset();
   });
 
   it("registers a keyless web search provider", () => {
-    expect(createContractOllamaWebSearchProvider()).toMatchObject({
-      id: "ollama",
-      label: "Ollama Web Search",
-      requiresCredential: false,
-      envVars: [],
-    });
+    const provider = createContractOllamaWebSearchProvider();
+
+    expect(provider.id).toBe("ollama");
+    expect(provider.label).toBe("Ollama Web Search");
+    expect(provider.requiresCredential).toBe(false);
+    expect(provider.envVars).toEqual([]);
   });
 
   it("uses the configured Ollama host and enables the plugin in config", () => {
@@ -167,32 +220,19 @@ describe("ollama web search provider", () => {
     }
     const result = await tool.execute({ query: "openclaw docs", count: 3 });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://ollama.local:11434/api/experimental/web_search",
-        auditContext: "ollama-web-search.search",
-      }),
-    );
-    expect(
-      JSON.parse(
-        String(
-          (
-            fetchWithSsrFGuardMock.mock.calls[0]?.[0] as {
-              init?: { body?: string };
-            }
-          ).init?.body,
-        ),
-      ),
-    ).toEqual({
+    expectOllamaWebSearchRequest(fetchWithSsrFGuardMock.mock.calls[0], {
+      url: "http://ollama.local:11434/api/experimental/web_search",
       query: "openclaw docs",
-      max_results: 3,
+      maxResults: 3,
+      policy: {
+        allowPrivateNetwork: true,
+        hostnameAllowlist: ["ollama.local"],
+      },
     });
-    expect(result).toMatchObject({
-      query: "openclaw docs",
-      provider: "ollama",
-      count: 1,
-      results: [{ url: "https://openclaw.ai/docs" }],
-    });
+    expect(result.query).toBe("openclaw docs");
+    expect(result.provider).toBe("ollama");
+    expect(result.count).toBe(1);
+    expectSingleSearchResultUrl(result.results, "https://openclaw.ai/docs");
     expect(release).toHaveBeenCalledTimes(1);
   });
 
@@ -215,12 +255,13 @@ describe("ollama web search provider", () => {
         release: vi.fn(async () => {}),
       });
 
-    await expect(
-      runOllamaWebSearch({ config: createOllamaConfig(), query: "openclaw" }),
-    ).resolves.toMatchObject({
-      count: 1,
-      results: [{ url: "https://example.com" }],
+    const result = await runOllamaWebSearch({
+      config: createOllamaConfig(),
+      query: "openclaw",
     });
+
+    expect(result.count).toBe(1);
+    expectSingleSearchResultUrl(result.results, "https://example.com");
 
     expect(fetchWithSsrFGuardMock.mock.calls.map((call) => call[0].url)).toEqual([
       "http://ollama.local:11434/api/experimental/web_search",
@@ -242,20 +283,27 @@ describe("ollama web search provider", () => {
       release: vi.fn(async () => {}),
     });
 
-    await expect(
-      runOllamaWebSearch({
-        config: createOllamaConfig({
-          baseUrl: "https://ollama.com",
-          apiKey: "cloud-config-secret",
-        }),
-        query: "openclaw",
+    const result = await runOllamaWebSearch({
+      config: createOllamaConfig({
+        baseUrl: "https://ollama.com",
+        apiKey: "cloud-config-secret",
       }),
-    ).resolves.toMatchObject({ count: 1 });
+      query: "openclaw",
+    });
 
+    expect(result.count).toBe(1);
     expect(fetchWithSsrFGuardMock.mock.calls).toHaveLength(1);
     expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0].url).toBe("https://ollama.com/api/web_search");
-    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0].init?.headers).toMatchObject({
-      Authorization: "Bearer cloud-config-secret",
+    expectOllamaWebSearchRequest(fetchWithSsrFGuardMock.mock.calls[0], {
+      url: "https://ollama.com/api/web_search",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer cloud-config-secret",
+      },
+      policy: {
+        allowPrivateNetwork: true,
+        hostnameAllowlist: ["ollama.com"],
+      },
     });
   });
 
@@ -285,12 +333,12 @@ describe("ollama web search provider", () => {
           release: vi.fn(async () => {}),
         });
 
-      await expect(
-        runOllamaWebSearch({ config: createOllamaConfig(), query: "openclaw" }),
-      ).resolves.toMatchObject({
-        count: 1,
+      const result = await runOllamaWebSearch({
+        config: createOllamaConfig(),
+        query: "openclaw",
       });
 
+      expect(result.count).toBe(1);
       const firstHeaders = fetchWithSsrFGuardMock.mock.calls[0]?.[0].init?.headers as
         | Record<string, string>
         | undefined;
@@ -340,10 +388,14 @@ describe("ollama web search provider", () => {
 
     expect(next).toBe(config);
     expect(notes).toEqual([
-      expect.objectContaining({
+      {
         title: "Ollama Web Search",
-        message: expect.stringContaining("requires Ollama to be running"),
-      }),
+        message: [
+          "Ollama Web Search requires Ollama to be running.",
+          "Expected host: http://ollama.local:11434",
+          "Start Ollama before using this provider.",
+        ].join("\n"),
+      },
     ]);
   });
 
@@ -397,11 +449,10 @@ describe("ollama web search provider", () => {
 
     expect(next).toBe(config);
     expect(notes).toEqual([
-      expect.objectContaining({
+      {
         title: "Ollama Web Search",
-        message: expect.stringContaining("Ollama Web Search requires `ollama signin`."),
-      }),
+        message: "Ollama Web Search requires `ollama signin`.\nhttps://ollama.com/signin",
+      },
     ]);
-    expect(notes[0]?.message).toContain("https://ollama.com/signin");
   });
 });

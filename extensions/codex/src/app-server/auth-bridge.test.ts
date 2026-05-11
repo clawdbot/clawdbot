@@ -38,7 +38,7 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
+vi.mock("@earendil-works/pi-ai/oauth", () => ({
   getOAuthApiKey: vi.fn(),
   getOAuthProviders: () => [],
   loginOpenAICodex: vi.fn(),
@@ -118,6 +118,28 @@ function createStartOptions(
     headers: { authorization: "Bearer dev-token" },
     ...overrides,
   };
+}
+
+async function expectPathMissing(filePath: string): Promise<void> {
+  try {
+    await fs.access(filePath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`Expected missing path: ${filePath}`);
+}
+
+type AuthProfileStore = ReturnType<typeof loadAuthProfileStoreForSecretsRuntime>;
+type AuthProfileCredential = AuthProfileStore["profiles"][string];
+
+function expectOAuthProfile(
+  profile: AuthProfileCredential | undefined,
+): Extract<AuthProfileCredential, { type: "oauth" }> {
+  if (!profile || profile.type !== "oauth") {
+    throw new Error("Expected OAuth auth profile");
+  }
+  return profile;
 }
 
 describe("bridgeCodexAppServerStartOptions", () => {
@@ -214,9 +236,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         clearEnv: ["FOO", "CODEX_API_KEY", "OPENAI_API_KEY"],
       });
       expect(startOptions.clearEnv).toEqual(["FOO"]);
-      await expect(fs.access(path.join(agentDir, "harness-auth"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectPathMissing(path.join(agentDir, "harness-auth"));
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
@@ -987,13 +1007,13 @@ describe("bridgeCodexAppServerStartOptions", () => {
       });
 
       expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("main-refresh-token");
-      await expect(fs.access(childAuthPath)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(loadAuthProfileStoreForSecretsRuntime().profiles["openai-codex:work"]).toMatchObject({
-        type: "oauth",
-        provider: "openai-codex",
-        access: "main-refreshed-access-token",
-        refresh: "main-refreshed-refresh-token",
-      });
+      await expectPathMissing(childAuthPath);
+      const mainProfile = expectOAuthProfile(
+        loadAuthProfileStoreForSecretsRuntime().profiles["openai-codex:work"],
+      );
+      expect(mainProfile?.provider).toBe("openai-codex");
+      expect(mainProfile?.access).toBe("main-refreshed-access-token");
+      expect(mainProfile?.refresh).toBe("main-refreshed-refresh-token");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -1056,19 +1076,17 @@ describe("bridgeCodexAppServerStartOptions", () => {
       });
 
       expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("main-owner-refresh-token");
-      expect(loadAuthProfileStoreForSecretsRuntime().profiles["openai-codex:work"]).toMatchObject({
-        type: "oauth",
-        provider: "openai-codex",
-        access: "main-refreshed-access-token",
-        refresh: "main-refreshed-refresh-token",
-      });
-      const child = JSON.parse(await fs.readFile(childAuthPath, "utf8")) as {
-        profiles: Record<string, { access?: string; refresh?: string }>;
-      };
-      expect(child.profiles["openai-codex:work"]).toMatchObject({
-        access: "child-stale-access-token",
-        refresh: "child-stale-refresh-token",
-      });
+      const mainProfile = expectOAuthProfile(
+        loadAuthProfileStoreForSecretsRuntime().profiles["openai-codex:work"],
+      );
+      expect(mainProfile?.provider).toBe("openai-codex");
+      expect(mainProfile?.access).toBe("main-refreshed-access-token");
+      expect(mainProfile?.refresh).toBe("main-refreshed-refresh-token");
+      const childProfile = expectOAuthProfile(
+        loadAuthProfileStoreForSecretsRuntime(childAgentDir).profiles["openai-codex:work"],
+      );
+      expect(childProfile?.access).toBe("child-stale-access-token");
+      expect(childProfile?.refresh).toBe("child-stale-refresh-token");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

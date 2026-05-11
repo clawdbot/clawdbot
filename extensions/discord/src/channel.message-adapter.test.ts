@@ -79,11 +79,17 @@ describe("discord channel message adapter", () => {
         text: "hello",
         accountId: "default",
       });
-      expect(hoisted.sendMessageDiscordMock).toHaveBeenLastCalledWith(
-        "channel:123456",
-        "hello",
-        expect.objectContaining({ accountId: "default" }),
-      );
+      expect(hoisted.sendMessageDiscordMock).toHaveBeenLastCalledWith("channel:123456", "hello", {
+        verbose: false,
+        replyTo: undefined,
+        accountId: "default",
+        silent: undefined,
+        cfg: {},
+        textLimit: undefined,
+        maxLinesPerMessage: undefined,
+        tableMode: undefined,
+        chunkMode: undefined,
+      });
       expect(result.receipt.platformMessageIds).toEqual(["msg-1"]);
       expect(result.receipt.parts[0]?.kind).toBe("text");
     };
@@ -97,14 +103,21 @@ describe("discord channel message adapter", () => {
         mediaUrl: "https://example.com/a.png",
         accountId: "default",
       });
-      expect(hoisted.sendMessageDiscordMock).toHaveBeenLastCalledWith(
-        "channel:123456",
-        "caption",
-        expect.objectContaining({
-          accountId: "default",
-          mediaUrl: "https://example.com/a.png",
-        }),
-      );
+      expect(hoisted.sendMessageDiscordMock).toHaveBeenLastCalledWith("channel:123456", "caption", {
+        verbose: false,
+        mediaUrl: "https://example.com/a.png",
+        mediaAccess: undefined,
+        mediaLocalRoots: undefined,
+        mediaReadFile: undefined,
+        replyTo: undefined,
+        accountId: "default",
+        silent: undefined,
+        cfg: {},
+        textLimit: undefined,
+        maxLinesPerMessage: undefined,
+        tableMode: undefined,
+        chunkMode: undefined,
+      });
       expect(result.receipt.parts[0]?.kind).toBe("media");
     };
 
@@ -117,11 +130,17 @@ describe("discord channel message adapter", () => {
         payload: { text: "payload" },
         accountId: "default",
       });
-      expect(hoisted.sendMessageDiscordMock).toHaveBeenLastCalledWith(
-        "channel:123456",
-        "payload",
-        expect.objectContaining({ accountId: "default" }),
-      );
+      expect(hoisted.sendMessageDiscordMock).toHaveBeenLastCalledWith("channel:123456", "payload", {
+        verbose: false,
+        replyTo: undefined,
+        accountId: "default",
+        silent: undefined,
+        cfg: {},
+        textLimit: undefined,
+        maxLinesPerMessage: undefined,
+        tableMode: undefined,
+        chunkMode: undefined,
+      });
       expect(result.receipt.platformMessageIds).toEqual(["msg-1"]);
     };
 
@@ -139,11 +158,17 @@ describe("discord channel message adapter", () => {
       expect(hoisted.sendMessageDiscordMock).toHaveBeenLastCalledWith(
         "channel:thread-1",
         "threaded",
-        expect.objectContaining({
+        {
+          verbose: false,
           accountId: "default",
           replyTo: "reply-1",
           silent: true,
-        }),
+          cfg: {},
+          textLimit: undefined,
+          maxLinesPerMessage: undefined,
+          tableMode: undefined,
+          chunkMode: undefined,
+        },
       );
       expect(result.receipt.threadId).toBe("thread-1");
       expect(result.receipt.replyToId).toBe("reply-1");

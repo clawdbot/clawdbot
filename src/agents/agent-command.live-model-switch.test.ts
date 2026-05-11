@@ -650,6 +650,35 @@ function setupModelSwitchRetry(switchOptions: ModelSwitchOptions) {
   });
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an array`);
+  }
+  return value;
+}
+
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls[callIndex] as unknown[] | undefined;
+  if (!call) {
+    throw new Error(`expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
+function expectRecordFields(value: unknown, expected: Record<string, unknown>): void {
+  const actual = requireRecord(value, "record");
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(expectedValue);
+  }
+}
+
 async function runBasicAgentCommand() {
   await agentCommand({
     message: "hello",
@@ -660,10 +689,10 @@ async function runBasicAgentCommand() {
 
 function expectFallbackOverrideCalls(first: boolean, second: boolean) {
   expect(state.resolveEffectiveModelFallbacksMock).toHaveBeenCalledTimes(2);
-  expect(state.resolveEffectiveModelFallbacksMock.mock.calls[0][0]).toMatchObject({
+  expectRecordFields(mockCallArg(state.resolveEffectiveModelFallbacksMock, 0), {
     hasSessionModelOverride: first,
   });
-  expect(state.resolveEffectiveModelFallbacksMock.mock.calls[1][0]).toMatchObject({
+  expectRecordFields(mockCallArg(state.resolveEffectiveModelFallbacksMock, 1), {
     hasSessionModelOverride: second,
   });
 }
@@ -785,20 +814,19 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       thinking: "xhigh",
     });
 
-    expect(state.isThinkingLevelSupportedMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "gmn",
-        model: "gpt-5.4",
-        level: "xhigh",
-        catalog: [
-          expect.objectContaining({
-            provider: "gmn",
-            id: "gpt-5.4",
-            compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
-          }),
-        ],
-      }),
+    const thinkingArgs = requireRecord(
+      mockCallArg(state.isThinkingLevelSupportedMock),
+      "thinking args",
     );
+    expect(thinkingArgs.provider).toBe("gmn");
+    expect(thinkingArgs.model).toBe("gpt-5.4");
+    expect(thinkingArgs.level).toBe("xhigh");
+    const catalog = requireArray(thinkingArgs.catalog, "thinking catalog");
+    expectRecordFields(catalog[0], {
+      provider: "gmn",
+      id: "gpt-5.4",
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+    });
   });
 
   it("validates explicit thinking against allowlisted configured model compat when manifest catalog is empty", async () => {
@@ -846,20 +874,19 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
 
     expect(state.loadManifestModelCatalogMock).toHaveBeenCalled();
-    expect(state.isThinkingLevelSupportedMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "gmn",
-        model: "gpt-5.4",
-        level: "xhigh",
-        catalog: [
-          expect.objectContaining({
-            provider: "gmn",
-            id: "gpt-5.4",
-            compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
-          }),
-        ],
-      }),
+    const thinkingArgs = requireRecord(
+      mockCallArg(state.isThinkingLevelSupportedMock),
+      "thinking args",
     );
+    expect(thinkingArgs.provider).toBe("gmn");
+    expect(thinkingArgs.model).toBe("gpt-5.4");
+    expect(thinkingArgs.level).toBe("xhigh");
+    const catalog = requireArray(thinkingArgs.catalog, "thinking catalog");
+    expectRecordFields(catalog[0], {
+      provider: "gmn",
+      id: "gpt-5.4",
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+    });
   });
 
   it("records fallback steps to the session trajectory runtime", async () => {
@@ -884,17 +911,16 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     await runBasicAgentCommand();
 
-    expect(state.trajectoryRecordEventMock).toHaveBeenCalledWith(
-      "model.fallback_step",
-      expect.objectContaining({
-        fallbackStepType: "fallback_step",
-        fallbackStepFromModel: "ollama/llama3",
-        fallbackStepToModel: "openai/gpt-5.4",
-        fallbackStepFromFailureReason: "overloaded",
-        fallbackStepChainPosition: 1,
-        fallbackStepFinalOutcome: "next_fallback",
-      }),
-    );
+    expect(state.trajectoryRecordEventMock).toHaveBeenCalledTimes(1);
+    expect(state.trajectoryRecordEventMock.mock.calls[0]?.[0]).toBe("model.fallback_step");
+    expectRecordFields(state.trajectoryRecordEventMock.mock.calls[0]?.[1], {
+      fallbackStepType: "fallback_step",
+      fallbackStepFromModel: "ollama/llama3",
+      fallbackStepToModel: "openai/gpt-5.4",
+      fallbackStepFromFailureReason: "overloaded",
+      fallbackStepChainPosition: 1,
+      fallbackStepFinalOutcome: "next_fallback",
+    });
     expect(state.trajectoryFlushMock).toHaveBeenCalled();
   });
 
@@ -1102,7 +1128,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     const attemptParams = state.runAgentAttemptMock.mock.calls[0]?.[0] as
       | { skillsSnapshot?: Record<string, unknown> }
       | undefined;
-    expect(attemptParams?.skillsSnapshot).toMatchObject({
+    expectRecordFields(attemptParams?.skillsSnapshot, {
       prompt: "persisted prompt",
       skills: [{ name: "cli-skill" }],
       skillFilter: ["cli-skill"],
@@ -1145,30 +1171,28 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     await runBasicAgentCommand();
 
-    expect(observedClassification).toMatchObject({
+    expectRecordFields(observedClassification, {
       reason: "format",
       code: "empty_result",
     });
     expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(2);
-    expect(state.runAgentAttemptMock.mock.calls[1]?.[0]).toMatchObject({
+    expectRecordFields(state.runAgentAttemptMock.mock.calls[1]?.[0], {
       providerOverride: "openai",
       modelOverride: "gpt-5.4",
       isFallbackRetry: true,
     });
-    expect(state.deliverAgentCommandResultMock.mock.calls[0]?.[0]).toMatchObject({
-      result: {
-        meta: {
-          agentMeta: {
-            fallbackAttempts: [
-              expect.objectContaining({
-                provider: "anthropic",
-                model: "claude",
-                reason: "format",
-              }),
-            ],
-          },
-        },
-      },
+    const deliveryParams = requireRecord(
+      state.deliverAgentCommandResultMock.mock.calls[0]?.[0],
+      "delivery params",
+    );
+    const result = requireRecord(deliveryParams.result, "delivery result");
+    const meta = requireRecord(result.meta, "delivery result meta");
+    const agentMeta = requireRecord(meta.agentMeta, "delivery agent meta");
+    const fallbackAttempts = requireArray(agentMeta.fallbackAttempts, "fallback attempts");
+    expectRecordFields(fallbackAttempts[0], {
+      provider: "anthropic",
+      model: "claude",
+      reason: "format",
     });
   });
 

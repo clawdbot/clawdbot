@@ -36,6 +36,18 @@ describe("config doc baseline integration", () => {
     return sharedByPathPromise;
   }
 
+  function requireEntry(
+    byPath: Map<string, ConfigDocBaselineEntry>,
+    entryPath: string,
+  ): ConfigDocBaselineEntry {
+    const entry = byPath.get(entryPath);
+    expect(entry).toBeDefined();
+    if (!entry) {
+      throw new Error(`expected config doc baseline entry for ${entryPath}`);
+    }
+    return entry;
+  }
+
   it("is deterministic across repeated runs", async () => {
     const first = await getSharedRendered();
     const { baseline } = first;
@@ -50,18 +62,17 @@ describe("config doc baseline integration", () => {
   it("includes core, channel, and plugin config metadata", async () => {
     const byPath = await getSharedByPath();
 
-    expect(byPath.get("gateway.auth.token")).toMatchObject({
-      kind: "core",
-      sensitive: true,
-    });
-    expect(byPath.get("channels.telegram.botToken")).toMatchObject({
-      kind: "channel",
-      sensitive: true,
-    });
-    expect(byPath.get("plugins.entries.voice-call.config.twilio.authToken")).toMatchObject({
-      kind: "plugin",
-      sensitive: true,
-    });
+    const gatewayToken = requireEntry(byPath, "gateway.auth.token");
+    expect(gatewayToken.kind).toBe("core");
+    expect(gatewayToken.sensitive).toBe(true);
+
+    const telegramToken = requireEntry(byPath, "channels.telegram.botToken");
+    expect(telegramToken.kind).toBe("channel");
+    expect(telegramToken.sensitive).toBe(true);
+
+    const twilioToken = requireEntry(byPath, "plugins.entries.voice-call.config.twilio.authToken");
+    expect(twilioToken.kind).toBe("plugin");
+    expect(twilioToken.sensitive).toBe(true);
   });
 
   it("preserves help text and tags from merged schema hints", async () => {
@@ -83,44 +94,38 @@ describe("config doc baseline integration", () => {
   it("uses human-readable channel metadata for top-level channel sections", async () => {
     const byPath = await getSharedByPath();
 
-    expect(byPath.get("channels.discord")).toMatchObject({
-      label: "Discord",
-      help: "very well supported right now.",
-    });
-    expect(byPath.get("channels.msteams")).toMatchObject({
-      label: "Microsoft Teams",
-      help: "Teams SDK; enterprise support.",
-    });
-    expect(byPath.get("channels.matrix")).toMatchObject({
-      label: "Matrix",
-      help: "open protocol; install the plugin to enable.",
-    });
-    expect(byPath.get("channels.msteams")?.label).not.toContain("@openclaw/");
-    expect(byPath.get("channels.matrix")?.help).not.toContain("homeserver");
+    const discordEntry = requireEntry(byPath, "channels.discord");
+    expect(discordEntry.label).toBe("Discord");
+    expect(discordEntry.help).toBe("very well supported right now.");
+
+    const msteamsEntry = requireEntry(byPath, "channels.msteams");
+    expect(msteamsEntry.label).toBe("Microsoft Teams");
+    expect(msteamsEntry.help).toBe("Teams SDK; enterprise support.");
+    expect(msteamsEntry.label).not.toContain("@openclaw/");
+
+    const matrixEntry = requireEntry(byPath, "channels.matrix");
+    expect(matrixEntry.label).toBe("Matrix");
+    expect(matrixEntry.help).toBe("open protocol; install the plugin to enable.");
+    expect(matrixEntry.help).not.toContain("homeserver");
   });
 
   it("matches array help hints that still use [] notation", async () => {
     const byPath = await getSharedByPath();
 
-    expect(byPath.get("session.sendPolicy.rules.*.match.keyPrefix")).toMatchObject({
-      help: expect.stringContaining("prefer rawKeyPrefix when exact full-key matching is required"),
-      sensitive: false,
-    });
+    const keyPrefixEntry = requireEntry(byPath, "session.sendPolicy.rules.*.match.keyPrefix");
+    expect(keyPrefixEntry.help).toContain(
+      "prefer rawKeyPrefix when exact full-key matching is required",
+    );
+    expect(keyPrefixEntry.sensitive).toBe(false);
   });
 
   it("walks union branches for nested config keys", async () => {
     const byPath = await getSharedByPath();
 
-    expect(byPath.get("bindings.*")).toMatchObject({
-      hasChildren: true,
-    });
-    expect(byPath.get("bindings.*.type")).toMatchObject({ path: "bindings.*.type" });
-    expect(byPath.get("bindings.*.match.channel")).toMatchObject({
-      path: "bindings.*.match.channel",
-    });
-    expect(byPath.get("bindings.*.match.peer.id")).toMatchObject({
-      path: "bindings.*.match.peer.id",
-    });
+    expect(requireEntry(byPath, "bindings.*").hasChildren).toBe(true);
+    expect(requireEntry(byPath, "bindings.*.type").path).toBe("bindings.*.type");
+    expect(requireEntry(byPath, "bindings.*.match.channel").path).toBe("bindings.*.match.channel");
+    expect(requireEntry(byPath, "bindings.*.match.peer.id").path).toBe("bindings.*.match.peer.id");
   });
 
   it("supports check mode for stale hash files", async () => {

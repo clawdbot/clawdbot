@@ -157,6 +157,43 @@ function mockMatrixQaRoomClient(params: {
   return { primeRoom, sendTextMessage, waitForRoomEvent };
 }
 
+type MockCallSource = {
+  mock: {
+    calls: ArrayLike<ReadonlyArray<unknown>>;
+  };
+};
+
+function mockObjectArg(source: MockCallSource, label: string, callIndex = 0, argIndex = 0) {
+  const arg = source.mock.calls[callIndex]?.[argIndex];
+  if (!arg || typeof arg !== "object") {
+    throw new Error(`expected ${label} object arg`);
+  }
+  return arg as Record<string, unknown>;
+}
+
+function expectSentTextMessage(
+  source: MockCallSource,
+  expected: {
+    bodyIncludes: string | string[];
+    mentionUserIds?: string[];
+    roomId: string;
+    callIndex?: number;
+  },
+) {
+  const params = mockObjectArg(source, "sendTextMessage", expected.callIndex);
+  const body = String(params.body);
+  for (const needle of Array.isArray(expected.bodyIncludes)
+    ? expected.bodyIncludes
+    : [expected.bodyIncludes]) {
+    expect(body.includes(needle), needle).toBe(true);
+  }
+  expect(params.roomId).toBe(expected.roomId);
+  if (expected.mentionUserIds) {
+    expect(params.mentionUserIds).toEqual(expected.mentionUserIds);
+  }
+  return params;
+}
+
 function mockMatrixQaCliAccount(params: {
   accessToken: string;
   deviceId: string;
@@ -1144,8 +1181,8 @@ describe("matrix live qa scenarios", () => {
       accessToken: "observer-token",
       baseUrl: "http://127.0.0.1:28008/",
     });
-    expect(sendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("@sut:matrix-qa.test reply with only this exact marker:"),
+    expectSentTextMessage(sendTextMessage, {
+      bodyIncludes: "@sut:matrix-qa.test reply with only this exact marker:",
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!room:matrix-qa.test",
     });
@@ -1191,8 +1228,8 @@ describe("matrix live qa scenarios", () => {
       accessToken: "observer-token",
       baseUrl: "http://127.0.0.1:28008/",
     });
-    expect(sendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("@sut:matrix-qa.test reply with only this exact marker:"),
+    expectSentTextMessage(sendTextMessage, {
+      bodyIncludes: "@sut:matrix-qa.test reply with only this exact marker:",
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!main:matrix-qa.test",
     });
@@ -1221,8 +1258,8 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.actorUserId).toBe("@observer:matrix-qa.test");
     expect(artifacts.driverEventId).toBe("$observer-bot-unmentioned");
 
-    expect(sendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("reply with only this exact marker:"),
+    expectSentTextMessage(sendTextMessage, {
+      bodyIncludes: "reply with only this exact marker:",
       roomId: "!main:matrix-qa.test",
     });
   });
@@ -1262,8 +1299,8 @@ describe("matrix live qa scenarios", () => {
       baseUrl: "http://127.0.0.1:28008/",
     });
     expect(observerSendTextMessage).not.toHaveBeenCalled();
-    expect(sutSendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("reply with only this exact marker:"),
+    expectSentTextMessage(sutSendTextMessage, {
+      bodyIncludes: "reply with only this exact marker:",
       roomId: "!main:matrix-qa.test",
     });
   });
@@ -1992,10 +2029,8 @@ describe("matrix live qa scenarios", () => {
       expect(waitGatewayAccountReady).toHaveBeenCalledWith("sync-state-loss-gateway", {
         timeoutMs: 8_000,
       });
-      expect(sendTextMessage).toHaveBeenCalledWith({
-        body: expect.stringContaining(
-          "@sync-gateway:matrix-qa.test reply with only this exact marker:",
-        ),
+      expectSentTextMessage(sendTextMessage, {
+        bodyIncludes: "@sync-gateway:matrix-qa.test reply with only this exact marker:",
         mentionUserIds: ["@sync-gateway:matrix-qa.test"],
         roomId: "!recovery:matrix-qa.test",
       });
@@ -2331,8 +2366,8 @@ describe("matrix live qa scenarios", () => {
     const artifacts = result.artifacts as { actorUserId?: unknown };
     expect(artifacts.actorUserId).toBe("@driver:matrix-qa.test");
 
-    expect(sendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("reply with only this exact marker:"),
+    expectSentTextMessage(sendTextMessage, {
+      bodyIncludes: "reply with only this exact marker:",
       roomId: "!dm:matrix-qa.test",
     });
     expect(waitForRoomEvent.mock.calls[0]?.[0]?.roomId).toBe("!dm:matrix-qa.test");
@@ -2474,13 +2509,8 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.subagentIntro?.eventId).toBe("$subagent-thread-root");
     expect(artifacts.threadRootEventId).toBe("$subagent-thread-root");
 
-    expect(sendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("Call sessions_spawn now for this QA check"),
-      mentionUserIds: ["@sut:matrix-qa.test"],
-      roomId: "!main:matrix-qa.test",
-    });
-    expect(sendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("runTimeoutSeconds=60"),
+    expectSentTextMessage(sendTextMessage, {
+      bodyIncludes: ["Call sessions_spawn now for this QA check", "runTimeoutSeconds=60"],
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!main:matrix-qa.test",
     });
@@ -2642,8 +2672,8 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.previewEventId).toBe("$quiet-preview");
     expect(artifacts.reply?.eventId).toBe("$quiet-final");
 
-    expect(sendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("Quiet streaming QA check"),
+    expectSentTextMessage(sendTextMessage, {
+      bodyIncludes: "Quiet streaming QA check",
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!main:matrix-qa.test",
     });
@@ -2698,8 +2728,8 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.previewEventId).toBe("$partial-preview");
     expect(artifacts.reply?.eventId).toBe("$partial-final");
 
-    expect(sendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("Partial streaming QA check"),
+    expectSentTextMessage(sendTextMessage, {
+      bodyIncludes: "Partial streaming QA check",
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!main:matrix-qa.test",
     });
@@ -3006,8 +3036,8 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.reply?.relatesTo?.relType).toBe("m.replace");
 
     expect(waitForRoomEvent.mock.calls[0]?.[0].predicate(progressEvent)).toBe(true);
-    expect(sendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("Tool progress error QA check"),
+    expectSentTextMessage(sendTextMessage, {
+      bodyIncludes: "Tool progress error QA check",
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!main:matrix-qa.test",
     });
@@ -3215,8 +3245,8 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.blockEventIds).toEqual(["$block-one", "$block-two"]);
     expect(artifacts.driverEventId).toBe("$block-stream-trigger");
 
-    expect(sendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("Block streaming QA check"),
+    expectSentTextMessage(sendTextMessage, {
+      bodyIncludes: "Block streaming QA check",
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!block:matrix-qa.test",
     });
@@ -3403,8 +3433,8 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.attachmentMsgtype).toBe("m.image");
     expect(artifacts.driverEventId).toBe("$image-generate-trigger");
 
-    expect(sendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("/tool image_generate action=generate"),
+    expectSentTextMessage(sendTextMessage, {
+      bodyIncludes: "/tool image_generate action=generate",
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!media:matrix-qa.test",
     });
@@ -3741,12 +3771,12 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.noticeEventId).toBe("$shared-notice");
     expect(artifacts.roomKey).toBe(scenarioTesting.MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY);
 
-    expect(sendPrimaryTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("reply with only this exact marker:"),
+    expectSentTextMessage(sendPrimaryTextMessage, {
+      bodyIncludes: "reply with only this exact marker:",
       roomId: "!dm:matrix-qa.test",
     });
-    expect(sendSecondaryTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("reply with only this exact marker:"),
+    expectSentTextMessage(sendSecondaryTextMessage, {
+      bodyIncludes: "reply with only this exact marker:",
       roomId: "!dm-shared:matrix-qa.test",
     });
     expect(waitSecondaryNotice.mock.calls[0]?.[0]?.roomId).toBe("!dm-shared:matrix-qa.test");
@@ -3925,12 +3955,14 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.joinedRoomId).toBe("!autojoin:matrix-qa.test");
     expect(artifacts.membershipJoinEventId).toBe("$autojoin-join");
 
-    expect(createPrivateRoom).toHaveBeenCalledWith({
-      inviteUserIds: ["@observer:matrix-qa.test", "@sut:matrix-qa.test"],
-      name: expect.stringContaining("Matrix QA AutoJoin"),
-    });
-    expect(sendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("@sut:matrix-qa.test reply with only this exact marker:"),
+    const privateRoomParams = mockObjectArg(createPrivateRoom, "createPrivateRoom");
+    expect(privateRoomParams.inviteUserIds).toEqual([
+      "@observer:matrix-qa.test",
+      "@sut:matrix-qa.test",
+    ]);
+    expect(String(privateRoomParams.name)).toContain("Matrix QA AutoJoin");
+    expectSentTextMessage(sendTextMessage, {
+      bodyIncludes: "@sut:matrix-qa.test reply with only this exact marker:",
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!autojoin:matrix-qa.test",
     });
@@ -4011,8 +4043,8 @@ describe("matrix live qa scenarios", () => {
     const artifacts = result.artifacts as { actorUserId?: unknown };
     expect(artifacts.actorUserId).toBe("@driver:matrix-qa.test");
 
-    expect(sendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("@sut:matrix-qa.test"),
+    expectSentTextMessage(sendTextMessage, {
+      bodyIncludes: "@sut:matrix-qa.test",
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!secondary:matrix-qa.test",
     });

@@ -9,6 +9,14 @@ import type { ReplyThreadingPolicy } from "./types.js";
 /** Valid message channels for routing. */
 export type OriginatingChannelType = string & { readonly __originatingChannelBrand?: never };
 
+export type MentionSource =
+  | "explicit_bot"
+  | "subteam"
+  | "mention_pattern"
+  | "implicit_thread"
+  | "command_bypass"
+  | "none";
+
 type StickerContextMetadata = {
   cachedDescription?: string;
   emoji?: string;
@@ -95,6 +103,7 @@ export type MsgContext = {
   /** Provider-specific full reply-to id when ReplyToId is a shortened alias. */
   ReplyToIdFull?: string;
   ReplyToBody?: string;
+  ReplyToQuoteText?: string;
   ReplyToSender?: string;
   ReplyChain?: Array<{
     messageId?: string;
@@ -206,6 +215,16 @@ export type MsgContext = {
   /** Platform bot username when command mentions should be normalized. */
   BotUsername?: string;
   WasMentioned?: boolean;
+  /** True when this turn explicitly mentioned the current bot target. */
+  ExplicitlyMentionedBot?: boolean;
+  /** Provider-native explicit user mention ids present on this turn. */
+  MentionedUserIds?: string[];
+  /** Provider-native explicit user-group/subteam mention ids present on this turn. */
+  MentionedSubteamIds?: string[];
+  /** Provider-native implicit mention wake reasons present on this turn. */
+  ImplicitMentionKinds?: string[];
+  /** Provider-native source that caused the current mention decision. */
+  MentionSource?: MentionSource;
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";
   CommandTargetSessionKey?: string;

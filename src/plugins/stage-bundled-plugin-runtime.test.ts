@@ -331,10 +331,11 @@ describe("stageBundledPluginRuntime", () => {
     ]);
 
     const match = commandsModule.matchPluginCommand("/pair now");
-    expect(match).toEqual(expect.objectContaining({ args: "now" }));
     if (match === null) {
       throw new Error("Expected plugin command match");
     }
+    expect(match.args).toBe("now");
+    expect(typeof match.command.handler).toBe("function");
     await expect(
       commandsModule.executePluginCommand({
         command: match.command,

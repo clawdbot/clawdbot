@@ -9,6 +9,11 @@ export type {
   ImagesDescriptionRequest,
   ImagesDescriptionResult,
   MediaUnderstandingProvider,
+  StructuredExtractionImageInput,
+  StructuredExtractionInput,
+  StructuredExtractionRequest,
+  StructuredExtractionResult,
+  StructuredExtractionTextInput,
   VideoDescriptionRequest,
   VideoDescriptionResult,
 } from "../media-understanding/types.js";

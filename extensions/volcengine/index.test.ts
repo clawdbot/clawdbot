@@ -17,26 +17,24 @@ describe("volcengine plugin", () => {
       entries: [],
     } as never);
 
-    expect(entries).toContainEqual(
-      expect.objectContaining({
+    expect(entries).toEqual([
+      ...DOUBAO_MODEL_CATALOG.map((entry) => ({
         provider: "volcengine",
-        id: DOUBAO_MODEL_CATALOG[0].id,
-        name: DOUBAO_MODEL_CATALOG[0].name,
-        reasoning: DOUBAO_MODEL_CATALOG[0].reasoning,
-        input: [...DOUBAO_MODEL_CATALOG[0].input],
-        contextWindow: DOUBAO_MODEL_CATALOG[0].contextWindow,
-      }),
-    );
-    expect(entries).toContainEqual(
-      expect.objectContaining({
+        id: entry.id,
+        name: entry.name,
+        reasoning: entry.reasoning,
+        input: [...entry.input],
+        contextWindow: entry.contextWindow,
+      })),
+      ...DOUBAO_CODING_MODEL_CATALOG.map((entry) => ({
         provider: "volcengine-plan",
-        id: DOUBAO_CODING_MODEL_CATALOG[0].id,
-        name: DOUBAO_CODING_MODEL_CATALOG[0].name,
-        reasoning: DOUBAO_CODING_MODEL_CATALOG[0].reasoning,
-        input: [...DOUBAO_CODING_MODEL_CATALOG[0].input],
-        contextWindow: DOUBAO_CODING_MODEL_CATALOG[0].contextWindow,
-      }),
-    );
+        id: entry.id,
+        name: entry.name,
+        reasoning: entry.reasoning,
+        input: [...entry.input],
+        contextWindow: entry.contextWindow,
+      })),
+    ]);
   });
 
   it("declares its coding provider auth alias in the manifest", () => {

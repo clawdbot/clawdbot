@@ -17,12 +17,14 @@ function normalizeTokenProfileName(raw: string): string {
   return slug || DEFAULT_TOKEN_PROFILE_NAME;
 }
 
+/** @deprecated Provider-owned setup helper; do not use from third-party plugins. */
 export function buildTokenProfileId(params: { provider: string; name: string }): string {
   const provider = normalizeProviderId(params.provider);
   const name = normalizeTokenProfileName(params.name);
   return `${provider}:${name}`;
 }
 
+/** @deprecated Anthropic provider-owned setup helper; do not use from third-party plugins. */
 export function validateAnthropicSetupToken(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) {

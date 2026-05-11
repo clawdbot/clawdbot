@@ -35,6 +35,19 @@ async function readTimeline(path: string) {
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
+function eventRecord(events: Record<string, unknown>[], index: number): Record<string, unknown> {
+  const event = events[index];
+  expect(event).toBeTruthy();
+  return event;
+}
+
+function attributesRecord(event: Record<string, unknown>): Record<string, unknown> {
+  expect(event.attributes).toBeTruthy();
+  expect(typeof event.attributes).toBe("object");
+  expect(Array.isArray(event.attributes)).toBe(false);
+  return event.attributes as Record<string, unknown>;
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
@@ -122,21 +135,18 @@ describe("diagnostics timeline", () => {
     );
 
     const [event] = await readTimeline(path);
-    expect(event).toMatchObject({
-      schemaVersion: "openclaw.diagnostics.v1",
-      type: "mark",
-      name: "gateway.ready",
-      runId: "run-1",
-      envName: "env-1",
-      phase: "startup",
-      attributes: {
-        ok: true,
-        count: 2,
-      },
-    });
+    expect(event?.schemaVersion).toBe("openclaw.diagnostics.v1");
+    expect(event?.type).toBe("mark");
+    expect(event?.name).toBe("gateway.ready");
+    expect(event?.runId).toBe("run-1");
+    expect(event?.envName).toBe("env-1");
+    expect(event?.phase).toBe("startup");
+    const attributes = attributesRecord(event ?? {});
+    expect(attributes.ok).toBe(true);
+    expect(attributes.count).toBe(2);
     expect(event?.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u);
     expect(event?.pid).toBe(process.pid);
-    expect((event?.attributes as Record<string, unknown>).ignored).toBeUndefined();
+    expect(attributes.ignored).toBeUndefined();
   });
 
   it("records span start and end events around successful work", async () => {
@@ -155,20 +165,18 @@ describe("diagnostics timeline", () => {
 
     const events = await readTimeline(path);
     expect(events).toHaveLength(2);
-    expect(events[0]).toMatchObject({
-      type: "span.start",
-      name: "runtimeDeps.stage",
-      phase: "startup",
-      attributes: { pluginCount: 3 },
-    });
-    expect(events[1]).toMatchObject({
-      type: "span.end",
-      name: "runtimeDeps.stage",
-      phase: "startup",
-      attributes: { pluginCount: 3 },
-    });
-    expect(events[1]?.spanId).toBe(events[0]?.spanId);
-    expect(events[1]?.durationMs).toBeGreaterThanOrEqual(0);
+    const start = eventRecord(events, 0);
+    const end = eventRecord(events, 1);
+    expect(start.type).toBe("span.start");
+    expect(start.name).toBe("runtimeDeps.stage");
+    expect(start.phase).toBe("startup");
+    expect(attributesRecord(start).pluginCount).toBe(3);
+    expect(end.type).toBe("span.end");
+    expect(end.name).toBe("runtimeDeps.stage");
+    expect(end.phase).toBe("startup");
+    expect(attributesRecord(end).pluginCount).toBe(3);
+    expect(end.spanId).toBe(start.spanId);
+    expect(end.durationMs).toBeGreaterThanOrEqual(0);
   });
 
   it("records span error events and rethrows failures", async () => {
@@ -186,13 +194,12 @@ describe("diagnostics timeline", () => {
 
     const events = await readTimeline(path);
     expect(events).toHaveLength(2);
-    expect(events[1]).toMatchObject({
-      type: "span.error",
-      name: "plugins.load",
-      phase: "startup",
-      errorName: "TypeError",
-      errorMessage: "bad plugin",
-    });
+    const errorEvent = eventRecord(events, 1);
+    expect(errorEvent.type).toBe("span.error");
+    expect(errorEvent.name).toBe("plugins.load");
+    expect(errorEvent.phase).toBe("startup");
+    expect(errorEvent.errorName).toBe("TypeError");
+    expect(errorEvent.errorMessage).toBe("bad plugin");
   });
 
   it("records synchronous spans", async () => {
@@ -206,14 +213,12 @@ describe("diagnostics timeline", () => {
     expect(result).toBe(42);
     const events = await readTimeline(path);
     expect(events).toHaveLength(2);
-    expect(events[0]).toMatchObject({
-      type: "span.start",
-      name: "plugins.metadata.scan",
-    });
-    expect(events[1]).toMatchObject({
-      type: "span.end",
-      name: "plugins.metadata.scan",
-    });
+    const start = eventRecord(events, 0);
+    const end = eventRecord(events, 1);
+    expect(start.type).toBe("span.start");
+    expect(start.name).toBe("plugins.metadata.scan");
+    expect(end.type).toBe("span.end");
+    expect(end.name).toBe("plugins.metadata.scan");
   });
 
   it("lets nested spans inherit the active timeline phase and parent span", async () => {
@@ -235,27 +240,19 @@ describe("diagnostics timeline", () => {
     const events = await readTimeline(path);
     expect(events).toHaveLength(4);
     const [parentStart, childStart, childEnd, parentEnd] = events;
-    expect(parentStart).toMatchObject({
-      type: "span.start",
-      name: "reply.run_agent_turn",
-      phase: "agent-turn",
-    });
-    expect(childStart).toMatchObject({
-      type: "span.start",
-      name: "plugins.metadata.scan",
-      phase: "agent-turn",
-      parentSpanId: parentStart?.spanId,
-    });
-    expect(childEnd).toMatchObject({
-      type: "span.end",
-      name: "plugins.metadata.scan",
-      phase: "agent-turn",
-      parentSpanId: parentStart?.spanId,
-    });
-    expect(parentEnd).toMatchObject({
-      type: "span.end",
-      name: "reply.run_agent_turn",
-      phase: "agent-turn",
-    });
+    expect(parentStart?.type).toBe("span.start");
+    expect(parentStart?.name).toBe("reply.run_agent_turn");
+    expect(parentStart?.phase).toBe("agent-turn");
+    expect(childStart?.type).toBe("span.start");
+    expect(childStart?.name).toBe("plugins.metadata.scan");
+    expect(childStart?.phase).toBe("agent-turn");
+    expect(childStart?.parentSpanId).toBe(parentStart?.spanId);
+    expect(childEnd?.type).toBe("span.end");
+    expect(childEnd?.name).toBe("plugins.metadata.scan");
+    expect(childEnd?.phase).toBe("agent-turn");
+    expect(childEnd?.parentSpanId).toBe(parentStart?.spanId);
+    expect(parentEnd?.type).toBe("span.end");
+    expect(parentEnd?.name).toBe("reply.run_agent_turn");
+    expect(parentEnd?.phase).toBe("agent-turn");
   });
 });

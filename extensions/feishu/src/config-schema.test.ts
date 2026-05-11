@@ -259,11 +259,16 @@ describe("FeishuConfigSchema TTS overrides", () => {
       },
     });
 
-    expect(result.tts).toMatchObject({
+    expect(result.tts).toEqual({
       auto: "always",
       provider: "openai",
+      providers: {
+        openai: {
+          voice: "alloy",
+        },
+      },
     });
-    expect(result.accounts?.english?.tts).toMatchObject({
+    expect(result.accounts?.english?.tts).toEqual({
       providers: {
         openai: {
           voice: "shimmer",

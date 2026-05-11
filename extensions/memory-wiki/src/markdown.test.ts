@@ -109,41 +109,41 @@ describe("toWikiPageSummary", () => {
       relativePath: "entities/brad.md",
       raw,
     });
+    expect(summary).not.toBeNull();
+    if (!summary) {
+      throw new Error("expected wiki summary");
+    }
 
-    expect(summary).toEqual(
-      expect.objectContaining({
-        entityType: "person",
-        canonicalId: "maintainer.brad-groux",
-        aliases: ["brad", "bgroux"],
+    expect(summary.entityType).toBe("person");
+    expect(summary.canonicalId).toBe("maintainer.brad-groux");
+    expect(summary.aliases).toEqual(["brad", "bgroux"]);
+    expect(summary.privacyTier).toBe("local-private");
+    expect(summary.bestUsedFor).toEqual(["Microsoft ecosystem routing"]);
+    expect(summary.notEnoughFor).toEqual(["legal approval"]);
+    expect(summary.lastRefreshedAt).toBe("2026-04-29T00:00:00.000Z");
+    expect(summary.personCard?.handles).toEqual(["@bgroux"]);
+    expect(summary.personCard?.emails).toEqual(["brad@example.com"]);
+    expect(summary.personCard?.lane).toBe("Microsoft Teams");
+    expect(summary.personCard?.privacyTier).toBe("confirm-before-use");
+    expect(summary.relationships).toEqual([
+      {
+        targetId: "entity.alice",
+        targetTitle: "Alice",
+        kind: "collaborates-with",
+        weight: 0.7,
+        confidence: 0.6,
+        evidenceKind: "discrawl-stat",
         privacyTier: "local-private",
-        bestUsedFor: ["Microsoft ecosystem routing"],
-        notEnoughFor: ["legal approval"],
-        lastRefreshedAt: "2026-04-29T00:00:00.000Z",
-        personCard: expect.objectContaining({
-          handles: ["@bgroux"],
-          emails: ["brad@example.com"],
-          lane: "Microsoft Teams",
-          privacyTier: "confirm-before-use",
-        }),
-        relationships: [
-          expect.objectContaining({
-            targetId: "entity.alice",
-            kind: "collaborates-with",
-            evidenceKind: "discrawl-stat",
-          }),
-        ],
-        claims: [
-          expect.objectContaining({
-            id: "claim.brad.teams",
-            evidence: [
-              expect.objectContaining({
-                kind: "maintainer-whois",
-                privacyTier: "local-private",
-              }),
-            ],
-          }),
-        ],
-      }),
-    );
+      },
+    ]);
+    expect(summary.claims[0]?.id).toBe("claim.brad.teams");
+    expect(summary.claims[0]?.evidence).toEqual([
+      {
+        kind: "maintainer-whois",
+        sourceId: "source.maintainers",
+        confidence: 0.8,
+        privacyTier: "local-private",
+      },
+    ]);
   });
 });

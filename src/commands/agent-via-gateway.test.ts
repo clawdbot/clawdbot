@@ -102,6 +102,11 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function mockMessages(mock: unknown): string[] {
+  const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls ?? [];
+  return calls.map(([message]) => String(message));
+}
+
 function createGatewayTimeoutError() {
   const err = new Error("gateway timeout after 90000ms");
   err.name = "GatewayTransportError";
@@ -169,13 +174,9 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      const request = requireFirstCallArg(callGateway, "gateway") as {
-        params?: Record<string, unknown>;
-      };
-      expect(request).toMatchObject({
-        clientName: "cli",
-        mode: "cli",
-      });
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      expect(request.clientName).toBe("cli");
+      expect(request.mode).toBe("cli");
       expect(request).not.toHaveProperty("scopes");
       expect(request.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
       expect(agentCommand).not.toHaveBeenCalled();
@@ -227,11 +228,9 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
-      expect(request).toMatchObject({
-        clientName: "gateway-client",
-        mode: "backend",
-        scopes: ["operator.admin"],
-      });
+      expect(request.clientName).toBe("gateway-client");
+      expect(request.mode).toBe("backend");
+      expect(request.scopes).toEqual(["operator.admin"]);
       const params = requireRecord(request.params, "gateway request params");
       expect(params.model).toBe("ollama/qwen3.5:9b");
     });
@@ -259,6 +258,39 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("promotes gateway deliveryStatus to the top-level JSON response", async () => {
+    await withTempStore(async () => {
+      const deliveryStatus = {
+        requested: true,
+        attempted: true,
+        status: "sent",
+        succeeded: true,
+        resultCount: 1,
+      };
+      const response = {
+        runId: "idem-1",
+        status: "ok",
+        result: {
+          payloads: [{ text: "hello" }],
+          meta: { stub: true },
+          deliveryStatus,
+        },
+      };
+      callGateway.mockResolvedValue(response);
+
+      await agentCliCommand({ message: "hi", to: "+1555", json: true, deliver: true }, jsonRuntime);
+
+      expect(jsonRuntime.writeJson).toHaveBeenCalledWith(
+        {
+          ...response,
+          deliveryStatus,
+        },
+        2,
+      );
+      expect(jsonRuntime.log).not.toHaveBeenCalled();
+    });
+  });
+
   it("falls back to embedded agent when gateway fails", async () => {
     await withTempStore(async () => {
       callGateway.mockRejectedValue(createGatewayClosedError());
@@ -278,9 +310,11 @@ describe("agentCliCommand", () => {
       );
       expect(resultMetaOverrides.transport).toBe("embedded");
       expect(resultMetaOverrides.fallbackFrom).toBe("gateway");
-      expect(runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining("EMBEDDED FALLBACK: Gateway agent failed"),
-      );
+      expect(
+        mockMessages(runtime.error).some((message) =>
+          message.includes("EMBEDDED FALLBACK: Gateway agent failed"),
+        ),
+      ).toBe(true);
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
   });
@@ -300,7 +334,9 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(agentCommand).not.toHaveBeenCalled();
-      expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("EMBEDDED FALLBACK"));
+      expect(
+        mockMessages(runtime.error).some((message) => message.includes("EMBEDDED FALLBACK")),
+      ).toBe(false);
     });
   });
 
@@ -339,11 +375,11 @@ describe("agentCliCommand", () => {
       expect(resultMetaOverrides.fallbackReason).toBe("gateway_timeout");
       expect(resultMetaOverrides.fallbackSessionId).toBe(fallbackSessionId);
       expect(resultMetaOverrides.fallbackSessionKey).toBe(fallbackSessionKey);
-      expect(runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "Gateway agent timed out; running embedded agent with fresh session",
+      expect(
+        mockMessages(runtime.error).some((message) =>
+          message.includes("Gateway agent timed out; running embedded agent with fresh session"),
         ),
-      );
+      ).toBe(true);
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
   });
@@ -417,9 +453,11 @@ describe("agentCliCommand", () => {
       );
       expect(resultMetaOverrides.transport).toBe("embedded");
       expect(resultMetaOverrides.fallbackFrom).toBe("gateway");
-      expect(jsonRuntime.error).toHaveBeenCalledWith(
-        expect.stringContaining("EMBEDDED FALLBACK: Gateway agent failed"),
-      );
+      expect(
+        mockMessages(jsonRuntime.error).some((message) =>
+          message.includes("EMBEDDED FALLBACK: Gateway agent failed"),
+        ),
+      ).toBe(true);
       expect(loggingState.forceConsoleToStderr).toBe(true);
       expect(jsonRuntime.log).toHaveBeenCalledTimes(1);
       const jsonPayload = requireFirstCallArg(jsonRuntime.log, "json runtime log");

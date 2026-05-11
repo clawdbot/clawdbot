@@ -33,34 +33,32 @@ function collectLegacyExtendedLevelIds(levels: readonly { id: string }[] | undef
   return ids;
 }
 
+function levelIds(levels: readonly { id: string }[] | undefined): string[] {
+  return (levels ?? []).map((level) => level.id);
+}
+
 describe("anthropic provider policy public artifact", () => {
   it("normalizes Anthropic provider config", () => {
-    expect(
-      normalizeConfig({
-        provider: "anthropic",
-        providerConfig: {
-          baseUrl: "https://api.anthropic.com",
-          models: [createModel("claude-sonnet-4-6", "Claude Sonnet 4.6")],
-        },
-      }),
-    ).toMatchObject({
-      api: "anthropic-messages",
-      baseUrl: "https://api.anthropic.com",
+    const normalized = normalizeConfig({
+      provider: "anthropic",
+      providerConfig: {
+        baseUrl: "https://api.anthropic.com",
+        models: [createModel("claude-sonnet-4-6", "Claude Sonnet 4.6")],
+      },
     });
+    expect(normalized.api).toBe("anthropic-messages");
+    expect(normalized.baseUrl).toBe("https://api.anthropic.com");
   });
 
   it("normalizes Claude CLI provider config", () => {
-    expect(
-      normalizeConfig({
-        provider: "claude-cli",
-        providerConfig: {
-          baseUrl: "https://api.anthropic.com",
-          models: [createModel("claude-sonnet-4-6", "Claude Sonnet 4.6")],
-        },
-      }),
-    ).toMatchObject({
-      api: "anthropic-messages",
+    const normalized = normalizeConfig({
+      provider: "claude-cli",
+      providerConfig: {
+        baseUrl: "https://api.anthropic.com",
+        models: [createModel("claude-sonnet-4-6", "Claude Sonnet 4.6")],
+      },
     });
+    expect(normalized.api).toBe("anthropic-messages");
   });
 
   it("does not normalize non-Anthropic provider config", () => {
@@ -96,22 +94,20 @@ describe("anthropic provider policy public artifact", () => {
       env: {},
     });
 
-    expect(nextConfig.agents?.defaults?.contextPruning).toMatchObject({
-      mode: "cache-ttl",
-      ttl: "1h",
-    });
+    expect(nextConfig.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
+    expect(nextConfig.agents?.defaults?.contextPruning?.ttl).toBe("1h");
   });
 
   it("exposes Claude Opus 4.7 thinking levels without loading the full provider plugin", () => {
-    expect(
-      resolveThinkingProfile({
-        provider: "anthropic",
-        modelId: "claude-opus-4-7",
-      }),
-    ).toMatchObject({
-      levels: expect.arrayContaining([{ id: "xhigh" }, { id: "adaptive" }, { id: "max" }]),
-      defaultLevel: "off",
+    const profile = resolveThinkingProfile({
+      provider: "anthropic",
+      modelId: "claude-opus-4-7",
     });
+    const ids = levelIds(profile?.levels);
+    expect(ids).toContain("xhigh");
+    expect(ids).toContain("adaptive");
+    expect(ids).toContain("max");
+    expect(profile?.defaultLevel).toBe("off");
   });
 
   it("keeps adaptive-only Claude profiles aligned with the runtime provider", () => {
@@ -120,13 +116,11 @@ describe("anthropic provider policy public artifact", () => {
       modelId: "claude-opus-4-6",
     });
 
-    expect(profile).toMatchObject({
-      levels: expect.arrayContaining([{ id: "adaptive" }]),
-      defaultLevel: "adaptive",
-    });
     if (!profile) {
       throw new Error("Expected Anthropic policy profile");
     }
+    expect(levelIds(profile.levels)).toContain("adaptive");
+    expect(profile.defaultLevel).toBe("adaptive");
     expect(collectLegacyExtendedLevelIds(profile.levels)).toStrictEqual([]);
   });
 

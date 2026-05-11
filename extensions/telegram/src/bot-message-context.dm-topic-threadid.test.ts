@@ -27,11 +27,13 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     message: Record<string, unknown>;
     options?: Record<string, unknown>;
     resolveGroupActivation?: () => boolean | undefined;
+    sessionRuntime?: Parameters<typeof buildTelegramMessageContextForTest>[0]["sessionRuntime"];
   }) {
     return await buildTelegramMessageContextForTest({
       message: params.message,
       options: params.options,
       resolveGroupActivation: params.resolveGroupActivation,
+      ...(params.sessionRuntime !== undefined ? { sessionRuntime: params.sessionRuntime } : {}),
     });
   }
 
@@ -73,6 +75,51 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     expect(recordInboundSessionMock).toHaveBeenCalled();
 
     expectRecordedRoute({ to: "telegram:1234", threadId: "42" });
+  });
+
+  it("builds Telegram payloads through the shared channel turn context", async () => {
+    const { buildChannelTurnContext } = await import("openclaw/plugin-sdk/channel-inbound");
+    const buildChannelTurnContextMock = vi.fn(buildChannelTurnContext);
+
+    const ctx = await buildCtx({
+      message: {
+        chat: { id: 1234, type: "private" },
+        text: "hello",
+        reply_to_message: {
+          message_id: 9,
+          date: 1_700_000_001,
+          text: "parent",
+          from: { id: 99, first_name: "Bob" },
+        },
+      },
+      sessionRuntime: {
+        buildChannelTurnContext: buildChannelTurnContextMock,
+      },
+    });
+
+    expect(ctx?.ctxPayload.ReplyToBody).toBe("parent");
+    expect(buildChannelTurnContextMock).toHaveBeenCalledOnce();
+    expect(buildChannelTurnContextMock.mock.calls[0]?.[0]).toMatchObject({
+      channel: "telegram",
+      from: "telegram:1234",
+      message: {
+        rawBody: "hello",
+        bodyForAgent: "hello",
+      },
+      reply: {
+        to: "telegram:1234",
+        originatingTo: "telegram:1234",
+        replyToId: "9",
+      },
+      supplemental: {
+        quote: {
+          id: "9",
+          body: "parent",
+          sender: "Bob",
+          senderAllowed: true,
+        },
+      },
+    });
   });
 
   it("does not pass threadId for regular DM without topic", async () => {

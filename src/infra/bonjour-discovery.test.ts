@@ -4,6 +4,19 @@ import { discoverGatewayBeacons } from "./bonjour-discovery.js";
 
 const WIDE_AREA_DOMAIN = "openclaw.internal.";
 
+type BeaconRecord = {
+  domain?: string;
+  instanceName?: string;
+  displayName?: string;
+  host?: string;
+  port?: number;
+  tailnetDns?: string;
+  gatewayPort?: number;
+  sshPort?: number;
+  cliPath?: string;
+  txt?: Record<string, unknown>;
+};
+
 function collectMatching<T, U>(
   items: readonly T[],
   predicate: (item: T) => boolean,
@@ -16,6 +29,12 @@ function collectMatching<T, U>(
     }
   }
   return matches;
+}
+
+function findBeaconByInstance(beacons: readonly BeaconRecord[], instanceName: string) {
+  const beacon = beacons.find((item) => item.instanceName === instanceName);
+  expect(beacon).toBeDefined();
+  return beacon as BeaconRecord;
 }
 
 describe("bonjour-discovery", () => {
@@ -100,22 +119,14 @@ describe("bonjour-discovery", () => {
     });
 
     expect(beacons).toHaveLength(3);
-    expect(beacons).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          instanceName: studioInstance,
-          displayName: "Peter’s Mac Studio",
-        }),
-      ]),
-    );
-    expect(beacons.map((b) => b.domain)).toEqual(
-      expect.arrayContaining(["local.", WIDE_AREA_DOMAIN]),
-    );
+    const studioBeacon = findBeaconByInstance(beacons, studioInstance);
+    expect(studioBeacon.displayName).toBe("Peter’s Mac Studio");
+    expect(beacons.map((b) => b.domain)).toContain("local.");
+    expect(beacons.map((b) => b.domain)).toContain(WIDE_AREA_DOMAIN);
 
     const browseCalls = calls.filter((c) => c.argv[0] === "dns-sd" && c.argv[1] === "-B");
-    expect(browseCalls.map((c) => c.argv[3])).toEqual(
-      expect.arrayContaining(["local.", WIDE_AREA_DOMAIN]),
-    );
+    expect(browseCalls.map((c) => c.argv[3])).toContain("local.");
+    expect(browseCalls.map((c) => c.argv[3])).toContain(WIDE_AREA_DOMAIN);
     expect([...new Set(browseCalls.map((c) => c.timeoutMs))]).toEqual([1234]);
   });
 
@@ -166,16 +177,12 @@ describe("bonjour-discovery", () => {
       run: run as unknown as typeof runCommandWithTimeout,
     });
 
-    expect(beacons).toEqual([
-      expect.objectContaining({
-        domain: "local.",
-        instanceName: "Studio Gateway",
-        displayName: "Peter’s Mac Studio",
-        txt: expect.objectContaining({
-          displayName: "Peter’s Mac Studio",
-        }),
-      }),
-    ]);
+    expect(beacons).toHaveLength(1);
+    const beacon = beacons[0] as BeaconRecord;
+    expect(beacon.domain).toBe("local.");
+    expect(beacon.instanceName).toBe("Studio Gateway");
+    expect(beacon.displayName).toBe("Peter’s Mac Studio");
+    expect(beacon.txt?.displayName).toBe("Peter’s Mac Studio");
   });
 
   it("falls back to tailnet DNS probing for wide-area when split DNS is not configured", async () => {
@@ -269,19 +276,17 @@ describe("bonjour-discovery", () => {
       run: run as unknown as typeof runCommandWithTimeout,
     });
 
-    expect(beacons).toEqual([
-      expect.objectContaining({
-        domain: WIDE_AREA_DOMAIN,
-        instanceName: "studio-gateway",
-        displayName: "Studio",
-        host: `studio.${zone}`,
-        port: 18789,
-        tailnetDns: "peters-mac-studio-1.sheep-coho.ts.net",
-        gatewayPort: 18789,
-        sshPort: 22,
-        cliPath: "/opt/homebrew/bin/openclaw",
-      }),
-    ]);
+    expect(beacons).toHaveLength(1);
+    const beacon = beacons[0] as BeaconRecord;
+    expect(beacon.domain).toBe(WIDE_AREA_DOMAIN);
+    expect(beacon.instanceName).toBe("studio-gateway");
+    expect(beacon.displayName).toBe("Studio");
+    expect(beacon.host).toBe(`studio.${zone}`);
+    expect(beacon.port).toBe(18789);
+    expect(beacon.tailnetDns).toBe("peters-mac-studio-1.sheep-coho.ts.net");
+    expect(beacon.gatewayPort).toBe(18789);
+    expect(beacon.sshPort).toBe(22);
+    expect(beacon.cliPath).toBe("/opt/homebrew/bin/openclaw");
 
     expect(calls.map((c) => c.argv.slice(0, 2).join(" "))).toContain("tailscale status");
     expect(calls.map((c) => c.argv[0])).toContain("dig");
@@ -307,13 +312,13 @@ describe("bonjour-discovery", () => {
       run: run as unknown as typeof runCommandWithTimeout,
     });
 
-    expect(
-      collectMatching(
-        calls,
-        (c) => c[1] === "-B",
-        (c) => c[3],
-      ),
-    ).toEqual(expect.arrayContaining(["local.", "openclaw.internal."]));
+    const browseDomains = collectMatching(
+      calls,
+      (c) => c[1] === "-B",
+      (c) => c[3],
+    );
+    expect(browseDomains).toContain("local.");
+    expect(browseDomains).toContain("openclaw.internal.");
 
     calls.length = 0;
     await discoverGatewayBeacons({

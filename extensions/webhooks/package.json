@@ -11,5 +11,8 @@
     "extensions": [
       "./index.ts"
     ]
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
   }
 }

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
@@ -133,6 +134,68 @@ describe("agents add command", () => {
         "openai:default",
       ]);
     } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("copies portable Codex OAuth profiles without inline token material", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agents-add-oauth-copy-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = root;
+    try {
+      const sourceAgentDir = path.join(root, "main", "agent");
+      const destAgentDir = path.join(root, "work", "agent");
+      const destAuthPath = path.join(destAgentDir, "auth-profiles.json");
+      await fs.mkdir(sourceAgentDir, { recursive: true });
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "openai-codex:default": {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "codex-copy-access-token",
+              refresh: "codex-copy-refresh-token",
+              expires: Date.now() + 60_000,
+              copyToAgents: true,
+            },
+          },
+        },
+        sourceAgentDir,
+      );
+
+      const result = await __testing.copyPortableAuthProfiles({
+        sourceAgentDir,
+        destAuthPath,
+      });
+
+      expect(result).toEqual({ copied: 1, skipped: 0 });
+      const copiedRaw = await fs.readFile(destAuthPath, "utf8");
+      expect(copiedRaw).not.toContain("codex-copy-access-token");
+      expect(copiedRaw).not.toContain("codex-copy-refresh-token");
+      const copied = JSON.parse(copiedRaw) as {
+        profiles: Record<string, Record<string, unknown>>;
+      };
+      const credential = copied.profiles["openai-codex:default"];
+      expect(credential).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+        copyToAgents: true,
+        oauthRef: {
+          source: "openclaw-credentials",
+          provider: "openai-codex",
+          id: expect.any(String),
+        },
+      });
+      expect(credential).not.toHaveProperty("access");
+      expect(credential).not.toHaveProperty("refresh");
+      expect(credential).not.toHaveProperty("idToken");
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
       await fs.rm(root, { recursive: true, force: true });
     }
   });

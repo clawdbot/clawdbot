@@ -6,39 +6,75 @@ read_when:
 title: "Plugin SDK subpaths"
 ---
 
-The plugin SDK is exposed as a set of narrow subpaths under `openclaw/plugin-sdk/`.
-This page catalogs the commonly used subpaths grouped by purpose. The generated
-full list of 200+ subpaths lives in `scripts/lib/plugin-sdk-entrypoints.json`;
-reserved bundled-plugin helper subpaths appear there but are implementation
-detail unless a doc page explicitly promotes them. Maintainers can audit active
-reserved helper subpaths with `pnpm plugins:boundary-report:summary`; unused
-reserved helper exports fail the CI report instead of staying in the public SDK
-as dormant compatibility debt.
+The plugin SDK is exposed as a set of narrow public subpaths under
+`openclaw/plugin-sdk/`. This page catalogs the commonly used subpaths grouped by
+purpose. The generated compiler entrypoint inventory lives in
+`scripts/lib/plugin-sdk-entrypoints.json`; package exports are the public subset
+after subtracting repo-local test/internal subpaths listed in
+`scripts/lib/plugin-sdk-private-local-only-subpaths.json`. Maintainers can audit
+the public export count with `pnpm plugin-sdk:surface` and active reserved
+helper subpaths with `pnpm plugins:boundary-report:summary`; unused reserved
+helper exports fail the CI report instead of staying in the public SDK as
+dormant compatibility debt.
 
 For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview).
 
 ## Plugin entry
 
-| Subpath                                   | Key exports                                                                                                                                                                  |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `plugin-sdk/plugin-entry`                 | `definePluginEntry`                                                                                                                                                          |
-| `plugin-sdk/core`                         | `defineChannelPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `defineSetupPluginEntry`, `buildChannelConfigSchema`, `buildJsonChannelConfigSchema`       |
-| `plugin-sdk/config-schema`                | `OpenClawSchema`                                                                                                                                                             |
-| `plugin-sdk/provider-entry`               | `defineSingleProviderPluginEntry`                                                                                                                                            |
-| `plugin-sdk/testing`                      | Broad compatibility barrel for legacy plugin tests; prefer focused test subpaths for new extension tests                                                                     |
-| `plugin-sdk/plugin-test-api`              | Minimal `OpenClawPluginApi` mock builder for direct plugin registration unit tests                                                                                           |
-| `plugin-sdk/agent-runtime-test-contracts` | Native agent-runtime adapter contract fixtures for auth profiles, delivery suppression, fallback classification, tool hooks, prompt overlays, schemas, and transcript repair |
-| `plugin-sdk/channel-test-helpers`         | Channel account lifecycle, directory, send-config, runtime mock, hook, bundled channel entry, envelope timestamp, pairing reply, and generic channel contract test helpers   |
-| `plugin-sdk/channel-target-testing`       | Shared channel target-resolution error-case test suite                                                                                                                       |
-| `plugin-sdk/plugin-test-contracts`        | Plugin registration, package manifest, public artifact, runtime API, import side-effect, and direct import contract helpers                                                  |
-| `plugin-sdk/plugin-test-runtime`          | Plugin runtime, registry, provider-registration, setup-wizard, and runtime task-flow fixtures for tests                                                                      |
-| `plugin-sdk/provider-test-contracts`      | Provider runtime, auth, discovery, onboard, catalog, media capability, replay policy, realtime STT live-audio, web-search/fetch, and wizard contract helpers                 |
-| `plugin-sdk/provider-http-test-mocks`     | Opt-in Vitest HTTP/auth mocks for provider tests that exercise `plugin-sdk/provider-http`                                                                                    |
-| `plugin-sdk/test-env`                     | Test environment, fetch/network, disposable HTTP server, incoming request, live-test, temporary filesystem, and time-control fixtures                                        |
-| `plugin-sdk/test-fixtures`                | Generic CLI, sandbox, skill, agent-message, system-event, module reload, bundled plugin path, terminal, chunking, auth-token, and typed-case test fixtures                   |
-| `plugin-sdk/test-node-mocks`              | Focused Node builtin mock helpers for use inside Vitest `vi.mock("node:*")` factories                                                                                        |
-| `plugin-sdk/migration`                    | Migration provider item helpers such as `createMigrationItem`, reason constants, item status markers, redaction helpers, and `summarizeMigrationItems`                       |
-| `plugin-sdk/migration-runtime`            | Runtime migration helpers such as `copyMigrationFileItem`, `withCachedMigrationConfigRuntime`, and `writeMigrationReport`                                                    |
+| Subpath                        | Key exports                                                                                                                                                            |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plugin-sdk/plugin-entry`      | `definePluginEntry`                                                                                                                                                    |
+| `plugin-sdk/core`              | `defineChannelPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `defineSetupPluginEntry`, `buildChannelConfigSchema`, `buildJsonChannelConfigSchema` |
+| `plugin-sdk/config-schema`     | `OpenClawSchema`                                                                                                                                                       |
+| `plugin-sdk/provider-entry`    | `defineSingleProviderPluginEntry`                                                                                                                                      |
+| `plugin-sdk/migration`         | Migration provider item helpers such as `createMigrationItem`, reason constants, item status markers, redaction helpers, and `summarizeMigrationItems`                 |
+| `plugin-sdk/migration-runtime` | Runtime migration helpers such as `copyMigrationFileItem`, `withCachedMigrationConfigRuntime`, and `writeMigrationReport`                                              |
+
+### Deprecated compatibility and test helpers
+
+These subpaths remain package exports for older plugins and OpenClaw test suites,
+but new code should not add imports from them: `agent-runtime-test-contracts`,
+`channel-contract-testing`, `channel-target-testing`, `channel-test-helpers`,
+`plugin-test-api`, `plugin-test-contracts`, `provider-http-test-mocks`,
+`provider-test-contracts`, `test-env`, `test-fixtures`, `test-node-mocks`,
+`testing`, `channel-runtime`, `compat`, `config-types`, `infra-runtime`,
+`text-runtime`, and `zod`. Import `zod` directly from `zod` in new plugin code.
+`plugin-test-runtime` is still an active focused test helper subpath.
+
+### Deprecated unused public subpaths
+
+These public subpaths existed for at least one month and currently have no
+bundled extension production imports. They remain importable for compatibility,
+but new plugin code should use focused, actively consumed SDK subpaths instead:
+`agent-config-primitives`, `channel-config-schema-legacy`,
+`channel-reply-pipeline`, `channel-runtime`, `channel-secret-runtime`,
+`command-auth`, `compat`, `config-runtime`, `config-schema`, `discord`,
+`group-access`, `infra-runtime`, `matrix`, `mattermost`,
+`media-generation-runtime-shared`, `memory-core-engine-runtime`,
+`memory-core-host-multimodal`, `memory-core-host-query`,
+`music-generation-core`, `self-hosted-provider-setup`, `telegram-account`,
+`telegram-command-config`, and `zalouser`.
+
+### Deprecated rare public subpaths
+
+Public subpaths currently used by only one or two bundled plugin owners are also
+deprecated for new plugin code. They remain package exports for compatibility,
+but new code should prefer actively shared SDK seams or plugin-owned package
+APIs. Maintainers track the exact set in
+`scripts/lib/plugin-sdk-deprecated-public-subpaths.json` and the current budget
+with `pnpm plugin-sdk:surface`.
+
+### Deprecated broad barrels
+
+These broad re-export barrels remain buildable for OpenClaw source and
+compatibility checks, but new code should prefer focused SDK subpaths:
+`agent-runtime`, `channel-lifecycle`, `channel-runtime`, `cli-runtime`,
+`compat`, `config-types`, `conversation-runtime`, `hook-runtime`,
+`infra-runtime`, `media-runtime`, `plugin-runtime`, `security-runtime`, and
+`text-runtime`. `channel-runtime`, `compat`, `config-types`, `infra-runtime`,
+and `text-runtime` remain package exports only for backwards compatibility; use
+focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
+`text-chunking`, `text-utility-runtime`, and `logging-core` instead.
 
 <AccordionGroup>
   <Accordion title="Channel subpaths">
@@ -50,7 +86,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/channel-setup` | `createOptionalChannelSetupSurface`, `createOptionalChannelSetupAdapter`, `createOptionalChannelSetupWizard`, plus `DEFAULT_ACCOUNT_ID`, `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, `splitSetupEntries` |
     | `plugin-sdk/setup` | Shared setup wizard helpers, allowlist prompts, setup status builders |
     | `plugin-sdk/setup-runtime` | `createPatchedAccountSetupAdapter`, `createEnvPatchedAccountSetupAdapter`, `createSetupInputPresenceValidator`, `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
-    | `plugin-sdk/setup-adapter-runtime` | `createEnvPatchedAccountSetupAdapter` |
+    | `plugin-sdk/setup-adapter-runtime` | Deprecated compatibility alias; use `plugin-sdk/setup-runtime` |
     | `plugin-sdk/setup-tools` | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR` |
     | `plugin-sdk/account-core` | Multi-account config/action-gate helpers, default-account fallback helpers |
     | `plugin-sdk/account-id` | `DEFAULT_ACCOUNT_ID`, account-id normalization helpers |
@@ -121,10 +157,9 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/provider-auth-runtime` | Runtime API-key resolution helpers for provider plugins |
     | `plugin-sdk/provider-auth-api-key` | API-key onboarding/profile-write helpers such as `upsertApiKeyProfile` |
     | `plugin-sdk/provider-auth-result` | Standard OAuth auth-result builder |
-    | `plugin-sdk/provider-auth-login` | Shared interactive login helpers for provider plugins |
     | `plugin-sdk/provider-env-vars` | Provider auth env-var lookup helpers |
     | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile`, `upsertApiKeyProfile`, `writeOAuthCredentials`, deprecated `resolveOpenClawAgentDir` compatibility export |
-    | `plugin-sdk/provider-model-shared` | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and model-id normalization helpers such as `normalizeNativeXaiModelId` |
+    | `plugin-sdk/provider-model-shared` | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and shared model-id normalization helpers |
     | `plugin-sdk/provider-catalog-runtime` | Provider catalog augmentation runtime hook and plugin-provider registry seams for contract tests |
     | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `buildManifestModelProviderConfig`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
     | `plugin-sdk/provider-http` | Generic provider HTTP/endpoint capability helpers, provider HTTP errors, and audio transcription multipart form helpers |
@@ -133,7 +168,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/provider-web-search-config-contract` | Narrow web-search config/credential helpers for providers that do not need plugin-enable wiring |
     | `plugin-sdk/provider-web-search-contract` | Narrow web-search config/credential contract helpers such as `createWebSearchProviderContractFields`, `enablePluginInConfig`, `resolveProviderWebSearchPluginConfig`, and scoped credential setters/getters |
     | `plugin-sdk/provider-web-search` | Web-search provider registration/cache/runtime helpers |
-    | `plugin-sdk/provider-tools` | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, Gemini schema cleanup + diagnostics, and xAI compat helpers such as `resolveXaiModelCompatPatch` / `applyXaiModelCompat` |
+    | `plugin-sdk/provider-tools` | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, and Gemini schema cleanup + diagnostics |
     | `plugin-sdk/provider-usage` | `fetchClaudeUsage` and similar |
     | `plugin-sdk/provider-stream` | `ProviderStreamFamily`, `buildProviderStreamFamilyHooks`, `composeProviderStreamWrappers`, stream wrapper types, and shared Anthropic/Bedrock/DeepSeek V4/Google/Kilocode/Moonshot/OpenAI/OpenRouter/Z.A.I/MiniMax/Copilot wrapper helpers |
     | `plugin-sdk/provider-transport-runtime` | Native provider transport helpers such as guarded fetch, transport message transforms, and writable transport event streams |
@@ -190,12 +225,12 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/process-runtime` | Process exec helpers |
     | `plugin-sdk/cli-runtime` | CLI formatting, wait, version, argument-invocation, and lazy command-group helpers |
     | `plugin-sdk/gateway-runtime` | Gateway client, event-loop-ready client start helper, gateway CLI RPC, gateway protocol errors, and channel-status patch helpers |
-    | `plugin-sdk/config-types` | Type-only config surface for plugin config shapes such as `OpenClawConfig` and channel/provider config types |
+    | `plugin-sdk/config-contracts` | Focused type-only config surface for plugin config shapes such as `OpenClawConfig` and channel/provider config types |
     | `plugin-sdk/plugin-config-runtime` | Runtime plugin-config lookup helpers such as `requireRuntimeConfig`, `resolvePluginConfigObject`, and `resolveLivePluginConfigObject` |
     | `plugin-sdk/config-mutation` | Transactional config mutation helpers such as `mutateConfigFile`, `replaceConfigFile`, and `logConfigUpdated` |
     | `plugin-sdk/runtime-config-snapshot` | Current process config snapshot helpers such as `getRuntimeConfig`, `getRuntimeConfigSnapshot`, and test snapshot setters |
     | `plugin-sdk/telegram-command-config` | Telegram command-name/description normalization and duplicate/conflict checks, even when the bundled Telegram contract surface is unavailable |
-    | `plugin-sdk/text-autolink-runtime` | File-reference autolink detection without the broad text-runtime barrel |
+    | `plugin-sdk/text-autolink-runtime` | File-reference autolink detection without the broad text barrel |
     | `plugin-sdk/approval-runtime` | Exec/plugin approval helpers, approval-capability builders, auth/profile helpers, native routing/runtime helpers, and structured approval display path formatting |
     | `plugin-sdk/reply-runtime` | Shared inbound/reply runtime helpers, chunking, dispatch, heartbeat, reply planner |
     | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch/finalize and conversation-label helpers |
@@ -234,7 +269,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/skill-commands-runtime` | Skill command listing helpers |
     | `plugin-sdk/native-command-registry` | Native command registry/build/serialize helpers |
     | `plugin-sdk/agent-harness` | Experimental trusted-plugin surface for low-level agent harnesses: harness types, active-run steer/abort helpers, OpenClaw tool bridge helpers, runtime-plan tool policy helpers, terminal outcome classification, tool progress formatting/detail helpers, and attempt result utilities |
-    | `plugin-sdk/provider-zai-endpoint` | Z.AI endpoint detection helpers |
+    | `plugin-sdk/provider-zai-endpoint` | Deprecated Z.AI provider-owned endpoint detection facade; use the Z.AI plugin public API |
     | `plugin-sdk/async-lock-runtime` | Process-local async lock helper for small runtime state files |
     | `plugin-sdk/channel-activity-runtime` | Channel activity telemetry helper |
     | `plugin-sdk/concurrency-runtime` | Bounded async task concurrency helper |
@@ -271,8 +306,8 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/media-mime` | Narrow MIME normalization, file-extension mapping, MIME detection, and media-kind helpers |
     | `plugin-sdk/media-store` | Narrow media store helpers such as `saveMediaBuffer` |
     | `plugin-sdk/media-generation-runtime` | Shared media-generation failover helpers, candidate selection, and missing-model messaging |
-    | `plugin-sdk/media-understanding` | Media understanding provider types plus provider-facing image/audio helper exports |
-    | `plugin-sdk/text-runtime` | Shared text/markdown/logging helpers such as assistant-visible-text stripping, markdown render/chunking/table helpers, redaction helpers, directive-tag helpers, and safe-text utilities |
+    | `plugin-sdk/media-understanding` | Media understanding provider types plus provider-facing image/audio/structured-extraction helper exports |
+    | `plugin-sdk/text-chunking` | Text and markdown chunking/render helpers, markdown table conversion, directive-tag stripping, and safe-text utilities |
     | `plugin-sdk/text-chunking` | Outbound text chunking helper |
     | `plugin-sdk/speech` | Speech provider types plus provider-facing directive, registry, validation, OpenAI-compatible TTS builder, and speech helper exports |
     | `plugin-sdk/speech-core` | Shared speech provider types, registry, directive, normalization, and speech helper exports |
@@ -285,19 +320,19 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/video-generation` | Video generation provider/request/result types |
     | `plugin-sdk/video-generation-core` | Shared video-generation types, failover helpers, provider lookup, and model-ref parsing |
     | `plugin-sdk/webhook-targets` | Webhook target registry and route-install helpers |
-    | `plugin-sdk/webhook-path` | Webhook path normalization helpers |
+    | `plugin-sdk/webhook-path` | Deprecated compatibility alias; use `plugin-sdk/webhook-ingress` |
     | `plugin-sdk/web-media` | Shared remote/local media loading helpers |
-    | `plugin-sdk/zod` | Re-exported `zod` for plugin SDK consumers |
-    | `plugin-sdk/testing` | Broad compatibility barrel for legacy plugin tests. New extension tests should import focused SDK subpaths such as `plugin-sdk/agent-runtime-test-contracts`, `plugin-sdk/plugin-test-runtime`, `plugin-sdk/channel-test-helpers`, `plugin-sdk/test-env`, or `plugin-sdk/test-fixtures` instead |
-    | `plugin-sdk/plugin-test-api` | Minimal `createTestPluginApi` helper for direct plugin registration unit tests without importing repo test helper bridges |
-    | `plugin-sdk/agent-runtime-test-contracts` | Native agent-runtime adapter contract fixtures for auth, delivery, fallback, tool-hook, prompt-overlay, schema, and transcript projection tests |
-    | `plugin-sdk/channel-test-helpers` | Channel-oriented test helpers for generic actions/setup/status contracts, directory assertions, account startup lifecycle, send-config threading, runtime mocks, status issues, outbound delivery, and hook registration |
-    | `plugin-sdk/channel-target-testing` | Shared target-resolution error-case suite for channel tests |
-    | `plugin-sdk/plugin-test-contracts` | Plugin package, registration, public artifact, direct import, runtime API, and import side-effect contract helpers |
-    | `plugin-sdk/provider-test-contracts` | Provider runtime, auth, discovery, onboard, catalog, wizard, media capability, replay policy, realtime STT live-audio, web-search/fetch, and stream contract helpers |
-    | `plugin-sdk/provider-http-test-mocks` | Opt-in Vitest HTTP/auth mocks for provider tests that exercise `plugin-sdk/provider-http` |
-    | `plugin-sdk/test-fixtures` | Generic CLI runtime capture, sandbox context, skill writer, agent-message, system-event, module reload, bundled plugin path, terminal-text, chunking, auth-token, and typed-case fixtures |
-    | `plugin-sdk/test-node-mocks` | Focused Node builtin mock helpers for use inside Vitest `vi.mock("node:*")` factories |
+    | `plugin-sdk/zod` | Deprecated compatibility re-export; import `zod` from `zod` directly |
+    | `plugin-sdk/testing` | Repo-local deprecated compatibility barrel for legacy OpenClaw tests. New repo tests should import focused local test subpaths such as `plugin-sdk/agent-runtime-test-contracts`, `plugin-sdk/plugin-test-runtime`, `plugin-sdk/channel-test-helpers`, `plugin-sdk/test-env`, or `plugin-sdk/test-fixtures` instead |
+    | `plugin-sdk/plugin-test-api` | Repo-local minimal `createTestPluginApi` helper for direct plugin registration unit tests without importing repo test helper bridges |
+    | `plugin-sdk/agent-runtime-test-contracts` | Repo-local native agent-runtime adapter contract fixtures for auth, delivery, fallback, tool-hook, prompt-overlay, schema, and transcript projection tests |
+    | `plugin-sdk/channel-test-helpers` | Repo-local channel-oriented test helpers for generic actions/setup/status contracts, directory assertions, account startup lifecycle, send-config threading, runtime mocks, status issues, outbound delivery, and hook registration |
+    | `plugin-sdk/channel-target-testing` | Repo-local shared target-resolution error-case suite for channel tests |
+    | `plugin-sdk/plugin-test-contracts` | Repo-local plugin package, registration, public artifact, direct import, runtime API, and import side-effect contract helpers |
+    | `plugin-sdk/provider-test-contracts` | Repo-local provider runtime, auth, discovery, onboard, catalog, wizard, media capability, replay policy, realtime STT live-audio, web-search/fetch, and stream contract helpers |
+    | `plugin-sdk/provider-http-test-mocks` | Repo-local opt-in Vitest HTTP/auth mocks for provider tests that exercise `plugin-sdk/provider-http` |
+    | `plugin-sdk/test-fixtures` | Repo-local generic CLI runtime capture, sandbox context, skill writer, agent-message, system-event, module reload, bundled plugin path, terminal-text, chunking, auth-token, and typed-case fixtures |
+    | `plugin-sdk/test-node-mocks` | Repo-local focused Node builtin mock helpers for use inside Vitest `vi.mock("node:*")` factories |
   </Accordion>
 
   <Accordion title="Memory subpaths">
@@ -312,17 +347,17 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/memory-core-host-multimodal` | Memory host multimodal helpers |
     | `plugin-sdk/memory-core-host-query` | Memory host query helpers |
     | `plugin-sdk/memory-core-host-secret` | Memory host secret helpers |
-    | `plugin-sdk/memory-core-host-events` | Memory host event journal helpers |
+    | `plugin-sdk/memory-core-host-events` | Deprecated compatibility alias; use `plugin-sdk/memory-host-events` |
     | `plugin-sdk/memory-core-host-status` | Memory host status helpers |
     | `plugin-sdk/memory-core-host-runtime-cli` | Memory host CLI runtime helpers |
     | `plugin-sdk/memory-core-host-runtime-core` | Memory host core runtime helpers |
     | `plugin-sdk/memory-core-host-runtime-files` | Memory host file/runtime helpers |
     | `plugin-sdk/memory-host-core` | Vendor-neutral alias for memory host core runtime helpers |
     | `plugin-sdk/memory-host-events` | Vendor-neutral alias for memory host event journal helpers |
-    | `plugin-sdk/memory-host-files` | Vendor-neutral alias for memory host file/runtime helpers |
+    | `plugin-sdk/memory-host-files` | Deprecated compatibility alias; use `plugin-sdk/memory-core-host-runtime-files` |
     | `plugin-sdk/memory-host-markdown` | Shared managed-markdown helpers for memory-adjacent plugins |
     | `plugin-sdk/memory-host-search` | Active memory runtime facade for search-manager access |
-    | `plugin-sdk/memory-host-status` | Vendor-neutral alias for memory host status helpers |
+    | `plugin-sdk/memory-host-status` | Deprecated compatibility alias; use `plugin-sdk/memory-core-host-status` |
   </Accordion>
 
   <Accordion title="Reserved bundled-helper subpaths">

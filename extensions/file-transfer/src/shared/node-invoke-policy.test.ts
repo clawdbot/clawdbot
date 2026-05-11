@@ -107,6 +107,34 @@ function createCtx(overrides: {
   };
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(typeof value).toBe("object");
+  expect(value).not.toBeNull();
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`${label} was not an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+function expectResultFields(result: unknown, fields: Record<string, unknown>) {
+  expectRecordFields(requireRecord(result, "policy result"), fields);
+}
+
+function requireInvokeParams(
+  invokeNode: ReturnType<typeof vi.fn<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>>,
+  callIndex: number,
+) {
+  const call = (invokeNode.mock.calls as unknown[][])[callIndex]?.[0];
+  const request = requireRecord(call, `invoke call ${callIndex + 1}`);
+  return requireRecord(request.params, `invoke call ${callIndex + 1} params`);
+}
+
 describe("file-transfer node invoke policy", () => {
   it("injects policy-owned limits before invoking the node", async () => {
     const policy = createFileTransferNodeInvokePolicy();
@@ -141,7 +169,7 @@ describe("file-transfer node invoke policy", () => {
 
     const result = await policy.handle(ctx);
 
-    expect(result).toMatchObject({ ok: false, code: "NO_POLICY" });
+    expectResultFields(result, { ok: false, code: "NO_POLICY" });
     expect(invokeNode).not.toHaveBeenCalled();
   });
 
@@ -167,13 +195,13 @@ describe("file-transfer node invoke policy", () => {
     const result = await policy.handle(ctx);
 
     expect(result.ok).toBe(true);
-    expect(approvals.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        title: "Read file: /tmp/new.txt",
-        severity: "info",
-        toolName: "file.fetch",
-      }),
-    );
+    const approvalCalls = approvals.request.mock.calls as unknown[][];
+    const approvalRequest = requireRecord(approvalCalls[0]?.[0], "approval request");
+    expectRecordFields(approvalRequest, {
+      title: "Read file: /tmp/new.txt",
+      severity: "info",
+      toolName: "file.fetch",
+    });
     expect(invokeNode).toHaveBeenNthCalledWith(1, {
       params: {
         path: "/tmp/new.txt",
@@ -205,7 +233,7 @@ describe("file-transfer node invoke policy", () => {
 
     const result = await policy.handle(ctx);
 
-    expect(result).toMatchObject({
+    expectResultFields(result, {
       ok: false,
       code: "TIMEOUT",
       unavailable: true,
@@ -230,14 +258,12 @@ describe("file-transfer node invoke policy", () => {
 
     const result = await policy.handle(ctx);
 
-    expect(result).toMatchObject({ ok: false, code: "SYMLINK_TARGET_DENIED" });
+    expectResultFields(result, { ok: false, code: "SYMLINK_TARGET_DENIED" });
     expect(invokeNode).toHaveBeenCalledTimes(1);
-    expect(invokeNode).toHaveBeenCalledWith({
-      params: expect.objectContaining({
-        path: "/tmp/link.txt",
-        followSymlinks: false,
-        preflightOnly: true,
-      }),
+    expectRecordFields(requireInvokeParams(invokeNode, 0), {
+      path: "/tmp/link.txt",
+      followSymlinks: false,
+      preflightOnly: true,
     });
   });
 
@@ -249,14 +275,13 @@ describe("file-transfer node invoke policy", () => {
 
     const result = await policy.handle(ctx);
 
-    expect(result).toMatchObject({ ok: true });
+    expectResultFields(result, { ok: true });
     expect(invokeNode).toHaveBeenCalledTimes(2);
-    expect(invokeNode).toHaveBeenNthCalledWith(1, {
-      params: expect.objectContaining({ path: "/tmp/file.txt", preflightOnly: true }),
+    expectRecordFields(requireInvokeParams(invokeNode, 0), {
+      path: "/tmp/file.txt",
+      preflightOnly: true,
     });
-    expect(invokeNode).toHaveBeenNthCalledWith(2, {
-      params: expect.not.objectContaining({ preflightOnly: true }),
-    });
+    expect(requireInvokeParams(invokeNode, 1).preflightOnly).toBeUndefined();
   });
 
   it("checks file.write canonical policy before the mutating node call", async () => {
@@ -290,14 +315,12 @@ describe("file-transfer node invoke policy", () => {
 
     const result = await policy.handle(ctx);
 
-    expect(result).toMatchObject({ ok: false, code: "SYMLINK_TARGET_DENIED" });
+    expectResultFields(result, { ok: false, code: "SYMLINK_TARGET_DENIED" });
     expect(invokeNode).toHaveBeenCalledTimes(1);
-    expect(invokeNode).toHaveBeenCalledWith({
-      params: expect.objectContaining({
-        path: "/tmp/link/out.txt",
-        followSymlinks: true,
-        preflightOnly: true,
-      }),
+    expectRecordFields(requireInvokeParams(invokeNode, 0), {
+      path: "/tmp/link/out.txt",
+      followSymlinks: true,
+      preflightOnly: true,
     });
   });
 
@@ -344,14 +367,10 @@ describe("file-transfer node invoke policy", () => {
 
     const result = await policy.handle(ctx);
 
-    expect(result).toMatchObject({ ok: true });
+    expectResultFields(result, { ok: true });
     expect(invokeNode).toHaveBeenCalledTimes(2);
-    expect(invokeNode).toHaveBeenNthCalledWith(1, {
-      params: expect.objectContaining({ preflightOnly: true }),
-    });
-    expect(invokeNode).toHaveBeenNthCalledWith(2, {
-      params: expect.not.objectContaining({ preflightOnly: true }),
-    });
+    expect(requireInvokeParams(invokeNode, 0).preflightOnly).toBe(true);
+    expect(requireInvokeParams(invokeNode, 1).preflightOnly).toBeUndefined();
   });
 
   it("checks every dir.fetch preflight entry before requesting the archive", async () => {
@@ -381,14 +400,14 @@ describe("file-transfer node invoke policy", () => {
 
     const result = await policy.handle(ctx);
 
-    expect(result).toMatchObject({
-      ok: false,
-      code: "PATH_POLICY_DENIED",
-      details: { path: "/home/me/.ssh/id_rsa" },
-    });
+    expectResultFields(result, { ok: false, code: "PATH_POLICY_DENIED" });
+    expect(
+      requireRecord(requireRecord(result, "policy result").details, "result details").path,
+    ).toBe("/home/me/.ssh/id_rsa");
     expect(invokeNode).toHaveBeenCalledTimes(1);
-    expect(invokeNode).toHaveBeenCalledWith({
-      params: expect.objectContaining({ path: "/home/me", preflightOnly: true }),
+    expectRecordFields(requireInvokeParams(invokeNode, 0), {
+      path: "/home/me",
+      preflightOnly: true,
     });
   });
 
@@ -417,7 +436,7 @@ describe("file-transfer node invoke policy", () => {
 
     const result = await policy.handle(ctx);
 
-    expect(result).toMatchObject({ ok: false, code: "PREFLIGHT_ENTRIES_MISSING" });
+    expectResultFields(result, { ok: false, code: "PREFLIGHT_ENTRIES_MISSING" });
     expect(invokeNode).toHaveBeenCalledTimes(1);
   });
 
@@ -447,7 +466,7 @@ describe("file-transfer node invoke policy", () => {
 
     const result = await policy.handle(ctx);
 
-    expect(result).toMatchObject({ ok: false, code: "PREFLIGHT_ENTRY_INVALID" });
+    expectResultFields(result, { ok: false, code: "PREFLIGHT_ENTRY_INVALID" });
     expect(invokeNode).toHaveBeenCalledTimes(1);
   });
 
@@ -489,14 +508,13 @@ describe("file-transfer node invoke policy", () => {
 
       const result = await policy.handle(ctx);
 
-      expect(result).toMatchObject({ ok: true });
+      expectResultFields(result, { ok: true });
       expect(invokeNode).toHaveBeenCalledTimes(2);
-      expect(invokeNode).toHaveBeenNthCalledWith(1, {
-        params: expect.objectContaining({ path: "/tmp/project", preflightOnly: true }),
+      expectRecordFields(requireInvokeParams(invokeNode, 0), {
+        path: "/tmp/project",
+        preflightOnly: true,
       });
-      expect(invokeNode).toHaveBeenNthCalledWith(2, {
-        params: expect.not.objectContaining({ preflightOnly: true }),
-      });
+      expect(requireInvokeParams(invokeNode, 1).preflightOnly).toBeUndefined();
     },
   );
 
@@ -545,11 +563,10 @@ describe("file-transfer node invoke policy", () => {
 
       const result = await policy.handle(ctx);
 
-      expect(result).toMatchObject({
-        ok: false,
-        code: "PATH_POLICY_DENIED",
-        details: { path: "/home/me/.ssh/id_rsa" },
-      });
+      expectResultFields(result, { ok: false, code: "PATH_POLICY_DENIED" });
+      expect(
+        requireRecord(requireRecord(result, "policy result").details, "result details").path,
+      ).toBe("/home/me/.ssh/id_rsa");
       expect(invokeNode).toHaveBeenCalledTimes(2);
     },
   );
@@ -584,7 +601,7 @@ describe("file-transfer node invoke policy", () => {
 
     const result = await policy.handle(ctx);
 
-    expect(result).toMatchObject({ ok: false, code: "ARCHIVE_ENTRIES_MISSING" });
+    expectResultFields(result, { ok: false, code: "ARCHIVE_ENTRIES_MISSING" });
     expect(invokeNode).toHaveBeenCalledTimes(2);
   });
 });

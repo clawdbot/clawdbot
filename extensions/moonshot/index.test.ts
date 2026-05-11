@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import type { Context, Model } from "@mariozechner/pi-ai";
+import type { Context, Model } from "@earendil-works/pi-ai";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
@@ -20,7 +20,9 @@ describe("moonshot provider plugin", () => {
   it("mirrors Kimi web-search env credentials in manifest metadata", () => {
     const manifestEnvVars = readManifest().providerAuthEnvVars?.moonshot ?? [];
 
-    expect(manifestEnvVars).toEqual(expect.arrayContaining(createKimiWebSearchProvider().envVars));
+    expect([...manifestEnvVars].toSorted()).toStrictEqual(
+      [...createKimiWebSearchProvider().envVars].toSorted(),
+    );
   });
 
   it("owns replay policy for OpenAI-compatible Moonshot transports without mangling native Kimi tool_call IDs", async () => {
@@ -32,8 +34,9 @@ describe("moonshot provider plugin", () => {
       modelId: "kimi-k2.6",
     } as never);
 
-    expect(policy).toMatchObject({
+    expect(policy).toEqual({
       applyAssistantFirstOrderingFix: true,
+      dropReasoningFromHistory: true,
       validateGeminiTurns: true,
       validateAnthropicTurns: true,
     });
@@ -62,7 +65,7 @@ describe("moonshot provider plugin", () => {
       {},
     );
 
-    expect(capturedStream.getCapturedPayload()).toMatchObject({
+    expect(capturedStream.getCapturedPayload()).toEqual({
       config: { thinkingConfig: { thinkingBudget: -1 } },
       thinking: { type: "disabled" },
     });

@@ -16,6 +16,80 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
+// Runs inside the bare Docker E2E image, before package dependencies are installed.
+// Keep this to the small pnpm-workspace.yaml surface the fixture mutates.
+function findTopLevelBlock(lines, key) {
+  const start = lines.findIndex((line) => new RegExp(`^${key}:\\s*(?:#.*)?$`).test(line));
+  if (start === -1) {
+    return null;
+  }
+  let end = start + 1;
+  while (end < lines.length && !/^[A-Za-z0-9_-]+:\s*/.test(lines[end])) {
+    end += 1;
+  }
+  return { start, end };
+}
+
+function parseYamlScalar(raw) {
+  const trimmed = raw.trim();
+  const withoutComment = trimmed.replace(/\s+#.*$/, "");
+  if (withoutComment.startsWith('"') && withoutComment.endsWith('"')) {
+    return withoutComment.slice(1, -1);
+  }
+  if (withoutComment.startsWith("'") && withoutComment.endsWith("'")) {
+    return withoutComment.slice(1, -1);
+  }
+  return withoutComment;
+}
+
+function readWorkspacePatchedDependencies(file) {
+  const lines = fs.readFileSync(file, "utf8").split("\n");
+  const block = findTopLevelBlock(lines, "patchedDependencies");
+  if (!block) {
+    return { patches: undefined };
+  }
+
+  const patches = {};
+  for (const line of lines.slice(block.start + 1, block.end)) {
+    const match = line.match(/^\s+(.+?):\s+(.+?)\s*$/);
+    if (!match) {
+      continue;
+    }
+    patches[parseYamlScalar(match[1])] = parseYamlScalar(match[2]);
+  }
+  return { patches };
+}
+
+function writeWorkspacePnpmConfig(file, keptPatches) {
+  const original = fs.readFileSync(file, "utf8");
+  const hadTrailingNewline = original.endsWith("\n");
+  const lines = original.replace(/\n$/, "").split("\n");
+  const patchBlock = findTopLevelBlock(lines, "patchedDependencies");
+
+  if (patchBlock) {
+    const nextLines = [];
+    nextLines.push(...lines.slice(0, patchBlock.start));
+    if (Object.keys(keptPatches).length > 0) {
+      nextLines.push("patchedDependencies:");
+      for (const [dependency, patchFile] of Object.entries(keptPatches)) {
+        nextLines.push(`  ${JSON.stringify(dependency)}: ${JSON.stringify(patchFile)}`);
+      }
+    }
+    nextLines.push(...lines.slice(patchBlock.end));
+    lines.length = 0;
+    lines.push(...nextLines);
+  }
+
+  const allowUnusedIndex = lines.findIndex((line) => /^allowUnusedPatches:\s*/.test(line));
+  if (allowUnusedIndex === -1) {
+    lines.push("allowUnusedPatches: true");
+  } else {
+    lines[allowUnusedIndex] = "allowUnusedPatches: true";
+  }
+
+  fs.writeFileSync(file, `${lines.join("\n")}${hadTrailingNewline ? "\n" : ""}`);
+}
+
 function writeControlUi(root) {
   const file = path.join(root, "dist", "control-ui", "index.html");
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -25,31 +99,41 @@ function writeControlUi(root) {
 function prepareGitFixture(root) {
   const packageJsonPath = path.join(root, "package.json");
   const packageJson = readJson(packageJsonPath);
-  packageJson.pnpm = { ...packageJson.pnpm, allowUnusedPatches: true };
-  const patches = packageJson.pnpm.patchedDependencies;
+  const pnpmWorkspacePath = path.join(root, "pnpm-workspace.yaml");
+  const workspaceConfig = fs.existsSync(pnpmWorkspacePath)
+    ? readWorkspacePatchedDependencies(pnpmWorkspacePath)
+    : undefined;
+  const pnpmConfig = workspaceConfig ? {} : { ...packageJson.pnpm };
+  const patches = workspaceConfig?.patches ?? pnpmConfig.patchedDependencies;
+  const keptPatches = {};
   if (patches && typeof patches === "object" && !Array.isArray(patches)) {
-    const kept = {};
     const missing = [];
     for (const [dependency, patchFile] of Object.entries(patches)) {
       const exists =
         typeof patchFile === "string" &&
         fs.existsSync(path.resolve(path.dirname(packageJsonPath), patchFile));
       if (exists) {
-        kept[dependency] = patchFile;
+        keptPatches[dependency] = patchFile;
       } else {
         missing.push(`${dependency} -> ${String(patchFile)}`);
       }
     }
     if (missing.length > 0 && !legacyPackageAcceptanceCompat(packageJson.version)) {
       throw new Error(
-        `package ${packageJson.version} has missing pnpm.patchedDependencies in package fixture: ${missing.join(", ")}`,
+        `package ${packageJson.version} has missing pnpm patchedDependencies in package fixture: ${missing.join(", ")}`,
       );
     }
-    if (Object.keys(kept).length > 0) {
-      packageJson.pnpm.patchedDependencies = kept;
+  }
+  if (workspaceConfig) {
+    writeWorkspacePnpmConfig(pnpmWorkspacePath, keptPatches);
+  } else {
+    pnpmConfig.allowUnusedPatches = true;
+    if (Object.keys(keptPatches).length > 0) {
+      pnpmConfig.patchedDependencies = keptPatches;
     } else {
-      delete packageJson.pnpm.patchedDependencies;
+      delete pnpmConfig.patchedDependencies;
     }
+    packageJson.pnpm = pnpmConfig;
   }
   const fixtureUiBuildSource = `const fs=require("node:fs");fs.mkdirSync("dist/control-ui",{recursive:true});fs.writeFileSync("dist/control-ui/index.html",${JSON.stringify(controlUiHtml)})`;
   packageJson.scripts = {

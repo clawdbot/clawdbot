@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RequestClient } from "../internal/discord.js";
@@ -33,21 +33,37 @@ vi.mock("../send.js", async () => {
 
 let deliverDiscordReply: typeof import("./reply-delivery.js").deliverDiscordReply;
 
+type DeliverParams = Record<string, unknown> & {
+  cfg?: OpenClawConfig;
+  formatting?: unknown;
+  deps?: Record<string, (...args: unknown[]) => Promise<unknown>>;
+};
+
 function firstDeliverParams() {
-  const calls = sendDurableMessageBatchMock.mock.calls as unknown as Array<
-    [
-      {
-        cfg?: OpenClawConfig;
-        formatting?: unknown;
-        deps?: Record<string, (...args: unknown[]) => Promise<unknown>>;
-      },
-    ]
-  >;
+  const calls = sendDurableMessageBatchMock.mock.calls as unknown as Array<[DeliverParams]>;
   const params = calls[0]?.[0];
   if (!params) {
     throw new Error("sendDurableMessageBatch was not called");
   }
   return params;
+}
+
+function recordField(value: unknown, field: string): Record<string, unknown> {
+  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${field} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function objectArgAt(
+  mock: { mock: { calls: unknown[][] } },
+  index: number,
+): Record<string, unknown> {
+  const value = mock.mock.calls[0]?.[index];
+  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected call argument ${index} to be an object`);
+  }
+  return value as Record<string, unknown>;
 }
 
 describe("deliverDiscordReply", () => {
@@ -93,24 +109,22 @@ describe("deliverDiscordReply", () => {
       replyToMode: "all",
     });
 
-    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "discord",
-        to: "channel:101",
-        accountId: "default",
-        payloads: replies,
-        replyToId: "reply-1",
-        replyToMode: "all",
-      }),
-    );
+    const params = firstDeliverParams();
+    expect(params.channel).toBe("discord");
+    expect(params.to).toBe("channel:101");
+    expect(params.accountId).toBe("default");
+    expect(params.payloads).toEqual(replies);
+    expect(params.replyToId).toBe("reply-1");
+    expect(params.replyToMode).toBe("all");
 
-    const deps = firstDeliverParams().deps!;
+    const deps = params.deps!;
     await deps.discord("channel:101", "probe", { verbose: false });
-    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
-      "channel:101",
-      "probe",
-      expect.objectContaining({ cfg: firstDeliverParams().cfg, token: "token", rest }),
-    );
+    expect(sendMessageDiscordMock.mock.calls[0]?.[0]).toBe("channel:101");
+    expect(sendMessageDiscordMock.mock.calls[0]?.[1]).toBe("probe");
+    const sendOptions = objectArgAt(sendMessageDiscordMock, 2);
+    expect(sendOptions.cfg).toBe(params.cfg);
+    expect(sendOptions.token).toBe("token");
+    expect(sendOptions.rest).toBe(rest);
   });
 
   it("fails when shared outbound accepts a final reply but delivers no Discord message", async () => {
@@ -135,7 +149,11 @@ describe("deliverDiscordReply", () => {
         {
           text: [
             "📊 Session Status: current",
-            "🛠️ Exec: run git status",
+            "🛠️ run git status",
+            "🛠️ `gh pr view`",
+            "🛠️ `docker compose up`",
+            "🛠️ elevated · `cd /tmp && pnpm test`",
+            "🛠️ pty · `apply_patch update`",
             "📖 Read: lines 1-40 from secret.md",
             "Visible reply.",
           ].join("\n"),
@@ -149,11 +167,7 @@ describe("deliverDiscordReply", () => {
       textLimit: 2000,
     });
 
-    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payloads: [{ text: "Visible reply." }],
-      }),
-    );
+    expect(firstDeliverParams().payloads).toEqual([{ text: "Visible reply." }]);
   });
 
   it("drops pure internal trace text while preserving media-only delivery", async () => {
@@ -172,11 +186,9 @@ describe("deliverDiscordReply", () => {
       textLimit: 2000,
     });
 
-    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payloads: [{ mediaUrl: "https://example.com/result.png", text: undefined }],
-      }),
-    );
+    expect(firstDeliverParams().payloads).toEqual([
+      { mediaUrl: "https://example.com/result.png", text: undefined },
+    ]);
   });
 
   it("preserves component-only channelData payloads when text scrubs empty", async () => {
@@ -213,11 +225,7 @@ describe("deliverDiscordReply", () => {
       textLimit: 2000,
     });
 
-    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payloads: [{ channelData, text: undefined }],
-      }),
-    );
+    expect(firstDeliverParams().payloads).toEqual([{ channelData, text: undefined }]);
   });
 
   it("preserves presentation-only payloads when text scrubs empty", async () => {
@@ -246,11 +254,7 @@ describe("deliverDiscordReply", () => {
       textLimit: 2000,
     });
 
-    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payloads: [{ presentation, text: undefined }],
-      }),
-    );
+    expect(firstDeliverParams().payloads).toEqual([{ presentation, text: undefined }]);
   });
 
   it("does not strip ordinary code-fenced examples of tool-call labels", async () => {
@@ -266,11 +270,7 @@ describe("deliverDiscordReply", () => {
       textLimit: 2000,
     });
 
-    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payloads: [{ text }],
-      }),
-    );
+    expect(firstDeliverParams().payloads).toEqual([{ text }]);
   });
 
   it("does not strip ordinary visible labeled lines", async () => {
@@ -291,11 +291,7 @@ describe("deliverDiscordReply", () => {
       textLimit: 2000,
     });
 
-    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payloads: [{ text }],
-      }),
-    );
+    expect(firstDeliverParams().payloads).toEqual([{ text }]);
   });
 
   it("passes resolved Discord formatting options as explicit delivery options", async () => {
@@ -357,14 +353,11 @@ describe("deliverDiscordReply", () => {
       mediaLocalRoots: ["/tmp/openclaw-media"],
     });
 
-    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payloads: replies,
-        replyToId: undefined,
-        replyToMode: "off",
-        mediaAccess: { localRoots: ["/tmp/openclaw-media"] },
-      }),
-    );
+    const params = firstDeliverParams();
+    expect(params.payloads).toEqual(replies);
+    expect(params.replyToId).toBeUndefined();
+    expect(params.replyToMode).toBe("off");
+    expect(params.mediaAccess).toEqual({ localRoots: ["/tmp/openclaw-media"] });
   });
 
   it("bridges Discord voice sends through the outbound dependency bag", async () => {
@@ -384,11 +377,12 @@ describe("deliverDiscordReply", () => {
       replyTo: "reply-1",
     });
 
-    expect(sendVoiceMessageDiscordMock).toHaveBeenCalledWith(
-      "channel:123",
-      "https://example.com/voice.ogg",
-      expect.objectContaining({ cfg, token: "token", replyTo: "reply-1" }),
-    );
+    expect(sendVoiceMessageDiscordMock.mock.calls[0]?.[0]).toBe("channel:123");
+    expect(sendVoiceMessageDiscordMock.mock.calls[0]?.[1]).toBe("https://example.com/voice.ogg");
+    const voiceOptions = objectArgAt(sendVoiceMessageDiscordMock, 2);
+    expect(voiceOptions.cfg).toBe(cfg);
+    expect(voiceOptions.token).toBe("token");
+    expect(voiceOptions.replyTo).toBe("reply-1");
   });
 
   it("rewrites bound thread replies to parent target plus thread id and persona", async () => {
@@ -421,17 +415,13 @@ describe("deliverDiscordReply", () => {
       threadBindings,
     });
 
-    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "channel:parent-1",
-        threadId: "thread-1",
-        replyToId: "reply-1",
-        identity: expect.objectContaining({ name: "🤖 child" }),
-        session: expect.objectContaining({
-          key: "agent:main:subagent:child",
-          agentId: "main",
-        }),
-      }),
-    );
+    const params = firstDeliverParams();
+    expect(params.to).toBe("channel:parent-1");
+    expect(params.threadId).toBe("thread-1");
+    expect(params.replyToId).toBe("reply-1");
+    expect(recordField(params.identity, "identity").name).toBe("🤖 child");
+    const session = recordField(params.session, "session");
+    expect(session.key).toBe("agent:main:subagent:child");
+    expect(session.agentId).toBe("main");
   });
 });

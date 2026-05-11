@@ -18,6 +18,8 @@ type SlackSocketModeLogger = SlackSdkLogger & {
 type SlackSocketDisconnect = Awaited<ReturnType<typeof waitForSlackSocketDisconnect>>;
 
 const OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS = 15_000;
+const OPENCLAW_SLACK_SOCKET_START_FAILED_EVENT = "unable_to_socket_mode_start";
+const OPENCLAW_SLACK_NATIVE_RECONNECT_OBSERVER_KEY = "__openclawNativeReconnectFailureObserver";
 const SLACK_SOCKET_PONG_TIMEOUT_WARNING_PREFIX = "A pong wasn't received from the server";
 const SLACK_SOCKET_PING_TIMEOUT_WARNING_PREFIX = "A ping wasn't received from the server";
 const SLACK_SOCKET_LOG_LEVEL_IGNORED_WARNING_RE =
@@ -47,6 +49,66 @@ function isConstructorFunction<
   T extends Constructor,
 >(value: unknown): value is T {
   return typeof value === "function";
+}
+
+function installSlackNativeReconnectFailureObserver(receiver: unknown) {
+  if (!receiver || typeof receiver !== "object") {
+    return;
+  }
+  const client = Reflect.get(receiver, "client");
+  if (!client || typeof client !== "object") {
+    return;
+  }
+  if (Reflect.get(client, OPENCLAW_SLACK_NATIVE_RECONNECT_OBSERVER_KEY)) {
+    return;
+  }
+  const delayReconnectAttempt = Reflect.get(client, "delayReconnectAttempt");
+  const emit = Reflect.get(client, "emit");
+  if (typeof delayReconnectAttempt !== "function" || typeof emit !== "function") {
+    return;
+  }
+
+  Reflect.set(client, OPENCLAW_SLACK_NATIVE_RECONNECT_OBSERVER_KEY, true);
+  Reflect.set(
+    client,
+    "delayReconnectAttempt",
+    function patchedDelayReconnectAttempt(this: object, callback: unknown) {
+      if (typeof callback !== "function") {
+        return delayReconnectAttempt.call(this, callback);
+      }
+      const failureCount = Number(Reflect.get(this, "numOfConsecutiveReconnectionFailures") ?? 0);
+      const nextFailureCount = failureCount + 1;
+      Reflect.set(this, "numOfConsecutiveReconnectionFailures", nextFailureCount);
+      const pingTimeoutMs = Number(Reflect.get(this, "clientPingTimeoutMS"));
+      const delayMs =
+        (Number.isFinite(pingTimeoutMs) && pingTimeoutMs >= 0
+          ? pingTimeoutMs
+          : OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS) * nextFailureCount;
+      const logger = Reflect.get(this, "logger") as { debug?: (message: string) => void };
+      logger?.debug?.(
+        `Before trying to reconnect, this client will wait for ${delayMs} milliseconds`,
+      );
+      return new Promise((resolve, reject) => {
+        setTimeout(() => {
+          if (Reflect.get(this, "shuttingDown")) {
+            logger?.debug?.("Client shutting down, will not attempt reconnect.");
+            resolve(undefined);
+            return;
+          }
+          logger?.debug?.("Continuing with reconnect...");
+          emit.call(this, "reconnecting");
+          Promise.resolve(callback.call(this)).then(resolve, (error: unknown) => {
+            if (callback === Reflect.get(this, "start")) {
+              emit.call(this, OPENCLAW_SLACK_SOCKET_START_FAILED_EVENT, error);
+              resolve(undefined);
+              return;
+            }
+            reject(error);
+          });
+        }, delayMs);
+      });
+    },
+  );
 }
 
 function resolveSlackBoltModule(value: unknown): SlackBoltResolvedExports | null {
@@ -249,7 +311,7 @@ export function createSlackBoltApp(params: {
   const socketModeLogger = createSlackSocketModeLogger();
   const socketModeReceiverOptions: SlackSocketModeReceiverOptions = {
     appToken: params.appToken ?? "",
-    autoReconnectEnabled: false,
+    autoReconnectEnabled: true,
     clientPingTimeout:
       params.socketMode?.clientPingTimeout ?? OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS,
     logger: socketModeLogger,
@@ -271,6 +333,9 @@ export function createSlackBoltApp(params: {
           signingSecret: params.signingSecret ?? "",
           endpoints: params.slackWebhookPath,
         });
+  if (params.slackMode === "socket") {
+    installSlackNativeReconnectFailureObserver(receiver);
+  }
   const app = new params.interop.App({
     token: params.botToken,
     receiver,

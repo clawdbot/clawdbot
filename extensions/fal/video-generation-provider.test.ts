@@ -91,6 +91,10 @@ describe("fal video generation provider", () => {
     >;
   }
 
+  function fetchGuardUrl(callNumber: number): string | undefined {
+    return (fetchGuardMock.mock.calls[callNumber - 1]?.[0] as { url?: string } | undefined)?.url;
+  }
+
   afterEach(() => {
     vi.restoreAllMocks();
     fetchGuardMock.mockReset();
@@ -137,30 +141,15 @@ describe("fal video generation provider", () => {
       cfg: {},
     });
 
-    expect(fetchGuardMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        url: "https://queue.fal.run/fal-ai/minimax/video-01-live",
-      }),
-    );
+    expect(fetchGuardUrl(1)).toBe("https://queue.fal.run/fal-ai/minimax/video-01-live");
     const submitBody = JSON.parse(
       String(fetchGuardMock.mock.calls[0]?.[0]?.init?.body ?? "{}"),
     ) as Record<string, unknown>;
     expect(submitBody).toEqual({
       prompt: "A spaceship emerges from the clouds",
     });
-    expect(fetchGuardMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        url: "https://queue.fal.run/fal-ai/minimax/requests/req-123/status",
-      }),
-    );
-    expect(fetchGuardMock).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({
-        url: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
-      }),
-    );
+    expect(fetchGuardUrl(2)).toBe("https://queue.fal.run/fal-ai/minimax/requests/req-123/status");
+    expect(fetchGuardUrl(3)).toBe("https://queue.fal.run/fal-ai/minimax/requests/req-123");
     expect(result.videos).toHaveLength(1);
     expect(result.videos[0]?.mimeType).toBe("video/webm");
     expect(result.videos[0]?.fileName).toBe("video-1.webm");
@@ -173,17 +162,13 @@ describe("fal video generation provider", () => {
   it("exposes Seedance 2 models", () => {
     const provider = buildFalVideoGenerationProvider();
 
-    expect(provider.models).toEqual(
-      expect.arrayContaining([
-        "fal-ai/heygen/v2/video-agent",
-        "bytedance/seedance-2.0/fast/text-to-video",
-        "bytedance/seedance-2.0/fast/image-to-video",
-        "bytedance/seedance-2.0/fast/reference-to-video",
-        "bytedance/seedance-2.0/text-to-video",
-        "bytedance/seedance-2.0/image-to-video",
-        "bytedance/seedance-2.0/reference-to-video",
-      ]),
-    );
+    expect(provider.models).toContain("fal-ai/heygen/v2/video-agent");
+    expect(provider.models).toContain("bytedance/seedance-2.0/fast/text-to-video");
+    expect(provider.models).toContain("bytedance/seedance-2.0/fast/image-to-video");
+    expect(provider.models).toContain("bytedance/seedance-2.0/fast/reference-to-video");
+    expect(provider.models).toContain("bytedance/seedance-2.0/text-to-video");
+    expect(provider.models).toContain("bytedance/seedance-2.0/image-to-video");
+    expect(provider.models).toContain("bytedance/seedance-2.0/reference-to-video");
   });
 
   it("submits HeyGen video-agent requests without unsupported fal controls", async () => {
@@ -209,12 +194,7 @@ describe("fal video generation provider", () => {
       cfg: {},
     });
 
-    expect(fetchGuardMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        url: "https://queue.fal.run/fal-ai/heygen/v2/video-agent",
-      }),
-    );
+    expect(fetchGuardUrl(1)).toBe("https://queue.fal.run/fal-ai/heygen/v2/video-agent");
     expect(getSubmitBody()).toEqual({
       prompt: "A founder explains OpenClaw in a concise studio video",
     });
@@ -248,11 +228,8 @@ describe("fal video generation provider", () => {
       cfg: {},
     });
 
-    expect(fetchGuardMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        url: "https://queue.fal.run/bytedance/seedance-2.0/fast/text-to-video",
-      }),
+    expect(fetchGuardUrl(1)).toBe(
+      "https://queue.fal.run/bytedance/seedance-2.0/fast/text-to-video",
     );
     expect(getSubmitBody()).toEqual({
       prompt: "A chrome lobster drives a tiny kart across a neon pier",
@@ -333,11 +310,8 @@ describe("fal video generation provider", () => {
       cfg: {},
     });
 
-    expect(fetchGuardMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        url: "https://queue.fal.run/bytedance/seedance-2.0/fast/reference-to-video",
-      }),
+    expect(fetchGuardUrl(1)).toBe(
+      "https://queue.fal.run/bytedance/seedance-2.0/fast/reference-to-video",
     );
     expect(getSubmitBody()).toEqual({
       prompt: "Blend @Image1, @Image2, @Video1, @Video2, and @Audio1 into one short film",

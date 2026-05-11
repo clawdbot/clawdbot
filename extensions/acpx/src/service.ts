@@ -11,6 +11,7 @@ import type {
 } from "../runtime-api.js";
 import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../runtime-api.js";
 import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
+import { DEFAULT_ACPX_TIMEOUT_SECONDS } from "./config-schema.js";
 import {
   resolveAcpxPluginConfig,
   toAcpMcpServers,
@@ -34,6 +35,7 @@ type AcpxRuntimeLike = AcpRuntime & {
 };
 
 const ENABLE_STARTUP_PROBE_ENV = "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE";
+const SKIP_RUNTIME_PROBE_ENV = "OPENCLAW_SKIP_ACPX_RUNTIME_PROBE";
 const ACPX_BACKEND_ID = "acpx";
 
 type AcpxRuntimeModule = typeof import("./runtime.js");
@@ -200,7 +202,38 @@ function resolveAllowedAgentsProbeAgent(ctx: OpenClawPluginServiceContext): stri
 }
 
 function shouldRunStartupProbe(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env[ENABLE_STARTUP_PROBE_ENV] === "1";
+  return env[ENABLE_STARTUP_PROBE_ENV] !== "0";
+}
+
+function shouldProbeRuntimeAtStartup(env: NodeJS.ProcessEnv = process.env): boolean {
+  return shouldRunStartupProbe(env) && env[SKIP_RUNTIME_PROBE_ENV] !== "1";
+}
+
+async function withStartupProbeTimeout<T>(params: {
+  promise: Promise<T>;
+  timeoutSeconds: number;
+}): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutMs = Math.max(1, params.timeoutSeconds * 1_000);
+  try {
+    return await Promise.race([
+      params.promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(
+            new Error(
+              `embedded acpx runtime backend startup probe timed out after ${params.timeoutSeconds}s`,
+            ),
+          );
+        }, timeoutMs);
+        (timeout as { unref?: () => void }).unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 async function resolveGatewayInstanceId(stateDir: string): Promise<string> {
@@ -333,43 +366,47 @@ export function createAcpxRuntimeService(
             logger: ctx.logger,
           });
 
+      const shouldProbeRuntime = shouldProbeRuntimeAtStartup();
       registerAcpRuntimeBackend({
         id: ACPX_BACKEND_ID,
         runtime,
-        ...(shouldRunStartupProbe() ? { healthy: () => runtime?.isHealthy() ?? false } : {}),
+        ...(shouldProbeRuntime ? { healthy: () => runtime?.isHealthy() ?? false } : {}),
       });
       ctx.logger.info(`embedded acpx runtime backend registered (cwd: ${pluginConfig.cwd})`);
 
-      if (!shouldRunStartupProbe() || process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE === "1") {
+      if (!shouldProbeRuntime) {
         return;
       }
 
       lifecycleRevision += 1;
       const currentRevision = lifecycleRevision;
-      void (async () => {
-        try {
-          await runtime?.probeAvailability();
-          if (currentRevision !== lifecycleRevision) {
-            return;
-          }
-          if (runtime?.isHealthy()) {
-            ctx.logger.info("embedded acpx runtime backend ready");
-            return;
-          }
-          const doctorReport = await runtime?.doctor?.();
-          if (currentRevision !== lifecycleRevision) {
-            return;
-          }
-          ctx.logger.warn(
-            `embedded acpx runtime backend probe failed: ${doctorReport ? formatDoctorFailureMessage(doctorReport) : "backend remained unhealthy after probe"}`,
-          );
-        } catch (err) {
-          if (currentRevision !== lifecycleRevision) {
-            return;
-          }
-          ctx.logger.warn(`embedded acpx runtime setup failed: ${formatErrorMessage(err)}`);
+      try {
+        if (runtime) {
+          await withStartupProbeTimeout({
+            promise: runtime.probeAvailability(),
+            timeoutSeconds: pluginConfig.timeoutSeconds ?? DEFAULT_ACPX_TIMEOUT_SECONDS,
+          });
         }
-      })();
+        if (currentRevision !== lifecycleRevision) {
+          return;
+        }
+        if (runtime?.isHealthy()) {
+          ctx.logger.info("embedded acpx runtime backend ready");
+          return;
+        }
+        const doctorReport = await runtime?.doctor?.();
+        if (currentRevision !== lifecycleRevision) {
+          return;
+        }
+        ctx.logger.warn(
+          `embedded acpx runtime backend probe failed: ${doctorReport ? formatDoctorFailureMessage(doctorReport) : "backend remained unhealthy after probe"}`,
+        );
+      } catch (err) {
+        if (currentRevision !== lifecycleRevision) {
+          return;
+        }
+        ctx.logger.warn(`embedded acpx runtime setup failed: ${formatErrorMessage(err)}`);
+      }
     },
     async stop(_ctx: OpenClawPluginServiceContext): Promise<void> {
       lifecycleRevision += 1;

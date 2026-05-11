@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import type { BootstrapMode } from "../../bootstrap-mode.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";

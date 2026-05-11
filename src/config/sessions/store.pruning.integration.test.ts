@@ -78,7 +78,13 @@ async function expectPathExists(targetPath: string): Promise<void> {
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect((error as { code?: unknown }).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected missing path: ${targetPath}`);
 }
 
 function createStaleAndFreshStore(now = Date.now()): Record<string, SessionEntry> {
@@ -286,11 +292,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       opts: { store: storePath, dryRun: true, enforce: true },
       targets: [{ agentId: "main", storePath }],
     });
-    expect(dryRun.previewResults[0]?.summary.unreferencedArtifacts).toEqual(
-      expect.objectContaining({
-        removedFiles: 4,
-      }),
-    );
+    expect(dryRun.previewResults[0]?.summary.unreferencedArtifacts.removedFiles).toBe(4);
     await expectPathExists(oldOrphanTranscript);
     await expectPathExists(orphanRuntime);
     await expectPathExists(orphanPointer);
@@ -302,11 +304,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       targets: [{ agentId: "main", storePath }],
     });
 
-    expect(applied.appliedSummaries[0]?.unreferencedArtifacts).toEqual(
-      expect.objectContaining({
-        removedFiles: 4,
-      }),
-    );
+    expect(applied.appliedSummaries[0]?.unreferencedArtifacts.removedFiles).toBe(4);
     await expectPathMissing(oldOrphanTranscript);
     await expectPathMissing(orphanRuntime);
     await expectPathMissing(orphanPointer);
@@ -433,16 +431,12 @@ describe("Integration: saveSessionStore with pruning", () => {
       targets: [{ agentId: "main", storePath }],
     });
 
-    expect(dryRun.previewResults[0]?.summary.diskBudget).toEqual(
-      expect.objectContaining({
-        removedFiles: 1,
-      }),
-    );
-    expect(dryRun.previewResults[0]?.summary.unreferencedArtifacts).toEqual(
-      expect.objectContaining({
-        removedFiles: 0,
-      }),
-    );
+    const diskBudgetSummary = dryRun.previewResults[0]?.summary.diskBudget;
+    if (diskBudgetSummary === null || diskBudgetSummary === undefined) {
+      throw new Error("expected disk budget cleanup summary");
+    }
+    expect(diskBudgetSummary.removedFiles).toBe(1);
+    expect(dryRun.previewResults[0]?.summary.unreferencedArtifacts.removedFiles).toBe(0);
     await expectPathExists(oldOrphanTranscript);
   });
 
@@ -480,15 +474,9 @@ describe("Integration: saveSessionStore with pruning", () => {
       targets: [{ agentId: "main", storePath }],
     });
 
-    expect(dryRun.previewResults[0]?.summary).toEqual(
-      expect.objectContaining({
-        pruned: 1,
-        capped: 1,
-        unreferencedArtifacts: expect.objectContaining({
-          removedFiles: 0,
-        }),
-      }),
-    );
+    expect(dryRun.previewResults[0]?.summary.pruned).toBe(1);
+    expect(dryRun.previewResults[0]?.summary.capped).toBe(1);
+    expect(dryRun.previewResults[0]?.summary.unreferencedArtifacts.removedFiles).toBe(0);
     await expectPathExists(staleTranscript);
     await expectPathExists(cappedTranscript);
     await expectPathExists(freshTranscript);

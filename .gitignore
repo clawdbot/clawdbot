@@ -118,6 +118,8 @@ USER.md
 !.agents/skills/gitcrawl/
 !.agents/skills/gitcrawl/**
 !.agents/skills/openclaw-docs/**
+!.agents/skills/openclaw-debugging/
+!.agents/skills/openclaw-debugging/**
 !.agents/skills/openclaw-ghsa-maintainer/
 !.agents/skills/openclaw-ghsa-maintainer/**
 !.agents/skills/openclaw-parallels-smoke/

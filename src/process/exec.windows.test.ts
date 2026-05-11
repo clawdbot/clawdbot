@@ -480,7 +480,7 @@ describe("windows command wrapper behavior", () => {
       expect(spawnMock).toHaveBeenCalledTimes(2);
       expect(spawnMock.mock.calls[1]?.[0]).toBe("taskkill");
       expect(spawnMock.mock.calls[1]?.[1]).toEqual(["/PID", "1234", "/T", "/F"]);
-      expect(spawnMock.mock.calls[1]?.[2]).toMatchObject({
+      expect(spawnMock.mock.calls[1]?.[2]).toEqual({
         stdio: "ignore",
         windowsHide: true,
       });
@@ -537,8 +537,9 @@ describe("windows command wrapper behavior", () => {
     );
 
     try {
-      await expect(runExec("node", ["utf8-output.js"], 1000)).resolves.toMatchObject({
+      await expect(runExec("node", ["utf8-output.js"], 1000)).resolves.toEqual({
         stdout: "测试",
+        stderr: "",
       });
     } finally {
       platformSpy.mockRestore();
@@ -561,8 +562,15 @@ describe("windows command wrapper behavior", () => {
     try {
       await expect(
         runCommandWithTimeout(["node", "gbk-output.js"], { timeoutMs: 1000 }),
-      ).resolves.toMatchObject({
+      ).resolves.toEqual({
+        pid: 1234,
         stdout: "测试",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+        noOutputTimedOut: false,
       });
     } finally {
       platformSpy.mockRestore();

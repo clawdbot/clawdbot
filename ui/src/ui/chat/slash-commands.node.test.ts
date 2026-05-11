@@ -11,108 +11,129 @@ afterEach(() => {
   resetSlashCommandsForTest();
 });
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value;
+}
+
+function requireArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an array`);
+  }
+  return value;
+}
+
+function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
+  const record = requireRecord(value, label);
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key]).toEqual(expectedValue);
+  }
+}
+
+function requireCommandByName(name: string): Record<string, unknown> {
+  return requireRecord(
+    SLASH_COMMANDS.find((entry) => entry.name === name),
+    `slash command ${name}`,
+  );
+}
+
+function requireCommandByKey(key: string): Record<string, unknown> {
+  return requireRecord(
+    SLASH_COMMANDS.find((entry) => entry.key === key),
+    `slash command ${key}`,
+  );
+}
+
+function expectParsedSlash(input: string, commandFields: Record<string, unknown>, args: string) {
+  const parsed = requireRecord(parseSlashCommand(input), `parsed ${input}`);
+  expectRecordFields(parsed.command, `parsed ${input} command`, commandFields);
+  expect(parsed.args).toBe(args);
+}
+
 describe("parseSlashCommand", () => {
   it("parses commands with an optional colon separator", () => {
-    expect(parseSlashCommand("/think: high")).toMatchObject({
-      command: { name: "think" },
-      args: "high",
-    });
-    expect(parseSlashCommand("/think:high")).toMatchObject({
-      command: { name: "think" },
-      args: "high",
-    });
-    expect(parseSlashCommand("/help:")).toMatchObject({
-      command: { name: "help" },
-      args: "",
-    });
+    expectParsedSlash("/think: high", { name: "think" }, "high");
+    expectParsedSlash("/think:high", { name: "think" }, "high");
+    expectParsedSlash("/help:", { name: "help" }, "");
   });
 
   it("still parses space-delimited commands", () => {
-    expect(parseSlashCommand("/verbose full")).toMatchObject({
-      command: { name: "verbose" },
-      args: "full",
-    });
+    expectParsedSlash("/verbose full", { name: "verbose" }, "full");
   });
 
   it("parses fast commands", () => {
-    expect(parseSlashCommand("/fast:on")).toMatchObject({
-      command: { name: "fast" },
-      args: "on",
-    });
+    expectParsedSlash("/fast:on", { name: "fast" }, "on");
   });
 
   it("keeps /status on the agent path", () => {
     const status = SLASH_COMMANDS.find((entry) => entry.name === "status");
     expect(status?.executeLocal).not.toBe(true);
-    expect(parseSlashCommand("/status")).toMatchObject({
-      command: { name: "status" },
-      args: "",
-    });
+    expectParsedSlash("/status", { name: "status" }, "");
   });
 
   it("includes shared /tools with shared arg hints", () => {
-    const tools = SLASH_COMMANDS.find((entry) => entry.name === "tools");
-    expect(tools).toMatchObject({
+    const tools = requireCommandByName("tools");
+    expectRecordFields(tools, "tools command", {
       key: "tools",
       description: "List available runtime tools.",
       argOptions: ["compact", "verbose"],
       executeLocal: false,
     });
-    expect(parseSlashCommand("/tools verbose")).toMatchObject({
-      command: { name: "tools" },
-      args: "verbose",
-    });
+    expectParsedSlash("/tools verbose", { name: "tools" }, "verbose");
   });
 
   it("parses slash aliases through the shared registry", () => {
-    const exportCommand = SLASH_COMMANDS.find((entry) => entry.key === "export-session");
-    expect(exportCommand).toMatchObject({
+    const exportCommand = requireCommandByKey("export-session");
+    expectRecordFields(exportCommand, "export-session command", {
       name: "export-session",
       aliases: ["export"],
       executeLocal: true,
     });
-    expect(parseSlashCommand("/export")).toMatchObject({
-      command: { key: "export-session" },
-      args: "",
-    });
-    expect(parseSlashCommand("/export-session")).toMatchObject({
-      command: { key: "export-session" },
-      args: "",
-    });
-    expect(parseSlashCommand("/side what changed?")).toMatchObject({
-      command: { key: "btw", name: "btw", aliases: expect.arrayContaining(["side"]) },
-      args: "what changed?",
-    });
+    expectParsedSlash("/export", { key: "export-session" }, "");
+    expectParsedSlash("/export-session", { key: "export-session" }, "");
+    const side = requireRecord(parseSlashCommand("/side what changed?"), "parsed /side");
+    expectRecordFields(side.command, "side command", { key: "btw", name: "btw" });
+    expect(
+      requireArray(requireRecord(side.command, "side command").aliases, "side aliases"),
+    ).toContain("side");
+    expect(side.args).toBe("what changed?");
   });
 
   it("keeps canonical long-form slash names as the primary menu command", () => {
-    expect(SLASH_COMMANDS.find((entry) => entry.key === "verbose")).toMatchObject({
+    expectRecordFields(requireCommandByKey("verbose"), "verbose command", {
       name: "verbose",
       aliases: ["v"],
     });
-    expect(SLASH_COMMANDS.find((entry) => entry.key === "think")).toMatchObject({
+    const think = requireCommandByKey("think");
+    expectRecordFields(think, "think command", {
       name: "think",
-      aliases: expect.arrayContaining(["thinking", "t"]),
     });
+    const aliases = requireArray(think.aliases, "think aliases");
+    expect(aliases).toContain("thinking");
+    expect(aliases).toContain("t");
   });
 
   it("keeps a single local /steer entry with the control-ui metadata", () => {
     const steerEntries = SLASH_COMMANDS.filter((entry) => entry.name === "steer");
     expect(steerEntries).toHaveLength(1);
-    expect(steerEntries[0]).toMatchObject({
+    const steer = requireRecord(steerEntries[0], "steer command");
+    expectRecordFields(steer, "steer command", {
       key: "steer",
       description: "Inject a message into the active run",
       args: "[id] <message>",
-      aliases: expect.arrayContaining(["tell"]),
       executeLocal: true,
     });
+    expect(requireArray(steer.aliases, "steer aliases")).toContain("tell");
   });
 
   it("keeps focus as a local slash command", () => {
-    expect(parseSlashCommand("/focus")).toMatchObject({
-      command: { key: "focus", executeLocal: true },
-      args: "",
-    });
+    expectParsedSlash("/focus", { key: "focus", executeLocal: true }, "");
   });
 
   it("refreshes runtime commands from commands.list so docks, plugins, and direct skills appear", async () => {
@@ -154,23 +175,20 @@ describe("parseSlashCommand", () => {
       agentId: "main",
     });
 
-    expect(SLASH_COMMANDS.find((entry) => entry.name === "dock-discord")).toMatchObject({
+    expectRecordFields(requireCommandByName("dock-discord"), "dock-discord command", {
       aliases: ["dock_discord"],
       category: "tools",
       executeLocal: false,
     });
-    expect(SLASH_COMMANDS.find((entry) => entry.name === "dreaming")).toMatchObject({
+    expectRecordFields(requireCommandByName("dreaming"), "dreaming command", {
       key: "dreaming",
       executeLocal: false,
     });
-    expect(SLASH_COMMANDS.find((entry) => entry.name === "prose")).toMatchObject({
+    expectRecordFields(requireCommandByName("prose"), "prose command", {
       key: "prose",
       executeLocal: false,
     });
-    expect(parseSlashCommand("/dock_discord")).toMatchObject({
-      command: { name: "dock-discord" },
-      args: "",
-    });
+    expectParsedSlash("/dock_discord", { name: "dock-discord" }, "");
   });
 
   it("does not let remote commands collide with reserved local commands", async () => {
@@ -200,12 +218,12 @@ describe("parseSlashCommand", () => {
       agentId: "main",
     });
 
-    expect(SLASH_COMMANDS.find((entry) => entry.name === "redirect")).toMatchObject({
+    expectRecordFields(requireCommandByName("redirect"), "redirect command", {
       key: "redirect",
       executeLocal: true,
       description: "Abort and restart with a new message",
     });
-    expect(SLASH_COMMANDS.find((entry) => entry.name === "kill")).toMatchObject({
+    expectRecordFields(requireCommandByName("kill"), "kill command", {
       key: "kill",
       executeLocal: true,
       description: "Kill a running subagent (or all).",
@@ -239,14 +257,12 @@ describe("parseSlashCommand", () => {
       agentId: "main",
     });
 
-    expect(SLASH_COMMANDS.find((entry) => entry.name === "safe-name")).toMatchObject({
+    expectRecordFields(requireCommandByName("safe-name"), "safe-name command", {
       name: "safe-name",
     });
     expect(SLASH_COMMANDS.find((entry) => entry.name === "prose now")).toBeUndefined();
     expect(SLASH_COMMANDS.find((entry) => entry.name === "bad:alias")).toBeUndefined();
-    expect(parseSlashCommand("/safe-name")).toMatchObject({
-      command: { name: "safe-name" },
-    });
+    expectParsedSlash("/safe-name", { name: "safe-name" }, "");
   });
 
   it("caps remote command payload size and long metadata before it reaches UI state", async () => {
@@ -364,11 +380,11 @@ describe("parseSlashCommand", () => {
       client: { request } as never,
       agentId: "main",
     });
-    expect(SLASH_COMMANDS.find((entry) => entry.name === "valid")).toMatchObject({
+    expectRecordFields(requireCommandByName("valid"), "valid command", {
       name: "valid",
       description: "",
     });
-    expect(SLASH_COMMANDS.find((entry) => entry.name === "pair")).toMatchObject({
+    expectRecordFields(requireCommandByName("pair"), "pair command", {
       name: "pair",
     });
   });

@@ -7,13 +7,9 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import {
-  type SkillsChangeEvent,
   bumpSkillsSnapshotVersion,
-  getSkillsSnapshotVersion,
-  registerSkillsChangeListener,
   resetSkillsRefreshStateForTest,
   setSkillsChangeListenerErrorHandler,
-  shouldRefreshSnapshotForVersion,
 } from "./refresh-state.js";
 export {
   bumpSkillsSnapshotVersion,

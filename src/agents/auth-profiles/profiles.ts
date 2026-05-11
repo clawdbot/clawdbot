@@ -8,8 +8,34 @@ import {
   saveAuthProfileStore,
   updateAuthProfileStoreWithLock,
 } from "./store.js";
-import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
+import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
 export { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
+
+function resetSuccessfulUsageStats(
+  existing: ProfileUsageStats | undefined,
+  lastUsed: number,
+): ProfileUsageStats {
+  return {
+    ...existing,
+    errorCount: 0,
+    cooldownUntil: undefined,
+    cooldownReason: undefined,
+    cooldownModel: undefined,
+    disabledUntil: undefined,
+    disabledReason: undefined,
+    failureCounts: undefined,
+    lastUsed,
+  };
+}
+
+function updateSuccessfulUsageStatsEntry(
+  store: AuthProfileStore,
+  profileId: string,
+  lastUsed: number,
+): void {
+  store.usageStats = store.usageStats ?? {};
+  store.usageStats[profileId] = resetSuccessfulUsageStats(store.usageStats[profileId], lastUsed);
+}
 
 export async function setAuthProfileOrder(params: {
   agentDir?: string;
@@ -157,7 +183,7 @@ export async function removeProviderAuthProfilesWithLock(params: {
   });
 }
 
-export async function markAuthProfileGood(params: {
+export async function markAuthProfileSuccess(params: {
   store: AuthProfileStore;
   provider: string;
   profileId: string;
@@ -165,6 +191,7 @@ export async function markAuthProfileGood(params: {
 }): Promise<void> {
   const { store, provider, profileId, agentDir } = params;
   const providerKey = resolveProviderIdForAuth(provider);
+  const lastUsed = Date.now();
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
@@ -173,11 +200,13 @@ export async function markAuthProfileGood(params: {
         return false;
       }
       freshStore.lastGood = { ...freshStore.lastGood, [providerKey]: profileId };
+      updateSuccessfulUsageStatsEntry(freshStore, profileId, lastUsed);
       return true;
     },
   });
   if (updated) {
     store.lastGood = updated.lastGood;
+    store.usageStats = updated.usageStats;
     return;
   }
   const profile = store.profiles[profileId];
@@ -185,5 +214,6 @@ export async function markAuthProfileGood(params: {
     return;
   }
   store.lastGood = { ...store.lastGood, [providerKey]: profileId };
+  updateSuccessfulUsageStatsEntry(store, profileId, lastUsed);
   saveAuthProfileStore(store, agentDir);
 }

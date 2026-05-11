@@ -217,7 +217,7 @@ function createSlackDispatchParams(params: {
 async function expectDedupedInteractiveDispatch(params: {
   baseParams: InteractiveDispatchParams;
   handler: ReturnType<typeof vi.fn>;
-  expectedCall: unknown;
+  expectHandlerContext: (ctx: unknown) => void;
 }) {
   const first = await dispatchInteractive(params.baseParams);
   const duplicate = await dispatchInteractive(params.baseParams);
@@ -225,7 +225,7 @@ async function expectDedupedInteractiveDispatch(params: {
   expect(first).toEqual({ matched: true, handled: true, duplicate: false });
   expect(duplicate).toEqual({ matched: true, handled: true, duplicate: true });
   expect(params.handler).toHaveBeenCalledTimes(1);
-  expect(params.handler).toHaveBeenCalledWith(expect.objectContaining(params.expectedCall));
+  params.expectHandlerContext(requireHandlerCall(params.handler));
 }
 
 async function dispatchInteractive(params: InteractiveDispatchParams) {
@@ -348,6 +348,14 @@ function registerInteractiveHandler(params: {
     namespace: params.namespace,
     handler: params.handler as never,
   });
+}
+
+function requireHandlerCall(handler: ReturnType<typeof vi.fn>, index = 0): unknown {
+  const call = handler.mock.calls[index] as [unknown] | undefined;
+  if (!call) {
+    throw new Error(`handler call ${index} missing`);
+  }
+  return call[0];
 }
 
 type BindingHelperCase = {
@@ -542,15 +550,14 @@ describe("plugin interactive handlers", () => {
         data: "codex:resume:thread-1",
         callbackId: "cb-1",
       }),
-      expectedCall: {
-        channel: "telegram",
-        conversationId: "-10099:topic:77",
-        callback: expect.objectContaining({
-          namespace: "codex",
-          payload: "resume:thread-1",
-          chatId: "-10099",
-          messageId: 55,
-        }),
+      expectHandlerContext: (ctx: unknown) => {
+        const telegramCtx = ctx as TelegramInteractiveHandlerContext;
+        expect(telegramCtx.channel).toBe("telegram");
+        expect(telegramCtx.conversationId).toBe("-10099:topic:77");
+        expect(telegramCtx.callback.namespace).toBe("codex");
+        expect(telegramCtx.callback.payload).toBe("resume:thread-1");
+        expect(telegramCtx.callback.chatId).toBe("-10099");
+        expect(telegramCtx.callback.messageId).toBe(55);
       },
     },
     {
@@ -561,15 +568,14 @@ describe("plugin interactive handlers", () => {
         interactionId: "ix-1",
         interaction: { kind: "button", values: ["allow"] },
       }),
-      expectedCall: {
-        channel: "discord",
-        conversationId: "channel-1",
-        interaction: expect.objectContaining({
-          namespace: "codex",
-          payload: "approve:thread-1",
-          messageId: "message-1",
-          values: ["allow"],
-        }),
+      expectHandlerContext: (ctx: unknown) => {
+        const discordCtx = ctx as DiscordInteractiveHandlerContext;
+        expect(discordCtx.channel).toBe("discord");
+        expect(discordCtx.conversationId).toBe("channel-1");
+        expect(discordCtx.interaction.namespace).toBe("codex");
+        expect(discordCtx.interaction.payload).toBe("approve:thread-1");
+        expect(discordCtx.interaction.messageId).toBe("message-1");
+        expect(discordCtx.interaction.values).toEqual(["allow"]);
       },
     },
     {
@@ -580,19 +586,18 @@ describe("plugin interactive handlers", () => {
         interactionId: "slack-ix-1",
         interaction: { kind: "button" },
       }),
-      expectedCall: {
-        channel: "slack",
-        conversationId: "C123",
-        threadId: "1710000000.000100",
-        interaction: expect.objectContaining({
-          namespace: "codex",
-          payload: "approve:thread-1",
-          actionId: "codex",
-          messageTs: "1710000000.000200",
-        }),
+      expectHandlerContext: (ctx: unknown) => {
+        const slackCtx = ctx as SlackInteractiveHandlerContext;
+        expect(slackCtx.channel).toBe("slack");
+        expect(slackCtx.conversationId).toBe("C123");
+        expect(slackCtx.threadId).toBe("1710000000.000100");
+        expect(slackCtx.interaction.namespace).toBe("codex");
+        expect(slackCtx.interaction.payload).toBe("approve:thread-1");
+        expect(slackCtx.interaction.actionId).toBe("codex");
+        expect(slackCtx.interaction.messageTs).toBe("1710000000.000200");
       },
     },
-  ] as const)("$name", async ({ channel, baseParams, expectedCall }) => {
+  ] as const)("$name", async ({ channel, baseParams, expectHandlerContext }) => {
     const handler = vi.fn(async () => ({ handled: true }));
     expect(registerInteractiveHandler({ channel, namespace: "codex", handler })).toEqual({
       ok: true,
@@ -601,7 +606,7 @@ describe("plugin interactive handlers", () => {
     await expectDedupedInteractiveDispatch({
       baseParams,
       handler,
-      expectedCall,
+      expectHandlerContext,
     });
   });
 
@@ -630,15 +635,11 @@ describe("plugin interactive handlers", () => {
       ),
     ).resolves.toEqual({ matched: true, handled: true, duplicate: false });
 
-    expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        callback: expect.objectContaining({
-          namespace: "codexapp",
-          payload: "resume:thread-1",
-        }),
-      }),
-    );
+    expect(handler).toHaveBeenCalledTimes(1);
+    const ctx = requireHandlerCall(handler) as TelegramInteractiveHandlerContext;
+    expect(ctx.channel).toBe("telegram");
+    expect(ctx.callback.namespace).toBe("codexapp");
+    expect(ctx.callback.payload).toBe("resume:thread-1");
 
     second.clearPluginInteractiveHandlers();
   });

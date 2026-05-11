@@ -149,6 +149,29 @@ type RunWithModelFallbackParams = {
   run: (provider: string, model: string) => Promise<unknown>;
 };
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(
+  value: unknown,
+  expected: Record<string, unknown>,
+  label: string,
+): Record<string, unknown> {
+  const record = requireRecord(value, label);
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], `${label}.${key}`).toEqual(expectedValue);
+  }
+  return record;
+}
+
+function expectReplyText(result: unknown, text: string): void {
+  expectRecordFields(result, { text }, "reply result");
+}
+
 beforeEach(() => {
   clearRuntimeConfigSnapshot();
   resetDiagnosticEventsForTest();
@@ -377,7 +400,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       typingMode: "instant",
     });
 
-    expect(result).toMatchObject({ text: "ok" });
+    expectReplyText(result, "ok");
     expect(scheduleFollowupDrain).toHaveBeenCalledTimes(1);
   });
 
@@ -392,21 +415,33 @@ describe("runReplyAgent auto-compaction token update", () => {
       },
     });
 
-    expect(usageEvent).toMatchObject({
-      type: "model.usage",
-      agentId: "main",
-      usage: {
+    const usagePayload = expectRecordFields(
+      usageEvent,
+      {
+        type: "model.usage",
+        agentId: "main",
+      },
+      "usage diagnostic event",
+    );
+    expectRecordFields(
+      usagePayload.usage,
+      {
         input: 75_000,
         output: 5_000,
         cacheRead: 25_000,
         promptTokens: 100_000,
         total: 105_000,
       },
-      context: {
+      "usage diagnostic usage",
+    );
+    expectRecordFields(
+      usagePayload.context,
+      {
         limit: 200_000,
         used: 44_000,
       },
-    });
+      "usage diagnostic context",
+    );
   });
 
   it("falls back to last-call prompt usage for live diagnostic context", async () => {
@@ -425,20 +460,32 @@ describe("runReplyAgent auto-compaction token update", () => {
       },
     });
 
-    expect(usageEvent).toMatchObject({
-      type: "model.usage",
-      usage: {
+    const usagePayload = expectRecordFields(
+      usageEvent,
+      {
+        type: "model.usage",
+      },
+      "usage diagnostic event",
+    );
+    expectRecordFields(
+      usagePayload.usage,
+      {
         input: 75_000,
         output: 5_000,
         cacheRead: 25_000,
         promptTokens: 100_000,
         total: 105_000,
       },
-      context: {
+      "usage diagnostic usage",
+    );
+    expectRecordFields(
+      usagePayload.context,
+      {
         limit: 200_000,
         used: 81_000,
       },
-    });
+      "usage diagnostic context",
+    );
   });
 });
 
@@ -634,7 +681,7 @@ describe("runReplyAgent block streaming", () => {
     const result = await resultPromise;
 
     expect(sawAbort).toBe(true);
-    expect(result).toMatchObject({ text: "Final message" });
+    expectReplyText(result, "Final message");
   });
 });
 
@@ -1304,7 +1351,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
       typingMode: "instant",
     });
 
-    expect(result).toMatchObject({ text: "Visible reply" });
+    expectReplyText(result, "Visible reply");
     expect(Array.isArray(result)).toBe(false);
   });
 
@@ -1613,7 +1660,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
     });
 
     expect(loadSessionStoreSpy).not.toHaveBeenCalledWith(storePath, { skipCache: true });
-    expect(result).toMatchObject({ text: "Normal reply" });
+    expectReplyText(result, "Normal reply");
   });
 });
 
@@ -1690,7 +1737,7 @@ describe("runReplyAgent claude-cli routing", () => {
 
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ text: "ok" });
+    expectReplyText(result, "ok");
   });
 
   it("does not leak hook-blocked CLI input in raw trace payloads", async () => {
@@ -1871,10 +1918,12 @@ describe("runReplyAgent claude-cli routing", () => {
     });
 
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-    expect(runCliAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "claude-cli" }),
+    expectRecordFields(
+      runCliAgentMock.mock.calls[0]?.[0],
+      { provider: "claude-cli" },
+      "CLI run params",
     );
-    expect(result).toMatchObject({ text: "ok" });
+    expectReplyText(result, "ok");
   });
 });
 
@@ -1952,7 +2001,7 @@ describe("runReplyAgent messaging tool dedupe", () => {
 
     const result = await createRun("slack");
 
-    expect(result).toMatchObject({ text: "hello world!" });
+    expectReplyText(result, "hello world!");
   });
 
   it("drops duplicate replies when a messaging tool sent the same text via the same provider + target", async () => {
@@ -1978,7 +2027,7 @@ describe("runReplyAgent messaging tool dedupe", () => {
 
     const result = await createRun("slack");
 
-    expect(result).toMatchObject({ text: "hello world!" });
+    expectReplyText(result, "hello world!");
   });
 
   it("keeps final reply when text matches a cross-target messaging send", async () => {
@@ -1991,7 +2040,7 @@ describe("runReplyAgent messaging tool dedupe", () => {
 
     const result = await createRun("slack");
 
-    expect(result).toMatchObject({ text: "hello world!" });
+    expectReplyText(result, "hello world!");
   });
 
   it("delivers replies when account ids do not match", async () => {
@@ -2011,7 +2060,7 @@ describe("runReplyAgent messaging tool dedupe", () => {
 
     const result = await createRun("slack");
 
-    expect(result).toMatchObject({ text: "hello world!" });
+    expectReplyText(result, "hello world!");
   });
 });
 
@@ -2083,9 +2132,10 @@ describe("runReplyAgent reminder commitment guard", () => {
     });
 
     const result = await createRun();
-    expect(result).toMatchObject({
-      text: "I'll remind you tomorrow morning.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
-    });
+    expectReplyText(
+      result,
+      "I'll remind you tomorrow morning.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
+    );
   });
 
   it("keeps reminder commitment unchanged when cron.add succeeded", async () => {
@@ -2096,9 +2146,7 @@ describe("runReplyAgent reminder commitment guard", () => {
     });
 
     const result = await createRun();
-    expect(result).toMatchObject({
-      text: "I'll remind you tomorrow morning.",
-    });
+    expectReplyText(result, "I'll remind you tomorrow morning.");
   });
 
   it("suppresses guard note when session already has an active cron job", async () => {
@@ -2123,9 +2171,7 @@ describe("runReplyAgent reminder commitment guard", () => {
     });
 
     const result = await createRun();
-    expect(result).toMatchObject({
-      text: "I'll ping you when it's done.",
-    });
+    expectReplyText(result, "I'll ping you when it's done.");
   });
 
   it("still appends guard note when cron jobs exist but not for the current session", async () => {
@@ -2150,9 +2196,10 @@ describe("runReplyAgent reminder commitment guard", () => {
     });
 
     const result = await createRun();
-    expect(result).toMatchObject({
-      text: "I'll remind you tomorrow morning.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
-    });
+    expectReplyText(
+      result,
+      "I'll remind you tomorrow morning.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
+    );
   });
 
   it("still appends guard note when cron jobs for session exist but are disabled", async () => {
@@ -2177,9 +2224,10 @@ describe("runReplyAgent reminder commitment guard", () => {
     });
 
     const result = await createRun();
-    expect(result).toMatchObject({
-      text: "I'll check back in an hour.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
-    });
+    expectReplyText(
+      result,
+      "I'll check back in an hour.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
+    );
   });
 
   it("still appends guard note when sessionKey is missing", async () => {
@@ -2204,9 +2252,10 @@ describe("runReplyAgent reminder commitment guard", () => {
     });
 
     const result = await createRun({ omitSessionKey: true });
-    expect(result).toMatchObject({
-      text: "I'll ping you later.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
-    });
+    expectReplyText(
+      result,
+      "I'll ping you later.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
+    );
   });
 
   it("still appends guard note when cron store read fails", async () => {
@@ -2219,9 +2268,10 @@ describe("runReplyAgent reminder commitment guard", () => {
     });
 
     const result = await createRun({ sessionKey: "main" });
-    expect(result).toMatchObject({
-      text: "I'll remind you after lunch.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
-    });
+    expectReplyText(
+      result,
+      "I'll remind you after lunch.\n\nNote: I did not schedule a reminder in this turn, so this will not trigger automatically.",
+    );
   });
 });
 
@@ -2705,9 +2755,11 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
     const result = await createRun();
     const payload = Array.isArray(result) ? result[0] : result;
 
-    expect(payload).toMatchObject({
-      mediaUrl: "https://example.test/image.png",
-    });
+    expectRecordFields(
+      payload,
+      { mediaUrl: "https://example.test/image.png" },
+      "media-only retry-limit payload",
+    );
     expect(payload?.text).toBeUndefined();
   });
 });

@@ -108,10 +108,17 @@ describe("auth-store", () => {
     );
 
     await expect(readWebAuthState(authDir)).resolves.toBe("linked");
-    await expect(readWebAuthSnapshot(authDir)).resolves.toMatchObject({
+    const snapshot = await readWebAuthSnapshot(authDir);
+    expect(snapshot.authAgeMs).toBeTypeOf("number");
+    expect(snapshot.authAgeMs).toBeGreaterThanOrEqual(0);
+    expect(snapshot).toEqual({
       state: "linked",
-      authAgeMs: expect.any(Number),
-      selfId: expect.objectContaining({ e164: "+15551234567" }),
+      authAgeMs: snapshot.authAgeMs,
+      selfId: {
+        e164: "+15551234567",
+        jid: "15551234567@s.whatsapp.net",
+        lid: null,
+      },
     });
   });
 
@@ -301,8 +308,12 @@ describe("auth-store", () => {
   it("throws a typed unstable-auth error when channel selection times out", async () => {
     hoisted.waitForCredsSaveQueueWithTimeout.mockResolvedValueOnce("timed_out");
 
-    await expect(pickWebChannel("auto", "/tmp/openclaw-wa-auth-unstable")).rejects.toEqual(
-      expect.objectContaining({
+    const error = await pickWebChannel("auto", "/tmp/openclaw-wa-auth-unstable").catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(WhatsAppAuthUnstableError);
+    expect(error).toEqual(
+      Object.assign(new WhatsAppAuthUnstableError(), {
         code: WHATSAPP_AUTH_UNSTABLE_CODE,
         name: WhatsAppAuthUnstableError.name,
       }),

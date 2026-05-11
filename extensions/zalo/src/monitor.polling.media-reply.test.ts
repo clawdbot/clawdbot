@@ -295,12 +295,10 @@ describe("Zalo polling media replies", () => {
       );
       expect(firstHostedMediaRoutes).toHaveLength(1);
       const hostedMediaRoute = firstHostedMediaRoutes[0];
-      expect(hostedMediaRoute).toEqual(
-        expect.objectContaining({
-          path: "/hooks/zalo/media",
-          pluginId: "zalo",
-        }),
-      );
+      expect(hostedMediaRoute?.path).toBe("/hooks/zalo/media");
+      expect(hostedMediaRoute?.pluginId).toBe("zalo");
+      expect(hostedMediaRoute?.source).toBe("zalo-hosted-media");
+      expect(hostedMediaRoute?.handler).toBeTypeOf("function");
 
       const secondRuntime = createRuntimeEnv();
       const secondSetup = createLifecycleMonitorSetup({

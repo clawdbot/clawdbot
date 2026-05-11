@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const SCRIPT_PATH = "scripts/test-install-sh-docker.sh";
+const DOCKER_SETUP_PATH = "scripts/docker/setup.sh";
 const SMOKE_RUNNER_PATH = "scripts/docker/install-sh-smoke/run.sh";
 const BUN_GLOBAL_SMOKE_PATH = "scripts/e2e/bun-global-install-smoke.sh";
 const BUN_GLOBAL_ASSERTIONS_PATH = "scripts/e2e/lib/bun-global-install/assertions.mjs";
@@ -71,7 +72,9 @@ describe("test-install-sh-docker", () => {
   it("runs the root Dockerfile build with the CI heap limit", () => {
     const dockerfile = readFileSync("Dockerfile", "utf8");
 
-    expect(dockerfile).toContain("NODE_OPTIONS=--max-old-space-size=8192 pnpm build:docker");
+    expect(dockerfile).toContain(
+      "NODE_OPTIONS=--max-old-space-size=8192 pnpm_config_verify_deps_before_run=false pnpm build:docker",
+    );
   });
 
   it("exports the Playwright browser cache installed by the root Dockerfile", () => {
@@ -82,6 +85,14 @@ describe("test-install-sh-docker", () => {
     expect(dockerfile).toContain(
       "node /app/node_modules/playwright-core/cli.js install --with-deps chromium",
     );
+  });
+
+  it("passes the baked browser build arg through Docker setup", () => {
+    const script = readFileSync(DOCKER_SETUP_PATH, "utf8");
+
+    expect(script).toContain('export OPENCLAW_INSTALL_BROWSER="${OPENCLAW_INSTALL_BROWSER:-}"');
+    expect(script).toContain("OPENCLAW_INSTALL_BROWSER \\");
+    expect(script).toContain('--build-arg "OPENCLAW_INSTALL_BROWSER=${OPENCLAW_INSTALL_BROWSER}"');
   });
 
   it("allows repository branch history and release tags for secret-backed Docker release checks", () => {
@@ -229,6 +240,9 @@ describe("bun global install smoke", () => {
     expect(workflow).not.toContain('timeout 300s docker pull "$IMAGE_REF"');
     expect(workflow).toContain("--progress=plain");
     expect(workflow).toContain("--load");
+    expect(workflow).toContain("pnpm-workspace.yaml");
+    expect(workflow).toContain("workspace.patchedDependencies");
+    expect(workflow).not.toContain("pkg.pnpm?.patchedDependencies");
     expect(workflow).not.toContain("--cache-from");
     expect(workflow).not.toContain("--cache-to");
     expect(workflow).not.toContain("type=gha");

@@ -41,6 +41,14 @@ function matchesSensitivePattern(path: string): boolean {
   return SENSITIVE_PATTERNS.some((pattern) => pattern.test(path));
 }
 
+function isLocalServiceEnvValuePath(path: string): boolean {
+  const lowerPath = normalizeLowercaseStringOrEmpty(path);
+  return lowerPath.includes("localservice.env.");
+}
+
 export function isSensitiveConfigPath(path: string): boolean {
-  return !isWhitelistedSensitivePath(path) && matchesSensitivePattern(path);
+  return (
+    isLocalServiceEnvValuePath(path) ||
+    (!isWhitelistedSensitivePath(path) && matchesSensitivePattern(path))
+  );
 }

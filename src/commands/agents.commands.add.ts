@@ -10,7 +10,10 @@ import {
   ensureAuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
-import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import {
+  buildPersistedAuthProfileSecretsStore,
+  loadPersistedAuthProfileStore,
+} from "../agents/auth-profiles/persisted.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { commitConfigWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -63,7 +66,12 @@ async function copyPortableAuthProfiles(params: {
     return { copied: 0, skipped: portable.skippedProfileIds.length };
   }
   await fs.mkdir(path.dirname(params.destAuthPath), { recursive: true });
-  saveJsonFile(params.destAuthPath, portable.store);
+  saveJsonFile(
+    params.destAuthPath,
+    buildPersistedAuthProfileSecretsStore(portable.store, undefined, {
+      agentDir: path.dirname(params.destAuthPath),
+    }),
+  );
   return {
     copied: portable.copiedProfileIds.length,
     skipped: portable.skippedProfileIds.length,
@@ -304,7 +312,10 @@ export async function agentsAddCommand(
           });
           if (shouldCopy) {
             await fs.mkdir(path.dirname(destAuthPath), { recursive: true });
-            saveJsonFile(destAuthPath, portable.store);
+            saveJsonFile(
+              destAuthPath,
+              buildPersistedAuthProfileSecretsStore(portable.store, undefined, { agentDir }),
+            );
             const skippedText =
               portable.skippedProfileIds.length > 0
                 ? ` ${formatSkippedOAuthProfilesMessage({

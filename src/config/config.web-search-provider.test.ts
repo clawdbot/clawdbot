@@ -240,6 +240,26 @@ vi.mock("../plugins/manifest-registry.js", () => {
 
 const { resolveSearchProvider } = webSearchTesting;
 
+type ValidationMessage = {
+  path?: string;
+  message?: string;
+  allowedValues?: unknown;
+};
+
+function findValidationMessage(messages: ValidationMessage[], path: string): ValidationMessage {
+  const message = messages.find((entry) => entry.path === path);
+  expect(message).toBeTruthy();
+  return message ?? {};
+}
+
+function expectAllowedValuesInclude(message: ValidationMessage, values: string[]): void {
+  expect(Array.isArray(message.allowedValues)).toBe(true);
+  const allowedValues = Array.isArray(message.allowedValues) ? message.allowedValues : [];
+  for (const value of values) {
+    expect(allowedValues).toContain(value);
+  }
+}
+
 describe("web search provider config", () => {
   it("does not warn for brave plugin config when bundled web search allowlist compat applies", () => {
     const res = validateConfigObjectWithPlugins({
@@ -269,14 +289,13 @@ describe("web search provider config", () => {
     if (!res.ok) {
       return;
     }
-    expect(res.warnings).not.toContainEqual(
-      expect.objectContaining({
-        path: "plugins.entries.brave",
-        message: expect.stringContaining(
-          "plugin disabled (not in allowlist) but config is present",
-        ),
-      }),
-    );
+    expect(
+      res.warnings.some(
+        (warning) =>
+          warning.path === "plugins.entries.brave" &&
+          warning.message.includes("plugin disabled (not in allowlist) but config is present"),
+      ),
+    ).toBe(false);
   });
 
   it("accepts perplexity provider and config", () => {
@@ -453,14 +472,11 @@ describe("web search provider config", () => {
     if (res.ok) {
       return;
     }
-    expect(res.issues).toContainEqual(
-      expect.objectContaining({
-        path: "tools.web.search.provider",
-        message:
-          'web_search provider is not available: brave (install or enable plugin "brave", then run openclaw doctor --fix)',
-        allowedValues: expect.arrayContaining(["brave"]),
-      }),
+    const issue = findValidationMessage(res.issues, "tools.web.search.provider");
+    expect(issue.message).toBe(
+      'web_search provider is not available: brave (install or enable plugin "brave", then run openclaw doctor --fix)',
     );
+    expectAllowedValuesInclude(issue, ["brave"]);
   });
 
   it("rejects unknown provider ids without plugin evidence", () => {
@@ -478,13 +494,9 @@ describe("web search provider config", () => {
     if (res.ok) {
       return;
     }
-    expect(res.issues).toContainEqual(
-      expect.objectContaining({
-        path: "tools.web.search.provider",
-        message: "unknown web_search provider: brvae",
-        allowedValues: expect.arrayContaining(["acme-search", "brave", "gemini"]),
-      }),
-    );
+    const issue = findValidationMessage(res.issues, "tools.web.search.provider");
+    expect(issue.message).toBe("unknown web_search provider: brvae");
+    expectAllowedValuesInclude(issue, ["acme-search", "brave", "gemini"]);
   });
 
   it("warns for unknown provider ids when stale plugin config is present", () => {
@@ -511,14 +523,8 @@ describe("web search provider config", () => {
     if (!res.ok) {
       return;
     }
-    expect(res.warnings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: "tools.web.search.provider",
-          message: expect.stringContaining("unknown web_search provider: missing-third-party"),
-        }),
-      ]),
-    );
+    const warning = findValidationMessage(res.warnings, "tools.web.search.provider");
+    expect(warning.message).toContain("unknown web_search provider: missing-third-party");
   });
 });
 

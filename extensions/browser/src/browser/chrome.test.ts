@@ -36,6 +36,25 @@ import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 
 type StopChromeTarget = Parameters<typeof stopOpenClawChrome>[0];
+type ChromeCdpDiagnostic = Awaited<ReturnType<typeof diagnoseChromeCdp>>;
+
+function expectFailedChromeCdpDiagnostic(
+  diagnostic: ChromeCdpDiagnostic,
+): Extract<ChromeCdpDiagnostic, { ok: false }> {
+  if (diagnostic.ok) {
+    throw new Error("Expected failed Chrome CDP diagnostic");
+  }
+  return diagnostic;
+}
+
+function expectReadyChromeCdpDiagnostic(
+  diagnostic: ChromeCdpDiagnostic,
+): Extract<ChromeCdpDiagnostic, { ok: true }> {
+  if (!diagnostic.ok) {
+    throw new Error("Expected ready Chrome CDP diagnostic");
+  }
+  return diagnostic;
+}
 
 async function readJson(filePath: string): Promise<Record<string, unknown>> {
   const raw = await fsp.readFile(filePath, "utf-8");
@@ -470,11 +489,11 @@ describe("browser chrome helpers", () => {
       } as unknown as Response),
     );
 
-    await expect(diagnoseChromeCdp("http://127.0.0.1:12345", 50, 50)).resolves.toMatchObject({
-      ok: false,
-      code: "missing_websocket_debugger_url",
-      cdpUrl: "http://127.0.0.1:12345",
-    });
+    const diagnostic = expectFailedChromeCdpDiagnostic(
+      await diagnoseChromeCdp("http://127.0.0.1:12345", 50, 50),
+    );
+    expect(diagnostic.code).toBe("missing_websocket_debugger_url");
+    expect(diagnostic.cdpUrl).toBe("http://127.0.0.1:12345");
   });
 
   it("allows loopback CDP probes while still blocking non-loopback private targets in strict SSRF mode", async () => {
@@ -587,11 +606,10 @@ describe("browser chrome helpers", () => {
       wsPath: "/devtools/browser/stale-diagnostic",
       onConnection: (wss) => wss.on("connection", (_ws) => {}),
       run: async (baseUrl) => {
-        const diagnostic = await diagnoseChromeCdp(baseUrl, 300, 50);
-        expect(diagnostic).toMatchObject({
-          ok: false,
-          code: "websocket_health_command_timeout",
-        });
+        const diagnostic = expectFailedChromeCdpDiagnostic(
+          await diagnoseChromeCdp(baseUrl, 300, 50),
+        );
+        expect(diagnostic.code).toBe("websocket_health_command_timeout");
         expect(diagnostic.wsUrl).toMatch(/\/devtools\/browser\/stale-diagnostic$/);
       },
     });
@@ -668,11 +686,10 @@ describe("browser chrome helpers", () => {
         const url = new URL(baseUrl);
         const wsOnlyBase = `ws://${url.host}?token=abc`;
         await expect(isChromeCdpReady(wsOnlyBase, 300, 400)).resolves.toBe(true);
-        const diagnostic = await diagnoseChromeCdp(wsOnlyBase, 300, 400);
-        expect(diagnostic).toMatchObject({
-          ok: true,
-          wsUrl: `ws://${url.host}/devtools/browser/READY?token=abc`,
-        });
+        const diagnostic = expectReadyChromeCdpDiagnostic(
+          await diagnoseChromeCdp(wsOnlyBase, 300, 400),
+        );
+        expect(diagnostic.wsUrl).toBe(`ws://${url.host}/devtools/browser/READY?token=abc`);
       },
     });
   });
@@ -719,11 +736,11 @@ describe("browser chrome helpers", () => {
       const addr = server.address() as AddressInfo;
       const wsOnlyBase = `ws://127.0.0.1:${addr.port}?token=abc`;
       await expect(isChromeCdpReady(wsOnlyBase, 300, 400)).resolves.toBe(true);
-      await expect(diagnoseChromeCdp(wsOnlyBase, 300, 400)).resolves.toMatchObject({
-        ok: true,
-        wsUrl: wsOnlyBase,
-        browser: "Browserless/Mock",
-      });
+      const diagnostic = expectReadyChromeCdpDiagnostic(
+        await diagnoseChromeCdp(wsOnlyBase, 300, 400),
+      );
+      expect(diagnostic.wsUrl).toBe(wsOnlyBase);
+      expect(diagnostic.browser).toBe("Browserless/Mock");
     } finally {
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -785,10 +802,10 @@ describe("browser chrome helpers", () => {
     const port = (wss.address() as AddressInfo).port;
     try {
       await expect(isChromeCdpReady(`ws://127.0.0.1:${port}`, 500, 500)).resolves.toBe(true);
-      await expect(diagnoseChromeCdp(`ws://127.0.0.1:${port}`, 500, 500)).resolves.toMatchObject({
-        ok: true,
-        wsUrl: `ws://127.0.0.1:${port}`,
-      });
+      const diagnostic = expectReadyChromeCdpDiagnostic(
+        await diagnoseChromeCdp(`ws://127.0.0.1:${port}`, 500, 500),
+      );
+      expect(diagnostic.wsUrl).toBe(`ws://127.0.0.1:${port}`);
     } finally {
       await new Promise<void>((resolve) => wss.close(() => resolve()));
     }

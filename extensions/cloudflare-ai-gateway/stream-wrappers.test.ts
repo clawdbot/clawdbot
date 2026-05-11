@@ -1,4 +1,4 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,

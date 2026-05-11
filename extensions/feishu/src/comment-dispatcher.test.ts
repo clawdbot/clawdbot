@@ -155,16 +155,15 @@ describe("createFeishuCommentReplyDispatcher", () => {
     const status = await raceWithNextMacrotask(deliverPromise.then(() => "done"));
 
     expect(status).toBe("done");
-    expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        file_token: "doc_token_1",
-        file_type: "docx",
-        comment_id: "comment_1",
-        content: "hello world",
-        is_whole_comment: false,
-      }),
-    );
+    const client = createFeishuClientMock.mock.results[0]?.value;
+    expect(client).toBeDefined();
+    expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(client, {
+      file_token: "doc_token_1",
+      file_type: "docx",
+      comment_id: "comment_1",
+      content: "hello world",
+      is_whole_comment: false,
+    });
     expect(cleanup).not.toHaveBeenCalled();
 
     void options.onCleanup?.();

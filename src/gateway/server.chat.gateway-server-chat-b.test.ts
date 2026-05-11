@@ -193,16 +193,14 @@ describe("gateway server chat", () => {
       });
 
       expect(context.loadGatewayModelCatalog).not.toHaveBeenCalled();
-      expect(responses).toEqual([
-        expect.objectContaining({
-          ok: true,
-          payload: expect.objectContaining({
-            sessionKey: "main",
-            sessionId: "sess-main",
-            messages: expect.any(Array),
-          }),
-        }),
-      ]);
+      expect(responses).toHaveLength(1);
+      expect(responses[0]?.ok).toBe(true);
+      const payload = responses[0]?.payload as
+        | { sessionKey?: string; sessionId?: string; messages?: unknown }
+        | undefined;
+      expect(payload?.sessionKey).toBe("main");
+      expect(payload?.sessionId).toBe("sess-main");
+      expect(Array.isArray(payload?.messages)).toBe(true);
     } finally {
       clearConfigCache();
       testState.agentConfig = undefined;
@@ -607,14 +605,12 @@ describe("gateway server chat", () => {
 
         const messages = await fetchHistoryMessages(ws);
         expect(messages).toHaveLength(2);
-        expect(messages[0]).toMatchObject({
-          role: "user",
-          content: "hi",
-        });
-        expect(messages[1]).toMatchObject({
-          role: "assistant",
-          provider: "claude-cli",
-        });
+        const userMessage = messages[0] as { role?: string; content?: string };
+        expect(userMessage.role).toBe("user");
+        expect(userMessage.content).toBe("hi");
+        const assistantMessage = messages[1] as { role?: string; provider?: string };
+        expect(assistantMessage.role).toBe("assistant");
+        expect(assistantMessage.provider).toBe("claude-cli");
       } finally {
         if (originalHome === undefined) {
           delete process.env.HOME;
@@ -835,11 +831,16 @@ describe("gateway server chat", () => {
 
       const messages = await fetchHistoryMessages(ws);
       expect(messages).toHaveLength(1);
-      expect(messages[0]).toMatchObject({
-        role: "assistant",
-        usage: { input: 12, output: 5, totalTokens: 17 },
-        cost: { total: 0.0123 },
-      });
+      const message = messages[0] as {
+        role?: string;
+        usage?: { input?: number; output?: number; totalTokens?: number };
+        cost?: { total?: number };
+      };
+      expect(message.role).toBe("assistant");
+      expect(message.usage?.input).toBe(12);
+      expect(message.usage?.output).toBe(5);
+      expect(message.usage?.totalTokens).toBe(17);
+      expect(message.cost?.total).toBe(0.0123);
       expect(messages[0]).not.toHaveProperty("details");
     });
   });
@@ -950,11 +951,16 @@ describe("gateway server chat", () => {
       ]);
 
       const messages = await fetchHistoryMessages(ws);
-      expect(messages[1]).toMatchObject({
-        role: "assistant",
-        content: [{ type: "text", text: "I will clean that up now." }],
-        timestamp: 2,
-      });
+      const assistantMessage = messages[1] as {
+        role?: string;
+        content?: Array<{ type?: string; text?: string }>;
+        timestamp?: number;
+      };
+      expect(assistantMessage.role).toBe("assistant");
+      expect(assistantMessage.content).toEqual([
+        { type: "text", text: "I will clean that up now." },
+      ]);
+      expect(assistantMessage.timestamp).toBe(2);
     });
   });
 

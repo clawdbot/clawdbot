@@ -187,7 +187,7 @@ describe("installPluginFromPath", () => {
 
     expect(result.ok).toBe(true);
     expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler.mock.calls[0]?.[0]).toMatchObject({
+    expect(handler.mock.calls[0]?.[0]).toEqual({
       targetName: "payload",
       targetType: "plugin",
       origin: "plugin-file",
@@ -200,6 +200,11 @@ describe("installPluginFromPath", () => {
       },
       builtinScan: {
         status: "ok",
+        scannedFiles: 1,
+        critical: 0,
+        warn: 0,
+        info: 0,
+        findings: [],
       },
       plugin: {
         contentType: "file",
@@ -221,6 +226,7 @@ describe("installPluginFromPath", () => {
 
     const sourcePath = path.join(baseDir, "payload.js");
     fs.writeFileSync(sourcePath, "eval('danger');\n", "utf-8");
+    const expectedFinding = `Dynamic code execution detected (${sourcePath}:1)`;
 
     const { result, warnings } = await installFromFileWithWarnings({
       filePath: sourcePath,
@@ -230,11 +236,13 @@ describe("installPluginFromPath", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(result.error).toContain('Plugin file "payload" installation blocked');
+      expect(result.error).toBe(
+        `Plugin file "payload" installation blocked: dangerous code patterns detected: ${expectedFinding}`,
+      );
     }
-    expect(warnings).toEqual(
-      expect.arrayContaining([expect.stringContaining("dangerous code pattern")]),
-    );
+    expect(warnings).toEqual([
+      `WARNING: Plugin file "payload" contains dangerous code patterns: ${expectedFinding}`,
+    ]);
   });
 
   it("allows plain file installs with dangerous code patterns when forced unsafe install is set", async () => {
@@ -244,6 +252,7 @@ describe("installPluginFromPath", () => {
 
     const sourcePath = path.join(baseDir, "payload.js");
     fs.writeFileSync(sourcePath, "eval('danger');\n", "utf-8");
+    const expectedFinding = `Dynamic code execution detected (${sourcePath}:1)`;
 
     const { result, warnings } = await installFromFileWithWarnings({
       filePath: sourcePath,
@@ -252,13 +261,10 @@ describe("installPluginFromPath", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(
-      warnings.some((warning) =>
-        warning.includes(
-          "forced despite dangerous code patterns via --dangerously-force-unsafe-install",
-        ),
-      ),
-    ).toBe(true);
+    expect(warnings).toEqual([
+      `WARNING: Plugin file "payload" contains dangerous code patterns: ${expectedFinding}`,
+      `WARNING: Plugin file "payload" installation forced despite dangerous code patterns via --dangerously-force-unsafe-install: ${expectedFinding}`,
+    ]);
   });
 
   it("blocks hardlink alias overwrites when installing a plain file plugin", async () => {

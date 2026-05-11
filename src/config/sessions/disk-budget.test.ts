@@ -15,7 +15,22 @@ async function expectPathExists(targetPath: string): Promise<void> {
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected path to be missing: ${targetPath}`);
+}
+
+function expectBudgetResult(
+  result: Awaited<ReturnType<typeof enforceSessionDiskBudget>>,
+): asserts result is NonNullable<Awaited<ReturnType<typeof enforceSessionDiskBudget>>> {
+  expect(result).not.toBeNull();
+  if (result === null) {
+    throw new Error("expected disk budget enforcement result");
+  }
 }
 
 describe("enforceSessionDiskBudget", () => {
@@ -46,11 +61,8 @@ describe("enforceSessionDiskBudget", () => {
       });
 
       await expectPathExists(transcriptPath);
-      expect(result).toEqual(
-        expect.objectContaining({
-          removedFiles: 0,
-        }),
-      );
+      expectBudgetResult(result);
+      expect(result.removedFiles).toBe(0);
     });
   });
 
@@ -85,12 +97,9 @@ describe("enforceSessionDiskBudget", () => {
 
       await expectPathExists(transcriptPath);
       await expectPathMissing(archivePath);
-      expect(result).toEqual(
-        expect.objectContaining({
-          removedFiles: 1,
-          removedEntries: 0,
-        }),
-      );
+      expectBudgetResult(result);
+      expect(result.removedFiles).toBe(1);
+      expect(result.removedEntries).toBe(0);
     });
   });
 
@@ -146,12 +155,9 @@ describe("enforceSessionDiskBudget", () => {
       await expectPathExists(transcriptPath);
       await expectPathMissing(checkpointPath);
       await expectPathExists(referencedCheckpointPath);
-      expect(result).toEqual(
-        expect.objectContaining({
-          removedFiles: 1,
-          removedEntries: 0,
-        }),
-      );
+      expectBudgetResult(result);
+      expect(result.removedFiles).toBe(1);
+      expect(result.removedEntries).toBe(0);
     });
   });
 
@@ -196,12 +202,9 @@ describe("enforceSessionDiskBudget", () => {
       await expectPathExists(referencedPointer);
       await expectPathMissing(orphanRuntime);
       await expectPathMissing(orphanPointer);
-      expect(result).toEqual(
-        expect.objectContaining({
-          removedFiles: 2,
-          removedEntries: 0,
-        }),
-      );
+      expectBudgetResult(result);
+      expect(result.removedFiles).toBe(2);
+      expect(result.removedEntries).toBe(0);
     });
   });
 
@@ -243,11 +246,8 @@ describe("enforceSessionDiskBudget", () => {
       expect(store).toHaveProperty(protectedKey);
       expect(store[removableKey]).toBeUndefined();
       expect(store).toHaveProperty(activeKey);
-      expect(result).toEqual(
-        expect.objectContaining({
-          removedEntries: 1,
-        }),
-      );
+      expectBudgetResult(result);
+      expect(result.removedEntries).toBe(1);
     });
   });
 });

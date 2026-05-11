@@ -9,7 +9,7 @@ describe("resolveWhatsAppOutboundSessionRoute", () => {
       target: "120363401234567890@newsletter",
     });
 
-    expect(route).toMatchObject({
+    expect(route).toEqual({
       sessionKey: "agent:main:whatsapp:channel:120363401234567890@newsletter",
       baseSessionKey: "agent:main:whatsapp:channel:120363401234567890@newsletter",
       peer: {
@@ -29,13 +29,16 @@ describe("resolveWhatsAppOutboundSessionRoute", () => {
       target: "+15551234567",
     });
 
-    expect(route).toMatchObject({
+    expect(route).toEqual({
       sessionKey: "agent:main:whatsapp:direct:+15551234567",
+      baseSessionKey: "agent:main:whatsapp:direct:+15551234567",
       peer: {
         kind: "direct",
         id: "+15551234567",
       },
       chatType: "direct",
+      from: "+15551234567",
+      to: "+15551234567",
     });
   });
 });

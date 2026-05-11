@@ -153,7 +153,7 @@ describe("registerMatrixAutoJoin", () => {
 
     expect(joinRoom).not.toHaveBeenCalled();
     expect(error).toHaveBeenCalledWith(
-      expect.stringContaining("matrix: failed resolving allowlisted alias #allowed:example.org:"),
+      "matrix: failed resolving allowlisted alias #allowed:example.org: Error: temporary homeserver failure",
     );
   });
 

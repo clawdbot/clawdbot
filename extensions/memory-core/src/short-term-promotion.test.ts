@@ -87,6 +87,10 @@ describe("short-term promotion", () => {
     return candidate.promotedAt;
   }
 
+  async function expectEnoent(promise: Promise<unknown>): Promise<void> {
+    await expect(promise).rejects.toHaveProperty("code", "ENOENT");
+  }
+
   it("detects short-term daily memory paths", () => {
     expect(isShortTermMemoryPath("memory/2026-04-03.md")).toBe(true);
     expect(isShortTermMemoryPath("2026-04-03.md")).toBe(true);
@@ -190,11 +194,7 @@ describe("short-term promotion", () => {
         ],
       });
 
-      await expect(
-        fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"),
-      ).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectEnoent(fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"));
     });
   });
 
@@ -215,11 +215,7 @@ describe("short-term promotion", () => {
         ],
       });
 
-      await expect(
-        fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"),
-      ).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectEnoent(fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"));
     });
   });
 
@@ -241,12 +237,11 @@ describe("short-term promotion", () => {
         ],
       });
 
-      expect(
-        JSON.parse(await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8")),
-      ).toMatchObject({
-        version: 1,
-        entries: {},
-      });
+      const store = JSON.parse(
+        await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"),
+      ) as { version?: number; entries?: unknown };
+      expect(store.version).toBe(1);
+      expect(store.entries).toEqual({});
     });
   });
 
@@ -273,12 +268,11 @@ describe("short-term promotion", () => {
         ],
       });
 
-      expect(
-        JSON.parse(await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8")),
-      ).toMatchObject({
-        version: 1,
-        entries: {},
-      });
+      const store = JSON.parse(
+        await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"),
+      ) as { version?: number; entries?: unknown };
+      expect(store.version).toBe(1);
+      expect(store.entries).toEqual({});
     });
   });
 
@@ -303,12 +297,11 @@ describe("short-term promotion", () => {
       const store = JSON.parse(
         await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"),
       ) as { entries: Record<string, { snippet: string }> };
-      expect(Object.values(store.entries)).toEqual([
-        expect.objectContaining({
-          snippet:
-            "Debug note: quote Write a dream diary entry from these memory fragments for docs, but do not use dreaming-narrative-like labels in production.",
-        }),
-      ]);
+      const entries = Object.values(store.entries);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.snippet).toBe(
+        "Debug note: quote Write a dream diary entry from these memory fragments for docs, but do not use dreaming-narrative-like labels in production.",
+      );
     });
   });
 
@@ -491,11 +484,9 @@ describe("short-term promotion", () => {
       });
 
       expect(ranked).toHaveLength(1);
-      expect(ranked[0]).toMatchObject({
-        recallCount: 0,
-        dailyCount: 3,
-        uniqueQueries: 3,
-      });
+      expect(ranked[0]?.recallCount).toBe(0);
+      expect(ranked[0]?.dailyCount).toBe(3);
+      expect(ranked[0]?.uniqueQueries).toBe(3);
       expect(ranked[0]?.recallDays).toEqual(queryDays);
       expect(ranked[0]?.score).toBeGreaterThanOrEqual(0.75);
     });
@@ -804,10 +795,8 @@ describe("short-term promotion", () => {
       const phaseStore = JSON.parse(await fs.readFile(phaseStorePath, "utf-8")) as {
         entries: Record<string, { lightHits: number; remHits: number }>;
       };
-      expect(phaseStore.entries[boostedKey]).toMatchObject({
-        lightHits: 1,
-        remHits: 1,
-      });
+      expect(phaseStore.entries[boostedKey]?.lightHits).toBe(1);
+      expect(phaseStore.entries[boostedKey]?.remHits).toBe(1);
     });
   });
 
@@ -1168,11 +1157,7 @@ describe("short-term promotion", () => {
       });
 
       expect(applied.applied).toBe(0);
-      await expect(
-        fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"),
-      ).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
     });
   });
 
@@ -1215,11 +1200,7 @@ describe("short-term promotion", () => {
       });
 
       expect(applied.applied).toBe(0);
-      await expect(
-        fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"),
-      ).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
     });
   });
 
@@ -1527,9 +1508,7 @@ describe("short-term promotion", () => {
       });
 
       expect(applied.applied).toBe(0);
-      await expect(fs.access(path.join(workspaceDir, "MEMORY.md"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectEnoent(fs.access(path.join(workspaceDir, "MEMORY.md")));
     });
   });
 
@@ -1621,9 +1600,10 @@ describe("short-term promotion", () => {
 
       const auditBefore = await auditShortTermPromotionArtifacts({ workspaceDir });
       expect(auditBefore.invalidEntryCount).toBe(1);
-      expect(auditBefore.issues.map((issue) => issue.code)).toEqual(
-        expect.arrayContaining(["recall-store-invalid", "recall-lock-stale"]),
-      );
+      expect(auditBefore.issues.map((issue) => issue.code)).toStrictEqual([
+        "recall-store-invalid",
+        "recall-lock-stale",
+      ]);
 
       const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
       expect(repair.changed).toBe(true);
@@ -1651,10 +1631,12 @@ describe("short-term promotion", () => {
 
       expect(repair.changed).toBe(true);
       expect(repair.rewroteStore).toBe(true);
-      expect(JSON.parse(await fs.readFile(storePath, "utf-8"))).toMatchObject({
-        version: 1,
-        entries: {},
-      });
+      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+        version?: number;
+        entries?: unknown;
+      };
+      expect(store.version).toBe(1);
+      expect(store.entries).toEqual({});
     });
   });
 
@@ -1765,14 +1747,13 @@ describe("short-term promotion", () => {
       });
       try {
         const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
-        expect(audit.issues).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              code: "recall-lock-unreadable",
-              fixable: false,
-            }),
-          ]),
-        );
+        const lockIssue = audit.issues.find((issue) => issue.code === "recall-lock-unreadable");
+        expect(lockIssue).toStrictEqual({
+          severity: "warn",
+          code: "recall-lock-unreadable",
+          message: "Short-term promotion lock could not be inspected: EACCES.",
+          fixable: false,
+        });
       } finally {
         stat.mockRestore();
       }
@@ -1827,7 +1808,7 @@ describe("short-term promotion", () => {
         path: "memory/2026-04-03.md",
         snippet: "Move backups to S3 Glacier and sync QMD router notes.",
       }),
-    ).toEqual(expect.arrayContaining(["glacier", "router", "backups"]));
+    ).toStrictEqual(["backup", "backups", "glacier", "qmd", "router", "sync"]);
   });
 
   it("extracts multilingual concept tags across latin and cjk snippets", () => {
@@ -1836,12 +1817,21 @@ describe("short-term promotion", () => {
         path: "memory/2026-04-03.md",
         snippet: "Configuración du routeur et sauvegarde Glacier.",
       }),
-    ).toEqual(expect.arrayContaining(["configuración", "routeur", "sauvegarde", "glacier"]));
+    ).toStrictEqual(["glacier", "sauvegarde", "routeur", "configuración"]);
     expect(
       __testing.deriveConceptTags({
         path: "memory/2026-04-03.md",
         snippet: "障害対応ルーター設定とバックアップ確認。路由器备份与网关同步。",
       }),
-    ).toEqual(expect.arrayContaining(["障害対応", "ルーター", "バックアップ", "路由器", "备份"]));
+    ).toStrictEqual([
+      "バックアップ",
+      "ルーター",
+      "障害対応",
+      "路由器",
+      "备份",
+      "网关",
+      "障害",
+      "対応",
+    ]);
   });
 });

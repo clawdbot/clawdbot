@@ -105,8 +105,12 @@ describe("Codex app inventory cache", () => {
 
     const forced = cache.refreshNow({ key, request, nowMs: 1 });
     resolveFresh?.({ data: [app("fresh-app")], nextCursor: null });
-    await expect(forced).resolves.toMatchObject({
-      apps: [expect.objectContaining({ id: "fresh-app" })],
+    await expect(forced).resolves.toStrictEqual({
+      key,
+      apps: [app("fresh-app")],
+      fetchedAtMs: 1,
+      expiresAtMs: 1_001,
+      revision: 2,
     });
 
     resolveStale?.({ data: [app("stale-app")], nextCursor: null });

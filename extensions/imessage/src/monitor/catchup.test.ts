@@ -450,7 +450,7 @@ describe("performIMessageCatchup", () => {
     expect(summary.querySucceeded).toBe(false);
     expect(summary.replayed).toBe(0);
     expect(dispatch).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/fetch failed/));
+    expect(warn).toHaveBeenCalledWith("imessage catchup: fetch failed: Error: imsg rpc closed");
 
     const cursor = await loadIMessageCatchupCursor("primary");
     expect(cursor?.lastSeenRowid).toBe(7);

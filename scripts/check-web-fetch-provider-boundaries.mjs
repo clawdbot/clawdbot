@@ -81,8 +81,9 @@ export async function collectWebFetchProviderBoundaryViolations() {
   return await webFetchProviderViolationsPromise;
 }
 
-export async function main(argv = process.argv.slice(2), io) {
-  const json = argv.includes("--json");
+export async function main(argv, io) {
+  const args = argv ?? process.argv.slice(2);
+  const json = args.includes("--json");
   const violations = await collectWebFetchProviderBoundaryViolations();
   const writeStdout = (chunk) => {
     if (io?.stdout?.write) {

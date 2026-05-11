@@ -60,4 +60,56 @@ describe("runDoctorConfigPreflight", () => {
       expect(await fs.readFile(configPath, "utf-8")).toBe(lastGoodRaw);
     });
   });
+
+  it("does not restore last-known-good for stale plugins.deny entries", async () => {
+    await withTempHome(async (home) => {
+      const configPath = await writeOpenClawConfig(home, {
+        gateway: { mode: "local", port: 19091 },
+      });
+      await promoteConfigSnapshotToLastKnownGood(await readConfigFileSnapshot());
+      const currentConfig = {
+        gateway: { mode: "local", port: 19092 },
+        plugins: { deny: ["missing-deny"] },
+      };
+      await fs.writeFile(configPath, `${JSON.stringify(currentConfig, null, 2)}\n`, "utf-8");
+
+      const repaired = await runDoctorConfigPreflight({
+        migrateState: false,
+        migrateLegacyConfig: false,
+        repairPrefixedConfig: true,
+        invalidConfigNote: false,
+      });
+
+      expect(repaired.snapshot.valid).toBe(true);
+      expect(repaired.snapshot.config.gateway?.port).toBe(19092);
+      expect(repaired.snapshot.config.plugins?.deny).toEqual(["missing-deny"]);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toContain('"missing-deny"');
+    });
+  });
+
+  it("restores last-known-good for malformed plugin policy values", async () => {
+    await withTempHome(async (home) => {
+      const configPath = await writeOpenClawConfig(home, {
+        gateway: { mode: "local", port: 19091 },
+      });
+      await promoteConfigSnapshotToLastKnownGood(await readConfigFileSnapshot());
+      const lastGoodRaw = await fs.readFile(configPath, "utf-8");
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ gateway: { mode: "local", port: 19092 }, plugins: { deny: "bad" } }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const repaired = await runDoctorConfigPreflight({
+        migrateState: false,
+        migrateLegacyConfig: false,
+        repairPrefixedConfig: true,
+        invalidConfigNote: false,
+      });
+
+      expect(repaired.snapshot.valid).toBe(true);
+      expect(repaired.snapshot.config.gateway?.port).toBe(19091);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(lastGoodRaw);
+    });
+  });
 });

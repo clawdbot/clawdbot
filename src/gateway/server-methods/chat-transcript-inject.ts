@@ -1,4 +1,4 @@
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { SessionWriteLockAcquireTimeoutConfig } from "../../agents/session-write-lock.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import { formatErrorMessage } from "../../infra/errors.js";

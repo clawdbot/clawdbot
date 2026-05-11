@@ -52,15 +52,15 @@ describe("dual-kind memory registration gate", () => {
     });
 
     expect(getMemoryRuntime()).toBeUndefined();
-    expect(registry.registry.diagnostics).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          pluginId: "dual-plugin",
-          level: "warn",
-          message: expect.stringContaining("dual-kind plugin not selected for memory slot"),
-        }),
-      ]),
-    );
+    expect(registry.registry.diagnostics).toEqual([
+      {
+        pluginId: "dual-plugin",
+        level: "warn",
+        source: "/virtual/dual-plugin/index.ts",
+        message:
+          "dual-kind plugin not selected for memory slot; skipping memory runtime registration",
+      },
+    ]);
   });
 
   it("allows memory runtime registration for dual-kind plugins selected for memory slot", () => {
@@ -111,6 +111,8 @@ describe("dual-kind memory registration gate", () => {
 
   it("allows selected dual-kind plugins to register the unified memory capability", () => {
     const { config, registry } = createPluginRegistryFixture();
+    const runtime = createStubMemoryRuntime();
+    const promptBuilder = () => ["memory capability"];
 
     registerTestPlugin({
       registry,
@@ -123,14 +125,18 @@ describe("dual-kind memory registration gate", () => {
       }),
       register(api) {
         api.registerMemoryCapability({
-          runtime: createStubMemoryRuntime(),
-          promptBuilder: () => ["memory capability"],
+          runtime,
+          promptBuilder,
         });
       },
     });
 
-    expect(getMemoryCapabilityRegistration()).toMatchObject({
+    expect(getMemoryCapabilityRegistration()).toEqual({
       pluginId: "dual-plugin",
+      capability: {
+        runtime,
+        promptBuilder,
+      },
     });
     expect(
       requireMemoryRuntime().resolveMemoryBackendConfig({ cfg: {} as never, agentId: "main" }),

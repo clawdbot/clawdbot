@@ -130,10 +130,8 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     const lastCall = createEmbeddingProviderMock.mock.calls.at(-1)?.[0] as
       | { provider?: string; model?: string }
       | undefined;
-    expect(lastCall).toMatchObject({
-      provider: "openai",
-      model: "text-embedding-3-small",
-    });
+    expect(lastCall?.provider).toBe("openai");
+    expect(lastCall?.model).toBe("text-embedding-3-small");
   });
 
   it("supports base64 encoding and agent-scoped auth/config resolution", async () => {
@@ -175,10 +173,13 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       { "x-openclaw-scopes": "operator.read" },
     );
     expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toMatchObject({
-      object: "list",
-      data: [{ object: "embedding", embedding: [0.1, 0.2] }],
-    });
+    const json = (await res.json()) as {
+      object?: string;
+      data?: Array<{ object?: string; embedding?: number[] }>;
+    };
+    expect(json.object).toBe("list");
+    expect(json.data?.[0]?.object).toBe("embedding");
+    expect(json.data?.[0]?.embedding).toEqual([0.1, 0.2]);
   });
 
   it("allows requests with an empty declared scopes header", async () => {
@@ -190,10 +191,13 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       { "x-openclaw-scopes": "" },
     );
     expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toMatchObject({
-      object: "list",
-      data: [{ object: "embedding", embedding: [0.1, 0.2] }],
-    });
+    const json = (await res.json()) as {
+      object?: string;
+      data?: Array<{ object?: string; embedding?: number[] }>;
+    };
+    expect(json.object).toBe("list");
+    expect(json.data?.[0]?.object).toBe("embedding");
+    expect(json.data?.[0]?.embedding).toEqual([0.1, 0.2]);
   });
 
   it("allows requests when the operator scopes header is missing", async () => {
@@ -209,10 +213,13 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       }),
     });
     expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toMatchObject({
-      object: "list",
-      data: [{ object: "embedding", embedding: [0.1, 0.2] }],
-    });
+    const json = (await res.json()) as {
+      object?: string;
+      data?: Array<{ object?: string; embedding?: number[] }>;
+    };
+    expect(json.object).toBe("list");
+    expect(json.data?.[0]?.object).toBe("embedding");
+    expect(json.data?.[0]?.embedding).toEqual([0.1, 0.2]);
   });
 
   it("rejects invalid agent targets", async () => {

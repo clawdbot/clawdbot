@@ -20,8 +20,26 @@ export type CachedModelPricing = {
   tieredPricing?: CachedPricingTier[];
 };
 
+export type GatewayModelPricingHealthSource = "openrouter" | "litellm" | "bootstrap" | "refresh";
+
+export type GatewayModelPricingHealth = {
+  state: "ok" | "degraded" | "disabled";
+  sources: Array<{
+    source: GatewayModelPricingHealthSource;
+    state: "ok" | "degraded";
+    lastFailureAt?: number;
+    detail?: string;
+  }>;
+  lastFailureAt?: number;
+  detail?: string;
+};
+
 let cachedPricing = new Map<string, CachedModelPricing>();
 let cachedAt = 0;
+const sourceFailures = new Map<
+  GatewayModelPricingHealthSource,
+  { lastFailureAt: number; detail: string }
+>();
 
 function modelPricingCacheKey(provider: string, model: string): string {
   const providerId = normalizeProviderId(provider);
@@ -47,6 +65,59 @@ export function replaceGatewayModelPricingCache(
 export function clearGatewayModelPricingCacheState(): void {
   cachedPricing = new Map();
   cachedAt = 0;
+  clearGatewayModelPricingFailures();
+}
+
+export function recordGatewayModelPricingSourceFailure(
+  source: GatewayModelPricingHealthSource,
+  detail: string,
+  failedAt = Date.now(),
+): void {
+  sourceFailures.set(source, {
+    lastFailureAt: failedAt,
+    detail,
+  });
+}
+
+export function clearGatewayModelPricingSourceFailure(
+  source: GatewayModelPricingHealthSource,
+): void {
+  sourceFailures.delete(source);
+}
+
+export function clearGatewayModelPricingFailures(): void {
+  sourceFailures.clear();
+}
+
+export function getGatewayModelPricingHealth(params?: {
+  enabled?: boolean;
+}): GatewayModelPricingHealth {
+  if (params?.enabled === false) {
+    return {
+      state: "disabled",
+      sources: [],
+    };
+  }
+  const sources: GatewayModelPricingHealth["sources"] = Array.from(sourceFailures.entries())
+    .map(([source, failure]) => ({
+      source,
+      state: "degraded" as const,
+      lastFailureAt: failure.lastFailureAt,
+      detail: failure.detail,
+    }))
+    .toSorted((left, right) => left.source.localeCompare(right.source));
+  const latest = sources.reduce<(typeof sources)[number] | undefined>((current, source) => {
+    if (!current || (source.lastFailureAt ?? 0) > (current.lastFailureAt ?? 0)) {
+      return source;
+    }
+    return current;
+  }, undefined);
+  return {
+    state: sources.length > 0 ? "degraded" : "ok",
+    sources,
+    ...(latest?.lastFailureAt ? { lastFailureAt: latest.lastFailureAt } : {}),
+    ...(latest?.detail ? { detail: latest.detail } : {}),
+  };
 }
 
 export function getCachedGatewayModelPricing(params: {

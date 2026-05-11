@@ -137,8 +137,9 @@ jobs:
             node -e "
               const fs = require(\"node:fs\");
               const path = require(\"node:path\");
-              const pkg = require(\"/app/package.json\");
-              for (const [dep, rel] of Object.entries(pkg.pnpm?.patchedDependencies ?? {})) {
+              const YAML = require(\"yaml\");
+              const workspace = YAML.parse(fs.readFileSync(\"/app/pnpm-workspace.yaml\", \"utf8\")) ?? {};
+              for (const [dep, rel] of Object.entries(workspace.patchedDependencies ?? {})) {
                 const absolute = path.join(\"/app\", rel);
                 if (!fs.existsSync(absolute)) {
                   throw new Error(`missing patch for ${dep}: ${rel}`);
@@ -321,7 +322,22 @@ jobs:
         env:
           IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
         run: |
-          docker run --rm --entrypoint sh "$IMAGE_REF" -lc 'which openclaw && openclaw --version'
+          docker run --rm --entrypoint sh "$IMAGE_REF" -lc '
+            which openclaw &&
+            openclaw --version &&
+            node -e "
+              const fs = require(\"node:fs\");
+              const path = require(\"node:path\");
+              const YAML = require(\"yaml\");
+              const workspace = YAML.parse(fs.readFileSync(\"/app/pnpm-workspace.yaml\", \"utf8\")) ?? {};
+              for (const [dep, rel] of Object.entries(workspace.patchedDependencies ?? {})) {
+                const absolute = path.join(\"/app\", rel);
+                if (!fs.existsSync(absolute)) {
+                  throw new Error(`missing patch for ${dep}: ${rel}`);
+                }
+              }
+            "
+          '
 
       - name: Run agents delete shared workspace Docker CLI smoke
         env:

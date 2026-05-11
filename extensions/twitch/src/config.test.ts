@@ -71,7 +71,10 @@ describe("getAccountConfig", () => {
       },
     };
 
-    expect(getAccountConfig(cfg, "SECONDARY\r\n")).toMatchObject({ username: "secondbot" });
+    expect(getAccountConfig(cfg, "SECONDARY\r\n")).toEqual({
+      username: "secondbot",
+      accessToken: "oauth:secondary",
+    });
     expect(getAccountConfig(cfg, "inherited")).toBeNull();
   });
 

@@ -250,6 +250,17 @@ number is available. This lane is transcript-visual rather than logged-in
 Telegram Web proof: the Telegram Bot API gives stable live message evidence, but
 Telegram Web login state is not required for normal Mantis automation.
 
+`Mantis Telegram Desktop Proof` is the agentic native Telegram Desktop
+before/after wrapper. A maintainer can trigger it from a PR comment with
+`@Mantis telegram desktop proof`, from the Actions UI with freeform
+instructions, or through the generic `Mantis Scenario` dispatcher. The workflow
+hands the PR, baseline ref, candidate ref, and maintainer instructions to Codex.
+The agent reads the PR, decides what Telegram-visible behavior proves the
+change, runs the real-user Crabbox Telegram Desktop proof lane for baseline and
+candidate, iterates until the native GIFs are useful, writes paired
+`motionPreview` artifacts into `mantis-evidence.json`, uploads the bundle, and
+posts a 2-column PR evidence table when a PR number is available.
+
 For human-in-the-loop Telegram desktop setup, use the scenario builder:
 
 ```bash

@@ -3,33 +3,29 @@ import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 
 describe("GATEWAY_EVENTS", () => {
   it("advertises Talk event streams in hello features", () => {
-    expect(GATEWAY_EVENTS).toEqual(expect.arrayContaining(["talk.event"]));
-    expect(GATEWAY_EVENTS).not.toEqual(
-      expect.arrayContaining(["talk.realtime.relay", "talk.transcription.relay"]),
-    );
+    expect(GATEWAY_EVENTS).toContain("talk.event");
+    expect(GATEWAY_EVENTS).not.toContain("talk.realtime.relay");
+    expect(GATEWAY_EVENTS).not.toContain("talk.transcription.relay");
   });
 });
 
 describe("listGatewayMethods", () => {
   it("advertises plugin surface refresh for capability rotation", () => {
-    expect(listGatewayMethods()).toEqual(expect.arrayContaining(["node.pluginSurface.refresh"]));
+    expect(listGatewayMethods()).toContain("node.pluginSurface.refresh");
   });
 
   it("advertises the versioned Talk session RPCs", () => {
-    expect(listGatewayMethods()).toEqual(
-      expect.arrayContaining([
-        "talk.client.create",
-        "talk.client.toolCall",
-        "talk.session.create",
-        "talk.session.join",
-        "talk.session.appendAudio",
-        "talk.session.startTurn",
-        "talk.session.endTurn",
-        "talk.session.cancelTurn",
-        "talk.session.cancelOutput",
-        "talk.session.submitToolResult",
-        "talk.session.close",
-      ]),
-    );
+    const methods = listGatewayMethods();
+    expect(methods).toContain("talk.client.create");
+    expect(methods).toContain("talk.client.toolCall");
+    expect(methods).toContain("talk.session.create");
+    expect(methods).toContain("talk.session.join");
+    expect(methods).toContain("talk.session.appendAudio");
+    expect(methods).toContain("talk.session.startTurn");
+    expect(methods).toContain("talk.session.endTurn");
+    expect(methods).toContain("talk.session.cancelTurn");
+    expect(methods).toContain("talk.session.cancelOutput");
+    expect(methods).toContain("talk.session.submitToolResult");
+    expect(methods).toContain("talk.session.close");
   });
 });

@@ -134,6 +134,10 @@ export type CronAgentExecutionPhase =
   | "context_engine"
   | "attempt_dispatch"
   | "context_assembled"
+  | "turn_accepted"
+  | "process_spawned"
+  | "tool_execution_started"
+  | "assistant_output_started"
   | "model_call_started";
 
 export type CronAgentExecutionStarted = {
@@ -144,6 +148,12 @@ export type CronAgentExecutionStarted = {
   phase?: CronAgentExecutionPhase;
   provider?: string;
   model?: string;
+  backend?: string;
+  source?: string;
+  tool?: string;
+  toolCallId?: string;
+  itemId?: string;
+  /** @deprecated Use phase-specific execution milestones for watchdog progress. */
   firstModelCallStarted?: boolean;
 };
 

@@ -52,13 +52,14 @@ describe("registerMaintenanceCommands doctor action", () => {
 
     await runMaintenanceCli(["doctor", "--non-interactive", "--yes"]);
 
-    expect(doctorCommand).toHaveBeenCalledWith(
-      runtime,
-      expect.objectContaining({
-        nonInteractive: true,
-        yes: true,
-      }),
-    );
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [runtimeArg, options] = doctorCommand.mock.calls[0] as unknown as [
+      typeof runtime,
+      Record<string, unknown>,
+    ];
+    expect(runtimeArg).toBe(runtime);
+    expect(options.nonInteractive).toBe(true);
+    expect(options.yes).toBe(true);
     expect(runtime.exit).toHaveBeenCalledWith(0);
   });
 
@@ -77,12 +78,13 @@ describe("registerMaintenanceCommands doctor action", () => {
 
     await runMaintenanceCli(["doctor", "--fix"]);
 
-    expect(doctorCommand).toHaveBeenCalledWith(
-      runtime,
-      expect.objectContaining({
-        repair: true,
-      }),
-    );
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [runtimeArg, options] = doctorCommand.mock.calls[0] as unknown as [
+      typeof runtime,
+      Record<string, unknown>,
+    ];
+    expect(runtimeArg).toBe(runtime);
+    expect(options.repair).toBe(true);
   });
 
   it("passes noOpen to dashboard command", async () => {
@@ -90,12 +92,13 @@ describe("registerMaintenanceCommands doctor action", () => {
 
     await runMaintenanceCli(["dashboard", "--no-open"]);
 
-    expect(dashboardCommand).toHaveBeenCalledWith(
-      runtime,
-      expect.objectContaining({
-        noOpen: true,
-      }),
-    );
+    expect(dashboardCommand).toHaveBeenCalledTimes(1);
+    const [runtimeArg, options] = dashboardCommand.mock.calls[0] as unknown as [
+      typeof runtime,
+      Record<string, unknown>,
+    ];
+    expect(runtimeArg).toBe(runtime);
+    expect(options.noOpen).toBe(true);
   });
 
   it("passes reset options to reset command", async () => {
@@ -110,15 +113,16 @@ describe("registerMaintenanceCommands doctor action", () => {
       "--dry-run",
     ]);
 
-    expect(resetCommand).toHaveBeenCalledWith(
-      runtime,
-      expect.objectContaining({
-        scope: "full",
-        yes: true,
-        nonInteractive: true,
-        dryRun: true,
-      }),
-    );
+    expect(resetCommand).toHaveBeenCalledTimes(1);
+    const [runtimeArg, options] = resetCommand.mock.calls[0] as unknown as [
+      typeof runtime,
+      Record<string, unknown>,
+    ];
+    expect(runtimeArg).toBe(runtime);
+    expect(options.scope).toBe("full");
+    expect(options.yes).toBe(true);
+    expect(options.nonInteractive).toBe(true);
+    expect(options.dryRun).toBe(true);
   });
 
   it("passes uninstall options to uninstall command", async () => {
@@ -136,19 +140,20 @@ describe("registerMaintenanceCommands doctor action", () => {
       "--dry-run",
     ]);
 
-    expect(uninstallCommand).toHaveBeenCalledWith(
-      runtime,
-      expect.objectContaining({
-        service: true,
-        state: true,
-        workspace: true,
-        app: true,
-        all: true,
-        yes: true,
-        nonInteractive: true,
-        dryRun: true,
-      }),
-    );
+    expect(uninstallCommand).toHaveBeenCalledTimes(1);
+    const [runtimeArg, options] = uninstallCommand.mock.calls[0] as unknown as [
+      typeof runtime,
+      Record<string, unknown>,
+    ];
+    expect(runtimeArg).toBe(runtime);
+    expect(options.service).toBe(true);
+    expect(options.state).toBe(true);
+    expect(options.workspace).toBe(true);
+    expect(options.app).toBe(true);
+    expect(options.all).toBe(true);
+    expect(options.yes).toBe(true);
+    expect(options.nonInteractive).toBe(true);
+    expect(options.dryRun).toBe(true);
   });
 
   it("exits with code 1 when dashboard fails", async () => {

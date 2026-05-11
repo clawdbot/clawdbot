@@ -45,7 +45,10 @@ export default defineSingleProviderPluginEntry({
       }),
     matchesContextOverflowError: ({ errorMessage }) =>
       /\bdeepseek\b.*(?:input.*too long|context.*exceed)/i.test(errorMessage),
-    ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
+    ...buildProviderReplayFamilyHooks({
+      family: "openai-compatible",
+      dropReasoningFromHistory: false,
+    }),
     wrapStreamFn: (ctx) => createDeepSeekV4ThinkingWrapper(ctx.streamFn, ctx.thinkingLevel),
     resolveThinkingProfile: ({ modelId }) => resolveDeepSeekV4ThinkingProfile(modelId),
     isModernModelRef: ({ modelId }) => Boolean(resolveDeepSeekV4ThinkingProfile(modelId)),

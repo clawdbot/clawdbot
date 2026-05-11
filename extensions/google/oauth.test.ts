@@ -854,9 +854,7 @@ describe("loginGeminiCliOAuth", () => {
 
     await runProjectDiscoveryExpectingProjectId("env-project");
     expect(countMatching(requests, ({ url }) => url.includes("v1internal:loadCodeAssist"))).toBe(3);
-    expect(requests.map(({ url }) => url)).not.toEqual(
-      expect.arrayContaining([expect.stringContaining("v1internal:onboardUser")]),
-    );
+    expect(countMatching(requests, ({ url }) => url.includes("v1internal:onboardUser"))).toBe(0);
   });
 
   it("skips loadCodeAssist entirely when Gemini CLI is configured for personal OAuth", async () => {

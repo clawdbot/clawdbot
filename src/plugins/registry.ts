@@ -19,6 +19,7 @@ import { isOperatorScope, type OperatorScope } from "../gateway/operator-scopes.
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   NODE_EXEC_APPROVALS_COMMANDS,
   NODE_SYSTEM_NOTIFY_COMMAND,
@@ -40,6 +41,7 @@ import {
   registerDetachedTaskLifecycleRuntime,
 } from "../tasks/detached-task-runtime-state.js";
 import { resolveUserPath } from "../utils.js";
+import { emitPluginAgentEvent } from "./agent-event-emission.js";
 import type { AgentToolResultMiddleware } from "./agent-tool-result-middleware-types.js";
 import {
   normalizeAgentToolResultMiddlewareRuntimeIds,
@@ -59,6 +61,7 @@ import {
   getRegisteredCompactionProvider,
   registerCompactionProvider,
 } from "./compaction-provider.js";
+import { sendPluginSessionAttachment } from "./host-hook-attachments.js";
 import {
   clearPluginRunContext,
   getPluginRunContext,
@@ -66,6 +69,10 @@ import {
   registerPluginSessionSchedulerJob,
   setPluginRunContext,
 } from "./host-hook-runtime.js";
+import {
+  schedulePluginSessionTurn,
+  unschedulePluginSessionTurnsByTag,
+} from "./host-hook-scheduled-turns.js";
 import { enqueuePluginNextTurnInjection } from "./host-hook-state.js";
 import {
   isPluginJsonValue,
@@ -73,6 +80,7 @@ import {
   type PluginAgentEventSubscriptionRegistration,
   type PluginControlUiDescriptor,
   type PluginRuntimeLifecycleRegistration,
+  type PluginSessionActionRegistration,
   type PluginSessionSchedulerJobRegistration,
   type PluginSessionExtensionRegistration,
   type PluginToolMetadataRegistration,
@@ -100,15 +108,25 @@ import {
 import { createModelCatalogRegistrationHandlers } from "./model-catalog-registration.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import { isPluginRegistryRetired } from "./registry-lifecycle.js";
+import { isPluginRegistryActivated, isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type {
   PluginHttpRouteRegistration as RegistryTypesPluginHttpRouteRegistration,
   PluginRecord,
   PluginRegistryParams,
+  PluginSessionActionRegistryRegistration,
   PluginTextTransformsRegistration,
 } from "./registry-types.js";
+export type {
+  PluginReloadRegistration,
+  PluginRuntimeLifecycleRegistryRegistration,
+  PluginSecurityAuditCollectorRegistration,
+  PluginServiceRegistration,
+  PluginSessionExtensionRegistryRegistration,
+} from "./registry-types.js";
+import { getActivePluginRegistry } from "./runtime.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import { validateJsonSchemaValue, type JsonSchemaValue } from "./schema-validator.js";
 import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import {
@@ -185,14 +203,9 @@ export type {
   PluginProviderRegistration,
   PluginControlUiDescriptorRegistryRegistration,
   PluginHostedMediaResolverRegistration,
-  PluginRuntimeLifecycleRegistryRegistration,
   PluginRecord,
   PluginRegistry,
   PluginRegistryParams,
-  PluginReloadRegistration,
-  PluginSecurityAuditCollectorRegistration,
-  PluginServiceRegistration,
-  PluginSessionExtensionRegistryRegistration,
   PluginTextTransformsRegistration,
   PluginToolMetadataRegistryRegistration,
   PluginTrustedToolPolicyRegistryRegistration,
@@ -326,6 +339,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   ).toSorted();
   registry.coreGatewayMethodNames = coreGatewayMethodNames;
   const coreGatewayMethods = new Set(coreGatewayMethodNames);
+  const getHostCronService = () => registryParams.hostServices?.cron;
   const pluginHookRollback = new Map<string, HookRollbackEntry[]>();
   const pluginsWithChannelRegistrationConflict = new Set<string>();
   const pluginSideEffectGuards = new Map<string, Set<PluginSideEffectGuard>>();
@@ -1678,6 +1692,54 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     return normalized as string[];
   };
 
+  const validateSessionActionSchema = (
+    record: PluginRecord,
+    id: string,
+    schema: unknown,
+  ): schema is JsonSchemaValue => {
+    if (schema === undefined) {
+      return true;
+    }
+    if (!isPluginJsonValue(schema)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `session action schema must be JSON-compatible: ${id}`,
+      });
+      return false;
+    }
+    if (
+      typeof schema !== "boolean" &&
+      (!schema || typeof schema !== "object" || Array.isArray(schema))
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `session action schema must be a JSON schema object or boolean: ${id}`,
+      });
+      return false;
+    }
+    try {
+      validateJsonSchemaValue({
+        schema,
+        cacheKey: `plugin-session-action-registration:${record.id}:${id}`,
+        value: undefined,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `session action schema is not valid JSON Schema: ${id}: ${message}`,
+      });
+      return false;
+    }
+    return true;
+  };
+
   const controlUiSurfaces = new Set<PluginControlUiDescriptor["surface"]>([
     "session",
     "tool",
@@ -2114,6 +2176,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const handle = registerPluginSessionSchedulerJob({
       pluginId: record.id,
       pluginName: record.name,
+      ownerRegistry: registry,
       job: { ...job, id: jobId, sessionKey, kind },
     });
     if (!handle) {
@@ -2138,6 +2201,67 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       rootDir: record.rootDir,
     });
     return handle;
+  };
+
+  const registerSessionAction = (record: PluginRecord, action: PluginSessionActionRegistration) => {
+    const id = normalizeHostHookString(action.id);
+    const description = normalizeOptionalHostHookString(action.description);
+    const requiredScopes = normalizeHostHookStringList(action.requiredScopes);
+    if (
+      !id ||
+      description === "" ||
+      requiredScopes === null ||
+      typeof action.handler !== "function"
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "session action registration requires id, handler, and valid optional fields",
+      });
+      return;
+    }
+    if (requiredScopes !== undefined) {
+      const unknownScope = requiredScopes.find((scope) => !isOperatorScope(scope));
+      if (unknownScope !== undefined) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `session action requiredScopes contains unknown operator scope: ${unknownScope}`,
+        });
+        return;
+      }
+    }
+    if (!validateSessionActionSchema(record, id, action.schema)) {
+      return;
+    }
+    const existing = (registry.sessionActions ?? []).find(
+      (entry) => entry.pluginId === record.id && entry.action.id === id,
+    );
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `session action already registered: ${id}`,
+      });
+      return;
+    }
+    (registry.sessionActions ??= []).push({
+      pluginId: record.id,
+      pluginName: record.name,
+      action: {
+        ...action,
+        id,
+        ...(description !== undefined ? { description } : {}),
+        ...(requiredScopes !== undefined
+          ? { requiredScopes: requiredScopes as OperatorScope[] }
+          : {}),
+      },
+      source: record.source,
+      rootDir: record.rootDir,
+    } satisfies PluginSessionActionRegistryRegistration);
   };
 
   const registerTypedHook = <K extends PluginHookName>(
@@ -2303,6 +2427,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const sideEffectGuard = createPluginSideEffectGuard(record.id);
     const isLoadedRecordInRegistry = () =>
       registry.plugins.some((plugin) => plugin.id === record.id && plugin.status === "loaded");
+    const isLoadedRecordInActiveRegistry = () =>
+      getActivePluginRegistry() === registry && isLoadedRecordInRegistry();
     const isActivatingLoadedRecord = () =>
       registryParams.activateGlobalSideEffects !== false &&
       record.enabled &&
@@ -2311,7 +2437,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const shouldCommitWorkflowSideEffect = () =>
       sideEffectGuard.active &&
       !isPluginRegistryRetired(registry) &&
-      (isLoadedRecordInRegistry() || isActivatingLoadedRecord());
+      (isActivatingLoadedRecord() ||
+        (isPluginRegistryActivated(registry) && isLoadedRecordInRegistry()));
     return buildPluginApi({
       id: record.id,
       name: record.name,
@@ -2525,6 +2652,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerRuntimeLifecycle: (lifecycle) => registerRuntimeLifecycle(record, lifecycle),
               registerAgentEventSubscription: (subscription) =>
                 registerAgentEventSubscription(record, subscription),
+              emitAgentEvent: (event) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return { emitted: false, reason: "global side effects disabled" };
+                }
+                if (!shouldCommitWorkflowSideEffect()) {
+                  return { emitted: false, reason: "plugin is not loaded" };
+                }
+                return emitPluginAgentEvent({
+                  pluginId: record.id,
+                  pluginName: record.name,
+                  origin: record.origin,
+                  event,
+                });
+              },
               setRunContext: (patch) =>
                 registryParams.activateGlobalSideEffects !== false &&
                 shouldCommitWorkflowSideEffect()
@@ -2545,6 +2686,60 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 });
               },
               registerSessionSchedulerJob: (job) => registerSessionSchedulerJob(record, job),
+              registerSessionAction: (action) => registerSessionAction(record, action),
+              sendSessionAttachment: async (attachment) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return { ok: false, error: "global side effects disabled" };
+                }
+                try {
+                  if (!isLoadedRecordInActiveRegistry()) {
+                    return { ok: false, error: "plugin is not loaded" };
+                  }
+                  const runtimeConfig =
+                    (registryParams.runtime.config?.current?.() as OpenClawConfig | undefined) ??
+                    params.config;
+                  return await sendPluginSessionAttachment({
+                    ...attachment,
+                    config: runtimeConfig,
+                    origin: record.origin,
+                  });
+                } catch (error) {
+                  return {
+                    ok: false,
+                    error: `attachment delivery setup failed: ${formatErrorMessage(error)}`,
+                  };
+                }
+              },
+              scheduleSessionTurn: async (schedule) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return undefined;
+                }
+                await Promise.resolve();
+                return schedulePluginSessionTurn({
+                  pluginId: record.id,
+                  pluginName: record.name,
+                  origin: record.origin,
+                  schedule,
+                  cron: getHostCronService(),
+                  shouldCommit: isLoadedRecordInActiveRegistry,
+                  ownerRegistry: registry,
+                });
+              },
+              unscheduleSessionTurnsByTag: async (request) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return { removed: 0, failed: 0 };
+                }
+                await Promise.resolve();
+                if (!isLoadedRecordInActiveRegistry()) {
+                  return { removed: 0, failed: 0 };
+                }
+                return unschedulePluginSessionTurnsByTag({
+                  pluginId: record.id,
+                  origin: record.origin,
+                  cron: getHostCronService(),
+                  request,
+                });
+              },
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {
                   throwRegistrationError("only memory plugins can register a memory capability");
@@ -2771,6 +2966,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerRuntimeLifecycle,
     registerAgentEventSubscription,
     registerSessionSchedulerJob,
+    registerSessionAction,
     registerHook,
     registerTypedHook,
   };

@@ -1,5 +1,7 @@
-// Public binding helpers for both runtime plugin-owned bindings and
-// config-driven channel bindings.
+/**
+ * @deprecated Broad public SDK barrel. Prefer focused conversation/thread
+ * binding subpaths and avoid adding new imports here.
+ */
 
 export {
   createConversationBindingRecord,

@@ -117,9 +117,13 @@ describe("qa-bus client", () => {
     });
     abort.abort();
 
-    await expect(withTimeout(request, 500, "poll abort did not settle")).rejects.toMatchObject({
-      name: "AbortError",
-    });
+    try {
+      await withTimeout(request, 500, "poll abort did not settle");
+      throw new Error("expected poll abort to reject");
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).name).toBe("AbortError");
+    }
   });
 
   it("preserves baseUrl path prefixes when composing bus URLs", async () => {
@@ -138,8 +142,11 @@ describe("qa-bus client", () => {
     }));
     stops.push(server.stop);
 
-    await expect(getQaBusState(`${server.baseUrl}/qa-bus`)).resolves.toMatchObject({
+    await expect(getQaBusState(`${server.baseUrl}/qa-bus`)).resolves.toEqual({
       cursor: 1,
+      conversations: [],
+      threads: [],
+      messages: [],
       events: [],
     });
   });

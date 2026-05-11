@@ -1,5 +1,5 @@
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import type { GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { normalizeZaloAllowEntry, resolveZaloRuntimeGroupPolicy } from "./group-access.js";
 import type { ZaloAccountConfig } from "./types.js";
@@ -109,12 +109,24 @@ async function resolveAccess(
   return { result, readAllowFromStore };
 }
 
+function stableSenderAccess(access: { allowed: boolean; decision: string; reasonCode: string }) {
+  return {
+    allowed: access.allowed,
+    decision: access.decision,
+    reasonCode: access.reasonCode,
+  };
+}
+
 describe("zalo shared ingress access policy", () => {
   it.each(groupPolicyCases)(
     "maps %s through shared ingress",
     async (_name, accountConfig, senderId, allowed, reasonCode) => {
       const { result } = await resolveAccess({ accountConfig, senderId });
-      expect(result.senderAccess).toMatchObject({ allowed, reasonCode });
+      expect(stableSenderAccess(result.senderAccess)).toEqual({
+        allowed,
+        decision: allowed ? "allow" : "block",
+        reasonCode,
+      });
     },
   );
 
@@ -147,7 +159,8 @@ describe("zalo shared ingress access policy", () => {
     });
 
     expect(readAllowFromStore).toHaveBeenCalledTimes(1);
-    expect(result.senderAccess).toMatchObject({
+    expect(stableSenderAccess(result.senderAccess)).toEqual({
+      allowed: true,
       decision: "allow",
       reasonCode: "dm_policy_allowlisted",
     });
@@ -165,7 +178,8 @@ describe("zalo shared ingress access policy", () => {
     });
 
     expect(readAllowFromStore).not.toHaveBeenCalled();
-    expect(result.senderAccess).toMatchObject({
+    expect(stableSenderAccess(result.senderAccess)).toEqual({
+      allowed: false,
       decision: "block",
       reasonCode: "dm_policy_not_allowlisted",
     });
@@ -190,8 +204,9 @@ describe("zalo shared ingress access policy", () => {
       senderId: "12345",
     });
 
-    expect(result.senderAccess).toMatchObject({
+    expect(stableSenderAccess(result.senderAccess)).toEqual({
       allowed: true,
+      decision: "allow",
       reasonCode: "group_policy_allowed",
     });
   });

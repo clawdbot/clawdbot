@@ -116,7 +116,7 @@ describe("handleAssistantFailover", () => {
       );
 
       expect(outcome.action).toBe("retry");
-      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("Profile undefined"));
+      expect(warn).not.toHaveBeenCalled();
     });
   });
 

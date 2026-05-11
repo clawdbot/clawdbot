@@ -78,16 +78,21 @@ describe("slack outbound shared hook wiring", () => {
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
         to: "C123",
         content: "hello",
         replyToId: "1712000000.000001",
-      }),
-      expect.objectContaining({
+        metadata: {
+          channel: "slack",
+          accountId: "default",
+          mediaUrls: [],
+        },
+      },
+      {
         channelId: "slack",
         accountId: "default",
         conversationId: "C123",
-      }),
+      },
     );
     expect(sendMessageSlackMock).toHaveBeenCalledTimes(1);
   });
@@ -102,13 +107,11 @@ describe("slack outbound shared hook wiring", () => {
       replyToId: "1712000000.000001",
     });
 
-    expect(sendMessageSlackMock).toHaveBeenCalledWith(
-      "C123",
-      "hello",
-      expect.objectContaining({
-        threadTs: "1712000000.000001",
-      }),
-    );
+    expect(sendMessageSlackMock).toHaveBeenCalledWith("C123", "hello", {
+      cfg,
+      threadTs: "1712000000.000001",
+      accountId: "default",
+    });
   });
 
   it("respects cancel from the shared hook without a second adapter pass", async () => {

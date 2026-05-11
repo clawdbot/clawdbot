@@ -30,7 +30,10 @@ describe("resolveJsonlOcPath", () => {
     const m = rs("oc://session-events/L2/event");
     expect(m?.kind).toBe("object-entry");
     if (m?.kind === "object-entry") {
-      expect(m.node.value).toMatchObject({ kind: "string", value: "step" });
+      expect(m.node.value.kind).toBe("string");
+      if (m.node.value.kind === "string") {
+        expect(m.node.value.value).toBe("step");
+      }
     }
   });
 
@@ -38,7 +41,10 @@ describe("resolveJsonlOcPath", () => {
     const m = rs("oc://session-events/L2/result.ok");
     expect(m?.kind).toBe("object-entry");
     if (m?.kind === "object-entry") {
-      expect(m.node.value).toMatchObject({ kind: "boolean", value: true });
+      expect(m.node.value.kind).toBe("boolean");
+      if (m.node.value.kind === "boolean") {
+        expect(m.node.value.value).toBe(true);
+      }
     }
   });
 
@@ -46,7 +52,10 @@ describe("resolveJsonlOcPath", () => {
     const m = rs("oc://session-events/$last/event");
     expect(m?.kind).toBe("object-entry");
     if (m?.kind === "object-entry") {
-      expect(m.node.value).toMatchObject({ kind: "string", value: "end" });
+      expect(m.node.value.kind).toBe("string");
+      if (m.node.value.kind === "string") {
+        expect(m.node.value.value).toBe("end");
+      }
     }
   });
 

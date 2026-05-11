@@ -27,6 +27,45 @@ import {
 import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.shared.js";
 import type { StatusSummary } from "./status.types.js";
 
+function readModelPricingHealth(params: {
+  health?: HealthSummary;
+  surface: StatusOverviewSurface;
+}): HealthSummary["modelPricing"] | undefined {
+  if (params.health?.modelPricing) {
+    return params.health.modelPricing;
+  }
+  const probeHealth = params.surface.gatewayProbe?.health;
+  if (!probeHealth || typeof probeHealth !== "object") {
+    return undefined;
+  }
+  const modelPricing = (probeHealth as { modelPricing?: unknown }).modelPricing;
+  if (!modelPricing || typeof modelPricing !== "object") {
+    return undefined;
+  }
+  const state = (modelPricing as { state?: unknown }).state;
+  if (state !== "ok" && state !== "degraded" && state !== "disabled") {
+    return undefined;
+  }
+  return modelPricing as HealthSummary["modelPricing"];
+}
+
+function buildModelPricingOverviewValue(params: {
+  health?: HealthSummary["modelPricing"];
+  ok: (value: string) => string;
+  warn: (value: string) => string;
+  muted: (value: string) => string;
+}): string | null {
+  const health = params.health;
+  if (!health) {
+    return null;
+  }
+  if (health.state !== "degraded") {
+    return null;
+  }
+  const detail = health.detail ? ` · ${health.detail}` : "";
+  return params.warn(`degraded${detail}`);
+}
+
 export function buildStatusCommandOverviewRows(
   params: {
     opts: {
@@ -96,6 +135,15 @@ export function buildStatusCommandOverviewRows(
     ok: params.ok,
     warn: params.warn,
   });
+  const modelPricingValue = buildModelPricingOverviewValue({
+    health: readModelPricingHealth({
+      health: params.health,
+      surface: params.surface,
+    }),
+    ok: params.ok,
+    warn: params.warn,
+    muted: params.muted,
+  });
 
   return buildStatusOverviewRowsFromSurface({
     surface: params.surface,
@@ -107,6 +155,7 @@ export function buildStatusCommandOverviewRows(
     updateValue: params.updateValue,
     agentsValue,
     suffixRows: [
+      ...(modelPricingValue ? [{ Item: "Model pricing", Value: modelPricingValue }] : []),
       { Item: "Memory", Value: memoryValue },
       { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
       { Item: "Probes", Value: probesValue },

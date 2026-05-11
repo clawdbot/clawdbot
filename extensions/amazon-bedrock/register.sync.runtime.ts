@@ -1,16 +1,13 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { streamSimple } from "@earendil-works/pi-ai";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
   normalizeProviderId,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  createBedrockNoCacheWrapper,
-  isAnthropicBedrockModel,
-  streamWithPayloadPatch,
-} from "openclaw/plugin-sdk/provider-stream-shared";
+import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 import { mergeImplicitBedrockProvider, resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
@@ -37,6 +34,30 @@ type AmazonBedrockPluginConfig = {
 
 const BEDROCK_SERVICE_TIER_VALUES = ["flex", "priority", "default", "reserved"] as const;
 type BedrockServiceTier = (typeof BEDROCK_SERVICE_TIER_VALUES)[number];
+
+function isAnthropicBedrockModel(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase();
+  if (normalized.includes("anthropic.claude") || normalized.includes("anthropic/claude")) {
+    return true;
+  }
+  if (
+    /^arn:aws(-cn|-us-gov)?:bedrock:/.test(normalized) &&
+    normalized.includes(":application-inference-profile/")
+  ) {
+    const profileId = normalized.split(":application-inference-profile/")[1] ?? "";
+    return profileId.includes("claude");
+  }
+  return false;
+}
+
+function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) =>
+    underlying(model, context, {
+      ...options,
+      cacheRetention: "none",
+    });
+}
 
 function isBedrockServiceTier(value: string): value is BedrockServiceTier {
   return BEDROCK_SERVICE_TIER_VALUES.some((tier) => tier === value);
@@ -101,7 +122,7 @@ function createGuardrailWrapStreamFn(
 
 /**
  * Mirrors the shipped pi-ai Bedrock `supportsPromptCaching` matcher.
- * Keep this in sync with node_modules/@mariozechner/pi-ai/dist/providers/amazon-bedrock.js.
+ * Keep this in sync with node_modules/@earendil-works/pi-ai/dist/providers/amazon-bedrock.js.
  */
 function matchesPiAiPromptCachingModelId(modelId: string): boolean {
   const id = modelId.toLowerCase();

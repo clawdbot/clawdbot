@@ -77,6 +77,9 @@ programmatic delivery.
   preserve isolation; direct chats collapse to `main`).
 - Thinking and verbose flags persist into the session store.
 - Output: plain text by default, or `--json` for structured payload + metadata.
+- With `--json --deliver`, the JSON includes delivery status for sent,
+  suppressed, partial, and failed sends. See
+  [JSON delivery status](/cli/agent#json-delivery-status).
 
 ## Examples
 

@@ -1,4 +1,4 @@
-import { streamSimple } from "@mariozechner/pi-ai";
+import { streamSimple } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../context-engine-capabilities.js", () => ({
@@ -73,21 +73,51 @@ async function invokeWrappedTestStream(
   return await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).toBeTypeOf("object");
+  expect(value, label).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+function requireContentItem(
+  content: Array<{ type?: string; text?: string; name?: string }> | unknown[],
+  index = 0,
+) {
+  return requireRecord(content[index], `content item ${index}`);
+}
+
+function expectSingleTextContent(
+  content: Array<{ type?: string; text?: string }> | unknown[],
+  textFragment: string,
+) {
+  expect(content).toHaveLength(1);
+  const item = requireContentItem(content);
+  expect(item.type).toBe("text");
+  expect(item.text).toContain(textFragment);
+}
+
+function expectSingleToolCallContent(
+  content: Array<{ type?: string; name?: string }> | unknown[],
+  name: string,
+) {
+  expect(content).toHaveLength(1);
+  const item = requireContentItem(content);
+  expect(item.type).toBe("toolCall");
+  expect(item.name).toBe(name);
+}
+
 describe("buildEmbeddedAttemptToolRunContext", () => {
   it("carries runtime toolsAllow into coding tool construction", () => {
-    expect(
-      buildEmbeddedAttemptToolRunContext({
-        trigger: "manual",
-        jobId: "job-1",
-        memoryFlushWritePath: "memory/log.md",
-        toolsAllow: ["memory_search", "memory_get"],
-      }),
-    ).toMatchObject({
+    const context = buildEmbeddedAttemptToolRunContext({
       trigger: "manual",
       jobId: "job-1",
       memoryFlushWritePath: "memory/log.md",
-      runtimeToolAllowlist: ["memory_search", "memory_get"],
+      toolsAllow: ["memory_search", "memory_get"],
     });
+    expect(context.trigger).toBe("manual");
+    expect(context.jobId).toBe("job-1");
+    expect(context.memoryFlushWritePath).toBe("memory/log.md");
+    expect(context.runtimeToolAllowlist).toEqual(["memory_search", "memory_get"]);
   });
 });
 
@@ -280,15 +310,9 @@ describe("normalizeMessagesForLlmBoundary", () => {
     ) as unknown as Array<Record<string, unknown>>;
 
     expect(output).toHaveLength(3);
-    expect(output).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ content: "old secret runtime context" })]),
-    );
-    expect(output).toEqual(
-      expect.arrayContaining([expect.objectContaining({ content: "secret runtime context" })]),
-    );
-    expect(output).toEqual(
-      expect.arrayContaining([expect.objectContaining({ customType: "other-extension-context" })]),
-    );
+    expect(output.some((item) => item.content === "old secret runtime context")).toBe(false);
+    expect(output.some((item) => item.content === "secret runtime context")).toBe(true);
+    expect(output.some((item) => item.customType === "other-extension-context")).toBe(true);
   });
 
   it("keeps only safe blocked metadata at the LLM boundary", () => {
@@ -720,10 +744,8 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       } as never,
     });
 
-    expect(result).toMatchObject({
-      merged: true,
-      removeLeaf: true,
-    });
+    expect(result.merged).toBe(true);
+    expect(result.removeLeaf).toBe(true);
     expect(result.prompt).toContain("please inspect this inline image");
     expect(result.prompt).toContain("[image_url] inline data URI (image/png, 4118 chars)");
     expect(result.prompt).not.toContain("base64");
@@ -748,10 +770,8 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       } as never,
     });
 
-    expect(result).toMatchObject({
-      merged: true,
-      removeLeaf: true,
-    });
+    expect(result.merged).toBe(true);
+    expect(result.removeLeaf).toBe(true);
     expect(result.prompt).toContain("[value] inline data URI (image/png, 10022 chars)");
     expect(result.prompt).toContain("bbbb");
     expect(result.prompt).toContain("(2000 chars)");
@@ -826,11 +846,12 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       },
     });
 
-    await expect(
-      streamFn({ provider: "demo-provider", id: "demo-model" } as never, {} as never, {}),
-    ).resolves.toMatchObject({
-      apiKey: "demo-runtime-key",
-    });
+    const streamOptions = await streamFn(
+      { provider: "demo-provider", id: "demo-model" } as never,
+      {} as never,
+      {},
+    );
+    expect(requireRecord(streamOptions, "stream options").apiKey).toBe("demo-runtime-key");
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
 
@@ -847,17 +868,16 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       } as never,
     });
 
-    await expect(
-      streamFn(
-        { provider: "demo-provider", id: "demo-model" } as never,
-        {
-          systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
-        } as never,
-        {},
-      ),
-    ).resolves.toMatchObject({
-      systemPrompt: "Stable prefix\nDynamic suffix",
-    });
+    const context = await streamFn(
+      { provider: "demo-provider", id: "demo-model" } as never,
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+      } as never,
+      {},
+    );
+    expect(requireRecord(context, "stream context").systemPrompt).toBe(
+      "Stable prefix\nDynamic suffix",
+    );
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
   it("routes supported default streamSimple fallbacks through boundary-aware transports", () => {
@@ -1154,10 +1174,9 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     for (let i = 0; i < 10; i += 1) {
       const stream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
       const result = await stream.result();
-      expect(result).toMatchObject({
-        role: "assistant",
-        content: [{ type: "toolCall", name: "exec" }],
-      });
+      const message = requireRecord(result, "result message");
+      expect(message.role).toBe("assistant");
+      expectSingleToolCallContent(message.content as unknown[], "exec");
     }
 
     const blockedStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
@@ -1167,12 +1186,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     };
 
     expect(blockedResult.role).toBe("assistant");
-    expect(blockedResult.content).toEqual([
-      expect.objectContaining({
-        type: "text",
-        text: expect.stringContaining('"exec"'),
-      }),
-    ]);
+    expectSingleTextContent(blockedResult.content, '"exec"');
   });
 
   it("leaves repeated unavailable tool calls alone when the unknown-tool guard is disabled", async () => {
@@ -1190,10 +1204,9 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     for (let i = 0; i < 11; i += 1) {
       const stream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
       const result = await stream.result();
-      expect(result).toMatchObject({
-        role: "assistant",
-        content: [{ type: "toolCall", name: "exec" }],
-      });
+      const message = requireRecord(result, "result message");
+      expect(message.role).toBe("assistant");
+      expectSingleToolCallContent(message.content as unknown[], "exec");
     }
   });
 
@@ -1221,7 +1234,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     expect(partialToolCall.name).toBe("exec");
     expect(messageToolCall.name).toBe("exec");
-    expect(result.content).toEqual([expect.objectContaining({ type: "toolCall", name: "exec" })]);
+    expectSingleToolCallContent(result.content, "exec");
   });
 
   it("does not reset the unavailable-tool streak on partial-only stream chunks", async () => {
@@ -1256,12 +1269,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     };
 
     expect(secondResult.role).toBe("assistant");
-    expect(secondResult.content).toEqual([
-      expect.objectContaining({
-        type: "text",
-        text: expect.stringContaining('"exec"'),
-      }),
-    ]);
+    expectSingleTextContent(secondResult.content, '"exec"');
   });
 
   it("counts the final unknown-tool retry when streamed messages omit the tool name", async () => {
@@ -1296,12 +1304,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     };
 
     expect(secondResult.role).toBe("assistant");
-    expect(secondResult.content).toEqual([
-      expect.objectContaining({
-        type: "text",
-        text: expect.stringContaining('"exec"'),
-      }),
-    ]);
+    expectSingleTextContent(secondResult.content, '"exec"');
   });
 
   it("resets a provisional streamed unknown-tool retry when later chunks resolve to an allowed tool", async () => {
@@ -1351,12 +1354,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     };
 
     expect(secondResult.role).toBe("assistant");
-    expect(secondResult.content).toEqual([
-      expect.objectContaining({
-        type: "toolCall",
-        name: "ex",
-      }),
-    ]);
+    expectSingleToolCallContent(secondResult.content, "ex");
   });
 
   it("keeps processing later streamed messages after one streamed unknown-tool retry was counted", async () => {
@@ -1406,12 +1404,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     };
 
     expect(secondResult.role).toBe("assistant");
-    expect(secondResult.content).toEqual([
-      expect.objectContaining({
-        type: "toolCall",
-        name: "re",
-      }),
-    ]);
+    expectSingleToolCallContent(secondResult.content, "re");
   });
 
   it("resets a stale unknown-tool streak when a streamed message mixes allowed and unknown tools", async () => {
@@ -1475,12 +1468,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     };
 
     expect(thirdResult.role).toBe("assistant");
-    expect(thirdResult.content).toEqual([
-      expect.objectContaining({
-        type: "toolCall",
-        name: "ex",
-      }),
-    ]);
+    expectSingleToolCallContent(thirdResult.content, "ex");
   });
 
   it("infers tool names from malformed toolCallId variants when allowlist is present", async () => {
@@ -1626,12 +1614,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
       content: Array<{ type: string; text?: string }>;
     };
 
-    expect(result.content).toEqual([
-      expect.objectContaining({
-        type: "text",
-        text: expect.stringContaining('"blank tool name"'),
-      }),
-    ]);
+    expectSingleTextContent(result.content, '"blank tool name"');
     expect(finalToolCall.name).toBe("");
     expect(finalToolCall.id).toBe("call_auto_1");
   });
@@ -1764,12 +1747,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
       content: Array<{ type: string; text?: string }>;
     };
 
-    expect(result.content).toEqual([
-      expect.objectContaining({
-        type: "text",
-        text: expect.stringContaining('"blank tool name"'),
-      }),
-    ]);
+    expectSingleTextContent(result.content, '"blank tool name"');
     expect(finalToolCall.name).toBe("");
   });
   it("leaves provisional blank streamed names recoverable while stopping final blank dispatch", async () => {
@@ -1790,12 +1768,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
       content: Array<{ type: string; text?: string }>;
     };
 
-    expect(result.content).toEqual([
-      expect.objectContaining({
-        type: "text",
-        text: expect.stringContaining('"blank tool name"'),
-      }),
-    ]);
+    expectSingleTextContent(result.content, '"blank tool name"');
     expect(partialToolCall.name).toBe("   ");
     expect(finalToolCall.name).toBe("\t  ");
     expect(baseFn).toHaveBeenCalledTimes(1);
@@ -1816,12 +1789,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
       content: Array<{ type: string; text?: string }>;
     };
 
-    expect(result.content).toEqual([
-      expect.objectContaining({
-        type: "text",
-        text: expect.stringContaining('"blank tool name"'),
-      }),
-    ]);
+    expectSingleTextContent(result.content, '"blank tool name"');
     expect(finalToolCall.name).toBe("");
   });
 
@@ -2300,32 +2268,30 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
 
     expect(baseFn).toHaveBeenCalledTimes(1);
     const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
-    expect(seenContext.messages).toEqual([
+    expect(seenContext.messages).toHaveLength(3);
+    expect(seenContext.messages[0]).toEqual({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+        { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+      ],
+    });
+    const repairedToolResult = requireRecord(seenContext.messages[1], "repaired tool result");
+    expect(repairedToolResult.role).toBe("toolResult");
+    expect(repairedToolResult.toolCallId).toBe("call_1");
+    expect(repairedToolResult.toolName).toBe("read");
+    expect(repairedToolResult.content).toEqual([
       {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
-          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [
-          {
-            type: "text",
-            text: "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
-          },
-        ],
-        isError: true,
-        timestamp: expect.any(Number),
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
+        type: "text",
+        text: "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
       },
     ]);
+    expect(repairedToolResult.isError).toBe(true);
+    expect(repairedToolResult.timestamp).toBeTypeOf("number");
+    expect(seenContext.messages[2]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "retry" }],
+    });
   });
 
   it("preserves sessions_spawn attachment payloads on replay", async () => {
@@ -3482,15 +3448,16 @@ describe("buildAfterTurnRuntimeContext", () => {
         activeAgentId: "main",
       });
 
-      expect(legacy.activeProcessSessions).toEqual([
-        expect.objectContaining({
-          sessionId: "sess-session-id",
-          command: "sleep 600",
-          pid: 1234,
-        }),
-      ]);
-      expect(legacy.activeProcessSessions).not.toEqual(
-        expect.arrayContaining([expect.objectContaining({ sessionId: "sess-other" })]),
+      const activeProcessSessions = legacy.activeProcessSessions as
+        | Array<{ sessionId?: string; command?: string; pid?: number }>
+        | undefined;
+      expect(activeProcessSessions).toHaveLength(1);
+      const activeSession = requireRecord(activeProcessSessions?.[0], "active process session");
+      expect(activeSession.sessionId).toBe("sess-session-id");
+      expect(activeSession.command).toBe("sleep 600");
+      expect(activeSession.pid).toBe(1234);
+      expect(activeProcessSessions?.some((session) => session.sessionId === "sess-other")).toBe(
+        false,
       );
     } finally {
       resetProcessRegistryForTests();
@@ -3519,10 +3486,8 @@ describe("buildAfterTurnRuntimeContext", () => {
       agentDir: "/tmp/agent",
     });
 
-    expect(legacy).toMatchObject({
-      provider: "openai-codex",
-      model: "gpt-5.4",
-    });
+    expect(legacy.provider).toBe("openai-codex");
+    expect(legacy.model).toBe("gpt-5.4");
   });
 
   it("resolves compaction.model override in runtime context so all context engines use the correct model", () => {
@@ -3558,12 +3523,10 @@ describe("buildAfterTurnRuntimeContext", () => {
     // buildEmbeddedCompactionRuntimeContext now resolves the override eagerly
     // so that context engines (including third-party ones) receive the correct
     // compaction model in the runtime context.
-    expect(legacy).toMatchObject({
-      provider: "openrouter",
-      model: "anthropic/claude-sonnet-4-5",
-      // Auth profile dropped because provider changed from openai-codex to openrouter
-      authProfileId: undefined,
-    });
+    expect(legacy.provider).toBe("openrouter");
+    expect(legacy.model).toBe("anthropic/claude-sonnet-4-5");
+    // Auth profile dropped because provider changed from openai-codex to openrouter.
+    expect(legacy.authProfileId).toBeUndefined();
   });
   it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {
     const promptCache = buildContextEnginePromptCacheInfo({
@@ -3599,20 +3562,14 @@ describe("buildAfterTurnRuntimeContext", () => {
       promptCache,
     });
 
-    expect(legacy).toMatchObject({
-      authProfileId: "openai:p1",
-      provider: "openai-codex",
-      model: "gpt-5.4",
-      workspaceDir: "/tmp/workspace",
-      agentDir: "/tmp/agent",
-      tokenBudget: 1050000,
-      currentTokenCount: 52,
-      promptCache: {
-        lastCallUsage: {
-          total: 57,
-        },
-      },
-    });
+    expect(legacy.authProfileId).toBe("openai:p1");
+    expect(legacy.provider).toBe("openai-codex");
+    expect(legacy.model).toBe("gpt-5.4");
+    expect(legacy.workspaceDir).toBe("/tmp/workspace");
+    expect(legacy.agentDir).toBe("/tmp/agent");
+    expect(legacy.tokenBudget).toBe(1050000);
+    expect(legacy.currentTokenCount).toBe(52);
+    expect(legacy.promptCache?.lastCallUsage?.total).toBe(57);
   });
 
   it("derives afterTurn token count from the current assistant usage snapshot", () => {
@@ -3648,14 +3605,8 @@ describe("buildAfterTurnRuntimeContext", () => {
       promptCache,
     });
 
-    expect(legacy).toMatchObject({
-      currentTokenCount: 52,
-      promptCache: {
-        lastCallUsage: {
-          total: 57,
-        },
-      },
-    });
+    expect(legacy.currentTokenCount).toBe(52);
+    expect(legacy.promptCache?.lastCallUsage?.total).toBe(57);
   });
 
   it("preserves sender and channel routing context for scoped compaction discovery", () => {
@@ -3684,11 +3635,9 @@ describe("buildAfterTurnRuntimeContext", () => {
       agentDir: "/tmp/agent",
     });
 
-    expect(legacy).toMatchObject({
-      senderId: "user-123",
-      currentChannelId: "C123",
-      currentThreadTs: "thread-9",
-      currentMessageId: "msg-42",
-    });
+    expect(legacy.senderId).toBe("user-123");
+    expect(legacy.currentChannelId).toBe("C123");
+    expect(legacy.currentThreadTs).toBe("thread-9");
+    expect(legacy.currentMessageId).toBe("msg-42");
   });
 });

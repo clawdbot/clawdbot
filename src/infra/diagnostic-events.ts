@@ -652,6 +652,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "tool.execution.started",
   "tool.execution.completed",
   "tool.execution.error",
+  "tool.execution.blocked",
   "exec.process.completed",
   "message.delivery.started",
   "message.delivery.completed",

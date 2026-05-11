@@ -100,6 +100,10 @@
       "types": "./dist/src/plugin-sdk/channel-streaming.d.ts",
       "default": "./src/channel-streaming.ts"
     },
+    "./channel-runtime": {
+      "types": "./dist/src/plugin-sdk/channel-runtime.d.ts",
+      "default": "./src/channel-runtime.ts"
+    },
     "./cli-runtime": {
       "types": "./dist/src/plugin-sdk/cli-runtime.d.ts",
       "default": "./src/cli-runtime.ts"
@@ -119,6 +123,10 @@
     "./provider-auth": {
       "types": "./dist/src/plugin-sdk/provider-auth.d.ts",
       "default": "./src/provider-auth.ts"
+    },
+    "./compat": {
+      "types": "./dist/src/plugin-sdk/compat.d.ts",
+      "default": "./src/compat.ts"
     },
     "./provider-auth-runtime": {
       "types": "./dist/src/plugin-sdk/provider-auth-runtime.d.ts",
@@ -188,6 +196,10 @@
       "types": "./dist/src/plugin-sdk/runtime-env.d.ts",
       "default": "./src/runtime-env.ts"
     },
+    "./infra-runtime": {
+      "types": "./dist/src/plugin-sdk/infra-runtime.d.ts",
+      "default": "./src/infra-runtime.ts"
+    },
     "./security-runtime": {
       "types": "./dist/src/plugin-sdk/security-runtime.d.ts",
       "default": "./src/security-runtime.ts"
@@ -204,10 +216,6 @@
       "types": "./dist/src/plugin-sdk/secret-input.d.ts",
       "default": "./src/secret-input.ts"
     },
-    "./text-runtime": {
-      "types": "./dist/src/plugin-sdk/text-runtime.d.ts",
-      "default": "./src/text-runtime.ts"
-    },
     "./tts-runtime": {
       "types": "./dist/src/plugin-sdk/tts-runtime.d.ts",
       "default": "./src/tts-runtime.ts"
@@ -216,9 +224,21 @@
       "types": "./dist/src/plugin-sdk/testing.d.ts",
       "default": "./src/testing.ts"
     },
+    "./text-runtime": {
+      "types": "./dist/src/plugin-sdk/text-runtime.d.ts",
+      "default": "./src/text-runtime.ts"
+    },
     "./video-generation": {
       "types": "./dist/src/plugin-sdk/video-generation.d.ts",
       "default": "./src/video-generation.ts"
+    },
+    "./config-contracts": {
+      "types": "./dist/src/plugin-sdk/config-contracts.d.ts",
+      "default": "./src/config-contracts.ts"
+    },
+    "./text-utility-runtime": {
+      "types": "./dist/src/plugin-sdk/text-utility-runtime.d.ts",
+      "default": "./src/text-utility-runtime.ts"
     },
     "./zod": {
       "types": "./dist/src/plugin-sdk/zod.d.ts",

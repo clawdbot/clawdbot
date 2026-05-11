@@ -1,6 +1,7 @@
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { log } from "./pi-embedded-runner/logger.js";
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export type OpenAITextVerbosity = "low" | "medium" | "high";
 
 function normalizeOpenAITextVerbosity(value: unknown): OpenAITextVerbosity | undefined {
@@ -14,6 +15,7 @@ function normalizeOpenAITextVerbosity(value: unknown): OpenAITextVerbosity | und
   return undefined;
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function resolveOpenAITextVerbosity(
   extraParams: Record<string, unknown> | undefined,
 ): OpenAITextVerbosity | undefined {

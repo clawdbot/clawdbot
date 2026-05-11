@@ -231,12 +231,42 @@ async function createPluginDirFixture(baseDir: string, pluginId = "my-plugin") {
 }
 
 async function expectPathAccessState(pathToCheck: string, expected: "exists" | "missing") {
-  const accessExpectation = fs.access(pathToCheck);
   if (expected === "exists") {
-    await expect(accessExpectation).resolves.toBeUndefined();
+    await fs.access(pathToCheck);
     return;
   }
-  await expect(accessExpectation).rejects.toMatchObject({ code: "ENOENT" });
+  try {
+    await fs.access(pathToCheck);
+  } catch (error) {
+    expect((error as { code?: unknown }).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected ${pathToCheck} to be missing`);
+}
+
+function expectNpmUninstallCommand(params: { packageName: string; npmRoot: string }) {
+  const command = runCommandWithTimeoutMock.mock.calls[0];
+  expect(command).toBeDefined();
+  expect(command?.[0]).toEqual([
+    "npm",
+    "uninstall",
+    "--loglevel=error",
+    "--legacy-peer-deps",
+    "--ignore-scripts",
+    "--no-audit",
+    "--no-fund",
+    params.packageName,
+  ]);
+  const options = command?.[1] as {
+    cwd?: string;
+    timeoutMs?: number;
+    env?: Record<string, string>;
+  };
+  expect(options.cwd).toBe(params.npmRoot);
+  expect(options.timeoutMs).toBe(300_000);
+  expect(options.env?.NPM_CONFIG_IGNORE_SCRIPTS).toBe("true");
+  expect(options.env?.npm_config_legacy_peer_deps).toBe("true");
+  expect(options.env?.npm_config_package_lock).toBe("true");
 }
 
 describe("resolveUninstallChannelConfigKeys", () => {
@@ -895,7 +925,7 @@ describe("uninstallPlugin", () => {
       expectSuccessfulUninstallActions(result, {
         directory: true,
       });
-      await expect(fs.access(pluginDir)).rejects.toMatchObject({ code: "ENOENT" });
+      await expectPathAccessState(pluginDir, "missing");
     } finally {
       await fs.rm(pluginDir, { recursive: true, force: true });
     }
@@ -923,7 +953,7 @@ describe("uninstallPlugin", () => {
 
     const applied = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
     expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
-    await expect(fs.access(pluginDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathAccessState(pluginDir, "missing");
   });
 
   it("uninstalls npm-managed packages through npm before deleting the package directory", async () => {
@@ -983,28 +1013,8 @@ describe("uninstallPlugin", () => {
     const applied = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
 
     expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
-      [
-        "npm",
-        "uninstall",
-        "--loglevel=error",
-        "--legacy-peer-deps",
-        "--ignore-scripts",
-        "--no-audit",
-        "--no-fund",
-        "@openclaw/kitchen-sink",
-      ],
-      expect.objectContaining({
-        cwd: npmRoot,
-        timeoutMs: 300_000,
-        env: expect.objectContaining({
-          NPM_CONFIG_IGNORE_SCRIPTS: "true",
-          npm_config_legacy_peer_deps: "true",
-          npm_config_package_lock: "true",
-        }),
-      }),
-    );
-    await expect(fs.access(pluginDir)).rejects.toMatchObject({ code: "ENOENT" });
+    expectNpmUninstallCommand({ packageName: "@openclaw/kitchen-sink", npmRoot });
+    await expectPathAccessState(pluginDir, "missing");
   });
 
   it("repairs remaining npm plugin openclaw peer links after npm uninstall prunes them", async () => {
@@ -1068,10 +1078,8 @@ describe("uninstallPlugin", () => {
     });
 
     expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
-    await expect(fs.access(removedPluginDir)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.access(path.join(npmRoot, "node_modules", "openclaw"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathAccessState(removedPluginDir, "missing");
+    await expectPathAccessState(path.join(npmRoot, "node_modules", "openclaw"), "missing");
     await expect(fs.lstat(peerLink).then((stat) => stat.isSymbolicLink())).resolves.toBe(true);
   });
 
@@ -1119,27 +1127,7 @@ describe("uninstallPlugin", () => {
     });
 
     expect(applied).toEqual({ directoryRemoved: false, warnings: [] });
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
-      [
-        "npm",
-        "uninstall",
-        "--loglevel=error",
-        "--legacy-peer-deps",
-        "--ignore-scripts",
-        "--no-audit",
-        "--no-fund",
-        "missing-plugin",
-      ],
-      expect.objectContaining({
-        cwd: npmRoot,
-        timeoutMs: 300_000,
-        env: expect.objectContaining({
-          NPM_CONFIG_IGNORE_SCRIPTS: "true",
-          npm_config_legacy_peer_deps: "true",
-          npm_config_package_lock: "true",
-        }),
-      }),
-    );
+    expectNpmUninstallCommand({ packageName: "missing-plugin", npmRoot });
     await expect(fs.lstat(peerLink).then((stat) => stat.isSymbolicLink())).resolves.toBe(true);
   });
 
@@ -1220,7 +1208,7 @@ describe("uninstallPlugin", () => {
     expect(successfulResult.warnings).toEqual([
       "Failed to prune npm dependencies for plugin package demo-plugin: registry unavailable",
     ]);
-    await expect(fs.access(pluginDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathAccessState(pluginDir, "missing");
   });
 
   it.each([
@@ -1368,7 +1356,7 @@ describe("uninstallPlugin", () => {
     expectSuccessfulUninstallActions(result, {
       directory: true,
     });
-    await expect(fs.access(managedDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathAccessState(managedDir, "missing");
   });
 
   it("deletes tracked installs from a recorded managed extensions root", async () => {
@@ -1388,7 +1376,7 @@ describe("uninstallPlugin", () => {
     expectSuccessfulUninstallActions(result, {
       directory: true,
     });
-    await expect(fs.access(installPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathAccessState(installPath, "missing");
   });
 
   it("deletes managed ClawHub install directories", async () => {
@@ -1431,7 +1419,7 @@ describe("uninstallPlugin", () => {
     expectSuccessfulUninstallActions(result, {
       directory: true,
     });
-    await expect(fs.access(installPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathAccessState(installPath, "missing");
   });
 
   it("deletes managed git install repos outside the extensions directory", async () => {
@@ -1457,8 +1445,8 @@ describe("uninstallPlugin", () => {
     expectSuccessfulUninstallActions(result, {
       directory: true,
     });
-    await expect(fs.access(installPath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.access(installParent)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathAccessState(installPath, "missing");
+    await expectPathAccessState(installParent, "missing");
   });
 
   it("keeps non-empty managed git install parents after deleting the repo", async () => {
@@ -1485,7 +1473,7 @@ describe("uninstallPlugin", () => {
     expectSuccessfulUninstallActions(result, {
       directory: true,
     });
-    await expect(fs.access(installPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathAccessState(installPath, "missing");
     await expect(fs.access(path.join(installParent, "keep.txt"))).resolves.toBeUndefined();
   });
 

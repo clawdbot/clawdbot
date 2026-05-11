@@ -1,4 +1,4 @@
-import { z } from "openclaw/plugin-sdk/zod";
+import { z } from "zod";
 import { normalizeWebhookPath } from "../runtime-api.js";
 
 const secretRefSchema = z

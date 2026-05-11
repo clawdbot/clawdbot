@@ -6,6 +6,16 @@ import { HERMES_REASON_AUTH_PROFILE_EXISTS } from "./items.js";
 import { buildHermesMigrationProvider } from "./provider.js";
 import { cleanupTempRoots, makeContext, makeTempRoot, writeFile } from "./test/provider-helpers.js";
 
+async function expectMissingPath(filePath: string): Promise<void> {
+  try {
+    await fs.access(filePath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected missing path: ${filePath}`);
+}
+
 describe("Hermes migration secret items", () => {
   afterEach(async () => {
     await cleanupTempRoots();
@@ -45,15 +55,22 @@ describe("Hermes migration secret items", () => {
     );
 
     expect(plan.metadata?.agentDir).toBe(customAgentDir);
-    expect(plan.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "secret:openai",
-          target: `${customAgentDir}/auth-profiles.json#openai:hermes-import`,
-          status: "planned",
-        }),
-      ]),
-    );
+    expect(plan.items).toEqual([
+      {
+        id: "secret:openai",
+        kind: "secret",
+        action: "create",
+        source: path.join(source, ".env"),
+        target: `${customAgentDir}/auth-profiles.json#openai:hermes-import`,
+        status: "planned",
+        sensitive: true,
+        details: {
+          envVar: "OPENAI_API_KEY",
+          provider: "openai",
+          profileId: "openai:hermes-import",
+        },
+      },
+    ]);
 
     const result = await provider.apply(
       makeContext({
@@ -70,14 +87,19 @@ describe("Hermes migration secret items", () => {
     expect(result.summary.errors).toBe(0);
     const authStore = JSON.parse(
       await fs.readFile(path.join(customAgentDir, "auth-profiles.json"), "utf8"),
-    ) as { profiles?: Record<string, { key?: string; provider?: string }> };
-    expect(authStore.profiles?.["openai:hermes-import"]).toMatchObject({
+    ) as {
+      profiles?: Record<
+        string,
+        { displayName?: string; key?: string; provider?: string; type?: string }
+      >;
+    };
+    expect(authStore.profiles?.["openai:hermes-import"]).toEqual({
+      type: "api_key",
       provider: "openai",
       key: "sk-hermes",
+      displayName: "Hermes import",
     });
-    await expect(
-      fs.access(path.join(stateDir, "agents", "custom", "agent", "auth-profiles.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissingPath(path.join(stateDir, "agents", "custom", "agent", "auth-profiles.json"));
   });
 
   it("keeps secret conflict checks read-only during planning", async () => {
@@ -98,9 +120,7 @@ describe("Hermes migration secret items", () => {
     await provider.plan(makeContext({ source, stateDir, workspaceDir, includeSecrets: true }));
 
     await expect(fs.access(path.join(agentDir, "auth.json"))).resolves.toBeUndefined();
-    await expect(fs.access(path.join(agentDir, "auth-profiles.json"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectMissingPath(path.join(agentDir, "auth-profiles.json"));
   });
 
   it("reports late-created auth profiles as conflicts without overwriting", async () => {
@@ -141,15 +161,23 @@ describe("Hermes migration secret items", () => {
 
     const result = await provider.apply(ctx, plan);
 
-    expect(result.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "secret:openai",
-          status: "conflict",
-          reason: HERMES_REASON_AUTH_PROFILE_EXISTS,
-        }),
-      ]),
-    );
+    expect(result.items).toEqual([
+      {
+        id: "secret:openai",
+        kind: "secret",
+        action: "create",
+        source: path.join(source, ".env"),
+        target: `${agentDir}/auth-profiles.json#openai:hermes-import`,
+        status: "conflict",
+        sensitive: true,
+        reason: HERMES_REASON_AUTH_PROFILE_EXISTS,
+        details: {
+          envVar: "OPENAI_API_KEY",
+          provider: "openai",
+          profileId: "openai:hermes-import",
+        },
+      },
+    ]);
     expect(result.summary.conflicts).toBe(1);
     const authStore = JSON.parse(
       await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),

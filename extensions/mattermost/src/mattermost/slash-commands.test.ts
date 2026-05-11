@@ -41,13 +41,18 @@ describe("slash-commands", () => {
       "token=t1&team_id=team&channel_id=ch1&user_id=u1&command=%2Foc_status&text=now",
       "application/x-www-form-urlencoded",
     );
-    expect(payload).toMatchObject({
+    expect(payload).toEqual({
       token: "t1",
       team_id: "team",
+      team_domain: undefined,
       channel_id: "ch1",
+      channel_name: undefined,
       user_id: "u1",
+      user_name: undefined,
       command: "/oc_status",
       text: "now",
+      trigger_id: undefined,
+      response_url: undefined,
     });
   });
 
@@ -63,10 +68,18 @@ describe("slash-commands", () => {
       }),
       "application/json; charset=utf-8",
     );
-    expect(payload).toMatchObject({
+    expect(payload).toEqual({
       token: "t2",
+      team_id: "team",
+      team_domain: undefined,
+      channel_id: "ch2",
+      channel_name: undefined,
+      user_id: "u2",
+      user_name: undefined,
       command: "/oc_model",
       text: "gpt-5",
+      trigger_id: undefined,
+      response_url: undefined,
     });
   });
 
@@ -183,9 +196,16 @@ describe("slash-commands", () => {
         ];
       }
       if (path === "/commands/cmd-1" && init?.method === "PUT") {
-        expect(JSON.parse(typeof init.body === "string" ? init.body : "{}")).toMatchObject({
+        expect(JSON.parse(typeof init.body === "string" ? init.body : "{}")).toEqual({
+          id: "cmd-1",
+          team_id: "team-1",
+          trigger: "oc_status",
           method: MATTERMOST_SLASH_POST_METHOD,
           url: "http://gateway/callback",
+          description: "status",
+          auto_complete: true,
+          auto_complete_desc: "status",
+          auto_complete_hint: undefined,
         });
         return {
           id: "cmd-1",

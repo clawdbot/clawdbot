@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { createRequire } from "node:module";
+import { shouldRouteCompletionThroughRequesterSession } from "../auto-reply/reply/completion-delivery-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -1055,7 +1056,11 @@ function getTaskDeliveryState(taskId: string): TaskDeliveryState | undefined {
 }
 
 function canDeliverTaskToRequesterOrigin(task: TaskRecord): boolean {
-  const origin = resolveTaskDeliveryOwner(task).requesterOrigin;
+  const owner = resolveTaskDeliveryOwner(task);
+  if (shouldRouteCompletionThroughRequesterSession(owner.sessionKey)) {
+    return false;
+  }
+  const origin = owner.requesterOrigin;
   const channel = origin?.channel?.trim();
   const to = origin?.to?.trim();
   return Boolean(channel && to && isDeliverableMessageChannel(channel));

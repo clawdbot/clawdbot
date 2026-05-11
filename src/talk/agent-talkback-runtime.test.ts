@@ -169,9 +169,7 @@ describe("realtime voice agent talkback queue", () => {
     queue.enqueue("question");
     await vi.advanceTimersByTimeAsync(1);
 
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringMatching(/^\[test\] consult failed: elapsedMs=\d+ boom$/),
-    );
+    expect(logger.warn).toHaveBeenCalledExactlyOnceWith("[test] consult failed: elapsedMs=0 boom");
     expect(deliver).toHaveBeenCalledWith("fallback");
     vi.useRealTimers();
   });

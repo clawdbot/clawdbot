@@ -112,6 +112,32 @@ function makeSuiteResult(params: { outputDir: string; model: string; transcript:
   } satisfies QaSuiteResult;
 }
 
+function requireRunSuiteParams(runSuite: ReturnType<typeof vi.fn>, index = 0) {
+  const params = runSuite.mock.calls[index]?.[0] as CharacterRunSuiteParams | undefined;
+  if (!params) {
+    throw new Error(`runSuite call ${index} missing`);
+  }
+  return params;
+}
+
+function requireRunJudgeParams(runJudge: ReturnType<typeof vi.fn>, index = 0) {
+  const params = runJudge.mock.calls[index]?.[0] as CharacterRunJudgeParams | undefined;
+  if (!params) {
+    throw new Error(`runJudge call ${index} missing`);
+  }
+  return params;
+}
+
+function expectFirstRunFailure(
+  result: Awaited<ReturnType<typeof runQaCharacterEval>>,
+  expected: { model: string; error: string },
+) {
+  const run = result.runs[0];
+  expect(run?.model).toBe(expected.model);
+  expect(run?.status).toBe("fail");
+  expect(run?.error).toBe(expected.error);
+}
+
 describe("runQaCharacterEval", () => {
   let tempRoot: string;
 
@@ -160,24 +186,17 @@ describe("runQaCharacterEval", () => {
     });
 
     expect(runSuite).toHaveBeenCalledTimes(2);
-    expect(runSuite).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5",
-        fastMode: true,
-        scenarioIds: ["character-vibes-gollum"],
-      }),
-    );
-    expect(runJudge).toHaveBeenCalledWith(
-      expect.objectContaining({
-        judgeModel: "openai/gpt-5.5",
-        judgeThinkingDefault: "xhigh",
-        judgeFastMode: true,
-        timeoutMs: 300_000,
-      }),
-    );
+    const firstRunParams = requireRunSuiteParams(runSuite);
+    expect(firstRunParams.providerMode).toBe("live-frontier");
+    expect(firstRunParams.primaryModel).toBe("openai/gpt-5.5");
+    expect(firstRunParams.alternateModel).toBe("openai/gpt-5.5");
+    expect(firstRunParams.fastMode).toBe(true);
+    expect(firstRunParams.scenarioIds).toEqual(["character-vibes-gollum"]);
+    const judgeParams = requireRunJudgeParams(runJudge);
+    expect(judgeParams.judgeModel).toBe("openai/gpt-5.5");
+    expect(judgeParams.judgeThinkingDefault).toBe("xhigh");
+    expect(judgeParams.judgeFastMode).toBe(true);
+    expect(judgeParams.timeoutMs).toBe(300_000);
     expect(result.judgments).toHaveLength(1);
     expect(result.judgments[0]?.rankings.map((ranking) => ranking.model)).toEqual([
       "openai/gpt-5.5",
@@ -404,9 +423,8 @@ describe("runQaCharacterEval", () => {
       runJudge,
     });
 
-    expect(result.runs[0]).toMatchObject({
+    expectFirstRunFailure(result, {
       model: "qwen/qwen3.6-plus",
-      status: "fail",
       error: "model unsupported error leaked into transcript",
     });
   });
@@ -432,9 +450,8 @@ describe("runQaCharacterEval", () => {
       runJudge,
     });
 
-    expect(result.runs[0]).toMatchObject({
+    expectFirstRunFailure(result, {
       model: "qwen/qwen3.5-plus",
-      status: "fail",
       error: "tool failure leaked into transcript",
     });
   });
@@ -461,9 +478,8 @@ describe("runQaCharacterEval", () => {
       runJudge,
     });
 
-    expect(result.runs[0]).toMatchObject({
+    expectFirstRunFailure(result, {
       model: "qa/generic-fallback-model",
-      status: "fail",
       error: "generic request failure leaked into transcript",
     });
   });
@@ -490,9 +506,8 @@ describe("runQaCharacterEval", () => {
       runJudge,
     });
 
-    expect(result.runs[0]).toMatchObject({
+    expectFirstRunFailure(result, {
       model: "google/gemini-test",
-      status: "fail",
       error: "LLM timeout leaked into transcript",
     });
   });
@@ -519,9 +534,8 @@ describe("runQaCharacterEval", () => {
       runJudge,
     });
 
-    expect(result.runs[0]).toMatchObject({
+    expectFirstRunFailure(result, {
       model: "codex/gpt-5.5",
-      status: "fail",
       error: "internal harness/meta text leaked into transcript",
     });
   });

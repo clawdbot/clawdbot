@@ -10,6 +10,10 @@ import {
   writeFile,
 } from "./test/provider-helpers.js";
 
+function itemById<T extends { id: string }>(items: T[], id: string): T | undefined {
+  return items.find((item) => item.id === id);
+}
+
 describe("Hermes migration config mapping", () => {
   afterEach(async () => {
     await cleanupTempRoots();
@@ -55,61 +59,47 @@ describe("Hermes migration config mapping", () => {
     const provider = buildHermesMigrationProvider();
     const plan = await provider.plan(makeContext({ source, stateDir, workspaceDir }));
 
-    expect(plan.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "config:memory-plugin:honcho",
-          kind: "config",
-          action: "merge",
-          target: "plugins.entries.honcho",
-        }),
-        expect.objectContaining({
-          id: "manual:memory-provider:honcho",
-          kind: "manual",
-          status: "skipped",
-        }),
-        expect.objectContaining({
-          id: "config:model-providers",
-          details: expect.objectContaining({
-            value: expect.objectContaining({
-              openai: expect.objectContaining({
-                baseUrl: "https://api.openai.example/v1",
-                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              }),
-              "local-llm": expect.objectContaining({
-                baseUrl: "http://127.0.0.1:11434/v1",
-              }),
-            }),
-          }),
-        }),
-        expect.objectContaining({
-          id: "config:mcp-servers",
-          details: expect.objectContaining({
-            value: {
-              time: {
-                command: "npx",
-                args: ["-y", "mcp-server-time"],
-              },
-            },
-          }),
-        }),
-        expect.objectContaining({
-          id: "config:skill-entries",
-          details: expect.objectContaining({
-            value: {
-              "ship-it": {
-                config: {
-                  mode: "fast",
-                },
-              },
-            },
-          }),
-        }),
-      ]),
-    );
-    expect(plan.warnings).toEqual(
-      expect.arrayContaining([expect.stringContaining("manual review")]),
-    );
+    const memoryPlugin = itemById(plan.items, "config:memory-plugin:honcho");
+    expect(memoryPlugin?.kind).toBe("config");
+    expect(memoryPlugin?.action).toBe("merge");
+    expect(memoryPlugin?.target).toBe("plugins.entries.honcho");
+
+    const manualMemory = itemById(plan.items, "manual:memory-provider:honcho");
+    expect(manualMemory?.kind).toBe("manual");
+    expect(manualMemory?.status).toBe("skipped");
+
+    const modelProviders = itemById(plan.items, "config:model-providers");
+    const modelProviderValue = modelProviders?.details?.value as
+      | {
+          openai?: { baseUrl?: string; apiKey?: unknown };
+          "local-llm"?: { baseUrl?: string };
+        }
+      | undefined;
+    expect(modelProviderValue?.openai?.baseUrl).toBe("https://api.openai.example/v1");
+    expect(modelProviderValue?.openai?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
+    });
+    expect(modelProviderValue?.["local-llm"]?.baseUrl).toBe("http://127.0.0.1:11434/v1");
+
+    const mcpServers = itemById(plan.items, "config:mcp-servers");
+    expect(mcpServers?.details?.value).toEqual({
+      time: {
+        command: "npx",
+        args: ["-y", "mcp-server-time"],
+      },
+    });
+
+    const skillEntries = itemById(plan.items, "config:skill-entries");
+    expect(skillEntries?.details?.value).toEqual({
+      "ship-it": {
+        config: {
+          mode: "fast",
+        },
+      },
+    });
+    expect((plan.warnings ?? []).some((warning) => warning.includes("manual review"))).toBe(true);
   });
 
   it("applies mapped config items through the migration runtime config writer", async () => {
@@ -149,31 +139,13 @@ describe("Hermes migration config mapping", () => {
     );
 
     expect(result.summary.errors).toBe(0);
-    expect(config).toMatchObject({
-      models: {
-        providers: {
-          openai: {
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-          },
-        },
-      },
-      mcp: {
-        servers: {
-          time: {
-            command: "npx",
-          },
-        },
-      },
-      skills: {
-        entries: {
-          "ship-it": {
-            config: {
-              mode: "fast",
-            },
-          },
-        },
-      },
+    expect(config.models?.providers?.openai?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
     });
+    expect(config.mcp?.servers?.time?.command).toBe("npx");
+    expect(config.skills?.entries?.["ship-it"]?.config?.mode).toBe("fast");
   });
 
   it("uses the provider runtime for CLI-applied config items", async () => {
@@ -200,17 +172,10 @@ describe("Hermes migration config mapping", () => {
     const result = await provider.apply(makeContext({ source, stateDir, workspaceDir }));
 
     expect(result.summary.errors).toBe(0);
-    expect(config).toMatchObject({
-      mcp: {
-        servers: {
-          time: {
-            command: "npx",
-            env: {
-              OPENAI_API_KEY: "short-dev-key",
-            },
-          },
-        },
-      },
-    });
+    const mcp = config.mcp as
+      | { servers?: { time?: { command?: unknown; env?: { OPENAI_API_KEY?: unknown } } } }
+      | undefined;
+    expect(mcp?.servers?.time?.command).toBe("npx");
+    expect(mcp?.servers?.time?.env?.OPENAI_API_KEY).toBe("short-dev-key");
   });
 });

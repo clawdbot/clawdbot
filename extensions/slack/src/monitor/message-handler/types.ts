@@ -18,6 +18,7 @@ export type PreparedSlackMessage = {
     record: unknown;
   };
   replyToMode: "off" | "first" | "all" | "batched";
+  requireMention: boolean;
   isDirectMessage: boolean;
   isRoomish: boolean;
   historyKey: string;

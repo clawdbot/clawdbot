@@ -429,18 +429,18 @@ ensure_pnpm() {
   if detect_pnpm_cmd && pnpm_cmd_is_ready; then
     local current_version
     current_version="$("${PNPM_CMD[@]}" --version 2>/dev/null || true)"
-    if [[ "$current_version" =~ ^10\. ]]; then
+    if [[ "$current_version" =~ ^11\. ]]; then
       return 0
     fi
-    log "Found pnpm ${current_version:-unknown}; upgrading to pnpm@10..."
+    log "Found pnpm ${current_version:-unknown}; upgrading to pnpm@11..."
   fi
 
   if [[ -x "$(node_dir)/bin/corepack" ]]; then
     emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"start\",\"method\":\"corepack\"}"
     log "Installing pnpm via Corepack..."
     "$(node_dir)/bin/corepack" enable >/dev/null 2>&1 || true
-    "$(node_dir)/bin/corepack" prepare pnpm@10 --activate
-    if detect_pnpm_cmd && pnpm_cmd_is_ready && [[ "$("${PNPM_CMD[@]}" --version 2>/dev/null || true)" =~ ^10\. ]]; then
+    "$(node_dir)/bin/corepack" prepare pnpm@11 --activate
+    if detect_pnpm_cmd && pnpm_cmd_is_ready && [[ "$("${PNPM_CMD[@]}" --version 2>/dev/null || true)" =~ ^11\. ]]; then
       emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"ok\"}"
       return 0
     fi
@@ -448,7 +448,7 @@ ensure_pnpm() {
 
   emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"start\",\"method\":\"npm\"}"
   log "Installing pnpm via npm..."
-  SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$PREFIX" pnpm@10
+  SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$PREFIX" pnpm@11
   detect_pnpm_cmd || true
   emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"ok\"}"
   return 0
@@ -524,51 +524,29 @@ EOF
 ensure_pnpm_git_prepare_allowlist() {
   local repo_dir="$1"
   local workspace_file="${repo_dir}/pnpm-workspace.yaml"
-  local package_file="${repo_dir}/package.json"
   local dep="@tloncorp/api"
   local tmp
 
-  if [[ -f "$workspace_file" ]] && ! grep -Fq "\"${dep}\"" "$workspace_file" && ! grep -Fq -- "- ${dep}" "$workspace_file"; then
+  if [[ -f "$workspace_file" ]] && ! grep -Fq "\"${dep}\"" "$workspace_file" && ! grep -Fq "${dep}:" "$workspace_file" && ! grep -Fq -- "- ${dep}" "$workspace_file"; then
     tmp="$(mktemp)"
-    if grep -q '^onlyBuiltDependencies:[[:space:]]*$' "$workspace_file"; then
+    if grep -q '^allowBuilds:[[:space:]]*$' "$workspace_file"; then
       awk -v dep="$dep" '
         BEGIN { inserted = 0 }
         {
           print
-          if (!inserted && $0 ~ /^onlyBuiltDependencies:[[:space:]]*$/) {
-            print "  - \"" dep "\""
+          if (!inserted && $0 ~ /^allowBuilds:[[:space:]]*$/) {
+            print "  \"" dep "\": true"
             inserted = 1
           }
         }
       ' "$workspace_file" >"$tmp"
     else
       cat "$workspace_file" >"$tmp"
-      printf '\nonlyBuiltDependencies:\n  - "%s"\n' "$dep" >>"$tmp"
+      printf '\nallowBuilds:\n  "%s": true\n' "$dep" >>"$tmp"
     fi
     mv "$tmp" "$workspace_file"
-  fi
-
-  if [[ -f "$package_file" ]]; then
-    "$(node_bin)" - "$package_file" "$dep" <<'EOF'
-const fs = require("node:fs");
-
-const [packageFile, dep] = process.argv.slice(2);
-const data = JSON.parse(fs.readFileSync(packageFile, "utf8"));
-const list = data.pnpm?.onlyBuiltDependencies;
-if (Array.isArray(list)) {
-  if (!list.includes(dep)) {
-    list.unshift(dep);
-    fs.writeFileSync(packageFile, `${JSON.stringify(data, null, 2)}\n`);
-  }
-  process.exit(0);
-}
-
-if (!data.pnpm || typeof data.pnpm !== "object") {
-  data.pnpm = {};
-}
-data.pnpm.onlyBuiltDependencies = [dep];
-fs.writeFileSync(packageFile, `${JSON.stringify(data, null, 2)}\n`);
-EOF
+  elif [[ ! -f "$workspace_file" ]]; then
+    printf 'allowBuilds:\n  "%s": true\n' "$dep" >"$workspace_file"
   fi
 
   log "Updated pnpm allowlist for git-hosted build dependency: ${dep}"

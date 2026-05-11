@@ -22,7 +22,7 @@ describe("waitForCronRunCompletion", () => {
       intervalMs: 0,
     });
 
-    expect(result).toMatchObject({ ts: 180, status: "ok", summary: "new run" });
+    expect(result).toEqual({ ts: 180, status: "ok", summary: "new run" });
     expect(callGateway).toHaveBeenNthCalledWith(
       1,
       "cron.runs",

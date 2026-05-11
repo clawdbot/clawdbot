@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   isSilentReplyPayloadText,
   isSilentReplyText,
@@ -131,6 +131,7 @@ const GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN = /^gemini(?:[.-]|$)/;
 // Ollama native `/api/chat` can finish with only thinking/internal blocks when
 // constrained, but it should not inherit the stricter planning-only/ack prompts.
 const OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN = /^ollama(?:-|$)/;
+const KIMI_INCOMPLETE_TURN_PROVIDER_ID_PATTERN = /^kimi(?:-|$)/;
 const DEFAULT_PLANNING_ONLY_RETRY_LIMIT = 1;
 const STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT = 2;
 // Allow one immediate continuation plus one follow-up continuation before
@@ -620,6 +621,14 @@ function shouldApplyNonVisibleTurnRetryGuard(params: {
     return true;
   }
   if (normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "openai-completions") {
+    return true;
+  }
+  if (
+    normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "anthropic-messages" &&
+    KIMI_INCOMPLETE_TURN_PROVIDER_ID_PATTERN.test(
+      normalizeLowercaseStringOrEmpty(params.provider ?? ""),
+    )
+  ) {
     return true;
   }
   // Non-visible final turns are narrower than planning-only turns: there is no

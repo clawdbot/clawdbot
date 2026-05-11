@@ -53,6 +53,52 @@ beforeEach(() => {
   __resetDiscordDirectoryCacheForTest();
 });
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value;
+}
+
+function requireArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an array`);
+  }
+  return value;
+}
+
+function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
+  const record = requireRecord(value, label);
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key]).toEqual(expectedValue);
+  }
+}
+
+function requireRestOptions(mock: ReturnType<typeof vi.fn>, callIndex: number) {
+  return requireRecord(mock.mock.calls[callIndex]?.[1], "Discord REST options");
+}
+
+function requireRestBody(mock: ReturnType<typeof vi.fn>, callIndex = 0) {
+  return requireRecord(requireRestOptions(mock, callIndex).body, "Discord REST body");
+}
+
+function expectSingleReceiptPart(receipt: unknown, expected: Record<string, unknown>) {
+  const receiptRecord = requireRecord(receipt, "send receipt");
+  const parts = requireArray(receiptRecord.parts, "send receipt parts");
+  expect(parts).toHaveLength(1);
+  expectRecordFields(parts[0], "send receipt part", expected);
+}
+
+function expectBodyFileName(body: unknown, expectedName: string) {
+  const files = requireArray(requireRecord(body, "Discord REST body").files, "Discord files");
+  expect(files).toHaveLength(1);
+  expectRecordFields(files[0], "Discord file", { name: expectedName });
+}
+
 describe("resolveDiscordTargetChannelId", () => {
   it("creates a DM channel for user targets", async () => {
     const { rest, postMock } = makeDiscordRest();
@@ -139,16 +185,15 @@ describe("sendMessageDiscord", () => {
       token: "t",
       cfg: DISCORD_TEST_CFG,
     });
-    expect(res).toMatchObject({ messageId: "msg1", channelId: "789" });
-    expect(res.receipt).toMatchObject({
+    expect(res.messageId).toBe("msg1");
+    expect(res.channelId).toBe("789");
+    expectRecordFields(res.receipt, "send receipt", {
       primaryPlatformMessageId: "msg1",
       platformMessageIds: ["msg1"],
-      parts: [expect.objectContaining({ platformMessageId: "msg1", kind: "text" })],
     });
-    expect(postMock).toHaveBeenCalledWith(
-      Routes.channelMessages("789"),
-      expect.objectContaining({ body: { content: "hello world" } }),
-    );
+    expectSingleReceiptPart(res.receipt, { platformMessageId: "msg1", kind: "text" });
+    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.channelMessages("789"));
+    expect(requireRestBody(postMock).content).toBe("hello world");
   });
 
   it("rewrites cached @username mentions to id-based mentions", async () => {
@@ -169,10 +214,8 @@ describe("sendMessageDiscord", () => {
       cfg: DISCORD_TEST_CFG,
       accountId: "default",
     });
-    expect(postMock).toHaveBeenCalledWith(
-      Routes.channelMessages("789"),
-      expect.objectContaining({ body: { content: "ping <@123456789012345678>" } }),
-    );
+    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.channelMessages("789"));
+    expect(requireRestBody(postMock).content).toBe("ping <@123456789012345678>");
   });
 
   it("rewrites configured @username aliases to id-based mentions", async () => {
@@ -197,10 +240,8 @@ describe("sendMessageDiscord", () => {
       } as never,
       accountId: "default",
     });
-    expect(postMock).toHaveBeenCalledWith(
-      Routes.channelMessages("789"),
-      expect.objectContaining({ body: { content: "ping <@123456789012345678>" } }),
-    );
+    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.channelMessages("789"));
+    expect(requireRestBody(postMock).content).toBe("ping <@123456789012345678>");
   });
 
   it("uses configured defaultAccount for cached mention rewriting when accountId is omitted", async () => {
@@ -231,10 +272,8 @@ describe("sendMessageDiscord", () => {
         },
       } as never,
     });
-    expect(postMock).toHaveBeenCalledWith(
-      Routes.channelMessages("789"),
-      expect.objectContaining({ body: { content: "ping <@222333444555666777>" } }),
-    );
+    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.channelMessages("789"));
+    expect(requireRestBody(postMock).content).toBe("ping <@222333444555666777>");
   });
 
   it("auto-creates a forum thread when target is a Forum channel", async () => {
@@ -250,22 +289,19 @@ describe("sendMessageDiscord", () => {
       token: "t",
       cfg: DISCORD_TEST_CFG,
     });
-    expect(res).toMatchObject({ messageId: "starter1", channelId: "thread1" });
-    expect(res.receipt).toMatchObject({
+    expect(res.messageId).toBe("starter1");
+    expect(res.channelId).toBe("thread1");
+    expectRecordFields(res.receipt, "send receipt", {
       threadId: "thread1",
       platformMessageIds: ["starter1"],
-      parts: [expect.objectContaining({ platformMessageId: "starter1", kind: "text" })],
     });
+    expectSingleReceiptPart(res.receipt, { platformMessageId: "starter1", kind: "text" });
     // Should POST to threads route, not channelMessages.
-    expect(postMock).toHaveBeenCalledWith(
-      Routes.threads("forum1"),
-      expect.objectContaining({
-        body: {
-          name: "Discussion topic",
-          message: { content: "Discussion topic\nBody of the post" },
-        },
-      }),
-    );
+    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.threads("forum1"));
+    expect(requireRestBody(postMock)).toEqual({
+      name: "Discussion topic",
+      message: { content: "Discussion topic\nBody of the post" },
+    });
   });
 
   it("posts media as a follow-up message in forum channels", async () => {
@@ -276,31 +312,20 @@ describe("sendMessageDiscord", () => {
       cfg: DISCORD_TEST_CFG,
       mediaUrl: "file:///tmp/photo.jpg",
     });
-    expect(res).toMatchObject({ messageId: "starter1", channelId: "thread1" });
-    expect(res.receipt).toMatchObject({
+    expect(res.messageId).toBe("starter1");
+    expect(res.channelId).toBe("thread1");
+    expectRecordFields(res.receipt, "send receipt", {
       threadId: "thread1",
       platformMessageIds: ["starter1"],
-      parts: [expect.objectContaining({ platformMessageId: "starter1", kind: "media" })],
     });
-    expect(postMock).toHaveBeenNthCalledWith(
-      1,
-      Routes.threads("forum1"),
-      expect.objectContaining({
-        body: {
-          name: "Topic",
-          message: { content: "Topic" },
-        },
-      }),
-    );
-    expect(postMock).toHaveBeenNthCalledWith(
-      2,
-      Routes.channelMessages("thread1"),
-      expect.objectContaining({
-        body: expect.objectContaining({
-          files: [expect.objectContaining({ name: "photo.jpg" })],
-        }),
-      }),
-    );
+    expectSingleReceiptPart(res.receipt, { platformMessageId: "starter1", kind: "media" });
+    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.threads("forum1"));
+    expect(requireRestBody(postMock, 0)).toEqual({
+      name: "Topic",
+      message: { content: "Topic" },
+    });
+    expect(postMock.mock.calls[1]?.[0]).toBe(Routes.channelMessages("thread1"));
+    expectBodyFileName(requireRestBody(postMock, 1), "photo.jpg");
   });
 
   it("chunks long forum posts into follow-up messages", async () => {
@@ -329,16 +354,10 @@ describe("sendMessageDiscord", () => {
       token: "t",
       cfg: DISCORD_TEST_CFG,
     });
-    expect(postMock).toHaveBeenNthCalledWith(
-      1,
-      Routes.userChannels(),
-      expect.objectContaining({ body: { recipient_id: "123" } }),
-    );
-    expect(postMock).toHaveBeenNthCalledWith(
-      2,
-      Routes.channelMessages("chan1"),
-      expect.objectContaining({ body: { content: "hiya" } }),
-    );
+    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.userChannels());
+    expect(requireRestBody(postMock, 0).recipient_id).toBe("123");
+    expect(postMock.mock.calls[1]?.[0]).toBe(Routes.channelMessages("chan1"));
+    expect(requireRestBody(postMock, 1).content).toBe("hiya");
     expect(res.channelId).toBe("chan1");
   });
 
@@ -445,18 +464,11 @@ describe("sendMessageDiscord", () => {
       mediaUrl: "file:///tmp/photo.jpg",
     });
     expect(res.messageId).toBe("msg");
-    expect(postMock).toHaveBeenCalledWith(
-      Routes.channelMessages("789"),
-      expect.objectContaining({
-        body: expect.objectContaining({
-          files: [expect.objectContaining({ name: "photo.jpg" })],
-        }),
-      }),
-    );
-    expect(loadWebMedia).toHaveBeenCalledWith(
-      "file:///tmp/photo.jpg",
-      expect.objectContaining({ maxBytes: 100 * 1024 * 1024 }),
-    );
+    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.channelMessages("789"));
+    expectBodyFileName(requireRestBody(postMock), "photo.jpg");
+    expect(loadWebMedia).toHaveBeenCalledWith("file:///tmp/photo.jpg", {
+      maxBytes: 100 * 1024 * 1024,
+    });
   });
 
   it("passes mediaAccess workspaceDir when loading relative media attachments", async () => {
@@ -473,12 +485,11 @@ describe("sendMessageDiscord", () => {
       },
     });
 
-    expect(loadWebMedia).toHaveBeenCalledWith(
-      "chart.png",
-      expect.objectContaining({
-        workspaceDir: "/tmp/agent-workspace",
-      }),
+    const mediaOptions = requireRecord(
+      vi.mocked(loadWebMedia).mock.calls[0]?.[1],
+      "media load options",
     );
+    expect(mediaOptions.workspaceDir).toBe("/tmp/agent-workspace");
   });
 
   it("prefers the caller-provided filename for media attachments", async () => {
@@ -493,14 +504,8 @@ describe("sendMessageDiscord", () => {
       filename: "renderable.png",
     });
 
-    expect(postMock).toHaveBeenCalledWith(
-      Routes.channelMessages("789"),
-      expect.objectContaining({
-        body: expect.objectContaining({
-          files: [expect.objectContaining({ name: "renderable.png" })],
-        }),
-      }),
-    );
+    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.channelMessages("789"));
+    expectBodyFileName(requireRestBody(postMock), "renderable.png");
   });
 
   it("uses configured discord mediaMaxMb for uploads", async () => {
@@ -520,10 +525,9 @@ describe("sendMessageDiscord", () => {
       },
     });
 
-    expect(loadWebMedia).toHaveBeenCalledWith(
-      "file:///tmp/photo.jpg",
-      expect.objectContaining({ maxBytes: 32 * 1024 * 1024 }),
-    );
+    expect(loadWebMedia).toHaveBeenCalledWith("file:///tmp/photo.jpg", {
+      maxBytes: 32 * 1024 * 1024,
+    });
   });
 
   it("sends media with empty text without content field", async () => {
@@ -889,10 +893,8 @@ describe("edit/delete message helpers", () => {
       { content: "hello" },
       { rest, token: "t", cfg: DISCORD_TEST_CFG },
     );
-    expect(patchMock).toHaveBeenCalledWith(
-      Routes.channelMessage("chan1", "m1"),
-      expect.objectContaining({ body: { content: "hello" } }),
-    );
+    expect(patchMock.mock.calls[0]?.[0]).toBe(Routes.channelMessage("chan1", "m1"));
+    expect(requireRestBody(patchMock).content).toBe("hello");
   });
 
   it("deletes message", async () => {

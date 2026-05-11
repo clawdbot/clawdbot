@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Context, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   createFireworksKimiThinkingDisabledWrapper,
@@ -42,7 +42,7 @@ describe("createFireworksKimiThinkingDisabledWrapper", () => {
         api: "openai-completions",
         modelId: "accounts/fireworks/routers/kimi-k2p5-turbo",
       }),
-    ).toMatchObject({ thinking: { type: "disabled" } });
+    ).toEqual({ thinking: { type: "disabled" } });
   });
 
   it("forces thinking disabled for Fireworks Kimi k2.5 aliases", () => {
@@ -52,7 +52,7 @@ describe("createFireworksKimiThinkingDisabledWrapper", () => {
         api: "openai-completions",
         modelId: "accounts/fireworks/routers/kimi-k2.5-turbo",
       }),
-    ).toMatchObject({ thinking: { type: "disabled" } });
+    ).toEqual({ thinking: { type: "disabled" } });
   });
 
   it("forces thinking disabled for Fireworks Kimi k2.6 models", () => {
@@ -62,7 +62,7 @@ describe("createFireworksKimiThinkingDisabledWrapper", () => {
         api: "openai-completions",
         modelId: "accounts/fireworks/models/kimi-k2p6",
       }),
-    ).toMatchObject({ thinking: { type: "disabled" } });
+    ).toEqual({ thinking: { type: "disabled" } });
 
     expect(
       capturePayload({
@@ -70,7 +70,7 @@ describe("createFireworksKimiThinkingDisabledWrapper", () => {
         api: "openai-completions",
         modelId: "accounts/fireworks/routers/kimi-k2.6-turbo",
       }),
-    ).toMatchObject({ thinking: { type: "disabled" } });
+    ).toEqual({ thinking: { type: "disabled" } });
   });
 
   it("strips reasoning fields when disabling Fireworks Kimi thinking", () => {

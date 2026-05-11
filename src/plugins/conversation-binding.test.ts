@@ -318,6 +318,14 @@ function createDeferredVoid(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
+function requireMockCallArg(mock: ReturnType<typeof vi.fn>, index = 0): unknown {
+  const call = mock.mock.calls[index] as [unknown] | undefined;
+  if (!call) {
+    throw new Error(`mock call ${index} missing`);
+  }
+  return call[0];
+}
+
 function createResolvedHandlerRegistry(params: {
   pluginRoot: string;
   handler: (input: unknown) => Promise<void>;
@@ -339,7 +347,7 @@ async function expectResolutionCallback(params: {
   requestInput: PluginBindingRequestInput;
   decision: PluginBindingDecision;
   expectedStatus: "approved" | "denied";
-  expectedCallback: unknown;
+  expectCallback: (payload: unknown) => void;
 }) {
   const onResolved = vi.fn(async () => undefined);
   createResolvedHandlerRegistry({
@@ -361,7 +369,8 @@ async function expectResolutionCallback(params: {
 
   expect(result.status).toBe(params.expectedStatus);
   await flushMicrotasks();
-  expect(onResolved).toHaveBeenCalledWith(params.expectedCallback);
+  expect(onResolved).toHaveBeenCalledTimes(1);
+  params.expectCallback(requireMockCallArg(onResolved));
 }
 
 async function expectResolutionDoesNotWait(params: {
@@ -484,20 +493,18 @@ describe("plugin conversation binding approvals", () => {
       first.requestPluginConversationBinding,
     );
 
-    await expect(
-      approveBindingRequest(
-        request.approvalId,
-        "allow-once",
-        second.resolvePluginConversationBindingApproval,
-      ),
-    ).resolves.toMatchObject({
-      status: "approved",
-      binding: expect.objectContaining({
-        pluginId: "codex",
-        pluginRoot: "/plugins/codex-a",
-        conversationId: "-10099:topic:77",
-      }),
-    });
+    const approved = await approveBindingRequest(
+      request.approvalId,
+      "allow-once",
+      second.resolvePluginConversationBindingApproval,
+    );
+    expect(approved.status).toBe("approved");
+    if (approved.status !== "approved") {
+      throw new Error("expected approved bind result");
+    }
+    expect(approved.binding.pluginId).toBe("codex");
+    expect(approved.binding.pluginRoot).toBe("/plugins/codex-a");
+    expect(approved.binding.conversationId).toBe("-10099:topic:77");
 
     second.__testing.reset();
   });
@@ -513,16 +520,16 @@ describe("plugin conversation binding approvals", () => {
       first.requestPluginConversationBinding,
     );
 
-    await expect(
-      approveBindingRequest(
-        request.approvalId,
-        "allow-always",
-        second.resolvePluginConversationBindingApproval,
-      ),
-    ).resolves.toMatchObject({
-      status: "approved",
-      decision: "allow-always",
-    });
+    const approved = await approveBindingRequest(
+      request.approvalId,
+      "allow-always",
+      second.resolvePluginConversationBindingApproval,
+    );
+    expect(approved.status).toBe("approved");
+    if (approved.status !== "approved") {
+      throw new Error("expected approved bind result");
+    }
+    expect(approved.decision).toBe("allow-always");
 
     const rebound = await first.requestPluginConversationBinding(
       createTelegramCodexBindRequest(
@@ -650,24 +657,39 @@ describe("plugin conversation binding approvals", () => {
       },
       decision: "allow-once" as const,
       expectedStatus: "approved" as const,
-      expectedCallback: {
-        status: "approved",
-        binding: expect.objectContaining({
-          pluginId: "codex",
-          pluginRoot: "/plugins/callback-test",
+      expectCallback: (payload: unknown) => {
+        const callback = payload as {
+          status: string;
+          binding?: {
+            pluginId: string;
+            pluginRoot: string;
+            conversationId: string;
+          };
+          decision: string;
+          request: {
+            summary: string;
+            detachHint?: string;
+            requestedBySenderId: string;
+            conversation: {
+              channel: string;
+              accountId: string;
+              conversationId: string;
+            };
+          };
+        };
+        expect(callback.status).toBe("approved");
+        expect(callback.binding?.pluginId).toBe("codex");
+        expect(callback.binding?.pluginRoot).toBe("/plugins/callback-test");
+        expect(callback.binding?.conversationId).toBe("channel:callback-test");
+        expect(callback.decision).toBe("allow-once");
+        expect(callback.request.summary).toBe("Bind this conversation to Codex thread abc.");
+        expect(callback.request.detachHint).toBeUndefined();
+        expect(callback.request.requestedBySenderId).toBe("user-1");
+        expect(callback.request.conversation).toEqual({
+          channel: "discord",
+          accountId: "isolated",
           conversationId: "channel:callback-test",
-        }),
-        decision: "allow-once",
-        request: {
-          summary: "Bind this conversation to Codex thread abc.",
-          detachHint: undefined,
-          requestedBySenderId: "user-1",
-          conversation: {
-            channel: "discord",
-            accountId: "isolated",
-            conversationId: "channel:callback-test",
-          },
-        },
+        });
       },
     },
     {
@@ -687,20 +709,33 @@ describe("plugin conversation binding approvals", () => {
       },
       decision: "deny" as const,
       expectedStatus: "denied" as const,
-      expectedCallback: {
-        status: "denied",
-        binding: undefined,
-        decision: "deny",
-        request: {
-          summary: "Bind this conversation to Codex thread deny.",
-          detachHint: undefined,
-          requestedBySenderId: "user-1",
-          conversation: {
-            channel: "telegram",
-            accountId: "default",
-            conversationId: "8460800771",
-          },
-        },
+      expectCallback: (payload: unknown) => {
+        const callback = payload as {
+          status: string;
+          binding?: unknown;
+          decision: string;
+          request: {
+            summary: string;
+            detachHint?: string;
+            requestedBySenderId: string;
+            conversation: {
+              channel: string;
+              accountId: string;
+              conversationId: string;
+            };
+          };
+        };
+        expect(callback.status).toBe("denied");
+        expect(callback.binding).toBeUndefined();
+        expect(callback.decision).toBe("deny");
+        expect(callback.request.summary).toBe("Bind this conversation to Codex thread deny.");
+        expect(callback.request.detachHint).toBeUndefined();
+        expect(callback.request.requestedBySenderId).toBe("user-1");
+        expect(callback.request.conversation).toEqual({
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "8460800771",
+        });
       },
     },
   ] as const)("$name", async (testCase) => {
@@ -771,13 +806,9 @@ describe("plugin conversation binding approvals", () => {
       },
     });
 
-    expect(current).toEqual(
-      expect.objectContaining({
-        pluginId: "codex",
-        pluginRoot: "/plugins/codex-a",
-        conversationId: "channel:1",
-      }),
-    );
+    expect(current?.pluginId).toBe("codex");
+    expect(current?.pluginRoot).toBe("/plugins/codex-a");
+    expect(current?.conversationId).toBe("channel:1");
 
     const otherPluginView = await getCurrentPluginConversationBinding({
       pluginRoot: "/plugins/codex-b",
@@ -917,6 +948,8 @@ describe("plugin conversation binding approvals", () => {
     const request = await requestPluginConversationBinding(requestInput);
     const binding = await resolveRequestedBinding(request);
 
-    expect(binding).toEqual(expect.objectContaining(expectedBinding));
+    expect(binding.pluginId).toBe(expectedBinding.pluginId);
+    expect(binding.pluginRoot).toBe(expectedBinding.pluginRoot);
+    expect(binding.conversationId).toBe(expectedBinding.conversationId);
   });
 });

@@ -1,4 +1,4 @@
-import { escapeRegExp } from "openclaw/plugin-sdk/text-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { QA_PROVIDER_SECRET_ENV_VARS } from "./providers/env.js";
 
 const QA_GATEWAY_DEBUG_SECRET_ENV_VARS = Object.freeze([

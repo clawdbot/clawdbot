@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   resolveSlackAccount,
@@ -69,6 +69,51 @@ describe("resolveSlackAccount allowFrom precedence", () => {
     });
 
     expect(resolved.config.allowFrom).toEqual(["top"]);
+  });
+
+  it("merges top-level unfurl controls into named accounts", () => {
+    const resolved = resolveSlackAccount({
+      cfg: {
+        channels: {
+          slack: {
+            unfurlLinks: false,
+            unfurlMedia: true,
+            accounts: {
+              work: { botToken: "xoxb-work", appToken: "xapp-work" },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.unfurlLinks).toBe(false);
+    expect(resolved.config.unfurlMedia).toBe(true);
+  });
+
+  it("prefers account-level unfurl controls over top-level defaults", () => {
+    const resolved = resolveSlackAccount({
+      cfg: {
+        channels: {
+          slack: {
+            unfurlLinks: false,
+            unfurlMedia: true,
+            accounts: {
+              work: {
+                botToken: "xoxb-work",
+                appToken: "xapp-work",
+                unfurlLinks: true,
+                unfurlMedia: false,
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.unfurlLinks).toBe(true);
+    expect(resolved.config.unfurlMedia).toBe(false);
   });
 
   it("does not inherit default account allowFrom for named account when top-level is absent", () => {

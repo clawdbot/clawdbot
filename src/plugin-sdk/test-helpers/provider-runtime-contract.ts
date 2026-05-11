@@ -9,7 +9,7 @@ import { createProviderUsageFetch, makeResponse } from "../test-env.js";
 
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
-const OAUTH_MODULE_ID = "@mariozechner/pi-ai/oauth";
+const OAUTH_MODULE_ID = "@earendil-works/pi-ai/oauth";
 const OPENAI_CODEX_PROVIDER_RUNTIME_MODULE_ID =
   "../../../extensions/openai/openai-codex-provider.runtime.js";
 const refreshOpenAICodexTokenMock = vi.fn();
@@ -22,7 +22,7 @@ const getOAuthProvidersMock = vi.fn(() => [
 function installProviderRuntimeContractMocks() {
   vi.doMock(OAUTH_MODULE_ID, async () => {
     const actual =
-      await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(OAUTH_MODULE_ID);
+      await vi.importActual<typeof import("@earendil-works/pi-ai/oauth")>(OAUTH_MODULE_ID);
     return {
       ...actual,
       refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
@@ -53,6 +53,19 @@ function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRun
     contextWindow: overrides.contextWindow ?? 200_000,
     maxTokens: overrides.maxTokens ?? 8_192,
   } satisfies ProviderRuntimeModel;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).toBeTypeOf("object");
+  expect(value, label).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+function expectFields(value: unknown, fields: Record<string, unknown>) {
+  const record = requireRecord(value, "record");
+  for (const [key, expected] of Object.entries(fields)) {
+    expect(record[key]).toEqual(expected);
+  }
 }
 
 type ProviderRuntimeContractFixture = {
@@ -154,7 +167,7 @@ export function describeAnthropicProviderRuntimeContract(
         } as never,
       });
 
-      expect(model).toMatchObject({
+      expectFields(model, {
         id: "claude-sonnet-4.6-20260219",
         provider: "anthropic",
         api: "anthropic-messages",
@@ -279,7 +292,7 @@ export function describeGithubCopilotProviderRuntimeContract(
           } as never,
         });
 
-        expect(model).toMatchObject({
+        expectFields(model, {
           id: "gpt-5.4",
           provider: "github-copilot",
           api: "openai-codex-responses",
@@ -316,7 +329,7 @@ export function describeGoogleProviderRuntimeContract(load: ProviderRuntimeContr
         } as never,
       });
 
-      expect(model).toMatchObject({
+      expectFields(model, {
         id: "gemini-3.1-pro-preview",
         provider: "google",
         api: "google-generative-ai",
@@ -346,7 +359,7 @@ export function describeGoogleProviderRuntimeContract(load: ProviderRuntimeContr
         } as never,
       });
 
-      expect(model).toMatchObject({
+      expectFields(model, {
         id: "gemini-3.1-pro-preview",
         provider: "google-gemini-cli",
         reasoning: true,
@@ -410,7 +423,7 @@ export function describeGoogleProviderRuntimeContract(load: ProviderRuntimeContr
         fetchFn: mockFetch as unknown as typeof fetch,
       });
 
-      expect(snapshot).toMatchObject({
+      expectFields(snapshot, {
         provider: "google-gemini-cli",
         displayName: "Gemini",
       });
@@ -445,7 +458,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         } as never,
       });
 
-      expect(model).toMatchObject({
+      expectFields(model, {
         id: "gpt-5.4-pro",
         provider: "openai",
         api: "openai-responses",
@@ -498,7 +511,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         } as never,
       });
 
-      expect(model).toMatchObject({
+      expectFields(model, {
         id: "gpt-5.4-mini",
         provider: "openai",
         api: "openai-responses",
@@ -510,7 +523,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
 
     it("owns direct openai transport normalization", () => {
       const provider = requireProviderContractProvider("openai");
-      expect(
+      expectFields(
         provider.normalizeResolvedModel?.({
           provider: "openai",
           modelId: "gpt-5.4",
@@ -524,9 +537,10 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
             maxTokens: 128_000,
           }),
         }),
-      ).toMatchObject({
-        api: "openai-responses",
-      });
+        {
+          api: "openai-responses",
+        },
+      );
     });
 
     it("owns refresh fallback for accountId extraction failures", async () => {
@@ -564,7 +578,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         } as never,
       });
 
-      expect(model).toMatchObject({
+      expectFields(model, {
         id: "gpt-5.4",
         provider: "openai-codex",
         api: "openai-codex-responses",
@@ -595,7 +609,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         } as never,
       });
 
-      expect(model).toMatchObject({
+      expectFields(model, {
         id: "gpt-5.5",
         provider: "openai-codex",
         api: "openai-codex-responses",
@@ -626,7 +640,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         } as never,
       });
 
-      expect(model).toMatchObject({
+      expectFields(model, {
         id: "gpt-5.4-mini",
         provider: "openai-codex",
         api: "openai-codex-responses",
@@ -707,7 +721,7 @@ export function describeOpenRouterProviderRuntimeContract(
         } as never,
       });
 
-      expect(model).toMatchObject({
+      expectFields(model, {
         id: "x-ai/grok-4-1-fast",
         provider: "openrouter",
         api: "openai-completions",
@@ -726,24 +740,20 @@ export function describeVeniceProviderRuntimeContract(load: ProviderRuntimeContr
 
     it("owns xai downstream compat flags for grok-backed Venice models", () => {
       const provider = requireProviderContractProvider("venice");
-      expect(
-        provider.normalizeResolvedModel?.({
+      const model = provider.normalizeResolvedModel?.({
+        provider: "venice",
+        modelId: "grok-41-fast",
+        model: createModel({
+          id: "grok-41-fast",
           provider: "venice",
-          modelId: "grok-41-fast",
-          model: createModel({
-            id: "grok-41-fast",
-            provider: "venice",
-            api: "openai-completions",
-            baseUrl: "https://api.venice.ai/api/v1",
-          }),
+          api: "openai-completions",
+          baseUrl: "https://api.venice.ai/api/v1",
         }),
-      ).toMatchObject({
-        compat: {
-          toolSchemaProfile: "xai",
-          nativeWebSearchTool: true,
-          toolCallArgumentsEncoding: "html-entities",
-        },
       });
+      const compat = requireRecord(model?.compat, "compat");
+      expect(compat.toolSchemaProfile).toBe("xai");
+      expect(compat.nativeWebSearchTool).toBe(true);
+      expect(compat.toolCallArgumentsEncoding).toBe("html-entities");
     });
   });
 }
@@ -775,7 +785,7 @@ export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContract
         } as never,
       });
 
-      expect(model).toMatchObject({
+      expectFields(model, {
         id: "glm-5",
         provider: "zai",
         api: "openai-completions",

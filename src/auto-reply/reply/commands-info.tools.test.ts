@@ -116,6 +116,14 @@ function buildConfig() {
   } as OpenClawConfig;
 }
 
+function resolveToolsArg(resolveToolsMock: { mock: { calls: unknown[][] } }, index = 0) {
+  const [arg] = resolveToolsMock.mock.calls[index] ?? [];
+  if (!arg || typeof arg !== "object") {
+    throw new Error(`expected resolve tools call ${index + 1}`);
+  }
+  return arg as Record<string, unknown>;
+}
+
 describe("handleToolsCommand", () => {
   beforeAll(async () => {
     ({ buildCommandTestParams } = await import("./commands.test-harness.js"));
@@ -160,23 +168,20 @@ describe("handleToolsCommand", () => {
     expect(result?.reply?.text).toContain("Connected tools");
     expect(result?.reply?.text).toContain("docs_lookup (docs)");
     expect(result?.reply?.text).not.toContain("unavailable right now");
-    expect(resolveToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        senderIsOwner: false,
-        senderId: undefined,
-        senderName: "User Name",
-        senderUsername: "user_name",
-        senderE164: "+1000",
-        accountId: "acct-1",
-        currentChannelId: "channel-123",
-        currentThreadTs: "99",
-        currentMessageId: "message-456",
-        groupId: "abc123",
-        groupChannel: "#ops",
-        groupSpace: "workspace-1",
-        replyToMode: "all",
-      }),
-    );
+    const toolsArg = resolveToolsArg(resolveToolsMock);
+    expect(toolsArg.senderIsOwner).toBe(false);
+    expect(toolsArg.senderId).toBeUndefined();
+    expect(toolsArg.senderName).toBe("User Name");
+    expect(toolsArg.senderUsername).toBe("user_name");
+    expect(toolsArg.senderE164).toBe("+1000");
+    expect(toolsArg.accountId).toBe("acct-1");
+    expect(toolsArg.currentChannelId).toBe("channel-123");
+    expect(toolsArg.currentThreadTs).toBe("99");
+    expect(toolsArg.currentMessageId).toBe("message-456");
+    expect(toolsArg.groupId).toBe("abc123");
+    expect(toolsArg.groupChannel).toBe("#ops");
+    expect(toolsArg.groupSpace).toBe("workspace-1");
+    expect(toolsArg.replyToMode).toBe("all");
   });
 
   it("returns usage when arguments are provided", async () => {
@@ -207,7 +212,7 @@ describe("handleToolsCommand", () => {
 
     await handleToolsCommand(params, true);
 
-    expect(resolveToolsMock).toHaveBeenCalledWith(expect.objectContaining({ groupId: undefined }));
+    expect(resolveToolsArg(resolveToolsMock).groupId).toBeUndefined();
   });
 
   it("prefers the target session entry for tool inventory group metadata", async () => {
@@ -243,13 +248,10 @@ describe("handleToolsCommand", () => {
 
     await handleToolsCommand(params, true);
 
-    expect(resolveToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        groupId: "target-group",
-        groupChannel: "#target",
-        groupSpace: "target-space",
-      }),
-    );
+    const toolsArg = resolveToolsArg(resolveToolsMock);
+    expect(toolsArg.groupId).toBe("target-group");
+    expect(toolsArg.groupChannel).toBe("#target");
+    expect(toolsArg.groupSpace).toBe("target-space");
   });
 
   it("renders the detailed tool list in verbose mode", async () => {
@@ -342,11 +344,7 @@ describe("handleToolsCommand", () => {
 
     await handleToolsCommand(params, true);
 
-    expect(resolveToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "work",
-      }),
-    );
+    expect(resolveToolsArg(resolveToolsMock).accountId).toBe("work");
   });
 
   it("returns a concise fallback error on effective inventory failures", async () => {
@@ -381,12 +379,9 @@ describe("handleToolsCommand", () => {
     const result = await handleToolsCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
-    expect(resolveToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "target",
-        sessionKey: "agent:target:whatsapp:direct:12345",
-      }),
-    );
+    const toolsArg = resolveToolsArg(resolveToolsMock);
+    expect(toolsArg.agentId).toBe("target");
+    expect(toolsArg.sessionKey).toBe("agent:target:whatsapp:direct:12345");
   });
 
   it("does not forward a stale ambient agentDir for session-bound /tools", async () => {
@@ -404,12 +399,9 @@ describe("handleToolsCommand", () => {
     const result = await handleToolsCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
-    expect(resolveToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "target",
-        agentDir: undefined,
-        sessionKey: "agent:target:whatsapp:direct:12345",
-      }),
-    );
+    const toolsArg = resolveToolsArg(resolveToolsMock);
+    expect(toolsArg.agentId).toBe("target");
+    expect(toolsArg.agentDir).toBeUndefined();
+    expect(toolsArg.sessionKey).toBe("agent:target:whatsapp:direct:12345");
   });
 });

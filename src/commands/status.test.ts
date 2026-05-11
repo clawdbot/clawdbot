@@ -97,6 +97,18 @@ function getJoinedRuntimeLogs() {
   return getRuntimeLogs().join("\n");
 }
 
+function expectLogsInclude(logs: readonly string[], fragment: string) {
+  expect(logs.some((log) => log.includes(fragment))).toBe(true);
+}
+
+function expectLogsExclude(logs: readonly string[], fragment: string) {
+  expect(logs.some((log) => log.includes(fragment))).toBe(false);
+}
+
+function expectLogsMatch(logs: readonly string[], pattern: RegExp) {
+  expect(logs.some((log) => pattern.test(log))).toBe(true);
+}
+
 async function runStatusAndGetLogs(args: Parameters<typeof statusCommand>[0] = {}) {
   runtimeLogMock.mockClear();
   await statusCommand(args, runtime as never);
@@ -1001,13 +1013,10 @@ describe("statusCommand", () => {
       count: 0,
       warnings: [],
     });
-    expect(payload.tasks).toEqual(
-      expect.objectContaining({
-        total: 0,
-        active: 0,
-        byStatus: expect.objectContaining({ queued: 0, running: 0 }),
-      }),
-    );
+    expect(payload.tasks.total).toBe(0);
+    expect(payload.tasks.active).toBe(0);
+    expect(payload.tasks.byStatus.queued).toBe(0);
+    expect(payload.tasks.byStatus.running).toBe(0);
     expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
 
     runtimeLogMock.mockClear();
@@ -1016,12 +1025,9 @@ describe("statusCommand", () => {
     const allPayload = JSON.parse(getRuntimeLog(0));
     expect(allPayload.securityAudit.summary.critical).toBe(1);
     expect(allPayload.securityAudit.summary.warn).toBe(1);
-    expect(mocks.runSecurityAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        includeFilesystem: true,
-        includeChannelSecurity: true,
-      }),
-    );
+    const auditParams = mocks.runSecurityAudit.mock.calls[0]?.[0];
+    expect(auditParams?.includeFilesystem).toBe(true);
+    expect(auditParams?.includeChannelSecurity).toBe(true);
   });
 
   it("scopes usage resolution to the scanned config", async () => {
@@ -1040,8 +1046,8 @@ describe("statusCommand", () => {
           resolveUsage?: (input: { config: unknown; timeoutMs?: number }) => Promise<unknown>;
         }
       | undefined;
-    expect(params).toBeDefined();
-    expect(params).toMatchObject({ usage: true, timeoutMs: 1234 });
+    expect(params?.usage).toBe(true);
+    expect(params?.timeoutMs).toBe(1234);
     if (!params?.resolveUsage) {
       throw new Error("missing status usage resolver");
     }
@@ -1131,21 +1137,13 @@ describe("statusCommand", () => {
       "Troubleshooting:",
       "Next steps:",
     ]) {
-      expect(logs).toEqual(expect.arrayContaining([expect.stringContaining(token)]));
+      expectLogsInclude(logs, token);
     }
-    expect(logs).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("legacy-plugin still uses legacy before_agent_start"),
-      ]),
-    );
-    expect(logs).toEqual(
-      expect.arrayContaining([
-        expect.stringMatching(/openclaw (?:--profile isolated )?status --all/),
-      ]),
-    );
-    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("Cache")]));
-    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("40% hit")]));
-    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("read 2.0k")]));
+    expectLogsInclude(logs, "legacy-plugin still uses legacy before_agent_start");
+    expectLogsMatch(logs, /openclaw (?:--profile isolated )?status --all/);
+    expectLogsInclude(logs, "Cache");
+    expectLogsInclude(logs, "40% hit");
+    expectLogsInclude(logs, "read 2.0k");
   });
 
   it("shows a maintenance hint when task audit errors are present", async () => {
@@ -1200,8 +1198,8 @@ describe("statusCommand", () => {
       },
     });
     const logs = await runStatusAndGetLogs();
-    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("100% cached")]));
-    expect(logs).not.toEqual(expect.arrayContaining([expect.stringContaining("120% cached")]));
+    expectLogsInclude(logs, "100% cached");
+    expectLogsExclude(logs, "120% cached");
 
     mocks.loadSessionStore.mockReturnValue({
       "+1000": {
@@ -1213,12 +1211,9 @@ describe("statusCommand", () => {
       },
     });
     const promptSideLogs = await runStatusAndGetLogs();
-    expect(promptSideLogs).toEqual(expect.arrayContaining([expect.stringContaining("67% cached")]));
-    expect(promptSideLogs).not.toEqual(
-      expect.arrayContaining([expect.stringContaining("40% cached")]),
-    );
+    expectLogsInclude(promptSideLogs, "67% cached");
+    expectLogsExclude(promptSideLogs, "40% cached");
   });
-
   it("shows node-only gateway info when no local gateway service is installed", async () => {
     mocks.resolveGatewayService.mockReturnValueOnce({
       label: "LaunchAgent",
@@ -1261,7 +1256,7 @@ describe("statusCommand", () => {
         presence: [],
       });
       const logs = await runStatusAndGetLogs();
-      expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("auth token")]));
+      expectLogsInclude(logs, "auth token");
     });
   });
 

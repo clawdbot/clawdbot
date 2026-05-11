@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import type { PluginHttpRouteRegistration } from "./registry.js";
 import {
@@ -129,6 +130,22 @@ describe("plugin runtime route registry", () => {
       setup: () => {},
       assert: run,
     });
+  });
+
+  it("keeps pinned route registries live until they are released", () => {
+    const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginHttpRouteRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry);
+
+    expect(resolveActivePluginHttpRouteRegistry(laterRegistry)).toBe(startupRegistry);
+    expect(isPluginRegistryRetired(startupRegistry)).toBe(false);
+
+    releasePinnedPluginHttpRouteRegistry(startupRegistry);
+
+    expect(resolveActivePluginHttpRouteRegistry(laterRegistry)).toBe(laterRegistry);
+    expect(isPluginRegistryRetired(startupRegistry)).toBe(true);
   });
 
   it.each([

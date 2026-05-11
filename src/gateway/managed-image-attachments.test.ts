@@ -82,7 +82,29 @@ function requireAttachmentIdFromUrl(url: unknown): string {
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  try {
+    await fs.access(targetPath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected ${targetPath} to be missing`);
+}
+
+type ManagedImageBlock = {
+  type?: string;
+  alt?: string;
+  mimeType?: string;
+  url?: string;
+  openUrl?: string;
+};
+
+function requireBlock(blocks: unknown[], index = 0): ManagedImageBlock {
+  const block = blocks[index];
+  if (!block) {
+    throw new Error(`expected block ${index}`);
+  }
+  return block as ManagedImageBlock;
 }
 
 async function createFixture(
@@ -409,13 +431,12 @@ describe("createManagedOutgoingImageBlocks", () => {
     });
 
     expect(blocks).toHaveLength(1);
-    expect(blocks[0]).toMatchObject({
-      type: "image",
-      alt: "Generated image 1",
-      mimeType: "image/png",
-    });
-    expect(blocks[0]?.url).toBe(blocks[0]?.openUrl);
-    expect(String(blocks[0]?.url)).toMatch(/\/full$/);
+    const block = requireBlock(blocks);
+    expect(block.type).toBe("image");
+    expect(block.alt).toBe("Generated image 1");
+    expect(block.mimeType).toBe("image/png");
+    expect(block.url).toBe(block.openUrl);
+    expect(String(block.url)).toMatch(/\/full$/);
 
     const recordsDir = path.join(stateDir, "media", "outgoing", "records");
     const [recordName] = await fs.readdir(recordsDir);
@@ -461,15 +482,14 @@ describe("createManagedOutgoingImageBlocks", () => {
       });
 
       expect(blocks).toHaveLength(1);
-      expect(blocks[0]).toMatchObject({
-        type: "image",
-        url: expect.stringContaining("/api/chat/media/outgoing/agent%3Amain%3Amain/"),
-        openUrl: expect.stringContaining("/full"),
-      });
-      expect(blocks[0]?.url).toBe(blocks[0]?.openUrl);
-      expect(JSON.stringify(blocks[0])).not.toContain(sourcePath);
+      const block = requireBlock(blocks);
+      expect(block.type).toBe("image");
+      expect(block.url).toContain("/api/chat/media/outgoing/agent%3Amain%3Amain/");
+      expect(block.openUrl).toContain("/full");
+      expect(block.url).toBe(block.openUrl);
+      expect(JSON.stringify(block)).not.toContain(sourcePath);
 
-      const attachmentId = requireAttachmentIdFromUrl(blocks[0]?.url);
+      const attachmentId = requireAttachmentIdFromUrl(block.url);
       const record = JSON.parse(
         await fs.readFile(
           path.join(stateDir, "media", "outgoing", "records", `${attachmentId}.json`),
@@ -518,17 +538,16 @@ describe("createManagedOutgoingImageBlocks", () => {
       });
 
       expect(blocks).toHaveLength(1);
-      expect(blocks[0]?.alt).toBe("remote-cat.png");
-      expect(blocks[0]).toMatchObject({
-        type: "image",
-        url: expect.stringContaining("/api/chat/media/outgoing/agent%3Amain%3Amain/"),
-        openUrl: expect.stringContaining("/full"),
-      });
-      expect(blocks[0]?.url).toBe(blocks[0]?.openUrl);
-      expect(JSON.stringify(blocks[0])).not.toContain("127.0.0.1");
-      expect(JSON.stringify(blocks[0])).not.toContain("sig=secret");
+      const block = requireBlock(blocks);
+      expect(block.alt).toBe("remote-cat.png");
+      expect(block.type).toBe("image");
+      expect(block.url).toContain("/api/chat/media/outgoing/agent%3Amain%3Amain/");
+      expect(block.openUrl).toContain("/full");
+      expect(block.url).toBe(block.openUrl);
+      expect(JSON.stringify(block)).not.toContain("127.0.0.1");
+      expect(JSON.stringify(block)).not.toContain("sig=secret");
 
-      const attachmentId = requireAttachmentIdFromUrl(blocks[0]?.url);
+      const attachmentId = requireAttachmentIdFromUrl(block.url);
       const record = JSON.parse(
         await fs.readFile(
           path.join(stateDir, "media", "outgoing", "records", `${attachmentId}.json`),
@@ -632,7 +651,7 @@ describe("createManagedOutgoingImageBlocks", () => {
 
     expect(blocks).toHaveLength(2);
     expect(blocks[0]?.type).toBe("image");
-    expect(blocks[1]).toMatchObject({ type: "text" });
+    expect(requireBlock(blocks, 1).type).toBe("text");
   });
 
   it("skips broken attachments when continueOnPrepareError is enabled", async () => {
@@ -647,7 +666,7 @@ describe("createManagedOutgoingImageBlocks", () => {
     });
 
     expect(blocks).toHaveLength(1);
-    expect(blocks[0]).toMatchObject({ type: "image" });
+    expect(requireBlock(blocks).type).toBe("image");
     expect(onPrepareError).toHaveBeenCalledTimes(1);
     expect(onPrepareError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
     expect(onPrepareError.mock.calls[0]?.[0]?.message).toMatch(
@@ -685,7 +704,7 @@ describe("createManagedOutgoingImageBlocks", () => {
       });
 
       expect(blocks).toHaveLength(1);
-      expect(blocks[0]).toMatchObject({ type: "image" });
+      expect(requireBlock(blocks).type).toBe("image");
     } finally {
       setMediaStoreNetworkDepsForTest();
       await new Promise<void>((resolve, reject) =>
@@ -732,7 +751,7 @@ describe("createManagedOutgoingImageBlocks", () => {
     });
 
     expect(blocks).toHaveLength(1);
-    expect(blocks[0]).toMatchObject({ type: "image" });
+    expect(requireBlock(blocks).type).toBe("image");
   });
 
   it("rejects relative local image paths that resolve outside allowed roots", async () => {
@@ -772,7 +791,7 @@ describe("createManagedOutgoingImageBlocks", () => {
     try {
       originals = await fs.readdir(originalsDir);
     } catch (error) {
-      expect(error).toMatchObject({ code: "ENOENT" });
+      expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
     }
     expect(originals ?? []).toStrictEqual([]);
   });
@@ -794,7 +813,7 @@ describe("createManagedOutgoingImageBlocks", () => {
     try {
       originals = await fs.readdir(originalsDir);
     } catch (error) {
-      expect(error).toMatchObject({ code: "ENOENT" });
+      expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
     }
     expect(originals ?? []).toStrictEqual([]);
   });
@@ -909,11 +928,9 @@ describe("cleanupManagedOutgoingImageRecords", () => {
 
     const result = await cleanupManagedOutgoingImageRecords({ stateDir });
 
-    expect(result).toMatchObject({
-      deletedRecordCount: 1,
-      deletedFileCount: 1,
-      retainedCount: 0,
-    });
+    expect(result.deletedRecordCount).toBe(1);
+    expect(result.deletedFileCount).toBe(1);
+    expect(result.retainedCount).toBe(0);
     await expectPathMissing(fixture.originalPath);
   });
 
@@ -938,11 +955,9 @@ describe("cleanupManagedOutgoingImageRecords", () => {
 
     const result = await cleanupManagedOutgoingImageRecords({ stateDir });
 
-    expect(result).toMatchObject({
-      deletedRecordCount: 0,
-      deletedFileCount: 0,
-      retainedCount: 1,
-    });
+    expect(result.deletedRecordCount).toBe(0);
+    expect(result.deletedFileCount).toBe(0);
+    expect(result.retainedCount).toBe(1);
     await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
   });
 
@@ -979,11 +994,9 @@ describe("cleanupManagedOutgoingImageRecords", () => {
 
     const result = await cleanupManagedOutgoingImageRecords({ stateDir });
 
-    expect(result).toMatchObject({
-      deletedRecordCount: 0,
-      deletedFileCount: 0,
-      retainedCount: 2,
-    });
+    expect(result.deletedRecordCount).toBe(0);
+    expect(result.deletedFileCount).toBe(0);
+    expect(result.retainedCount).toBe(2);
     expect(readSessionMessagesMock).toHaveBeenCalledTimes(1);
   });
 
@@ -1012,10 +1025,8 @@ describe("cleanupManagedOutgoingImageRecords", () => {
       forceDeleteSessionRecords: true,
     });
 
-    expect(result).toMatchObject({
-      deletedRecordCount: 1,
-      retainedCount: 1,
-    });
+    expect(result.deletedRecordCount).toBe(1);
+    expect(result.retainedCount).toBe(1);
     await expect(fs.access(retainedFixture.originalPath)).resolves.toBeUndefined();
   });
 });

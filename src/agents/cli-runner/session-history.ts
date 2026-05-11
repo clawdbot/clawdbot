@@ -1,6 +1,6 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { migrateSessionEntries, parseSessionEntries } from "@mariozechner/pi-coding-agent";
+import { migrateSessionEntries, parseSessionEntries } from "@earendil-works/pi-coding-agent";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,

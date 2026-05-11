@@ -40,7 +40,7 @@ export type NormalizedTurnInput = {
 };
 
 export type SenderFacts = {
-  id: string;
+  id?: string;
   name?: string;
   username?: string;
   tag?: string;
@@ -84,7 +84,7 @@ export type ReplyPlanFacts = {
   deliveryTarget?: string;
   replyToId?: string;
   replyToIdFull?: string;
-  messageThreadId?: string;
+  messageThreadId?: string | number;
   threadParentId?: string;
   sourceReplyDeliveryMode?: "thread" | "reply" | "channel" | "direct" | "none";
 };
@@ -209,7 +209,7 @@ export type SupplementalContextFacts = {
     modelParentSessionKey?: string;
     senderAllowed?: boolean;
   };
-  untrustedContext?: unknown[];
+  untrustedContext?: Array<{ label: string; source?: string; type?: string; payload: unknown }>;
   groupSystemPrompt?: string;
 };
 

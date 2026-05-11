@@ -152,6 +152,38 @@ function getWizardNoteCalls(note: WizardPrompter["note"]) {
   return (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(
+  value: unknown,
+  expected: Record<string, unknown>,
+  label: string,
+): Record<string, unknown> {
+  const record = requireRecord(value, label);
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], `${label}.${key}`).toEqual(expectedValue);
+  }
+  return record;
+}
+
+function getMockCallArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  callIndex: number,
+  argIndex: number,
+  label: string,
+): unknown {
+  const call = (mock.mock.calls as unknown[][])[callIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
 vi.mock("../commands/onboard-channels.js", () => ({
   setupChannels,
 }));
@@ -379,8 +411,10 @@ describe("runSetupWizard", () => {
         prompter,
       ),
     ).resolves.toBeUndefined();
-    expect(resolvePreferredProviderForAuthChoice).toHaveBeenCalledWith(
-      expect.objectContaining({ choice: "ollama" }),
+    expectRecordFields(
+      getMockCallArg(resolvePreferredProviderForAuthChoice, 0, 0, "preferred provider lookup"),
+      { choice: "ollama" },
+      "preferred provider lookup params",
     );
     expect(resolvePluginProvidersRuntime).toHaveBeenCalled();
     setupChannels.mockClear();
@@ -488,23 +522,31 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    expect(replaceConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nextConfig: expect.objectContaining({
-          agents: expect.objectContaining({
-            defaults: expect.objectContaining({
-              skipBootstrap: true,
-              workspace: workspaceDir,
-            }),
-          }),
-        }),
-        writeOptions: expect.objectContaining({ allowConfigSizeDrop: true }),
-      }),
+    const replaceParams = requireRecord(
+      getMockCallArg(replaceConfigFile, 0, 0, "config replacement"),
+      "config replacement params",
     );
-    expect(ensureWorkspaceAndSessions).toHaveBeenCalledWith(
-      workspaceDir,
-      runtime,
-      expect.objectContaining({ skipBootstrap: true }),
+    const nextConfig = requireRecord(replaceParams.nextConfig, "next config");
+    const agents = requireRecord(nextConfig.agents, "next config agents");
+    expectRecordFields(
+      requireRecord(agents.defaults, "next config agent defaults"),
+      {
+        skipBootstrap: true,
+        workspace: workspaceDir,
+      },
+      "next config agent defaults",
+    );
+    expectRecordFields(
+      replaceParams.writeOptions,
+      { allowConfigSizeDrop: true },
+      "config replacement write options",
+    );
+    expect(getMockCallArg(ensureWorkspaceAndSessions, 0, 0, "workspace setup")).toBe(workspaceDir);
+    expect(getMockCallArg(ensureWorkspaceAndSessions, 0, 1, "workspace setup")).toBe(runtime);
+    expectRecordFields(
+      getMockCallArg(ensureWorkspaceAndSessions, 0, 2, "workspace setup"),
+      { skipBootstrap: true },
+      "workspace setup options",
     );
   });
 
@@ -569,12 +611,14 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    expect(runTui).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectRecordFields(
+      getMockCallArg(runTui, 0, 0, "tui launch"),
+      {
         local: true,
         deliver: false,
         message: params.expectedMessage,
-      }),
+      },
+      "tui launch options",
     );
   }
 
@@ -651,14 +695,16 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    expect(setupChannels).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-      expect.objectContaining({
+    expect(getMockCallArg(setupChannels, 0, 0, "channel setup")).not.toBeNull();
+    expect(getMockCallArg(setupChannels, 0, 1, "channel setup")).not.toBeNull();
+    expect(getMockCallArg(setupChannels, 0, 2, "channel setup")).not.toBeNull();
+    expectRecordFields(
+      getMockCallArg(setupChannels, 0, 3, "channel setup"),
+      {
         deferStatusUntilSelection: true,
         quickstartDefaults: true,
-      }),
+      },
+      "channel setup options",
     );
   });
 
@@ -710,16 +756,20 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    expect(promptDefaultModel).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectRecordFields(
+      getMockCallArg(promptDefaultModel, 0, 0, "default model prompt"),
+      {
         allowKeep: false,
         browseCatalogOnDemand: true,
-      }),
+      },
+      "default model prompt params",
     );
-    expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      expect.objectContaining({ validateCatalog: false }),
+    expect(getMockCallArg(warnIfModelConfigLooksOff, 0, 0, "model warning")).not.toBeNull();
+    expect(getMockCallArg(warnIfModelConfigLooksOff, 0, 1, "model warning")).not.toBeNull();
+    expectRecordFields(
+      getMockCallArg(warnIfModelConfigLooksOff, 0, 2, "model warning"),
+      { validateCatalog: false },
+      "model warning options",
     );
   });
 
@@ -774,9 +824,9 @@ describe("runSetupWizard", () => {
 
     expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
     expect(applyAuthChoice).toHaveBeenCalledTimes(2);
-    expect(applyAuthChoice).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
+    expectRecordFields(
+      getMockCallArg(applyAuthChoice, 1, 0, "retry auth choice"),
+      {
         authChoice: "demo-provider-two",
         config: {
           plugins: {
@@ -787,7 +837,8 @@ describe("runSetupWizard", () => {
             },
           },
         },
-      }),
+      },
+      "retry auth choice params",
     );
   });
 
@@ -914,11 +965,13 @@ describe("runSetupWizard", () => {
       }
     }
 
-    expect(probeGatewayReachable).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectRecordFields(
+      getMockCallArg(probeGatewayReachable, 0, 0, "gateway probe"),
+      {
         url: "ws://127.0.0.1:18789",
         password: "gateway-ref-password", // pragma: allowlist secret
-      }),
+      },
+      "gateway probe params",
     );
   });
 
@@ -945,10 +998,12 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    expect(configureGatewayForSetup).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectRecordFields(
+      getMockCallArg(configureGatewayForSetup, 0, 0, "gateway setup"),
+      {
         secretInputMode: "ref", // pragma: allowlist secret
-      }),
+      },
+      "gateway setup params",
     );
   });
 
@@ -1038,13 +1093,19 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    expect(resolvePluginSetupProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectRecordFields(
+      getMockCallArg(resolvePluginSetupProvider, 0, 0, "plugin setup provider"),
+      {
         provider: "openai-codex",
         pluginIds: ["openai"],
-      }),
+      },
+      "plugin setup provider params",
     );
     expect(resolvePluginProvidersRuntime).not.toHaveBeenCalled();
-    expect(promptDefaultModel).toHaveBeenCalledWith(expect.objectContaining({ allowKeep: false }));
+    expectRecordFields(
+      getMockCallArg(promptDefaultModel, 0, 0, "default model prompt"),
+      { allowKeep: false },
+      "default model prompt params",
+    );
   });
 });

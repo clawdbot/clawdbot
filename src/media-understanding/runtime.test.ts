@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { MediaAttachment, MediaUnderstandingOutput } from "../media-understanding/types.js";
 import {
   describeImageFile,
   describeImageFileWithModel,
+  extractStructuredWithModel,
   runMediaUnderstandingFile,
 } from "./runtime.js";
 
@@ -14,6 +16,8 @@ const mocks = vi.hoisted(() => {
     createMediaAttachmentCache: vi.fn(() => ({ cleanup })),
     normalizeMediaAttachments: vi.fn<() => MediaAttachment[]>(() => []),
     normalizeMediaProviderId: vi.fn((provider: string) => provider.trim().toLowerCase()),
+    buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
+    getMediaUnderstandingProvider: vi.fn(),
     readLocalFileSafely: vi.fn(async () => ({ buffer: Buffer.from("image") })),
     describeImageWithModel: vi.fn(async () => ({ text: "generic image ok", model: "vision" })),
     runCapability: vi.fn(),
@@ -30,6 +34,8 @@ vi.mock("./runner.js", () => ({
 
 vi.mock("./provider-registry.js", () => ({
   normalizeMediaProviderId: mocks.normalizeMediaProviderId,
+  buildMediaUnderstandingRegistry: mocks.buildMediaUnderstandingRegistry,
+  getMediaUnderstandingProvider: mocks.getMediaUnderstandingProvider,
 }));
 
 vi.mock("../infra/fs-safe.js", () => ({
@@ -46,6 +52,8 @@ describe("media-understanding runtime", () => {
     mocks.createMediaAttachmentCache.mockReset();
     mocks.normalizeMediaAttachments.mockReset();
     mocks.normalizeMediaProviderId.mockReset();
+    mocks.buildMediaUnderstandingRegistry.mockReset();
+    mocks.getMediaUnderstandingProvider.mockReset();
     mocks.readLocalFileSafely.mockReset();
     mocks.readLocalFileSafely.mockResolvedValue({ buffer: Buffer.from("image") });
     mocks.describeImageWithModel.mockReset();
@@ -251,6 +259,153 @@ describe("media-understanding runtime", () => {
       cfg: {},
       agentDir: "/tmp/agent",
     });
+  });
+
+  it("routes direct image description through a provider-specific image hook", async () => {
+    const describeImage = vi.fn(async () => ({
+      text: "image ok",
+      model: "vision-v1",
+    }));
+    mocks.buildProviderRegistry.mockReturnValue(
+      new Map([["gemini", { id: "gemini", capabilities: ["image"], describeImage }]]),
+    );
+    mocks.readLocalFileSafely.mockResolvedValue({ buffer: Buffer.from("image-bytes") });
+
+    await expect(
+      describeImageFileWithModel({
+        filePath: "/tmp/sample.jpg",
+        mime: "image/jpeg",
+        provider: "gemini",
+        model: "vision-v1",
+        prompt: "Describe the sample.",
+        cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/agent",
+      }),
+    ).resolves.toEqual({
+      text: "image ok",
+      model: "vision-v1",
+    });
+
+    expect(mocks.normalizeMediaProviderId).toHaveBeenCalledWith("gemini");
+    expect(describeImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buffer: Buffer.from("image-bytes"),
+        fileName: "sample.jpg",
+        mime: "image/jpeg",
+        provider: "gemini",
+        model: "vision-v1",
+        prompt: "Describe the sample.",
+        agentDir: "/tmp/agent",
+      }),
+    );
+  });
+
+  it("routes structured extraction to a provider by id and model", async () => {
+    const providerRegistry = new Map();
+    const authStore = {} as AuthProfileStore;
+    const extractStructured = vi.fn(async () => ({
+      text: '{"ok":true}',
+      parsed: { ok: true },
+      model: "vision-json",
+      provider: "vision-plugin",
+      contentType: "json" as const,
+    }));
+    mocks.buildMediaUnderstandingRegistry.mockReturnValue(providerRegistry);
+    mocks.getMediaUnderstandingProvider.mockReturnValue({ id: "vision-plugin", extractStructured });
+
+    await expect(
+      extractStructuredWithModel({
+        input: [
+          { type: "text", text: "Extract the fact." },
+          {
+            type: "image",
+            buffer: Buffer.from("image-bytes"),
+            fileName: "fact.png",
+            mime: "image/png",
+          },
+        ],
+        instructions: "Return JSON.",
+        provider: "Vision-Plugin",
+        model: "vision-json",
+        profile: "work",
+        preferredProfile: "preferred-work",
+        authStore,
+        timeoutMs: 45_000,
+        cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/agent",
+      }),
+    ).resolves.toEqual({
+      text: '{"ok":true}',
+      parsed: { ok: true },
+      model: "vision-json",
+      provider: "vision-plugin",
+      contentType: "json",
+    });
+
+    expect(mocks.buildMediaUnderstandingRegistry).toHaveBeenCalledWith(undefined, {});
+    expect(mocks.getMediaUnderstandingProvider).toHaveBeenCalledWith(
+      "Vision-Plugin",
+      providerRegistry,
+    );
+    expect(extractStructured).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          { type: "text", text: "Extract the fact." },
+          {
+            type: "image",
+            buffer: Buffer.from("image-bytes"),
+            fileName: "fact.png",
+            mime: "image/png",
+          },
+        ],
+        instructions: "Return JSON.",
+        provider: "Vision-Plugin",
+        model: "vision-json",
+        profile: "work",
+        preferredProfile: "preferred-work",
+        authStore,
+        timeoutMs: 45_000,
+        agentDir: "/tmp/agent",
+      }),
+    );
+  });
+
+  it("rejects text-only structured extraction before provider lookup", async () => {
+    await expect(
+      extractStructuredWithModel({
+        input: [{ type: "text", text: "Extract the fact." }],
+        instructions: "Return JSON.",
+        provider: "vision-plugin",
+        model: "vision-json",
+        cfg: {} as OpenClawConfig,
+      }),
+    ).rejects.toThrow("Structured extraction requires at least one image input.");
+
+    expect(mocks.buildMediaUnderstandingRegistry).not.toHaveBeenCalled();
+    expect(mocks.getMediaUnderstandingProvider).not.toHaveBeenCalled();
+  });
+
+  it("fails clearly when a provider lacks structured extraction", async () => {
+    const providerRegistry = new Map();
+    mocks.buildMediaUnderstandingRegistry.mockReturnValue(providerRegistry);
+    mocks.getMediaUnderstandingProvider.mockReturnValue({ id: "vision-plugin" });
+
+    await expect(
+      extractStructuredWithModel({
+        input: [
+          {
+            type: "image",
+            buffer: Buffer.from("image-bytes"),
+            fileName: "fact.png",
+            mime: "image/png",
+          },
+        ],
+        instructions: "Return JSON.",
+        provider: "vision-plugin",
+        model: "vision-json",
+        cfg: {} as OpenClawConfig,
+      }),
+    ).rejects.toThrow("Provider does not support structured extraction: vision-plugin");
   });
 
   it("surfaces the underlying provider failure when media understanding fails", async () => {

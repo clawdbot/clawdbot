@@ -155,4 +155,48 @@ import Testing
         #expect(GatewayTLSStore.loadFingerprint(stableID: stableID1) == nil)
         #expect(GatewayTLSStore.loadFingerprint(stableID: stableID2) == nil)
     }
+
+    @Test func trustedPinMismatchCanBeRecoveredByReplacingStoredPin() {
+        let stableID = "test|\(UUID().uuidString)"
+        defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }
+        GatewayTLSStore.saveFingerprint("old", stableID: stableID)
+
+        let error = GatewayTLSValidationError(
+            failure: GatewayTLSValidationFailure(
+                kind: .pinMismatch,
+                host: "gateway.tailnet.ts.net",
+                storeKey: stableID,
+                expectedFingerprint: "old",
+                observedFingerprint: "new",
+                systemTrustOk: true),
+            context: "connect to gateway")
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .tlsPinMismatch)
+        #expect(problem?.canTrustRotatedCertificate == true)
+        #expect(problem?.tlsStoreKey == stableID)
+        #expect(problem?.tlsExpectedFingerprint == "old")
+        #expect(problem?.tlsObservedFingerprint == "new")
+
+        #expect(GatewayTLSStore.replaceFingerprint(problem?.tlsObservedFingerprint ?? "", stableID: stableID))
+        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID) == "new")
+    }
+
+    @Test func untrustedPinMismatchCannotBeRecoveredInApp() {
+        let error = GatewayTLSValidationError(
+            failure: GatewayTLSValidationFailure(
+                kind: .pinMismatch,
+                host: "gateway.tailnet.ts.net",
+                storeKey: "gateway",
+                expectedFingerprint: "old",
+                observedFingerprint: "new",
+                systemTrustOk: false),
+            context: "connect to gateway")
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .tlsPinMismatch)
+        #expect(problem?.canTrustRotatedCertificate == false)
+    }
 }

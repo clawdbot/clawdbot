@@ -111,6 +111,27 @@ async function expectDueIsolatedManualRunProgresses(storePath: string, now: numb
   expect(persisted.jobs[0]?.state.lastStatus).toBe("ok");
 }
 
+function expectWarnedJob(params: { field: "jobId" | "jobStatus"; value: string; message: string }) {
+  const warnCalls = logger.warn.mock.calls as unknown as Array<[Record<string, unknown>, string]>;
+  const warning = warnCalls.find(
+    ([metadata, message]) => metadata[params.field] === params.value && message === params.message,
+  );
+  expect(warning?.[0][params.field]).toBe(params.value);
+  expect(warning?.[1]).toBe(params.message);
+}
+
+function expectTaskRun(params: {
+  runId: string;
+  runtime: string;
+  status: string;
+  sourceId: string;
+}) {
+  const task = findTaskByRunId(params.runId);
+  expect(task?.runtime).toBe(params.runtime);
+  expect(task?.status).toBe(params.status);
+  expect(task?.sourceId).toBe(params.sourceId);
+}
+
 function createMissedIsolatedJob(now: number): CronJob {
   return {
     id: "startup-timeout",
@@ -154,13 +175,14 @@ describe("cron service ops seam coverage", () => {
 
     await start(state);
 
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ jobId: "startup-interrupted" }),
-      "cron: marking interrupted running job failed on startup",
-    );
+    expectWarnedJob({
+      field: "jobId",
+      value: "startup-interrupted",
+      message: "cron: marking interrupted running job failed on startup",
+    });
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(requestHeartbeat).not.toHaveBeenCalled();
-    expect(state.timer).toEqual(expect.anything());
+    expect(state.timer).toBeDefined();
 
     const persisted = (await loadCronStore(storePath)) as {
       jobs: CronJob[];
@@ -281,7 +303,8 @@ describe("cron service ops seam coverage", () => {
         ran: true,
       });
 
-      expect(findTaskByRunId(`cron:isolated-timeout:${now}`)).toMatchObject({
+      expectTaskRun({
+        runId: `cron:isolated-timeout:${now}`,
         runtime: "cron",
         status: "succeeded",
         sourceId: "isolated-timeout",
@@ -306,7 +329,8 @@ describe("cron service ops seam coverage", () => {
 
     await run(state, "isolated-timeout");
 
-    expect(findTaskByRunId(`cron:isolated-timeout:${now}`)).toMatchObject({
+    expectTaskRun({
+      runId: `cron:isolated-timeout:${now}`,
       runtime: "cron",
       status: "timed_out",
       sourceId: "isolated-timeout",
@@ -331,10 +355,11 @@ describe("cron service ops seam coverage", () => {
       });
 
     await expectDueIsolatedManualRunProgresses(storePath, now);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ jobId: "isolated-timeout" }),
-      "cron: failed to create task ledger record",
-    );
+    expectWarnedJob({
+      field: "jobId",
+      value: "isolated-timeout",
+      message: "cron: failed to create task ledger record",
+    });
 
     createTaskRecordSpy.mockRestore();
   });
@@ -356,10 +381,11 @@ describe("cron service ops seam coverage", () => {
       });
 
     await expectDueIsolatedManualRunProgresses(storePath, now);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ jobStatus: "ok" }),
-      "cron: failed to update task ledger record",
-    );
+    expectWarnedJob({
+      field: "jobStatus",
+      value: "ok",
+      message: "cron: failed to update task ledger record",
+    });
 
     updateTaskRecordSpy.mockRestore();
     if (originalStateDir === undefined) {
@@ -450,7 +476,8 @@ describe("cron service ops seam coverage", () => {
 
       await runMissedJobs(state);
 
-      expect(findTaskByRunId(`cron:startup-timeout:${now}`)).toMatchObject({
+      expectTaskRun({
+        runId: `cron:startup-timeout:${now}`,
         runtime: "cron",
         status: "timed_out",
         sourceId: "startup-timeout",

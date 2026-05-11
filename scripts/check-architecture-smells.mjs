@@ -216,9 +216,10 @@ function formatInventoryHuman(inventory) {
   return lines.join("\n");
 }
 
-async function runArchitectureSmellsCheck(argv = process.argv.slice(2), io) {
+async function runArchitectureSmellsCheck(argv, io) {
+  const args = argv ?? process.argv.slice(2);
   const streams = io ?? { stdout: process.stdout, stderr: process.stderr };
-  const json = argv.includes("--json");
+  const json = args.includes("--json");
   const inventory = await collectArchitectureSmells();
 
   if (json) {
@@ -231,7 +232,7 @@ async function runArchitectureSmellsCheck(argv = process.argv.slice(2), io) {
   return 0;
 }
 
-export async function main(argv = process.argv.slice(2), io) {
+export async function main(argv, io) {
   return await runArchitectureSmellsCheck(argv, io);
 }
 

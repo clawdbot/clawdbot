@@ -48,6 +48,16 @@ async function expectUploadError(
   throw new Error("expected upload request error");
 }
 
+async function expectMissingPath(targetPath: string): Promise<void> {
+  try {
+    await fs.stat(targetPath);
+  } catch (err) {
+    expect((err as { code?: unknown }).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected missing path: ${targetPath}`);
+}
+
 describe("skill upload store", () => {
   beforeEach(() => {
     tempDirs = [];
@@ -94,23 +104,19 @@ describe("skill upload store", () => {
     expect(chunk.receivedBytes).toBe(archive.length);
 
     const commit = await store.commit({ uploadId: begin.uploadId, sha256: digest });
-    expect(commit).toMatchObject({
-      uploadId: begin.uploadId,
-      receivedBytes: archive.length,
-      sha256: digest,
-    });
+    expect(commit.uploadId).toBe(begin.uploadId);
+    expect(commit.receivedBytes).toBe(archive.length);
+    expect(commit.sha256).toBe(digest);
 
     const record = await store.withCommittedUpload(begin.uploadId, async (committedRecord) => {
       return committedRecord;
     });
-    expect(record).toMatchObject({
-      uploadId: begin.uploadId,
-      slug: "demo-skill",
-      force: false,
-      receivedBytes: archive.length,
-      actualSha256: digest,
-      committed: true,
-    });
+    expect(record.uploadId).toBe(begin.uploadId);
+    expect(record.slug).toBe("demo-skill");
+    expect(record.force).toBe(false);
+    expect(record.receivedBytes).toBe(archive.length);
+    expect(record.actualSha256).toBe(digest);
+    expect(record.committed).toBe(true);
     await expectUploadError(
       store.chunk({
         uploadId: begin.uploadId,
@@ -352,9 +358,7 @@ describe("skill upload store", () => {
     release.resolve();
     await expect(pinned).resolves.toBe(true);
     await sweep;
-    await expect(fs.stat(path.join(rootDir, committed.uploadId))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectMissingPath(path.join(rootDir, committed.uploadId));
   });
 
   it("does not remove expired idempotent uploads while an install holds the upload lock", async () => {
@@ -402,8 +406,6 @@ describe("skill upload store", () => {
     await expect(pinned).resolves.toBe(true);
     const next = await repeated;
     expect(next.uploadId).not.toBe(committed.uploadId);
-    await expect(fs.stat(path.join(rootDir, committed.uploadId))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectMissingPath(path.join(rootDir, committed.uploadId));
   });
 });

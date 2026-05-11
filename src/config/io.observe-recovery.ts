@@ -855,7 +855,7 @@ export async function recoverConfigFromLastKnownGood(params: {
   if (!shouldAttemptLastKnownGoodRecovery(snapshot)) {
     if (isPluginLocalInvalidConfigSnapshot(snapshot)) {
       deps.logger.warn(
-        `Config last-known-good recovery skipped: invalidity is scoped to plugin entries (${params.reason})`,
+        `Config last-known-good recovery skipped: invalidity is scoped to stale plugin config (${params.reason})`,
       );
     }
     return false;

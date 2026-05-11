@@ -1,15 +1,61 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Context } from "@earendil-works/pi-ai";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import { buildCopilotIdeHeaders, COPILOT_INTEGRATION_ID } from "openclaw/plugin-sdk/provider-auth";
 import {
   applyAnthropicEphemeralCacheControlMarkers,
-  buildCopilotDynamicHeaders,
-  hasCopilotVisionInput,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { rewriteCopilotResponsePayloadConnectionBoundIds } from "./connection-bound-ids.js";
 
-type _StreamContext = Parameters<StreamFn>[1];
 type StreamOptions = Parameters<StreamFn>[2];
+
+function containsCopilotContentType(value: unknown, type: string): boolean {
+  if (Array.isArray(value)) {
+    return value.some((item) => containsCopilotContentType(item, type));
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const entry = value as { type?: unknown; content?: unknown };
+  return entry.type === type || containsCopilotContentType(entry.content, type);
+}
+
+function inferCopilotInitiator(messages: Context["messages"]): "agent" | "user" {
+  const last = messages[messages.length - 1];
+  if (!last) {
+    return "user";
+  }
+  if (last.role === "user" && containsCopilotContentType(last.content, "tool_result")) {
+    return "agent";
+  }
+  return last.role === "user" ? "user" : "agent";
+}
+
+export function hasCopilotVisionInput(messages: Context["messages"]): boolean {
+  return messages.some((message) => {
+    if (message.role === "user" && Array.isArray(message.content)) {
+      return message.content.some((item) => containsCopilotContentType(item, "image"));
+    }
+    if (message.role === "toolResult" && Array.isArray(message.content)) {
+      return message.content.some((item) => containsCopilotContentType(item, "image"));
+    }
+    return false;
+  });
+}
+
+export function buildCopilotDynamicHeaders(params: {
+  messages: Context["messages"];
+  hasImages: boolean;
+}): Record<string, string> {
+  return {
+    ...buildCopilotIdeHeaders(),
+    "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+    "Openai-Organization": "github-copilot",
+    "x-initiator": inferCopilotInitiator(params.messages),
+    ...(params.hasImages ? { "Copilot-Vision-Request": "true" } : {}),
+  };
+}
 
 function patchOnPayloadResult(result: unknown): unknown {
   if (result && typeof result === "object" && "then" in result) {

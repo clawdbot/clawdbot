@@ -237,6 +237,13 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/ui/chat/grouped-render.ts",
+      "text": "Tool output"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/chat/grouped-render.ts",
       "text": "Unknown date"
     },
     {

@@ -1,3 +1,8 @@
+/**
+ * @deprecated Public SDK subpath has no bundled extension production imports.
+ * Use plugin-local Telegram command config handling for new plugin code.
+ */
+
 import {
   normalizeCommandDescription,
   normalizeSlashCommandName,

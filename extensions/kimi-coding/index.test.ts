@@ -17,7 +17,12 @@ describe("kimi provider plugin", () => {
           api: "anthropic-messages",
         },
       } as never),
-    ).toMatchObject({ id: "kimi-for-coding" });
+    ).toEqual({
+      id: "kimi-for-coding",
+      name: "Kimi Code",
+      provider: "kimi",
+      api: "anthropic-messages",
+    });
   });
 
   it("uses binary thinking with thinking off by default", async () => {

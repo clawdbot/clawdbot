@@ -137,8 +137,9 @@ are emitted with `open_world_enabled: true`; OpenClaw does not expose a separate
 plugin open-world policy knob and does not maintain per-plugin destructive
 tool-name deny lists.
 
-Tool approval mode is prompted by default for plugin apps because OpenClaw does
-not have an interactive app-elicitation UI in this same-thread path.
+Tool approval mode is automatic by default for plugin apps so non-destructive
+read tools can run without a same-thread approval UI. Destructive tools remain
+controlled by each app's `destructive_enabled` policy.
 
 ## Destructive action policy
 

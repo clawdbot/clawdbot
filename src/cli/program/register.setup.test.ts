@@ -16,6 +16,14 @@ const setupCommandMock = mocks.setupCommandMock;
 const setupWizardCommandMock = mocks.setupWizardCommandMock;
 const runtime = mocks.runtime;
 
+function lastSetupOptions(): Record<string, unknown> | undefined {
+  return setupCommandMock.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined;
+}
+
+function lastWizardOptions(): Record<string, unknown> | undefined {
+  return setupWizardCommandMock.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined;
+}
+
 vi.mock("../../commands/setup.js", () => ({
   setupCommand: mocks.setupCommandMock,
 }));
@@ -44,38 +52,26 @@ describe("registerSetupCommand", () => {
   it("runs setup command by default", async () => {
     await runCli(["setup", "--workspace", "/tmp/ws"]);
 
-    expect(setupCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspace: "/tmp/ws",
-      }),
-      runtime,
-    );
+    expect(setupCommandMock).toHaveBeenCalledWith(lastSetupOptions(), runtime);
+    expect(lastSetupOptions()?.workspace).toBe("/tmp/ws");
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
   it("runs setup wizard command when --wizard is set", async () => {
     await runCli(["setup", "--wizard", "--mode", "remote", "--remote-url", "wss://example"]);
 
-    expect(setupWizardCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: "remote",
-        remoteUrl: "wss://example",
-      }),
-      runtime,
-    );
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
+    expect(lastWizardOptions()?.mode).toBe("remote");
+    expect(lastWizardOptions()?.remoteUrl).toBe("wss://example");
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
   it("runs setup wizard command when wizard-only flags are passed explicitly", async () => {
     await runCli(["setup", "--mode", "remote", "--non-interactive"]);
 
-    expect(setupWizardCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: "remote",
-        nonInteractive: true,
-      }),
-      runtime,
-    );
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
+    expect(lastWizardOptions()?.mode).toBe("remote");
+    expect(lastWizardOptions()?.nonInteractive).toBe(true);
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
@@ -89,14 +85,10 @@ describe("registerSetupCommand", () => {
       "--import-secrets",
     ]);
 
-    expect(setupWizardCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        importFrom: "hermes",
-        importSource: "/tmp/hermes",
-        importSecrets: true,
-      }),
-      runtime,
-    );
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
+    expect(lastWizardOptions()?.importFrom).toBe("hermes");
+    expect(lastWizardOptions()?.importSource).toBe("/tmp/hermes");
+    expect(lastWizardOptions()?.importSecrets).toBe(true);
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 

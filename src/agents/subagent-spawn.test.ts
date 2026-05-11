@@ -38,6 +38,22 @@ function createConfigOverride(overrides?: Record<string, unknown>) {
   });
 }
 
+function requireRecord(value: unknown): Record<string, unknown> {
+  expect(value).toBeTruthy();
+  expect(typeof value).toBe("object");
+  expect(Array.isArray(value)).toBe(false);
+  return value as Record<string, unknown>;
+}
+
+function gatewayRequestRecords(): Record<string, unknown>[] {
+  return hoisted.callGatewayMock.mock.calls.map((call) => requireRecord(call[0]));
+}
+
+function gatewayRequest(method: string): Record<string, unknown> {
+  const request = gatewayRequestRecords().find((entry) => entry.method === method);
+  return requireRecord(request);
+}
+
 describe("spawnSubagentDirect seam flow", () => {
   beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
@@ -114,13 +130,9 @@ describe("spawnSubagentDirect seam flow", () => {
       },
     );
 
-    expect(result).toMatchObject({
-      status: "forbidden",
-      error: "agentId is not allowed for sessions_spawn (allowed: planner)",
-    });
-    expect(hoisted.callGatewayMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ method: "agent" }),
-    );
+    expect(result.status).toBe("forbidden");
+    expect(result.error).toBe("agentId is not allowed for sessions_spawn (allowed: planner)");
+    expect(gatewayRequestRecords().some((request) => request.method === "agent")).toBe(false);
   });
 
   it("allows omitted agentId to default to requester even when allowAgents excludes requester", async () => {
@@ -154,10 +166,8 @@ describe("spawnSubagentDirect seam flow", () => {
       },
     );
 
-    expect(result).toMatchObject({
-      status: "accepted",
-      childSessionKey: expect.stringMatching(/^agent:task-manager:subagent:/),
-    });
+    expect(result.status).toBe("accepted");
+    expect(result.childSessionKey).toMatch(/^agent:task-manager:subagent:/);
   });
 
   it("accepts a spawned run across session patching, runtime-model persistence, registry registration, and lifecycle emission", async () => {
@@ -196,37 +206,31 @@ describe("spawnSubagentDirect seam flow", () => {
       },
     );
 
-    expect(result).toMatchObject({
-      status: "accepted",
-      runId: "run-1",
-      mode: "run",
-      modelApplied: true,
-    });
+    expect(result.status).toBe("accepted");
+    expect(result.runId).toBe("run-1");
+    expect(result.mode).toBe("run");
+    expect(result.modelApplied).toBe(true);
     expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
 
     const childSessionKey = result.childSessionKey as string;
     expect(hoisted.pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(3);
     expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(3);
-    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-1",
-        childSessionKey,
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "agent:main:main",
-        requesterOrigin: {
-          channel: "discord",
-          accountId: "acct-1",
-          to: "user-1",
-          threadId: 42,
-        },
-        task: "inspect the spawn seam",
-        cleanup: "keep",
-        model: "openai-codex/gpt-5.4",
-        workspaceDir: "/tmp/requester-workspace",
-        expectsCompletionMessage: true,
-        spawnMode: "run",
-      }),
-    );
+    const registerInput = requireRecord(hoisted.registerSubagentRunMock.mock.calls[0]?.[0]);
+    const requesterOrigin = requireRecord(registerInput.requesterOrigin);
+    expect(registerInput.runId).toBe("run-1");
+    expect(registerInput.childSessionKey).toBe(childSessionKey);
+    expect(registerInput.requesterSessionKey).toBe("agent:main:main");
+    expect(registerInput.requesterDisplayKey).toBe("agent:main:main");
+    expect(requesterOrigin.channel).toBe("discord");
+    expect(requesterOrigin.accountId).toBe("acct-1");
+    expect(requesterOrigin.to).toBe("user-1");
+    expect(requesterOrigin.threadId).toBe(42);
+    expect(registerInput.task).toBe("inspect the spawn seam");
+    expect(registerInput.cleanup).toBe("keep");
+    expect(registerInput.model).toBe("openai-codex/gpt-5.4");
+    expect(registerInput.workspaceDir).toBe("/tmp/requester-workspace");
+    expect(registerInput.expectsCompletionMessage).toBe(true);
+    expect(registerInput.spawnMode).toBe("run");
     expect(hoisted.emitSessionLifecycleEventMock).toHaveBeenCalledWith({
       sessionKey: childSessionKey,
       reason: "create",
@@ -245,15 +249,10 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(operations.indexOf("gateway:agent")).toBeGreaterThan(
       operations.lastIndexOf("store:update"),
     );
-    expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "agent",
-        params: expect.objectContaining({
-          sessionKey: childSessionKey,
-          cleanupBundleMcpOnRunEnd: true,
-        }),
-      }),
-    );
+    const agentRequest = gatewayRequest("agent");
+    const agentParams = requireRecord(agentRequest.params);
+    expect(agentParams.sessionKey).toBe(childSessionKey);
+    expect(agentParams.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
   it("omits requesterOrigin threadId when no requester thread is provided", async () => {
@@ -282,13 +281,12 @@ describe("spawnSubagentDirect seam flow", () => {
     );
 
     expect(result.status).toBe("accepted");
-    const registerInput = hoisted.registerSubagentRunMock.mock.calls[0]?.[0];
-    expect(registerInput?.requesterOrigin).toMatchObject({
-      channel: "discord",
-      accountId: "acct-1",
-      to: "user-1",
-    });
-    expect(registerInput?.requesterOrigin).not.toHaveProperty("threadId");
+    const registerInput = requireRecord(hoisted.registerSubagentRunMock.mock.calls[0]?.[0]);
+    const requesterOrigin = requireRecord(registerInput.requesterOrigin);
+    expect(requesterOrigin.channel).toBe("discord");
+    expect(requesterOrigin.accountId).toBe("acct-1");
+    expect(requesterOrigin.to).toBe("user-1");
+    expect(requesterOrigin).not.toHaveProperty("threadId");
   });
 
   it("pins admin-only methods to operator.admin and preserves least-privilege for others (#59428)", async () => {
@@ -364,13 +362,10 @@ describe("spawnSubagentDirect seam flow", () => {
       },
     );
 
-    expect(result).toMatchObject({
-      status: "accepted",
-    });
+    expect(result.status).toBe("accepted");
     const agentCall = calls.find((call) => call.method === "agent");
-    expect(agentCall?.params).toMatchObject({
-      thinking: "high",
-    });
+    const params = requireRecord(agentCall?.params);
+    expect(params.thinking).toBe("high");
   });
 
   it("does not duplicate long subagent task text in the initial user message (#72019)", async () => {
@@ -434,10 +429,8 @@ describe("spawnSubagentDirect seam flow", () => {
       },
     );
 
-    expect(result).toMatchObject({
-      status: "error",
-      childSessionKey: expect.stringMatching(/^agent:main:subagent:/),
-    });
+    expect(result.status).toBe("error");
+    expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
     expect(result.error ?? "").toContain("invalid model");
     expect(
       hoisted.callGatewayMock.mock.calls.some(

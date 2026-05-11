@@ -112,6 +112,15 @@ describe("models set + fallbacks", () => {
     expectWrittenPrimaryModel("openrouter/hunter-alpha");
   });
 
+  it("normalizes retired Google Gemini preview ids in models set", async () => {
+    mockConfigSnapshot({});
+    const runtime = makeRuntime();
+
+    await modelsSetCommand("google/gemini-3-pro-preview", runtime);
+
+    expectWrittenPrimaryModel("google/gemini-3.1-pro-preview");
+  });
+
   it("migrates legacy duplicated OpenRouter keys on write", async () => {
     mockConfigSnapshot({
       agents: {

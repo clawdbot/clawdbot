@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
 import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
@@ -234,11 +234,11 @@ describe("resolveMentionTargets with @lid mapping", () => {
         authDir,
       );
       expect(mentionTargets.normalizedMentions).toEqual([
-        expect.objectContaining({
+        {
           jid: null,
           lid: "777@lid",
           e164: "+1777",
-        }),
+        },
       ]);
 
       const selfTargets = resolveMentionTargets(
@@ -248,8 +248,11 @@ describe("resolveMentionTargets with @lid mapping", () => {
         }),
         authDir,
       );
-      expect(selfTargets.self.e164).toBe("+1777");
-      expect(selfTargets.self.lid).toBe("777@lid");
+      expect(selfTargets.self).toEqual({
+        jid: null,
+        lid: "777@lid",
+        e164: "+1777",
+      });
     });
   });
 });
@@ -342,7 +345,7 @@ describe("web auto-reply util", () => {
   describe("isLikelyWhatsAppCryptoError", () => {
     it("matches known Baileys crypto auth errors (Error)", () => {
       const err = new Error("bad mac");
-      err.stack = "at something\nat @whiskeysockets/baileys/noise-handler\n";
+      err.stack = "at something\nat baileys/noise-handler\n";
       expect(isLikelyWhatsAppCryptoError(err)).toBe(true);
     });
 

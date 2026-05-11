@@ -60,24 +60,27 @@ describe("checkGatewayHealth", () => {
       checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
     ).resolves.toEqual({ healthOk: true, status: { runtimeVersion: "2026.4.23" } });
 
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("the running Gateway is OpenClaw 2026.4.23"),
-      "OpenClaw version mismatch",
-    );
-    expect(note).toHaveBeenCalledWith(
-      expect.not.stringContaining("That usually means"),
-      "OpenClaw version mismatch",
-    );
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Check `openclaw --version`, `which openclaw`"),
-      "OpenClaw version mismatch",
-    );
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "If this mismatch is unexpected, update PATH so `openclaw` points to the version you want",
+    const mismatchNotes = note.mock.calls
+      .filter(([, title]) => title === "OpenClaw version mismatch")
+      .map(([message]) => String(message));
+    expect(
+      mismatchNotes.some((message) =>
+        message.includes("the running Gateway is OpenClaw 2026.4.23"),
       ),
-      "OpenClaw version mismatch",
-    );
+    ).toBe(true);
+    expect(mismatchNotes.some((message) => message.includes("That usually means"))).toBe(false);
+    expect(
+      mismatchNotes.some((message) =>
+        message.includes("Check `openclaw --version`, `which openclaw`"),
+      ),
+    ).toBe(true);
+    expect(
+      mismatchNotes.some((message) =>
+        message.includes(
+          "If this mismatch is unexpected, update PATH so `openclaw` points to the version you want",
+        ),
+      ),
+    ).toBe(true);
   });
 
   it("does not run follow-up channel probes when liveness fails", async () => {
@@ -89,9 +92,7 @@ describe("checkGatewayHealth", () => {
     ).resolves.toEqual({ healthOk: false });
 
     expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("gateway timeout after 3000ms"),
-    );
+    expect(String(runtime.error.mock.calls[0]?.[0])).toContain("gateway timeout after 3000ms");
   });
 });
 
@@ -127,12 +128,11 @@ describe("probeGatewayMemoryStatus", () => {
       new Error("gateway timeout after 8000ms\nGateway target: ws://127.0.0.1:18789"),
     );
 
-    await expect(probeGatewayMemoryStatus({ cfg })).resolves.toEqual({
-      checked: false,
-      ready: false,
-      error: expect.stringContaining("gateway memory probe timed out"),
-      skipped: false,
-    });
+    const result = await probeGatewayMemoryStatus({ cfg });
+    expect(result.checked).toBe(false);
+    expect(result.ready).toBe(false);
+    expect(result.error).toContain("gateway memory probe timed out");
+    expect(result.skipped).toBe(false);
   });
 
   it("propagates checked: false and skipped: true when gateway skipped the embedding probe", async () => {
@@ -149,12 +149,11 @@ describe("probeGatewayMemoryStatus", () => {
       },
     });
 
-    await expect(probeGatewayMemoryStatus({ cfg })).resolves.toEqual({
-      checked: false,
-      ready: false,
-      error: expect.stringContaining("not checked"),
-      skipped: true,
-    });
+    const result = await probeGatewayMemoryStatus({ cfg });
+    expect(result.checked).toBe(false);
+    expect(result.ready).toBe(false);
+    expect(result.error).toContain("not checked");
+    expect(result.skipped).toBe(true);
   });
 
   it("keeps gateway request timeouts as explicit failures", async () => {

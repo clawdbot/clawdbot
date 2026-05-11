@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -13,6 +13,20 @@ const replaceConfigFile: AsyncUnknownMock = vi.fn(async (params: unknown) => {
 const loadCronStore: AsyncUnknownMock = vi.fn();
 const resolveCronStorePath: UnknownMock = vi.fn();
 const saveCronStore: AsyncUnknownMock = vi.fn();
+
+type TelegramConfigWrite = {
+  channels?: {
+    telegram?: {
+      defaultTo?: string;
+      accounts?: Record<string, { defaultTo?: string }>;
+    };
+  };
+};
+
+type CronStoreWrite = {
+  version: number;
+  jobs: Array<{ id: string; delivery: { channel: string; to: string } }>;
+};
 
 vi.mock("openclaw/plugin-sdk/config-mutation", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-mutation")>(
@@ -43,6 +57,24 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
 }) {
   describe("maybePersistResolvedTelegramTarget", () => {
     let maybePersistResolvedTelegramTarget: typeof import("./target-writeback.js").maybePersistResolvedTelegramTarget;
+
+    function requireWriteConfigCall(index = 0): [TelegramConfigWrite, Record<string, unknown>] {
+      const call = writeConfigFile.mock.calls[index] as
+        | [TelegramConfigWrite, Record<string, unknown>]
+        | undefined;
+      if (!call) {
+        throw new Error(`expected writeConfigFile call #${index + 1}`);
+      }
+      return call;
+    }
+
+    function requireSaveCronStoreCall(index = 0): [string, CronStoreWrite] {
+      const call = saveCronStore.mock.calls[index] as [string, CronStoreWrite] | undefined;
+      if (!call) {
+        throw new Error(`expected saveCronStore call #${index + 1}`);
+      }
+      return call;
+    }
 
     beforeAll(async () => {
       ({ maybePersistResolvedTelegramTarget } = await import("./target-writeback.js"));
@@ -138,31 +170,17 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
       });
 
       expect(writeConfigFile).toHaveBeenCalledTimes(1);
-      expect(writeConfigFile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channels: {
-            telegram: {
-              defaultTo: "-100123",
-              accounts: {
-                alerts: {
-                  defaultTo: "-100123",
-                },
-              },
-            },
-          },
-        }),
-        expect.objectContaining({ expectedConfigPath: "/tmp/openclaw.json" }),
-      );
+      const [writtenConfig, writeOptions] = requireWriteConfigCall();
+      expect(writtenConfig.channels?.telegram?.defaultTo).toBe("-100123");
+      expect(writtenConfig.channels?.telegram?.accounts?.alerts?.defaultTo).toBe("-100123");
+      expect(writeOptions.expectedConfigPath).toBe("/tmp/openclaw.json");
       expect(saveCronStore).toHaveBeenCalledTimes(1);
-      expect(saveCronStore).toHaveBeenCalledWith(
-        "/tmp/cron/jobs.json",
-        expect.objectContaining({
-          jobs: [
-            { id: "a", delivery: { channel: "telegram", to: "-100123" } },
-            { id: "b", delivery: { channel: "slack", to: "C123" } },
-          ],
-        }),
-      );
+      const [cronPath, cronStore] = requireSaveCronStoreCall();
+      expect(cronPath).toBe("/tmp/cron/jobs.json");
+      expect(cronStore.jobs).toEqual([
+        { id: "a", delivery: { channel: "telegram", to: "-100123" } },
+        { id: "b", delivery: { channel: "slack", to: "C123" } },
+      ]);
     });
 
     it("preserves topic suffix style in writeback target", async () => {
@@ -186,16 +204,10 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
         resolvedChatId: "-100123",
       });
 
-      expect(writeConfigFile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channels: {
-            telegram: {
-              defaultTo: "-100123:topic:9",
-            },
-          },
-        }),
-        expect.any(Object),
-      );
+      expect(writeConfigFile).toHaveBeenCalledTimes(1);
+      const [writtenConfig, writeOptions] = requireWriteConfigCall();
+      expect(writtenConfig.channels?.telegram?.defaultTo).toBe("-100123:topic:9");
+      expect(writeOptions).toEqual({});
     });
 
     it("matches username targets case-insensitively", async () => {
@@ -222,22 +234,16 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
         resolvedChatId: "-100123",
       });
 
-      expect(writeConfigFile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channels: {
-            telegram: {
-              defaultTo: "-100123",
-            },
-          },
-        }),
-        expect.any(Object),
-      );
-      expect(saveCronStore).toHaveBeenCalledWith(
-        "/tmp/cron/jobs.json",
-        expect.objectContaining({
-          jobs: [{ id: "a", delivery: { channel: "telegram", to: "-100123" } }],
-        }),
-      );
+      expect(writeConfigFile).toHaveBeenCalledTimes(1);
+      const [writtenConfig, writeOptions] = requireWriteConfigCall();
+      expect(writtenConfig.channels?.telegram?.defaultTo).toBe("-100123");
+      expect(writeOptions).toEqual({});
+      expect(saveCronStore).toHaveBeenCalledTimes(1);
+      const [cronPath, cronStore] = requireSaveCronStoreCall();
+      expect(cronPath).toBe("/tmp/cron/jobs.json");
+      expect(cronStore.jobs).toEqual([
+        { id: "a", delivery: { channel: "telegram", to: "-100123" } },
+      ]);
     });
   });
 }

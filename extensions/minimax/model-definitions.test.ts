@@ -34,11 +34,14 @@ describe("minimax model definitions", () => {
       contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
       maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
     });
-    expect(model).toMatchObject({
+    expect(model).toEqual({
+      contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
+      cost: MINIMAX_API_COST,
       id: "MiniMax-M2.7",
+      input: ["text"],
+      maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
       name: "MiniMax M2.7",
       reasoning: true,
-      input: ["text"],
     });
   });
 
@@ -49,11 +52,14 @@ describe("minimax model definitions", () => {
       contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
       maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
     });
-    expect(model).toMatchObject({
+    expect(model).toEqual({
+      contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
+      cost: MINIMAX_API_COST,
       id: "MiniMax-M2.5",
+      input: ["text"],
+      maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
       name: "MiniMax MiniMax-M2.5",
       reasoning: false,
-      input: ["text"], // M2.5 is not image-capable
     });
   });
 

@@ -192,6 +192,10 @@ import {
   PluginApprovalRequestParamsSchema,
   type PluginApprovalResolveParams,
   PluginApprovalResolveParamsSchema,
+  type PluginsSessionActionParams,
+  type PluginsSessionActionResult,
+  PluginsSessionActionParamsSchema,
+  PluginsSessionActionResultSchema,
   type PluginsUiDescriptorsParams,
   PluginsUiDescriptorsParamsSchema,
   ErrorCodes,
@@ -264,6 +268,7 @@ import {
   NodeRenameParamsSchema,
   type PollParams,
   PollParamsSchema,
+  MIN_CLIENT_PROTOCOL_VERSION,
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   type PushTestParams,
@@ -713,6 +718,12 @@ export const validatePluginApprovalResolveParams = ajv.compile<PluginApprovalRes
 export const validatePluginsUiDescriptorsParams = ajv.compile<PluginsUiDescriptorsParams>(
   PluginsUiDescriptorsParamsSchema,
 );
+export const validatePluginsSessionActionParams = ajv.compile<PluginsSessionActionParams>(
+  PluginsSessionActionParamsSchema,
+);
+export const validatePluginsSessionActionResult = ajv.compile<PluginsSessionActionResult>(
+  PluginsSessionActionResultSchema,
+);
 export const validateExecApprovalsNodeGetParams = ajv.compile<ExecApprovalsNodeGetParams>(
   ExecApprovalsNodeGetParamsSchema,
 );
@@ -909,6 +920,8 @@ export {
   AgentsListResultSchema,
   CommandsListParamsSchema,
   CommandsListResultSchema,
+  PluginsSessionActionParamsSchema,
+  PluginsSessionActionResultSchema,
   PluginsUiDescriptorsParamsSchema,
   ModelsListParamsSchema,
   SkillsStatusParamsSchema,
@@ -946,6 +959,7 @@ export {
   TickEventSchema,
   ShutdownEventSchema,
   ProtocolSchemas,
+  MIN_CLIENT_PROTOCOL_VERSION,
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   ErrorCodes,
@@ -1047,6 +1061,8 @@ export type {
   CommandsListParams,
   CommandsListResult,
   CommandEntry,
+  PluginsSessionActionParams,
+  PluginsSessionActionResult,
   SkillsStatusParams,
   ToolsCatalogParams,
   ToolsCatalogResult,

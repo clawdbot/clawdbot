@@ -163,14 +163,11 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     });
 
     expect(registry.diagnostics).toStrictEqual([]);
-    expect(registry.plugins).toEqual([
-      expect.objectContaining({
-        id: "claude-bundle",
-        format: "bundle",
-        bundleFormat: "claude",
-        skills: ["commands"],
-      }),
-    ]);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.id).toBe("claude-bundle");
+    expect(registry.plugins[0]?.format).toBe("bundle");
+    expect(registry.plugins[0]?.bundleFormat).toBe("claude");
+    expect(registry.plugins[0]?.skills).toEqual(["commands"]);
   });
 
   it("hydrates package channel command metadata while reconstructing from an older index", () => {
@@ -239,20 +236,19 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     );
 
     const index = createIndex(rootDir);
+    const persistedPlugin = {
+      ...index.plugins[0],
+      pluginId: "claude-bundle",
+      manifestPath: path.join(rootDir, ".claude-plugin", "plugin.json"),
+      source: rootDir,
+      format: "bundle" as const,
+      bundleFormat: "claude" as const,
+      setupSource: path.join(rootDir, "setup-api.js"),
+    };
     await writePersistedInstalledPluginIndex(
       {
         ...index,
-        plugins: [
-          {
-            ...index.plugins[0],
-            pluginId: "claude-bundle",
-            manifestPath: path.join(rootDir, ".claude-plugin", "plugin.json"),
-            source: rootDir,
-            format: "bundle",
-            bundleFormat: "claude",
-            setupSource: path.join(rootDir, "setup-api.js"),
-          },
-        ],
+        plugins: [persistedPlugin],
       },
       { stateDir },
     );
@@ -261,14 +257,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     if (!persisted) {
       throw new Error("expected persisted installed plugin index");
     }
-    expect(persisted?.plugins[0]).toMatchObject({
-      pluginId: "claude-bundle",
-      source: rootDir,
-      format: "bundle",
-      bundleFormat: "claude",
-      setupSource: path.join(rootDir, "setup-api.js"),
-      rootDir,
-    });
+    expect(persisted.plugins[0]).toEqual(persistedPlugin);
 
     const registry = loadPluginManifestRegistryForInstalledIndex({
       index: persisted,
@@ -280,14 +269,11 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     });
 
     expect(registry.diagnostics).toStrictEqual([]);
-    expect(registry.plugins).toEqual([
-      expect.objectContaining({
-        id: "claude-bundle",
-        format: "bundle",
-        bundleFormat: "claude",
-        rootDir,
-        skills: ["commands"],
-      }),
-    ]);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.id).toBe("claude-bundle");
+    expect(registry.plugins[0]?.format).toBe("bundle");
+    expect(registry.plugins[0]?.bundleFormat).toBe("claude");
+    expect(registry.plugins[0]?.rootDir).toBe(rootDir);
+    expect(registry.plugins[0]?.skills).toEqual(["commands"]);
   });
 });

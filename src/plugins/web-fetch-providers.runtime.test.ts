@@ -175,14 +175,23 @@ describe("resolvePluginWebFetchProviders", () => {
     });
 
     expect(providers).toStrictEqual([]);
-    expect(inFlightSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        activate: false,
-        cache: true,
-        onlyPluginIds: ["firecrawl"],
-        workspaceDir: DEFAULT_WORKSPACE,
-      }),
-    );
+    const { logger: inFlightLogger, ...inFlightLoadOptions } = inFlightSpy.mock.calls[0]?.[0] ?? {};
+    expect(Object.keys(inFlightLogger ?? {}).toSorted()).toEqual([
+      "debug",
+      "error",
+      "info",
+      "warn",
+    ]);
+    expect(inFlightLoadOptions).toEqual({
+      config: createFirecrawlAllowConfig(),
+      activationSourceConfig: createFirecrawlAllowConfig(),
+      autoEnabledReasons: {},
+      workspaceDir: DEFAULT_WORKSPACE,
+      env: createWebFetchEnv(),
+      cache: true,
+      activate: false,
+      onlyPluginIds: ["firecrawl"],
+    });
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
@@ -275,17 +284,25 @@ describe("resolvePluginWebFetchProviders", () => {
       env,
     });
 
-    expect(manifestRegistryModule.loadPluginManifestRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceDir: "/tmp/runtime-workspace",
-      }),
-    );
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceDir: "/tmp/runtime-workspace",
-        onlyPluginIds: ["firecrawl"],
-      }),
-    );
+    expect(manifestRegistryModule.loadPluginManifestRegistry).toHaveBeenCalledWith({
+      config: rawConfig,
+      workspaceDir: "/tmp/runtime-workspace",
+      env,
+      diagnostics: [],
+      installRecords: {},
+    });
+    const { logger, ...loadOptions } = loadOpenClawPluginsMock.mock.calls[0]?.[0] ?? {};
+    expect(Object.keys(logger ?? {}).toSorted()).toEqual(["debug", "error", "info", "warn"]);
+    expect(loadOptions).toEqual({
+      config: createFirecrawlAllowConfig(),
+      activationSourceConfig: createFirecrawlAllowConfig(),
+      autoEnabledReasons: {},
+      workspaceDir: "/tmp/runtime-workspace",
+      env,
+      cache: true,
+      activate: false,
+      onlyPluginIds: ["firecrawl"],
+    });
   });
 
   it("resolves web-fetch providers for each active registry workspace", () => {

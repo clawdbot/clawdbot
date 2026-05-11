@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getMemorySearchManagerMockConfigs,
   getMemorySearchManagerMockParams,
@@ -12,6 +12,26 @@ import {
   createMemorySearchToolOrThrow,
   expectUnavailableMemorySearchDetails,
 } from "./tools.test-helpers.js";
+
+const sessionStore = vi.hoisted(() => ({
+  "agent:main:main": {
+    sessionId: "thread-1",
+    updatedAt: 1,
+    sessionFile: "/tmp/sessions/thread-1.jsonl",
+  },
+}));
+
+vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-hit")>();
+  return {
+    ...actual,
+    loadCombinedSessionStoreForGateway: vi.fn(() => ({
+      storePath: "(test)",
+      store: sessionStore,
+    })),
+  };
+});
 
 describe("memory_search unavailable payloads", () => {
   beforeEach(() => {
@@ -107,6 +127,12 @@ describe("memory_search unavailable payloads", () => {
       (result.details as { debug?: { searchMs?: number } }).debug?.searchMs,
     ).toBeGreaterThanOrEqual(0);
   });
+});
+
+describe("memory_search corpus labels", () => {
+  beforeEach(() => {
+    resetMemoryToolMockState({ searchImpl: async () => [] });
+  });
 
   it("uses explicit plugin context agent over synthetic active-memory session keys", async () => {
     const tool = createMemorySearchToolOrThrow({
@@ -169,5 +195,58 @@ describe("memory_search unavailable payloads", () => {
     await tool.execute("patched-config", { query: "provider switch" });
 
     expect(getMemorySearchManagerMockConfigs()).toEqual([patchedConfig]);
+  });
+
+  it("preserves source corpus labels for memory and session transcript hits", async () => {
+    setMemorySearchImpl(async () => [
+      {
+        path: "MEMORY.md",
+        startLine: 3,
+        endLine: 4,
+        score: 0.95,
+        snippet: "Durable memory note",
+        source: "memory" as const,
+      },
+      {
+        path: "sessions/thread-1.jsonl",
+        startLine: 1,
+        endLine: 2,
+        score: 0.9,
+        snippet: "Thread transcript note",
+        source: "sessions" as const,
+      },
+    ]);
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+        tools: { sessions: { visibility: "all" } },
+      },
+      agentSessionKey: "agent:main:main",
+    });
+    const result = await tool.execute("mixed", { query: "thread note" });
+    const details = result.details as { results: Array<{ corpus: string; path: string }> };
+
+    expect(details.results).toEqual([
+      {
+        corpus: "memory",
+        path: "MEMORY.md",
+        startLine: 3,
+        endLine: 4,
+        score: 0.95,
+        snippet: "Durable memory note",
+        source: "memory",
+      },
+      {
+        corpus: "sessions",
+        path: "sessions/thread-1.jsonl",
+        startLine: 1,
+        endLine: 2,
+        score: 0.9,
+        snippet: "Thread transcript note",
+        source: "sessions",
+      },
+    ]);
   });
 });

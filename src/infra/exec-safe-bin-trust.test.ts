@@ -10,6 +10,13 @@ import {
   listWritableExplicitTrustedSafeBinDirs,
 } from "./exec-safe-bin-trust.js";
 
+function swapAsciiCase(value: string): string {
+  return value.replace(/[A-Za-z]/g, (char) => {
+    const lower = char.toLowerCase();
+    return char === lower ? char.toUpperCase() : lower;
+  });
+}
+
 describe("exec safe bin trust", () => {
   it("keeps default trusted dirs limited to immutable system paths", () => {
     const dirs = getTrustedSafeBinDirs({ refresh: true });
@@ -62,6 +69,62 @@ describe("exec safe bin trust", () => {
         trustedDirs: trusted,
       }),
     ).toBe(false);
+  });
+
+  it("matches trusted dirs through path-local case folding on case-insensitive filesystems", async () => {
+    await withTempDir({ prefix: "OpenClaw-Safe-Bin-" }, async (dir) => {
+      const swapped = swapAsciiCase(dir);
+      if (swapped === dir) {
+        return;
+      }
+      const originalStat = await fs.stat(dir);
+      let swappedStat: Awaited<ReturnType<typeof fs.stat>>;
+      try {
+        swappedStat = await fs.stat(swapped);
+      } catch {
+        return;
+      }
+      if (originalStat.dev !== swappedStat.dev || originalStat.ino !== swappedStat.ino) {
+        return;
+      }
+
+      const dirs = buildTrustedSafeBinDirs({
+        baseDirs: [],
+        extraDirs: [swapped],
+      });
+
+      expect(
+        isTrustedSafeBinPath({
+          resolvedPath: path.join(dir, "jq"),
+          trustedDirs: dirs,
+        }),
+      ).toBe(true);
+    });
+  });
+
+  it("keeps case-distinct trusted dirs separate on case-sensitive filesystems", async () => {
+    await withTempDir({ prefix: "openclaw-safe-bin-case-" }, async (parent) => {
+      const trustedDir = path.join(parent, "ToolBin");
+      const untrustedDir = path.join(parent, "toolbin");
+      await fs.mkdir(trustedDir);
+      try {
+        await fs.mkdir(untrustedDir);
+      } catch {
+        return;
+      }
+
+      const dirs = buildTrustedSafeBinDirs({
+        baseDirs: [],
+        extraDirs: [trustedDir],
+      });
+
+      expect(
+        isTrustedSafeBinPath({
+          resolvedPath: path.join(untrustedDir, "jq"),
+          trustedDirs: dirs,
+        }),
+      ).toBe(false);
+    });
   });
 
   it("does not trust PATH entries by default", () => {

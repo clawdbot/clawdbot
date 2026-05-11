@@ -15,6 +15,24 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
+type FetchGuardRequest = {
+  url?: unknown;
+  auditContext?: unknown;
+  init?: {
+    method?: unknown;
+    headers?: HeadersInit;
+    body?: BodyInit | null;
+  };
+};
+
+function fetchRequest(call: number): FetchGuardRequest {
+  const request = fetchWithSsrFGuardMock.mock.calls[call - 1]?.[0] as FetchGuardRequest | undefined;
+  if (!request) {
+    throw new Error(`expected Comfy fetch call ${call}`);
+  }
+  return request;
+}
+
 function parseJsonBody(call: number): Record<string, unknown> {
   return parseComfyJsonBody(fetchWithSsrFGuardMock, call);
 }
@@ -146,33 +164,23 @@ describe("comfy image-generation provider", () => {
       }),
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        url: "http://127.0.0.1:8188/prompt",
-        auditContext: "comfy-image-generate",
-      }),
-    );
+    const submitRequest = fetchRequest(1);
+    expect(submitRequest.url).toBe("http://127.0.0.1:8188/prompt");
+    expect(submitRequest.auditContext).toBe("comfy-image-generate");
     expect(parseJsonBody(1)).toEqual({
       prompt: {
         "6": { inputs: { text: "draw a lobster" } },
         "9": { inputs: {} },
       },
     });
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        url: "http://127.0.0.1:8188/history/local-prompt-1",
-        auditContext: "comfy-history",
-      }),
+    const historyRequest = fetchRequest(2);
+    expect(historyRequest.url).toBe("http://127.0.0.1:8188/history/local-prompt-1");
+    expect(historyRequest.auditContext).toBe("comfy-history");
+    const downloadRequest = fetchRequest(3);
+    expect(downloadRequest.url).toBe(
+      "http://127.0.0.1:8188/view?filename=generated.png&subfolder=&type=output",
     );
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({
-        url: "http://127.0.0.1:8188/view?filename=generated.png&subfolder=&type=output",
-        auditContext: "comfy-image-download",
-      }),
-    );
+    expect(downloadRequest.auditContext).toBe("comfy-image-download");
     expect(result).toEqual({
       images: [
         {
@@ -260,14 +268,16 @@ describe("comfy image-generation provider", () => {
       ],
     });
 
-    const uploadRequest = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+    const uploadRequest = fetchRequest(1);
     expect(uploadRequest?.url).toBe("http://127.0.0.1:8188/upload/image");
     expect(uploadRequest?.auditContext).toBe("comfy-image-upload");
     expect(uploadRequest?.init?.method).toBe("POST");
     const uploadForm = uploadRequest?.init?.body;
-    expect(uploadForm).toBeInstanceOf(FormData);
-    expect(uploadForm?.get("type")).toBe("input");
-    expect(uploadForm?.get("overwrite")).toBe("true");
+    if (!(uploadForm instanceof FormData)) {
+      throw new Error("expected Comfy upload request body to be FormData");
+    }
+    expect(uploadForm.get("type")).toBe("input");
+    expect(uploadForm.get("overwrite")).toBe("true");
 
     expect(parseJsonBody(2)).toEqual({
       prompt: {
@@ -306,7 +316,7 @@ describe("comfy image-generation provider", () => {
       }),
     });
 
-    const submitRequest = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+    const submitRequest = fetchRequest(1);
     expect(submitRequest?.url).toBe("https://cloud.comfy.org/api/prompt");
     expect(submitRequest?.auditContext).toBe("comfy-image-generate");
     const submitHeaders = new Headers(submitRequest?.init?.headers);
@@ -321,34 +331,20 @@ describe("comfy image-generation provider", () => {
       },
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        url: "https://cloud.comfy.org/api/job/cloud-job-1/status",
-        auditContext: "comfy-status",
-      }),
+    const statusRequest = fetchRequest(2);
+    expect(statusRequest.url).toBe("https://cloud.comfy.org/api/job/cloud-job-1/status");
+    expect(statusRequest.auditContext).toBe("comfy-status");
+    const historyRequest = fetchRequest(3);
+    expect(historyRequest.url).toBe("https://cloud.comfy.org/api/history_v2/cloud-job-1");
+    expect(historyRequest.auditContext).toBe("comfy-history");
+    const viewRequest = fetchRequest(4);
+    expect(viewRequest.url).toBe(
+      "https://cloud.comfy.org/api/view?filename=cloud.png&subfolder=&type=output",
     );
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({
-        url: "https://cloud.comfy.org/api/history_v2/cloud-job-1",
-        auditContext: "comfy-history",
-      }),
-    );
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      4,
-      expect.objectContaining({
-        url: "https://cloud.comfy.org/api/view?filename=cloud.png&subfolder=&type=output",
-        auditContext: "comfy-image-download",
-      }),
-    );
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      5,
-      expect.objectContaining({
-        url: "https://cdn.example.com/cloud.png",
-        auditContext: "comfy-image-download",
-      }),
-    );
+    expect(viewRequest.auditContext).toBe("comfy-image-download");
+    const cdnRequest = fetchRequest(5);
+    expect(cdnRequest.url).toBe("https://cdn.example.com/cloud.png");
+    expect(cdnRequest.auditContext).toBe("comfy-image-download");
     expect(result.metadata).toEqual({
       promptId: "cloud-job-1",
       outputNodeIds: ["9"],
@@ -384,14 +380,12 @@ describe("comfy image-generation provider", () => {
       }),
     });
 
-    const submitRequest = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+    const submitRequest = fetchRequest(1);
     const submitHeaders = new Headers(submitRequest?.init?.headers);
     expect(submitHeaders.get("x-api-key")).toBe("comfy-secret-ref-key");
-    expect(parseJsonBody(1)).toMatchObject({
-      extra_data: {
-        api_key_comfy_org: "comfy-secret-ref-key",
-      },
-    });
+    const requestBody = parseJsonBody(1);
+    const extraData = requestBody.extra_data as { api_key_comfy_org?: unknown } | undefined;
+    expect(extraData?.api_key_comfy_org).toBe("comfy-secret-ref-key");
   });
 
   it("uses provider auth fallback for cloud workflows without plugin config API keys", async () => {
@@ -423,13 +417,11 @@ describe("comfy image-generation provider", () => {
       }),
     });
 
-    const submitRequest = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+    const submitRequest = fetchRequest(1);
     const submitHeaders = new Headers(submitRequest?.init?.headers);
     expect(submitHeaders.get("x-api-key")).toBe("profile-key");
-    expect(parseJsonBody(1)).toMatchObject({
-      extra_data: {
-        api_key_comfy_org: "profile-key",
-      },
-    });
+    const requestBody = parseJsonBody(1);
+    const extraData = requestBody.extra_data as { api_key_comfy_org?: unknown } | undefined;
+    expect(extraData?.api_key_comfy_org).toBe("profile-key");
   });
 });

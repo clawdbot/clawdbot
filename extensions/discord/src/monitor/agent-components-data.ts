@@ -1,4 +1,4 @@
-import { logError } from "openclaw/plugin-sdk/text-runtime";
+import { logError } from "openclaw/plugin-sdk/logging-core";
 import {
   parseDiscordComponentCustomId,
   parseDiscordModalCustomId,

@@ -172,16 +172,14 @@ describe("gateway server hooks", () => {
       const resWake = await postHook(port, "/hooks/wake", { text: "Ping", mode: "next-heartbeat" });
       expect(resWake.status).toBe(200);
       const wakeEvents = await waitForSystemEvent();
-      expect(wakeEvents).toEqual(expect.arrayContaining([expect.stringContaining("Ping")]));
+      expect(wakeEvents.some((event) => event.includes("Ping"))).toBe(true);
       drainSystemEvents(resolveMainKey());
 
       mockIsolatedRunOkOnce();
       const resAgent = await postHook(port, "/hooks/agent", { message: "Do it", name: "Email" });
       expect(resAgent.status).toBe(200);
       const agentEvents = await waitForSystemEvent();
-      expect(agentEvents).toEqual(
-        expect.arrayContaining([expect.stringContaining("Hook Email: done")]),
-      );
+      expect(agentEvents.some((event) => event.includes("Hook Email: done"))).toBe(true);
       const firstCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { payload?: { externalContentSource?: string } };
       };
@@ -253,9 +251,7 @@ describe("gateway server hooks", () => {
       );
       expect(resHeader.status).toBe(200);
       const headerEvents = await waitForSystemEvent();
-      expect(headerEvents).toEqual(
-        expect.arrayContaining([expect.stringContaining("Header auth")]),
-      );
+      expect(headerEvents.some((event) => event.includes("Header auth"))).toBe(true);
       drainSystemEvents(resolveMainKey());
 
       const resGet = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
@@ -325,9 +321,7 @@ describe("gateway server hooks", () => {
       expect(resAgent.status).toBe(200);
 
       const targetEvents = await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
-      expect(targetEvents).toEqual(
-        expect.arrayContaining([expect.stringContaining("Hook Email: done")]),
-      );
+      expect(targetEvents.some((event) => event.includes("Hook Email: done"))).toBe(true);
       expect(peekSystemEventEntries(resolveMainKey())).toStrictEqual([]);
       drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
     });
@@ -430,23 +424,19 @@ describe("gateway server hooks", () => {
       const direct = await postHook(port, "/hooks/wake", { text: "Direct wake" });
       expect(direct.status).toBe(200);
       await waitForSystemEvent(5_000);
-      expect(peekSystemEventEntries(resolveMainKey())).toEqual([
-        expect.objectContaining({
-          text: "Direct wake",
-          trusted: false,
-        }),
-      ]);
+      const directEvents = peekSystemEventEntries(resolveMainKey());
+      expect(directEvents).toHaveLength(1);
+      expect(directEvents[0]?.text).toBe("Direct wake");
+      expect(directEvents[0]?.trusted).toBe(false);
       drainSystemEvents(resolveMainKey());
 
       const mapped = await postHook(port, "/hooks/mapped-wake", { subject: "Email" });
       expect(mapped.status).toBe(200);
       await waitForSystemEvent(5_000);
-      expect(peekSystemEventEntries(resolveMainKey())).toEqual([
-        expect.objectContaining({
-          text: "Mapped wake: Email",
-          trusted: false,
-        }),
-      ]);
+      const mappedEvents = peekSystemEventEntries(resolveMainKey());
+      expect(mappedEvents).toHaveLength(1);
+      expect(mappedEvents[0]?.text).toBe("Mapped wake: Email");
+      expect(mappedEvents[0]?.trusted).toBe(false);
       drainSystemEvents(resolveMainKey());
     });
   });

@@ -56,7 +56,7 @@ export async function modelsAliasesAddCommand(
   const alias = normalizeAlias(aliasRaw);
   const cfg = await loadModelsConfig({ commandName: "models aliases add", runtime });
   const resolved = resolveModelTarget({ raw: modelRaw, cfg });
-  const _updated = await updateConfig((cfg) => {
+  await updateConfig((cfg) => {
     const modelKey = `${resolved.provider}/${resolved.model}`;
     const nextModels = { ...cfg.agents?.defaults?.models };
     for (const [key, entry] of Object.entries(nextModels)) {

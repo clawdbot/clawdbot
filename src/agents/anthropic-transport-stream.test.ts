@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 
@@ -194,6 +194,35 @@ describe("anthropic transport stream", () => {
     expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBe(
       "fine-grained-tool-streaming-2025-05-14",
     );
+  });
+
+  it("bypasses the OpenAI SSE sanitizer for Kimi Anthropic thinking streams", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "kimi-for-coding",
+      name: "Kimi Code",
+      provider: "kimi",
+      baseUrl: "https://api.kimi.com/coding",
+      maxTokens: 32768,
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-kimi-api",
+        reasoning: "high",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(buildGuardedModelFetchMock).toHaveBeenCalledWith(model, undefined, {
+      sanitizeSse: false,
+    });
+    expect(latestAnthropicRequest().payload.thinking).toEqual({
+      type: "enabled",
+      budget_tokens: 16384,
+    });
   });
 
   it("does not add implicit Anthropic beta headers for custom compatible API-key endpoints", async () => {

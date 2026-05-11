@@ -1,4 +1,4 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
@@ -7,7 +7,7 @@ import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 type MoonshotThinkingType = "enabled" | "disabled";
 type MoonshotThinkingKeep = "all";
 const MOONSHOT_THINKING_KEEP_MODEL_ID = "kimi-k2.6";
-const piAiRuntimeLoader = createLazyImportLoader(() => import("@mariozechner/pi-ai"));
+const piAiRuntimeLoader = createLazyImportLoader(() => import("@earendil-works/pi-ai"));
 
 async function loadDefaultStreamFn(): Promise<StreamFn> {
   const runtime = await piAiRuntimeLoader.load();
@@ -67,6 +67,7 @@ function isPinnedToolChoice(toolChoice: unknown): boolean {
   return typeValue === "tool" || typeValue === "function";
 }
 
+/** @deprecated Moonshot provider-owned stream helper; do not use from third-party plugins. */
 export function resolveMoonshotThinkingType(params: {
   configuredThinking: unknown;
   thinkingLevel?: ThinkLevel;
@@ -81,12 +82,14 @@ export function resolveMoonshotThinkingType(params: {
   return params.thinkingLevel === "off" ? "disabled" : "enabled";
 }
 
+/** @deprecated Moonshot provider-owned stream helper; do not use from third-party plugins. */
 export function resolveMoonshotThinkingKeep(params: {
   configuredThinking: unknown;
 }): MoonshotThinkingKeep | undefined {
   return normalizeMoonshotThinkingKeep(params.configuredThinking);
 }
 
+/** @deprecated Moonshot provider-owned stream helper; do not use from third-party plugins. */
 export function createMoonshotThinkingWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingType?: MoonshotThinkingType,

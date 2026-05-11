@@ -151,7 +151,7 @@ function createBasePreflightParams(overrides?: Record<string, unknown>) {
       discordConfig: {
         allowBots: true,
       } as NonNullable<
-        import("openclaw/plugin-sdk/config-types").OpenClawConfig["channels"]
+        import("openclaw/plugin-sdk/config-contracts").OpenClawConfig["channels"]
       >["discord"],
       data: createGuildEvent({
         channelId: CHANNEL_ID,
@@ -165,7 +165,7 @@ function createBasePreflightParams(overrides?: Record<string, unknown>) {
     discordConfig: {
       allowBots: true,
     } as NonNullable<
-      import("openclaw/plugin-sdk/config-types").OpenClawConfig["channels"]
+      import("openclaw/plugin-sdk/config-contracts").OpenClawConfig["channels"]
     >["discord"],
     ...overrides,
   } satisfies Parameters<typeof preflightDiscordMessage>[0];
@@ -280,9 +280,10 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
 
     expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({
-      boundSessionKey: "agent:codex:acp:binding:discord:default:abc123",
-    });
+    expect(result?.boundSessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
+    expect(result?.boundAgentId).toBe("codex");
+    expect(result?.route.sessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
+    expect(result?.route.agentId).toBe("codex");
   });
 
   it("accepts plain messages in configured ACP-bound channels without a mention", async () => {
@@ -311,9 +312,10 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     );
 
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({
-      boundSessionKey: "agent:codex:acp:binding:discord:default:abc123",
-    });
+    expect(result?.boundSessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
+    expect(result?.boundAgentId).toBe("codex");
+    expect(result?.route.sessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
+    expect(result?.route.agentId).toBe("codex");
   });
 
   it("hydrates empty guild message payloads from REST before ensuring configured ACP bindings", async () => {

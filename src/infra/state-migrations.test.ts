@@ -78,6 +78,19 @@ vi.mock("../channels/plugins/bundled.js", () => {
 });
 
 const tempDirs = createTrackedTempDirs();
+
+async function expectMissingPath(targetPath: string): Promise<void> {
+  let statError: NodeJS.ErrnoException | undefined;
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    statError = error as NodeJS.ErrnoException;
+  }
+  expect(statError).toBeInstanceOf(Error);
+  expect(statError?.code).toBe("ENOENT");
+  expect(statError?.path).toBe(targetPath);
+  expect(statError?.syscall).toBe("stat");
+}
 const createTempDir = () => tempDirs.make("openclaw-state-migrations-test-");
 
 function createConfig(): OpenClawConfig {
@@ -231,12 +244,8 @@ describe("state migrations", () => {
     await expect(
       fs.readFile(path.join(stateDir, "agents", "worker-1", "sessions", "trace.jsonl"), "utf8"),
     ).resolves.toBe("{}\n");
-    await expect(fs.stat(path.join(stateDir, "sessions", "sessions.json"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await expect(fs.stat(path.join(stateDir, "sessions", "trace.jsonl"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectMissingPath(path.join(stateDir, "sessions", "sessions.json"));
+    await expectMissingPath(path.join(stateDir, "sessions", "trace.jsonl"));
 
     await expect(
       fs.readFile(path.join(stateDir, "agents", "worker-1", "agent", "settings.json"), "utf8"),
@@ -259,11 +268,7 @@ describe("state migrations", () => {
     await expect(
       fs.readFile(resolveChannelAllowFromPath("chatapp", env, "alpha"), "utf8"),
     ).resolves.toBe('["123","456"]\n');
-    await expect(
-      fs.stat(resolveChannelAllowFromPath("chatapp", env, "default")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.stat(resolveChannelAllowFromPath("chatapp", env, "beta")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissingPath(resolveChannelAllowFromPath("chatapp", env, "default"));
+    await expectMissingPath(resolveChannelAllowFromPath("chatapp", env, "beta"));
   });
 });

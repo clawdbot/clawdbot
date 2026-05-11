@@ -22,6 +22,12 @@ function registerHandlersForTest(config: Record<string, unknown> = baseConfig) {
   });
 }
 
+async function expectHookError(value: unknown, expectedErrorFragment: string): Promise<void> {
+  const result = (await value) as { status?: unknown; error?: unknown };
+  expect(result.status).toBe("error");
+  expect(result.error).toContain(expectedErrorFragment);
+}
+
 describe("feishu subagent hook handlers", () => {
   beforeEach(() => {
     threadBindingTesting.resetFeishuThreadBindingsForTests();
@@ -199,12 +205,12 @@ describe("feishu subagent hook handlers", () => {
     );
 
     expect(reboundResult).toEqual({ status: "ok", threadBindingReady: true });
-    expect(manager.listBySessionKey("agent:main:subagent:sender-child")).toMatchObject([
-      {
-        conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
-        parentConversationId: "oc_group_chat",
-      },
-    ]);
+    const childBindings = manager.listBySessionKey("agent:main:subagent:sender-child");
+    expect(childBindings).toHaveLength(1);
+    expect(childBindings[0]?.conversationId).toBe(
+      "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
+    );
+    expect(childBindings[0]?.parentConversationId).toBe("oc_group_chat");
     await expect(
       deliveryHandler(
         {
@@ -311,7 +317,7 @@ describe("feishu subagent hook handlers", () => {
       metadata: { boundBy: "system" },
     });
 
-    await expect(
+    await expectHookError(
       spawnHandler(
         {
           childSessionKey: "agent:main:subagent:ambiguous-child",
@@ -330,10 +336,8 @@ describe("feishu subagent hook handlers", () => {
           requesterSessionKey: "agent:main:parent",
         },
       ),
-    ).resolves.toMatchObject({
-      status: "error",
-      error: expect.stringContaining("direct messages or topic conversations"),
-    });
+      "direct messages or topic conversations",
+    );
 
     await expect(
       deliveryHandler(
@@ -374,7 +378,7 @@ describe("feishu subagent hook handlers", () => {
       metadata: { boundBy: "system" },
     });
 
-    await expect(
+    await expectHookError(
       spawnHandler(
         {
           childSessionKey: "agent:main:subagent:mixed-topic-child",
@@ -393,10 +397,8 @@ describe("feishu subagent hook handlers", () => {
           requesterSessionKey: "agent:main:parent",
         },
       ),
-    ).resolves.toMatchObject({
-      status: "error",
-      error: expect.stringContaining("direct messages or topic conversations"),
-    });
+      "direct messages or topic conversations",
+    );
 
     await expect(
       deliveryHandler(
@@ -489,7 +491,7 @@ describe("feishu subagent hook handlers", () => {
     const handler = getRequiredHookHandler(registerHandlersForTest(), "subagent_spawning");
     createFeishuThreadBindingManager({ cfg: baseConfig, accountId: "work" });
 
-    await expect(
+    await expectHookError(
       handler(
         {
           childSessionKey: "agent:main:subagent:child",
@@ -504,10 +506,8 @@ describe("feishu subagent hook handlers", () => {
         },
         {},
       ),
-    ).resolves.toMatchObject({
-      status: "error",
-      error: expect.stringContaining("direct messages or topic conversations"),
-    });
+      "direct messages or topic conversations",
+    );
   });
 
   it("unbinds Feishu bindings on subagent_ended", async () => {
@@ -564,7 +564,7 @@ describe("feishu subagent hook handlers", () => {
     const spawnHandler = getRequiredHookHandler(handlers, "subagent_spawning");
     const deliveryHandler = getRequiredHookHandler(handlers, "subagent_delivery_target");
 
-    await expect(
+    await expectHookError(
       spawnHandler(
         {
           childSessionKey: "agent:main:subagent:no-manager",
@@ -579,10 +579,8 @@ describe("feishu subagent hook handlers", () => {
         },
         {},
       ),
-    ).resolves.toMatchObject({
-      status: "error",
-      error: expect.stringContaining("monitor is not active"),
-    });
+      "monitor is not active",
+    );
 
     await expect(
       deliveryHandler(

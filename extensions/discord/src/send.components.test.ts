@@ -125,7 +125,7 @@ describe("sendDiscordComponentMessage", () => {
 
     expect(patchMock).toHaveBeenCalledTimes(1);
     const [patchUrl, patchRequest] = patchMock.mock.calls[0] ?? [];
-    expect(patchUrl).toEqual(expect.stringContaining("/channels/chan-1/messages/msg1"));
+    expect(patchUrl).toContain("/channels/chan-1/messages/msg1");
     expect(patchRequest?.body?.flags).toBe(MessageFlags.IsComponentsV2);
     expect(Array.isArray(patchRequest?.body?.components)).toBe(true);
     expect(patchRequest?.body?.components).toHaveLength(1);
@@ -174,14 +174,28 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
       },
     );
 
-    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageDiscordMock.mock.calls[0]).toEqual([
       "channel:chan-1",
       "report",
-      expect.objectContaining({
+      {
+        cfg: DISCORD_TEST_CFG,
+        accountId: undefined,
+        token: "t",
+        rest: undefined,
+        mediaUrl: "https://example.com/report.pdf",
+        filename: undefined,
+        mediaLocalRoots: undefined,
         mediaReadFile: readFileMock,
         mediaAccess,
-      }),
-    );
+        replyTo: undefined,
+        silent: undefined,
+        textLimit: undefined,
+        maxLinesPerMessage: undefined,
+        tableMode: undefined,
+        chunkMode: undefined,
+      },
+    ]);
   });
 
   it("keeps modal component messages on the component path", async () => {
@@ -212,11 +226,13 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
 
     expect(sendMessageDiscordMock).not.toHaveBeenCalled();
     expect(postMock).toHaveBeenCalledTimes(1);
-    expect(registerMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modals: [expect.objectContaining({ title: "Feedback" })],
-      }),
-    );
+    expect(registerMock).toHaveBeenCalledTimes(1);
+    const registration = registerMock.mock.calls[0]?.[0];
+    expect(registration?.messageId).toBe("msg1");
+    expect(registration?.modals).toHaveLength(1);
+    expect(registration?.modals[0]?.title).toBe("Feedback");
+    expect(registration?.modals[0]?.fields).toHaveLength(1);
+    expect(registration?.modals[0]?.fields[0]?.label).toBe("Notes");
   });
 
   it("keeps spoiler file blocks on the component path", async () => {

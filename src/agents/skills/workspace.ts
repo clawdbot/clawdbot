@@ -77,12 +77,25 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
 
 function compactHomePath(filePath: string, homes: readonly string[]): string {
   for (const home of homes) {
-    const prefix = home.endsWith(path.sep) ? home : home + path.sep;
-    if (filePath.startsWith(prefix)) {
-      return "~/" + filePath.slice(prefix.length);
+    for (const prefix of compactHomePrefixesForHome(home)) {
+      if (filePath.startsWith(prefix)) {
+        return "~/" + normalizeCompactedSkillPath(filePath.slice(prefix.length), prefix);
+      }
     }
   }
   return filePath;
+}
+
+function compactHomePrefixesForHome(home: string): string[] {
+  const prefixes = [home.endsWith(path.sep) ? home : home + path.sep];
+  if (home.includes("\\") && !home.endsWith("\\")) {
+    prefixes.push(home + "\\");
+  }
+  return prefixes;
+}
+
+function normalizeCompactedSkillPath(filePath: string, matchedHomePrefix: string): string {
+  return matchedHomePrefix.includes("\\") ? filePath.replace(/\\/g, "/") : filePath;
 }
 
 function compactPathForConsoleMessage(filePath: string): string {
@@ -951,6 +964,10 @@ export function buildWorkspaceSkillsPrompt(
 ): string {
   return resolveWorkspaceSkillPromptState(workspaceDir, opts).prompt;
 }
+
+export const __testing = {
+  compactHomePath,
+};
 
 type WorkspaceSkillBuildOptions = {
   config?: OpenClawConfig;

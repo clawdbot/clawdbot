@@ -167,18 +167,19 @@ describe("googlechat inbound access policy", () => {
 
     const statusSink = vi.fn();
     const logVerbose = vi.fn();
+    const account = {
+      accountId: "default",
+      config: {
+        dm: { policy: "pairing" },
+      },
+    };
 
     vi.useFakeTimers();
     vi.setSystemTime(now);
     try {
       await expect(
         applyGoogleChatInboundAccessPolicy({
-          account: {
-            accountId: "default",
-            config: {
-              dm: { policy: "pairing" },
-            },
-          } as never,
+          account: account as never,
           config: {
             channels: { googlechat: {} },
           } as never,
@@ -197,7 +198,7 @@ describe("googlechat inbound access policy", () => {
 
       expect(issueChallenge).toHaveBeenCalledTimes(1);
       expect(sendGoogleChatMessage).toHaveBeenCalledWith({
-        account: expect.anything(),
+        account,
         space: "spaces/AAA",
         text: "pairing text",
       });

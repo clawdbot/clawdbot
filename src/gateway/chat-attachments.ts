@@ -83,7 +83,7 @@ export class UnsupportedAttachmentError extends Error {
 }
 
 export class MediaOffloadError extends Error {
-  readonly cause: unknown;
+  override readonly cause: unknown;
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = "MediaOffloadError";

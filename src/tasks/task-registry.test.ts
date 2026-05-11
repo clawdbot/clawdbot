@@ -920,6 +920,87 @@ describe("task-registry", () => {
     });
   });
 
+  it.each([
+    {
+      id: "channel",
+      name: "room channel",
+      ownerKey: "agent:main:guildchat:channel:123",
+      target: "guildchat:channel:123",
+    },
+    {
+      id: "group",
+      name: "group",
+      ownerKey: "agent:main:guildchat:group:123",
+      target: "guildchat:group:123",
+    },
+    {
+      id: "topic",
+      name: "group topic",
+      ownerKey: "agent:main:guildchat:group:-100123:topic:42",
+      target: "guildchat:group:-100123:topic:42",
+    },
+    {
+      id: "discord-legacy-channel",
+      name: "legacy Discord channel",
+      ownerKey: "agent:main:discord:guild-123:channel-456",
+      target: "guildchat:channel:456",
+    },
+    {
+      id: "whatsapp-legacy-group",
+      name: "legacy WhatsApp group",
+      ownerKey: "agent:main:whatsapp:123@g.us",
+      target: "guildchat:group:123@g.us",
+    },
+  ])("routes $name ACP completion through the parent session", async ({ id, ownerKey, target }) => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const runId = `run-group-terminal-${id}`;
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "guildchat",
+        to: target,
+        via: "direct",
+      });
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey,
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "guildchat",
+          to: target,
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId,
+        task: "Investigate issue",
+        status: "running",
+        deliveryStatus: "pending",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 250,
+        },
+      });
+
+      await waitForAssertion(() => {
+        const task = findTaskByRunId(runId);
+        expect(task).toBeDefined();
+        expect(task?.status).toBe("succeeded");
+        expect(task?.deliveryStatus).toBe("session_queued");
+      });
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      expect(peekSystemEvents(ownerKey)).toEqual([
+        expect.stringContaining("Background task done: ACP background task"),
+      ]);
+      expect(hasPendingHeartbeatWake()).toBe(true);
+    });
+  });
+
   it("records delivery failure and queues a session fallback when direct delivery misses", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;

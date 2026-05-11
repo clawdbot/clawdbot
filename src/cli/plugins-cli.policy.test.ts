@@ -122,7 +122,7 @@ describe("plugins cli policy mutations", () => {
 
     const nextConfig = requireFirstWrittenConfig();
     const entries = requirePluginEntries(nextConfig);
-    expect(entries.alpha).toMatchObject({ enabled: false });
+    expect(entries.alpha).toEqual({ enabled: false });
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: nextConfig,
       installRecords: {},
@@ -174,7 +174,7 @@ describe("plugins cli policy mutations", () => {
 
       const nextConfig = requireFirstWrittenConfig();
       const entries = requirePluginEntries(nextConfig);
-      expect(entries[pluginId]).toMatchObject({ enabled: false });
+      expect(entries[pluginId]).toEqual({ enabled: false });
       expect(entries[alias]).toBeUndefined();
     },
   );
@@ -205,7 +205,7 @@ describe("plugins cli policy mutations", () => {
 
     const nextConfig = requireFirstWrittenConfig();
     const entries = requirePluginEntries(nextConfig);
-    expect(entries.twitch).toMatchObject({ enabled: false });
+    expect(entries.twitch).toEqual({ enabled: false });
     expect(nextConfig.channels?.twitch).toBeUndefined();
   });
 });

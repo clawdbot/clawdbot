@@ -41,7 +41,7 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
-import { PROTOCOL_VERSION } from "./protocol/index.js";
+import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./protocol/index.js";
 export type { GatewayConnectionDetails };
 
 type CallGatewayBaseOptions = {
@@ -654,7 +654,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
         opts.deviceIdentity === undefined
           ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
           : opts.deviceIdentity,
-      minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
+      minProtocol: opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: async (hello) => {
         try {
@@ -779,7 +779,7 @@ export async function callGatewayCli<T = Record<string, unknown>>(
   const scopes = Array.isArray(opts.scopes)
     ? opts.scopes
     : isGatewayMethodClassified(opts.method)
-      ? resolveLeastPrivilegeOperatorScopesForMethod(opts.method)
+      ? resolveLeastPrivilegeOperatorScopesForMethod(opts.method, opts.params)
       : CLI_DEFAULT_OPERATOR_SCOPES;
   return await callGatewayWithScopes(opts, scopes);
 }
@@ -787,7 +787,7 @@ export async function callGatewayCli<T = Record<string, unknown>>(
 export async function callGatewayLeastPrivilege<T = Record<string, unknown>>(
   opts: CallGatewayBaseOptions,
 ): Promise<T> {
-  const scopes = resolveLeastPrivilegeOperatorScopesForMethod(opts.method);
+  const scopes = resolveLeastPrivilegeOperatorScopesForMethod(opts.method, opts.params);
   return await callGatewayWithScopes(opts, scopes);
 }
 

@@ -10,6 +10,26 @@ function createHarness(params: {
   return createSlackOutboundPayloadHarness(params);
 }
 
+function sendOptions(call: unknown[] | undefined): {
+  blocks?: Array<{
+    block_id?: string;
+    elements?: Array<{ action_id?: string }>;
+    type?: string;
+  }>;
+  mediaUrl?: string;
+} {
+  const options = call?.[2];
+  expect(options).toBeDefined();
+  return options as {
+    blocks?: Array<{
+      block_id?: string;
+      elements?: Array<{ action_id?: string }>;
+      type?: string;
+    }>;
+    mediaUrl?: string;
+  };
+}
+
 describe("slackOutbound sendPayload", () => {
   it("renders presentation blocks", async () => {
     const { run, sendMock, to } = createHarness({
@@ -22,14 +42,12 @@ describe("slackOutbound sendPayload", () => {
     const result = await run();
 
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(sendMock).toHaveBeenCalledWith(
-      to,
-      "Fallback summary",
-      expect.objectContaining({
-        blocks: [{ type: "divider" }],
-      }),
-    );
-    expect(result).toMatchObject({ channel: "slack", messageId: "sl-1" });
+    const call = sendMock.mock.calls[0];
+    expect(call?.[0]).toBe(to);
+    expect(call?.[1]).toBe("Fallback summary");
+    expect(sendOptions(call).blocks).toEqual([{ type: "divider" }]);
+    expect(result.channel).toBe("slack");
+    expect(result.messageId).toBe("sl-1");
   });
 
   it("sends media before a separate interactive blocks message", async () => {
@@ -52,28 +70,17 @@ describe("slackOutbound sendPayload", () => {
     const result = await run();
 
     expect(sendMock).toHaveBeenCalledTimes(2);
-    expect(sendMock).toHaveBeenNthCalledWith(
-      1,
-      to,
-      "",
-      expect.objectContaining({
-        mediaUrl: "https://example.com/image.png",
-      }),
-    );
-    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
-    expect(sendMock).toHaveBeenNthCalledWith(
-      2,
-      to,
-      "Approval required",
-      expect.objectContaining({
-        blocks: [
-          expect.objectContaining({
-            type: "actions",
-          }),
-        ],
-      }),
-    );
-    expect(result).toMatchObject({ channel: "slack", messageId: "sl-controls" });
+    const mediaCall = sendMock.mock.calls[0];
+    expect(mediaCall?.[0]).toBe(to);
+    expect(mediaCall?.[1]).toBe("");
+    expect(sendOptions(mediaCall).mediaUrl).toBe("https://example.com/image.png");
+    expect(mediaCall?.[2]).not.toHaveProperty("blocks");
+    const controlsCall = sendMock.mock.calls[1];
+    expect(controlsCall?.[0]).toBe(to);
+    expect(controlsCall?.[1]).toBe("Approval required");
+    expect(sendOptions(controlsCall).blocks?.[0]?.type).toBe("actions");
+    expect(result.channel).toBe("slack");
+    expect(result.messageId).toBe("sl-controls");
   });
 
   it("fails when merged Slack blocks exceed the platform limit", async () => {
@@ -131,23 +138,16 @@ describe("slackOutbound sendPayload", () => {
 
     await run();
 
-    expect(sendMock).toHaveBeenCalledWith(
-      to,
-      "Deploy?",
-      expect.objectContaining({
-        blocks: [
-          expect.objectContaining({ block_id: "openclaw_reply_buttons_1" }),
-          expect.objectContaining({
-            block_id: "openclaw_reply_buttons_2",
-            elements: [expect.objectContaining({ action_id: "openclaw:reply_button:2:1" })],
-          }),
-          expect.objectContaining({
-            block_id: "openclaw_reply_buttons_3",
-            elements: [expect.objectContaining({ action_id: "openclaw:reply_button:3:1" })],
-          }),
-        ],
-      }),
-    );
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    const call = sendMock.mock.calls[0];
+    expect(call?.[0]).toBe(to);
+    expect(call?.[1]).toBe("Deploy?");
+    const blocks = sendOptions(call).blocks;
+    expect(blocks?.[0]?.block_id).toBe("openclaw_reply_buttons_1");
+    expect(blocks?.[1]?.block_id).toBe("openclaw_reply_buttons_2");
+    expect(blocks?.[1]?.elements?.[0]?.action_id).toBe("openclaw:reply_button:2:1");
+    expect(blocks?.[2]?.block_id).toBe("openclaw_reply_buttons_3");
+    expect(blocks?.[2]?.elements?.[0]?.action_id).toBe("openclaw:reply_button:3:1");
   });
 });
 

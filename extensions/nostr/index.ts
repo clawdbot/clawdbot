@@ -50,7 +50,7 @@ export default defineBundledChannelEntry({
         const account = resolveNostrAccount({ cfg, accountId });
         return account.profile;
       },
-      updateConfigProfile: async (accountId: string, profile: unknown) => {
+      updateConfigProfile: async (_accountId: string, profile: unknown) => {
         const runtime = getNostrRuntime();
         const cfg = runtime.config.current() as OpenClawConfig;
 

@@ -9,7 +9,8 @@
   "type": "module",
   "dependencies": {
     "gaxios": "7.1.4",
-    "google-auth-library": "10.6.2"
+    "google-auth-library": "10.6.2",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

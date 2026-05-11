@@ -29,7 +29,7 @@ import type {
   OpenClawConfig,
   ReplyToMode,
   TelegramAccountConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import {
@@ -1215,7 +1215,6 @@ export const dispatchTelegramMessage = async ({
                     );
                     const segments = split.segments;
                     const reply = resolveSendableOutboundReplyParts(effectivePayload);
-                    const _hasMedia = reply.hasMedia;
 
                     const flushBufferedFinalAnswer = async () => {
                       const buffered =

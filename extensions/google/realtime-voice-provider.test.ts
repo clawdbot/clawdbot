@@ -57,6 +57,12 @@ function lastConnectParams(): MockGoogleLiveConnectParams {
   return params;
 }
 
+function sentAudio(index = 0): { data?: unknown; mimeType?: unknown } {
+  const audio = session.sendRealtimeInput.mock.calls[index]?.[0]?.audio;
+  expect(audio).toBeDefined();
+  return audio as { data?: unknown; mimeType?: unknown };
+}
+
 describe("buildGoogleRealtimeVoiceProvider", () => {
   beforeEach(() => {
     envSnapshot = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
@@ -204,61 +210,68 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     await bridge.connect();
 
     expect(connectMock).toHaveBeenCalledTimes(1);
-    expect(lastConnectParams()).toMatchObject({
-      model: "gemini-live-2.5-flash-preview",
-      config: {
-        responseModalities: ["AUDIO"],
-        temperature: 0.3,
-        systemInstruction: "Speak briefly.",
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: {
-              voiceName: "Kore",
-            },
-          },
-        },
-        outputAudioTranscription: {},
-        realtimeInputConfig: {
-          activityHandling: "NO_INTERRUPTION",
-          automaticActivityDetection: {
-            startOfSpeechSensitivity: "START_SENSITIVITY_LOW",
-            endOfSpeechSensitivity: "END_SENSITIVITY_LOW",
-          },
-          turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
-        },
-        sessionResumption: {},
-        contextWindowCompression: { slidingWindow: {} },
-        tools: [
-          {
-            functionDeclarations: [
-              {
-                name: "lookup",
-                description: "Look something up",
-                parametersJsonSchema: {
-                  type: "object",
-                  properties: {
-                    query: { type: "string" },
-                  },
-                  required: ["query"],
-                },
-              },
-              {
-                name: "openclaw_agent_consult",
-                description: "Ask OpenClaw",
-                parametersJsonSchema: {
-                  type: "object",
-                  properties: {
-                    question: { type: "string" },
-                  },
-                  required: ["question"],
-                },
-                behavior: "NON_BLOCKING",
-              },
-            ],
-          },
-        ],
+    const params = lastConnectParams();
+    expect(params.model).toBe("gemini-live-2.5-flash-preview");
+    const config = params.config as {
+      contextWindowCompression?: unknown;
+      outputAudioTranscription?: unknown;
+      realtimeInputConfig?: {
+        activityHandling?: string;
+        automaticActivityDetection?: {
+          endOfSpeechSensitivity?: string;
+          startOfSpeechSensitivity?: string;
+        };
+        turnCoverage?: string;
+      };
+      responseModalities?: string[];
+      sessionResumption?: unknown;
+      speechConfig?: { voiceConfig?: { prebuiltVoiceConfig?: { voiceName?: string } } };
+      systemInstruction?: string;
+      temperature?: number;
+      tools?: Array<{
+        functionDeclarations?: Array<{
+          behavior?: string;
+          description?: string;
+          name?: string;
+          parametersJsonSchema?: unknown;
+        }>;
+      }>;
+    };
+    expect(config.responseModalities).toEqual(["AUDIO"]);
+    expect(config.temperature).toBe(0.3);
+    expect(config.systemInstruction).toBe("Speak briefly.");
+    expect(config.speechConfig?.voiceConfig?.prebuiltVoiceConfig?.voiceName).toBe("Kore");
+    expect(config.outputAudioTranscription).toEqual({});
+    expect(config.realtimeInputConfig?.activityHandling).toBe("NO_INTERRUPTION");
+    expect(config.realtimeInputConfig?.automaticActivityDetection?.startOfSpeechSensitivity).toBe(
+      "START_SENSITIVITY_LOW",
+    );
+    expect(config.realtimeInputConfig?.automaticActivityDetection?.endOfSpeechSensitivity).toBe(
+      "END_SENSITIVITY_LOW",
+    );
+    expect(config.realtimeInputConfig?.turnCoverage).toBe("TURN_INCLUDES_ONLY_ACTIVITY");
+    expect(config.sessionResumption).toEqual({});
+    expect(config.contextWindowCompression).toEqual({ slidingWindow: {} });
+    const declarations = config.tools?.[0]?.functionDeclarations ?? [];
+    expect(declarations[0]?.name).toBe("lookup");
+    expect(declarations[0]?.description).toBe("Look something up");
+    expect(declarations[0]?.parametersJsonSchema).toEqual({
+      type: "object",
+      properties: {
+        query: { type: "string" },
       },
+      required: ["query"],
     });
+    expect(declarations[1]?.name).toBe("openclaw_agent_consult");
+    expect(declarations[1]?.description).toBe("Ask OpenClaw");
+    expect(declarations[1]?.parametersJsonSchema).toEqual({
+      type: "object",
+      properties: {
+        question: { type: "string" },
+      },
+      required: ["question"],
+    });
+    expect(declarations[1]?.behavior).toBe("NON_BLOCKING");
   });
 
   it("omits zero temperature for native audio responses", async () => {
@@ -305,58 +318,67 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     });
 
     expect(createTokenMock).toHaveBeenCalledTimes(1);
-    expect(createTokenMock.mock.calls[0]?.[0]).toMatchObject({
-      config: {
-        uses: 1,
-        liveConnectConstraints: {
-          model: "gemini-live-2.5-flash-preview",
-          config: {
-            responseModalities: ["AUDIO"],
-            temperature: 0.4,
-            systemInstruction: "Speak briefly.",
-            speechConfig: {
-              voiceConfig: {
-                prebuiltVoiceConfig: {
-                  voiceName: "Puck",
-                },
-              },
-            },
-            tools: [
-              {
-                functionDeclarations: [
-                  {
-                    name: "openclaw_agent_consult",
-                    behavior: "NON_BLOCKING",
-                  },
-                ],
-              },
-            ],
-          },
-        },
-      },
-    });
-    expect(session).toMatchObject({
-      provider: "google",
-      transport: "provider-websocket",
-      protocol: "google-live-bidi",
-      clientSecret: "auth_tokens/browser-session",
-      websocketUrl:
-        "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
+    const tokenConfig = createTokenMock.mock.calls[0]?.[0] as {
+      config?: {
+        liveConnectConstraints?: {
+          config?: {
+            responseModalities?: string[];
+            speechConfig?: { voiceConfig?: { prebuiltVoiceConfig?: { voiceName?: string } } };
+            systemInstruction?: string;
+            temperature?: number;
+            tools?: Array<{ functionDeclarations?: Array<{ behavior?: string; name?: string }> }>;
+          };
+          model?: string;
+        };
+        uses?: number;
+      };
+    };
+    const liveConstraints = tokenConfig.config?.liveConnectConstraints;
+    expect(tokenConfig.config?.uses).toBe(1);
+    expect(liveConstraints?.model).toBe("gemini-live-2.5-flash-preview");
+    expect(liveConstraints?.config?.responseModalities).toEqual(["AUDIO"]);
+    expect(liveConstraints?.config?.temperature).toBe(0.4);
+    expect(liveConstraints?.config?.systemInstruction).toBe("Speak briefly.");
+    expect(liveConstraints?.config?.speechConfig?.voiceConfig?.prebuiltVoiceConfig?.voiceName).toBe(
+      "Puck",
+    );
+    expect(liveConstraints?.config?.tools?.[0]?.functionDeclarations?.[0]?.name).toBe(
+      "openclaw_agent_consult",
+    );
+    expect(liveConstraints?.config?.tools?.[0]?.functionDeclarations?.[0]?.behavior).toBe(
+      "NON_BLOCKING",
+    );
+    expect(session?.provider).toBe("google");
+    expect(session?.transport).toBe("provider-websocket");
+    const websocketSession = session as {
       audio: {
-        inputEncoding: "pcm16",
-        inputSampleRateHz: 16000,
-        outputEncoding: "pcm16",
-        outputSampleRateHz: 24000,
-      },
+        inputEncoding: string;
+        inputSampleRateHz: number;
+        outputEncoding: string;
+        outputSampleRateHz: number;
+      };
+      clientSecret: string;
       initialMessage: {
-        setup: {
-          model: "models/gemini-live-2.5-flash-preview",
-          generationConfig: {
-            responseModalities: ["AUDIO"],
-          },
-        },
-      },
-    });
+        setup: { generationConfig: { responseModalities: string[] }; model: string };
+      };
+      protocol: string;
+      websocketUrl: string;
+    };
+    expect(websocketSession.protocol).toBe("google-live-bidi");
+    expect(websocketSession.clientSecret).toBe("auth_tokens/browser-session");
+    expect(websocketSession.websocketUrl).toBe(
+      "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
+    );
+    expect(websocketSession.audio.inputEncoding).toBe("pcm16");
+    expect(websocketSession.audio.inputSampleRateHz).toBe(16000);
+    expect(websocketSession.audio.outputEncoding).toBe("pcm16");
+    expect(websocketSession.audio.outputSampleRateHz).toBe(24000);
+    expect(websocketSession.initialMessage.setup.model).toBe(
+      "models/gemini-live-2.5-flash-preview",
+    );
+    expect(websocketSession.initialMessage.setup.generationConfig.responseModalities).toEqual([
+      "AUDIO",
+    ]);
   });
 
   it("can opt out of Google Live session resumption and context compression", async () => {
@@ -421,11 +443,8 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       });
 
       expect(onClose).not.toHaveBeenCalled();
-      expect(onError).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: expect.stringContaining("reconnecting 1/3"),
-        }),
-      );
+      const error = onError.mock.calls[0]?.[0] as { message?: string };
+      expect(error.message).toContain("reconnecting 1/3");
 
       await vi.advanceTimersByTimeAsync(250);
 
@@ -457,10 +476,9 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
 
     expect(onReady).toHaveBeenCalledTimes(1);
     expect(session.sendRealtimeInput).toHaveBeenCalledTimes(1);
-    expect(session.sendRealtimeInput.mock.calls[0]?.[0].audio).toMatchObject({
-      data: expect.any(String),
-      mimeType: "audio/pcm;rate=16000",
-    });
+    const audio = sentAudio();
+    expect(typeof audio.data).toBe("string");
+    expect(audio.mimeType).toBe("audio/pcm;rate=16000");
   });
 
   it("marks the Google audio stream complete after sustained telephony silence", async () => {
@@ -509,13 +527,10 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
 
     bridge.sendAudio(Buffer.from([0xff, 0x00]));
 
-    expect(session.sendRealtimeInput).toHaveBeenCalledWith({
-      audio: {
-        data: expect.any(String),
-        mimeType: "audio/pcm;rate=16000",
-      },
-    });
-    const sent = Buffer.from(session.sendRealtimeInput.mock.calls[0]?.[0].audio.data, "base64");
+    const audio = sentAudio();
+    expect(typeof audio.data).toBe("string");
+    expect(audio.mimeType).toBe("audio/pcm;rate=16000");
+    const sent = Buffer.from(audio.data as string, "base64");
     expect(Array.from({ length: sent.length / 2 }, (_, i) => sent.readInt16LE(i * 2))).toEqual([
       0, -16062, -32124, -32124,
     ]);
@@ -536,13 +551,10 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
 
     bridge.sendAudio(Buffer.alloc(480));
 
-    expect(session.sendRealtimeInput).toHaveBeenCalledWith({
-      audio: {
-        data: expect.any(String),
-        mimeType: "audio/pcm;rate=16000",
-      },
-    });
-    const sent = Buffer.from(session.sendRealtimeInput.mock.calls[0]?.[0].audio.data, "base64");
+    const audio = sentAudio();
+    expect(typeof audio.data).toBe("string");
+    expect(audio.mimeType).toBe("audio/pcm;rate=16000");
+    const sent = Buffer.from(audio.data as string, "base64");
     expect(sent).toHaveLength(320);
   });
 
@@ -559,13 +571,10 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
 
     await bridge.connect();
 
-    expect(lastConnectParams().config).toMatchObject({
-      realtimeInputConfig: {
-        automaticActivityDetection: {
-          disabled: true,
-        },
-      },
-    });
+    const config = lastConnectParams().config as {
+      realtimeInputConfig?: { automaticActivityDetection?: { disabled?: boolean } };
+    };
+    expect(config.realtimeInputConfig?.automaticActivityDetection?.disabled).toBe(true);
   });
 
   it("sends text prompts as ordered client turns", async () => {
@@ -777,11 +786,9 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     bridge.submitToolResult("missing-call", { result: "ok" });
 
     expect(session.sendToolResponse).not.toHaveBeenCalled();
-    expect(onError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message:
-          "Google Live function response is missing a matching function call for missing-call",
-      }),
+    const error = onError.mock.calls[0]?.[0] as { message?: string };
+    expect(error.message).toBe(
+      "Google Live function response is missing a matching function call for missing-call",
     );
   });
 

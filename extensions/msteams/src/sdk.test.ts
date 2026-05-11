@@ -146,6 +146,14 @@ function createSdkStub(): MSTeamsTeamsSdk {
   };
 }
 
+function requireFirstAppInstance(appInstances: Record<string, unknown>[]) {
+  const appInstance = appInstances[0];
+  if (!appInstance) {
+    throw new Error("expected sdk.App constructor call");
+  }
+  return appInstance;
+}
+
 describe("createMSTeamsApp", () => {
   it("creates app without the Express 5 wildcard route regression (#55161)", async () => {
     // Regression test for: https://github.com/openclaw/openclaw/issues/55161
@@ -199,15 +207,16 @@ describe("createMSTeamsAdapter", () => {
       },
     );
 
-    expect(fetchMock).toHaveBeenCalledWith(
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, options] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      { method?: string; headers?: { Authorization?: string } },
+    ];
+    expect(url).toBe(
       "https://example.com/v3/conversations/19%3Aconversation%40thread.tacv2/activities/activity-123",
-      expect.objectContaining({
-        method: "DELETE",
-        headers: expect.objectContaining({
-          Authorization: "Bearer bot-token",
-        }),
-      }),
     );
+    expect(options.method).toBe("DELETE");
+    expect(options.headers?.Authorization).toBe("Bearer bot-token");
   });
 
   it("passes the OpenClaw User-Agent to the Bot Framework connector client", async () => {
@@ -238,14 +247,10 @@ describe("createMSTeamsAdapter", () => {
     );
 
     expect(clientConstructorState.calls).toHaveLength(1);
-    expect(clientConstructorState.calls[0]).toMatchObject({
-      serviceUrl: "https://service.example.com/",
-      options: {
-        headers: {
-          "User-Agent": expect.stringMatching(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/),
-        },
-      },
-    });
+    const clientCall = clientConstructorState.calls[0];
+    expect(clientCall?.serviceUrl).toBe("https://service.example.com/");
+    const options = clientCall?.options as { headers?: { "User-Agent"?: string } } | undefined;
+    expect(options?.headers?.["User-Agent"]).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/);
   });
 });
 
@@ -442,11 +447,10 @@ describe("createMSTeamsApp – secret credentials", () => {
     };
     const app = await createMSTeamsApp(creds, sdk);
     expect(app).toBeInstanceOf(FakeApp);
-    expect(appInstances[0]).toMatchObject({
-      clientId: "my-app-id",
-      clientSecret: "my-secret",
-      tenantId: "my-tenant",
-    });
+    const appInstance = requireFirstAppInstance(appInstances);
+    expect(appInstance.clientId).toBe("my-app-id");
+    expect(appInstance.clientSecret).toBe("my-secret");
+    expect(appInstance.tenantId).toBe("my-tenant");
   });
 });
 
@@ -468,11 +472,10 @@ describe("createMSTeamsApp – federated certificate credentials", () => {
     };
     await createMSTeamsApp(creds, sdk);
     expect(fs.readFileSync).toHaveBeenCalledWith("/certs/bot.pem", "utf-8");
-    expect(appInstances[0]).toMatchObject({
-      clientId: "fed-app-id",
-      tenantId: "fed-tenant",
-    });
-    const tokenProvider = appInstances[0].token as ((scope: string) => Promise<string>) | undefined;
+    const appInstance = requireFirstAppInstance(appInstances);
+    expect(appInstance.clientId).toBe("fed-app-id");
+    expect(appInstance.tenantId).toBe("fed-tenant");
+    const tokenProvider = appInstance.token as ((scope: string) => Promise<string>) | undefined;
     if (!tokenProvider) {
       throw new Error("expected federated app to expose token provider");
     }
@@ -520,8 +523,10 @@ describe("createMSTeamsApp – federated managed identity", () => {
       managedIdentityClientId: "mi-client-id",
     };
     await createMSTeamsApp(creds, sdk);
-    expect(appInstances[0]).toMatchObject({ clientId: "mi-app-id", tenantId: "mi-tenant" });
-    const tokenProvider = appInstances[0].token as ((scope: string) => Promise<string>) | undefined;
+    const appInstance = requireFirstAppInstance(appInstances);
+    expect(appInstance.clientId).toBe("mi-app-id");
+    expect(appInstance.tenantId).toBe("mi-tenant");
+    const tokenProvider = appInstance.token as ((scope: string) => Promise<string>) | undefined;
     if (!tokenProvider) {
       throw new Error("expected managed-identity app to expose token provider");
     }
@@ -608,9 +613,9 @@ describe("createMSTeamsAdapter – continueConversation", () => {
     });
 
     expect(createFn).toHaveBeenCalledTimes(1);
-    expect(createFn).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "message", text: "hello from proactive send" }),
-    );
+    const activity = createFn.mock.calls[0]?.[0] as { type?: string; text?: string } | undefined;
+    expect(activity?.type).toBe("message");
+    expect(activity?.text).toBe("hello from proactive send");
   });
 
   it("provides deleteActivity via REST DELETE in logic callback", async () => {

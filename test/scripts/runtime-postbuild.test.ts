@@ -654,6 +654,32 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
+  it("writes compatibility aliases for previous tool and ACP manager chunk names", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(path.join(distDir, "acp", "control-plane"), { recursive: true });
+    await fs.mkdir(path.join(distDir, "web-fetch"), { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "acp", "control-plane", "manager.js"),
+      "export const getAcpSessionManager = true;\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "web-fetch", "runtime.js"),
+      "export const resolveWebFetchDefinition = true;\n",
+      "utf8",
+    );
+
+    writeLegacyRootRuntimeCompatAliases({ rootDir });
+
+    expect(await fs.readFile(path.join(distDir, "manager-DzRWrKSA.js"), "utf8")).toBe(
+      'export * from "./acp/control-plane/manager.js";\n',
+    );
+    expect(await fs.readFile(path.join(distDir, "runtime-CeGN4XUC.js"), "utf8")).toBe(
+      'export * from "./web-fetch/runtime.js";\n',
+    );
+  });
+
   it("writes legacy CLI exit compatibility chunks", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
 

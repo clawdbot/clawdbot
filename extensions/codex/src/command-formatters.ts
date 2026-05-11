@@ -1,7 +1,10 @@
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerModelListResult } from "./app-server/models.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
-import { summarizeCodexRateLimits } from "./app-server/rate-limits.js";
+import {
+  summarizeCodexAccountRateLimits,
+  summarizeCodexRateLimits,
+} from "./app-server/rate-limits.js";
 import type { SafeValue } from "./command-rpc.js";
 
 type CodexStatusProbes = {
@@ -103,12 +106,18 @@ export function formatAccount(
   account: SafeValue<JsonValue | undefined>,
   limits: SafeValue<JsonValue | undefined>,
 ): string {
+  const formattedLimits = limits.ok
+    ? formatCodexRateLimitDetails(limits.value)
+    : formatCodexDisplayText(limits.error);
+  const rateLimitBlock = formattedLimits.startsWith("Codex is ")
+    ? formattedLimits
+    : formattedLimits.includes("\n")
+      ? `Rate limits:\n${formattedLimits}`
+      : `Rate limits: ${formattedLimits}`;
   return [
     `Account: ${account.ok ? formatCodexAccountSummary(account.value) : formatCodexDisplayText(account.error)}`,
-    `Rate limits: ${
-      limits.ok ? formatCodexRateLimitSummary(limits.value) : formatCodexDisplayText(limits.error)
-    }`,
-  ].join("\n");
+    rateLimitBlock,
+  ].join("\n\n");
 }
 
 export function formatComputerUseStatus(status: CodexComputerUseStatus): string {
@@ -281,6 +290,14 @@ function summarizeArrayLike(value: JsonValue | undefined): string {
 
 function formatCodexRateLimitSummary(value: JsonValue | undefined): string {
   return formatCodexDisplayText(summarizeCodexRateLimits(value) ?? summarizeRateLimits(value));
+}
+
+function formatCodexRateLimitDetails(value: JsonValue | undefined): string {
+  const lines = summarizeCodexAccountRateLimits(value);
+  if (!lines) {
+    return formatCodexDisplayText(summarizeRateLimits(value));
+  }
+  return lines.map(formatCodexDisplayText).join("\n");
 }
 
 function summarizeRateLimits(value: JsonValue | undefined): string {

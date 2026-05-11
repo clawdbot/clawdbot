@@ -2644,23 +2644,26 @@ describe("google-meet plugin", () => {
     })) as { session?: { chrome?: { health?: { manualActionRequired?: boolean } } } };
 
     expect(status.session?.chrome?.health?.manualActionRequired).toBe(true);
-    expect(nodesInvoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "browser.proxy",
-        params: expect.objectContaining({
-          path: "/act",
-          body: expect.objectContaining({ targetId: "tab-1" }),
-        }),
-      }),
+    const actCall = nodesInvoke.mock.calls.find(([rawCall]) => {
+      const call = requireRecord(rawCall, "node invoke");
+      const params = requireRecord(call.params, "node invoke params");
+      return call.command === "browser.proxy" && params.path === "/act";
+    });
+    if (!actCall) {
+      throw new Error("Expected browser.proxy /act node invoke");
+    }
+    const actParams = requireRecord(
+      requireRecord(actCall[0], "act node invoke").params,
+      "act params",
     );
-    expect(nodesInvoke).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "browser.proxy",
-        params: expect.objectContaining({
-          path: "/permissions/grant",
-        }),
+    expect(requireRecord(actParams.body, "act body").targetId).toBe("tab-1");
+    expect(
+      nodesInvoke.mock.calls.some(([rawCall]) => {
+        const call = requireRecord(rawCall, "node invoke");
+        const params = requireRecord(call.params, "node invoke params");
+        return call.command === "browser.proxy" && params.path === "/permissions/grant";
       }),
-    );
+    ).toBe(false);
   });
 
   it("retries caption enable until the captions button is available", async () => {
@@ -3639,12 +3642,10 @@ describe("google-meet plugin", () => {
       message: "Say exactly: hello.",
     });
 
-    expect(join).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Say exactly: hello.",
-        mode: "bidi",
-      }),
-    );
+    expect(join).toHaveBeenCalledTimes(1);
+    const joinArgs = requireRecord(join.mock.calls[0]?.[0], "test speech join args");
+    expect(joinArgs.message).toBe("Say exactly: hello.");
+    expect(joinArgs.mode).toBe("bidi");
   });
 
   it("rejects observe-only mode for test speech", async () => {

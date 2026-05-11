@@ -47,6 +47,15 @@ function requirePropertyDescriptor(
   return descriptor;
 }
 
+function expectEnumerableConfigurableDescriptor(
+  target: Record<string, unknown>,
+  propertyName: string,
+): void {
+  const descriptor = requirePropertyDescriptor(target, propertyName);
+  expect(descriptor.configurable).toBe(true);
+  expect(descriptor.enumerable).toBe(true);
+}
+
 function loadRootAliasWithStubs(options?: {
   distExists?: boolean;
   distEntries?: string[];
@@ -280,10 +289,7 @@ describe("plugin-sdk root alias", () => {
     expect(lazyModule.createJitiOptions.at(-1)?.tryNative).toBe(false);
     expect((lazyRootSdk.slowHelper as () => string)()).toBe("loaded");
     expect(Object.keys(lazyRootSdk)).toContain("slowHelper");
-    expect(requirePropertyDescriptor(lazyRootSdk, "slowHelper")).toMatchObject({
-      configurable: true,
-      enumerable: true,
-    });
+    expectEnumerableConfigurableDescriptor(lazyRootSdk, "slowHelper");
   });
 
   it.each([
@@ -374,16 +380,15 @@ describe("plugin-sdk root alias", () => {
     });
 
     expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
-    expect(lazyModule.createJitiOptions.at(-1)?.alias).toMatchObject({
-      "openclaw/plugin-sdk": rootAliasPath,
-      "@openclaw/plugin-sdk": rootAliasPath,
-      "openclaw/plugin-sdk/group-access": expect.stringContaining(
-        path.join("src", "plugin-sdk", "group-access.ts"),
-      ),
-      "@openclaw/plugin-sdk/group-access": expect.stringContaining(
-        path.join("src", "plugin-sdk", "group-access.ts"),
-      ),
-    });
+    const aliasMap = (lazyModule.createJitiOptions.at(-1)?.alias ?? {}) as Record<string, string>;
+    expect(aliasMap["openclaw/plugin-sdk"]).toBe(rootAliasPath);
+    expect(aliasMap["@openclaw/plugin-sdk"]).toBe(rootAliasPath);
+    expect(aliasMap["openclaw/plugin-sdk/group-access"]).toContain(
+      path.join("src", "plugin-sdk", "group-access.ts"),
+    );
+    expect(aliasMap["@openclaw/plugin-sdk/group-access"]).toContain(
+      path.join("src", "plugin-sdk", "group-access.ts"),
+    );
   });
 
   it("keeps bootstrap plugin-sdk aliases deterministic and ignores unsafe subpaths", () => {
@@ -451,20 +456,13 @@ describe("plugin-sdk root alias", () => {
     });
 
     expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
-    expect(lazyModule.createJitiOptions.at(-1)?.alias).toMatchObject({
-      "openclaw/plugin-sdk/channel-runtime": path.join(
-        packageRoot,
-        "src",
-        "plugin-sdk",
-        "channel-runtime.mts",
-      ),
-      "@openclaw/plugin-sdk/channel-runtime": path.join(
-        packageRoot,
-        "src",
-        "plugin-sdk",
-        "channel-runtime.mts",
-      ),
-    });
+    const aliasMap = (lazyModule.createJitiOptions.at(-1)?.alias ?? {}) as Record<string, string>;
+    expect(aliasMap["openclaw/plugin-sdk/channel-runtime"]).toBe(
+      path.join(packageRoot, "src", "plugin-sdk", "channel-runtime.mts"),
+    );
+    expect(aliasMap["@openclaw/plugin-sdk/channel-runtime"]).toBe(
+      path.join(packageRoot, "src", "plugin-sdk", "channel-runtime.mts"),
+    );
   });
 
   it("prefers hashed dist diagnostic events chunks before falling back to src", () => {
@@ -543,17 +541,18 @@ describe("plugin-sdk root alias", () => {
     );
     const lazyModule = loadRootAliasWithStubs({ monolithicExports });
 
-    expect(rootSdk.emptyPluginConfigSchema).toEqual(expect.any(Function));
-    expect(rootSdk.resolveControlCommandGate).toEqual(expect.any(Function));
-    expect(rootSdk.onDiagnosticEvent).toEqual(expect.any(Function));
+    expect(rootSdk.emptyPluginConfigSchema).toBeTypeOf("function");
+    expect(rootSdk.resolveControlCommandGate).toBeTypeOf("function");
+    expect(rootSdk.onDiagnosticEvent).toBeTypeOf("function");
 
     for (const name of legacyRootExportNames) {
       expect(lazyModule.moduleExports[name]).toBe(monolithicExports[name]);
     }
     expect(lazyModule.jitiLoadCalls).toBe(1);
-    expect(Object.keys(lazyModule.moduleExports)).toEqual(
-      expect.arrayContaining([...legacyRootExportNames]),
-    );
+    const exportKeys = Object.keys(lazyModule.moduleExports);
+    for (const name of legacyRootExportNames) {
+      expect(exportKeys).toContain(name);
+    }
     expect(typeof rootSdk.default).toBe("object");
     expect(rootSdk.default).toBe(rootSdk);
     expect(rootSdk.__esModule).toBe(true);
@@ -589,10 +588,7 @@ describe("plugin-sdk root alias", () => {
     const keys = Object.keys(rootSdk);
     expect(keys).toContain("resolveControlCommandGate");
     expect(keys).toContain("onDiagnosticEvent");
-    expect(requirePropertyDescriptor(rootSdk, "resolveControlCommandGate")).toMatchObject({
-      configurable: true,
-      enumerable: true,
-    });
+    expectEnumerableConfigurableDescriptor(rootSdk, "resolveControlCommandGate");
     expect(typeof requirePropertyDescriptor(rootSdk, "onDiagnosticEvent").value).toBe("function");
   });
 });

@@ -5,7 +5,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runMantisVisualDriver, runMantisVisualTask } from "./visual-task.runtime.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect((error as { code?: unknown }).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`Expected path to be missing: ${targetPath}`);
+}
+
+function expectArgsContainSequence(args: readonly string[], expected: readonly string[]): void {
+  const startIndex = args.findIndex((_, index) => {
+    return expected.every((value, offset) => args[index + offset] === value);
+  });
+  expect(startIndex).toBeGreaterThanOrEqual(0);
 }
 
 describe("mantis visual task runtime", () => {
@@ -88,23 +101,19 @@ describe("mantis visual task runtime", () => {
       ".artifacts/qa-e2e/mantis/visual-task-test/visual-task.mp4",
     );
     const stagedVideoPath = recordArgs[recordArgs.indexOf("--output") + 1];
-    expect(recordArgs).toEqual(
-      expect.arrayContaining([
-        "--duration",
-        "12s",
-        "--output",
-        stagedVideoPath,
-        "--while",
-        "--",
-        "pnpm",
-        "--dir",
-        repoRoot,
-        "openclaw",
-        "qa",
-        "mantis",
-        "visual-driver",
-      ]),
-    );
+    expectArgsContainSequence(recordArgs, ["--duration", "12s"]);
+    expectArgsContainSequence(recordArgs, ["--output", stagedVideoPath ?? ""]);
+    expectArgsContainSequence(recordArgs, [
+      "--while",
+      "--",
+      "pnpm",
+      "--dir",
+      repoRoot,
+      "openclaw",
+      "qa",
+      "mantis",
+      "visual-driver",
+    ]);
     expect(stagedVideoPath).not.toBe(finalVideoPath);
     expect(path.basename(stagedVideoPath ?? "")).toContain(path.basename(finalVideoPath));
     expect(path.basename(stagedVideoPath ?? "")).toMatch(/\.part$/);
@@ -116,14 +125,12 @@ describe("mantis visual task runtime", () => {
       status: string;
       visionMode: string;
     };
-    expect(summary).toMatchObject({
-      crabbox: {
-        id: "cbx_abc123",
-        vncCommand: "/tmp/crabbox vnc --provider hetzner --id cbx_abc123 --open",
-      },
-      status: "pass",
-      visionMode: "metadata",
-    });
+    expect(summary.crabbox.id).toBe("cbx_abc123");
+    expect(summary.crabbox.vncCommand).toBe(
+      "/tmp/crabbox vnc --provider hetzner --id cbx_abc123 --open",
+    );
+    expect(summary.status).toBe("pass");
+    expect(summary.visionMode).toBe("metadata");
   });
 
   it("fails when recording breaks after the visual driver passes", async () => {
@@ -180,10 +187,8 @@ describe("mantis visual task runtime", () => {
       visionMode: "metadata",
     });
 
-    expect(result).toMatchObject({
-      status: "fail",
-      videoPath: undefined,
-    });
+    expect(result.status).toBe("fail");
+    expect(result.videoPath).toBeUndefined();
     expect(commands.map((entry) => [entry.command, entry.args[0]])).toEqual([
       ["/tmp/crabbox", "warmup"],
       ["/tmp/crabbox", "inspect"],
@@ -194,14 +199,10 @@ describe("mantis visual task runtime", () => {
       recording?: { error?: string; required: boolean };
       status: string;
     };
-    expect(summary).toMatchObject({
-      error: "crabbox record failed after driver exit",
-      recording: {
-        error: "crabbox record failed after driver exit",
-        required: true,
-      },
-      status: "fail",
-    });
+    expect(summary.error).toBe("crabbox record failed after driver exit");
+    expect(summary.recording?.error).toBe("crabbox record failed after driver exit");
+    expect(summary.recording?.required).toBe(true);
+    expect(summary.status).toBe("fail");
   });
 
   it("preserves the video artifact when recording fails after writing output", async () => {
@@ -278,17 +279,11 @@ describe("mantis visual task runtime", () => {
       recording?: { error?: string; required: boolean };
       status: string;
     };
-    expect(summary).toMatchObject({
-      artifacts: {
-        videoPath: result.videoPath,
-      },
-      error: "crabbox record failed after writing video",
-      recording: {
-        error: "crabbox record failed after writing video",
-        required: true,
-      },
-      status: "fail",
-    });
+    expect(summary.artifacts?.videoPath).toBe(result.videoPath);
+    expect(summary.error).toBe("crabbox record failed after writing video");
+    expect(summary.recording?.error).toBe("crabbox record failed after writing video");
+    expect(summary.recording?.required).toBe(true);
+    expect(summary.status).toBe("fail");
   });
 
   it("drives a lease, screenshots it, and verifies image-describe text", async () => {
@@ -345,29 +340,27 @@ describe("mantis visual task runtime", () => {
       ["pnpm", "--dir", repoRoot],
     ]);
     const launchArgs = commands.find((entry) => entry.args[0] === "desktop")?.args ?? [];
-    expect(launchArgs).toEqual(
-      expect.arrayContaining(["--", "sh", "-lc", expect.stringContaining("--no-first-run")]),
-    );
+    const launchShellIndex = launchArgs.findIndex((arg) => arg === "--");
+    expect(launchArgs.slice(launchShellIndex, launchShellIndex + 3)).toEqual(["--", "sh", "-lc"]);
+    expect(launchArgs[launchShellIndex + 3]).toContain("--no-first-run");
     const visionArgs = commands.find((entry) => entry.command === "pnpm")?.args ?? [];
-    expect(visionArgs).toEqual(
-      expect.arrayContaining([
-        "infer",
-        "image",
-        "describe",
-        "--file",
-        path.join(repoRoot, ".artifacts/qa-e2e/mantis/visual-driver-test/visual-task.png"),
-        "--model",
-        "openai/gpt-5.4",
-      ]),
-    );
-    expect(visionArgs).toEqual(
-      expect.arrayContaining(["--prompt", expect.stringContaining("return only valid JSON")]),
-    );
-    expect(result.vision.assertion).toMatchObject({
-      evidence: 'The page heading reads "Example Domain".',
-      matched: true,
-      visible: true,
-    });
+    expectArgsContainSequence(visionArgs, [
+      "openclaw",
+      "infer",
+      "image",
+      "describe",
+      "--file",
+      path.join(repoRoot, ".artifacts/qa-e2e/mantis/visual-driver-test/visual-task.png"),
+    ]);
+    const promptIndex = visionArgs.indexOf("--prompt");
+    expect(promptIndex).toBeGreaterThanOrEqual(0);
+    expect(visionArgs[promptIndex + 1]).toContain("return only valid JSON");
+    const modelIndex = visionArgs.indexOf("--model");
+    expect(modelIndex).toBeGreaterThanOrEqual(0);
+    expect(visionArgs[modelIndex + 1]).toBe("openai/gpt-5.4");
+    expect(result.vision.assertion?.evidence).toBe('The page heading reads "Example Domain".');
+    expect(result.vision.assertion?.matched).toBe(true);
+    expect(result.vision.assertion?.visible).toBe(true);
   });
 
   it("fails image-describe text checks when the model gives negative evidence that quotes the target", async () => {
@@ -405,16 +398,12 @@ describe("mantis visual task runtime", () => {
       visionMode: "image-describe",
     });
 
-    expect(result).toMatchObject({
-      matched: false,
-      status: "fail",
-      vision: {
-        assertion: {
-          matched: false,
-          reason: "Image describe did not return a structured visual assertion.",
-        },
-      },
-    });
+    expect(result.matched).toBe(false);
+    expect(result.status).toBe("fail");
+    expect(result.vision.assertion?.matched).toBe(false);
+    expect(result.vision.assertion?.reason).toBe(
+      "Image describe did not return a structured visual assertion.",
+    );
   });
 
   it("fails metadata mode when text evidence is requested", async () => {
@@ -438,12 +427,8 @@ describe("mantis visual task runtime", () => {
       visionMode: "metadata",
     });
 
-    expect(result).toMatchObject({
-      matched: false,
-      status: "fail",
-      vision: {
-        mode: "metadata",
-      },
-    });
+    expect(result.matched).toBe(false);
+    expect(result.status).toBe("fail");
+    expect(result.vision.mode).toBe("metadata");
   });
 });

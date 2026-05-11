@@ -6,7 +6,6 @@ import {
   clearExpiredCooldowns,
   isProfileInCooldown,
   markAuthProfileFailure,
-  markAuthProfileUsed,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntil,
   resolveProfileUnusableUntilForDisplay,
@@ -597,60 +596,6 @@ describe("clearAuthProfileCooldown", () => {
     const store = makeStore(undefined);
     await clearAuthProfileCooldown({ store, profileId: "nonexistent" });
     expect(store.usageStats).toBeUndefined();
-  });
-});
-
-describe("markAuthProfileUsed", () => {
-  it("updates usage stats and persists through the fallback save path when lock update misses", async () => {
-    const store = makeStore({
-      "anthropic:default": {
-        errorCount: 3,
-        cooldownUntil: Date.now() + 60_000,
-      },
-    });
-
-    storeMocks.updateAuthProfileStoreWithLock.mockResolvedValue(null);
-
-    const beforeUsed = Date.now();
-    await markAuthProfileUsed({
-      store,
-      profileId: "anthropic:default",
-      agentDir: "/tmp/openclaw-auth-profiles-used",
-    });
-
-    expect(storeMocks.saveAuthProfileStore).toHaveBeenCalledWith(
-      store,
-      "/tmp/openclaw-auth-profiles-used",
-    );
-    expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(0);
-    expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBeUndefined();
-    expect(store.usageStats?.["anthropic:default"]?.lastUsed).toBeGreaterThanOrEqual(beforeUsed);
-  });
-
-  it("adopts locked store usage stats without saving locally when lock update succeeds", async () => {
-    const store = makeStore({
-      "anthropic:default": {
-        errorCount: 3,
-        cooldownUntil: Date.now() + 60_000,
-      },
-    });
-    const lockedStore = makeStore({
-      "anthropic:default": {
-        lastUsed: 123_456,
-        errorCount: 0,
-      },
-    });
-
-    storeMocks.updateAuthProfileStoreWithLock.mockResolvedValue(lockedStore);
-
-    await markAuthProfileUsed({
-      store,
-      profileId: "anthropic:default",
-      agentDir: "/tmp/openclaw-auth-profiles-used",
-    });
-
-    expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
-    expect(store.usageStats).toEqual(lockedStore.usageStats);
   });
 });
 

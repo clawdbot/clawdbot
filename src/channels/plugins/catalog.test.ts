@@ -24,7 +24,7 @@ describe("channel plugin catalog", () => {
         pluginId: "openclaw-plugin-yuanbao",
         trustedSourceLinkedOfficialInstall: true,
         install: expect.objectContaining({
-          npmSpec: "openclaw-plugin-yuanbao@2.13.0",
+          npmSpec: "openclaw-plugin-yuanbao@2.13.1",
         }),
       }),
     );

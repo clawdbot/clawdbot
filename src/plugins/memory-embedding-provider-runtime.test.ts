@@ -75,32 +75,33 @@ describe("memory embedding provider runtime resolution", () => {
 
   it("uses a configured provider api as the memory adapter owner", () => {
     const ollamaAdapter = createCapabilityAdapter("ollama");
+    const config = {
+      models: {
+        providers: {
+          "ollama-5080": {
+            api: "ollama",
+            baseUrl: "http://10.0.0.8:11435",
+            models: [],
+          },
+        },
+      },
+    };
     mocks.resolvePluginCapabilityProvider.mockImplementation(({ providerId }) =>
       providerId === "ollama" ? ollamaAdapter : undefined,
     );
 
-    expect(
-      runtimeModule.getMemoryEmbeddingProvider("ollama-5080", {
-        models: {
-          providers: {
-            "ollama-5080": {
-              api: "ollama",
-              baseUrl: "http://10.0.0.8:11435",
-              models: [],
-            },
-          },
-        },
-      } as never),
-    ).toBe(ollamaAdapter);
+    expect(runtimeModule.getMemoryEmbeddingProvider("ollama-5080", config as never)).toBe(
+      ollamaAdapter,
+    );
     expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
       key: "memoryEmbeddingProviders",
       providerId: "ollama-5080",
-      cfg: expect.any(Object),
+      cfg: config,
     });
     expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
       key: "memoryEmbeddingProviders",
       providerId: "ollama",
-      cfg: expect.any(Object),
+      cfg: config,
     });
   });
 
@@ -134,9 +135,7 @@ describe("memory embedding provider runtime resolution", () => {
     });
     mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("openai")]);
 
-    expect(runtimeModule.getMemoryEmbeddingProvider("openai")).toEqual(
-      expect.objectContaining({ id: "openai" }),
-    );
+    expect(runtimeModule.getMemoryEmbeddingProvider("openai")).toStrictEqual(registered);
     expect(runtimeModule.listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
       "openai",
     ]);

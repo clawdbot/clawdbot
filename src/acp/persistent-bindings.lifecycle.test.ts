@@ -97,6 +97,16 @@ function mockReadySession(params: {
   return sessionKey;
 }
 
+function expectCloseArgs(): Record<string, unknown> {
+  expect(managerMocks.closeSession).toHaveBeenCalledTimes(1);
+  return (managerMocks.closeSession.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+}
+
+function expectInitializeArgs(): Record<string, unknown> {
+  expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
+  return (managerMocks.initializeSession.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+}
+
 describe("ensureConfiguredAcpBindingSession", () => {
   it("keeps an existing ready session when configured binding omits cwd", async () => {
     const spec = createPersistentSpec();
@@ -130,13 +140,9 @@ describe("ensureConfiguredAcpBindingSession", () => {
     });
 
     expect(ensured).toEqual({ ok: true, sessionKey });
-    expect(managerMocks.closeSession).toHaveBeenCalledTimes(1);
-    expect(managerMocks.closeSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-        clearMeta: false,
-      }),
-    );
+    const closeArgs = expectCloseArgs();
+    expect(closeArgs.sessionKey).toBe(sessionKey);
+    expect(closeArgs.clearMeta).toBe(false);
     expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
   });
 
@@ -173,11 +179,8 @@ describe("ensureConfiguredAcpBindingSession", () => {
     });
 
     expect(ensured.ok).toBe(true);
-    expect(managerMocks.initializeSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agent: "codex",
-      }),
-    );
+    const initializeArgs = expectInitializeArgs();
+    expect(initializeArgs.agent).toBe("codex");
   });
 });
 
@@ -211,13 +214,10 @@ describe("resetAcpSessionInPlace", () => {
 
     expect(result).toEqual({ ok: true });
     expect(resolveMocks.resolveConfiguredAcpBindingSpecBySessionKey).toHaveBeenCalledTimes(1);
-    expect(managerMocks.closeSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-        discardPersistentState: true,
-        clearMeta: true,
-      }),
-    );
+    const closeArgs = expectCloseArgs();
+    expect(closeArgs.sessionKey).toBe(sessionKey);
+    expect(closeArgs.discardPersistentState).toBe(true);
+    expect(closeArgs.clearMeta).toBe(true);
     expect(managerMocks.initializeSession).not.toHaveBeenCalled();
     expect(managerMocks.updateSessionRuntimeOptions).not.toHaveBeenCalled();
   });
@@ -240,12 +240,9 @@ describe("resetAcpSessionInPlace", () => {
 
     expect(result).toEqual({ ok: true });
     expect(resolveMocks.resolveConfiguredAcpBindingSpecBySessionKey).toHaveBeenCalledTimes(1);
-    expect(managerMocks.closeSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-        clearMeta: false,
-      }),
-    );
+    const closeArgs = expectCloseArgs();
+    expect(closeArgs.sessionKey).toBe(sessionKey);
+    expect(closeArgs.clearMeta).toBe(false);
     expect(managerMocks.initializeSession).not.toHaveBeenCalled();
   });
 
@@ -268,12 +265,9 @@ describe("resetAcpSessionInPlace", () => {
 
     expect(result).toEqual({ ok: true });
     expect(resolveMocks.resolveConfiguredAcpBindingSpecBySessionKey).toHaveBeenCalledTimes(1);
-    expect(managerMocks.closeSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-        clearMeta: true,
-      }),
-    );
+    const closeArgs = expectCloseArgs();
+    expect(closeArgs.sessionKey).toBe(sessionKey);
+    expect(closeArgs.clearMeta).toBe(true);
   });
 
   it("treats configured bindings with no ACP metadata as already reset", async () => {

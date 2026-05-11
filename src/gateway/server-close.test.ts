@@ -154,14 +154,10 @@ describe("createGatewayCloseHandler", () => {
       ([event]) => event?.type === "gateway" && event?.action === "pre-restart",
     )?.[0];
 
-    expect(shutdownEvent?.context).toMatchObject({
-      reason: "gateway restarting",
-      restartExpectedMs: 123,
-    });
-    expect(preRestartEvent?.context).toMatchObject({
-      reason: "gateway restarting",
-      restartExpectedMs: 123,
-    });
+    expect(shutdownEvent?.context?.reason).toBe("gateway restarting");
+    expect(shutdownEvent?.context?.restartExpectedMs).toBe(123);
+    expect(preRestartEvent?.context?.reason).toBe("gateway restarting");
+    expect(preRestartEvent?.context?.restartExpectedMs).toBe(123);
   });
 
   it("continues shutdown and records a warning when gateway shutdown hook stalls", async () => {
@@ -231,7 +227,8 @@ describe("createGatewayCloseHandler", () => {
 
     const result = await close({ reason: "test shutdown" });
 
-    expect(result.warnings).toEqual(expect.arrayContaining(["bonjour", "channel/telegram"]));
+    expect(result.warnings).toContain("bonjour");
+    expect(result.warnings).toContain("channel/telegram");
     expect(result.warnings).not.toContain("channel/discord");
     expect(lifecycleUnsub).toHaveBeenCalledTimes(1);
     expect(stopChannel).toHaveBeenCalledTimes(2);
@@ -514,9 +511,8 @@ describe("createGatewayCloseHandler", () => {
       }),
     );
 
-    await expect(close({ reason: "startup failed before bind" })).resolves.toMatchObject({
-      warnings: [],
-    });
+    const result = await close({ reason: "startup failed before bind" });
+    expect(result.warnings).toStrictEqual([]);
   });
 
   it("broadcasts normalized shutdown metadata", async () => {

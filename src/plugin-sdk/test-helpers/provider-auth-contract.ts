@@ -9,23 +9,27 @@ import type {
 } from "../setup.js";
 import { registerProviders, requireProvider } from "./contracts-testkit.js";
 
-type LoginOpenAICodexOAuth =
-  (typeof import("openclaw/plugin-sdk/provider-auth-login"))["loginOpenAICodexOAuth"];
-type GithubCopilotLoginCommand =
-  (typeof import("openclaw/plugin-sdk/provider-auth-login"))["githubCopilotLoginCommand"];
+type LoginOpenAICodexOAuth = (params: unknown) => Promise<{
+  access: string;
+  refresh: string;
+  expires: number;
+  email?: string;
+} | null>;
 type EnsureAuthProfileStore =
   typeof import("openclaw/plugin-sdk/provider-auth").ensureAuthProfileStore;
 type ListProfilesForProvider =
   typeof import("openclaw/plugin-sdk/provider-auth").listProfilesForProvider;
 
-const loginOpenAICodexOAuthMock = vi.hoisted(() => vi.fn<LoginOpenAICodexOAuth>());
-const githubCopilotLoginCommandMock = vi.hoisted(() => vi.fn<GithubCopilotLoginCommand>());
 const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn<EnsureAuthProfileStore>());
 const listProfilesForProviderMock = vi.hoisted(() => vi.fn<ListProfilesForProvider>());
 
 export type ProviderAuthContractPluginLoader = () => Promise<{
   default: Parameters<typeof registerProviders>[0];
 }>;
+
+export type OpenAICodexProviderAuthContractOptions = {
+  loginOpenAICodexOAuthMock: ReturnType<typeof vi.fn<LoginOpenAICodexOAuth>>;
+};
 
 function buildPrompter(): WizardPrompter {
   const progress: WizardProgress = {
@@ -106,16 +110,6 @@ function buildOpenAICodexOAuthResult(params: {
 
 function installSharedAuthProfileStoreHooks(state: { authStore: AuthProfileStore }) {
   beforeEach(() => {
-    vi.doMock("openclaw/plugin-sdk/provider-auth-login", async () => {
-      const actual = await vi.importActual<
-        typeof import("openclaw/plugin-sdk/provider-auth-login")
-      >("openclaw/plugin-sdk/provider-auth-login");
-      return {
-        ...actual,
-        loginOpenAICodexOAuth: loginOpenAICodexOAuthMock,
-        githubCopilotLoginCommand: githubCopilotLoginCommandMock,
-      };
-    });
     vi.doMock("openclaw/plugin-sdk/provider-auth", async () => {
       const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-auth")>(
         "openclaw/plugin-sdk/provider-auth",
@@ -138,18 +132,20 @@ function installSharedAuthProfileStoreHooks(state: { authStore: AuthProfileStore
   });
 
   afterEach(() => {
-    loginOpenAICodexOAuthMock.mockReset();
-    githubCopilotLoginCommandMock.mockReset();
     ensureAuthProfileStoreMock.mockReset();
     listProfilesForProviderMock.mockReset();
     clearRuntimeAuthProfileStoreSnapshots();
   });
 }
 
-export function describeOpenAICodexProviderAuthContract(load: ProviderAuthContractPluginLoader) {
+export function describeOpenAICodexProviderAuthContract(
+  load: ProviderAuthContractPluginLoader,
+  options: OpenAICodexProviderAuthContractOptions,
+) {
   const state = {
     authStore: { version: 1, profiles: {} } as AuthProfileStore,
   };
+  const { loginOpenAICodexOAuthMock } = options;
 
   describe("openai-codex provider auth contract", () => {
     installSharedAuthProfileStoreHooks(state);
@@ -284,13 +280,13 @@ export function describeOpenAICodexProviderAuthContract(load: ProviderAuthContra
       );
     });
 
-    it("keeps OAuth failures non-fatal at the provider layer", async () => {
+    it("surfaces OAuth failures instead of silently succeeding with no profiles", async () => {
       const provider = await getProvider();
       loginOpenAICodexOAuthMock.mockRejectedValueOnce(new Error("oauth failed"));
 
-      await expect(provider.auth[0]?.run(buildAuthContext() as never)).resolves.toEqual({
-        profiles: [],
-      });
+      await expect(provider.auth[0]?.run(buildAuthContext() as never)).rejects.toThrow(
+        "oauth failed",
+      );
     });
   });
 }
@@ -327,7 +323,6 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
 
       try {
         const result = await provider.auth[0]?.run(buildAuthContext() as never);
-        expect(githubCopilotLoginCommandMock).not.toHaveBeenCalled();
         expect(result).toEqual({
           profiles: [
             {
@@ -428,7 +423,6 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
       // on-disk auth store. ensureAuthProfileStore is still called by the
       // resolveExistingCopilotAuthResult existence check, which legitimately probes
       // the store before launching the device flow when no profile exists yet.
-      expect(githubCopilotLoginCommandMock).not.toHaveBeenCalled();
     });
 
     it("uses the wizard prompter and openUrl hooks for the device code (no stdin/stdout)", async () => {

@@ -32,7 +32,7 @@ on:
         default: stable
         type: choice
         options:
-          - minimum
+          - beta
           - stable
           - full
       run_release_soak:
@@ -73,6 +73,11 @@ on:
         required: false
         default: ""
         type: string
+      release_package_spec:
+        description: Optional published package spec for release checks and package lanes; blank builds a SHA package artifact
+        required: false
+        default: ""
+        type: string
       evidence_package_spec:
         description: Optional published package spec to prove in the private release evidence report
         required: false
@@ -108,8 +113,8 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   GH_REPO: ${{ github.repository }}
-  NODE_VERSION: "24.x"
-  PNPM_VERSION: "10.32.1"
+  NODE_VERSION: "24.15.0"
+  PNPM_VERSION: "11.0.8"
 
 jobs:
   resolve_target:
@@ -143,6 +148,7 @@ jobs:
           TARGET_SHA: ${{ steps.resolve.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
+          RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           EVIDENCE_PACKAGE_SPEC: ${{ inputs.evidence_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
@@ -180,18 +186,25 @@ jobs:
             else
               echo "- Release/live/Docker/package/QA: skipped by rerun group"
             fi
+            if [[ -n "${RELEASE_PACKAGE_SPEC// }" ]]; then
+              echo "- Published release package: \`${RELEASE_PACKAGE_SPEC}\`"
+            fi
             if [[ -n "${NPM_TELEGRAM_PACKAGE_SPEC// }" ]]; then
               echo "- Published-package Telegram E2E: \`${NPM_TELEGRAM_PACKAGE_SPEC}\`"
+            elif [[ -n "${RELEASE_PACKAGE_SPEC// }" ]]; then
+              echo "- Published-package Telegram E2E: \`${RELEASE_PACKAGE_SPEC}\`"
             elif [[ "$RERUN_GROUP" == "all" && "$RELEASE_PROFILE" == "full" ]]; then
               echo "- Package Telegram E2E: parent \`release-package-under-test\` artifact"
             else
-              echo "- Package Telegram E2E: skipped unless \`release_profile=full\` or \`npm_telegram_package_spec\` is provided"
+              echo "- Package Telegram E2E: skipped unless \`release_profile=full\`, \`release_package_spec\`, or \`npm_telegram_package_spec\` is provided"
             fi
             if [[ -n "${EVIDENCE_PACKAGE_SPEC// }" ]]; then
               echo "- Private evidence package proof: \`${EVIDENCE_PACKAGE_SPEC}\`"
             fi
             if [[ -n "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
               echo "- Package Acceptance package spec: \`${PACKAGE_ACCEPTANCE_PACKAGE_SPEC}\`"
+            elif [[ -n "${RELEASE_PACKAGE_SPEC// }" ]]; then
+              echo "- Package Acceptance package spec: \`${RELEASE_PACKAGE_SPEC}\`"
             else
               echo "- Package Acceptance package spec: SHA-built release artifact"
             fi
@@ -202,7 +215,7 @@ jobs:
     needs: [resolve_target]
     if: contains(fromJSON('["all","ci"]'), inputs.rerun_group)
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: ${{ inputs.release_profile == 'full' && 240 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -301,7 +314,7 @@ jobs:
     needs: [resolve_target]
     if: contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group)
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
+    timeout-minutes: ${{ inputs.release_profile == 'full' && 300 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -400,7 +413,7 @@ jobs:
     needs: [resolve_target]
     if: contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group)
     runs-on: ubuntu-24.04
-    timeout-minutes: 720
+    timeout-minutes: ${{ inputs.release_profile == 'full' && 240 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -420,6 +433,7 @@ jobs:
           RERUN_GROUP: ${{ inputs.rerun_group }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
+          RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
         run: |
           set -euo pipefail
@@ -509,6 +523,9 @@ jobs:
             if [[ -n "${CROSS_OS_SUITE_FILTER// }" ]]; then
               echo "- Cross-OS suite filter: \`${CROSS_OS_SUITE_FILTER}\`"
             fi
+            if [[ -n "${RELEASE_PACKAGE_SPEC// }" ]]; then
+              echo "- Release package spec: \`${RELEASE_PACKAGE_SPEC}\`"
+            fi
             if [[ -n "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
               echo "- Package Acceptance package spec: \`${PACKAGE_ACCEPTANCE_PACKAGE_SPEC}\`"
             fi
@@ -534,6 +551,9 @@ jobs:
           if [[ -n "${CROSS_OS_SUITE_FILTER// }" ]]; then
             args+=(-f cross_os_suite_filter="$CROSS_OS_SUITE_FILTER")
           fi
+          if [[ -n "${RELEASE_PACKAGE_SPEC// }" ]]; then
+            args+=(-f release_package_spec="$RELEASE_PACKAGE_SPEC")
+          fi
           if [[ -n "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
             args+=(-f package_acceptance_package_spec="$PACKAGE_ACCEPTANCE_PACKAGE_SPEC")
           fi
@@ -543,9 +563,9 @@ jobs:
   prepare_release_package:
     name: Prepare release package artifact
     needs: [resolve_target]
-    if: ${{ inputs.npm_telegram_package_spec == '' && inputs.rerun_group == 'all' && inputs.release_profile == 'full' }}
+    if: ${{ inputs.npm_telegram_package_spec == '' && inputs.release_package_spec == '' && inputs.rerun_group == 'all' && inputs.release_profile == 'full' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 15
     permissions:
       contents: read
       packages: write
@@ -614,9 +634,9 @@ jobs:
   npm_telegram:
     name: Run package Telegram E2E
     needs: [resolve_target, prepare_release_package]
-    if: ${{ always() && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || (inputs.rerun_group == 'all' && inputs.release_profile == 'full')) }}
+    if: ${{ always() && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || inputs.release_package_spec != '' || (inputs.rerun_group == 'all' && inputs.release_profile == 'full')) }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: ${{ inputs.release_profile == 'full' && 120 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -628,7 +648,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
-          PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
+          PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec || inputs.release_package_spec }}
           PACKAGE_ARTIFACT_NAME: ${{ needs.prepare_release_package.outputs.artifact_name }}
           PREPARE_PACKAGE_RESULT: ${{ needs.prepare_release_package.result }}
           PROVIDER_MODE: ${{ inputs.npm_telegram_provider_mode }}
@@ -783,6 +803,7 @@ jobs:
           RELEASE_CHECKS_RESULT: ${{ needs.release_checks.result }}
           NPM_TELEGRAM_RESULT: ${{ needs.npm_telegram.result }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+          CHILD_WORKFLOW_REF: ${{ github.ref_name }}
         run: |
           set -euo pipefail
 
@@ -809,7 +830,7 @@ jobs:
             head_sha="$(jq -r '.headSha // ""' <<< "$run_json")"
             echo "${label}: ${status}/${conclusion} attempt ${attempt} head ${head_sha}: ${url}"
 
-            if [[ -n "${TARGET_SHA// }" && "$head_sha" != "$TARGET_SHA" ]]; then
+            if [[ "$CHILD_WORKFLOW_REF" == release-ci/* && -n "${TARGET_SHA// }" && "$head_sha" != "$TARGET_SHA" ]]; then
               echo "::error::${label} child run used ${head_sha}, expected ${TARGET_SHA}. Dispatch Full Release Validation from a ref pinned to the target SHA, not a moving branch."
               return 1
             fi

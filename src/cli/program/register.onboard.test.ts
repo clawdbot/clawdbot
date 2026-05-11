@@ -63,6 +63,16 @@ describe("registerOnboardCommand", () => {
     await program.parseAsync(args, { from: "user" });
   }
 
+  function setupWizardOptions(callIndex = 0): Record<string, unknown> {
+    const call = setupWizardCommandMock.mock.calls[callIndex];
+    expect(call).toBeDefined();
+    if (!call) {
+      throw new Error(`expected setup wizard call ${callIndex}`);
+    }
+    expect(call[1]).toBe(runtime);
+    return call[0] as Record<string, unknown>;
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.runCrestodian.mockResolvedValue(undefined);
@@ -72,113 +82,54 @@ describe("registerOnboardCommand", () => {
   it("defaults installDaemon to undefined when no daemon flags are provided", async () => {
     await runCli(["onboard"]);
 
-    expect(setupWizardCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        installDaemon: undefined,
-      }),
-      runtime,
-    );
+    expect(setupWizardOptions().installDaemon).toBeUndefined();
     expect(mocks.runCrestodian).not.toHaveBeenCalled();
   });
 
   it("sets installDaemon from explicit install flags and prioritizes --skip-daemon", async () => {
     await runCli(["onboard", "--install-daemon"]);
-    expect(setupWizardCommandMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        installDaemon: true,
-      }),
-      runtime,
-    );
+    expect(setupWizardOptions(0).installDaemon).toBe(true);
 
     await runCli(["onboard", "--no-install-daemon"]);
-    expect(setupWizardCommandMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        installDaemon: false,
-      }),
-      runtime,
-    );
+    expect(setupWizardOptions(1).installDaemon).toBe(false);
 
     await runCli(["onboard", "--install-daemon", "--skip-daemon"]);
-    expect(setupWizardCommandMock).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({
-        installDaemon: false,
-      }),
-      runtime,
-    );
+    expect(setupWizardOptions(2).installDaemon).toBe(false);
   });
 
   it("parses numeric gateway port and drops invalid values", async () => {
     await runCli(["onboard", "--gateway-port", "18789"]);
-    expect(setupWizardCommandMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        gatewayPort: 18789,
-      }),
-      runtime,
-    );
+    expect(setupWizardOptions(0).gatewayPort).toBe(18789);
 
     await runCli(["onboard", "--gateway-port", "nope"]);
-    expect(setupWizardCommandMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        gatewayPort: undefined,
-      }),
-      runtime,
-    );
+    expect(setupWizardOptions(1).gatewayPort).toBeUndefined();
   });
 
   it("forwards --reset-scope to setup wizard options", async () => {
     await runCli(["onboard", "--reset", "--reset-scope", "full"]);
-    expect(setupWizardCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        reset: true,
-        resetScope: "full",
-      }),
-      runtime,
-    );
+    const options = setupWizardOptions();
+    expect(options.reset).toBe(true);
+    expect(options.resetScope).toBe("full");
   });
 
   it("forwards --skip-bootstrap to setup wizard options", async () => {
     await runCli(["onboard", "--skip-bootstrap"]);
-    expect(setupWizardCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        skipBootstrap: true,
-      }),
-      runtime,
-    );
+    expect(setupWizardOptions().skipBootstrap).toBe(true);
   });
 
   it("parses --mistral-api-key and forwards mistralApiKey", async () => {
     await runCli(["onboard", "--mistral-api-key", "sk-mistral-test"]);
-    expect(setupWizardCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mistralApiKey: "sk-mistral-test", // pragma: allowlist secret
-      }),
-      runtime,
-    );
+    expect(setupWizardOptions().mistralApiKey).toBe("sk-mistral-test"); // pragma: allowlist secret
   });
 
   it("dedupes provider auth flags before registering command options", async () => {
     await runCli(["onboard", "--openai-api-key", "sk-openai-test"]);
-    expect(setupWizardCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        openaiApiKey: "sk-openai-test", // pragma: allowlist secret
-      }),
-      runtime,
-    );
+    expect(setupWizardOptions().openaiApiKey).toBe("sk-openai-test"); // pragma: allowlist secret
   });
 
   it("forwards --gateway-token-ref-env", async () => {
     await runCli(["onboard", "--gateway-token-ref-env", "OPENCLAW_GATEWAY_TOKEN"]);
-    expect(setupWizardCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        gatewayTokenRefEnv: "OPENCLAW_GATEWAY_TOKEN",
-      }),
-      runtime,
-    );
+    expect(setupWizardOptions().gatewayTokenRefEnv).toBe("OPENCLAW_GATEWAY_TOKEN");
   });
 
   it("forwards onboarding migration flags", async () => {
@@ -192,15 +143,11 @@ describe("registerOnboardCommand", () => {
       "/tmp/hermes",
       "--import-secrets",
     ]);
-    expect(setupWizardCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        flow: "import",
-        importFrom: "hermes",
-        importSource: "/tmp/hermes",
-        importSecrets: true,
-      }),
-      runtime,
-    );
+    const options = setupWizardOptions();
+    expect(options.flow).toBe("import");
+    expect(options.importFrom).toBe("hermes");
+    expect(options.importSource).toBe("/tmp/hermes");
+    expect(options.importSecrets).toBe(true);
   });
 
   it("reports errors via runtime on setup wizard command failures", async () => {

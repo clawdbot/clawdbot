@@ -1,4 +1,4 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import { VERSION } from "../version.js";
 import {
@@ -36,6 +36,29 @@ function requireStreamFn(streamFn: StreamFn | null | undefined) {
     throw new Error("expected wrapped streamFn to be defined");
   }
   return streamFn;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value).toBeTypeOf("object");
+  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requirePayload(payload: Record<string, unknown> | undefined): Record<string, unknown> {
+  expect(payload).toBeDefined();
+  if (!payload) {
+    throw new Error("expected captured payload");
+  }
+  return payload;
+}
+
+function expectDefaultThinkingBudget(payload: Record<string, unknown>) {
+  const config = requireRecord(payload.config, "payload.config");
+  const thinkingConfig = requireRecord(config.thinkingConfig, "payload.config.thinkingConfig");
+  expect(thinkingConfig.thinkingBudget).toBe(-1);
 }
 
 describe("composeProviderStreamWrappers", () => {
@@ -113,12 +136,13 @@ describe("buildProviderStreamFamilyHooks", () => {
       {} as never,
       {},
     );
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingLevel: "HIGH" } },
-    });
-    const googleThinkingConfig = (
-      (capturedPayload as Record<string, unknown>).config as Record<string, unknown>
-    ).thinkingConfig as Record<string, unknown>;
+    const googlePayload = requirePayload(capturedPayload);
+    const googleConfig = requireRecord(googlePayload.config, "google payload config");
+    const googleThinkingConfig = requireRecord(
+      googleConfig.thinkingConfig,
+      "google thinking config",
+    );
+    expect(googleThinkingConfig.thinkingLevel).toBe("HIGH");
     expect(googleThinkingConfig).not.toHaveProperty("thinkingBudget");
 
     const minimaxHooks = MINIMAX_FAST_MODE_STREAM_HOOKS;
@@ -147,10 +171,11 @@ describe("buildProviderStreamFamilyHooks", () => {
         modelId: "openai/gpt-5.4",
       } as never),
     )({ provider: "kilocode", id: "openai/gpt-5.4" } as never, {} as never, {});
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-      reasoning: { effort: "high" },
-    });
+    const kilocodeOpenAiPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(kilocodeOpenAiPayload);
+    expect(requireRecord(kilocodeOpenAiPayload.reasoning, "kilocode reasoning").effort).toBe(
+      "high",
+    );
 
     void requireStreamFn(
       requireWrapStreamFn(kilocodeHooks.wrapStreamFn)({
@@ -159,10 +184,9 @@ describe("buildProviderStreamFamilyHooks", () => {
         modelId: "kilo/auto",
       } as never),
     )({ provider: "kilocode", id: "kilo/auto" } as never, {} as never, {});
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-    });
-    expect(capturedPayload).not.toHaveProperty("reasoning");
+    const kilocodeAutoPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(kilocodeAutoPayload);
+    expect(kilocodeAutoPayload).not.toHaveProperty("reasoning");
 
     const moonshotHooks = MOONSHOT_THINKING_STREAM_HOOKS;
     const moonshotStream = requireStreamFn(
@@ -172,10 +196,11 @@ describe("buildProviderStreamFamilyHooks", () => {
       } as never),
     );
     await moonshotStream({ api: "openai-completions", id: "kimi-k2.5" } as never, {} as never, {});
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-      thinking: { type: "disabled" },
-    });
+    const moonshotDisabledPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(moonshotDisabledPayload);
+    expect(requireRecord(moonshotDisabledPayload.thinking, "moonshot thinking").type).toBe(
+      "disabled",
+    );
 
     const moonshotKeepStream = requireStreamFn(
       requireWrapStreamFn(moonshotHooks.wrapStreamFn)({
@@ -189,21 +214,28 @@ describe("buildProviderStreamFamilyHooks", () => {
       {} as never,
       {},
     );
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-      thinking: { type: "enabled", keep: "all" },
-    });
+    const moonshotKeepPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(moonshotKeepPayload);
+    const moonshotKeepThinking = requireRecord(
+      moonshotKeepPayload.thinking,
+      "moonshot keep thinking",
+    );
+    expect(moonshotKeepThinking.type).toBe("enabled");
+    expect(moonshotKeepThinking.keep).toBe("all");
 
     await moonshotKeepStream(
       { api: "openai-completions", id: "kimi-k2.5" } as never,
       {} as never,
       {},
     );
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-      thinking: { type: "enabled" },
-    });
-    expect((capturedPayload?.thinking as Record<string, unknown>) ?? {}).not.toHaveProperty("keep");
+    const moonshotStrippedPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(moonshotStrippedPayload);
+    const moonshotStrippedThinking = requireRecord(
+      moonshotStrippedPayload.thinking,
+      "moonshot stripped thinking",
+    );
+    expect(moonshotStrippedThinking.type).toBe("enabled");
+    expect(moonshotStrippedThinking).not.toHaveProperty("keep");
 
     payloadSeed = { tool_choice: { type: "tool", name: "read" } };
     await moonshotKeepStream(
@@ -211,12 +243,18 @@ describe("buildProviderStreamFamilyHooks", () => {
       {} as never,
       {},
     );
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-      tool_choice: { type: "tool", name: "read" },
-      thinking: { type: "disabled" },
+    const moonshotToolChoicePayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(moonshotToolChoicePayload);
+    expect(requireRecord(moonshotToolChoicePayload.tool_choice, "tool choice")).toEqual({
+      type: "tool",
+      name: "read",
     });
-    expect((capturedPayload?.thinking as Record<string, unknown>) ?? {}).not.toHaveProperty("keep");
+    const moonshotToolChoiceThinking = requireRecord(
+      moonshotToolChoicePayload.thinking,
+      "moonshot tool-choice thinking",
+    );
+    expect(moonshotToolChoiceThinking.type).toBe("disabled");
+    expect(moonshotToolChoiceThinking).not.toHaveProperty("keep");
 
     const openAiHooks = OPENAI_RESPONSES_STREAM_HOOKS;
     void requireStreamFn(
@@ -236,10 +274,9 @@ describe("buildProviderStreamFamilyHooks", () => {
       {} as never,
       {},
     );
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-      service_tier: "flex",
-    });
+    const openAiPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(openAiPayload);
+    expect(openAiPayload.service_tier).toBe("flex");
     expect(capturedHeaders).toEqual({
       "User-Agent": `openclaw/${VERSION}`,
       originator: "openclaw",
@@ -254,10 +291,11 @@ describe("buildProviderStreamFamilyHooks", () => {
         modelId: "openai/gpt-5.4",
       } as never),
     )({ provider: "openrouter", id: "openai/gpt-5.4" } as never, {} as never, {});
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-      reasoning: { effort: "high" },
-    });
+    const openRouterOpenAiPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(openRouterOpenAiPayload);
+    expect(requireRecord(openRouterOpenAiPayload.reasoning, "openrouter reasoning").effort).toBe(
+      "high",
+    );
 
     void requireStreamFn(
       requireWrapStreamFn(openRouterHooks.wrapStreamFn)({
@@ -266,10 +304,9 @@ describe("buildProviderStreamFamilyHooks", () => {
         modelId: "x-ai/grok-3",
       } as never),
     )({ provider: "openrouter", id: "x-ai/grok-3" } as never, {} as never, {});
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-    });
-    expect(capturedPayload).not.toHaveProperty("reasoning");
+    const openRouterGrokPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(openRouterGrokPayload);
+    expect(openRouterGrokPayload).not.toHaveProperty("reasoning");
 
     const toolStreamHooks = TOOL_STREAM_DEFAULT_ON_HOOKS;
     const toolStreamDefault = requireStreamFn(
@@ -279,10 +316,9 @@ describe("buildProviderStreamFamilyHooks", () => {
       } as never),
     );
     await toolStreamDefault({ id: "glm-4.7" } as never, {} as never, {});
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-      tool_stream: true,
-    });
+    const toolStreamDefaultPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(toolStreamDefaultPayload);
+    expect(toolStreamDefaultPayload.tool_stream).toBe(true);
 
     const toolStreamDisabled = requireStreamFn(
       requireWrapStreamFn(toolStreamHooks.wrapStreamFn)({
@@ -291,10 +327,9 @@ describe("buildProviderStreamFamilyHooks", () => {
       } as never),
     );
     await toolStreamDisabled({ id: "glm-4.7" } as never, {} as never, {});
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-    });
-    expect(capturedPayload).not.toHaveProperty("tool_stream");
+    const toolStreamDisabledPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(toolStreamDisabledPayload);
+    expect(toolStreamDisabledPayload).not.toHaveProperty("tool_stream");
   });
 
   it("exposes canonical stream hook constants for reused families", () => {

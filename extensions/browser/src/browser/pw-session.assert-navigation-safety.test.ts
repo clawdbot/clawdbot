@@ -117,8 +117,7 @@ describe("assertPageNavigationCompletedSafely", () => {
     ).resolves.toBeUndefined();
 
     expect(close).not.toHaveBeenCalled();
-    expect(mockedResultAllowed).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "https://allowed.example/" }),
-    );
+    expect(mockedResultAllowed).toHaveBeenCalledTimes(1);
+    expect(mockedResultAllowed.mock.calls[0]?.[0].url).toBe("https://allowed.example/");
   });
 });

@@ -1,3 +1,4 @@
+import type { PluginRegistryParams } from "../../plugins/registry-types.js";
 import type { OpenClawPluginApi } from "../plugin-entry.js";
 import {
   createPluginRecord,
@@ -13,7 +14,10 @@ import { uniqueSortedStrings } from "./string-utils.js";
 
 export { registerProviders, requireProvider, uniqueSortedStrings };
 
-export function createPluginRegistryFixture(config = {} as OpenClawConfig) {
+export function createPluginRegistryFixture(
+  config = {} as OpenClawConfig,
+  params: { hostServices?: PluginRegistryParams["hostServices"] } = {},
+) {
   return {
     config,
     registry: createPluginRegistry({
@@ -24,6 +28,7 @@ export function createPluginRegistryFixture(config = {} as OpenClawConfig) {
         debug() {},
       },
       runtime: {} as PluginRuntime,
+      ...(params.hostServices ? { hostServices: params.hostServices } : {}),
     }),
   };
 }

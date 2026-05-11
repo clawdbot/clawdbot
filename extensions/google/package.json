@@ -6,7 +6,7 @@
   "type": "module",
   "dependencies": {
     "@google/genai": "^2.0.1",
-    "@mariozechner/pi-ai": "0.73.1"
+    "@earendil-works/pi-ai": "0.74.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

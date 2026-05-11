@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple, type AssistantMessageEvent } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { streamSimple, type AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type { PluginTextReplacement, PluginTextTransforms } from "../plugins/cli-backend.types.js";
 import { createStreamIteratorWrapper } from "./stream-iterator-wrapper.js";
 

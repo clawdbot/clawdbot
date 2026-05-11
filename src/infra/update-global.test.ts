@@ -139,17 +139,13 @@ describe("update global helpers", () => {
   });
 
   it("defaults corepack download prompts off for global install env", async () => {
-    await expect(createGlobalInstallEnv({})).resolves.toMatchObject({
-      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-    });
+    const defaultEnv = await createGlobalInstallEnv({});
+    expect(defaultEnv?.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("0");
 
-    await expect(
-      createGlobalInstallEnv({
-        COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
-      }),
-    ).resolves.toMatchObject({
+    const explicitEnv = await createGlobalInstallEnv({
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
     });
+    expect(explicitEnv?.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("1");
   });
 
   it("uses an absolute POSIX script shell for npm lifecycle scripts during global installs", async () => {
@@ -158,15 +154,12 @@ describe("update global helpers", () => {
       .spyOn(fsSync, "existsSync")
       .mockImplementation((candidate) => candidate === "/bin/sh");
     try {
-      await expect(
-        createGlobalInstallEnv({
-          COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
-          PATH: "/home/peter/.npm-global/bin",
-        }),
-      ).resolves.toMatchObject({
+      const env = await createGlobalInstallEnv({
         COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
-        NPM_CONFIG_SCRIPT_SHELL: "/bin/sh",
+        PATH: "/home/peter/.npm-global/bin",
       });
+      expect(env?.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("1");
+      expect(env?.NPM_CONFIG_SCRIPT_SHELL).toBe("/bin/sh");
     } finally {
       existsSyncSpy.mockRestore();
       platformSpy.mockRestore();
@@ -176,22 +169,17 @@ describe("update global helpers", () => {
   it("preserves explicit npm script shell config for global installs", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     try {
-      await expect(
-        createGlobalInstallEnv({
-          COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
-          NPM_CONFIG_SCRIPT_SHELL: "/custom/sh",
-        }),
-      ).resolves.toMatchObject({
+      const upperEnv = await createGlobalInstallEnv({
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
         NPM_CONFIG_SCRIPT_SHELL: "/custom/sh",
       });
-      await expect(
-        createGlobalInstallEnv({
-          COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
-          npm_config_script_shell: "/custom/lower-sh",
-        }),
-      ).resolves.toMatchObject({
+      expect(upperEnv?.NPM_CONFIG_SCRIPT_SHELL).toBe("/custom/sh");
+
+      const lowerEnv = await createGlobalInstallEnv({
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
         npm_config_script_shell: "/custom/lower-sh",
       });
+      expect(lowerEnv?.npm_config_script_shell).toBe("/custom/lower-sh");
     } finally {
       platformSpy.mockRestore();
     }

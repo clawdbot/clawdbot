@@ -278,8 +278,18 @@ function expectRespondErrorContaining(respond: ReturnType<typeof vi.fn>, text: s
   expect(mockCallArg(respond)).toBe(false);
   expect(mockCallArg(respond, 0, 1)).toBeUndefined();
   const error = expectRecordFields(mockCallArg(respond, 0, 2), {});
-  expect(error.message).toEqual(expect.stringContaining(text));
+  expectStringContaining(error.message, text);
   return error;
+}
+
+function expectStringContaining(value: unknown, text: string) {
+  expect(typeof value).toBe("string");
+  expect(value as string).toContain(text);
+}
+
+function expectStringNotContaining(value: unknown, text: string) {
+  expect(typeof value).toBe("string");
+  expect(value as string).not.toContain(text);
 }
 
 function findMockCallArg(
@@ -568,7 +578,7 @@ describe("agents.create", () => {
       rootDir: "/resolved/tmp/ws",
       relativePath: "IDENTITY.md",
     });
-    expect(write.data).toEqual(expect.stringContaining("- Name: Plain Agent"));
+    expectStringContaining(write.data, "- Name: Plain Agent");
   });
 
   it("writes emoji and avatar to both config and IDENTITY.md", async () => {
@@ -882,9 +892,9 @@ describe("agents.update", () => {
       rootDir: "/resolved/new/workspace",
       relativePath: "IDENTITY.md",
     });
-    expect(write.data).toEqual(expect.stringContaining("- **Creature:** Steady Turtle"));
-    expect(write.data).toEqual(expect.stringContaining("## Role"));
-    expect(write.data).not.toEqual(expect.stringContaining("Flustered Protocol Droid"));
+    expectStringContaining(write.data, "- **Creature:** Steady Turtle");
+    expectStringContaining(write.data, "## Role");
+    expectStringNotContaining(write.data, "Flustered Protocol Droid");
   });
 
   it("preserves an existing destination identity file when workspace changes", async () => {
@@ -950,9 +960,9 @@ describe("agents.update", () => {
       rootDir: "/resolved/new/workspace",
       relativePath: "IDENTITY.md",
     });
-    expect(write.data).toEqual(expect.stringContaining("- **Creature:** Destination Fox"));
-    expect(write.data).toEqual(expect.stringContaining("Destination workspace role."));
-    expect(write.data).not.toEqual(expect.stringContaining("Old workspace role."));
+    expectStringContaining(write.data, "- **Creature:** Destination Fox");
+    expectStringContaining(write.data, "Destination workspace role.");
+    expectStringNotContaining(write.data, "Old workspace role.");
   });
 
   it("does not persist config when IDENTITY.md write fails on update", async () => {
@@ -1142,6 +1152,33 @@ describe("agents.files.list", () => {
       size: 17,
     });
     expect(rootOpen).not.toHaveBeenCalled();
+  });
+
+  it("falls back to fixed-path lstat when safe stat is unavailable", async () => {
+    const rootStat = vi.fn(async () => {
+      throw createErrnoError("helper-unavailable");
+    });
+    agentsTesting.setDepsForTests({ root: makeRootForTest({ stat: rootStat }) });
+    mocks.fsLstat.mockImplementation(async (filePath: unknown) => {
+      if (filePath === "/workspace/main/AGENTS.md") {
+        return makeFileStat({ size: 23, mtimeMs: 6789 });
+      }
+      throw createEnoentError();
+    });
+
+    const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
+    await promise;
+
+    const [, result] = respond.mock.calls[0] ?? [];
+    const files = (result as { files: Array<{ name: string; missing: boolean; size?: number }> })
+      .files;
+    const file = files.find((entry) => entry.name === "AGENTS.md");
+    expectRecordFields(file, {
+      name: "AGENTS.md",
+      missing: false,
+      size: 23,
+    });
+    expect(rootStat).toHaveBeenCalled();
   });
 });
 

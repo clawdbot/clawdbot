@@ -324,7 +324,15 @@ describe("provider install catalog", () => {
       },
     ]);
 
-    expect(resolveProviderInstallCatalogEntry("vllm")).toMatchObject({
+    expect(resolveProviderInstallCatalogEntry("vllm")).toEqual({
+      pluginId: "vllm",
+      providerId: "vllm",
+      methodId: "server",
+      choiceId: "vllm",
+      choiceLabel: "vLLM",
+      groupLabel: "vLLM",
+      label: "vLLM",
+      origin: "global",
       install: {
         clawhubSpec: "clawhub:openclaw/vllm@2026.5.2",
         defaultChoice: "clawhub",
@@ -547,7 +555,7 @@ describe("provider install catalog", () => {
       },
     ]);
 
-    expect(resolveProviderInstallCatalogEntry("codex")).toMatchObject({
+    expect(resolveProviderInstallCatalogEntry("codex")).toEqual({
       pluginId: "codex",
       providerId: "codex",
       methodId: "app-server",
@@ -558,9 +566,21 @@ describe("provider install catalog", () => {
       groupLabel: "Codex",
       onboardingScopes: ["text-inference"],
       label: "Codex",
+      origin: "bundled",
       install: {
         npmSpec: "@openclaw/codex",
         defaultChoice: "npm",
+      },
+      installSource: {
+        defaultChoice: "npm",
+        npm: {
+          spec: "@openclaw/codex",
+          packageName: "@openclaw/codex",
+          selectorKind: "none",
+          exactVersion: false,
+          pinState: "floating-without-integrity",
+        },
+        warnings: ["npm-spec-floating", "npm-spec-missing-integrity"],
       },
     });
   });
@@ -786,8 +806,14 @@ describe("provider install catalog", () => {
 
     expect(entries.map((entry) => entry.choiceId)).toEqual(["groq-api-key", "vllm-server"]);
     expect(resolveProviderInstallCatalogEntry("moonshot-api-key")).toBeUndefined();
-    expect(resolveProviderInstallCatalogEntry("vllm-server")).toMatchObject({
+    expect(resolveProviderInstallCatalogEntry("vllm-server")).toEqual({
       pluginId: "vllm",
+      providerId: "vllm",
+      methodId: "server",
+      choiceId: "vllm-server",
+      choiceLabel: "vLLM server",
+      label: "vLLM",
+      origin: "bundled",
       install: {
         clawhubSpec: "clawhub:openclaw/vllm@2026.5.2",
         npmSpec: "@openclaw/plugin-vllm@2026.5.2",
@@ -797,10 +823,19 @@ describe("provider install catalog", () => {
         defaultChoice: "clawhub",
         clawhub: {
           spec: "clawhub:openclaw/vllm@2026.5.2",
+          packageName: "openclaw/vllm",
+          version: "2026.5.2",
+          exactVersion: true,
         },
         npm: {
           spec: "@openclaw/plugin-vllm@2026.5.2",
+          packageName: "@openclaw/plugin-vllm",
+          selector: "2026.5.2",
+          selectorKind: "exact-version",
+          exactVersion: true,
+          pinState: "exact-without-integrity",
         },
+        warnings: ["npm-spec-missing-integrity"],
       },
     });
   });

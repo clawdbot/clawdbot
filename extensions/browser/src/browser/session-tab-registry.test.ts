@@ -112,7 +112,7 @@ describe("session tab registry", () => {
 
     expect(closed).toBe(0);
     expect(closeTab).toHaveBeenCalledTimes(2);
-    expect(warnings).toEqual([expect.stringContaining("network down")]);
+    expect(warnings).toEqual(["failed to close tracked browser tab tab-b: Error: network down"]);
     expect(__countTrackedSessionBrowserTabsForTests()).toBe(0);
   });
 

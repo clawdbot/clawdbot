@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { SpeechProviderConfig, SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -73,6 +73,28 @@ async function synthesize(params: {
   });
 }
 
+function parseAudioPayload(result: { audioBuffer: Buffer }) {
+  return JSON.parse(result.audioBuffer.toString("utf8")) as {
+    stdin?: string;
+    textArg?: string;
+  };
+}
+
+function requireFfmpegArgs(index = 0) {
+  const args = runFfmpegMock.mock.calls[index]?.[0];
+  if (!args) {
+    throw new Error(`runFfmpeg call ${index} missing`);
+  }
+  return args;
+}
+
+function expectArgsContainSequence(args: string[], sequence: string[]) {
+  const startIndex = args.findIndex((arg, index) =>
+    sequence.every((expected, offset) => args[index + offset] === expected),
+  );
+  expect(startIndex).toBeGreaterThanOrEqual(0);
+}
+
 describe("buildCliSpeechProvider", () => {
   beforeEach(() => {
     runFfmpegMock.mockImplementation(async (args) => {
@@ -80,6 +102,9 @@ describe("buildCliSpeechProvider", () => {
       if (typeof outputPath !== "string") {
         throw new Error("missing ffmpeg output path");
       }
+      const stagedTarget = outputPath.endsWith(".part")
+        ? outputPath.slice(0, -".part".length)
+        : outputPath;
       const forcedFormatIndex = args.lastIndexOf("-f");
       const forcedFormat =
         forcedFormatIndex >= 0 && typeof args[forcedFormatIndex + 1] === "string"
@@ -90,7 +115,7 @@ describe("buildCliSpeechProvider", () => {
           ? ".pcm"
           : forcedFormat
             ? `.${forcedFormat}`
-            : path.extname(outputPath.replace(/\.part$/, ""));
+            : path.extname(stagedTarget);
       writeFileSync(outputPath, Buffer.from(`converted:${extension}`));
     });
   });
@@ -127,15 +152,12 @@ describe("buildCliSpeechProvider", () => {
         text: "hello 😀 world",
       });
 
-      expect(result).toMatchObject({
-        outputFormat: "mp3",
-        fileExtension: ".mp3",
-        voiceCompatible: false,
-      });
-      expect(JSON.parse(result.audioBuffer.toString("utf8"))).toMatchObject({
-        stdin: "hello world",
-        textArg: "",
-      });
+      expect(result.outputFormat).toBe("mp3");
+      expect(result.fileExtension).toBe(".mp3");
+      expect(result.voiceCompatible).toBe(false);
+      const audioPayload = parseAudioPayload(result);
+      expect(audioPayload.stdin).toBe("hello world");
+      expect(audioPayload.textArg).toBe("");
       expect(runFfmpegMock).not.toHaveBeenCalled();
     } finally {
       rmSync(fixture.dir, { recursive: true, force: true });
@@ -153,15 +175,12 @@ describe("buildCliSpeechProvider", () => {
         text: "spoken words",
       });
 
-      expect(result).toMatchObject({
-        outputFormat: "wav",
-        fileExtension: ".wav",
-        voiceCompatible: false,
-      });
-      expect(JSON.parse(result.audioBuffer.toString("utf8"))).toMatchObject({
-        stdin: "",
-        textArg: "spoken words",
-      });
+      expect(result.outputFormat).toBe("wav");
+      expect(result.fileExtension).toBe(".wav");
+      expect(result.voiceCompatible).toBe(false);
+      const audioPayload = parseAudioPayload(result);
+      expect(audioPayload.stdin).toBe("");
+      expect(audioPayload.textArg).toBe("spoken words");
     } finally {
       rmSync(fixture.dir, { recursive: true, force: true });
     }
@@ -184,9 +203,7 @@ describe("buildCliSpeechProvider", () => {
         fileExtension: ".ogg",
         voiceCompatible: true,
       });
-      expect(runFfmpegMock).toHaveBeenCalledWith(
-        expect.arrayContaining(["-c:a", "libopus", "-b:a", "64k"]),
-      );
+      expectArgsContainSequence(requireFfmpegArgs(), ["-c:a", "libopus", "-b:a", "64k"]);
     } finally {
       rmSync(fixture.dir, { recursive: true, force: true });
     }
@@ -208,9 +225,7 @@ describe("buildCliSpeechProvider", () => {
         fileExtension: ".mp3",
         voiceCompatible: false,
       });
-      expect(runFfmpegMock).toHaveBeenCalledWith(
-        expect.arrayContaining(["-c:a", "libmp3lame", "-b:a", "128k"]),
-      );
+      expectArgsContainSequence(requireFfmpegArgs(), ["-c:a", "libmp3lame", "-b:a", "128k"]);
     } finally {
       rmSync(fixture.dir, { recursive: true, force: true });
     }
@@ -234,9 +249,7 @@ describe("buildCliSpeechProvider", () => {
         outputFormat: "pcm",
         sampleRate: 16000,
       });
-      expect(runFfmpegMock).toHaveBeenCalledWith(
-        expect.arrayContaining(["-ar", "16000", "-ac", "1", "-f", "s16le"]),
-      );
+      expectArgsContainSequence(requireFfmpegArgs(), ["-ar", "16000", "-ac", "1", "-f", "s16le"]);
     } finally {
       rmSync(fixture.dir, { recursive: true, force: true });
     }

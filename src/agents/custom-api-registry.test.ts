@@ -4,7 +4,7 @@ import {
   getApiProvider,
   registerBuiltInApiProviders,
   unregisterApiProviders,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureCustomApiRegistered, getCustomApiRegistrySourceId } from "./custom-api-registry.js";
 

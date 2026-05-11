@@ -47,10 +47,11 @@ describe("validateTarUncompressedBudget", () => {
       await fs.writeFile(path.join(tmpRoot, "zeros.txt"), "0".repeat(128));
       const tarBuffer = await tarDirectory(tmpRoot);
 
-      await expect(validateTarUncompressedBudget(tarBuffer, 64)).resolves.toMatchObject({
+      await expect(validateTarUncompressedBudget(tarBuffer, 64)).resolves.toEqual({
         ok: false,
+        reason: "archive expands past uncompressed budget 64 bytes",
       });
-      await expect(validateTarUncompressedBudget(tarBuffer, 256)).resolves.toMatchObject({
+      await expect(validateTarUncompressedBudget(tarBuffer, 256)).resolves.toEqual({
         ok: true,
       });
     },

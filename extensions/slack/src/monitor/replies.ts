@@ -1,4 +1,4 @@
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   chunkMarkdownTextWithMode,
   isSilentReplyText,

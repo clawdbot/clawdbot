@@ -66,6 +66,15 @@ function mockClaudeCliCredentialRead() {
   );
 }
 
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  expect(value).toBeTypeOf("object");
+  expect(value).not.toBeNull();
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
 describe("cli credentials", () => {
   beforeAll(async () => {
     ({
@@ -232,13 +241,13 @@ describe("cli credentials", () => {
       if (!first || !second) {
         throw new Error("expected cached Claude CLI credentials to be available");
       }
-      expect(first).toMatchObject({
+      expectFields(first, {
         type: "oauth",
         provider: "anthropic",
         access: expect.stringMatching(/^token-/),
         refresh: "cached-refresh",
       });
-      expect(second).toMatchObject({
+      expectFields(second, {
         type: "oauth",
         provider: "anthropic",
         access: expect.stringMatching(/^token-/),
@@ -277,7 +286,7 @@ describe("cli credentials", () => {
       execSync: execSyncMock,
     });
 
-    expect(withKeychain).toMatchObject({
+    expectFields(withKeychain, {
       type: "oauth",
       provider: "anthropic",
       refresh: "cached-refresh",
@@ -305,7 +314,7 @@ describe("cli credentials", () => {
       execSync: execSyncMock,
     });
 
-    expect(withKeychain).toMatchObject({
+    expectFields(withKeychain, {
       type: "oauth",
       provider: "anthropic",
       refresh: "cached-refresh",
@@ -337,7 +346,7 @@ describe("cli credentials", () => {
 
     const creds = readCodexCliCredentials({ platform: "darwin", execSync: execSyncMock });
 
-    expect(creds).toMatchObject({
+    expectFields(creds, {
       access: createJwtWithExp(expSeconds),
       refresh: "keychain-refresh",
       provider: "openai-codex",
@@ -370,7 +379,7 @@ describe("cli credentials", () => {
 
     const creds = readCodexCliCredentials({ execSync: execSyncMock });
 
-    expect(creds).toMatchObject({
+    expectFields(creds, {
       access: createJwtWithExp(expSeconds),
       refresh: "file-refresh",
       provider: "openai-codex",
@@ -403,7 +412,7 @@ describe("cli credentials", () => {
       execSync: execSyncMock,
     });
 
-    expect(creds).toMatchObject({
+    expectFields(creds, {
       access: createJwtWithExp(expSeconds),
       refresh: "file-refresh",
       provider: "openai-codex",
@@ -439,7 +448,7 @@ describe("cli credentials", () => {
       execSync: execSyncMock,
     });
 
-    expect(withKeychain).toMatchObject({
+    expectFields(withKeychain, {
       access: createJwtWithExp(expSeconds),
       refresh: "keychain-refresh",
       provider: "openai-codex",
@@ -486,12 +495,12 @@ describe("cli credentials", () => {
       execSync: execSyncMock,
     });
 
-    expect(withKeychain).toMatchObject({
+    expectFields(withKeychain, {
       refresh: "keychain-refresh",
       expires: keychainExpiry * 1000,
       provider: "openai-codex",
     });
-    expect(withoutPrompt).toMatchObject({
+    expectFields(withoutPrompt, {
       refresh: "file-refresh",
       expires: fileExpiry * 1000,
       provider: "openai-codex",
@@ -526,7 +535,7 @@ describe("cli credentials", () => {
         execSync: execSyncMock,
       });
 
-      expect(first).toMatchObject({
+      expectFields(first, {
         refresh: "stale-refresh",
         expires: firstExpiry * 1000,
       });
@@ -550,7 +559,7 @@ describe("cli credentials", () => {
         execSync: execSyncMock,
       });
 
-      expect(second).toMatchObject({
+      expectFields(second, {
         refresh: "fresh-refresh",
         expires: secondExpiry * 1000,
       });
@@ -581,7 +590,7 @@ describe("cli credentials", () => {
 
       const creds = readGeminiCliCredentialsCached({ homeDir: tempHome, ttlMs: 0 });
 
-      expect(creds).toMatchObject({
+      expectFields(creds, {
         type: "oauth",
         provider: "google-gemini-cli",
         access: "gemini-access",
@@ -611,7 +620,7 @@ describe("cli credentials", () => {
 
       const creds = readGeminiCliCredentialsCached({ homeDir: tempHome, ttlMs: 0 });
 
-      expect(creds).toMatchObject({
+      expectFields(creds, {
         type: "oauth",
         provider: "google-gemini-cli",
         access: "gemini-access",

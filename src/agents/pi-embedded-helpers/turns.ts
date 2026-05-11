@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 

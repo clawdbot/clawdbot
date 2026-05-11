@@ -65,7 +65,7 @@ describe("tool-cards", () => {
     expect(container.textContent).not.toContain("No output");
   });
 
-  it("labels collapsed tool calls as tool call", () => {
+  it("labels collapsed tool calls with the display summary", () => {
     const container = document.createElement("div");
     render(
       renderToolCard(
@@ -80,7 +80,7 @@ describe("tool-cards", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Tool call");
+    expect(container.textContent).toContain("Sessions Spawn");
     expect(container.textContent).not.toContain("Tool input");
     const summaryButton = container.querySelector("button.chat-tool-msg-summary");
     expect(summaryButton?.getAttribute("aria-expanded")).toBe("false");

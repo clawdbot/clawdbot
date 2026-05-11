@@ -4,6 +4,7 @@ import os from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, expect, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../../src/agents/auth-profiles.js";
+import type { EmbeddedPiQueueMessageOutcome } from "../../../src/agents/pi-embedded-runner/runs.js";
 import { withFastReplyConfig } from "../../../src/auto-reply/reply/get-reply-fast-path.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 
@@ -24,7 +25,14 @@ const piEmbeddedMocks = getSharedMocks("openclaw.trigger-handling.pi-embedded-mo
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
   compactEmbeddedPiSession: vi.fn(),
   runEmbeddedPiAgent: vi.fn(),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+  queueEmbeddedPiMessageWithOutcome: vi.fn(
+    (sessionId: string, _text?: string, _options?: unknown): EmbeddedPiQueueMessageOutcome => ({
+      queued: false,
+      sessionId,
+      reason: "not_streaming",
+      gatewayHealth: "live",
+    }),
+  ),
   resolveActiveEmbeddedRunSessionId: vi.fn().mockReturnValue(undefined),
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
@@ -48,7 +56,8 @@ const installPiEmbeddedMock = () =>
     compactEmbeddedPiSession: (...args: unknown[]) =>
       piEmbeddedMocks.compactEmbeddedPiSession(...args),
     runEmbeddedPiAgent: (...args: unknown[]) => piEmbeddedMocks.runEmbeddedPiAgent(...args),
-    queueEmbeddedPiMessage: (...args: unknown[]) => piEmbeddedMocks.queueEmbeddedPiMessage(...args),
+    queueEmbeddedPiMessageWithOutcome: (sessionId: string, text: string, options?: unknown) =>
+      piEmbeddedMocks.queueEmbeddedPiMessageWithOutcome(sessionId, text, options),
     resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
     resolveActiveEmbeddedRunSessionId: (...args: unknown[]) =>
       piEmbeddedMocks.resolveActiveEmbeddedRunSessionId(...args),
@@ -61,6 +70,12 @@ installPiEmbeddedMock();
 
 vi.doMock("../../../src/agents/pi-embedded-runner/runs.js", () => ({
   abortEmbeddedPiRun: (...args: unknown[]) => piEmbeddedMocks.abortEmbeddedPiRun(...args),
+  formatEmbeddedPiQueueFailureSummary: (outcome: { reason?: string; sessionId?: string }) =>
+    outcome.reason && outcome.sessionId
+      ? `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=live`
+      : undefined,
+  queueEmbeddedPiMessageWithOutcome: (sessionId: string, text: string, options?: unknown) =>
+    piEmbeddedMocks.queueEmbeddedPiMessageWithOutcome(sessionId, text, options),
 }));
 
 const providerUsageMocks = vi.hoisted(() => ({
@@ -246,7 +261,14 @@ export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise
     piEmbeddedMocks.runEmbeddedPiAgent.mockReset();
     piEmbeddedMocks.abortEmbeddedPiRun.mockReset().mockReturnValue(false);
     piEmbeddedMocks.compactEmbeddedPiSession.mockReset();
-    piEmbeddedMocks.queueEmbeddedPiMessage.mockReset().mockReturnValue(false);
+    piEmbeddedMocks.queueEmbeddedPiMessageWithOutcome
+      .mockReset()
+      .mockImplementation((sessionId: string) => ({
+        queued: false,
+        sessionId,
+        reason: "not_streaming",
+        gatewayHealth: "live",
+      }));
     piEmbeddedMocks.isEmbeddedPiRunActive.mockReset().mockReturnValue(false);
     piEmbeddedMocks.isEmbeddedPiRunStreaming.mockReset().mockReturnValue(false);
     modelFallbackMocks.runWithModelFallback.mockClear();

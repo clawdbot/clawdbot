@@ -66,15 +66,34 @@ describe("signal mention-skip silent ingest", () => {
       }),
     );
 
-    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
-      "message",
-      "received",
-      expect.stringContaining("signal"),
-      expect.objectContaining({
-        channelId: "signal",
-        content: "hello without mention",
-      }),
-    );
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
+    const [type, action, sessionKey, context] =
+      internalHookMocks.createInternalHookEvent.mock.calls[0] ?? [];
+    expect(type).toBe("message");
+    expect(action).toBe("received");
+    expect(sessionKey).toContain("signal");
+    expect(context).toEqual({
+      from: "group:group-123",
+      content: "hello without mention",
+      timestamp: 1700000000000,
+      channelId: "signal",
+      accountId: "default",
+      conversationId: "group:group-123",
+      messageId: "1700000000000",
+      metadata: {
+        to: "group:group-123",
+        provider: "signal",
+        surface: "signal",
+        threadId: undefined,
+        senderId: "+15550001111",
+        senderName: "Alice",
+        senderUsername: undefined,
+        senderE164: undefined,
+        guildId: undefined,
+        channelName: undefined,
+        topicName: undefined,
+      },
+    });
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
 

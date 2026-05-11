@@ -88,6 +88,30 @@ describe("createSlackDraftStream", () => {
     );
   });
 
+  it("forwards identity to the initial send call", async () => {
+    const identity = { username: "test-agent", iconEmoji: ":robot_face:" };
+    const send = vi.fn<DraftSendFn>(async () => slackDraftSendResult("111.222"));
+    const stream = createSlackDraftStream({
+      target: "channel:C123",
+      cfg: TEST_CFG,
+      token: "xoxb-test",
+      throttleMs: 250,
+      identity,
+      send,
+      edit: vi.fn<DraftEditFn>(async () => {}),
+      remove: vi.fn<DraftRemoveFn>(async () => {}),
+    });
+
+    stream.update("hello");
+    await stream.flush();
+
+    expect(send).toHaveBeenCalledWith(
+      "channel:C123",
+      "hello",
+      expect.objectContaining({ identity }),
+    );
+  });
+
   it("does not send duplicate text", async () => {
     const { stream, send, edit } = createDraftStreamHarness();
 

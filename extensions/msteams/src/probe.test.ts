@@ -42,8 +42,9 @@ describe("msteams probe", () => {
 
   it("returns an error when credentials are missing", async () => {
     const cfg = { enabled: true } as unknown as MSTeamsConfig;
-    await expect(probeMSTeams(cfg)).resolves.toMatchObject({
+    await expect(probeMSTeams(cfg)).resolves.toEqual({
       ok: false,
+      error: "missing credentials (appId, appPassword, tenantId)",
     });
   });
 
@@ -54,9 +55,10 @@ describe("msteams probe", () => {
       appPassword: "pw",
       tenantId: "tenant",
     } as unknown as MSTeamsConfig;
-    await expect(probeMSTeams(cfg)).resolves.toMatchObject({
+    await expect(probeMSTeams(cfg)).resolves.toEqual({
       ok: true,
       appId: "app",
+      graph: { ok: true, roles: undefined, scopes: undefined },
     });
   });
 
@@ -68,7 +70,7 @@ describe("msteams probe", () => {
       appPassword: "pw",
       tenantId: "tenant",
     } as unknown as MSTeamsConfig;
-    await expect(probeMSTeams(cfg)).resolves.toMatchObject({
+    await expect(probeMSTeams(cfg)).resolves.toEqual({
       ok: false,
       appId: "app",
       error: "bad creds",

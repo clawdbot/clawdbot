@@ -74,14 +74,10 @@ describe("Discord security audit findings", () => {
       config: discordConfig,
     });
 
-    expect(findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "channels.discord.commands.native.unrestricted",
-          severity: "critical",
-        }),
-      ]),
+    const unrestrictedFinding = findings.find(
+      (finding) => finding.checkId === "channels.discord.commands.native.unrestricted",
     );
+    expect(unrestrictedFinding?.severity).toBe("critical");
   });
 
   it.each([

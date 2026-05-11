@@ -34,6 +34,8 @@ type ResolvedBuildManager =
       reason: UpdatePackageManagerFailureReason;
     };
 
+const PNPM_NPM_FALLBACK_SPEC = "pnpm@11";
+
 async function detectBuildManager(root: string): Promise<BuildManager> {
   return (await detectPackageManagerImpl(root)) ?? "npm";
 }
@@ -124,7 +126,7 @@ async function bootstrapPnpmViaNpm(params: {
   };
   try {
     const installResult = await params.runCommand(
-      ["npm", "install", "--prefix", tempRoot, "pnpm@10"],
+      ["npm", "install", "--prefix", tempRoot, PNPM_NPM_FALLBACK_SPEC],
       {
         timeoutMs: params.timeoutMs,
         env: params.baseEnv,

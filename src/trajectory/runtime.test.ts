@@ -80,6 +80,8 @@ describe("trajectory runtime", () => {
       systemPrompt: "system prompt",
       headers: [{ name: "Authorization", value: "Bearer sk-test-secret-token" }],
       command: "curl -H 'Authorization: Bearer sk-other-secret-token'",
+      oauth: "ya29.fake-access-token-with-enough-length",
+      apple: "abcd-efgh-ijkl-mnop",
       tools: toTrajectoryToolDefinitions([
         { name: "z-tool", parameters: { z: 1 } },
         { name: "a-tool", description: "alpha", parameters: { a: 1 } },
@@ -98,6 +100,8 @@ describe("trajectory runtime", () => {
     ]);
     expect(JSON.stringify(parsed.data)).not.toContain("sk-test-secret-token");
     expect(JSON.stringify(parsed.data)).not.toContain("sk-other-secret-token");
+    expect(JSON.stringify(parsed.data)).not.toContain("ya29.fake-access-token");
+    expect(JSON.stringify(parsed.data)).not.toContain("abcd-efgh-ijkl-mnop");
   });
 
   it("bounds large runtime event fields before serialization", () => {

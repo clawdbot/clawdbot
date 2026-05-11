@@ -9,12 +9,14 @@ title: "Health"
 
 Fetch health from the running Gateway.
 
-Options:
+## Options
 
-- `--json`: machine-readable output
-- `--timeout <ms>`: connection timeout in milliseconds (default `10000`)
-- `--verbose`: verbose logging
-- `--debug`: alias for `--verbose`
+| Flag             | Default | Description                                                        |
+| ---------------- | ------- | ------------------------------------------------------------------ |
+| `--json`         | `false` | Print machine-readable JSON instead of text.                       |
+| `--timeout <ms>` | `10000` | Connection timeout in milliseconds.                                |
+| `--verbose`      | `false` | Verbose logging. Forces a live probe and expands per-agent output. |
+| `--debug`        | `false` | Alias for `--verbose`.                                             |
 
 Examples:
 

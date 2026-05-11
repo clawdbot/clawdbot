@@ -117,11 +117,7 @@ describe("doctor-contract-registry module loader", () => {
     expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(
       pathToFileURL(contractApiPath, { windows: true }).href,
     );
-    expect(mocks.createJiti.mock.calls[0]?.[1]).toEqual(
-      expect.objectContaining({
-        tryNative: false,
-      }),
-    );
+    expect(mocks.createJiti.mock.calls[0]?.[1]?.tryNative).toBe(false);
   });
 
   it("prefers doctor-contract-api over the broader contract-api surface", () => {
@@ -257,9 +253,12 @@ describe("doctor-contract-registry module loader", () => {
         message: "load path contract",
       },
     ]);
-    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({ config }),
-    );
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith({
+      config,
+      workspaceDir: "/workspace",
+      env: {},
+      includeDisabled: true,
+    });
   });
 
   it("reads doctor contracts from the current manifest registry on each call", () => {

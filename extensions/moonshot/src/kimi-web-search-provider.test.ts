@@ -41,6 +41,12 @@ async function executeKimiSearch(query: string): Promise<Record<string, unknown>
   return await tool.execute({ query });
 }
 
+function expectStringFieldContains(result: Record<string, unknown>, field: string, text: string) {
+  const value = result[field];
+  expect(typeof value).toBe("string");
+  expect(value).toContain(text);
+}
+
 describe("kimi web search provider", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -56,10 +62,12 @@ describe("kimi web search provider", () => {
 
       const result = await tool.execute({ query: "OpenClaw docs" });
 
-      expect(result).toMatchObject({
-        error: "missing_kimi_api_key",
-        message: expect.stringContaining("use web_fetch for a specific URL or the browser tool"),
-      });
+      expect(result.error).toBe("missing_kimi_api_key");
+      expectStringFieldContains(
+        result,
+        "message",
+        "use web_fetch for a specific URL or the browser tool",
+      );
     });
   });
 
@@ -144,11 +152,9 @@ describe("kimi web search provider", () => {
     await withEnvAsync({ KIMI_API_KEY: "kimi-test-key" }, async () => {
       const result = await executeKimiSearch("kimi ungrounded chat fallback");
 
-      expect(result).toMatchObject({
-        error: "kimi_web_search_ungrounded",
-        provider: "kimi",
-        message: expect.stringContaining("without native web-search grounding"),
-      });
+      expect(result.error).toBe("kimi_web_search_ungrounded");
+      expect(result.provider).toBe("kimi");
+      expectStringFieldContains(result, "message", "without native web-search grounding");
     });
   });
 
@@ -195,11 +201,9 @@ describe("kimi web search provider", () => {
     await withEnvAsync({ KIMI_API_KEY: "kimi-test-key" }, async () => {
       const result = await executeKimiSearch("kimi grounded tool replay");
 
-      expect(result).toMatchObject({
-        provider: "kimi",
-        content: expect.stringContaining("OpenClaw is available on GitHub."),
-        citations: [],
-      });
+      expect(result.provider).toBe("kimi");
+      expectStringFieldContains(result, "content", "OpenClaw is available on GitHub.");
+      expect(result.citations).toEqual([]);
       expect(result).not.toHaveProperty("error");
     });
   });
@@ -221,11 +225,9 @@ describe("kimi web search provider", () => {
     await withEnvAsync({ KIMI_API_KEY: "kimi-test-key" }, async () => {
       const result = await executeKimiSearch("kimi grounded citation");
 
-      expect(result).toMatchObject({
-        provider: "kimi",
-        content: expect.stringContaining("OpenClaw is on GitHub."),
-        citations: ["https://github.com/openclaw/openclaw"],
-      });
+      expect(result.provider).toBe("kimi");
+      expectStringFieldContains(result, "content", "OpenClaw is on GitHub.");
+      expect(result.citations).toEqual(["https://github.com/openclaw/openclaw"]);
       expect(result).not.toHaveProperty("error");
     });
   });

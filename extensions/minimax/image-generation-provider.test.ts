@@ -66,19 +66,18 @@ describe("minimax image-generation provider", () => {
       cfg: {},
     });
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.minimax.io/v1/image_generation",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          model: "image-01",
-          prompt: "draw a cat",
-          response_format: "base64",
-          n: 1,
-        }),
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.minimax.io/v1/image_generation");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe(
+      JSON.stringify({
+        model: "image-01",
+        prompt: "draw a cat",
+        response_format: "base64",
+        n: 1,
       }),
     );
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const headers = new Headers(init.headers);
     expect(headers.get("authorization")).toBe("Bearer minimax-test-key");
     expect(headers.get("content-type")).toBe("application/json");
@@ -117,11 +116,19 @@ describe("minimax image-generation provider", () => {
       ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
 
-    expect(postJsonRequest).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
-      }),
-    );
+    expect(postJsonRequest).toHaveBeenCalledOnce();
+    const request = postJsonRequest.mock.calls[0]?.[0];
+    if (!request) {
+      throw new Error("expected MiniMax image request");
+    }
+    expect(request.url).toBe("https://api.minimax.io/v1/image_generation");
+    expect(request.body).toEqual({
+      model: "image-01",
+      prompt: "draw a cat",
+      response_format: "base64",
+      n: 1,
+    });
+    expect(request.ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
   });
 
   it("keeps the dedicated global image endpoint when text config uses the global API host", async () => {

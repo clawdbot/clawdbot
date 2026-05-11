@@ -392,11 +392,12 @@ function renderToolDataBlock(params: {
 
 function renderCollapsedToolSummary(params: {
   label: string;
-  name: string;
+  icon: ReturnType<typeof html> | undefined;
+  name?: string;
   expanded: boolean;
   onToggleExpanded: () => void;
 }) {
-  const { label, name, expanded, onToggleExpanded } = params;
+  const { label, icon, name, expanded, onToggleExpanded } = params;
   return html`
     <button
       class="chat-tool-msg-summary"
@@ -404,9 +405,9 @@ function renderCollapsedToolSummary(params: {
       aria-expanded=${String(expanded)}
       @click=${() => onToggleExpanded()}
     >
-      <span class="chat-tool-msg-summary__icon">${icons.zap}</span>
+      <span class="chat-tool-msg-summary__icon">${icon}</span>
       <span class="chat-tool-msg-summary__label">${label}</span>
-      <span class="chat-tool-msg-summary__names">${name}</span>
+      ${name ? html`<span class="chat-tool-msg-summary__names">${name}</span>` : nothing}
     </button>
   `;
 }
@@ -423,7 +424,9 @@ export function renderToolCard(
   },
 ) {
   const hasOutput = Boolean(card.outputText?.trim());
-  const previewLabel = hasOutput ? "Tool output" : "Tool call";
+  const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
+  const previewLabel = display.detail ?? display.label;
+  const previewName = display.detail && hasOutput ? "output" : undefined;
 
   return html`
     <div
@@ -433,7 +436,8 @@ export function renderToolCard(
     >
       ${renderCollapsedToolSummary({
         label: previewLabel,
-        name: card.name,
+        icon: icons[display.icon],
+        name: previewName,
         expanded: opts.expanded,
         onToggleExpanded: () => opts.onToggleExpanded(card.id),
       })}

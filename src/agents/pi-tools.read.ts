@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-coding-agent";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import { root as fsRoot, FsSafeError } from "../infra/fs-safe.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
@@ -351,19 +351,15 @@ function mapContainerPathToWorkspaceRoot(params: {
   root: string;
   containerWorkdir?: string;
 }): string {
-  const containerWorkdir = params.containerWorkdir?.trim();
-  if (!containerWorkdir) {
-    return params.filePath;
-  }
-  const normalizedWorkdir = containerWorkdir.replace(/\\/g, "/").replace(/\/+$/, "");
-  if (!normalizedWorkdir.startsWith("/")) {
-    return params.filePath;
-  }
-  if (!normalizedWorkdir) {
-    return params.filePath;
-  }
+  return mapContainerPathToRoot({
+    filePath: params.filePath,
+    root: params.root,
+    containerRoot: params.containerWorkdir,
+  }).filePath;
+}
 
-  let candidate = params.filePath.startsWith("@") ? params.filePath.slice(1) : params.filePath;
+function resolveContainerPathCandidate(filePath: string): string | null {
+  let candidate = filePath.startsWith("@") ? filePath.slice(1) : filePath;
   if (/^file:\/\//i.test(candidate)) {
     const localFilePath = trySafeFileURLToPath(candidate);
     if (localFilePath) {
@@ -375,47 +371,65 @@ function mapContainerPathToWorkspaceRoot(params: {
       try {
         parsed = new URL(candidate);
       } catch {
-        return params.filePath;
+        return filePath;
       }
       if (parsed.protocol !== "file:") {
-        return params.filePath;
+        return filePath;
       }
       const host = parsed.hostname.trim().toLowerCase();
       if (host && host !== "localhost") {
-        return params.filePath;
+        return filePath;
       }
       if (hasEncodedFileUrlSeparator(parsed.pathname)) {
-        return params.filePath;
+        return filePath;
       }
       let normalizedPathname: string;
       try {
         normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
       } catch {
-        return params.filePath;
-      }
-      if (
-        normalizedPathname !== normalizedWorkdir &&
-        !normalizedPathname.startsWith(`${normalizedWorkdir}/`)
-      ) {
-        return params.filePath;
+        return filePath;
       }
       candidate = normalizedPathname;
     }
   }
+  return candidate;
+}
+
+function mapContainerPathToRoot(params: {
+  filePath: string;
+  root: string;
+  containerRoot?: string;
+}): { filePath: string; matched: boolean } {
+  const containerRoot = params.containerRoot?.trim();
+  if (!containerRoot) {
+    return { filePath: params.filePath, matched: false };
+  }
+  const normalizedRoot = containerRoot.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!normalizedRoot.startsWith("/") || !normalizedRoot) {
+    return { filePath: params.filePath, matched: false };
+  }
+
+  const candidate = resolveContainerPathCandidate(params.filePath);
+  if (candidate === null) {
+    return { filePath: params.filePath, matched: false };
+  }
 
   const normalizedCandidate = candidate.replace(/\\/g, "/");
-  if (normalizedCandidate === normalizedWorkdir) {
-    return path.resolve(params.root);
+  if (normalizedCandidate === normalizedRoot) {
+    return { filePath: path.resolve(params.root), matched: true };
   }
-  const prefix = `${normalizedWorkdir}/`;
+  const prefix = `${normalizedRoot}/`;
   if (!normalizedCandidate.startsWith(prefix)) {
-    return candidate;
+    return { filePath: candidate, matched: false };
   }
   const relative = normalizedCandidate.slice(prefix.length);
   if (!relative) {
-    return path.resolve(params.root);
+    return { filePath: path.resolve(params.root), matched: true };
   }
-  return path.resolve(params.root, ...relative.split("/").filter(Boolean));
+  return {
+    filePath: path.resolve(params.root, ...relative.split("/").filter(Boolean)),
+    matched: true,
+  };
 }
 
 export function resolveToolPathAgainstWorkspaceRoot(params: {
@@ -576,6 +590,10 @@ export function wrapToolWorkspaceRootGuardWithOptions(
   tool: AnyAgentTool,
   root: string,
   options?: {
+    additionalContainerMounts?: readonly {
+      containerRoot: string;
+      hostRoot: string;
+    }[];
     containerWorkdir?: string;
     pathParamKeys?: readonly string[];
     normalizeGuardedPathParams?: boolean;
@@ -593,12 +611,32 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         if (typeof filePath !== "string" || !filePath.trim()) {
           continue;
         }
-        const sandboxPath = mapContainerPathToWorkspaceRoot({
+        let guardedRoot = root;
+        const workspaceMapping = mapContainerPathToRoot({
           filePath,
           root,
-          containerWorkdir: options?.containerWorkdir,
+          containerRoot: options?.containerWorkdir,
         });
-        const sandboxResult = await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+        let sandboxPath = workspaceMapping.filePath;
+        if (!workspaceMapping.matched) {
+          for (const mount of options?.additionalContainerMounts ?? []) {
+            const mountMapping = mapContainerPathToRoot({
+              filePath,
+              root: mount.hostRoot,
+              containerRoot: mount.containerRoot,
+            });
+            if (mountMapping.matched) {
+              guardedRoot = path.resolve(mount.hostRoot);
+              sandboxPath = mountMapping.filePath;
+              break;
+            }
+          }
+        }
+        const sandboxResult = await assertSandboxPath({
+          filePath: sandboxPath,
+          cwd: guardedRoot,
+          root: guardedRoot,
+        });
         if (options?.normalizeGuardedPathParams && record) {
           normalizedRecord ??= { ...record };
           normalizedRecord[key] = sandboxResult.resolved;

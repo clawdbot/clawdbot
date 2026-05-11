@@ -20,6 +20,18 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+function requireRecord(value: unknown): Record<string, unknown> {
+  expect(value).toBeTruthy();
+  expect(typeof value).toBe("object");
+  expect(Array.isArray(value)).toBe(false);
+  return value as Record<string, unknown>;
+}
+
+function mockCallArg(mock: ReturnType<typeof vi.fn>, index = 0): Record<string, unknown> {
+  const arg = mock.mock.calls[index]?.[0];
+  return requireRecord(arg);
+}
+
 describe("deliverApprovalRequestViaChannelNativePlan", () => {
   it("dedupes converged prepared targets", async () => {
     const adapter: ChannelApprovalNativeAdapter = {
@@ -165,49 +177,52 @@ describe("createChannelNativeApprovalRuntime", () => {
       ts: 1,
     });
 
-    expect(buildPendingContent).toHaveBeenCalledWith({
-      request: expect.objectContaining({ id: "plugin:req-1" }),
-      approvalKind: "plugin",
-      nowMs: expect.any(Number),
+    const pendingCall = mockCallArg(buildPendingContent);
+    expect(requireRecord(pendingCall.request).id).toBe("plugin:req-1");
+    expect(pendingCall.approvalKind).toBe("plugin");
+    expect(typeof pendingCall.nowMs).toBe("number");
+
+    const prepareCall = mockCallArg(prepareTarget);
+    expect(prepareCall.plannedTarget).toEqual({
+      surface: "approver-dm",
+      target: { to: "plugin:secondary" },
+      reason: "preferred",
     });
-    expect(prepareTarget).toHaveBeenCalledWith({
-      plannedTarget: {
-        surface: "approver-dm",
-        target: { to: "plugin:secondary" },
-        reason: "preferred",
-      },
-      request: expect.objectContaining({ id: "plugin:req-1" }),
-      approvalKind: "plugin",
-      pendingContent: "pending plugin",
+    expect(requireRecord(prepareCall.request).id).toBe("plugin:req-1");
+    expect(prepareCall.approvalKind).toBe("plugin");
+    expect(prepareCall.pendingContent).toBe("pending plugin");
+
+    const deliverCall = mockCallArg(deliverTarget);
+    expect(deliverCall.plannedTarget).toEqual({
+      surface: "approver-dm",
+      target: { to: "plugin:secondary" },
+      reason: "preferred",
     });
-    expect(deliverTarget).toHaveBeenCalledWith({
-      plannedTarget: {
-        surface: "approver-dm",
-        target: { to: "plugin:secondary" },
-        reason: "preferred",
-      },
-      preparedTarget: { chatId: "plugin:secondary" },
-      request: expect.objectContaining({ id: "plugin:req-1" }),
-      approvalKind: "plugin",
-      pendingContent: "pending plugin",
+    expect(deliverCall.preparedTarget).toEqual({ chatId: "plugin:secondary" });
+    expect(requireRecord(deliverCall.request).id).toBe("plugin:req-1");
+    expect(deliverCall.approvalKind).toBe("plugin");
+    expect(deliverCall.pendingContent).toBe("pending plugin");
+
+    const capabilitiesCall = mockCallArg(describeDeliveryCapabilities);
+    expect(capabilitiesCall.cfg).toEqual({});
+    expect(capabilitiesCall.accountId).toBe("secondary");
+    expect(capabilitiesCall.approvalKind).toBe("plugin");
+    expect(requireRecord(capabilitiesCall.request).id).toBe("plugin:req-1");
+
+    const dmTargetsCall = mockCallArg(resolveApproverDmTargets);
+    expect(dmTargetsCall.cfg).toEqual({});
+    expect(dmTargetsCall.accountId).toBe("secondary");
+    expect(dmTargetsCall.approvalKind).toBe("plugin");
+    expect(requireRecord(dmTargetsCall.request).id).toBe("plugin:req-1");
+
+    const resolvedCall = mockCallArg(finalizeResolved);
+    expect(requireRecord(resolvedCall.request).id).toBe("plugin:req-1");
+    expect(requireRecord(resolvedCall.resolved)).toEqual({
+      id: "plugin:req-1",
+      decision: "allow-once",
+      ts: 1,
     });
-    expect(describeDeliveryCapabilities).toHaveBeenCalledWith({
-      cfg: {} as never,
-      accountId: "secondary",
-      approvalKind: "plugin",
-      request: expect.objectContaining({ id: "plugin:req-1" }),
-    });
-    expect(resolveApproverDmTargets).toHaveBeenCalledWith({
-      cfg: {} as never,
-      accountId: "secondary",
-      approvalKind: "plugin",
-      request: expect.objectContaining({ id: "plugin:req-1" }),
-    });
-    expect(finalizeResolved).toHaveBeenCalledWith({
-      request: expect.objectContaining({ id: "plugin:req-1" }),
-      resolved: expect.objectContaining({ id: "plugin:req-1", decision: "allow-once" }),
-      entries: [{ chatId: "plugin:secondary", messageId: "m1" }],
-    });
+    expect(resolvedCall.entries).toEqual([{ chatId: "plugin:secondary", messageId: "m1" }]);
   });
 
   it("runs expiration through the shared runtime factory", async () => {
@@ -252,10 +267,9 @@ describe("createChannelNativeApprovalRuntime", () => {
 
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(finalizeExpired).toHaveBeenCalledWith({
-      request: expect.objectContaining({ id: "req-1" }),
-      entries: [{ chatId: "owner", messageId: "m1" }],
-    });
+    const expiredCall = mockCallArg(finalizeExpired);
+    expect(requireRecord(expiredCall.request).id).toBe("req-1");
+    expect(expiredCall.entries).toEqual([{ chatId: "owner", messageId: "m1" }]);
     vi.useRealTimers();
   });
 });

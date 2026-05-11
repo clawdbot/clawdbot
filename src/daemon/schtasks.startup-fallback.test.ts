@@ -101,15 +101,12 @@ function expectStartupFallbackSpawn() {
   }
   const [executable, args, options] = lastCall;
   expect(executable).not.toBe("cmd.exe");
-  expect(args).toEqual(expect.arrayContaining(["--port", "18789"]));
-  expect(options).toEqual(
-    expect.objectContaining({
-      detached: true,
-      env: expect.objectContaining({ OPENCLAW_GATEWAY_PORT: "18789" }),
-      stdio: "ignore",
-      windowsHide: true,
-    }),
-  );
+  expect(args).toContain("--port");
+  expect(args).toContain("18789");
+  expect(options.detached).toBe(true);
+  expect((options.env as Record<string, string> | undefined)?.OPENCLAW_GATEWAY_PORT).toBe("18789");
+  expect(options.stdio).toBe("ignore");
+  expect(options.windowsHide).toBe(true);
 }
 
 function expectGatewayTermination(pid: number) {
@@ -346,12 +343,11 @@ describe("Windows startup fallback", () => {
         { code: 0, stdout: notYetRunTaskQueryOutput(), stderr: "" },
       );
 
-      await expect(readScheduledTaskRuntime(env)).resolves.toMatchObject({
-        status: "running",
-        pid: 4242,
-        state: "Ready",
-        lastRunResult: "267011",
-      });
+      const runtime = await readScheduledTaskRuntime(env);
+      expect(runtime.status).toBe("running");
+      expect(runtime.pid).toBe(4242);
+      expect(runtime.state).toBe("Ready");
+      expect(runtime.lastRunResult).toBe("267011");
     });
   });
 
@@ -369,11 +365,10 @@ describe("Windows startup fallback", () => {
         { code: 0, stdout: notYetRunTaskQueryOutput(), stderr: "" },
       );
 
-      await expect(readScheduledTaskRuntime(env)).resolves.toMatchObject({
-        status: "stopped",
-        state: "Ready",
-        lastRunResult: "267011",
-      });
+      const runtime = await readScheduledTaskRuntime(env);
+      expect(runtime.status).toBe("stopped");
+      expect(runtime.state).toBe("Ready");
+      expect(runtime.lastRunResult).toBe("267011");
     });
   });
 
@@ -397,10 +392,9 @@ describe("Windows startup fallback", () => {
         hints: [],
       });
 
-      await expect(readScheduledTaskRuntime(env)).resolves.toMatchObject({
-        status: "running",
-        pid: 4242,
-      });
+      const runtime = await readScheduledTaskRuntime(env);
+      expect(runtime.status).toBe("running");
+      expect(runtime.pid).toBe(4242);
     });
   });
 

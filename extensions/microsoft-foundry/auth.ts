@@ -98,7 +98,11 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
           label: `${sub.name} (${sub.id})`,
         })),
       });
-      selectedSub = subs.find((sub) => sub.id === selectedId)!;
+      const match = subs.find((sub) => sub.id === selectedId);
+      if (!match) {
+        throw new Error(`Selected subscription not found: ${selectedId}`);
+      }
+      selectedSub = match;
       tenantId ??= selectedSub.tenantId;
     }
 

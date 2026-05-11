@@ -9,6 +9,7 @@ import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
+import { resolveToolDisplay } from "../tool-display.ts";
 import type {
   MessageContentItem,
   MessageGroup,
@@ -1465,19 +1466,30 @@ function renderGroupedMessage(
   const toolMessageDisclosureId = `toolmsg:${messageKey}`;
   const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
-  const toolSummaryLabel =
-    toolNames.length <= 3
+  const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
+  const singleToolDisplay = singleToolCard
+    ? resolveToolDisplay({
+        name: singleToolCard.name,
+        args: singleToolCard.args,
+        detailMode: "explain",
+      })
+    : null;
+  const toolSummaryLabel = singleToolDisplay?.detail
+    ? singleToolCard?.outputText?.trim()
+      ? "output"
+      : undefined
+    : toolNames.length <= 3
       ? toolNames.join(", ")
       : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
   const toolPreview =
     markdown && !toolSummaryLabel ? markdown.trim().replace(/\s+/g, " ").slice(0, 120) : "";
-  const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
   const toolMessageLabel =
-    singleToolCard && !markdown && !hasImages
-      ? singleToolCard.outputText?.trim()
-        ? "Tool output"
-        : "Tool call"
-      : "Tool output";
+    singleToolDisplay?.detail && !markdown && !hasImages
+      ? singleToolDisplay.detail
+      : singleToolDisplay && !markdown && !hasImages
+        ? singleToolDisplay.label
+        : "Tool output";
+  const toolMessageIcon = singleToolDisplay ? icons[singleToolDisplay.icon] : icons.zap;
 
   const hasActions = canCopyMarkdown || canExpand;
   const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
@@ -1504,7 +1516,7 @@ function renderGroupedMessage(
                 aria-expanded=${String(toolMessageExpanded)}
                 @click=${() => opts.onToggleToolMessageExpanded?.(toolMessageDisclosureId)}
               >
-                <span class="chat-tool-msg-summary__icon">${icons.zap}</span>
+                <span class="chat-tool-msg-summary__icon">${toolMessageIcon}</span>
                 <span class="chat-tool-msg-summary__label">${toolMessageLabel}</span>
                 ${toolSummaryLabel
                   ? html`<span class="chat-tool-msg-summary__names">${toolSummaryLabel}</span>`

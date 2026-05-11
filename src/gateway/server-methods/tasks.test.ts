@@ -12,6 +12,12 @@ import { tasksHandlers } from "./tasks.js";
 import type { RespondFn } from "./types.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+type TaskResponsePayload = {
+  tasks?: Array<Record<string, unknown>>;
+  task?: Record<string, unknown>;
+  found?: boolean;
+  cancelled?: boolean;
+};
 
 let stateDir: string;
 
@@ -86,22 +92,19 @@ describe("tasks gateway handlers", () => {
     });
 
     expect(calls[0]?.[0]).toBe(true);
-    expect(calls[0]?.[1]).toMatchObject({
-      tasks: [
-        {
-          id: running.taskId,
-          taskId: running.taskId,
-          kind: "investigation",
-          runtime: "subagent",
-          status: "running",
-          title: "Investigate issue",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          childSessionKey: "agent:worker:subagent:child",
-          runId: "run-running",
-        },
-      ],
-    });
+    const payload = calls[0]?.[1] as TaskResponsePayload | undefined;
+    expect(payload?.tasks).toHaveLength(1);
+    const listedTask = payload?.tasks?.[0];
+    expect(listedTask?.id).toBe(running.taskId);
+    expect(listedTask?.taskId).toBe(running.taskId);
+    expect(listedTask?.kind).toBe("investigation");
+    expect(listedTask?.runtime).toBe("subagent");
+    expect(listedTask?.status).toBe("running");
+    expect(listedTask?.title).toBe("Investigate issue");
+    expect(listedTask?.agentId).toBe("main");
+    expect(listedTask?.sessionKey).toBe("agent:main:main");
+    expect(listedTask?.childSessionKey).toBe("agent:worker:subagent:child");
+    expect(listedTask?.runId).toBe("run-running");
   });
 
   it("gets completed tasks with stable completed status", async () => {
@@ -127,13 +130,10 @@ describe("tasks gateway handlers", () => {
     });
 
     expect(calls[0]?.[0]).toBe(true);
-    expect(calls[0]?.[1]).toMatchObject({
-      task: {
-        id: task.taskId,
-        status: "completed",
-        title: "Done task",
-      },
-    });
+    const payload = calls[0]?.[1] as TaskResponsePayload | undefined;
+    expect(payload?.task?.id).toBe(task.taskId);
+    expect(payload?.task?.status).toBe("completed");
+    expect(payload?.task?.title).toBe("Done task");
   });
 
   it("sanitizes task text before exposing SDK summaries", async () => {
@@ -174,14 +174,11 @@ describe("tasks gateway handlers", () => {
     });
 
     expect(calls[0]?.[0]).toBe(true);
-    expect(calls[0]?.[1]).toMatchObject({
-      task: {
-        id: task.taskId,
-        title: "Compile artifact",
-        terminalSummary: "Failed after build",
-        error: "Tool failed",
-      },
-    });
+    const payload = calls[0]?.[1] as TaskResponsePayload | undefined;
+    expect(payload?.task?.id).toBe(task.taskId);
+    expect(payload?.task?.title).toBe("Compile artifact");
+    expect(payload?.task?.terminalSummary).toBe("Failed after build");
+    expect(payload?.task?.error).toBe("Tool failed");
     expect(JSON.stringify(calls[0]?.[1])).not.toContain("OpenClaw runtime context");
   });
 
@@ -208,14 +205,11 @@ describe("tasks gateway handlers", () => {
     });
 
     expect(calls[0]?.[0]).toBe(true);
-    expect(calls[0]?.[1]).toMatchObject({
-      found: true,
-      cancelled: true,
-      task: {
-        id: task.taskId,
-        status: "cancelled",
-        error: "user stopped task",
-      },
-    });
+    const payload = calls[0]?.[1] as TaskResponsePayload | undefined;
+    expect(payload?.found).toBe(true);
+    expect(payload?.cancelled).toBe(true);
+    expect(payload?.task?.id).toBe(task.taskId);
+    expect(payload?.task?.status).toBe("cancelled");
+    expect(payload?.task?.error).toBe("user stopped task");
   });
 });

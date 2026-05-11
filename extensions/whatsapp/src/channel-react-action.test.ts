@@ -83,7 +83,16 @@ describe("whatsapp react action messageId resolution", () => {
       accountId: "default",
     });
     expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      expect.objectContaining({ messageId: "explicit-id" }),
+      {
+        action: "react",
+        chatJid: "+1555",
+        messageId: "explicit-id",
+        emoji: "👍",
+        remove: undefined,
+        participant: undefined,
+        accountId: "default",
+        fromMe: undefined,
+      },
       baseCfg,
     );
   });
@@ -101,7 +110,16 @@ describe("whatsapp react action messageId resolution", () => {
       },
     });
     expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      expect.objectContaining({ messageId: "ctx-msg-42" }),
+      {
+        action: "react",
+        chatJid: "+1555",
+        messageId: "ctx-msg-42",
+        emoji: "❤️",
+        remove: undefined,
+        participant: undefined,
+        accountId: "default",
+        fromMe: undefined,
+      },
       baseCfg,
     );
   });
@@ -119,7 +137,16 @@ describe("whatsapp react action messageId resolution", () => {
       },
     });
     expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      expect.objectContaining({ messageId: "12345" }),
+      {
+        action: "react",
+        chatJid: "+1555",
+        messageId: "12345",
+        emoji: "🎉",
+        remove: undefined,
+        participant: undefined,
+        accountId: "default",
+        fromMe: undefined,
+      },
       baseCfg,
     );
   });
@@ -165,10 +192,16 @@ describe("whatsapp react action messageId resolution", () => {
       },
     });
     expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
+        action: "react",
+        chatJid: "12345@g.us",
         messageId: "ctx-msg-42",
+        emoji: "👍",
+        remove: undefined,
         participant: "123@lid",
-      }),
+        accountId: "default",
+        fromMe: undefined,
+      },
       baseCfg,
     );
   });
@@ -187,10 +220,16 @@ describe("whatsapp react action messageId resolution", () => {
       },
     });
     expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
+        action: "react",
+        chatJid: "+1555",
         messageId: "ctx-msg-42",
+        emoji: "👍",
+        remove: undefined,
         participant: undefined,
-      }),
+        accountId: "default",
+        fromMe: undefined,
+      },
       baseCfg,
     );
   });
@@ -213,10 +252,16 @@ describe("whatsapp react action messageId resolution", () => {
       },
     });
     expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
+        action: "react",
+        chatJid: "12345@g.us",
         messageId: "ctx-msg-42",
+        emoji: "👍",
+        remove: undefined,
         participant: "555@s.whatsapp.net",
-      }),
+        accountId: "default",
+        fromMe: undefined,
+      },
       baseCfg,
     );
   });
@@ -253,10 +298,16 @@ describe("whatsapp react action messageId resolution", () => {
       },
     });
     expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
+        action: "react",
+        chatJid: "12345@g.us",
         messageId: "older-msg-7",
+        emoji: "👍",
+        remove: undefined,
         participant: undefined,
-      }),
+        accountId: "default",
+        fromMe: undefined,
+      },
       baseCfg,
     );
   });

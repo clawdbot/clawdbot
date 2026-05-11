@@ -64,6 +64,17 @@ function rewriteLine(line, mcpServers) {
   }
 }
 
+export function createTargetSpawnOptions(platform = process.platform) {
+  const options = {
+    stdio: ["pipe", "pipe", "inherit"],
+    env: process.env,
+  };
+  if (platform === "win32") {
+    options.windowsHide = true;
+  }
+  return options;
+}
+
 function isMainModule() {
   const mainPath = process.argv[1];
   if (!mainPath) {
@@ -75,10 +86,7 @@ function isMainModule() {
 function main() {
   const { targetCommand, mcpServers } = decodePayload(process.argv.slice(2));
   const target = splitCommandLine(targetCommand);
-  const child = spawn(target.command, target.args, {
-    stdio: ["pipe", "pipe", "inherit"],
-    env: process.env,
-  });
+  const child = spawn(target.command, target.args, createTargetSpawnOptions());
 
   if (!child.stdin || !child.stdout) {
     throw new Error("Failed to create MCP proxy stdio pipes");

@@ -182,6 +182,20 @@ export function resolveImageModelConfigForTool(params: {
   });
 }
 
+function resolveImageModelConfigForOverride(params: {
+  cfg?: OpenClawConfig;
+  modelOverride?: string;
+}): ImageModelConfig | null {
+  const model = params.modelOverride?.trim();
+  if (!model) {
+    return null;
+  }
+  return resolveConfiguredImageModelRefs({
+    cfg: params.cfg,
+    imageModelConfig: { primary: model },
+  });
+}
+
 function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undefined {
   if (typeof maxBytesMb === "number" && Number.isFinite(maxBytesMb) && maxBytesMb > 0) {
     return Math.floor(maxBytesMb * 1024 * 1024);
@@ -622,6 +636,10 @@ export function createImageTool(options?: {
       // MARK: - Run image prompt with all loaded images
       const imageModelConfig =
         resolvedImageModelConfig ??
+        resolveImageModelConfigForOverride({
+          cfg: options?.config,
+          modelOverride,
+        }) ??
         resolveImageModelConfigForTool({
           cfg: options?.config,
           agentDir,

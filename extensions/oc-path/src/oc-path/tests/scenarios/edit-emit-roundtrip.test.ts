@@ -72,7 +72,10 @@ describe("edit-then-emit round-trip", () => {
       expect(line2?.kind).toBe("value");
       if (line2?.kind === "value" && line2.value.kind === "object") {
         const entry = line2.value.entries.find((e) => e.key === "a");
-        expect(entry?.value).toMatchObject({ kind: "number", value: 99 });
+        expect(entry?.value.kind).toBe("number");
+        if (entry?.value.kind === "number") {
+          expect(entry.value.value).toBe(99);
+        }
       }
     }
   });
@@ -142,7 +145,10 @@ describe("edit-then-emit round-trip", () => {
       const reparsed = resolveJsoncOcPath(r.ast, parseOcPath("oc://config/k"));
       expect(reparsed?.kind).toBe("object-entry");
       if (reparsed?.kind === "object-entry") {
-        expect(reparsed.node.value).toMatchObject({ kind: "number", value: 2 });
+        expect(reparsed.node.value.kind).toBe("number");
+        if (reparsed.node.value.kind === "number") {
+          expect(reparsed.node.value.value).toBe(2);
+        }
       }
     }
   });

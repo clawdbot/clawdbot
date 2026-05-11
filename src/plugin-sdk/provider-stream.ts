@@ -30,16 +30,12 @@ import {
 export {
   applyAnthropicEphemeralCacheControlMarkers,
   applyAnthropicPayloadPolicyToParams,
-  buildCopilotDynamicHeaders,
   composeProviderStreamWrappers,
   createAnthropicThinkingPrefillPayloadWrapper,
-  createBedrockNoCacheWrapper,
   createMoonshotThinkingWrapper,
   createToolStreamWrapper,
   createZaiToolStreamWrapper,
   defaultToolStreamExtraParams,
-  hasCopilotVisionInput,
-  isAnthropicBedrockModel,
   isOpenAICompatibleThinkingEnabled,
   type ProviderStreamWrapperFactory,
   resolveAnthropicPayloadPolicy,
@@ -147,15 +143,22 @@ export function buildProviderStreamFamilyHooks(
   throw new Error("Unsupported provider stream family");
 }
 
+/** @deprecated Google provider-owned stream hook shortcut; use local provider hooks instead. */
 export const GOOGLE_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("google-thinking");
+/** @deprecated Kilocode provider-owned stream hook shortcut; use local provider hooks instead. */
 export const KILOCODE_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("kilocode-thinking");
+/** @deprecated Moonshot provider-owned stream hook shortcut; use local provider hooks instead. */
 export const MOONSHOT_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("moonshot-thinking");
+/** @deprecated MiniMax provider-owned stream hook shortcut; use local provider hooks instead. */
 export const MINIMAX_FAST_MODE_STREAM_HOOKS = buildProviderStreamFamilyHooks("minimax-fast-mode");
+/** @deprecated OpenAI provider-owned stream hook shortcut; use local provider hooks instead. */
 export const OPENAI_RESPONSES_STREAM_HOOKS = buildProviderStreamFamilyHooks(
   "openai-responses-defaults",
 );
+/** @deprecated OpenRouter provider-owned stream hook shortcut; use local provider hooks instead. */
 export const OPENROUTER_THINKING_STREAM_HOOKS =
   buildProviderStreamFamilyHooks("openrouter-thinking");
+/** @deprecated Provider-owned stream hook shortcut; use local provider hooks instead. */
 export const TOOL_STREAM_DEFAULT_ON_HOOKS =
   buildProviderStreamFamilyHooks("tool-stream-default-on");
 

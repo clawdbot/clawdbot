@@ -1,5 +1,8 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { resolveReactionLevel, type ResolvedReactionLevel } from "openclaw/plugin-sdk/text-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  resolveReactionLevel,
+  type ResolvedReactionLevel,
+} from "openclaw/plugin-sdk/status-helpers";
 import { resolveMergedWhatsAppAccountConfig } from "./account-config.js";
 
 type ResolvedWhatsAppReactionLevel = ResolvedReactionLevel;

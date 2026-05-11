@@ -1,4 +1,7 @@
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const HELPER_PATH = "scripts/lib/docker-build.sh";
@@ -120,7 +123,7 @@ describe("docker build helper", () => {
     const openWebUiRunner = readFileSync(OPENWEBUI_DOCKER_E2E_PATH, "utf8");
 
     expect(scenarios).toContain(
-      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=1500 OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=300 pnpm test:install:e2e"',
+      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=120 OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=120 pnpm test:install:e2e"',
     );
     expect(scenarios).toContain(
       '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local pnpm test:install:e2e"',
@@ -145,14 +148,18 @@ describe("docker build helper", () => {
     expect(runner).toContain("phase_mark_start");
     expect(runner).toContain("run_agent_turn_bg");
     expect(runner).toContain("wait_agent_turn_batch");
-    expect(runner).toContain('run_agent_turn_bg "read proof"');
+    expect(runner).not.toContain('run_agent_turn_bg "read proof"');
     expect(runner).toContain('run_agent_turn_bg "image write"');
     expect(runner).toContain('run_agent_turn_logged "read proof copy"');
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL");
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_OPENAI_MODEL");
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS");
+    expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS:-300");
     expect(runner).toContain("OPENCLAW_INSTALL_E2E_OPENAI_MODEL");
     expect(runner).toContain("OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS");
+    expect(runner).toContain(
+      'AGENT_TURN_TIMEOUT_SECONDS="${OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS:-300}"',
+    );
   });
 
   it("keeps package acceptance plugin coverage offline-capable", () => {
@@ -221,6 +228,50 @@ describe("docker build helper", () => {
     expect(pluginsAssertions).toContain("expected modern installRecords in installed plugin index");
   });
 
+  it("prepares pnpm workspace package fixtures without package dependencies", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-update-channel-fixture-"));
+    try {
+      mkdirSync(join(root, "patches"));
+      writeFileSync(
+        join(root, "package.json"),
+        `${JSON.stringify({ name: "openclaw", version: "2026.5.6", scripts: {} }, null, 2)}\n`,
+        "utf8",
+      );
+      writeFileSync(
+        join(root, "pnpm-workspace.yaml"),
+        [
+          "packages:",
+          "  - .",
+          "",
+          "patchedDependencies:",
+          '  "kept@1.0.0": "patches/kept.patch"',
+          "allowBuilds:",
+          "  esbuild: true",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      writeFileSync(join(root, "patches", "kept.patch"), "", "utf8");
+
+      execFileSync(process.execPath, [
+        UPDATE_CHANNEL_SWITCH_ASSERTIONS_PATH,
+        "prepare-git-fixture",
+        root,
+      ]);
+
+      const workspace = readFileSync(join(root, "pnpm-workspace.yaml"), "utf8");
+      const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
+        pnpm?: unknown;
+      };
+      expect(workspace).toContain('  "kept@1.0.0": "patches/kept.patch"');
+      expect(workspace).toContain("allowUnusedPatches: true");
+      expect(workspace).toContain("allowBuilds:");
+      expect(manifest.pnpm).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps bundled plugin install/uninstall sweep chunkable", () => {
     const runner = readFileSync(BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_PATH, "utf8");
     const sweep = readFileSync(BUNDLED_PLUGIN_INSTALL_UNINSTALL_SWEEP_PATH, "utf8");
@@ -265,7 +316,7 @@ describe("docker build helper", () => {
     const runner = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
 
     expect(runner).toContain('SESSION_ID_PREFIX="e2e-tools-${profile}"');
-    expect(runner).toContain('TURN1_SESSION_ID="${SESSION_ID_PREFIX}-read-proof"');
+    expect(runner).toContain('TURN2B_SESSION_ID="${SESSION_ID_PREFIX}-read-copy"');
     expect(runner).toContain('TURN3_SESSION_ID="${SESSION_ID_PREFIX}-exec-hostname"');
     expect(runner).toContain('TURN4_SESSION_ID="${SESSION_ID_PREFIX}-image-write"');
   });

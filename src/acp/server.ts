@@ -131,7 +131,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     filePath: resolveDefaultAcpEventLedgerPath(process.env),
   });
 
-  const _connection = new AgentSideConnection((conn: AgentSideConnection) => {
+  void new AgentSideConnection((conn: AgentSideConnection) => {
     agent = new AcpGatewayAgent(conn, gateway, { ...opts, eventLedger });
     agent.start();
     return agent;

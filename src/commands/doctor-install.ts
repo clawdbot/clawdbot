@@ -7,8 +7,9 @@ export function noteSourceInstallIssues(root: string | null) {
     return;
   }
 
+  const srcEntry = path.join(root, "src", "entry.ts");
   const workspaceMarker = path.join(root, "pnpm-workspace.yaml");
-  if (!fs.existsSync(workspaceMarker)) {
+  if (!fs.existsSync(workspaceMarker) || !fs.existsSync(srcEntry)) {
     return;
   }
 
@@ -16,7 +17,6 @@ export function noteSourceInstallIssues(root: string | null) {
   const nodeModules = path.join(root, "node_modules");
   const pnpmStore = path.join(nodeModules, ".pnpm");
   const tsxBin = path.join(nodeModules, ".bin", "tsx");
-  const srcEntry = path.join(root, "src", "entry.ts");
 
   if (fs.existsSync(nodeModules) && !fs.existsSync(pnpmStore)) {
     warnings.push(

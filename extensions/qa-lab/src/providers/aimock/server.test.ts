@@ -30,18 +30,27 @@ describe("qa aimock server", () => {
         }),
       });
       expect(response.status).toBe(200);
-      expect(await response.json()).toMatchObject({
-        status: "completed",
-        model: "aimock/gpt-5.5",
-      });
+      const responseBody = (await response.json()) as { model?: unknown; status?: unknown };
+      expect(responseBody.status).toBe("completed");
+      expect(responseBody.model).toBe("aimock/gpt-5.5");
 
       const debug = await fetch(`${server.baseUrl}/debug/last-request`);
       expect(debug.status).toBe(200);
-      expect(await debug.json()).toMatchObject({
+      const expectedBody = {
+        model: "aimock/gpt-5.5",
+        messages: [{ role: "user", content: "hello aimock" }],
+        stream: false,
+        _endpointType: "chat",
+      };
+      expect(await debug.json()).toEqual({
+        raw: JSON.stringify(expectedBody),
+        body: expectedBody,
         prompt: "hello aimock",
         allInputText: "hello aimock",
+        toolOutput: "",
         model: "aimock/gpt-5.5",
         providerVariant: "openai",
+        imageInputCount: 0,
       });
     } finally {
       await server.stop();
@@ -64,16 +73,28 @@ describe("qa aimock server", () => {
         }),
       });
       expect(response.status).toBe(200);
-      expect(await response.json()).toMatchObject({
-        status: "completed",
-      });
+      const responseBody = (await response.json()) as { status?: unknown };
+      expect(responseBody.status).toBe("completed");
 
       const debug = await fetch(`${server.baseUrl}/debug/requests`);
       expect(debug.status).toBe(200);
+      const expectedBody = {
+        model: "aimock/gpt-5.5",
+        messages: [{ role: "user", content: "@openclaw explain the QA lab" }],
+        stream: false,
+        _endpointType: "chat",
+      };
       expect(await debug.json()).toEqual([
-        expect.objectContaining({
+        {
+          raw: JSON.stringify(expectedBody),
+          body: expectedBody,
           prompt: "@openclaw explain the QA lab",
-        }),
+          allInputText: "@openclaw explain the QA lab",
+          toolOutput: "",
+          model: "aimock/gpt-5.5",
+          providerVariant: "openai",
+          imageInputCount: 0,
+        },
       ]);
     } finally {
       await server.stop();
@@ -99,9 +120,21 @@ describe("qa aimock server", () => {
 
       const debug = await fetch(`${server.baseUrl}/debug/last-request`);
       expect(debug.status).toBe(200);
-      expect(await debug.json()).toMatchObject({
+      const expectedBody = {
+        model: "openai-codex/gpt-5.5",
+        messages: [{ role: "user", content: "hello codex-compatible aimock" }],
+        stream: false,
+        _endpointType: "chat",
+      };
+      expect(await debug.json()).toEqual({
+        raw: JSON.stringify(expectedBody),
+        body: expectedBody,
+        prompt: "hello codex-compatible aimock",
+        allInputText: "hello codex-compatible aimock",
+        toolOutput: "",
         model: "openai-codex/gpt-5.5",
         providerVariant: "openai",
+        imageInputCount: 0,
       });
     } finally {
       await server.stop();

@@ -17,7 +17,7 @@ describe("waitForEventLoopReady", () => {
 
     await vi.advanceTimersByTimeAsync(20);
 
-    await expect(promise).resolves.toMatchObject({
+    await expect(promise).resolves.toEqual({
       ready: true,
       aborted: false,
       elapsedMs: 20,
@@ -37,7 +37,7 @@ describe("waitForEventLoopReady", () => {
 
     await vi.advanceTimersByTimeAsync(5);
 
-    await expect(promise).resolves.toMatchObject({
+    await expect(promise).resolves.toEqual({
       ready: false,
       aborted: false,
       elapsedMs: 5,
@@ -58,10 +58,11 @@ describe("waitForEventLoopReady", () => {
 
     controller.abort();
 
-    await expect(promise).resolves.toMatchObject({
+    await expect(promise).resolves.toEqual({
       ready: false,
       aborted: true,
       elapsedMs: 0,
+      maxDriftMs: 0,
       checks: 0,
     });
     expect(vi.getTimerCount()).toBe(0);

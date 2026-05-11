@@ -259,10 +259,10 @@ describe("slash-http cfg threading", () => {
     expect(mockState.sendMessageMattermost).toHaveBeenCalledWith(
       "channel:chan-1",
       "No models available.",
-      expect.objectContaining({
+      {
         cfg,
         accountId: "default",
-      }),
+      },
     );
   });
 

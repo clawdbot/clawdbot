@@ -94,8 +94,10 @@ describe("mattermost monitor gating", () => {
         oncharTriggered: false,
         canDetectMention: true,
       }),
-    ).toMatchObject({
+    ).toEqual({
       shouldRequireMention: false,
+      shouldBypassMention: false,
+      effectiveWasMentioned: false,
       dropReason: null,
     });
   });

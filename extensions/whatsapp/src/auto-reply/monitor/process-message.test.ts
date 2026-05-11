@@ -288,39 +288,73 @@ describe("processMessage group system prompt wiring", () => {
 
     expect(runMessageReceivedMock).toHaveBeenCalledTimes(1);
     expect(runMessageReceivedMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
         from: GROUP_JID,
         content: "hi",
         timestamp: 1710000000,
+        threadId: undefined,
         messageId: "msg1",
         senderId: "+15550002222",
         sessionKey: baseRoute.sessionKey,
-      }),
-      expect.objectContaining({
+        runId: undefined,
+        metadata: {
+          to: "+15550001111",
+          provider: "whatsapp",
+          surface: "whatsapp",
+          threadId: undefined,
+          originatingChannel: "whatsapp",
+          originatingTo: GROUP_JID,
+          messageId: "msg1",
+          senderId: "+15550002222",
+          senderName: "Alice",
+          senderUsername: undefined,
+          senderE164: "+15550002222",
+          guildId: undefined,
+          channelName: undefined,
+          topicName: undefined,
+        },
+      },
+      {
         channelId: "whatsapp",
         accountId: "default",
         conversationId: GROUP_JID,
         sessionKey: baseRoute.sessionKey,
         messageId: "msg1",
         senderId: "+15550002222",
-      }),
+      },
     );
-    expect(internalReceived).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "message",
-        action: "received",
-        sessionKey: baseRoute.sessionKey,
-        context: expect.objectContaining({
-          from: GROUP_JID,
-          content: "hi",
-          timestamp: 1710000000,
-          channelId: "whatsapp",
-          accountId: "default",
-          conversationId: GROUP_JID,
-          messageId: "msg1",
-        }),
-      }),
-    );
+    expect(internalReceived).toHaveBeenCalledTimes(1);
+    const [internalEvent] = internalReceived.mock.calls[0] ?? [];
+    expect(internalEvent.timestamp).toBeInstanceOf(Date);
+    expect({ ...internalEvent, timestamp: undefined }).toEqual({
+      type: "message",
+      action: "received",
+      sessionKey: baseRoute.sessionKey,
+      context: {
+        from: GROUP_JID,
+        content: "hi",
+        timestamp: 1710000000,
+        channelId: "whatsapp",
+        accountId: "default",
+        conversationId: GROUP_JID,
+        messageId: "msg1",
+        metadata: {
+          to: "+15550001111",
+          provider: "whatsapp",
+          surface: "whatsapp",
+          threadId: undefined,
+          senderId: "+15550002222",
+          senderName: "Alice",
+          senderUsername: undefined,
+          senderE164: "+15550002222",
+          guildId: undefined,
+          channelName: undefined,
+          topicName: undefined,
+        },
+      },
+      timestamp: undefined,
+      messages: [],
+    });
   });
 
   it("does not fire WhatsApp message_received hooks without explicit opt-in", async () => {

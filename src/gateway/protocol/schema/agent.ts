@@ -101,6 +101,12 @@ export const SendParamsSchema = Type.Object(
     replyToId: Type.Optional(Type.String()),
     /** Thread id (channel-specific meaning, e.g. Telegram forum topic id). */
     threadId: Type.Optional(Type.String()),
+    /** Force document-style media sends where supported. */
+    forceDocument: Type.Optional(Type.Boolean()),
+    /** Send silently (no notification) where supported. */
+    silent: Type.Optional(Type.Boolean()),
+    /** Channel-specific parse mode for formatted text. */
+    parseMode: Type.Optional(Type.Literal("HTML")),
     /** Optional session key for mirroring delivered output back into the transcript. */
     sessionKey: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,

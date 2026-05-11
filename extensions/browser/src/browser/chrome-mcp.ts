@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { asRecord } from "../record-shared.js";
@@ -903,6 +906,7 @@ export async function takeChromeMcpScreenshot(params: {
   timeoutMs?: number;
 }): Promise<Buffer> {
   return await withTempFile(async (filePath) => {
+    const format = params.format ?? "png";
     await callTool(
       params.profileName,
       chromeMcpProfileOptionsFromParams(params),
@@ -910,13 +914,13 @@ export async function takeChromeMcpScreenshot(params: {
       {
         pageId: parsePageId(params.targetId),
         filePath,
-        format: params.format ?? "png",
+        format,
         ...(params.uid ? { uid: params.uid } : {}),
         ...(params.fullPage ? { fullPage: true } : {}),
       },
       { timeoutMs: params.timeoutMs },
     );
-    return await fs.readFile(filePath);
+    return await fs.readFile(`${filePath}.${format}`);
   });
 }
 

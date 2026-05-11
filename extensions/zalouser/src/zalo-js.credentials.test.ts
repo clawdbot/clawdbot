@@ -143,16 +143,13 @@ describe("zalouser credential persistence", () => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
         await startZaloQrLogin({ profile, timeoutMs: 1000 });
 
-        await expect(waitForZaloQrLogin({ profile, timeoutMs: 1000 })).resolves.toMatchObject({
-          connected: true,
-        });
+        const loginResult = await waitForZaloQrLogin({ profile, timeoutMs: 1000 });
+        expect(loginResult.connected).toBe(true);
 
         const stored = await readStoredCredentials(stateDir, profile);
-        expect(stored).toMatchObject({
-          imei: "api-imei",
-          userAgent: "api-user-agent",
-          language: "vi",
-        });
+        expect(stored.imei).toBe("api-imei");
+        expect(stored.userAgent).toBe("api-user-agent");
+        expect(stored.language).toBe("vi");
         expect(stored.cookie).toEqual(refreshedCookie);
       });
     } finally {
@@ -328,23 +325,24 @@ describe("zalouser credential persistence", () => {
     }
   });
 
+  function expectMissingSessionResult(result: { ok: boolean; error?: string }) {
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("No saved Zalo session");
+  }
+
   it("keeps reaction sends non-throwing when session restore fails", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await expect(
-          sendZaloReaction({
-            profile: "missing-session",
-            threadId: "thread-1",
-            msgId: "msg-1",
-            cliMsgId: "cli-1",
-            emoji: "like",
-          }),
-        ).resolves.toMatchObject({
-          ok: false,
-          error: expect.stringContaining("No saved Zalo session"),
+        const result = await sendZaloReaction({
+          profile: "missing-session",
+          threadId: "thread-1",
+          msgId: "msg-1",
+          cliMsgId: "cli-1",
+          emoji: "like",
         });
+        expectMissingSessionResult(result);
       });
     } finally {
       await rm(stateDir, { recursive: true, force: true });
@@ -356,14 +354,10 @@ describe("zalouser credential persistence", () => {
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await expect(
-          sendZaloLink("thread-1", "https://example.com", {
-            profile: "missing-session",
-          }),
-        ).resolves.toMatchObject({
-          ok: false,
-          error: expect.stringContaining("No saved Zalo session"),
+        const result = await sendZaloLink("thread-1", "https://example.com", {
+          profile: "missing-session",
         });
+        expectMissingSessionResult(result);
       });
     } finally {
       await rm(stateDir, { recursive: true, force: true });
@@ -402,9 +396,8 @@ describe("zalouser credential persistence", () => {
       try {
         await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
           await startZaloQrLogin({ profile, timeoutMs: 1000 });
-          await expect(waitForZaloQrLogin({ profile, timeoutMs: 1000 })).resolves.toMatchObject({
-            connected: true,
-          });
+          const loginResult = await waitForZaloQrLogin({ profile, timeoutMs: 1000 });
+          expect(loginResult.connected).toBe(true);
 
           const filePath = credentialPath(stateDir, profile);
           const dirMode = (await stat(path.dirname(filePath))).mode & 0o777;

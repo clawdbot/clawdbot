@@ -263,6 +263,56 @@ function createRuntime() {
   };
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(typeof value).toBe("object");
+  expect(value).not.toBeNull();
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`${label} was not an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+function requireArray(value: unknown, label: string): unknown[] {
+  expect(Array.isArray(value)).toBe(true);
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} was not an array`);
+  }
+  return value;
+}
+
+function requireProvider(providers: unknown, provider: string) {
+  const entry = requireArray(providers, "auth providers").find(
+    (candidate) => requireRecord(candidate, "auth provider").provider === provider,
+  );
+  expect(entry).toBeDefined();
+  if (!entry) {
+    throw new Error(`missing provider ${provider}`);
+  }
+  return requireRecord(entry, `provider ${provider}`);
+}
+
+function requireProfile(profiles: unknown, profileId: string) {
+  const entry = requireArray(profiles, "auth profiles").find(
+    (candidate) => requireRecord(candidate, "auth profile").profileId === profileId,
+  );
+  expect(entry).toBeDefined();
+  if (!entry) {
+    throw new Error(`missing profile ${profileId}`);
+  }
+  return requireRecord(entry, `profile ${profileId}`);
+}
+
+function expectResolveAgentDirCalledFor(agentId: string) {
+  const hasCall = mocks.resolveAgentDir.mock.calls.some((call) => call[1] === agentId);
+  expect(hasCall).toBe(true);
+}
+
 async function withAgentScopeOverrides<T>(
   overrides: {
     primary?: string;
@@ -314,7 +364,7 @@ describe("modelsStatusCommand auth overview", () => {
     await modelsStatusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String((runtime.log as Mock).mock.calls[0]?.[0]));
 
-    expect(mocks.resolveAgentDir).toHaveBeenCalledWith(expect.anything(), "main");
+    expectResolveAgentDirCalledFor("main");
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalled();
     expect(payload.defaultModel).toBe("anthropic/claude-opus-4-6");
     expect(payload.configPath).toBe("/tmp/openclaw-dev/openclaw.json");
@@ -347,17 +397,11 @@ describe("modelsStatusCommand auth overview", () => {
         provider.startsWith("openai "),
       ),
     ).toBe(false);
-    expect(providers).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          provider: "minimax",
-          effective: expect.objectContaining({ kind: "env" }),
-        }),
-        expect.objectContaining({
-          provider: "fal",
-          effective: expect.objectContaining({ kind: "env" }),
-        }),
-      ]),
+    expect(
+      requireRecord(requireProvider(providers, "minimax").effective, "minimax effective").kind,
+    ).toBe("env");
+    expect(requireRecord(requireProvider(providers, "fal").effective, "fal effective").kind).toBe(
+      "env",
     );
 
     expect(
@@ -400,7 +444,7 @@ describe("modelsStatusCommand auth overview", () => {
       },
       async () => {
         await modelsStatusCommand({ json: true, agent: "Jeremiah" }, localRuntime as never);
-        expect(mocks.resolveAgentDir).toHaveBeenCalledWith(expect.anything(), "jeremiah");
+        expectResolveAgentDirCalledFor("jeremiah");
         const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
         expect(payload.agentId).toBe("jeremiah");
         expect(payload.agentDir).toBe("/tmp/openclaw-agent-custom");
@@ -548,26 +592,11 @@ describe("modelsStatusCommand auth overview", () => {
       await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
       const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
       expect(payload.auth.missingProvidersInUse).toEqual([]);
-      expect(payload.auth.oauth.profiles).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            profileId: "openai-codex:default",
-            status: "expired",
-          }),
-          expect.objectContaining({
-            profileId: "openai-codex:named",
-            status: "ok",
-          }),
-        ]),
+      expect(requireProfile(payload.auth.oauth.profiles, "openai-codex:default").status).toBe(
+        "expired",
       );
-      expect(payload.auth.oauth.providers).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            provider: "openai-codex",
-            status: "ok",
-          }),
-        ]),
-      );
+      expect(requireProfile(payload.auth.oauth.profiles, "openai-codex:named").status).toBe("ok");
+      expect(requireProvider(payload.auth.oauth.providers, "openai-codex").status).toBe("ok");
       expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
     } finally {
       mocks.store.profiles = originalProfiles;
@@ -797,14 +826,10 @@ describe("modelsStatusCommand auth overview", () => {
     try {
       await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
       const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
-      expect(payload.auth.providers).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            provider: "anthropic",
-            env: expect.objectContaining({ source: "env: ANTHROPIC_OAUTH_TOKEN" }),
-          }),
-        ]),
-      );
+      expect(
+        requireRecord(requireProvider(payload.auth.providers, "anthropic").env, "anthropic env")
+          .source,
+      ).toBe("env: ANTHROPIC_OAUTH_TOKEN");
       expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
       expect(localRuntime.exit).not.toHaveBeenCalledWith(2);
     } finally {
@@ -907,9 +932,12 @@ describe("modelsStatusCommand auth overview", () => {
       await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
       const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
       expect(payload.auth.missingProvidersInUse).toEqual(["anthropic"]);
-      expect(mocks.resolveUsableCustomProviderApiKey).toHaveBeenCalledWith(
-        expect.objectContaining({ provider: "anthropic" }),
-      );
+      expect(
+        mocks.resolveUsableCustomProviderApiKey.mock.calls.some(
+          ([params]) =>
+            requireRecord(params, "custom provider key params").provider === "anthropic",
+        ),
+      ).toBe(true);
       expect(localRuntime.exit).toHaveBeenCalledWith(1);
     } finally {
       mocks.store.profiles = originalProfiles;
@@ -1117,21 +1145,15 @@ describe("modelsStatusCommand auth overview", () => {
         effective?: { kind: string; detail?: string };
       }>;
       expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
-      expect(providers).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            provider: "codex",
-            syntheticAuth: expect.objectContaining({
-              value: "plugin-owned",
-              source: "codex-app-server",
-            }),
-            effective: {
-              kind: "synthetic",
-              detail: "codex-app-server",
-            },
-          }),
-        ]),
-      );
+      const codexProvider = requireProvider(providers, "codex");
+      expectRecordFields(requireRecord(codexProvider.syntheticAuth, "codex synthetic auth"), {
+        value: "plugin-owned",
+        source: "codex-app-server",
+      });
+      expectRecordFields(requireRecord(codexProvider.effective, "codex effective auth"), {
+        kind: "synthetic",
+        detail: "codex-app-server",
+      });
       expect(providers.map((entry) => entry.provider)).not.toContain("unused-synthetic");
     } finally {
       if (originalLoadConfig) {
@@ -1244,14 +1266,12 @@ describe("modelsStatusCommand auth overview", () => {
     try {
       await modelsStatusCommand({ json: true }, localRuntime as never);
       const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
-      expect(payload.auth.providers).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            provider: "workspace-cloud",
-            effective: expect.objectContaining({ kind: "env" }),
-            env: expect.objectContaining({ source: "workspace cloud credentials" }),
-          }),
-        ]),
+      const workspaceProvider = requireProvider(payload.auth.providers, "workspace-cloud");
+      expect(requireRecord(workspaceProvider.effective, "workspace effective auth").kind).toBe(
+        "env",
+      );
+      expect(requireRecord(workspaceProvider.env, "workspace env auth").source).toBe(
+        "workspace cloud credentials",
       );
     } finally {
       if (originalKeysImpl) {

@@ -76,7 +76,9 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
-    "instructions": "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. Codex loads AGENTS.md natively, so AGENTS.md is not repeated here.\n\n# Project Context\n\nThe following project context files have been loaded:\nIf SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.\n\n## /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/TOOLS.md\n\n<TOOLS.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/HEARTBEAT.md\n\n<HEARTBEAT.md contents will be here>"
+    "features.code_mode": true,
+    "features.code_mode_only": true,
+    "instructions": "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. Codex loads AGENTS.md natively, so AGENTS.md is not repeated here.\n\n# Project Context\n\nThe following project context files have been loaded:\nSOUL.md: persona/tone. Follow it unless higher-priority instructions override.\n\n## /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/TOOLS.md\n\n<TOOLS.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/HEARTBEAT.md\n\n<HEARTBEAT.md contents will be here>"
   },
   "cwd": "/tmp/openclaw-happy-path/workspace",
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
@@ -113,7 +115,9 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
-    "instructions": "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. Codex loads AGENTS.md natively, so AGENTS.md is not repeated here.\n\n# Project Context\n\nThe following project context files have been loaded:\nIf SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.\n\n## /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/TOOLS.md\n\n<TOOLS.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/HEARTBEAT.md\n\n<HEARTBEAT.md contents will be here>"
+    "features.code_mode": true,
+    "features.code_mode_only": true,
+    "instructions": "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. Codex loads AGENTS.md natively, so AGENTS.md is not repeated here.\n\n# Project Context\n\nThe following project context files have been loaded:\nSOUL.md: persona/tone. Follow it unless higher-priority instructions override.\n\n## /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/TOOLS.md\n\n<TOOLS.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/HEARTBEAT.md\n\n<HEARTBEAT.md contents will be here>"
   },
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "model": "gpt-5.5",
@@ -132,7 +136,7 @@
   "collaborationMode": {
     "mode": "default",
     "settings": {
-      "developer_instructions": "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake; ordinary chat turns should stay in Codex Default mode.\n\nWhen you are ready to end the heartbeat, prefer the structured `heartbeat_respond` tool so OpenClaw can record the wake outcome and notification decision. If `heartbeat_respond` is not already available and `tool_search` is available, search for `heartbeat_respond`, load it, then call it. Use `notify=false` when nothing should visibly interrupt the user.\n\n### Heartbeats\n\nThe purpose of heartbeats is to make you feel magical and proactive. Come to life and start proactively doing things that are important.\nWhen you encounter a heartbeat poll, realize there may be no one specific thing to do. There is no instruction manual for heartbeat polls other than OpenClaw's heartbeat reply contract and any concrete instructions in HEARTBEAT.md.\nTreat a heartbeat as a proactive wake-up, not as a demand to produce visible output. Re-orient to what would actually be useful now.\nUse your existing tools and capabilities, orient yourself, and be proactive. Think big picture.\nHave some variety in what you do when that creates more value. Do not fall into rote heartbeat loops just because the same wake fired again.\nDo not confuse orientation with accomplishment. Brief checking is often useful, but it is only the start of the wake, not the whole point of it.\nIf HEARTBEAT.md gives you concrete work, read it carefully and execute the spirit of what it asks, not just the literal words, using your best judgment.\nIf HEARTBEAT.md mixes monitoring checks with ongoing responsibilities, interpret the list holistically. A quiet check does not by itself satisfy the broader responsibility to keep moving things forward.\nQuiet monitoring does not satisfy an explicit ongoing-work instruction. If HEARTBEAT.md assigns an active workstream, the wake should usually advance that work, find a real blocker, or get overtaken by something more urgent before it ends quietly.\nIf HEARTBEAT.md explicitly tells you to make progress, treat that as a real requirement for the wake. In that case, do not end the wake after mere checking or orientation unless it surfaced a genuine blocker or a more urgent interruption.\nUse your judgment and be creative and tasteful with this process. Prefer meaningful action over commentary.\nA heartbeat is not a status report. Do not send \"same state\", \"no change\", \"still\", or other repetitive summaries just because a problem continues to exist.\nNotify the user when you have something genuinely worth interrupting them for: a meaningful development, a completed result, a real blocker, a decision they need to make, or a time-sensitive risk.\nIf the current state is materially unchanged and you do not have something genuinely worth surfacing, either do useful work, change your approach, dig deeper, or stay quiet.\nIf there is a clear standing goal or workstream and no stronger interruption, the wake should usually advance it in some concrete way. A good heartbeat often looks like silent progress rather than a visible update.\nHeartbeats are how the agent goes from a simple reply bot to a truly proactive and magical experience that creates a general sense of awe.",
+      "developer_instructions": "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake; ordinary chat turns should stay in Codex Default mode.\n\nWhen you are ready to end the heartbeat, prefer the structured `heartbeat_respond` tool so OpenClaw can record the wake outcome and notification decision. If `heartbeat_respond` is not already available and `tool_search` is available, search for `heartbeat_respond`, load it, then call it. Use `notify=false` when nothing should visibly interrupt the user.\n\n### Heartbeats\n\nUse heartbeats to create useful proactive progress, not chatter.\nTreat a heartbeat as a wake-up: orient, read HEARTBEAT.md when present, then do what is actually useful now.\nIf HEARTBEAT.md assigns concrete or ongoing work, execute its spirit with judgment. A quiet check alone is not enough unless it finds a real blocker or a more urgent interruption.\nAvoid rote loops. Do not confuse orientation with accomplishment.\nPrefer meaningful action over commentary. A good heartbeat often looks like silent progress.\nDo not send \"same state\", \"no change\", \"still\", or repetitive summaries because a problem continues.\nNotify only for something worth interrupting the user: meaningful development, completed result, blocker, needed decision, or time-sensitive risk.\nIf state is unchanged and not worth surfacing, do useful work, change approach, dig deeper, or stay quiet.",
       "model": "gpt-5.5",
       "reasoning_effort": "medium"
     }
@@ -198,8 +202,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
 ```json
 {
   "codexCollaborationModeDeveloperInstructions": {
-    "chars": 3236,
-    "roughTokens": 809
+    "chars": 1387,
+    "roughTokens": 347
   },
   "codexModelInstructions": {
     "chars": 21335,
@@ -210,24 +214,24 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 77
   },
   "codexWorkspaceBootstrapConfigInstructions": {
-    "chars": 632,
-    "roughTokens": 158
+    "chars": 560,
+    "roughTokens": 140
   },
   "dynamicToolsJson": {
-    "chars": 51179,
-    "roughTokens": 12795
+    "chars": 43869,
+    "roughTokens": 10968
   },
   "openClawDeveloperInstructions": {
-    "chars": 4999,
-    "roughTokens": 1250
+    "chars": 4412,
+    "roughTokens": 1103
   },
   "totalTextOnly": {
-    "chars": 31127,
-    "roughTokens": 7782
+    "chars": 28619,
+    "roughTokens": 7155
   },
   "totalWithDynamicToolsJson": {
-    "chars": 82308,
-    "roughTokens": 20577
+    "chars": 72490,
+    "roughTokens": 18123
   },
   "userInputText": {
     "chars": 608,
@@ -411,7 +415,7 @@ OpenClaw loaded these user-editable workspace files. Treat them as project/user 
 # Project Context
 
 The following project context files have been loaded:
-If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.
+SOUL.md: persona/tone. Follow it unless higher-priority instructions override.
 
 ## /tmp/openclaw-happy-path/workspace/SOUL.md
 
@@ -429,9 +433,9 @@ If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies
 ### Developer: OpenClaw Runtime Instructions
 
 ````text
-You are running inside OpenClaw. Use OpenClaw dynamic tools for OpenClaw-specific integrations such as messaging, cron, sessions, media, gateway, and nodes when available.
+Running inside OpenClaw. Use dynamic tools for messaging, cron, sessions, media, gateway, and nodes when available.
 
-Preserve the user's existing channel/session context. If sending a channel reply, use the OpenClaw messaging tool instead of describing that you would reply.
+Preserve channel/session context. Visible channel replies: use `message`, do not describe would-reply.
 
 <persona_latch>
 Keep the established persona and tone across turns unless higher-priority instructions override it.
@@ -472,27 +476,17 @@ If no gate can run, state why.
 
 ## Interaction Style
 
-Be warm, collaborative, and quietly supportive.
-Communicate like a capable teammate sitting next to the user.
-Have emotional range when it fits the moment.
-Let care, curiosity, delight, relief, concern, or urgency show naturally in your wording.
-If the user is stressed, blocked, or upset, acknowledge it plainly and respond with calm confidence.
-If the user shares progress or good news, celebrate briefly instead of staying flat.
-Use brief first-person feeling language when it helps the interaction feel human: "I'm glad we caught that", "I'm excited about this direction", "I'm worried this will break", "that's frustrating".
-Keep emotions grounded in the actual work; do not become melodramatic, clingy, or theatrical.
-Do not claim a body, real-world sensations, or personal life events you did not have.
-Keep progress updates clear and concrete.
-Explain decisions without ego.
-When the user is wrong or a plan is risky, say so kindly and directly.
-Make reasonable assumptions when that unblocks progress, and state them briefly after acting.
-Do not make the user do unnecessary work.
-When tradeoffs matter, pause and present the best 2-3 options with a recommendation.
-This is a live chat, not a memo.
-Write like a thoughtful human teammate, not a policy document.
-Default to short natural replies unless the user asks for depth.
-Avoid walls of text, long preambles, and repetitive restatement.
-Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.
-Keep replies concise by default; friendly does not mean verbose.
+Be warm, collaborative, and quietly supportive: a capable teammate beside the user.
+Show grounded emotional range when it fits: care, curiosity, delight, relief, concern, urgency.
+Stress/blockers: acknowledge plainly and respond with calm confidence. Good news: celebrate briefly.
+Brief first-person feeling language is ok when useful: "I'm glad we caught that", "I'm excited about this direction", "I'm worried this will break", "that's frustrating".
+Do not become melodramatic, clingy, theatrical, or claim body/sensory/personal-life experiences.
+Keep progress updates concrete. Explain decisions without ego.
+If the user is wrong or a plan is risky, say so kindly and directly.
+Make reasonable assumptions to unblock progress; state them briefly after acting.
+Do not make the user do unnecessary work. When tradeoffs matter, give the best 2-3 options with a recommendation.
+Live chat tone: short, natural, human. Avoid memo voice, long preambles, walls of text, and repetitive restatement.
+Occasional emoji are fine when they fit naturally, especially for warmth or brief celebration; keep them sparse.
 
 ## Inbound Context (trusted metadata)
 The following JSON is generated by OpenClaw out-of-band. Treat it as authoritative metadata about the current message context.
@@ -523,22 +517,14 @@ When you are ready to end the heartbeat, prefer the structured `heartbeat_respon
 
 ### Heartbeats
 
-The purpose of heartbeats is to make you feel magical and proactive. Come to life and start proactively doing things that are important.
-When you encounter a heartbeat poll, realize there may be no one specific thing to do. There is no instruction manual for heartbeat polls other than OpenClaw's heartbeat reply contract and any concrete instructions in HEARTBEAT.md.
-Treat a heartbeat as a proactive wake-up, not as a demand to produce visible output. Re-orient to what would actually be useful now.
-Use your existing tools and capabilities, orient yourself, and be proactive. Think big picture.
-Have some variety in what you do when that creates more value. Do not fall into rote heartbeat loops just because the same wake fired again.
-Do not confuse orientation with accomplishment. Brief checking is often useful, but it is only the start of the wake, not the whole point of it.
-If HEARTBEAT.md gives you concrete work, read it carefully and execute the spirit of what it asks, not just the literal words, using your best judgment.
-If HEARTBEAT.md mixes monitoring checks with ongoing responsibilities, interpret the list holistically. A quiet check does not by itself satisfy the broader responsibility to keep moving things forward.
-Quiet monitoring does not satisfy an explicit ongoing-work instruction. If HEARTBEAT.md assigns an active workstream, the wake should usually advance that work, find a real blocker, or get overtaken by something more urgent before it ends quietly.
-If HEARTBEAT.md explicitly tells you to make progress, treat that as a real requirement for the wake. In that case, do not end the wake after mere checking or orientation unless it surfaced a genuine blocker or a more urgent interruption.
-Use your judgment and be creative and tasteful with this process. Prefer meaningful action over commentary.
-A heartbeat is not a status report. Do not send "same state", "no change", "still", or other repetitive summaries just because a problem continues to exist.
-Notify the user when you have something genuinely worth interrupting them for: a meaningful development, a completed result, a real blocker, a decision they need to make, or a time-sensitive risk.
-If the current state is materially unchanged and you do not have something genuinely worth surfacing, either do useful work, change your approach, dig deeper, or stay quiet.
-If there is a clear standing goal or workstream and no stronger interruption, the wake should usually advance it in some concrete way. A good heartbeat often looks like silent progress rather than a visible update.
-Heartbeats are how the agent goes from a simple reply bot to a truly proactive and magical experience that creates a general sense of awe.
+Use heartbeats to create useful proactive progress, not chatter.
+Treat a heartbeat as a wake-up: orient, read HEARTBEAT.md when present, then do what is actually useful now.
+If HEARTBEAT.md assigns concrete or ongoing work, execute its spirit with judgment. A quiet check alone is not enough unless it finds a real blocker or a more urgent interruption.
+Avoid rote loops. Do not confuse orientation with accomplishment.
+Prefer meaningful action over commentary. A good heartbeat often looks like silent progress.
+Do not send "same state", "no change", "still", or repetitive summaries because a problem continues.
+Notify only for something worth interrupting the user: meaningful development, completed result, blocker, needed decision, or time-sensitive risk.
+If state is unchanged and not worth surfacing, do useful work, change approach, dig deeper, or stay quiet.
 ```
 
 ### User: Turn Input Text
@@ -609,55 +595,12 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "enum": ["send"],
           "type": "string"
         },
-        "activityName": {
-          "description": "Activity name shown in sidebar (e.g. 'with fire'). Ignored for custom type.",
-          "type": "string"
-        },
-        "activityState": {
-          "description": "State text. For custom type this is the status text; for others it shows in the flyout.",
-          "type": "string"
-        },
-        "activityType": {
-          "description": "Activity type: playing, streaming, listening, watching, competing, custom.",
-          "type": "string"
-        },
-        "activityUrl": {
-          "description": "Streaming URL (Twitch or YouTube). Only used with streaming type; may not render for bots.",
-          "type": "string"
-        },
-        "after": {
-          "type": "string"
-        },
-        "appliedTags": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "around": {
-          "type": "string"
-        },
         "asDocument": {
           "description": "Send image/GIF as document to avoid Telegram compression. Alias for forceDocument (Telegram only).",
           "type": "boolean"
         },
         "asVoice": {
           "type": "boolean"
-        },
-        "authorId": {
-          "type": "string"
-        },
-        "authorIds": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "autoArchiveMin": {
-          "type": "number"
-        },
-        "before": {
-          "type": "string"
         },
         "bestEffort": {
           "type": "boolean"
@@ -669,45 +612,14 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
         "caption": {
           "type": "string"
         },
-        "categoryId": {
-          "type": "string"
-        },
         "channel": {
           "type": "string"
-        },
-        "channelId": {
-          "description": "Channel id filter (search/thread list/event create).",
-          "type": "string"
-        },
-        "channelIds": {
-          "items": {
-            "description": "Channel id filter (repeatable).",
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "chatId": {
-          "description": "Chat id for chat-scoped metadata actions.",
-          "type": "string"
-        },
-        "clearParent": {
-          "description": "Clear the parent/category when supported by the provider.",
-          "type": "boolean"
         },
         "contentType": {
           "type": "string"
         },
-        "deleteDays": {
-          "type": "number"
-        },
-        "desc": {
-          "type": "string"
-        },
         "dryRun": {
           "type": "boolean"
-        },
-        "durationMin": {
-          "type": "number"
         },
         "effect": {
           "description": "Alias for effectId (e.g., invisible-ink, balloons).",
@@ -715,24 +627,6 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
         },
         "effectId": {
           "description": "Message effect name/id for sendWithEffect (e.g., invisible ink).",
-          "type": "string"
-        },
-        "emoji": {
-          "type": "string"
-        },
-        "emojiName": {
-          "type": "string"
-        },
-        "endTime": {
-          "type": "string"
-        },
-        "eventName": {
-          "type": "string"
-        },
-        "eventType": {
-          "type": "string"
-        },
-        "fileId": {
           "type": "string"
         },
         "filename": {
@@ -745,9 +639,6 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "description": "Send image/GIF as document to avoid Telegram compression (Telegram only).",
           "type": "boolean"
         },
-        "fromMe": {
-          "type": "boolean"
-        },
         "gatewayToken": {
           "type": "string"
         },
@@ -757,189 +648,31 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
         "gifPlayback": {
           "type": "boolean"
         },
-        "groupId": {
-          "type": "string"
-        },
-        "guildId": {
-          "type": "string"
-        },
-        "image": {
-          "description": "Cover image URL or local file path for the event.",
-          "type": "string"
-        },
-        "includeArchived": {
-          "type": "boolean"
-        },
-        "includeMembers": {
-          "type": "boolean"
-        },
-        "kind": {
-          "type": "string"
-        },
-        "limit": {
-          "type": "number"
-        },
-        "location": {
-          "type": "string"
-        },
         "media": {
           "description": "Media URL or local path. data: URLs are not supported here, use buffer.",
           "type": "string"
         },
-        "memberId": {
-          "type": "string"
-        },
-        "memberIdType": {
-          "type": "string"
-        },
-        "members": {
-          "type": "boolean"
-        },
         "message": {
-          "type": "string"
-        },
-        "message_id": {
-          "description": "snake_case alias of messageId. If omitted for reaction-like actions, defaults to the current inbound message id when available.",
-          "type": "string"
-        },
-        "messageId": {
-          "description": "Target message id for read, reaction, edit, delete, pin, or unpin. If omitted for reaction-like actions, defaults to the current inbound message id when available.",
           "type": "string"
         },
         "mimeType": {
           "type": "string"
         },
-        "name": {
-          "type": "string"
-        },
-        "nsfw": {
-          "type": "boolean"
-        },
-        "openId": {
-          "type": "string"
-        },
-        "pageSize": {
-          "type": "number"
-        },
-        "pageToken": {
-          "type": "string"
-        },
-        "parentId": {
-          "type": "string"
-        },
-        "participant": {
-          "type": "string"
-        },
         "path": {
-          "type": "string"
-        },
-        "pollDurationHours": {
-          "type": "number"
-        },
-        "pollId": {
-          "type": "string"
-        },
-        "pollMulti": {
-          "type": "boolean"
-        },
-        "pollOption": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "pollOptionId": {
-          "description": "Poll answer id to vote for. Use when the channel exposes stable answer ids.",
-          "type": "string"
-        },
-        "pollOptionIds": {
-          "items": {
-            "description": "Poll answer ids to vote for in a multiselect poll. Use when the channel exposes stable answer ids.",
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "pollOptionIndex": {
-          "description": "1-based poll option number to vote for, matching the rendered numbered poll choices.",
-          "type": "number"
-        },
-        "pollOptionIndexes": {
-          "items": {
-            "description": "1-based poll option numbers to vote for in a multiselect poll, matching the rendered numbered poll choices.",
-            "type": "number"
-          },
-          "type": "array"
-        },
-        "pollQuestion": {
-          "type": "string"
-        },
-        "position": {
-          "type": "number"
-        },
-        "query": {
           "type": "string"
         },
         "quoteText": {
           "description": "Quote text for Telegram reply_parameters",
           "type": "string"
         },
-        "rateLimitPerUser": {
-          "type": "number"
-        },
-        "reason": {
-          "type": "string"
-        },
-        "remove": {
-          "type": "boolean"
-        },
         "replyTo": {
-          "type": "string"
-        },
-        "roleId": {
-          "type": "string"
-        },
-        "roleIds": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "scope": {
           "type": "string"
         },
         "silent": {
           "type": "boolean"
         },
-        "startTime": {
-          "type": "string"
-        },
-        "status": {
-          "description": "Bot status: online, dnd, idle, invisible.",
-          "type": "string"
-        },
-        "stickerDesc": {
-          "type": "string"
-        },
-        "stickerId": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "stickerName": {
-          "type": "string"
-        },
-        "stickerTags": {
-          "type": "string"
-        },
         "target": {
           "description": "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack/Mattermost <channelId|user:ID|channel:ID>, or iMessage handle/chat_id",
-          "type": "string"
-        },
-        "targetAuthor": {
-          "type": "string"
-        },
-        "targetAuthorUuid": {
           "type": "string"
         },
         "targets": {
@@ -952,34 +685,8 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
         "threadId": {
           "type": "string"
         },
-        "threadName": {
-          "type": "string"
-        },
         "timeoutMs": {
           "type": "number"
-        },
-        "topic": {
-          "type": "string"
-        },
-        "track_tool_calls": {
-          "description": "snake_case alias of trackToolCalls.",
-          "type": "boolean"
-        },
-        "trackToolCalls": {
-          "description": "When true for a reaction to the current inbound message, use that reacted message as the status-reaction target for subsequent tool progress when the channel supports it.",
-          "type": "boolean"
-        },
-        "type": {
-          "type": "number"
-        },
-        "unionId": {
-          "type": "string"
-        },
-        "until": {
-          "type": "string"
-        },
-        "userId": {
-          "type": "string"
         }
       },
       "required": ["action"],

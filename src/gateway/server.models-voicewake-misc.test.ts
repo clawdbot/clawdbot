@@ -504,13 +504,11 @@ describe("gateway server models + voicewake", () => {
         ]);
         const res = await listModels();
         expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual([
-          expect.objectContaining({
-            id: "MiniMax-M2.7-highspeed",
-            name: "MiniMax M2.7 Highspeed",
-            provider: "minimax",
-          }),
-        ]);
+        const models = res.payload?.models ?? [];
+        expect(models).toHaveLength(1);
+        expect(models[0]?.id).toBe("MiniMax-M2.7-highspeed");
+        expect(models[0]?.name).toBe("MiniMax M2.7 Highspeed");
+        expect(models[0]?.provider).toBe("minimax");
       },
     );
   });
@@ -558,19 +556,15 @@ describe("gateway server models + voicewake", () => {
         ]);
         const res = await listModels({ view: "configured" });
         expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual([
-          expect.objectContaining({
-            id: "MiniMax-M2.7-highspeed",
-            name: "MiniMax M2.7 Highspeed",
-            provider: "minimax",
-          }),
-          expect.objectContaining({
-            id: "glm-4.5-air",
-            name: "GLM 4.5 Air",
-            provider: "zhipu",
-            reasoning: true,
-          }),
-        ]);
+        const models = res.payload?.models ?? [];
+        expect(models).toHaveLength(2);
+        expect(models[0]?.id).toBe("MiniMax-M2.7-highspeed");
+        expect(models[0]?.name).toBe("MiniMax M2.7 Highspeed");
+        expect(models[0]?.provider).toBe("minimax");
+        expect(models[1]?.id).toBe("glm-4.5-air");
+        expect(models[1]?.name).toBe("GLM 4.5 Air");
+        expect(models[1]?.provider).toBe("zhipu");
+        expect(models[1]?.reasoning).toBe(true);
       },
     );
   });
@@ -699,15 +693,13 @@ describe("gateway server models + voicewake", () => {
         await seedPiCatalog();
         const res = await listModels();
         expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual([
-          expect.objectContaining({
-            id: "moonshotai/kimi-k2.5",
-            name: "Kimi K2.5 (Configured)",
-            alias: "Kimi K2.5 (NVIDIA)",
-            provider: "nvidia",
-            contextWindow: 32_000,
-          }),
-        ]);
+        const models = res.payload?.models ?? [];
+        expect(models).toHaveLength(1);
+        expect(models[0]?.id).toBe("moonshotai/kimi-k2.5");
+        expect(models[0]?.name).toBe("Kimi K2.5 (Configured)");
+        expect(models[0]?.alias).toBe("Kimi K2.5 (NVIDIA)");
+        expect(models[0]?.provider).toBe("nvidia");
+        expect(models[0]?.contextWindow).toBe(32_000);
       },
     );
   });
@@ -742,15 +734,13 @@ describe("gateway server models + voicewake", () => {
         await seedPiCatalog();
         const res = await listModels();
         expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual([
-          expect.objectContaining({
-            id: "gpt-test-z",
-            name: "Configured GPT Test Z",
-            alias: "GPT Test Z Alias",
-            provider: "openai",
-            contextWindow: 64_000,
-          }),
-        ]);
+        const models = res.payload?.models ?? [];
+        expect(models).toHaveLength(1);
+        expect(models[0]?.id).toBe("gpt-test-z");
+        expect(models[0]?.name).toBe("Configured GPT Test Z");
+        expect(models[0]?.alias).toBe("GPT Test Z Alias");
+        expect(models[0]?.provider).toBe("openai");
+        expect(models[0]?.contextWindow).toBe(64_000);
       },
     );
   });

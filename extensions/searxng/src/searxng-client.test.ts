@@ -98,14 +98,25 @@ describe("searxng client", () => {
     expect(endpointMockState.calls).toHaveLength(2);
     expect(new URL(endpointMockState.calls[0].url).searchParams.get("categories")).toBe("weather");
     expect(new URL(endpointMockState.calls[1].url).searchParams.get("categories")).toBe("general");
-    expect(result).toMatchObject({
+    expect(result.provider).toBe("searxng");
+    expect(result.query).toBe("beijing hourly weather");
+    expect(result.count).toBe(1);
+    const results = result.results as Array<{
+      url?: string;
+      siteName?: string;
+      title?: string;
+      snippet?: string;
+    }>;
+    expect(results).toHaveLength(1);
+    expect(results[0]?.url).toBe("https://example.com/weather");
+    expect(results[0]?.siteName).toBe("example.com");
+    expect(results[0]?.title).toContain("Beijing hourly weather");
+    expect(results[0]?.snippet).toContain("Hourly forecast");
+    expect(result.externalContent).toEqual({
       provider: "searxng",
-      count: 1,
-      results: [
-        expect.objectContaining({
-          url: "https://example.com/weather",
-        }),
-      ],
+      source: "web_search",
+      untrusted: true,
+      wrapped: true,
     });
   });
 
@@ -122,9 +133,18 @@ describe("searxng client", () => {
     });
 
     expect(endpointMockState.calls).toHaveLength(1);
-    expect(result).toMatchObject({
+    const { tookMs, ...stableResult } = result;
+    expect(typeof tookMs).toBe("number");
+    expect(stableResult).toEqual({
+      query: "openclaw",
       provider: "searxng",
       count: 0,
+      externalContent: {
+        provider: "searxng",
+        source: "web_search",
+        untrusted: true,
+        wrapped: true,
+      },
       results: [],
     });
   });

@@ -10,6 +10,29 @@ const { sendMessageSlack } = await import("./send.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 const SLACK_TEXT_LIMIT = 8000;
 
+type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
+
+function mockObjectArg(
+  source: MockCallSource,
+  label: string,
+  callIndex = 0,
+  argIndex = 0,
+): Record<string, unknown> {
+  const call = source.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected ${label} call ${callIndex} to exist`);
+  }
+  const value = call[argIndex];
+  if (!value || typeof value !== "object") {
+    throw new Error(`Expected ${label} call ${callIndex} argument ${argIndex} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function postedMessage(client: ReturnType<typeof createSlackSendTestClient>, callIndex = 0) {
+  return mockObjectArg(client.chat.postMessage, "chat.postMessage", callIndex);
+}
+
 function slackDnsRequestError(): Error {
   return Object.assign(new Error("A request error occurred: getaddrinfo EAI_AGAIN slack.com"), {
     code: "slack_webapi_request_error",
@@ -127,12 +150,8 @@ describe("sendMessageSlack chunking", () => {
     });
 
     expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
-    expect(client.chat.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "C123",
-        text: message,
-      }),
-    );
+    expect(postedMessage(client).channel).toBe("C123");
+    expect(postedMessage(client).text).toBe(message);
   });
 
   it("splits oversized fallback text through the normal Slack sender", async () => {
@@ -168,25 +187,19 @@ describe("sendMessageSlack blocks", () => {
     });
 
     expect(client.conversations.open).not.toHaveBeenCalled();
-    expect(client.chat.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "C123",
-        text: "Shared a Block Kit message",
-        blocks: [{ type: "divider" }],
-      }),
-    );
-    expect(result).toMatchObject({ messageId: "171234.567", channelId: "C123" });
-    expect(result.receipt).toMatchObject({
-      primaryPlatformMessageId: "171234.567",
-      platformMessageIds: ["171234.567"],
-      parts: [
-        expect.objectContaining({
-          platformMessageId: "171234.567",
-          kind: "card",
-          raw: expect.objectContaining({ channel: "slack", channelId: "C123" }),
-        }),
-      ],
-    });
+    const post = postedMessage(client);
+    expect(post.channel).toBe("C123");
+    expect(post.text).toBe("Shared a Block Kit message");
+    expect(post.blocks).toEqual([{ type: "divider" }]);
+    expect(result.messageId).toBe("171234.567");
+    expect(result.channelId).toBe("C123");
+    expect(result.receipt.primaryPlatformMessageId).toBe("171234.567");
+    expect(result.receipt.platformMessageIds).toEqual(["171234.567"]);
+    const receiptPart = result.receipt.parts[0];
+    expect(receiptPart?.platformMessageId).toBe("171234.567");
+    expect(receiptPart?.kind).toBe("card");
+    expect((receiptPart?.raw as Record<string, unknown> | undefined)?.channel).toBe("slack");
+    expect((receiptPart?.raw as Record<string, unknown> | undefined)?.channelId).toBe("C123");
   });
 
   it("posts user-target block messages directly without conversations.open", async () => {
@@ -201,13 +214,10 @@ describe("sendMessageSlack blocks", () => {
     });
 
     expect(client.conversations.open).not.toHaveBeenCalled();
-    expect(client.chat.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "U123",
-        text: "Shared a Block Kit message",
-      }),
-    );
-    expect(result).toMatchObject({ messageId: "171234.567", channelId: "U123" });
+    expect(postedMessage(client).channel).toBe("U123");
+    expect(postedMessage(client).text).toBe("Shared a Block Kit message");
+    expect(result.messageId).toBe("171234.567");
+    expect(result.channelId).toBe("U123");
     expect(result.receipt.platformMessageIds).toEqual(["171234.567"]);
   });
 
@@ -224,13 +234,10 @@ describe("sendMessageSlack blocks", () => {
     });
 
     expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
-    expect(result).toMatchObject({ messageId: "171234.999", channelId: "C123" });
-    expect(result.receipt.parts[0]).toEqual(
-      expect.objectContaining({
-        platformMessageId: "171234.999",
-        kind: "text",
-      }),
-    );
+    expect(result.messageId).toBe("171234.999");
+    expect(result.channelId).toBe("C123");
+    expect(result.receipt.parts[0]?.platformMessageId).toBe("171234.999");
+    expect(result.receipt.parts[0]?.kind).toBe("text");
   });
 
   it("retries Slack conversations.open DNS request errors for threaded DMs", async () => {
@@ -247,11 +254,41 @@ describe("sendMessageSlack blocks", () => {
     });
 
     expect(client.conversations.open).toHaveBeenCalledTimes(2);
-    expect(client.chat.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "D123", thread_ts: "171234.100" }),
-    );
-    expect(result).toMatchObject({ messageId: "171234.567", channelId: "D123" });
+    expect(postedMessage(client).channel).toBe("D123");
+    expect(postedMessage(client).thread_ts).toBe("171234.100");
+    expect(result.messageId).toBe("171234.567");
+    expect(result.channelId).toBe("D123");
     expect(result.receipt.threadId).toBe("171234.100");
+  });
+
+  it("passes reply_broadcast for threaded text sends only on the first chunk", async () => {
+    const client = createSlackSendTestClient();
+
+    await sendMessageSlack("channel:C123", "a".repeat(8500), {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      threadTs: "171234.100",
+      replyBroadcast: true,
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(postedMessage(client).thread_ts).toBe("171234.100");
+    expect(postedMessage(client).reply_broadcast).toBe(true);
+    expect(postedMessage(client, 1)).not.toHaveProperty("reply_broadcast");
+  });
+
+  it("does not pass reply_broadcast when no thread is selected", async () => {
+    const client = createSlackSendTestClient();
+
+    await sendMessageSlack("channel:C123", "hello", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      replyBroadcast: true,
+    });
+
+    expect(postedMessage(client)).not.toHaveProperty("reply_broadcast");
   });
 
   it("does not retry Slack platform errors", async () => {
@@ -284,11 +321,7 @@ describe("sendMessageSlack blocks", () => {
       blocks: [{ type: "image", image_url: "https://example.com/a.png", alt_text: "Build chart" }],
     });
 
-    expect(client.chat.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "Build chart",
-      }),
-    );
+    expect(postedMessage(client).text).toBe("Build chart");
   });
 
   it("derives fallback text from video blocks", async () => {
@@ -308,11 +341,7 @@ describe("sendMessageSlack blocks", () => {
       ],
     });
 
-    expect(client.chat.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "Release demo",
-      }),
-    );
+    expect(postedMessage(client).text).toBe("Release demo");
   });
 
   it("derives fallback text from file blocks", async () => {
@@ -324,11 +353,7 @@ describe("sendMessageSlack blocks", () => {
       blocks: [{ type: "file", source: "remote", external_id: "F123" }],
     });
 
-    expect(client.chat.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "Shared a file",
-      }),
-    );
+    expect(postedMessage(client).text).toBe("Shared a file");
   });
 
   it("caps long fallback text while preserving blocks", async () => {
@@ -352,13 +377,10 @@ describe("sendMessageSlack blocks", () => {
       blocks,
     });
 
-    expect(client.chat.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: expect.stringMatching(/…$/),
-        blocks,
-      }),
-    );
-    expect(client.chat.postMessage.mock.calls[0]?.[0].text).toHaveLength(SLACK_TEXT_LIMIT);
+    const post = postedMessage(client);
+    expect(String(post.text).endsWith("…")).toBe(true);
+    expect(post.blocks).toBe(blocks);
+    expect(post.text).toHaveLength(SLACK_TEXT_LIMIT);
   });
 
   it("rejects blocks combined with mediaUrl", async () => {
@@ -372,6 +394,21 @@ describe("sendMessageSlack blocks", () => {
         blocks: [{ type: "divider" }],
       }),
     ).rejects.toThrow(/does not support blocks with mediaUrl/i);
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects replyBroadcast combined with mediaUrl", async () => {
+    const client = createSlackSendTestClient();
+    await expect(
+      sendMessageSlack("channel:C123", "hi", {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+        mediaUrl: "https://example.com/image.png",
+        threadTs: "171234.100",
+        replyBroadcast: true,
+      }),
+    ).rejects.toThrow(/replyBroadcast is only supported for text or block thread replies/i);
     expect(client.chat.postMessage).not.toHaveBeenCalled();
   });
 

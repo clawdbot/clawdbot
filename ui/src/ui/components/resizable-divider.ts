@@ -16,7 +16,7 @@ export class ResizableDivider extends LitElement {
   private startRatio = 0;
   private activePointerId: number | null = null;
 
-  static styles = css`
+  static override styles = css`
     :host {
       width: 4px;
       cursor: col-resize;
@@ -48,25 +48,25 @@ export class ResizableDivider extends LitElement {
     }
   `;
 
-  render() {
+  override render() {
     return nothing;
   }
 
-  connectedCallback() {
+  override connectedCallback() {
     super.connectedCallback();
     this.setStaticAccessibilityAttributes();
     this.addEventListener("pointerdown", this.handlePointerDown);
     this.addEventListener("keydown", this.handleKeyDown);
   }
 
-  disconnectedCallback() {
+  override disconnectedCallback() {
     super.disconnectedCallback();
     this.removeEventListener("pointerdown", this.handlePointerDown);
     this.removeEventListener("keydown", this.handleKeyDown);
     this.stopDragging();
   }
 
-  protected updated() {
+  protected override updated() {
     this.setAttribute("aria-valuemin", String(this.toAriaValue(this.minRatio)));
     this.setAttribute("aria-valuemax", String(this.toAriaValue(this.maxRatio)));
     this.setAttribute("aria-valuenow", String(this.toAriaValue(this.splitRatio)));

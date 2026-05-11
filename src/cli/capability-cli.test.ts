@@ -491,6 +491,14 @@ describe("capability cli", () => {
     expect(firstPreparedModelParams()?.modelRef).toBe(modelRef);
   }
 
+  function runtimeErrorMessages(): string[] {
+    return mocks.runtime.error.mock.calls.map((call) => String(call[0] ?? ""));
+  }
+
+  function expectRuntimeErrorContains(expected: string): void {
+    expect(runtimeErrorMessages().some((message) => message.includes(expected))).toBe(true);
+  }
+
   it("lists canonical capabilities", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -726,9 +734,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Only image files are supported"),
-    );
+    expectRuntimeErrorContains("Only image files are supported");
     expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
     expect(mocks.callGateway).not.toHaveBeenCalled();
   });
@@ -745,9 +751,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining('No text output returned for provider "openai" model "gpt-5.4"'),
-    );
+    expectRuntimeErrorContains('No text output returned for provider "openai" model "gpt-5.4"');
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
@@ -765,9 +769,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining('{"detail":"Instructions are required"}'),
-    );
+    expectRuntimeErrorContains('{"detail":"Instructions are required"}');
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
@@ -806,9 +808,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Codex app-server agent runtime"),
-    );
+    expectRuntimeErrorContains("Codex app-server agent runtime");
     expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
@@ -823,9 +823,7 @@ describe("capability cli", () => {
         }),
       ).rejects.toThrow("exit 1");
 
-      expect(mocks.runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining("--prompt cannot be empty or whitespace-only."),
-      );
+      expectRuntimeErrorContains("--prompt cannot be empty or whitespace-only.");
       expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
       expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
       expect(mocks.callGateway).not.toHaveBeenCalled();
@@ -995,9 +993,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Invalid thinking level."),
-    );
+    expectRuntimeErrorContains("Invalid thinking level.");
     expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
     expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
     expect(mocks.callGateway).not.toHaveBeenCalled();
@@ -1012,9 +1008,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("--prompt cannot be empty or whitespace-only."),
-    );
+    expectRuntimeErrorContains("--prompt cannot be empty or whitespace-only.");
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
@@ -1161,12 +1155,8 @@ describe("capability cli", () => {
         argv: ["capability", "image", "describe", "--file", "photo.jpg", "--json"],
       }),
     ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("No image understanding provider is configured or ready"),
-    );
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("agents.defaults.imageModel.primary"),
-    );
+    expectRuntimeErrorContains("No image understanding provider is configured or ready");
+    expectRuntimeErrorContains("agents.defaults.imageModel.primary");
   });
 
   it("reports missing image understanding configuration for image describe-many", async () => {
@@ -1185,9 +1175,7 @@ describe("capability cli", () => {
         argv: ["capability", "image", "describe-many", "--file", "photo.jpg", "--json"],
       }),
     ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("No image understanding provider is configured or ready"),
-    );
+    expectRuntimeErrorContains("No image understanding provider is configured or ready");
   });
 
   it("rewrites mismatched explicit image output extensions to the detected file type", async () => {
@@ -1616,9 +1604,7 @@ describe("capability cli", () => {
         argv: ["capability", "video", "generate", "--prompt", "friendly lobster", "--json"],
       }),
     ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Video asset at index 0 has neither buffer nor url"),
-    );
+    expectRuntimeErrorContains("Video asset at index 0 has neither buffer nor url");
   });
 
   it("routes audio transcribe through transcription, not realtime", async () => {
@@ -1665,12 +1651,8 @@ describe("capability cli", () => {
         argv: ["capability", "audio", "transcribe", "--file", "memo.m4a", "--json"],
       }),
     ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("No audio transcription provider is configured or ready"),
-    );
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("tools.media.audio.models"),
-    );
+    expectRuntimeErrorContains("No audio transcription provider is configured or ready");
+    expectRuntimeErrorContains("tools.media.audio.models");
   });
 
   it("surfaces the underlying transcription failure for audio transcribe", async () => {
@@ -1808,9 +1790,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("--output is not supported for remote gateway TTS yet"),
-    );
+    expectRuntimeErrorContains("--output is not supported for remote gateway TTS yet");
   });
 
   it("uses only embedding providers for embedding creation", async () => {
@@ -1919,9 +1899,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to remove saved auth profiles for provider openai."),
-    );
+    expectRuntimeErrorContains("Failed to remove saved auth profiles for provider openai.");
   });
 
   it("rejects providerless audio model overrides", async () => {
@@ -1941,9 +1919,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Model overrides must use the form <provider/model>."),
-    );
+    expectRuntimeErrorContains("Model overrides must use the form <provider/model>.");
     expect(mocks.transcribeAudioFile).not.toHaveBeenCalled();
   });
 
@@ -1964,9 +1940,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Model overrides must use the form <provider/model>."),
-    );
+    expectRuntimeErrorContains("Model overrides must use the form <provider/model>.");
     expect(mocks.describeImageFile).not.toHaveBeenCalled();
   });
 
@@ -1994,9 +1968,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Model overrides must use the form <provider/model>."),
-    );
+    expectRuntimeErrorContains("Model overrides must use the form <provider/model>.");
     expect(vi.mocked(mediaRuntime.describeVideoFile)).not.toHaveBeenCalled();
   });
 

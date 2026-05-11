@@ -1,4 +1,4 @@
-export { asNullableRecord as asRecord } from "openclaw/plugin-sdk/text-runtime";
+export { asNullableRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 export { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export function normalizeTrimmedString(value: unknown): string | undefined {

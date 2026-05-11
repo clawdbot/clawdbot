@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@whiskeysockets/baileys": "7.0.0-rc10",
+    "baileys": "7.0.0-rc10",
     "https-proxy-agent": "^9.0.0",
     "jimp": "^1.6.1",
     "typebox": "1.1.38",

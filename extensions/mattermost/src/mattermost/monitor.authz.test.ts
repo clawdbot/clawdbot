@@ -144,20 +144,41 @@ describe("mattermost monitor authz", () => {
   it("denies group control commands when the sender is outside the allowlist", async () => {
     const decision = await authorizeGroupCommand("attacker");
 
-    expect(decision).toMatchObject({
+    expect(decision).toEqual({
       ok: false,
       denyReason: "unauthorized",
+      commandAuthorized: false,
+      channelInfo: {
+        id: "chan-1",
+        type: "O",
+        name: "general",
+        display_name: "General",
+      },
       kind: "channel",
+      chatType: "channel",
+      channelName: "general",
+      channelDisplay: "General",
+      roomLabel: "#general",
     });
   });
 
   it("authorizes group control commands for allowlisted senders", async () => {
     const decision = await authorizeGroupCommand("trusted-user");
 
-    expect(decision).toMatchObject({
+    expect(decision).toEqual({
       ok: true,
       commandAuthorized: true,
+      channelInfo: {
+        id: "chan-1",
+        type: "O",
+        name: "general",
+        display_name: "General",
+      },
       kind: "channel",
+      chatType: "channel",
+      channelName: "general",
+      channelDisplay: "General",
+      roomLabel: "#general",
     });
   });
 
@@ -197,10 +218,20 @@ describe("mattermost monitor authz", () => {
       hasControlCommand: true,
     });
 
-    expect(decision).toMatchObject({
+    expect(decision).toEqual({
       ok: true,
       commandAuthorized: true,
+      channelInfo: {
+        id: "chan-1",
+        type: "O",
+        name: "general",
+        display_name: "General",
+      },
       kind: "channel",
+      chatType: "channel",
+      channelName: "general",
+      channelDisplay: "General",
+      roomLabel: "#general",
     });
   });
 

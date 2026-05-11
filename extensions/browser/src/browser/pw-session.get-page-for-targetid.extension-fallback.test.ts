@@ -139,10 +139,15 @@ describe("pw-session getPageForTargetId", () => {
         targetId: "TARGET_B",
       });
       expect(resolved).toBe(pageB);
-      expect(fetchSpy).toHaveBeenCalledWith(
-        "http://127.0.0.1:18792/json/list?token=abc",
-        expect.any(Object),
-      );
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe("http://127.0.0.1:18792/json/list?token=abc");
+      const fetchInit = fetchSpy.mock.calls[0]?.[1] as
+        | { dispatcher?: unknown; headers?: unknown; redirect?: unknown; signal?: unknown }
+        | undefined;
+      expect(fetchInit?.headers).toEqual({});
+      expect(fetchInit?.redirect).toBe("manual");
+      expect(fetchInit?.signal).toBeInstanceOf(AbortSignal);
+      expect(fetchInit?.dispatcher).toBeDefined();
     } finally {
       fetchSpy.mockRestore();
     }

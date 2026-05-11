@@ -1,4 +1,4 @@
-import type { proto } from "@whiskeysockets/baileys";
+import type { proto } from "baileys";
 import { describe, expect, it } from "vitest";
 import { extractMentionedJids, hasInboundUserContent } from "./extract.js";
 

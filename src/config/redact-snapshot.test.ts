@@ -356,6 +356,60 @@ describe("redactConfigSnapshot", () => {
     expect(restored.models.providers.openai.request.auth.token).toBe("provider-secret-token");
   });
 
+  it("redacts model provider local service env values from config snapshots", () => {
+    const hints = buildConfigSchema().uiHints;
+    const raw = `{
+  models: {
+    providers: {
+      local: {
+        baseUrl: "http://127.0.0.1:18000/v1",
+        models: [],
+        localService: {
+          command: "/usr/local/bin/server",
+          env: {
+            HF_HOME: "local-service-secret-home",
+            MAX_TOKENS: "local-service-secret-limit",
+          },
+        },
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        models: {
+          providers: {
+            local: {
+              baseUrl: "http://127.0.0.1:18000/v1",
+              models: [],
+              localService: {
+                command: "/usr/local/bin/server",
+                env: {
+                  HF_HOME: "local-service-secret-home",
+                  MAX_TOKENS: "local-service-secret-limit",
+                },
+              },
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.models.providers.local.localService.env.HF_HOME).toBe(REDACTED_SENTINEL);
+    expect(cfg.models.providers.local.localService.env.MAX_TOKENS).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("local-service-secret-home");
+    expect(result.raw).not.toContain("local-service-secret-limit");
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.models.providers.local.localService.env.HF_HOME).toBe(
+      "local-service-secret-home",
+    );
+  });
+
   it("redacts model provider request proxy URLs from config snapshots", () => {
     const hints = buildConfigSchema().uiHints;
     const raw = `{

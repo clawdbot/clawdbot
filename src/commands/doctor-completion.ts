@@ -79,7 +79,7 @@ export type DoctorCompletionOptions = {
  * - If no completion at all: prompt to install (with user confirmation)
  */
 export async function doctorShellCompletion(
-  runtime: RuntimeEnv,
+  _runtime: RuntimeEnv,
   prompter: DoctorPrompter,
   options: DoctorCompletionOptions = {},
 ): Promise<void> {

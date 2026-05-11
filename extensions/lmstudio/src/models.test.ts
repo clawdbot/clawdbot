@@ -166,12 +166,12 @@ describe("lmstudio-models", () => {
     ).toEqual({
       supportsReasoningEffort: true,
       supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
-      reasoningEffortMap: expect.objectContaining({
+      reasoningEffortMap: {
         off: "none",
         none: "none",
         adaptive: "xhigh",
         max: "xhigh",
-      }),
+      },
     });
 
     expect(
@@ -186,10 +186,10 @@ describe("lmstudio-models", () => {
     ).toEqual({
       supportsReasoningEffort: true,
       supportedReasoningEfforts: ["low", "medium", "high"],
-      reasoningEffortMap: expect.objectContaining({
+      reasoningEffortMap: {
         adaptive: "high",
         max: "high",
-      }),
+      },
     });
 
     expect(
@@ -205,7 +205,7 @@ describe("lmstudio-models", () => {
   });
 
   it("discovers llm models and maps metadata", async () => {
-    const fetchMock = vi.fn(async (_url: string | URL) => ({
+    const fetchMock = vi.fn(async (_url: string | URL, _init?: RequestInit) => ({
       ok: true,
       json: async () => ({
         models: [
@@ -248,14 +248,16 @@ describe("lmstudio-models", () => {
       fetchImpl: asFetch(fetchMock),
     });
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://localhost:1234/api/v1/models",
-      expect.objectContaining({
-        headers: {
-          Authorization: "Bearer lm-token",
-        },
-      }),
+    const modelsRequest = fetchMock.mock.calls.find(
+      ([url]) => url === "http://localhost:1234/api/v1/models",
     );
+    const modelsRequestOptions = modelsRequest?.[1] as
+      | { headers?: Record<string, string>; signal?: unknown }
+      | undefined;
+    expect(modelsRequestOptions?.headers).toEqual({
+      Authorization: "Bearer lm-token",
+    });
+    expect(modelsRequestOptions?.signal).toBeInstanceOf(AbortSignal);
 
     expect(models).toHaveLength(2);
     expect(models[0]).toEqual({
@@ -268,12 +270,12 @@ describe("lmstudio-models", () => {
         supportsUsageInStreaming: true,
         supportsReasoningEffort: true,
         supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
-        reasoningEffortMap: expect.objectContaining({
+        reasoningEffortMap: {
           off: "none",
           none: "none",
           adaptive: "xhigh",
           max: "xhigh",
-        }),
+        },
       },
       contextWindow: 262144,
       contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
@@ -366,7 +368,10 @@ describe("lmstudio-models", () => {
     if (!loadCall) {
       throw new Error("expected LM Studio model load request");
     }
-    expect(loadCall[1]).toMatchObject({
+    const loadInit = loadCall[1] as RequestInit;
+    const { signal, ...stableLoadInit } = loadInit;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(stableLoadInit).toEqual({
       method: "POST",
       headers: {
         "X-Proxy-Auth": "required",
@@ -378,7 +383,6 @@ describe("lmstudio-models", () => {
         context_length: 32768,
       }),
     });
-    const loadInit = loadCall[1] as RequestInit;
     const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
     expect(loadBody.context_length).not.toBe(LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
   });

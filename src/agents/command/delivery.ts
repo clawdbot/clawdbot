@@ -9,6 +9,7 @@ import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
@@ -30,6 +31,45 @@ import type { EmbeddedPiRunMeta } from "../pi-embedded-runner/types.js";
 import type { AgentCommandOpts, AgentCommandResultMetaOverrides } from "./types.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmbeddedPiAgent"]>>;
+type DurableSendResult = Awaited<ReturnType<typeof sendDurableMessageBatch>>;
+
+export type AgentCommandDeliveryPayloadStatus = "sent" | "suppressed" | "failed";
+
+export type AgentCommandDeliveryPayloadOutcome = {
+  index: number;
+  status: AgentCommandDeliveryPayloadStatus;
+  reason?: string;
+  resultCount?: number;
+  sentBeforeError?: boolean;
+  stage?: string;
+  error?: string;
+  hookEffect?: {
+    cancelReason?: string;
+    metadata?: Record<string, unknown>;
+  };
+};
+
+export type AgentCommandDeliveryStatus = {
+  requested: true;
+  attempted: boolean;
+  status: "sent" | "suppressed" | "partial_failed" | "failed";
+  /** `partial` means at least one payload was sent before a later payload failed. */
+  succeeded: true | false | "partial";
+  error?: true;
+  errorMessage?: string;
+  /** Free-form lowercase_snake reason from durable delivery or preflight validation. */
+  reason?: string;
+  resultCount?: number;
+  sentBeforeError?: true;
+  payloadOutcomes?: AgentCommandDeliveryPayloadOutcome[];
+};
+
+export type AgentCommandDeliveryResult = {
+  payloads: ReturnType<typeof projectOutboundPayloadPlanForJson>;
+  meta: EmbeddedPiRunMeta & AgentCommandResultMetaOverrides;
+  deliverySucceeded?: boolean;
+  deliveryStatus?: AgentCommandDeliveryStatus;
+};
 
 const NESTED_LOG_PREFIX = "[agent:nested]";
 
@@ -80,6 +120,110 @@ function mergeResultMetaOverrides(
   return {
     ...meta,
     ...overrides,
+  };
+}
+
+function serializeDeliveryPayloadOutcomes(
+  outcomes: DurableSendResult["payloadOutcomes"],
+): AgentCommandDeliveryPayloadOutcome[] | undefined {
+  if (!outcomes || outcomes.length === 0) {
+    return undefined;
+  }
+  return outcomes.map((outcome) => {
+    if (outcome.status === "sent") {
+      return {
+        index: outcome.index,
+        status: "sent",
+        resultCount: outcome.results.length,
+      };
+    }
+    if (outcome.status === "suppressed") {
+      return {
+        index: outcome.index,
+        status: "suppressed",
+        reason: outcome.reason,
+        ...(outcome.hookEffect ? { hookEffect: outcome.hookEffect } : {}),
+      };
+    }
+    return {
+      index: outcome.index,
+      status: "failed",
+      error: formatErrorMessage(outcome.error),
+      sentBeforeError: outcome.sentBeforeError,
+      stage: outcome.stage,
+    };
+  });
+}
+
+function deliveryStatusFromDurableSend(send: DurableSendResult): AgentCommandDeliveryStatus {
+  const payloadOutcomes = serializeDeliveryPayloadOutcomes(send.payloadOutcomes);
+  switch (send.status) {
+    case "sent":
+      return {
+        requested: true,
+        attempted: true,
+        status: "sent",
+        succeeded: true,
+        resultCount: send.results.length,
+        ...(payloadOutcomes ? { payloadOutcomes } : {}),
+      };
+    case "suppressed":
+      return {
+        requested: true,
+        attempted: true,
+        status: "suppressed",
+        succeeded: true,
+        reason: send.reason,
+        resultCount: 0,
+        ...(payloadOutcomes ? { payloadOutcomes } : {}),
+      };
+    case "partial_failed":
+      return {
+        requested: true,
+        attempted: true,
+        status: "partial_failed",
+        succeeded: "partial",
+        error: true,
+        errorMessage: formatErrorMessage(send.error),
+        resultCount: send.results.length,
+        sentBeforeError: true,
+        ...(payloadOutcomes ? { payloadOutcomes } : {}),
+      };
+    case "failed":
+      return {
+        requested: true,
+        attempted: true,
+        status: "failed",
+        succeeded: false,
+        error: true,
+        errorMessage: formatErrorMessage(send.error),
+        ...(send.stage ? { reason: send.stage } : {}),
+        ...(payloadOutcomes ? { payloadOutcomes } : {}),
+      };
+  }
+  const exhaustive: never = send;
+  return exhaustive;
+}
+
+function preDeliveryFailureStatus(reason: string): AgentCommandDeliveryStatus {
+  return {
+    requested: true,
+    attempted: false,
+    status: "failed",
+    succeeded: false,
+    error: true,
+    reason,
+  };
+}
+
+function noVisiblePayloadStatus(): AgentCommandDeliveryStatus {
+  return {
+    requested: true,
+    attempted: false,
+    status: "suppressed",
+    succeeded: true,
+    reason: "no_visible_payload",
+    resultCount: 0,
   };
 }
 
@@ -196,7 +340,7 @@ export async function deliverAgentCommandResult(params: {
   sessionEntry: SessionEntry | undefined;
   result: RunResult;
   payloads: RunResult["payloads"];
-}) {
+}): Promise<AgentCommandDeliveryResult> {
   const { cfg, deps, runtime, opts, outboundSession, sessionEntry, payloads, result } = params;
   const effectiveSessionKey = outboundSession?.key ?? opts.sessionKey;
   const deliver = opts.deliver === true;
@@ -276,12 +420,27 @@ export async function deliverAgentCommandResult(params: {
       ? (replyTransport.threadId ?? null)
       : (resolvedThreadId ?? null);
 
+  let deliveryLoggedError = false;
   const logDeliveryError = (err: unknown) => {
+    deliveryLoggedError = true;
     const message = `Delivery failed (${deliveryChannel}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
     runtime.error?.(message);
     if (!runtime.error) {
       runtime.log(message);
     }
+  };
+  let strictPreDeliveryError: unknown;
+  let deliveryStatus: AgentCommandDeliveryStatus | undefined;
+  const handlePreDeliveryError = (err: unknown, reason: string) => {
+    deliveryStatus = preDeliveryFailureStatus(reason);
+    if (!bestEffortDeliver) {
+      if (opts.json) {
+        strictPreDeliveryError = err;
+        return;
+      }
+      throw err;
+    }
+    logDeliveryError(err);
   };
 
   if (deliver) {
@@ -289,21 +448,12 @@ export async function deliverAgentCommandResult(params: {
       const err = new Error(
         "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
       );
-      if (!bestEffortDeliver) {
-        throw err;
-      }
-      logDeliveryError(err);
+      handlePreDeliveryError(err, "channel_resolved_to_internal");
     } else if (!isDeliveryChannelKnown) {
       const err = new Error(`Unknown channel: ${deliveryChannel}`);
-      if (!bestEffortDeliver) {
-        throw err;
-      }
-      logDeliveryError(err);
+      handlePreDeliveryError(err, "unknown_channel");
     } else if (resolvedTarget && !resolvedTarget.ok) {
-      if (!bestEffortDeliver) {
-        throw resolvedTarget.error;
-      }
-      logDeliveryError(resolvedTarget.error);
+      handlePreDeliveryError(resolvedTarget.error, "invalid_delivery_target");
     }
   }
 
@@ -323,7 +473,7 @@ export async function deliverAgentCommandResult(params: {
   // with "Local media path is not under an allowed directory". Mirrors the
   // normalizer wiring in `src/auto-reply/reply/agent-runner.ts`.
   const mediaNormalizedReplyPayloads =
-    deliver && !isInternalMessageChannel(deliveryChannel)
+    deliver && !deliveryStatus && !isInternalMessageChannel(deliveryChannel)
       ? await normalizeReplyMediaPathsForDelivery({
           cfg,
           payloads: normalizedReplyPayloads,
@@ -336,26 +486,37 @@ export async function deliverAgentCommandResult(params: {
   const outboundPayloadPlan = createOutboundPayloadPlan(mediaNormalizedReplyPayloads);
   const normalizedPayloads = projectOutboundPayloadPlanForJson(outboundPayloadPlan);
   const resultMeta = mergeResultMetaOverrides(result.meta, opts.resultMetaOverrides);
-  if (opts.json) {
-    writeRuntimeJson(
-      runtime,
-      buildOutboundResultEnvelope({
+  const emitJsonEnvelope = (status?: AgentCommandDeliveryStatus) => {
+    if (!opts.json) {
+      return;
+    }
+    writeRuntimeJson(runtime, {
+      ...buildOutboundResultEnvelope({
         payloads: normalizedPayloads,
         meta: resultMeta,
       }),
-    );
-    if (!deliver) {
-      return { payloads: normalizedPayloads, meta: resultMeta };
-    }
-  }
-
-  if (!payloads || payloads.length === 0) {
-    return { payloads: [], meta: resultMeta };
+      ...(status ? { deliveryStatus: status } : {}),
+    });
+  };
+  if (strictPreDeliveryError) {
+    emitJsonEnvelope(deliveryStatus);
+    throw strictPreDeliveryError;
   }
 
   const deliveryPayloads = projectOutboundPayloadPlanForOutbound(outboundPayloadPlan);
+  if (deliveryPayloads.length === 0) {
+    deliveryStatus = deliver ? (deliveryStatus ?? noVisiblePayloadStatus()) : undefined;
+    const deliverySucceeded = deliveryStatus?.succeeded === true ? true : undefined;
+    emitJsonEnvelope(deliveryStatus);
+    return {
+      payloads: normalizedPayloads,
+      meta: resultMeta,
+      ...(deliverySucceeded !== undefined ? { deliverySucceeded } : {}),
+      ...(deliveryStatus ? { deliveryStatus } : {}),
+    };
+  }
+
   let deliverySucceeded = false;
-  let deliveryHadError = false;
   const logPayload = (payload: NormalizedOutboundPayload) => {
     if (opts.json) {
       return;
@@ -370,17 +531,15 @@ export async function deliverAgentCommandResult(params: {
     }
     runtime.log(output);
   };
-  const markDeliveryError = (err: unknown) => {
-    deliveryHadError = true;
-    logDeliveryError(err);
-  };
   if (!deliver) {
     for (const payload of deliveryPayloads) {
       logPayload(payload);
     }
+    emitJsonEnvelope();
+    return { payloads: normalizedPayloads, meta: resultMeta };
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
-    if (deliveryTarget) {
+    if (deliveryTarget && !deliveryStatus) {
       const send = await sendDurableMessageBatch({
         cfg,
         channel: deliveryChannel,
@@ -392,19 +551,33 @@ export async function deliverAgentCommandResult(params: {
         threadId: resolvedThreadTarget ?? null,
         bestEffort: bestEffortDeliver,
         durability: bestEffortDeliver ? "best_effort" : "required",
-        onError: markDeliveryError,
+        onError: logDeliveryError,
         onPayload: logPayload,
         deps: createOutboundSendDeps(deps),
       });
+      deliveryStatus = deliveryStatusFromDurableSend(send);
       if (!bestEffortDeliver && (send.status === "failed" || send.status === "partial_failed")) {
+        emitJsonEnvelope(deliveryStatus);
         throw send.error;
       }
-      if (send.status === "failed" || send.status === "partial_failed") {
-        deliveryHadError = true;
-      }
-      deliverySucceeded = !deliveryHadError;
+      deliverySucceeded = send.status === "sent" || send.status === "suppressed";
+    }
+  }
+  if (deliver && !deliveryStatus) {
+    deliveryStatus = preDeliveryFailureStatus("no_delivery_target");
+  }
+  if (deliver && !deliverySucceeded && !opts.json && !deliveryLoggedError) {
+    const message =
+      `[delivery] delivery requested but not completed: ${deliveryStatus?.status ?? "unknown"} ` +
+      `(reason=${deliveryStatus?.reason ?? "none"} session=${effectiveSessionKey ?? "unknown"} ` +
+      `channel=${deliveryChannel ?? "none"} target=${deliveryTarget ?? "none"} ` +
+      `payloads=${deliveryPayloads.length})`;
+    runtime.error?.(message);
+    if (!runtime.error) {
+      runtime.log(message);
     }
   }
 
-  return { payloads: normalizedPayloads, meta: resultMeta, deliverySucceeded };
+  emitJsonEnvelope(deliveryStatus);
+  return { payloads: normalizedPayloads, meta: resultMeta, deliverySucceeded, deliveryStatus };
 }

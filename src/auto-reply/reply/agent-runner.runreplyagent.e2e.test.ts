@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -38,6 +38,24 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
     }
   }
   return count;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value).toBeTypeOf("object");
+  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function mockCallArgs(mock: ReturnType<typeof vi.fn>, label: string, callIndex = 0): unknown[] {
+  const call = mock.mock.calls[callIndex] as unknown[] | undefined;
+  expect(call).toBeDefined();
+  if (!call) {
+    throw new Error(`expected ${label} mock call ${callIndex}`);
+  }
+  return call;
 }
 
 let modelFallbackModule: typeof import("../../agents/model-fallback.js");
@@ -384,6 +402,64 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(stored.pendingFinalDelivery).toBe(true);
     expect(stored.pendingFinalDeliveryText).toBe("visible final");
   });
+
+  it("keeps heartbeat replies with real content in pending final delivery", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Sent daily summary to channel." }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await run();
+
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.pendingFinalDelivery).toBe(true);
+    expect(stored.pendingFinalDeliveryText).toBe("Sent daily summary to channel.");
+  });
+
+  it("persists heartbeat reply remainder as pending delivery when remainder exceeds ackMaxChars", async () => {
+    // When a heartbeat response contains HEARTBEAT_OK followed by substantive content,
+    // the remainder after stripping the token must be persisted for durable delivery.
+    // The default ackMaxChars is 300 — any remainder longer than that is treated as real content.
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const longRemainder = "Sent daily digest to channel. ".repeat(12).trimEnd(); // ~360 chars, > 300
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: `HEARTBEAT_OK ${longRemainder}` }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await run();
+
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.pendingFinalDelivery).toBe(true);
+    expect(stored.pendingFinalDeliveryText).toBe(longRemainder);
+  });
 });
 
 describe("runReplyAgent typing (heartbeat)", () => {
@@ -419,6 +495,40 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(onPartialReply).toHaveBeenCalled();
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
+  });
+
+  it("does not persist heartbeat ack text as pending final delivery", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "openclaw-heartbeat-pending-"));
+    const storePath = join(dir, "sessions.json");
+    await writeFile(
+      storePath,
+      JSON.stringify({
+        main: { sessionId: "session", updatedAt: 1 },
+      }),
+      "utf-8",
+    );
+    try {
+      state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "HEARTBEAT_OK" }],
+        meta: {},
+      });
+
+      const { run } = createMinimalRun({
+        opts: { isHeartbeat: true },
+        sessionCtx: { Provider: "heartbeat" },
+        sessionKey: "main",
+        storePath,
+      });
+      await run();
+
+      const store = JSON.parse(await readFile(storePath, "utf-8")) as {
+        main?: { pendingFinalDelivery?: boolean; pendingFinalDeliveryText?: string };
+      };
+      expect(store.main?.pendingFinalDelivery).toBeUndefined();
+      expect(store.main?.pendingFinalDeliveryText).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("suppresses NO_REPLY partials but allows normal No-prefix partials", async () => {
@@ -617,11 +727,12 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(typing.startTypingOnText).toHaveBeenCalledWith("chunk");
     expect(onBlockReply).toHaveBeenCalled();
     const [blockPayload, blockOpts] = onBlockReply.mock.calls[0] ?? [];
-    expect(blockPayload).toMatchObject({ text: "chunk", audioAsVoice: false });
-    expect(blockOpts).toMatchObject({
-      abortSignal: expect.any(AbortSignal),
-      timeoutMs: expect.any(Number),
-    });
+    const blockPayloadRecord = requireRecord(blockPayload, "block payload");
+    expect(blockPayloadRecord.text).toBe("chunk");
+    expect(blockPayloadRecord.audioAsVoice).toBe(false);
+    const blockOptions = requireRecord(blockOpts, "block options");
+    expect(blockOptions.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(blockOptions.timeoutMs).toBeTypeOf("number");
   });
 
   it("handles typing for normal and silent tool results", async () => {
@@ -719,10 +830,12 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
     expect(onToolResult).toHaveBeenCalledTimes(1);
-    expect(onToolResult.mock.calls[0]?.[0]).toMatchObject({
-      mediaUrls: ["/tmp/generated.png"],
-    });
-    expect(onToolResult.mock.calls[0]?.[0]?.text).toBeUndefined();
+    const toolPayload = requireRecord(
+      mockCallArgs(onToolResult, "onToolResult")[0],
+      "tool payload",
+    );
+    expect(toolPayload.mediaUrls).toEqual(["/tmp/generated.png"]);
+    expect(toolPayload.text).toBeUndefined();
   });
 
   it("retries transient HTTP failures once with timer-driven backoff", async () => {
@@ -1243,12 +1356,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const { run } = createMinimalRun();
     const res = await run();
     const payload = Array.isArray(res) ? res[0] : res;
-    expect(payload).toMatchObject({
-      text: expect.stringContaining("conversation is too large"),
-    });
     if (!payload) {
       throw new Error("expected payload");
     }
+    expect(payload.text).toContain("conversation is too large");
     expect(payload.text).toContain("/new");
   });
 
@@ -1267,12 +1378,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const { run } = createMinimalRun();
     const res = await run();
     const payload = Array.isArray(res) ? res[0] : res;
-    expect(payload).toMatchObject({
-      text: expect.stringContaining("conversation is too large"),
-    });
     if (!payload) {
       throw new Error("expected payload");
     }
+    expect(payload.text).toContain("conversation is too large");
     expect(payload.text).toContain("/new");
   });
 
@@ -1284,12 +1393,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const { run } = createMinimalRun({});
     const res = await run();
 
-    expect(res).toMatchObject({
-      text: expect.stringContaining("Message ordering conflict"),
-    });
-    expect(res).toMatchObject({
-      text: expect.not.stringContaining("400"),
-    });
+    const payload = requireRecord(res, "ordering conflict payload");
+    expect(payload.text).toContain("Message ordering conflict");
+    expect(payload.text).not.toContain("400");
   });
 
   it("rewrites Bun socket errors into friendly text", async () => {

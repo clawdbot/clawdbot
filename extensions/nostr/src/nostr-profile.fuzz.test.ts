@@ -53,8 +53,10 @@ describe("profile unicode attacks", () => {
       if (!result.profile) {
         throw new Error("expected validated profile");
       }
-      expect(result.valid).toBe(true);
-      expect(result.profile).toMatchObject({ name: "\u202Eevil\u202C" });
+      expect(result).toEqual({
+        valid: true,
+        profile: { name: "\u202Eevil\u202C" },
+      });
 
       // UI should escape or handle this
       const sanitized = sanitizeProfileForDisplay(result.profile);

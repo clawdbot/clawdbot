@@ -450,7 +450,7 @@ describe("resolveReactionSyntheticEvent", () => {
     });
     expect(result).toBeNull();
     expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("ignoring reaction on non-bot/unverified message om_msg1"),
+      "feishu[acct1]: ignoring reaction on non-bot/unverified message om_msg1 (sender: unknown)",
     );
   });
 });
@@ -679,12 +679,11 @@ describe("Feishu inbound debounce regressions", () => {
     expect(dispatched.message.message_id).toBe("om_new_latest_fresh");
     const combined = JSON.parse(dispatched.message.content) as { text?: string };
     expect(combined.text).toBe("fresh");
-    expect(recordSpy).toHaveBeenCalledWith("om_old_latest_fresh", "default", expect.any(Function));
-    expect(recordSpy).not.toHaveBeenCalledWith(
-      "om_new_latest_fresh",
-      "default",
-      expect.any(Function),
-    );
+    expect(recordSpy).toHaveBeenCalledTimes(1);
+    const [recordedMessageId, recordedNamespace, recordedLogger] = recordSpy.mock.calls[0] ?? [];
+    expect(recordedMessageId).toBe("om_old_latest_fresh");
+    expect(recordedNamespace).toBe("default");
+    expect(typeof recordedLogger).toBe("function");
   });
 
   it("releases early event dedupe when debounced dispatch fails", async () => {

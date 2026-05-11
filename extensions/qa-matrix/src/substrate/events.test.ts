@@ -57,14 +57,19 @@ describe("matrix observed event normalization", () => {
           msgtype: "m.notice",
         },
       }),
-    ).toEqual(
-      expect.objectContaining({
-        kind: "notice",
-        eventId: "$notice",
-        msgtype: "m.notice",
-        type: "m.room.message",
-      }),
-    );
+    ).toEqual({
+      kind: "notice",
+      roomId: "!room:matrix-qa.test",
+      eventId: "$notice",
+      sender: "@sut:matrix-qa.test",
+      stateKey: undefined,
+      type: "m.room.message",
+      originServerTs: undefined,
+      body: "notice",
+      formattedBody: undefined,
+      msgtype: "m.notice",
+      membership: undefined,
+    });
   });
 
   it("prefers m.new_content text for Matrix replacement events", () => {
@@ -86,18 +91,25 @@ describe("matrix observed event normalization", () => {
           },
         },
       }),
-    ).toEqual(
-      expect.objectContaining({
-        kind: "message",
-        eventId: "$replace",
-        body: "finalized",
-        msgtype: "m.text",
-        relatesTo: {
-          eventId: "$draft",
-          relType: "m.replace",
-        },
-      }),
-    );
+    ).toEqual({
+      kind: "message",
+      roomId: "!room:matrix-qa.test",
+      eventId: "$replace",
+      sender: "@sut:matrix-qa.test",
+      stateKey: undefined,
+      type: "m.room.message",
+      originServerTs: undefined,
+      body: "finalized",
+      formattedBody: undefined,
+      msgtype: "m.text",
+      membership: undefined,
+      relatesTo: {
+        eventId: "$draft",
+        inReplyToId: undefined,
+        isFallingBack: undefined,
+        relType: "m.replace",
+      },
+    });
   });
 
   it("normalizes Matrix reaction events with target metadata", () => {
@@ -154,20 +166,29 @@ describe("matrix observed event normalization", () => {
           },
         },
       }),
-    ).toEqual(
-      expect.objectContaining({
-        approval: {
-          allowedDecisions: ["allow-once", "deny"],
-          commandTextPreview: commandText.slice(0, 160),
-          hasCommandText: true,
-          id: "approval-1",
-          kind: "exec",
-          state: "pending",
-          type: "approval.request",
-          version: 1,
-        },
-      }),
-    );
+    ).toEqual({
+      kind: "message",
+      roomId: "!room:matrix-qa.test",
+      eventId: "$approval",
+      sender: "@sut:matrix-qa.test",
+      stateKey: undefined,
+      type: "m.room.message",
+      originServerTs: undefined,
+      body: "React here: ✅ Allow once, ❌ Deny",
+      formattedBody: undefined,
+      msgtype: "m.text",
+      membership: undefined,
+      approval: {
+        allowedDecisions: ["allow-once", "deny"],
+        commandTextPreview: commandText.slice(0, 160),
+        hasCommandText: true,
+        id: "approval-1",
+        kind: "exec",
+        state: "pending",
+        type: "approval.request",
+        version: 1,
+      },
+    });
   });
 
   it("summarizes Matrix plugin approval metadata fields", () => {
@@ -193,22 +214,31 @@ describe("matrix observed event normalization", () => {
           },
         },
       }),
-    ).toEqual(
-      expect.objectContaining({
-        approval: {
-          agentId: "qa",
-          allowedDecisions: ["allow-once", "deny"],
-          id: "plugin:approval-1",
-          kind: "plugin",
-          pluginId: "qa-plugin",
-          severity: "medium",
-          state: "pending",
-          toolName: "qa_tool",
-          type: "approval.request",
-          version: 1,
-        },
-      }),
-    );
+    ).toEqual({
+      kind: "message",
+      roomId: "!room:matrix-qa.test",
+      eventId: "$plugin-approval",
+      sender: "@sut:matrix-qa.test",
+      stateKey: undefined,
+      type: "m.room.message",
+      originServerTs: undefined,
+      body: "Plugin approval required",
+      formattedBody: undefined,
+      msgtype: "m.text",
+      membership: undefined,
+      approval: {
+        agentId: "qa",
+        allowedDecisions: ["allow-once", "deny"],
+        id: "plugin:approval-1",
+        kind: "plugin",
+        pluginId: "qa-plugin",
+        severity: "medium",
+        state: "pending",
+        toolName: "qa_tool",
+        type: "approval.request",
+        version: 1,
+      },
+    });
   });
 
   it("normalizes Matrix image messages with attachment metadata", () => {
@@ -223,18 +253,24 @@ describe("matrix observed event normalization", () => {
           msgtype: "m.image",
         },
       }),
-    ).toEqual(
-      expect.objectContaining({
-        kind: "message",
-        eventId: "$image",
-        msgtype: "m.image",
-        attachment: {
-          kind: "image",
-          caption: "Protocol note: generated the QA lighthouse image successfully.",
-          filename: "qa-lighthouse.png",
-        },
-      }),
-    );
+    ).toEqual({
+      kind: "message",
+      roomId: "!room:matrix-qa.test",
+      eventId: "$image",
+      sender: "@sut:matrix-qa.test",
+      stateKey: undefined,
+      type: "m.room.message",
+      originServerTs: undefined,
+      body: "Protocol note: generated the QA lighthouse image successfully.",
+      formattedBody: undefined,
+      msgtype: "m.image",
+      membership: undefined,
+      attachment: {
+        kind: "image",
+        caption: "Protocol note: generated the QA lighthouse image successfully.",
+        filename: "qa-lighthouse.png",
+      },
+    });
   });
 
   it("treats filename-like Matrix media bodies as attachment filenames", () => {
@@ -248,14 +284,23 @@ describe("matrix observed event normalization", () => {
           msgtype: "m.image",
         },
       }),
-    ).toEqual(
-      expect.objectContaining({
-        attachment: {
-          kind: "image",
-          filename: "qa-lighthouse.png",
-        },
-      }),
-    );
+    ).toEqual({
+      kind: "message",
+      roomId: "!room:matrix-qa.test",
+      eventId: "$image",
+      sender: "@sut:matrix-qa.test",
+      stateKey: undefined,
+      type: "m.room.message",
+      originServerTs: undefined,
+      body: "qa-lighthouse.png",
+      formattedBody: undefined,
+      msgtype: "m.image",
+      membership: undefined,
+      attachment: {
+        kind: "image",
+        filename: "qa-lighthouse.png",
+      },
+    });
   });
 
   it("normalizes membership events with explicit membership kind", () => {
@@ -269,15 +314,19 @@ describe("matrix observed event normalization", () => {
           membership: "leave",
         },
       }),
-    ).toEqual(
-      expect.objectContaining({
-        kind: "membership",
-        eventId: "$membership",
-        membership: "leave",
-        stateKey: "@sut:matrix-qa.test",
-        type: "m.room.member",
-      }),
-    );
+    ).toEqual({
+      kind: "membership",
+      roomId: "!room:matrix-qa.test",
+      eventId: "$membership",
+      sender: "@driver:matrix-qa.test",
+      stateKey: "@sut:matrix-qa.test",
+      type: "m.room.member",
+      originServerTs: undefined,
+      body: undefined,
+      formattedBody: undefined,
+      msgtype: undefined,
+      membership: "leave",
+    });
   });
 
   it("classifies Matrix redactions without needing raw event inspection", () => {
@@ -288,12 +337,18 @@ describe("matrix observed event normalization", () => {
         type: "m.room.redaction",
         content: {},
       }),
-    ).toEqual(
-      expect.objectContaining({
-        kind: "redaction",
-        eventId: "$redaction",
-        type: "m.room.redaction",
-      }),
-    );
+    ).toEqual({
+      kind: "redaction",
+      roomId: "!room:matrix-qa.test",
+      eventId: "$redaction",
+      sender: "@driver:matrix-qa.test",
+      stateKey: undefined,
+      type: "m.room.redaction",
+      originServerTs: undefined,
+      body: undefined,
+      formattedBody: undefined,
+      msgtype: undefined,
+      membership: undefined,
+    });
   });
 });

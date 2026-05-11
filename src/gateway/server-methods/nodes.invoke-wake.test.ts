@@ -75,6 +75,42 @@ type TestNodeSession = {
   platform?: string;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(isRecord(value), `${label} must be an object`).toBe(true);
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(
+  value: unknown,
+  label: string,
+  expected: Record<string, unknown>,
+): Record<string, unknown> {
+  const record = requireRecord(value, label);
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], `${label}.${key}`).toEqual(expectedValue);
+  }
+  return record;
+}
+
+function requireRespondPayload(call: RespondCall | undefined, label: string) {
+  expect(call?.[0], `${label} success`).toBe(true);
+  return requireRecord(call?.[1], `${label} payload`);
+}
+
+function expectQueuedAction(
+  payload: Record<string, unknown>,
+  expected: Record<string, unknown>,
+): Record<string, unknown> {
+  expect(Array.isArray(payload.actions), "payload.actions must be an array").toBe(true);
+  const actions = payload.actions as unknown[];
+  expect(actions).toHaveLength(1);
+  return expectRecordFields(actions[0], "queued action", expected);
+}
+
 const WAKE_WAIT_TIMEOUT_MS = 3_001;
 const DEFAULT_RELAY_CONFIG = {
   baseUrl: "https://relay.example.com",
@@ -352,13 +388,13 @@ describe("node.invoke APNs wake path", () => {
     const first = await maybeWakeNodeWithApns("ios-node-relay-no-auth");
     const second = await maybeWakeNodeWithApns("ios-node-relay-no-auth");
 
-    expect(first).toMatchObject({
+    expectRecordFields(first, "first wake result", {
       available: false,
       throttled: false,
       path: "no-auth",
       apnsReason: "relay config missing",
     });
-    expect(second).toMatchObject({
+    expectRecordFields(second, "second wake result", {
       available: false,
       throttled: false,
       path: "no-auth",
@@ -379,30 +415,30 @@ describe("node.invoke APNs wake path", () => {
       transport: "direct",
     });
 
-    await expect(maybeWakeNodeWithApns("ios-node-clear-wake")).resolves.toMatchObject({
+    expectRecordFields(await maybeWakeNodeWithApns("ios-node-clear-wake"), "wake result", {
       path: "sent",
       throttled: false,
     });
-    await expect(maybeSendNodeWakeNudge("ios-node-clear-wake")).resolves.toMatchObject({
+    expectRecordFields(await maybeSendNodeWakeNudge("ios-node-clear-wake"), "nudge result", {
       sent: true,
       throttled: false,
     });
-    await expect(maybeWakeNodeWithApns("ios-node-clear-wake")).resolves.toMatchObject({
+    expectRecordFields(await maybeWakeNodeWithApns("ios-node-clear-wake"), "wake result", {
       path: "throttled",
       throttled: true,
     });
-    await expect(maybeSendNodeWakeNudge("ios-node-clear-wake")).resolves.toMatchObject({
+    expectRecordFields(await maybeSendNodeWakeNudge("ios-node-clear-wake"), "nudge result", {
       sent: false,
       throttled: true,
     });
 
     clearNodeWakeState("ios-node-clear-wake");
 
-    await expect(maybeWakeNodeWithApns("ios-node-clear-wake")).resolves.toMatchObject({
+    expectRecordFields(await maybeWakeNodeWithApns("ios-node-clear-wake"), "wake result", {
       path: "sent",
       throttled: false,
     });
-    await expect(maybeSendNodeWakeNudge("ios-node-clear-wake")).resolves.toMatchObject({
+    expectRecordFields(await maybeSendNodeWakeNudge("ios-node-clear-wake"), "nudge result", {
       sent: true,
       throttled: false,
     });
@@ -443,15 +479,13 @@ describe("node.invoke APNs wake path", () => {
 
     expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
     expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1);
-    expect(nodeRegistry.invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nodeId: "ios-node-reconnect",
-        command: "camera.capture",
-      }),
-    );
+    expectRecordFields(nodeRegistry.invoke.mock.calls[0]?.[0], "node invoke payload", {
+      nodeId: "ios-node-reconnect",
+      command: "camera.capture",
+    });
     const call = respond.mock.calls[0] as RespondCall | undefined;
     expect(call?.[0]).toBe(true);
-    expect(call?.[1]).toMatchObject({ ok: true, nodeId: "ios-node-reconnect" });
+    expectRecordFields(call?.[1], "respond payload", { ok: true, nodeId: "ios-node-reconnect" });
   });
 
   it("broadcasts canonical Talk capture events for successful PTT node commands", async () => {
@@ -490,28 +524,26 @@ describe("node.invoke APNs wake path", () => {
     });
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
-    expect(broadcast).toHaveBeenCalledWith(
-      "talk.event",
-      expect.objectContaining({
-        nodeId: "android-talk-node",
-        command: "talk.ptt.start",
-        talkEvent: expect.objectContaining({
-          type: "capture.started",
-          sessionId: "node:android-talk-node:talk:capture-1",
-          captureId: "capture-1",
-          seq: expect.any(Number),
-          mode: "stt-tts",
-          transport: "managed-room",
-          brain: "agent-consult",
-          final: false,
-          payload: expect.objectContaining({
-            nodeId: "android-talk-node",
-            command: "talk.ptt.start",
-          }),
-        }),
-      }),
-      { dropIfSlow: true },
-    );
+    expect(broadcast.mock.calls[0]?.[0]).toBe("talk.event");
+    const broadcastPayload = expectRecordFields(broadcast.mock.calls[0]?.[1], "broadcast payload", {
+      nodeId: "android-talk-node",
+      command: "talk.ptt.start",
+    });
+    const talkEvent = expectRecordFields(broadcastPayload.talkEvent, "talk event", {
+      type: "capture.started",
+      sessionId: "node:android-talk-node:talk:capture-1",
+      captureId: "capture-1",
+      mode: "stt-tts",
+      transport: "managed-room",
+      brain: "agent-consult",
+      final: false,
+    });
+    expect(talkEvent.seq).toBeTypeOf("number");
+    expectRecordFields(talkEvent.payload, "talk event payload", {
+      nodeId: "android-talk-node",
+      command: "talk.ptt.start",
+    });
+    expect(broadcast.mock.calls[0]?.[2]).toEqual({ dropIfSlow: true });
   });
 
   it("clears stale registrations after an invalid device token wake failure", async () => {
@@ -525,7 +557,7 @@ describe("node.invoke APNs wake path", () => {
     mocks.shouldClearStoredApnsRegistration.mockReturnValue(true);
     const wake = await maybeWakeNodeWithApns("ios-node-stale", { force: true });
 
-    expect(wake).toMatchObject({
+    expectRecordFields(wake, "wake result", {
       available: true,
       throttled: false,
       path: "send-error",
@@ -548,7 +580,7 @@ describe("node.invoke APNs wake path", () => {
     mocks.shouldClearStoredApnsRegistration.mockReturnValue(false);
     const wake = await maybeWakeNodeWithApns("ios-node-relay", { force: true });
 
-    expect(wake).toMatchObject({
+    expectRecordFields(wake, "wake result", {
       available: true,
       throttled: false,
       path: "send-error",
@@ -632,32 +664,27 @@ describe("node.invoke APNs wake path", () => {
 
     const pullRespond = await pullPending("ios-node-queued", ["canvas.navigate"]);
     const pullCall = pullRespond.mock.calls[0] as RespondCall | undefined;
-    expect(pullCall?.[0]).toBe(true);
-    expect(pullCall?.[1]).toMatchObject({
+    const pullPayload = requireRespondPayload(pullCall, "pull response");
+    expectRecordFields(pullPayload, "pull payload", {
       nodeId: "ios-node-queued",
-      actions: [
-        expect.objectContaining({
-          command: "canvas.navigate",
-          paramsJSON: JSON.stringify({ url: "http://example.com/" }),
-        }),
-      ],
+    });
+    expectQueuedAction(pullPayload, {
+      command: "canvas.navigate",
+      paramsJSON: JSON.stringify({ url: "http://example.com/" }),
     });
 
     const repeatedPullRespond = await pullPending("ios-node-queued", ["canvas.navigate"]);
     const repeatedPullCall = repeatedPullRespond.mock.calls[0] as RespondCall | undefined;
-    expect(repeatedPullCall?.[0]).toBe(true);
-    expect(repeatedPullCall?.[1]).toMatchObject({
+    const repeatedPullPayload = requireRespondPayload(repeatedPullCall, "repeated pull response");
+    expectRecordFields(repeatedPullPayload, "repeated pull payload", {
       nodeId: "ios-node-queued",
-      actions: [
-        expect.objectContaining({
-          command: "canvas.navigate",
-          paramsJSON: JSON.stringify({ url: "http://example.com/" }),
-        }),
-      ],
+    });
+    expectQueuedAction(repeatedPullPayload, {
+      command: "canvas.navigate",
+      paramsJSON: JSON.stringify({ url: "http://example.com/" }),
     });
 
-    const queuedActionId = (pullCall?.[1] as { actions?: Array<{ id?: string }> } | undefined)
-      ?.actions?.[0]?.id;
+    const queuedActionId = (pullPayload.actions as Array<{ id?: string }> | undefined)?.[0]?.id;
     expect(queuedActionId).toEqual(
       expect.stringMatching(
         /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
@@ -669,8 +696,7 @@ describe("node.invoke APNs wake path", () => {
 
     const ackRespond = await ackPending("ios-node-queued", [queuedActionId], ["canvas.navigate"]);
     const ackCall = ackRespond.mock.calls[0] as RespondCall | undefined;
-    expect(ackCall?.[0]).toBe(true);
-    expect(ackCall?.[1]).toMatchObject({
+    expectRecordFields(requireRespondPayload(ackCall, "ack response"), "ack payload", {
       nodeId: "ios-node-queued",
       ackedIds: [queuedActionId],
       remainingCount: 0,
@@ -678,11 +704,14 @@ describe("node.invoke APNs wake path", () => {
 
     const emptyPullRespond = await pullPending("ios-node-queued", ["canvas.navigate"]);
     const emptyPullCall = emptyPullRespond.mock.calls[0] as RespondCall | undefined;
-    expect(emptyPullCall?.[0]).toBe(true);
-    expect(emptyPullCall?.[1]).toMatchObject({
-      nodeId: "ios-node-queued",
-      actions: [],
-    });
+    expectRecordFields(
+      requireRespondPayload(emptyPullCall, "empty pull response"),
+      "empty pull payload",
+      {
+        nodeId: "ios-node-queued",
+        actions: [],
+      },
+    );
   });
 
   it("drops queued actions that are no longer allowed at pull time", async () => {
@@ -731,23 +760,20 @@ describe("node.invoke APNs wake path", () => {
       "canvas.navigate",
     ]);
     const preChangePullCall = preChangePullRespond.mock.calls[0] as RespondCall | undefined;
-    expect(preChangePullCall?.[0]).toBe(true);
-    expect(preChangePullCall?.[1]).toMatchObject({
+    const preChangePayload = requireRespondPayload(preChangePullCall, "pre-change pull response");
+    expectRecordFields(preChangePayload, "pre-change pull payload", {
       nodeId: "ios-node-policy",
-      actions: [
-        expect.objectContaining({
-          command: "camera.snap",
-          paramsJSON: JSON.stringify({ facing: "front" }),
-        }),
-      ],
+    });
+    expectQueuedAction(preChangePayload, {
+      command: "camera.snap",
+      paramsJSON: JSON.stringify({ facing: "front" }),
     });
 
     allowlistedCommands.delete("camera.snap");
 
     const pullRespond = await pullPending("ios-node-policy", ["camera.snap", "canvas.navigate"]);
     const pullCall = pullRespond.mock.calls[0] as RespondCall | undefined;
-    expect(pullCall?.[0]).toBe(true);
-    expect(pullCall?.[1]).toMatchObject({
+    expectRecordFields(requireRespondPayload(pullCall, "pull response"), "pull payload", {
       nodeId: "ios-node-policy",
       actions: [],
     });
@@ -792,17 +818,13 @@ describe("node.invoke APNs wake path", () => {
 
     const pullRespond = await pullPending("ios-node-dedupe", ["canvas.navigate"]);
     const pullCall = pullRespond.mock.calls[0] as RespondCall | undefined;
-    expect(pullCall?.[0]).toBe(true);
-    expect(pullCall?.[1]).toMatchObject({
+    const pullPayload = requireRespondPayload(pullCall, "pull response");
+    expectRecordFields(pullPayload, "pull payload", {
       nodeId: "ios-node-dedupe",
-      actions: [
-        expect.objectContaining({
-          command: "canvas.navigate",
-          paramsJSON: JSON.stringify({ url: "http://example.com/first" }),
-        }),
-      ],
     });
-    const actions = (pullCall?.[1] as { actions?: unknown[] } | undefined)?.actions ?? [];
-    expect(actions).toHaveLength(1);
+    expectQueuedAction(pullPayload, {
+      command: "canvas.navigate",
+      paramsJSON: JSON.stringify({ url: "http://example.com/first" }),
+    });
   });
 });

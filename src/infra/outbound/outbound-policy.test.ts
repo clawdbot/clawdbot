@@ -95,6 +95,7 @@ function expectCrossContextPolicyResult(params: {
   to: string;
   currentChannelId: string;
   currentChannelProvider: string;
+  agentId?: string;
   expected: "allow" | RegExp;
 }) {
   const run = () =>
@@ -107,6 +108,7 @@ function expectCrossContextPolicyResult(params: {
         currentChannelId: params.currentChannelId,
         currentChannelProvider: params.currentChannelProvider,
       },
+      agentId: params.agentId,
     });
   if (params.expected === "allow") {
     expect(run()).toBeUndefined();
@@ -179,6 +181,32 @@ describe("outbound policy helpers", () => {
       to: "C999",
       currentChannelId: "C123",
       currentChannelProvider: "workspace",
+      expected: /target="C999" while bound to "C123"/,
+    },
+    {
+      cfg: {
+        ...workspaceConfig,
+        agents: {
+          list: [
+            {
+              id: "sandbox",
+              tools: {
+                message: {
+                  crossContext: {
+                    allowWithinProvider: false,
+                  },
+                },
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      channel: "workspace",
+      action: "send" as const,
+      to: "C999",
+      currentChannelId: "C123",
+      currentChannelProvider: "workspace",
+      agentId: "sandbox",
       expected: /target="C999" while bound to "C123"/,
     },
   ])("enforces cross-context policy for %j", (params) => {

@@ -81,15 +81,38 @@ function expectRemovedPluginWarnings(
   expect(result.ok).toBe(true);
   if (result.ok) {
     const message = `plugin removed: ${removedLabel} (stale config entry ignored; remove it from plugins config)`;
-    expect(result.warnings).toEqual(
-      expect.arrayContaining([
-        { path: `plugins.entries.${removedId}`, message },
-        { path: "plugins.allow", message },
-        { path: "plugins.deny", message },
-        { path: "plugins.slots.memory", message },
-      ]),
-    );
+    expectPathMessage(result.warnings, `plugins.entries.${removedId}`, message);
+    expectPathMessage(result.warnings, "plugins.allow", message);
+    expectPathMessage(result.warnings, "plugins.deny", message);
+    expectPathMessage(result.warnings, "plugins.slots.memory", message);
   }
+}
+
+function expectPathMessage(
+  entries: readonly { path: string; message: string }[] | undefined,
+  pathValue: string,
+  message: string,
+) {
+  expect(entries?.some((entry) => entry.path === pathValue && entry.message === message)).toBe(
+    true,
+  );
+}
+
+function expectPathMessageIncludes(
+  entries: readonly { path: string; message: string }[] | undefined,
+  pathValue: string,
+  fragment: string,
+) {
+  expect(
+    entries?.some((entry) => entry.path === pathValue && entry.message.includes(fragment)),
+  ).toBe(true);
+}
+
+function expectNoPath(
+  entries: readonly { path: string; message: string }[] | undefined,
+  pathValue: string,
+) {
+  expect(entries?.some((entry) => entry.path === pathValue)).toBe(false);
 }
 
 describe("config plugin validation", () => {
@@ -234,21 +257,39 @@ describe("config plugin validation", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues).toEqual(
-        expect.arrayContaining([
-          { path: "plugins.deny", message: "plugin not found: missing-deny" },
-          { path: "plugins.slots.memory", message: "plugin not found: missing-slot" },
-        ]),
-      );
+      expectPathMessage(res.issues, "plugins.slots.memory", "plugin not found: missing-slot");
       expect(res.warnings).toContainEqual({
         path: "plugins.allow",
         message:
           "plugin not found: missing-allow (stale config entry ignored; remove it from plugins config)",
       });
       expect(res.warnings).toContainEqual({
+        path: "plugins.deny",
+        message:
+          "plugin not found: missing-deny (stale config entry ignored; remove it from plugins config)",
+      });
+      expect(res.warnings).toContainEqual({
         path: "plugins.entries.missing-plugin",
         message:
           "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
+      });
+    }
+  });
+
+  it("warns instead of failing for stale plugins.deny entries", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        deny: ["missing-deny"],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.warnings).toContainEqual({
+        path: "plugins.deny",
+        message:
+          "plugin not found: missing-deny (stale config entry ignored; remove it from plugins config)",
       });
     }
   });
@@ -276,12 +317,8 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(true);
     const message =
       "plugin not installed: brave — install the official external plugin with: openclaw plugins install @openclaw/brave-plugin";
-    expect(res.warnings ?? []).toEqual(
-      expect.arrayContaining([
-        { path: "plugins.entries.brave", message },
-        { path: "plugins.allow", message },
-      ]),
-    );
+    expectPathMessage(res.warnings, "plugins.entries.brave", message);
+    expectPathMessage(res.warnings, "plugins.allow", message);
     expect(
       (res.warnings ?? []).some(
         (warning) =>
@@ -310,17 +347,15 @@ describe("config plugin validation", () => {
         if (!res.ok) {
           return;
         }
-        expect(res.warnings).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              path: "plugins.entries.blocked-plugin",
-              message: expect.stringContaining("plugin present but blocked: blocked-plugin"),
-            }),
-            expect.objectContaining({
-              path: "plugins.allow",
-              message: expect.stringContaining("plugin present but blocked: blocked-plugin"),
-            }),
-          ]),
+        expectPathMessageIncludes(
+          res.warnings,
+          "plugins.entries.blocked-plugin",
+          "plugin present but blocked: blocked-plugin",
+        );
+        expectPathMessageIncludes(
+          res.warnings,
+          "plugins.allow",
+          "plugin present but blocked: blocked-plugin",
         );
         expect(
           res.warnings.some(
@@ -367,17 +402,15 @@ describe("config plugin validation", () => {
     if (!res.ok) {
       return;
     }
-    expect(res.warnings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: "plugins.entries.blocked-plugin",
-          message: expect.stringContaining("plugin present but blocked: blocked-plugin"),
-        }),
-        expect.objectContaining({
-          path: "plugins.allow",
-          message: expect.stringContaining("plugin present but blocked: blocked-plugin"),
-        }),
-      ]),
+    expectPathMessageIncludes(
+      res.warnings,
+      "plugins.entries.blocked-plugin",
+      "plugin present but blocked: blocked-plugin",
+    );
+    expectPathMessageIncludes(
+      res.warnings,
+      "plugins.allow",
+      "plugin present but blocked: blocked-plugin",
     );
     expect(
       res.warnings.some((warning) => warning.message.includes("plugin not found: blocked-plugin")),
@@ -421,28 +454,20 @@ describe("config plugin validation", () => {
     if (!res.ok) {
       return;
     }
-    expect(res.warnings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: "plugins.entries.actual-id",
-          message: expect.stringContaining("plugin present but blocked: actual-id"),
-        }),
-        expect.objectContaining({
-          path: "plugins.allow",
-          message: expect.stringContaining("plugin present but blocked: actual-id"),
-        }),
-        expect.objectContaining({
-          path: "plugins.entries.alias-dir",
-          message:
-            "plugin not found: alias-dir (stale config entry ignored; remove it from plugins config)",
-        }),
-        expect.objectContaining({
-          path: "plugins.allow",
-          message:
-            "plugin not found: alias-dir (stale config entry ignored; remove it from plugins config)",
-        }),
-      ]),
+    expectPathMessageIncludes(
+      res.warnings,
+      "plugins.entries.actual-id",
+      "plugin present but blocked: actual-id",
     );
+    expectPathMessageIncludes(
+      res.warnings,
+      "plugins.allow",
+      "plugin present but blocked: actual-id",
+    );
+    const aliasMessage =
+      "plugin not found: alias-dir (stale config entry ignored; remove it from plugins config)";
+    expectPathMessage(res.warnings, "plugins.entries.alias-dir", aliasMessage);
+    expectPathMessage(res.warnings, "plugins.allow", aliasMessage);
     expect(
       res.warnings.some((warning) =>
         warning.message.includes("plugin present but blocked: alias-dir"),
@@ -502,7 +527,7 @@ describe("config plugin validation", () => {
       path: "channels.telegarm",
       message: "unknown channel id: telegarm",
     });
-    expect(res.warnings).not.toContainEqual(expect.objectContaining({ path: "channels.telegarm" }));
+    expectNoPath(res.warnings, "channels.telegarm");
   });
 
   it("warns when plugins.allow contains a channel id without a plugin manifest (#76872)", () => {
@@ -718,11 +743,10 @@ describe("config plugin validation", () => {
 
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues).toContainEqual(
-        expect.objectContaining({
-          path: "plugins.entries.codex.config.codexPlugins.plugins.github.marketplaceName",
-          message: expect.stringContaining("invalid config"),
-        }),
+      expectPathMessageIncludes(
+        res.issues,
+        "plugins.entries.codex.config.codexPlugins.plugins.github.marketplaceName",
+        "invalid config",
       );
       expect(
         res.issues.some(
@@ -775,11 +799,9 @@ describe("config plugin validation", () => {
       const issue = res.issues.find(
         (entry) => entry.path === "plugins.entries.enum-plugin.config.fileFormat",
       );
-      expect(issue).toMatchObject({
-        message: expect.stringContaining('allowed: "markdown", "html"'),
-        allowedValues: ["markdown", "html"],
-        allowedValuesHiddenCount: 0,
-      });
+      expect(issue?.message).toContain('allowed: "markdown", "html"');
+      expect(issue?.allowedValues).toEqual(["markdown", "html"]);
+      expect(issue?.allowedValuesHiddenCount).toBe(0);
     }
   });
 

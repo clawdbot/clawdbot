@@ -90,6 +90,13 @@ region's `/v1/models` endpoint.
 | Discovery cache   | Results cached for 1 hour |
 | IAM token refresh | Hourly                    |
 
+To keep the Mantle plugin enabled but suppress automatic discovery and IAM
+bearer-token generation, disable the plugin-owned discovery toggle:
+
+```bash
+openclaw config set plugins.entries.amazon-bedrock-mantle.config.discovery.enabled false
+```
+
 <Note>
 The bearer token is the same `AWS_BEARER_TOKEN_BEDROCK` used by the standard [Amazon Bedrock](/providers/bedrock) provider.
 </Note>

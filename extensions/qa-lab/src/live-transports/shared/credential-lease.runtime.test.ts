@@ -80,6 +80,64 @@ describe("credential lease runtime", () => {
     expect(headers.authorization).toBe("Bearer maintainer-secret");
   });
 
+  it("hydrates chunked convex credential payloads after acquire", async () => {
+    const serialized = JSON.stringify({
+      groupId: "-100123",
+      driverToken: "driver",
+      sutToken: "sut",
+    });
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: "ok",
+          credentialId: "cred-chunked",
+          leaseToken: "lease-chunked",
+          payload: {
+            __openclawQaCredentialPayloadChunksV1: true,
+            byteLength: serialized.length,
+            chunkCount: 2,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", data: serialized.slice(0, 20) }))
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", data: serialized.slice(20) }));
+
+    const lease = await acquireQaCredentialLease({
+      kind: "telegram",
+      source: "convex",
+      role: "ci",
+      env: {
+        OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
+        OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
+      },
+      fetchImpl,
+      resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
+      parsePayload: (payload) =>
+        payload as { groupId: string; driverToken: string; sutToken: string },
+    });
+
+    expect(lease.payload).toEqual({
+      groupId: "-100123",
+      driverToken: "driver",
+      sutToken: "sut",
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe(
+      "https://qa-cred.example.convex.site/qa-credentials/v1/payload-chunk",
+    );
+    const chunkRequestBody = fetchImpl.mock.calls[1]?.[1]?.body;
+    expect(chunkRequestBody).toBeTypeOf("string");
+    const chunkRequest = JSON.parse(chunkRequestBody as string) as {
+      credentialId?: string;
+      index?: number;
+      leaseToken?: string;
+    };
+    expect(chunkRequest.credentialId).toBe("cred-chunked");
+    expect(chunkRequest.index).toBe(0);
+    expect(chunkRequest.leaseToken).toBe("lease-chunked");
+  });
+
   it("defaults convex credential role to maintainer outside CI", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
       jsonResponse({

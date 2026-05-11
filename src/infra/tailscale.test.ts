@@ -12,7 +12,7 @@ const {
   ensureFunnel,
   tailscaleFunnelStatusCoversPort,
 } = tailscale;
-const tailscaleBin = expect.stringMatching(/tailscale$/i);
+const tailscaleBin = "tailscale";
 
 function createRuntimeWithExitError() {
   return {
@@ -24,11 +24,23 @@ function createRuntimeWithExitError() {
   };
 }
 
-function expectServeFallbackCommand(params: { callArgs: string[]; sudoArgs: string[] }) {
-  return [
-    [tailscaleBin, expect.arrayContaining(params.callArgs)],
-    ["sudo", expect.arrayContaining(["-n", tailscaleBin, ...params.sudoArgs])],
-  ];
+function expectExecCall(
+  exec: ReturnType<typeof vi.fn>,
+  callNumber: number,
+  command: string,
+  args: readonly string[],
+  options?: Record<string, unknown>,
+) {
+  const call = exec.mock.calls[callNumber - 1];
+  expect(call, `call ${callNumber}`).toBeDefined();
+  expect(call[0]).toBe(command);
+  expect(call[1]).toEqual(args);
+  if (options) {
+    expect(call).toHaveLength(3);
+    expect(call[2]).toEqual(options);
+  } else {
+    expect(call).toHaveLength(2);
+  }
 }
 
 describe("tailscale helpers", () => {
@@ -142,12 +154,15 @@ describe("tailscale helpers", () => {
 
     await enableTailscaleServe(3000, exec as never);
 
-    const [firstCall, secondCall] = expectServeFallbackCommand({
-      callArgs: ["serve", "--bg", "--yes", "3000"],
-      sudoArgs: ["serve", "--bg", "--yes", "3000"],
+    expect(exec).toHaveBeenCalledTimes(2);
+    expectExecCall(exec, 1, tailscaleBin, ["serve", "--bg", "--yes", "3000"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
     });
-    expect(exec).toHaveBeenNthCalledWith(1, firstCall[0], firstCall[1], expect.any(Object));
-    expect(exec).toHaveBeenNthCalledWith(2, secondCall[0], secondCall[1], expect.any(Object));
+    expectExecCall(exec, 2, "sudo", ["-n", tailscaleBin, "serve", "--bg", "--yes", "3000"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    });
   });
 
   it("enableTailscaleServe does NOT use sudo if first attempt succeeds", async () => {
@@ -156,11 +171,10 @@ describe("tailscale helpers", () => {
     await enableTailscaleServe(3000, exec as never);
 
     expect(exec).toHaveBeenCalledTimes(1);
-    expect(exec).toHaveBeenCalledWith(
-      tailscaleBin,
-      expect.arrayContaining(["serve", "--bg", "--yes", "3000"]),
-      expect.any(Object),
-    );
+    expectExecCall(exec, 1, tailscaleBin, ["serve", "--bg", "--yes", "3000"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    });
   });
 
   it("disableTailscaleServe uses fallback", async () => {
@@ -172,12 +186,10 @@ describe("tailscale helpers", () => {
     await disableTailscaleServe(exec as never);
 
     expect(exec).toHaveBeenCalledTimes(2);
-    expect(exec).toHaveBeenNthCalledWith(
-      2,
-      "sudo",
-      expect.arrayContaining(["-n", tailscaleBin, "serve", "reset"]),
-      expect.any(Object),
-    );
+    expectExecCall(exec, 2, "sudo", ["-n", tailscaleBin, "serve", "reset"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    });
   });
 
   it("ensureFunnel uses fallback for enabling", async () => {
@@ -196,23 +208,16 @@ describe("tailscale helpers", () => {
 
     await ensureFunnel(8080, exec as never, runtime, prompt);
 
-    expect(exec).toHaveBeenNthCalledWith(
-      1,
-      tailscaleBin,
-      expect.arrayContaining(["funnel", "status", "--json"]),
-    );
-    expect(exec).toHaveBeenNthCalledWith(
-      2,
-      tailscaleBin,
-      expect.arrayContaining(["funnel", "--yes", "--bg", "8080"]),
-      expect.any(Object),
-    );
-    expect(exec).toHaveBeenNthCalledWith(
-      3,
-      "sudo",
-      expect.arrayContaining(["-n", tailscaleBin, "funnel", "--yes", "--bg", "8080"]),
-      expect.any(Object),
-    );
+    expect(exec).toHaveBeenCalledTimes(3);
+    expectExecCall(exec, 1, tailscaleBin, ["funnel", "status", "--json"]);
+    expectExecCall(exec, 2, tailscaleBin, ["funnel", "--yes", "--bg", "8080"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    });
+    expectExecCall(exec, 3, "sudo", ["-n", tailscaleBin, "funnel", "--yes", "--bg", "8080"], {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    });
   });
 
   it("enableTailscaleServe skips sudo on non-permission errors", async () => {

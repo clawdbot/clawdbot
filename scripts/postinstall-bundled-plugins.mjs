@@ -30,14 +30,7 @@ const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
 const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
 const LEGACY_PLUGIN_RUNTIME_DEPS_DIR = "plugin-runtime-deps";
-const BAILEYS_MEDIA_FILE = join(
-  "node_modules",
-  "@whiskeysockets",
-  "baileys",
-  "lib",
-  "Utils",
-  "messages-media.js",
-);
+const BAILEYS_MEDIA_FILE = join("node_modules", "baileys", "lib", "Utils", "messages-media.js");
 const BAILEYS_MEDIA_HOTFIX_NEEDLE = [
   "        encFileWriteStream.write(mac);",
   "        encFileWriteStream.end();",
@@ -732,13 +725,11 @@ function applyBundledPluginRuntimeHotfixes(params = {}) {
   const log = params.log ?? console;
   const baileysResult = applyBaileysEncryptedStreamFinishHotfix(params);
   if (baileysResult.applied) {
-    log.log("[postinstall] patched @whiskeysockets/baileys runtime hotfixes");
+    log.log("[postinstall] patched baileys runtime hotfixes");
     return;
   }
   if (baileysResult.reason !== "missing" && baileysResult.reason !== "already_patched") {
-    log.warn(
-      `[postinstall] could not patch @whiskeysockets/baileys runtime hotfixes: ${baileysResult.reason}`,
-    );
+    log.warn(`[postinstall] could not patch baileys runtime hotfixes: ${baileysResult.reason}`);
   }
 }
 

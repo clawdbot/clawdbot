@@ -1,4 +1,7 @@
-// Public security/policy helpers for plugins that need shared trust and DM gating logic.
+/**
+ * @deprecated Broad public SDK barrel. Prefer focused security/SSRF/secret
+ * subpaths and avoid adding new imports here.
+ */
 
 import { root as fsRoot, type OpenResult } from "../infra/fs-safe.js";
 

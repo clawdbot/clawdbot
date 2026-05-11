@@ -31,6 +31,20 @@ describe("Hermes migration file and skill items", () => {
     } as never;
   }
 
+  function itemById<T extends { id: string }>(items: T[], id: string): T | undefined {
+    return items.find((item) => item.id === id);
+  }
+
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    try {
+      await fs.access(targetPath);
+    } catch (error) {
+      expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+      return;
+    }
+    throw new Error(`Expected path to be missing: ${targetPath}`);
+  }
+
   it("reports normalized skill-name collisions instead of overwriting during apply", async () => {
     const root = await makeTempRoot();
     const source = path.join(root, "hermes");
@@ -44,16 +58,10 @@ describe("Hermes migration file and skill items", () => {
     const skillItems = plan.items.filter((item) => item.kind === "skill");
 
     expect(skillItems).toHaveLength(2);
-    expect(skillItems).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "skill:ship-it",
-          status: "conflict",
-          reason: 'multiple Hermes skill directories normalize to "ship-it"',
-          target: path.join(workspaceDir, "skills", "ship-it"),
-        }),
-      ]),
-    );
+    const shipIt = itemById(skillItems, "skill:ship-it");
+    expect(shipIt?.status).toBe("conflict");
+    expect(shipIt?.reason).toBe('multiple Hermes skill directories normalize to "ship-it"');
+    expect(shipIt?.target).toBe(path.join(workspaceDir, "skills", "ship-it"));
 
     const result = await provider.apply(
       makeContext({
@@ -66,9 +74,7 @@ describe("Hermes migration file and skill items", () => {
     );
 
     expect(result.summary.conflicts).toBe(2);
-    await expect(fs.access(path.join(workspaceDir, "skills", "ship-it"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(workspaceDir, "skills", "ship-it"));
   });
 
   it("reports late-created copy targets as conflicts without overwriting", async () => {
@@ -86,15 +92,9 @@ describe("Hermes migration file and skill items", () => {
 
     const result = await provider.apply(ctx, plan);
 
-    expect(result.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "workspace:AGENTS.md",
-          status: "conflict",
-          reason: MIGRATION_REASON_TARGET_EXISTS,
-        }),
-      ]),
-    );
+    const agents = itemById(result.items, "workspace:AGENTS.md");
+    expect(agents?.status).toBe("conflict");
+    expect(agents?.reason).toBe(MIGRATION_REASON_TARGET_EXISTS);
     expect(result.summary.conflicts).toBe(1);
     expect(await fs.readFile(path.join(workspaceDir, "AGENTS.md"), "utf8")).toBe("# Late agents\n");
   });
@@ -138,17 +138,15 @@ describe("Hermes migration file and skill items", () => {
       "Imported from Hermes",
     );
     const copiedAgentsItem = result.items.find((item) => item.id === "workspace:AGENTS.md");
-    expect(copiedAgentsItem?.details?.backupPath).toEqual(expect.stringContaining("AGENTS.md"));
+    expect(String(copiedAgentsItem?.details?.backupPath)).toContain("AGENTS.md");
     const authStore = JSON.parse(
       await fs.readFile(
         path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"),
         "utf8",
       ),
     ) as { profiles?: Record<string, { key?: string; provider?: string }> };
-    expect(authStore.profiles?.["openai:hermes-import"]).toMatchObject({
-      provider: "openai",
-      key: "sk-hermes",
-    });
+    expect(authStore.profiles?.["openai:hermes-import"]?.provider).toBe("openai");
+    expect(authStore.profiles?.["openai:hermes-import"]?.key).toBe("sk-hermes");
   });
 
   it("archives unsupported Hermes state into the report without importing it", async () => {
@@ -163,48 +161,28 @@ describe("Hermes migration file and skill items", () => {
     const provider = buildHermesMigrationProvider();
     const plan = await provider.plan(makeContext({ source, stateDir, workspaceDir, reportDir }));
 
-    expect(plan.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "archive:logs",
-          kind: "archive",
-          action: "archive",
-          status: "planned",
-        }),
-        expect.objectContaining({
-          id: "archive:auth.json",
-          kind: "archive",
-          action: "archive",
-          status: "planned",
-        }),
-      ]),
-    );
-    expect(plan.warnings).toEqual(
-      expect.arrayContaining([expect.stringContaining("archive-only")]),
-    );
+    const plannedLogs = itemById(plan.items, "archive:logs");
+    expect(plannedLogs?.kind).toBe("archive");
+    expect(plannedLogs?.action).toBe("archive");
+    expect(plannedLogs?.status).toBe("planned");
+    const plannedAuth = itemById(plan.items, "archive:auth.json");
+    expect(plannedAuth?.kind).toBe("archive");
+    expect(plannedAuth?.action).toBe("archive");
+    expect(plannedAuth?.status).toBe("planned");
+    expect((plan.warnings ?? []).some((warning) => warning.includes("archive-only"))).toBe(true);
 
     const result = await provider.apply(makeContext({ source, stateDir, workspaceDir, reportDir }));
 
     expect(result.summary.errors).toBe(0);
-    expect(result.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "archive:logs",
-          status: "migrated",
-          target: path.join(reportDir, "archive", "logs"),
-        }),
-        expect.objectContaining({
-          id: "archive:auth.json",
-          status: "migrated",
-          target: path.join(reportDir, "archive", "auth.json"),
-        }),
-      ]),
-    );
+    const migratedLogs = itemById(result.items, "archive:logs");
+    expect(migratedLogs?.status).toBe("migrated");
+    expect(migratedLogs?.target).toBe(path.join(reportDir, "archive", "logs"));
+    const migratedAuth = itemById(result.items, "archive:auth.json");
+    expect(migratedAuth?.status).toBe("migrated");
+    expect(migratedAuth?.target).toBe(path.join(reportDir, "archive", "auth.json"));
     expect(await fs.readFile(path.join(reportDir, "archive", "logs", "session.log"), "utf8")).toBe(
       "log line\n",
     );
-    await expect(fs.access(path.join(workspaceDir, "logs", "session.log"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(workspaceDir, "logs", "session.log"));
   });
 });

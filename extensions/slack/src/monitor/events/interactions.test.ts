@@ -1451,7 +1451,9 @@ describe("registerSlackInteractionEvents", () => {
     expect(ack).toHaveBeenCalled();
     expect(app.client.chat.update).not.toHaveBeenCalled();
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(runtimeLog).toHaveBeenCalledWith(expect.stringContaining("slack:interaction malformed"));
+    expect(runtimeLog).toHaveBeenCalledWith(
+      "slack:interaction malformed action payload channel=C1 user=U666",
+    );
   });
 
   it("escapes mrkdwn characters in confirmation labels", async () => {

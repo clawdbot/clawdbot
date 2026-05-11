@@ -1,1 +1,1 @@
-export { createLoggerBackedRuntime } from "openclaw/plugin-sdk/runtime-logger";
+export { createLoggerBackedRuntime } from "openclaw/plugin-sdk/runtime";

@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   readNumberParam,
@@ -71,6 +71,8 @@ import {
   buildCrossContextDecoration,
   type CrossContextDecoration,
   enforceCrossContextPolicy,
+  enforceMessageActionAllowlist,
+  resolveEffectiveMessageToolsConfig,
   shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
@@ -254,6 +256,7 @@ async function maybeApplyCrossContextMarker(params: {
   target: string;
   toolContext?: ChannelThreadingToolContext;
   accountId?: string | null;
+  agentId?: string | null;
   args: Record<string, unknown>;
   message: string;
   preferPresentation: boolean;
@@ -267,6 +270,7 @@ async function maybeApplyCrossContextMarker(params: {
     target: params.target,
     toolContext: params.toolContext,
     accountId: params.accountId ?? undefined,
+    agentId: params.agentId ?? undefined,
   });
   if (!decoration) {
     return params.message;
@@ -512,7 +516,9 @@ async function handleBroadcastAction(
   params: Record<string, unknown>,
 ): Promise<MessageActionRunResult> {
   throwIfAborted(input.abortSignal);
-  const broadcastEnabled = input.cfg.tools?.message?.broadcast?.enabled !== false;
+  const broadcastEnabled =
+    resolveEffectiveMessageToolsConfig({ cfg: input.cfg, agentId: input.agentId })?.broadcast
+      ?.enabled !== false;
   if (!broadcastEnabled) {
     throw new Error("Broadcast is disabled. Set tools.message.broadcast.enabled to true.");
   }
@@ -672,6 +678,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     target: to,
     toolContext: input.toolContext,
     accountId,
+    agentId,
     args: params,
     message,
     preferPresentation: true,
@@ -851,6 +858,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
     target: to,
     toolContext: input.toolContext,
     accountId,
+    agentId,
     args: params,
     message: base,
     preferPresentation: false,
@@ -1035,6 +1043,11 @@ export async function runMessageAction(
   parseInteractiveParam(params);
 
   const action = input.action;
+  enforceMessageActionAllowlist({
+    cfg,
+    agentId: resolvedAgentId,
+    action,
+  });
   if (action === "broadcast") {
     return handleBroadcastAction(input, params);
   }
@@ -1122,6 +1135,7 @@ export async function runMessageAction(
     args: params,
     toolContext: input.toolContext,
     cfg,
+    agentId: resolvedAgentId,
   });
 
   if (action === "send" && hasPollCreationParams(params)) {

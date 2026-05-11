@@ -65,10 +65,15 @@ describe("matrix pins actions", () => {
 
     expect(result.pinned).toEqual(["$a", "$missing"]);
     expect(result.events).toEqual([
-      expect.objectContaining({
-        eventId: "$a",
+      {
+        attachment: undefined,
         body: "hello",
-      }),
+        eventId: "$a",
+        msgtype: "m.text",
+        relatesTo: undefined,
+        sender: "@alice:example.org",
+        timestamp: 123,
+      },
     ]);
   });
 });

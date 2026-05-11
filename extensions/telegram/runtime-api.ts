@@ -6,7 +6,7 @@ export type {
   OpenClawPluginServiceContext,
   PluginLogger,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 export type {
   AcpRuntime,
@@ -86,7 +86,7 @@ export {
 export { resolveTelegramToken } from "./src/token.js";
 export { setTelegramRuntime } from "./src/runtime.js";
 export type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-export type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 export type TelegramAccountConfig = NonNullable<
   NonNullable<RuntimeOpenClawConfig["channels"]>["telegram"]
 >;

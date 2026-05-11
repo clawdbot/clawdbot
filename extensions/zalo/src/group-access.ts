@@ -1,4 +1,4 @@
-import type { GroupPolicy } from "openclaw/plugin-sdk/config-types";
+import type { GroupPolicy } from "openclaw/plugin-sdk/config-contracts";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 
 const ZALO_ALLOW_FROM_PREFIX_RE = /^(zalo|zl):/i;

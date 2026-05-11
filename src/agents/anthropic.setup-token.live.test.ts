@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
+import { type Api, completeSimple, type Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   ANTHROPIC_SETUP_TOKEN_PREFIX,

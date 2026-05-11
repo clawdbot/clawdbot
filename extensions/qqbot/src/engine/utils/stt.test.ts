@@ -1,19 +1,36 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+const ssrfRuntimeMocks = vi.hoisted(() => ({
+  fetchWithSsrFGuard: vi.fn(),
+}));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  fetchWithSsrFGuard: ssrfRuntimeMocks.fetchWithSsrFGuard,
 }));
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
+});
 
 import { resolveSTTConfig, transcribeAudio } from "./stt.js";
 
 describe("engine/utils/stt", () => {
+  beforeEach(() => {
+    ssrfRuntimeMocks.fetchWithSsrFGuard.mockReset();
+    ssrfRuntimeMocks.fetchWithSsrFGuard.mockImplementation(
+      async ({ url, init }: { url: string; init?: RequestInit }) => ({
+        response: await fetch(url, init),
+        release: vi.fn(async () => {}),
+      }),
+    );
+  });
+
   afterEach(() => {
-    fetchWithSsrFGuardMock.mockReset();
+    ssrfRuntimeMocks.fetchWithSsrFGuard.mockReset();
     vi.unstubAllGlobals();
   });
 
@@ -81,7 +98,7 @@ describe("engine/utils/stt", () => {
     fs.writeFileSync(audioPath, Buffer.from([1, 2, 3, 4]));
 
     const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+    ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
       response: Response.json({
         text: "hello from audio",
       }),
@@ -101,7 +118,7 @@ describe("engine/utils/stt", () => {
     });
 
     expect(transcript).toBe("hello from audio");
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://api.example.test/v1/audio/transcriptions",
         auditContext: "qqbot-stt",

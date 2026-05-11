@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { callGateway } from "../gateway/call.js";
 import type { EmbeddedPiQueueMessageOptions } from "./pi-embedded-runner/run-state.js";
+import type { EmbeddedPiQueueMessageOutcome } from "./pi-embedded-runner/runs.js";
 
 type DeliveryRuntimeMockOptions = {
   callGateway: (request: unknown) => Promise<unknown>;
@@ -10,11 +11,11 @@ type DeliveryRuntimeMockOptions = {
   resolveMainSessionKey: (cfg: unknown) => string;
   resolveStorePath: (store: unknown, options: unknown) => string;
   isEmbeddedPiRunActive: (sessionId: string) => boolean;
-  queueEmbeddedPiMessage: (
+  queueEmbeddedPiMessageWithOutcome: (
     sessionId: string,
     text: string,
     options?: EmbeddedPiQueueMessageOptions,
-  ) => boolean;
+  ) => EmbeddedPiQueueMessageOutcome;
   hasHooks?: () => boolean;
 };
 
@@ -58,7 +59,11 @@ export function createSubagentAnnounceDeliveryRuntimeMock(options: DeliveryRunti
     resolveMainSessionKey: options.resolveMainSessionKey,
     resolveStorePath: options.resolveStorePath,
     isEmbeddedPiRunActive: options.isEmbeddedPiRunActive,
-    queueEmbeddedPiMessage: options.queueEmbeddedPiMessage,
+    queueEmbeddedPiMessageWithOutcome: options.queueEmbeddedPiMessageWithOutcome,
+    formatEmbeddedPiQueueFailureSummary: (outcome: { reason?: string; sessionId?: string }) =>
+      outcome.reason && outcome.sessionId
+        ? `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=live`
+        : undefined,
     isSteeringQueueMode: (mode: string) =>
       mode === "steer" || mode === "queue" || mode === "steer-backlog",
     resolvePiSteeringModeForQueueMode: (mode: string) =>

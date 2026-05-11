@@ -35,6 +35,7 @@ export const runDryAction = (params: {
   toolContext?: Record<string, unknown>;
   abortSignal?: AbortSignal;
   sandboxRoot?: string;
+  agentId?: string;
 }) =>
   runMessageAction({
     cfg: params.cfg,
@@ -44,6 +45,7 @@ export const runDryAction = (params: {
     dryRun: true,
     abortSignal: params.abortSignal,
     sandboxRoot: params.sandboxRoot,
+    agentId: params.agentId,
   });
 
 export const runDrySend = (params: {
@@ -52,6 +54,7 @@ export const runDrySend = (params: {
   toolContext?: Record<string, unknown>;
   abortSignal?: AbortSignal;
   sandboxRoot?: string;
+  agentId?: string;
 }) =>
   runDryAction({
     ...params,

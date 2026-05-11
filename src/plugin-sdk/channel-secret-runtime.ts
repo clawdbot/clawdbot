@@ -1,4 +1,8 @@
-// Narrow shared secret-contract exports for channel/plugin secret surfaces.
+/**
+ * @deprecated Public SDK subpath has no bundled extension production imports.
+ * Prefer focused channel secret subpaths such as channel-secret-basic-runtime
+ * and channel-secret-tts-runtime.
+ */
 
 export {
   collectConditionalChannelFieldAssignments,

@@ -202,6 +202,36 @@ describe("config io audit helpers", () => {
     expect(written.nextHash).toBe("next-hash");
   });
 
+  it("redacts structured audit records before persistence", async () => {
+    const home = await suiteRootTracker.make("append-redacted");
+    const record = finalizeConfigWriteAuditRecord({
+      base: {
+        ...createAuditRecordBase(path.join(home, ".openclaw", "openclaw.json")),
+        suspicious: [
+          "provider returned ya29.fake-access-token-with-enough-length",
+          "plugin returned AIzaSyD-very-real-looking-google-api-key-123",
+        ],
+      },
+      result: "failed",
+      err: Object.assign(new Error("payload contained abcd-efgh-ijkl-mnop"), { code: "EFAIL" }),
+    });
+
+    await appendConfigAuditRecord({
+      fs,
+      env: {} as NodeJS.ProcessEnv,
+      homedir: () => home,
+      record,
+    });
+
+    const raw = fs.readFileSync(
+      path.join(home, ".openclaw", "logs", "config-audit.jsonl"),
+      "utf-8",
+    );
+    expect(raw).not.toContain("AIzaSyD-very-real-looking");
+    expect(raw).not.toContain("ya29.fake-access-token");
+    expect(raw).not.toContain("abcd-efgh-ijkl-mnop");
+  });
+
   it("redacts argv values that follow known secret flag names", () => {
     const argv = [
       "node",

@@ -13,7 +13,7 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   };
 });
 
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   getSessionBindingService,
   registerSessionBindingAdapter,
@@ -156,13 +156,22 @@ describe("Discord ACP bind here end-to-end flow", () => {
     });
 
     expect(adapter.bindings).toHaveLength(1);
-    expect(binding).toMatchObject({
+    expect(binding).toEqual({
+      bindingId: "discord:default:user:user-1",
       targetSessionKey: "agent:codex:acp:test-session",
+      targetKind: "session",
       conversation: {
         channel: "discord",
         accountId: "default",
         conversationId: "user:user-1",
         parentConversationId: "user:user-1",
+      },
+      status: "active",
+      boundAt: 1,
+      metadata: {
+        boundBy: "user-1",
+        agentId: "codex",
+        label: "codex",
       },
     });
     expect(
@@ -171,9 +180,7 @@ describe("Discord ACP bind here end-to-end flow", () => {
         accountId: "default",
         conversationId: "user:user-1",
       }),
-    )?.toMatchObject({
-      targetSessionKey: binding.targetSessionKey,
-    });
+    ).toEqual(binding);
 
     const message = createDiscordMessage({
       id: "m-followup-1",
@@ -203,12 +210,10 @@ describe("Discord ACP bind here end-to-end flow", () => {
       allowFrom: ["*"],
     });
 
-    expect(preflight).toMatchObject({
-      boundSessionKey: binding.targetSessionKey,
-      route: {
-        sessionKey: binding.targetSessionKey,
-        agentId: "codex",
-      },
-    });
+    expect(preflight?.boundSessionKey).toBe(binding.targetSessionKey);
+    expect(preflight?.boundAgentId).toBe("codex");
+    expect(preflight?.route.sessionKey).toBe(binding.targetSessionKey);
+    expect(preflight?.route.agentId).toBe("codex");
+    expect(preflight?.threadBinding).toEqual(binding);
   });
 });

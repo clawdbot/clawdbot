@@ -736,9 +736,11 @@ describe("RealtimeCallHandler path routing", () => {
         await waitForRealtimeTest(() => {
           expect(submitToolResult).toHaveBeenCalledWith("custom-call", { ok: true }, undefined);
         });
-        expect(submitToolResult).not.toHaveBeenCalledWith("custom-call", expect.anything(), {
-          willContinue: true,
-        });
+        const customCallResults = submitToolResult.mock.calls.filter(
+          ([callId]) => callId === "custom-call",
+        );
+        expect(customCallResults).toHaveLength(1);
+        expect(customCallResults[0]?.[2]).toBeUndefined();
       } finally {
         vi.useRealTimers();
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
@@ -50,6 +50,26 @@ function createSynologySetupPrompter(params: { allowedUserIds?: string } = {}) {
       throw new Error(`Unexpected prompt: ${message}`);
     }) as WizardPrompter["text"],
   });
+}
+
+async function expectDmAuthorization(params: {
+  userId: string;
+  dmPolicy: "open" | "allowlist" | "disabled";
+  allowedUserIds: string[];
+  allowed: boolean;
+  reasonCode?: string;
+}): Promise<void> {
+  const auth = await authorizeUserForDmWithIngress({
+    accountId: "default",
+    userId: params.userId,
+    dmPolicy: params.dmPolicy,
+    allowedUserIds: params.allowedUserIds,
+  });
+
+  expect(auth.senderAccess.allowed).toBe(params.allowed);
+  if (params.reasonCode !== undefined) {
+    expect(auth.senderAccess.reasonCode).toBe(params.reasonCode);
+  }
 }
 
 describe("synology-chat core", () => {
@@ -317,74 +337,46 @@ describe("synology-chat security helpers", () => {
   });
 
   it("matches DM policy decisions through channel ingress", async () => {
-    await expect(
-      authorizeUserForDmWithIngress({
-        accountId: "default",
-        userId: "user1",
-        dmPolicy: "open",
-        allowedUserIds: [],
-      }),
-    ).resolves.toMatchObject({
-      senderAccess: {
-        allowed: false,
-        reasonCode: "dm_policy_not_allowlisted",
-      },
+    await expectDmAuthorization({
+      userId: "user1",
+      dmPolicy: "open",
+      allowedUserIds: [],
+      allowed: false,
+      reasonCode: "dm_policy_not_allowlisted",
     });
-    await expect(
-      authorizeUserForDmWithIngress({
-        accountId: "default",
-        userId: "user1",
-        dmPolicy: "open",
-        allowedUserIds: ["*"],
-      }),
-    ).resolves.toMatchObject({ senderAccess: { allowed: true } });
-    await expect(
-      authorizeUserForDmWithIngress({
-        accountId: "default",
-        userId: "user1",
-        dmPolicy: "disabled",
-        allowedUserIds: ["user1"],
-      }),
-    ).resolves.toMatchObject({
-      senderAccess: {
-        allowed: false,
-        reasonCode: "dm_policy_disabled",
-      },
+    await expectDmAuthorization({
+      userId: "user1",
+      dmPolicy: "open",
+      allowedUserIds: ["*"],
+      allowed: true,
     });
-    await expect(
-      authorizeUserForDmWithIngress({
-        accountId: "default",
-        userId: "user1",
-        dmPolicy: "allowlist",
-        allowedUserIds: [],
-      }),
-    ).resolves.toMatchObject({
-      senderAccess: {
-        allowed: false,
-        reasonCode: "dm_policy_not_allowlisted",
-      },
+    await expectDmAuthorization({
+      userId: "user1",
+      dmPolicy: "disabled",
+      allowedUserIds: ["user1"],
+      allowed: false,
+      reasonCode: "dm_policy_disabled",
     });
-    await expect(
-      authorizeUserForDmWithIngress({
-        accountId: "default",
-        userId: "user9",
-        dmPolicy: "allowlist",
-        allowedUserIds: ["user1"],
-      }),
-    ).resolves.toMatchObject({
-      senderAccess: {
-        allowed: false,
-        reasonCode: "dm_policy_not_allowlisted",
-      },
+    await expectDmAuthorization({
+      userId: "user1",
+      dmPolicy: "allowlist",
+      allowedUserIds: [],
+      allowed: false,
+      reasonCode: "dm_policy_not_allowlisted",
     });
-    await expect(
-      authorizeUserForDmWithIngress({
-        accountId: "default",
-        userId: "user1",
-        dmPolicy: "allowlist",
-        allowedUserIds: ["user1", "user2"],
-      }),
-    ).resolves.toMatchObject({ senderAccess: { allowed: true } });
+    await expectDmAuthorization({
+      userId: "user9",
+      dmPolicy: "allowlist",
+      allowedUserIds: ["user1"],
+      allowed: false,
+      reasonCode: "dm_policy_not_allowlisted",
+    });
+    await expectDmAuthorization({
+      userId: "user1",
+      dmPolicy: "allowlist",
+      allowedUserIds: ["user1", "user2"],
+      allowed: true,
+    });
   });
 
   it("redacts Synology user IDs and allowlist entries from ingress state/decision", async () => {

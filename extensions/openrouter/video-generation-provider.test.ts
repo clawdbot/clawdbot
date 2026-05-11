@@ -93,6 +93,21 @@ function requireFetchCallHeaders(index: number): Headers {
   return new Headers(init.headers);
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(typeof value).toBe("object");
+  expect(value).not.toBeNull();
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`${label} was not an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
 function expectOpenRouterFetchCall(index: number, url: string, auditContext: string) {
   const call = fetchWithTimeoutGuardedMock.mock.calls[index];
   if (!call) {
@@ -100,11 +115,34 @@ function expectOpenRouterFetchCall(index: number, url: string, auditContext: str
   }
   const [actualUrl, init, timeoutMs, fetchFn, guardOptions] = call;
   expect(actualUrl).toBe(url);
-  expect(init).toMatchObject({ method: "GET" });
+  expect(requireRecord(init, "OpenRouter fetch init").method).toBe("GET");
   expect(Number.isInteger(timeoutMs)).toBe(true);
   expect(timeoutMs).toBeGreaterThan(0);
   expect(fetchFn).toBe(fetch);
-  expect(guardOptions).toMatchObject({ auditContext });
+  expect(requireRecord(guardOptions, "OpenRouter fetch guard options").auditContext).toBe(
+    auditContext,
+  );
+}
+
+function requirePostJsonParams(index = 0): Record<string, unknown> {
+  const call = postJsonRequestMock.mock.calls[index] as unknown[] | undefined;
+  if (!call) {
+    throw new Error(`expected OpenRouter POST JSON call ${index + 1}`);
+  }
+  return requireRecord(call[0], "OpenRouter POST JSON params");
+}
+
+function requireMockCallArg(
+  mockCalls: unknown[][],
+  index: number,
+  argIndex: number,
+  label: string,
+) {
+  const call = mockCalls[index];
+  if (!call) {
+    throw new Error(`expected ${label} call ${index + 1}`);
+  }
+  return call[argIndex];
 }
 
 function requireGeneratedVideo(result: OpenRouterVideoResult, index: number) {
@@ -149,8 +187,8 @@ describe("openrouter video generation provider", () => {
     expect(generateCapabilities.supportedDurationSeconds).toEqual([4, 6, 8]);
     expect(generateCapabilities.resolutions).toEqual(["720P", "1080P"]);
     expect(generateCapabilities.aspectRatios).toEqual(["16:9", "9:16"]);
-    expect(provider.capabilities.imageToVideo).toMatchObject({ enabled: true });
-    expect(provider.capabilities.videoToVideo).toMatchObject({ enabled: false });
+    expect(provider.capabilities.imageToVideo?.enabled).toBe(true);
+    expect(provider.capabilities.videoToVideo?.enabled).toBe(false);
   });
 
   it("maps OpenRouter video model discovery into unified catalog rows", async () => {
@@ -199,54 +237,58 @@ describe("openrouter video generation provider", () => {
       }),
     });
 
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectRecordFields(
+      requireRecord(resolveProviderHttpRequestConfigMock.mock.calls[0]?.[0], "request config"),
+      {
         baseUrl: "https://custom.openrouter.test/openrouter/api/v1",
         defaultBaseUrl: "https://openrouter.ai/api/v1",
         provider: "openrouter",
         capability: "video",
-      }),
+      },
     );
-    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledWith(
+    expectOpenRouterFetchCall(
+      0,
       "https://custom.openrouter.test/openrouter/api/v1/videos/models",
-      expect.objectContaining({ method: "GET" }),
-      expect.any(Number),
-      expect.any(Function),
-      expect.objectContaining({ auditContext: "openrouter-video-models" }),
+      "openrouter-video-models",
     );
     expect(requireFetchCallHeaders(0).get("authorization")).toBe("Bearer resolved-openrouter-key");
     expectUnifiedModelCatalogEntries(rows, {
       provider: "openrouter",
       kind: "video_generation",
     });
-    expect(rows).toEqual([
-      expect.objectContaining({
-        kind: "video_generation",
-        provider: "openrouter",
-        model: "google/veo-3.1",
-        label: "Veo 3.1",
-        source: "live",
-        capabilities: expect.objectContaining({
-          canonicalSlug: "google/veo-3.1",
-          description: "Google video generation model",
-          created: 1_700_000_000,
-          pricingSkus: { generate: "0.50" },
-          allowedPassthroughParameters: ["provider"],
-          generate: expect.objectContaining({
-            supportsAudio: true,
-            supportedDurationSeconds: [5, 8],
-            aspectRatios: ["16:9"],
-            resolutions: ["720P"],
-            sizes: ["1280x720"],
-          }),
-          imageToVideo: expect.objectContaining({
-            enabled: true,
-            maxInputImages: 2,
-          }),
-          videoToVideo: { enabled: false },
-        }),
-      }),
-    ]);
+    expect(rows).toHaveLength(1);
+    const row = rows[0];
+    expect(row).toBeDefined();
+    if (!row) {
+      throw new Error("expected OpenRouter catalog row");
+    }
+    expectRecordFields(row as unknown as Record<string, unknown>, {
+      kind: "video_generation",
+      provider: "openrouter",
+      model: "google/veo-3.1",
+      label: "Veo 3.1",
+      source: "live",
+    });
+    const capabilities = requireRecord(row.capabilities, "catalog row capabilities");
+    expectRecordFields(capabilities, {
+      canonicalSlug: "google/veo-3.1",
+      description: "Google video generation model",
+      created: 1_700_000_000,
+      pricingSkus: { generate: "0.50" },
+      allowedPassthroughParameters: ["provider"],
+      videoToVideo: { enabled: false },
+    });
+    expectRecordFields(requireRecord(capabilities.generate, "generate capabilities"), {
+      supportsAudio: true,
+      supportedDurationSeconds: [5, 8],
+      aspectRatios: ["16:9"],
+      resolutions: ["720P"],
+      sizes: ["1280x720"],
+    });
+    expectRecordFields(requireRecord(capabilities.imageToVideo, "image-to-video capabilities"), {
+      enabled: true,
+      maxInputImages: 2,
+    });
   });
 
   it("skips live OpenRouter video catalog discovery without an API key", async () => {
@@ -293,23 +335,28 @@ describe("openrouter video generation provider", () => {
       timeoutMs: 12_345,
     });
 
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "openrouter" }),
-    );
-    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledWith(
+    expect(
+      requireRecord(
+        requireMockCallArg(resolveApiKeyForProviderMock.mock.calls, 0, 0, "API key request"),
+        "API key request",
+      ).provider,
+    ).toBe("openrouter");
+    expectOpenRouterFetchCall(
+      0,
       "https://custom.openrouter.test/openrouter/api/v1/videos/models",
-      expect.objectContaining({ method: "GET" }),
-      12_345,
-      expect.any(Function),
-      expect.objectContaining({ auditContext: "openrouter-video-models" }),
+      "openrouter-video-models",
     );
-    expect(capabilities).toMatchObject({
-      providerOptions: { seed: "number" },
-      generate: {
-        supportsAudio: false,
-        supportedDurationSeconds: [5],
-        resolutions: ["720P"],
-      },
+    expect(fetchWithTimeoutGuardedMock.mock.calls[0]?.[2]).toBe(12_345);
+    expect(fetchWithTimeoutGuardedMock.mock.calls[0]?.[3]).toBeTypeOf("function");
+    const resolvedCapabilities = requireRecord(capabilities, "resolved capabilities");
+    expect(resolvedCapabilities.providerOptions).toEqual({
+      callback_url: "string",
+      seed: "number",
+    });
+    expectRecordFields(requireRecord(resolvedCapabilities.generate, "generate capabilities"), {
+      supportsAudio: false,
+      supportedDurationSeconds: [5],
+      resolutions: ["720P"],
     });
   });
 
@@ -335,13 +382,7 @@ describe("openrouter video generation provider", () => {
       cfg: {} as never,
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.objectContaining({
-          duration: 8,
-        }),
-      }),
-    );
+    expect(requireRecord(requirePostJsonParams().body, "OpenRouter request body").duration).toBe(8);
   });
 
   it("preserves runtime-normalized live catalog durations in request bodies", async () => {
@@ -369,13 +410,7 @@ describe("openrouter video generation provider", () => {
       [SUPPORTED_DURATIONS_HINT]: readonly number[];
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.objectContaining({
-          duration: 5,
-        }),
-      }),
-    );
+    expect(requireRecord(requirePostJsonParams().body, "OpenRouter request body").duration).toBe(5);
   });
 
   it("submits OpenRouter video jobs, polls completion, and downloads the result", async () => {
@@ -438,57 +473,58 @@ describe("openrouter video generation provider", () => {
       } as never,
     });
 
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "openrouter" }),
-    );
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expect(
+      requireRecord(
+        requireMockCallArg(resolveApiKeyForProviderMock.mock.calls, 0, 0, "API key request"),
+        "API key request",
+      ).provider,
+    ).toBe("openrouter");
+    expectRecordFields(
+      requireRecord(resolveProviderHttpRequestConfigMock.mock.calls[0]?.[0], "request config"),
+      {
         provider: "openrouter",
         capability: "video",
         baseUrl: "https://custom.openrouter.test/api/v1",
         request: requestOverrides,
-      }),
+      },
     );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://custom.openrouter.test/api/v1/videos",
-        body: {
-          model: "google/veo-3.1",
-          prompt: "A chrome sphere glides across a quiet moonlit beach",
-          duration: 6,
-          resolution: "720p",
-          aspect_ratio: "16:9",
-          size: "1280x720",
-          generate_audio: false,
-          frame_images: [
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:image/png;base64,${Buffer.from("first-frame").toString("base64")}`,
-              },
-              frame_type: "first_frame",
-            },
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:image/png;base64,${Buffer.from("last-frame").toString("base64")}`,
-              },
-              frame_type: "last_frame",
-            },
-          ],
-          input_references: [
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:image/webp;base64,${Buffer.from("style-reference").toString("base64")}`,
-              },
-            },
-          ],
-          callback_url: "https://example.com/openrouter-video-hook",
-          seed: 42,
+    const postParams = requirePostJsonParams();
+    expect(postParams.url).toBe("https://custom.openrouter.test/api/v1/videos");
+    expect(postParams.body).toEqual({
+      model: "google/veo-3.1",
+      prompt: "A chrome sphere glides across a quiet moonlit beach",
+      duration: 6,
+      resolution: "720p",
+      aspect_ratio: "16:9",
+      size: "1280x720",
+      generate_audio: false,
+      frame_images: [
+        {
+          type: "image_url",
+          image_url: {
+            url: `data:image/png;base64,${Buffer.from("first-frame").toString("base64")}`,
+          },
+          frame_type: "first_frame",
         },
-      }),
-    );
+        {
+          type: "image_url",
+          image_url: {
+            url: `data:image/png;base64,${Buffer.from("last-frame").toString("base64")}`,
+          },
+          frame_type: "last_frame",
+        },
+      ],
+      input_references: [
+        {
+          type: "image_url",
+          image_url: {
+            url: `data:image/webp;base64,${Buffer.from("style-reference").toString("base64")}`,
+          },
+        },
+      ],
+      callback_url: "https://example.com/openrouter-video-hook",
+      seed: 42,
+    });
     expectOpenRouterFetchCall(
       0,
       "https://custom.openrouter.test/api/v1/videos/job-123",

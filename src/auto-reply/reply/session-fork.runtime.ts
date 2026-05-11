@@ -8,7 +8,7 @@ import {
   type FileEntry,
   type SessionEntry as PiSessionEntry,
   type SessionHeader,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { derivePromptTokens } from "../../agents/usage.js";
 import {
   resolveSessionFilePath,

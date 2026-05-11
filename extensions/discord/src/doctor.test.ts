@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   collectDiscordMissingEnvTokenWarnings,
@@ -358,8 +358,10 @@ describe("discord doctor", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(collectDiscordMissingEnvTokenWarnings({ cfg, env: {} })).toEqual([
-      expect.stringContaining("DISCORD_BOT_TOKEN is absent"),
+    const missingTokenWarning =
+      "- channels.discord: default account has no available bot token, and DISCORD_BOT_TOKEN is absent in this doctor environment. After migration, verify DISCORD_BOT_TOKEN is present in the state-dir .env or configure channels.discord.token / channels.discord.accounts.default.token as a SecretRef.";
+    expect(collectDiscordMissingEnvTokenWarnings({ cfg, env: {} })).toStrictEqual([
+      missingTokenWarning,
     ]);
     expect(
       collectDiscordMissingEnvTokenWarnings({ cfg, env: { DISCORD_BOT_TOKEN: "Bot tok" } }),
@@ -370,7 +372,7 @@ describe("discord doctor", () => {
         doctorFixCommand: "openclaw doctor --fix",
         env: {},
       }),
-    ).toEqual([expect.stringContaining("DISCORD_BOT_TOKEN is absent")]);
+    ).toStrictEqual([missingTokenWarning]);
   });
 
   it("does not warn about DISCORD_BOT_TOKEN when a non-default account is selected", () => {

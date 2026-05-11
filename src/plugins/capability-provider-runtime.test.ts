@@ -154,6 +154,44 @@ function expectInitialRuntimeRegistryLookup() {
   expect(mocks.resolveRuntimePluginRegistry).toHaveBeenNthCalledWith(1);
 }
 
+function requireManifestRegistryLoadParams(index = 0): Record<string, unknown> {
+  const call = mocks.loadPluginManifestRegistry.mock.calls[index] as
+    | [Record<string, unknown>]
+    | undefined;
+  if (!call) {
+    throw new Error(`loadPluginManifestRegistry call ${index} missing`);
+  }
+  return call[0];
+}
+
+function expectManifestRegistryLoad(index: number, config: OpenClawConfig | Record<string, never>) {
+  const params = requireManifestRegistryLoadParams(index);
+  expect(params.config).toEqual(config);
+  expect(params.env).toBe(process.env);
+}
+
+function requireRuntimeRegistryLookup(params: {
+  activate?: boolean;
+  onlyPluginIds?: string[];
+}): Record<string, unknown> {
+  const lookup = mocks.resolveRuntimePluginRegistry.mock.calls
+    .map(([options]) => options)
+    .find(
+      (options): options is Record<string, unknown> =>
+        Boolean(options) &&
+        typeof options === "object" &&
+        (params.activate === undefined ||
+          (options as { activate?: unknown }).activate === params.activate) &&
+        (params.onlyPluginIds === undefined ||
+          JSON.stringify((options as { onlyPluginIds?: unknown }).onlyPluginIds) ===
+            JSON.stringify(params.onlyPluginIds)),
+    );
+  if (!lookup) {
+    throw new Error("runtime registry lookup missing");
+  }
+  return lookup;
+}
+
 function collectActiveRegistryLookups() {
   return mocks.resolveRuntimePluginRegistry.mock.calls
     .map(([options]) => options)
@@ -177,12 +215,7 @@ function expectBundledCompatLoadPath(params: {
     };
   };
 }) {
-  expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith(
-    expect.objectContaining({
-      config: params.cfg,
-      env: process.env,
-    }),
-  );
+  expectManifestRegistryLoad(0, params.cfg);
   expect(mocks.withBundledPluginEnablementCompat).toHaveBeenCalledWith({
     config: params.allowlistCompat,
     pluginIds: ["openai"],
@@ -580,12 +613,12 @@ describe("resolvePluginCapabilityProviders", () => {
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       onlyPluginIds: ["fish-audio"],
     });
-    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        activate: false,
-        onlyPluginIds: ["fish-audio"],
-      }),
-    );
+    const inactiveLookup = requireRuntimeRegistryLookup({
+      activate: false,
+      onlyPluginIds: ["fish-audio"],
+    });
+    expect(inactiveLookup.activate).toBe(false);
+    expect(inactiveLookup.onlyPluginIds).toEqual(["fish-audio"]);
     expect(mocks.loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
   });
 
@@ -758,9 +791,14 @@ describe("resolvePluginCapabilityProviders", () => {
 
     expectResolvedCapabilityProviderIds(providers, ["acme"]);
     expectInitialRuntimeRegistryLookup();
-    expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalledWith({
-      config: expect.anything(),
-    });
+    expect(
+      mocks.resolveRuntimePluginRegistry.mock.calls.some(
+        ([options]) =>
+          Boolean(options) &&
+          typeof options === "object" &&
+          Object.hasOwn(options as Record<string, unknown>, "config"),
+      ),
+    ).toBe(false);
   });
 
   it("merges active and allowlisted bundled capability providers when cfg is passed", () => {
@@ -1260,12 +1298,7 @@ describe("resolvePluginCapabilityProviders", () => {
     const providers = resolvePluginCapabilityProviders({ key: "mediaUnderstandingProviders" });
 
     expectResolvedCapabilityProviderIds(providers, ["google"]);
-    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: {},
-        env: process.env,
-      }),
-    );
+    expectManifestRegistryLoad(0, {});
     expectActiveRegistryLookup(["google"]);
   });
 
@@ -1378,12 +1411,7 @@ describe("resolvePluginCapabilityProviders", () => {
     });
 
     expectResolvedCapabilityProviderIds(providers, ["microsoft"]);
-    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: cfg,
-        env: process.env,
-      }),
-    );
+    expectManifestRegistryLoad(0, cfg);
     expect(mocks.withBundledPluginAllowlistCompat).toHaveBeenCalledWith({
       config: cfg,
       pluginIds: ["microsoft"],
@@ -1407,12 +1435,7 @@ describe("resolvePluginCapabilityProviders", () => {
     });
 
     expectNoResolvedCapabilityProviders(providers as Array<{ id: string }>);
-    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: {},
-        env: process.env,
-      }),
-    );
+    expectManifestRegistryLoad(0, {});
     expectInitialRuntimeRegistryLookup();
     expectActiveRegistryLookup([]);
   });

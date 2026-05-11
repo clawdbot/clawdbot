@@ -92,11 +92,11 @@ barrels, package-boundary tests, or extension suites.
    - runtime capture should be quiet and config-tolerant.
    - command output should include wall time, exit code, and peak RSS when
      available.
-4. For broad or package-heavy plugin proof, use Blacksmith Testbox by default on
-   maintainer machines. Warm once and reuse the same box:
-   - `blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90`
-   - `blacksmith testbox run --id <ID> "OPENCLAW_TESTBOX=1 pnpm test:extensions:batch <ids>"`
-   - stop the box when done.
+4. For broad or package-heavy plugin proof, use Crabbox-backed Blacksmith
+   Testbox by default on maintainer machines:
+   - `pnpm crabbox:run -- --provider blacksmith-testbox --timing-json -- OPENCLAW_TESTBOX=1 pnpm test:extensions:batch <ids>`
+   - add `--keep`/`--id <id-or-slug>` only when several commands must share one
+     warmed box; stop it with `pnpm crabbox:stop -- <id-or-slug>`.
 5. If plugin performance is package-artifact sensitive, switch to
    `openclaw-pre-release-plugin-testing` and Package Acceptance rather than
    trusting source-only timing.

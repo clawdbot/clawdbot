@@ -15,6 +15,7 @@ type DirectMessageCheck = {
 type DirectRoomTrackerOptions = {
   log?: (message: string) => void;
   canPromoteRecentInvite?: (roomId: string) => boolean | Promise<boolean>;
+  canPromoteUnmappedStrictRoom?: (roomId: string) => boolean | Promise<boolean>;
   shouldKeepLocallyPromotedDirectRoom?:
     | ((roomId: string) => boolean | undefined | Promise<boolean | undefined>)
     | undefined;
@@ -141,6 +142,15 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
     }
   };
 
+  const canPromoteUnmappedStrictRoom = async (roomId: string): Promise<boolean> => {
+    try {
+      return (await opts.canPromoteUnmappedStrictRoom?.(roomId)) ?? false;
+    } catch (err) {
+      log(`matrix: unmapped strict room promotion veto failed room=${roomId} (${String(err)})`);
+      return false;
+    }
+  };
+
   const shouldKeepLocallyPromotedDirectRoom = async (
     roomId: string,
   ): Promise<boolean | undefined> => {
@@ -255,6 +265,22 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
             rememberLocallyPromotedDirectRoom(roomId, senderId ?? "");
             log(
               `matrix: dm detected via recent invite room=${roomId} reason=${promotion.reason} repaired=${String(promotion.repaired)}`,
+            );
+            return true;
+          }
+        }
+
+        if (await canPromoteUnmappedStrictRoom(roomId)) {
+          const promotion = await promoteMatrixDirectRoomCandidate({
+            client,
+            remoteUserId: senderId ?? "",
+            roomId,
+            selfUserId,
+          });
+          if (promotion.classifyAsDirect) {
+            rememberLocallyPromotedDirectRoom(roomId, senderId ?? "");
+            log(
+              `matrix: dm detected via per-room strict fallback room=${roomId} reason=${promotion.reason} repaired=${String(promotion.repaired)}`,
             );
             return true;
           }

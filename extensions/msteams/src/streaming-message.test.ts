@@ -15,6 +15,40 @@ function requireMessageActivity(sent: unknown[]): Record<string, unknown> {
   return activity;
 }
 
+function requireEntities(activity: Record<string, unknown>): Array<Record<string, unknown>> {
+  const entities = activity.entities;
+  if (!Array.isArray(entities)) {
+    throw new Error("expected Teams activity entities");
+  }
+  return entities as Array<Record<string, unknown>>;
+}
+
+function requireEntity(
+  activity: Record<string, unknown>,
+  predicate: (entity: Record<string, unknown>) => boolean,
+  label: string,
+): Record<string, unknown> {
+  const entity = requireEntities(activity).find(predicate);
+  if (!entity) {
+    throw new Error(`expected ${label} entity`);
+  }
+  return entity;
+}
+
+function requireSendActivity(
+  sendActivity: ReturnType<typeof vi.fn>,
+  predicate: (activity: Record<string, unknown>) => boolean,
+  label: string,
+): Record<string, unknown> {
+  const activity = sendActivity.mock.calls
+    .map(([sent]) => sent as Record<string, unknown>)
+    .find(predicate);
+  if (!activity) {
+    throw new Error(`expected ${label} sendActivity call`);
+  }
+  return activity;
+}
+
 describe("TeamsHttpStream", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -42,12 +76,12 @@ describe("TeamsHttpStream", () => {
     expect(typeof firstActivity.text).toBe("string");
     expect(firstActivity.text as string).toContain("Hello");
     // Should have streaminfo entity
-    const entities = firstActivity.entities as Array<Record<string, unknown>>;
-    expect(entities).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "streaminfo", streamType: "streaming" }),
-      ]),
+    const streamInfo = requireEntity(
+      firstActivity,
+      (entity) => entity.type === "streaminfo",
+      "streaminfo",
     );
+    expect(streamInfo.streamType).toBe("streaming");
   });
 
   it("sends final message activity on finalize", async () => {
@@ -75,17 +109,22 @@ describe("TeamsHttpStream", () => {
     expect(finalActivity.text as string).not.toContain("\u258D");
 
     // Should have AI-generated entity
-    const entities = finalActivity.entities as Array<Record<string, unknown>>;
-    expect(entities).toEqual(
-      expect.arrayContaining([expect.objectContaining({ additionalType: ["AIGeneratedContent"] })]),
+    const aiGenerated = requireEntity(
+      finalActivity,
+      (entity) =>
+        Array.isArray(entity.additionalType) &&
+        entity.additionalType.includes("AIGeneratedContent"),
+      "AI-generated content",
     );
+    expect(aiGenerated.additionalType).toEqual(["AIGeneratedContent"]);
 
     // Should have streaminfo with final type
-    expect(entities).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "streaminfo", streamType: "final" }),
-      ]),
+    const streamInfo = requireEntity(
+      finalActivity,
+      (entity) => entity.type === "streaminfo",
+      "streaminfo",
     );
+    expect(streamInfo.streamType).toBe("final");
   });
 
   it("does not send below MIN_INITIAL_CHARS", async () => {
@@ -168,16 +207,13 @@ describe("TeamsHttpStream", () => {
     const activity = sent[0] as Record<string, unknown>;
     expect(activity.type).toBe("typing");
     expect(activity.text).toBe("Thinking...");
-    const entities = activity.entities as Array<Record<string, unknown>>;
-    expect(entities).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "streaminfo",
-          streamType: "informative",
-          streamSequence: 1,
-        }),
-      ]),
+    const streamInfo = requireEntity(
+      activity,
+      (entity) => entity.type === "streaminfo",
+      "streaminfo",
     );
+    expect(streamInfo.streamType).toBe("informative");
+    expect(streamInfo.streamSequence).toBe(1);
   });
 
   it("informative update establishes streamId for subsequent chunks", async () => {
@@ -199,12 +235,8 @@ describe("TeamsHttpStream", () => {
     // Second activity (streaming chunk) should have the streamId from the informative update
     expect(sent.length).toBeGreaterThanOrEqual(2);
     const chunk = sent[1] as Record<string, unknown>;
-    const entities = chunk.entities as Array<Record<string, unknown>>;
-    expect(entities).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "streaminfo", streamId: "stream-1" }),
-      ]),
-    );
+    const streamInfo = requireEntity(chunk, (entity) => entity.type === "streaminfo", "streaminfo");
+    expect(streamInfo.streamId).toBe("stream-1");
   });
 
   it("reports failure when replacing informative progress with final text fails", async () => {
@@ -223,11 +255,14 @@ describe("TeamsHttpStream", () => {
 
     expect(carried).toBe(false);
     expect(stream.isFailed).toBe(true);
-    expect(sendActivity).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "message",
-        text: "Final response long enough to stream before the final message send fails.",
-      }),
+    const finalSend = requireSendActivity(
+      sendActivity,
+      (activity) => activity.type === "message",
+      "final message",
+    );
+    expect(finalSend.type).toBe("message");
+    expect(finalSend.text).toBe(
+      "Final response long enough to stream before the final message send fails.",
     );
   });
 

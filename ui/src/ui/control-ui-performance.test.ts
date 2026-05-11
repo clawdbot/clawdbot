@@ -53,6 +53,18 @@ function createHost() {
   };
 }
 
+function requireBufferedEvent(host: ReturnType<typeof createHost>, index = 0) {
+  const entry = host.eventLogBuffer[index];
+  if (!entry) {
+    throw new Error(`Expected buffered event ${index}`);
+  }
+  return entry;
+}
+
+function payloadOf(entry: EventLogEntry): Record<string, unknown> {
+  return entry.payload as Record<string, unknown>;
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   Object.defineProperty(globalThis, "PerformanceObserver", {
@@ -90,17 +102,14 @@ describe("recordControlUiRenderTiming", () => {
     expect(host.eventLogBuffer).toHaveLength(0);
     await Promise.resolve();
 
-    expect(host.eventLogBuffer).toEqual([
-      expect.objectContaining({
-        event: "control-ui.render",
-        payload: expect.objectContaining({
-          surface: "chat",
-          durationMs: 20,
-          messageCount: 150,
-          slow: true,
-        }),
-      }),
-    ]);
+    expect(host.eventLogBuffer).toHaveLength(1);
+    const entry = requireBufferedEvent(host);
+    const payload = payloadOf(entry);
+    expect(entry.event).toBe("control-ui.render");
+    expect(payload.surface).toBe("chat");
+    expect(payload.durationMs).toBe(20);
+    expect(payload.messageCount).toBe(150);
+    expect(payload.slow).toBe(true);
   });
 
   it("skips render timings that stay within budget", async () => {
@@ -147,25 +156,22 @@ describe("startControlUiResponsivenessObserver", () => {
 
     expect(observe).toHaveBeenCalledWith({ type: "long-animation-frame", buffered: true });
     expect(mock.disconnect).toHaveBeenCalledOnce();
-    expect(host.eventLogBuffer).toEqual([
-      expect.objectContaining({
-        event: "control-ui.long-animation-frame",
-        payload: expect.objectContaining({
-          tab: "chat",
-          name: "long-frame",
-          startTimeMs: 12,
-          durationMs: 84,
-          blockingDurationMs: 42,
-          scriptCount: 2,
-          topScript: {
-            durationMs: 51,
-            invoker: "event-listener",
-            sourceUrl: "/assets/app.js",
-            sourceFunctionName: "renderApp",
-          },
-        }),
-      }),
-    ]);
+    expect(host.eventLogBuffer).toHaveLength(1);
+    const entry = requireBufferedEvent(host);
+    const payload = payloadOf(entry);
+    expect(entry.event).toBe("control-ui.long-animation-frame");
+    expect(payload.tab).toBe("chat");
+    expect(payload.name).toBe("long-frame");
+    expect(payload.startTimeMs).toBe(12);
+    expect(payload.durationMs).toBe(84);
+    expect(payload.blockingDurationMs).toBe(42);
+    expect(payload.scriptCount).toBe(2);
+    expect(payload.topScript).toEqual({
+      durationMs: 51,
+      invoker: "event-listener",
+      sourceUrl: "/assets/app.js",
+      sourceFunctionName: "renderApp",
+    });
   });
 
   it("falls back to long task entries when long animation frames are unavailable", () => {
@@ -191,15 +197,12 @@ describe("startControlUiResponsivenessObserver", () => {
     ]);
 
     expect(observe).toHaveBeenCalledWith({ type: "longtask", buffered: true });
-    expect(host.eventLogBuffer).toEqual([
-      expect.objectContaining({
-        event: "control-ui.longtask",
-        payload: expect.objectContaining({
-          name: "self",
-          durationMs: 51,
-        }),
-      }),
-    ]);
+    expect(host.eventLogBuffer).toHaveLength(1);
+    const entry = requireBufferedEvent(host);
+    const payload = payloadOf(entry);
+    expect(entry.event).toBe("control-ui.longtask");
+    expect(payload.name).toBe("self");
+    expect(payload.durationMs).toBe(51);
   });
 
   it("caps responsiveness events so gateway events stay visible", () => {

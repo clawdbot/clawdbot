@@ -44,20 +44,29 @@ function pluginTool(name: string, description: string, pluginId = "fake-catalog"
   return tool;
 }
 
+function resultDetails(result: { details?: unknown }): Record<string, unknown> {
+  expect(result.details).toBeDefined();
+  expect(typeof result.details).toBe("object");
+  return result.details as Record<string, unknown>;
+}
+
+function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0): unknown[] {
+  const call = mock.mock.calls[index];
+  expect(call).toBeDefined();
+  return call;
+}
+
 describe("Tool Search", () => {
   it("enables object config when a mode is set", () => {
-    expect(
-      __testing.resolveToolSearchConfig({
-        tools: {
-          toolSearch: {
-            mode: "tools",
-          },
+    const resolved = __testing.resolveToolSearchConfig({
+      tools: {
+        toolSearch: {
+          mode: "tools",
         },
-      } as never),
-    ).toMatchObject({
-      enabled: true,
-      mode: "tools",
-    });
+      },
+    } as never);
+    expect(resolved.enabled).toBe(true);
+    expect(resolved.mode).toBe("tools");
   });
 
   it("falls back to structured controls when code mode is unsupported", () => {
@@ -121,24 +130,24 @@ describe("Tool Search", () => {
       `,
     });
 
-    expect(alpha.execute).toHaveBeenCalledWith(
-      "tool_search_code:call-1:fake_create_ticket:1",
-      {
-        value: "ship",
-      },
-      expect.any(AbortSignal),
-      undefined,
-      undefined,
-    );
-    expect(result.details).toMatchObject({
-      ok: true,
-      telemetry: {
-        catalogSize: 2,
-        searchCount: 1,
-        describeCount: 1,
-        callCount: 1,
-      },
-    });
+    const alphaCall = mockCall(vi.mocked(alpha.execute));
+    expect(alphaCall[0]).toBe("tool_search_code:call-1:fake_create_ticket:1");
+    expect(alphaCall[1]).toEqual({ value: "ship" });
+    expect(alphaCall[2]).toBeInstanceOf(AbortSignal);
+    expect(alphaCall[3]).toBeUndefined();
+    expect(alphaCall[4]).toBeUndefined();
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+    const telemetry = details.telemetry as {
+      catalogSize?: number;
+      searchCount?: number;
+      describeCount?: number;
+      callCount?: number;
+    };
+    expect(telemetry.catalogSize).toBe(2);
+    expect(telemetry.searchCount).toBe(1);
+    expect(telemetry.describeCount).toBe(1);
+    expect(telemetry.callCount).toBe(1);
   });
 
   it("scopes catalogs by run id when attempts share a session", async () => {
@@ -304,14 +313,10 @@ describe("Tool Search", () => {
 
     expect(compacted.tools).toEqual([]);
     expect(compacted.catalogToolCount).toBe(1);
-    expect(__testing.sessionCatalogs.get("session:session-client")?.entries).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "client:client:client_pick_file",
-          source: "client",
-        }),
-      ]),
-    );
+    const clientEntry = __testing.sessionCatalogs
+      .get("session:session-client")
+      ?.entries.find((entry) => entry.id === "client:client:client_pick_file");
+    expect(clientEntry?.source).toBe("client");
   });
 
   it("wraps cataloged OpenClaw tools with before_tool_call hooks", async () => {
@@ -343,12 +348,11 @@ describe("Tool Search", () => {
     await runtimeCodeTool.execute("call-hooks", {
       code: `return await openclaw.tools.call("fake_hooked", { value: "ok" });`,
     });
-    expect(target.execute).toHaveBeenCalledWith(
-      "tool_search_code:call-hooks:fake_hooked:1",
-      { value: "ok" },
-      expect.any(AbortSignal),
-      undefined,
-    );
+    const targetCall = mockCall(vi.mocked(target.execute));
+    expect(targetCall[0]).toBe("tool_search_code:call-hooks:fake_hooked:1");
+    expect(targetCall[1]).toEqual({ value: "ok" });
+    expect(targetCall[2]).toBeInstanceOf(AbortSignal);
+    expect(targetCall[3]).toBeUndefined();
   });
 
   it("does not re-wrap abort-wrapped tools that already have before_tool_call hooks", () => {
@@ -402,40 +406,28 @@ describe("Tool Search", () => {
       `,
     });
 
-    expect(target.execute).toHaveBeenNthCalledWith(
-      1,
-      "tool_search_code:call-repeated:fake_repeated:1",
-      {
-        value: "one",
-      },
-      expect.any(AbortSignal),
-      undefined,
-      undefined,
-    );
-    expect(target.execute).toHaveBeenNthCalledWith(
-      2,
-      "tool_search_code:call-repeated:fake_repeated:2",
-      {
-        value: "two",
-      },
-      expect.any(AbortSignal),
-      undefined,
-      undefined,
-    );
+    const firstCall = mockCall(vi.mocked(target.execute));
+    expect(firstCall[0]).toBe("tool_search_code:call-repeated:fake_repeated:1");
+    expect(firstCall[1]).toEqual({ value: "one" });
+    expect(firstCall[2]).toBeInstanceOf(AbortSignal);
+    expect(firstCall[3]).toBeUndefined();
+    expect(firstCall[4]).toBeUndefined();
+    const secondCall = mockCall(vi.mocked(target.execute), 1);
+    expect(secondCall[0]).toBe("tool_search_code:call-repeated:fake_repeated:2");
+    expect(secondCall[1]).toEqual({ value: "two" });
+    expect(secondCall[2]).toBeInstanceOf(AbortSignal);
+    expect(secondCall[3]).toBeUndefined();
+    expect(secondCall[4]).toBeUndefined();
     await runtimeCodeTool.execute("call-repeated-again", {
       code: `return await openclaw.tools.call("fake_repeated", { value: "three" });`,
     });
 
-    expect(target.execute).toHaveBeenNthCalledWith(
-      3,
-      "tool_search_code:call-repeated-again:fake_repeated:1",
-      {
-        value: "three",
-      },
-      expect.any(AbortSignal),
-      undefined,
-      undefined,
-    );
+    const thirdCall = mockCall(vi.mocked(target.execute), 2);
+    expect(thirdCall[0]).toBe("tool_search_code:call-repeated-again:fake_repeated:1");
+    expect(thirdCall[1]).toEqual({ value: "three" });
+    expect(thirdCall[2]).toBeInstanceOf(AbortSignal);
+    expect(thirdCall[3]).toBeUndefined();
+    expect(thirdCall[4]).toBeUndefined();
   });
 
   it("routes bridged calls through the configured catalog executor", async () => {
@@ -469,17 +461,22 @@ describe("Tool Search", () => {
     );
 
     expect(target.execute).not.toHaveBeenCalled();
-    expect(executeTool).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tool: expect.objectContaining({ name: "fake_lifecycle" }),
-        toolName: "fake_lifecycle",
-        toolCallId: "tool_search_code:call-lifecycle:fake_lifecycle:1",
-        parentToolCallId: "call-lifecycle",
-        input: { value: "ok" },
-        signal: expect.any(AbortSignal),
-        onUpdate,
-      }),
-    );
+    const firstExecuteInput = mockCall(executeTool)[0] as {
+      tool?: { name?: string };
+      toolName?: string;
+      toolCallId?: string;
+      parentToolCallId?: string;
+      input?: unknown;
+      signal?: unknown;
+      onUpdate?: unknown;
+    };
+    expect(firstExecuteInput.tool?.name).toBe("fake_lifecycle");
+    expect(firstExecuteInput.toolName).toBe("fake_lifecycle");
+    expect(firstExecuteInput.toolCallId).toBe("tool_search_code:call-lifecycle:fake_lifecycle:1");
+    expect(firstExecuteInput.parentToolCallId).toBe("call-lifecycle");
+    expect(firstExecuteInput.input).toEqual({ value: "ok" });
+    expect(firstExecuteInput.signal).toBeInstanceOf(AbortSignal);
+    expect(firstExecuteInput.onUpdate).toBe(onUpdate);
 
     await runtimeCallTool.execute(
       "call-lifecycle-structured",
@@ -492,18 +489,24 @@ describe("Tool Search", () => {
     );
 
     expect(target.execute).not.toHaveBeenCalled();
-    expect(executeTool).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        tool: expect.objectContaining({ name: "fake_lifecycle" }),
-        toolName: "fake_lifecycle",
-        toolCallId: "tool_search_code:call-lifecycle-structured:fake_lifecycle:1",
-        parentToolCallId: "call-lifecycle-structured",
-        input: { value: "structured" },
-        signal: abortController.signal,
-        onUpdate,
-      }),
+    const secondExecuteInput = mockCall(executeTool, 1)[0] as {
+      tool?: { name?: string };
+      toolName?: string;
+      toolCallId?: string;
+      parentToolCallId?: string;
+      input?: unknown;
+      signal?: unknown;
+      onUpdate?: unknown;
+    };
+    expect(secondExecuteInput.tool?.name).toBe("fake_lifecycle");
+    expect(secondExecuteInput.toolName).toBe("fake_lifecycle");
+    expect(secondExecuteInput.toolCallId).toBe(
+      "tool_search_code:call-lifecycle-structured:fake_lifecycle:1",
     );
+    expect(secondExecuteInput.parentToolCallId).toBe("call-lifecycle-structured");
+    expect(secondExecuteInput.input).toEqual({ value: "structured" });
+    expect(secondExecuteInput.signal).toBe(abortController.signal);
+    expect(secondExecuteInput.onUpdate).toBe(onUpdate);
   });
 
   it("projects target tool calls after their Tool Search wrapper result", () => {
@@ -543,25 +546,40 @@ describe("Tool Search", () => {
     ]);
 
     expect(projected).toHaveLength(5);
-    expect(projected[2]).toMatchObject({
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "tool_search_code:wrapper-call:fake_target:1",
-          name: "fake_target",
-          arguments: { value: "ok" },
-          input: { value: "ok" },
-        },
-      ],
-    });
-    expect(projected[3]).toMatchObject({
-      role: "toolResult",
-      toolCallId: "tool_search_code:wrapper-call:fake_target:1",
-      toolName: "fake_target",
-      isError: false,
-      content: [{ type: "text", text: JSON.stringify({ ok: true }, null, 2) }],
-    });
+    const projectedToolCall = projected[2] as {
+      role?: string;
+      content?: Array<{
+        type?: string;
+        id?: string;
+        name?: string;
+        arguments?: unknown;
+        input?: unknown;
+      }>;
+    };
+    expect(projectedToolCall.role).toBe("assistant");
+    expect(projectedToolCall.content).toEqual([
+      {
+        type: "toolCall",
+        id: "tool_search_code:wrapper-call:fake_target:1",
+        name: "fake_target",
+        arguments: { value: "ok" },
+        input: { value: "ok" },
+      },
+    ]);
+    const projectedToolResult = projected[3] as {
+      role?: string;
+      toolCallId?: string;
+      toolName?: string;
+      isError?: boolean;
+      content?: unknown;
+    };
+    expect(projectedToolResult.role).toBe("toolResult");
+    expect(projectedToolResult.toolCallId).toBe("tool_search_code:wrapper-call:fake_target:1");
+    expect(projectedToolResult.toolName).toBe("fake_target");
+    expect(projectedToolResult.isError).toBe(false);
+    expect(projectedToolResult.content).toEqual([
+      { type: "text", text: JSON.stringify({ ok: true }, null, 2) },
+    ]);
     expect(projected[4]).toBe(messages[2]);
   });
 
@@ -589,13 +607,10 @@ describe("Tool Search", () => {
     });
 
     expect(target.execute).not.toHaveBeenCalled();
-    expect(result.details).toMatchObject({
-      ok: true,
-      value: "done",
-      telemetry: {
-        callCount: 0,
-      },
-    });
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+    expect(details.value).toBe("done");
+    expect((details.telemetry as { callCount?: number }).callCount).toBe(0);
   });
 
   it("waits for started bridged calls before returning code-mode success", async () => {
@@ -642,13 +657,10 @@ describe("Tool Search", () => {
     resolveTool?.();
     const result = await resultPromise;
 
-    expect(result.details).toMatchObject({
-      ok: true,
-      value: "done",
-      telemetry: {
-        callCount: 1,
-      },
-    });
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+    expect(details.value).toBe("done");
+    expect((details.telemetry as { callCount?: number }).callCount).toBe(1);
   });
 
   it("does not expose the host process to model-authored code", async () => {

@@ -1,5 +1,5 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   installOpenClawOwnedToolHooks,
   resetOpenClawOwnedToolHooks,
@@ -47,7 +47,7 @@ function createToolHandlerCtx(): ToolHandlerContext {
       messagingToolSentTargets: [] as MessagingToolSend[],
       successfulCronAdds: 0,
     },
-    log: { debug: vi.fn(), warn: vi.fn() },
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     flushBlockReplyBuffer: vi.fn(),
     shouldEmitToolResult: () => false,
     shouldEmitToolOutput: () => false,
@@ -87,6 +87,17 @@ function toolExecutionEndEvent(params: {
 
 function createToolExtensionContext(): ExtensionContext {
   return {} as ExtensionContext;
+}
+
+async function waitForAfterToolCall(hooks: {
+  afterToolCall: { mock: { calls: unknown[][] } };
+}): Promise<[Record<string, unknown>, Record<string, unknown>]> {
+  await vi.waitFor(() => {
+    expect(hooks.afterToolCall.mock.calls.length).toBe(1);
+  });
+  const call = hooks.afterToolCall.mock.calls[0];
+  expect(call).toBeDefined();
+  return call as [Record<string, unknown>, Record<string, unknown>];
 }
 
 describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
@@ -140,26 +151,19 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
 
     expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
     expect(execute).toHaveBeenCalledWith(toolCallId, mergedParams, undefined, undefined);
-    await vi.waitFor(() => {
-      expect(hooks.afterToolCall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          toolName: "exec",
-          toolCallId,
-          params: mergedParams,
-          result: expect.objectContaining({
-            content: [{ type: "text", text: "done" }],
-            details: { ok: true },
-          }),
-        }),
-        expect.objectContaining({
-          agentId: "agent-1",
-          sessionId: "session-1",
-          sessionKey: "agent:agent-1:session-1",
-          runId: "run-contract",
-          toolCallId,
-        }),
-      );
+    const [afterPayload, afterContext] = await waitForAfterToolCall(hooks);
+    expect(afterPayload.toolName).toBe("exec");
+    expect(afterPayload.toolCallId).toBe(toolCallId);
+    expect(afterPayload.params).toEqual(mergedParams);
+    expect(afterPayload.result).toEqual({
+      content: [{ type: "text", text: "done" }],
+      details: { ok: true },
     });
+    expect(afterContext.agentId).toBe("agent-1");
+    expect(afterContext.sessionId).toBe("session-1");
+    expect(afterContext.sessionKey).toBe("agent:agent-1:session-1");
+    expect(afterContext.runId).toBe("run-contract");
+    expect(afterContext.toolCallId).toBe(toolCallId);
   });
 
   it("reports Pi dynamic tool execution errors through after_tool_call", async () => {
@@ -199,14 +203,9 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
       undefined,
       createToolExtensionContext(),
     );
-    expect(result).toEqual(
-      expect.objectContaining({
-        details: expect.objectContaining({
-          status: "error",
-          error: "tool failed",
-        }),
-      }),
-    );
+    const resultDetails = (result as { details?: Record<string, unknown> }).details;
+    expect(resultDetails?.status).toBe("error");
+    expect(resultDetails?.error).toBe("tool failed");
     await handleToolExecutionEnd(
       ctx,
       toolExecutionEndEvent({
@@ -219,20 +218,13 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
 
     expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
     expect(execute).toHaveBeenCalledWith(toolCallId, mergedParams, undefined, undefined);
-    await vi.waitFor(() => {
-      expect(hooks.afterToolCall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          toolName: "exec",
-          toolCallId,
-          params: mergedParams,
-          error: "tool failed",
-        }),
-        expect.objectContaining({
-          runId: "run-error",
-          toolCallId,
-        }),
-      );
-    });
+    const [afterPayload, afterContext] = await waitForAfterToolCall(hooks);
+    expect(afterPayload.toolName).toBe("exec");
+    expect(afterPayload.toolCallId).toBe(toolCallId);
+    expect(afterPayload.params).toEqual(mergedParams);
+    expect(afterPayload.error).toBe("tool failed");
+    expect(afterContext.runId).toBe("run-error");
+    expect(afterContext.toolCallId).toBe(toolCallId);
   });
 
   it("commits successful Pi messaging text, media, and target telemetry", async () => {
@@ -286,31 +278,32 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
 
     expect(ctx.state.messagingToolSentTexts).toEqual(["hello from Pi"]);
     expect(ctx.state.messagingToolSentMediaUrls).toEqual(["/tmp/pi-reply.png"]);
-    expect(ctx.state.messagingToolSentTargets).toEqual([
-      expect.objectContaining({
+    expect(
+      ctx.state.messagingToolSentTargets.map((target) => ({
+        tool: "message",
+        provider: target.provider,
+        to: target.to,
+        text: target.text,
+        mediaUrls: target.mediaUrls,
+      })),
+    ).toEqual([
+      {
         tool: "message",
         provider: "telegram",
         to: "chat-1",
         text: "hello from Pi",
         mediaUrls: ["/tmp/pi-reply.png"],
-      }),
+      },
     ]);
-    await vi.waitFor(() => {
-      expect(hooks.afterToolCall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          toolName: "message",
-          toolCallId,
-          params: originalParams,
-          result: expect.objectContaining({
-            content: [{ type: "text", text: "sent" }],
-          }),
-        }),
-        expect.objectContaining({
-          runId: "run-message",
-          toolCallId,
-        }),
-      );
-    });
+    const [afterPayload, afterContext] = await waitForAfterToolCall(hooks);
+    expect(afterPayload.toolName).toBe("message");
+    expect(afterPayload.toolCallId).toBe(toolCallId);
+    expect(afterPayload.params).toEqual(originalParams);
+    expect((afterPayload.result as { content?: unknown }).content).toEqual([
+      { type: "text", text: "sent" },
+    ]);
+    expect(afterContext.runId).toBe("run-message");
+    expect(afterContext.toolCallId).toBe(toolCallId);
   });
 
   it("fails closed when before_tool_call blocks a Pi dynamic tool", async () => {
@@ -351,15 +344,10 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
       undefined,
       createToolExtensionContext(),
     );
-    expect(result).toEqual(
-      expect.objectContaining({
-        details: expect.objectContaining({
-          status: "blocked",
-          deniedReason: "plugin-before-tool-call",
-          reason: "blocked by policy",
-        }),
-      }),
-    );
+    const resultDetails = (result as { details?: Record<string, unknown> }).details;
+    expect(resultDetails?.status).toBe("blocked");
+    expect(resultDetails?.deniedReason).toBe("plugin-before-tool-call");
+    expect(resultDetails?.reason).toBe("blocked by policy");
     await handleToolExecutionEnd(
       ctx,
       toolExecutionEndEvent({
@@ -372,30 +360,23 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
 
     expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
     expect(execute).not.toHaveBeenCalled();
-    await vi.waitFor(() => {
-      expect(hooks.afterToolCall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          toolName: "message",
-          toolCallId,
-          params: originalParams,
-          result: expect.objectContaining({
-            content: [{ type: "text", text: "blocked by policy" }],
-            details: {
-              status: "blocked",
-              deniedReason: "plugin-before-tool-call",
-              reason: "blocked by policy",
-            },
-          }),
-          error: "blocked by policy",
-        }),
-        expect.objectContaining({
-          agentId: "agent-1",
-          sessionId: "session-1",
-          sessionKey: "agent:agent-1:session-1",
-          runId: "run-blocked",
-          toolCallId,
-        }),
-      );
+    const [afterPayload, afterContext] = await waitForAfterToolCall(hooks);
+    expect(afterPayload.toolName).toBe("message");
+    expect(afterPayload.toolCallId).toBe(toolCallId);
+    expect(afterPayload.params).toEqual(originalParams);
+    expect(afterPayload.result).toEqual({
+      content: [{ type: "text", text: "blocked by policy" }],
+      details: {
+        status: "blocked",
+        deniedReason: "plugin-before-tool-call",
+        reason: "blocked by policy",
+      },
     });
+    expect(afterPayload.error).toBe("blocked by policy");
+    expect(afterContext.agentId).toBe("agent-1");
+    expect(afterContext.sessionId).toBe("session-1");
+    expect(afterContext.sessionKey).toBe("agent:agent-1:session-1");
+    expect(afterContext.runId).toBe("run-blocked");
+    expect(afterContext.toolCallId).toBe(toolCallId);
   });
 });

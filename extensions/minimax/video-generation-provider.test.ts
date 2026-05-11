@@ -34,10 +34,18 @@ function expectMinimaxFetchCall(index: number, url: string) {
   }
   const [actualUrl, init, timeoutMs, fetchFn] = call;
   expect(actualUrl).toBe(url);
-  expect(init).toMatchObject({ method: "GET" });
+  expect(init?.method).toBe("GET");
   expect(Number.isInteger(timeoutMs)).toBe(true);
   expect(timeoutMs).toBeGreaterThan(0);
   expect(fetchFn).toBe(fetch);
+}
+
+function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): Record<string, unknown> {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected mock call ${index}`);
+  }
+  return call[0] as Record<string, unknown>;
 }
 
 describe("minimax video generation provider", () => {
@@ -83,23 +91,15 @@ describe("minimax video generation provider", () => {
       resolution: "720P",
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.minimax.io/v1/video_generation",
-        body: expect.objectContaining({
-          duration: 6,
-          resolution: "768P",
-        }),
-      }),
-    );
+    const request = mockCallArg(postJsonRequestMock);
+    expect(request.url).toBe("https://api.minimax.io/v1/video_generation");
+    const body = request.body as Record<string, unknown>;
+    expect(body.duration).toBe(6);
+    expect(body.resolution).toBe("768P");
     expect(result.videos).toHaveLength(1);
     expect(result.videos[0]?.fileName).toBe("video-1.webm");
-    expect(result.metadata).toEqual(
-      expect.objectContaining({
-        taskId: "task-123",
-        fileId: "file-1",
-      }),
-    );
+    expect(result.metadata?.taskId).toBe("task-123");
+    expect(result.metadata?.fileId).toBe("file-1");
   });
 
   it("downloads via file_id when the status response omits video_url", async () => {
@@ -147,13 +147,9 @@ describe("minimax video generation provider", () => {
     expectMinimaxFetchCall(1, "https://api.minimax.io/v1/files/retrieve?file_id=file-9");
     expectMinimaxFetchCall(2, "https://example.com/download.mp4");
     expect(result.videos).toHaveLength(1);
-    expect(result.metadata).toEqual(
-      expect.objectContaining({
-        taskId: "task-456",
-        fileId: "file-9",
-        videoUrl: undefined,
-      }),
-    );
+    expect(result.metadata?.taskId).toBe("task-456");
+    expect(result.metadata?.fileId).toBe("file-9");
+    expect(result.metadata?.videoUrl).toBeUndefined();
   });
 
   it("routes portal video generation through minimax-portal auth and HTTP config", async () => {
@@ -201,23 +197,14 @@ describe("minimax video generation provider", () => {
       },
     });
 
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "minimax-portal",
-      }),
-    );
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baseUrl: "https://api.minimaxi.com",
-        provider: "minimax-portal",
-        capability: "video",
-        transport: "http",
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.minimaxi.com/v1/video_generation",
-      }),
+    expect(mockCallArg(resolveApiKeyForProviderMock).provider).toBe("minimax-portal");
+    const httpConfigParams = mockCallArg(resolveProviderHttpRequestConfigMock);
+    expect(httpConfigParams.baseUrl).toBe("https://api.minimaxi.com");
+    expect(httpConfigParams.provider).toBe("minimax-portal");
+    expect(httpConfigParams.capability).toBe("video");
+    expect(httpConfigParams.transport).toBe("http");
+    expect(mockCallArg(postJsonRequestMock).url).toBe(
+      "https://api.minimaxi.com/v1/video_generation",
     );
     expectMinimaxFetchCall(
       0,

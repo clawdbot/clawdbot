@@ -4,6 +4,8 @@
 
 Maintenance update for the current OpenClaw beta release.
 
+- Gateway connections now recover after a trusted Gateway certificate changes by refreshing the stored certificate pin during reconnect.
+
 ## 2026.5.8 - 2026-05-08
 
 Maintenance update for the current OpenClaw development release.

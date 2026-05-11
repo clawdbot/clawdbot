@@ -1,4 +1,4 @@
-import type { Usage } from "@mariozechner/pi-ai";
+import type { Usage } from "@earendil-works/pi-ai";
 
 export const ZERO_USAGE_FIXTURE: Usage = {
   input: 0,

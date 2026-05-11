@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { detectToolCallShapedText } from "../shared/text/tool-call-shaped-text.js";

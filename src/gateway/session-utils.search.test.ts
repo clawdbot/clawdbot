@@ -513,15 +513,13 @@ describe("listSessionsFromStore search", () => {
           } as SessionEntry,
         });
 
-        expect(result.sessions[0]).toMatchObject({
-          key: "agent:main:subagent:child-live",
-          status: "running",
-          modelProvider: "anthropic",
-          model: "claude-sonnet-4-6",
-          totalTokens: 3_200,
-          totalTokensFresh: true,
-          contextTokens: 1_048_576,
-        });
+        expect(result.sessions[0]?.key).toBe("agent:main:subagent:child-live");
+        expect(result.sessions[0]?.status).toBe("running");
+        expect(result.sessions[0]?.modelProvider).toBe("anthropic");
+        expect(result.sessions[0]?.model).toBe("claude-sonnet-4-6");
+        expect(result.sessions[0]?.totalTokens).toBe(3_200);
+        expect(result.sessions[0]?.totalTokensFresh).toBe(true);
+        expect(result.sessions[0]?.contextTokens).toBe(1_048_576);
         expect(result.sessions[0]?.estimatedCostUsd).toBeCloseTo(0.007725, 8);
       },
     });
@@ -567,14 +565,12 @@ describe("listSessionsFromStore search", () => {
           } as SessionEntry,
         });
 
-        expect(result.sessions[0]).toMatchObject({
-          key: "agent:main:subagent:child-live-stale-transcript",
-          status: "running",
-          modelProvider: "openai",
-          model: "gpt-5.4",
-          totalTokens: 3_200,
-          totalTokensFresh: true,
-        });
+        expect(result.sessions[0]?.key).toBe("agent:main:subagent:child-live-stale-transcript");
+        expect(result.sessions[0]?.status).toBe("running");
+        expect(result.sessions[0]?.modelProvider).toBe("openai");
+        expect(result.sessions[0]?.model).toBe("gpt-5.4");
+        expect(result.sessions[0]?.totalTokens).toBe(3_200);
+        expect(result.sessions[0]?.totalTokensFresh).toBe(true);
       },
     });
   });
@@ -604,13 +600,11 @@ describe("listSessionsFromStore search", () => {
           } as SessionEntry,
         });
 
-        expect(result.sessions[0]).toMatchObject({
-          key: "agent:main:main",
-          modelProvider: "openai",
-          model: "gpt-5.4",
-          totalTokens: 3_200,
-          totalTokensFresh: true,
-        });
+        expect(result.sessions[0]?.key).toBe("agent:main:main");
+        expect(result.sessions[0]?.modelProvider).toBe("openai");
+        expect(result.sessions[0]?.model).toBe("gpt-5.4");
+        expect(result.sessions[0]?.totalTokens).toBe(3_200);
+        expect(result.sessions[0]?.totalTokensFresh).toBe(true);
       },
     });
   });
@@ -649,14 +643,12 @@ describe("listSessionsFromStore search", () => {
           } as SessionEntry,
         });
 
-        expect(result.sessions[0]).toMatchObject({
-          key: "agent:main:main",
-          modelProvider: "openai",
-          model: "gpt-5.4",
-          totalTokens: 3_200,
-          totalTokensFresh: true,
-          contextTokens: 200_000,
-        });
+        expect(result.sessions[0]?.key).toBe("agent:main:main");
+        expect(result.sessions[0]?.modelProvider).toBe("openai");
+        expect(result.sessions[0]?.model).toBe("gpt-5.4");
+        expect(result.sessions[0]?.totalTokens).toBe(3_200);
+        expect(result.sessions[0]?.totalTokensFresh).toBe(true);
+        expect(result.sessions[0]?.contextTokens).toBe(200_000);
       },
     });
   });

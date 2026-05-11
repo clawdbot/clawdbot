@@ -22,6 +22,17 @@ vi.mock("./channel-resolution.js", () => ({
   resolveOutboundChannelMessageAdapter: resolveOutboundChannelMessageAdapterMock,
 }));
 
+function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
+  const call = mock.mock.calls[index];
+  expect(call).toBeDefined();
+  return call[0];
+}
+
+function expectMockMessageContaining(mock: { mock: { calls: unknown[][] } }, expected: string) {
+  const messages = mock.mock.calls.map((call) => (typeof call[0] === "string" ? call[0] : ""));
+  expect(messages.some((message) => message.includes(expected))).toBe(true);
+}
+
 describe("delivery-queue recovery", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
   const baseCfg = {};
@@ -134,7 +145,7 @@ describe("delivery-queue recovery", () => {
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("unknown_after_send"));
+    expectMockMessageContaining(log.warn, "unknown_after_send");
   });
 
   it("moves started entries without reconciliation to failed instead of blindly replaying", async () => {
@@ -161,9 +172,7 @@ describe("delivery-queue recovery", () => {
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
-    expect(log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("refusing blind replay without adapter reconciliation"),
-    );
+    expectMockMessageContaining(log.warn, "refusing blind replay without adapter reconciliation");
   });
 
   it("replays started entries only after adapter proves they were not sent", async () => {
@@ -191,9 +200,14 @@ describe("delivery-queue recovery", () => {
       cfg: baseCfg,
       allowBootstrap: true,
     });
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "demo-channel-a", to: "+1", skipQueue: true }),
-    );
+    const deliverInput = mockCallArg(deliver) as {
+      channel?: string;
+      to?: string;
+      skipQueue?: boolean;
+    };
+    expect(deliverInput.channel).toBe("demo-channel-a");
+    expect(deliverInput.to).toBe("+1");
+    expect(deliverInput.skipQueue).toBe(true);
     expect(result).toEqual({
       recovered: 1,
       failed: 0,
@@ -264,31 +278,45 @@ describe("delivery-queue recovery", () => {
         skippedMaxRetries: 0,
         deferredBackoff: 0,
       });
-      expect(reconcileUnknownSend).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cfg: baseCfg,
-          queueId: id,
-          channel: "demo-channel-a",
-          to: "+1",
-          accountId: "acct-1",
-          payloads: [{ text: "maybe sent" }],
-          replyToId: "root-message",
-          threadId: "thread-1",
-          silent: true,
-          retryCount: 0,
-        }),
-      );
-      expect(afterCommit).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "text",
-          to: "+1",
-          accountId: "acct-1",
-          replyToId: "root-message",
-          threadId: "thread-1",
-          silent: true,
-          result: expect.objectContaining({ messageId: "platform-1" }),
-        }),
-      );
+      const reconcileInput = mockCallArg(reconcileUnknownSend) as {
+        cfg?: unknown;
+        queueId?: string;
+        channel?: string;
+        to?: string;
+        accountId?: string;
+        payloads?: unknown;
+        replyToId?: string;
+        threadId?: string;
+        silent?: boolean;
+        retryCount?: number;
+      };
+      expect(reconcileInput.cfg).toBe(baseCfg);
+      expect(reconcileInput.queueId).toBe(id);
+      expect(reconcileInput.channel).toBe("demo-channel-a");
+      expect(reconcileInput.to).toBe("+1");
+      expect(reconcileInput.accountId).toBe("acct-1");
+      expect(reconcileInput.payloads).toEqual([{ text: "maybe sent" }]);
+      expect(reconcileInput.replyToId).toBe("root-message");
+      expect(reconcileInput.threadId).toBe("thread-1");
+      expect(reconcileInput.silent).toBe(true);
+      expect(reconcileInput.retryCount).toBe(0);
+
+      const afterCommitInput = mockCallArg(afterCommit) as {
+        kind?: string;
+        to?: string;
+        accountId?: string;
+        replyToId?: string;
+        threadId?: string;
+        silent?: boolean;
+        result?: { messageId?: string };
+      };
+      expect(afterCommitInput.kind).toBe("text");
+      expect(afterCommitInput.to).toBe("+1");
+      expect(afterCommitInput.accountId).toBe("acct-1");
+      expect(afterCommitInput.replyToId).toBe("root-message");
+      expect(afterCommitInput.threadId).toBe("thread-1");
+      expect(afterCommitInput.silent).toBe(true);
+      expect(afterCommitInput.result?.messageId).toBe("platform-1");
       expect(order).toEqual(["ack", "afterCommit"]);
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     } finally {
@@ -343,9 +371,7 @@ describe("delivery-queue recovery", () => {
       expect(entries[0]?.retryCount).toBe(1);
       expect(entries[0]?.lastError).toContain("failed to ack reconciled sent delivery");
       expect(entries[0]?.lastError).toContain("ack denied");
-      expect(log.warn).toHaveBeenCalledWith(
-        expect.stringContaining("failed to ack reconciled sent delivery"),
-      );
+      expectMockMessageContaining(log.warn, "failed to ack reconciled sent delivery");
     } finally {
       renameSpy.mockRestore();
     }
@@ -372,9 +398,14 @@ describe("delivery-queue recovery", () => {
     const { result } = await runRecovery({ deliver });
 
     expect(deliver).toHaveBeenCalledTimes(1);
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "demo-channel-a", to: "+1", skipQueue: true }),
-    );
+    const deliverInput = mockCallArg(deliver) as {
+      channel?: string;
+      to?: string;
+      skipQueue?: boolean;
+    };
+    expect(deliverInput.channel).toBe("demo-channel-a");
+    expect(deliverInput.to).toBe("+1");
+    expect(deliverInput.skipQueue).toBe(true);
     expect(result).toEqual({
       recovered: 1,
       failed: 0,
@@ -444,9 +475,7 @@ describe("delivery-queue recovery", () => {
     expect(result.failed).toBe(1);
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
-    expect(log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("refusing blind replay without adapter reconciliation"),
-    );
+    expectMockMessageContaining(log.warn, "refusing blind replay without adapter reconciliation");
   });
 
   it("moves entries to failed/ immediately on permanent delivery errors", async () => {
@@ -464,7 +493,7 @@ describe("delivery-queue recovery", () => {
     expect(result.recovered).toBe(0);
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
+    expectMockMessageContaining(log.warn, "permanent error");
   });
 
   it("treats Matrix 'User not in room' as a permanent error", async () => {
@@ -486,7 +515,7 @@ describe("delivery-queue recovery", () => {
     expect(result.recovered).toBe(0);
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
+    expectMockMessageContaining(log.warn, "permanent error");
   });
 
   it("passes skipQueue: true to prevent re-enqueueing during recovery", async () => {
@@ -498,13 +527,14 @@ describe("delivery-queue recovery", () => {
     const deliver = vi.fn().mockResolvedValue([]);
     await runRecovery({ deliver });
 
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deliveryQueueId: id,
-        deliveryQueueStateDir: tmpDir(),
-        skipQueue: true,
-      }),
-    );
+    const deliverInput = mockCallArg(deliver) as {
+      deliveryQueueId?: string;
+      deliveryQueueStateDir?: string;
+      skipQueue?: boolean;
+    };
+    expect(deliverInput.deliveryQueueId).toBe(id);
+    expect(deliverInput.deliveryQueueStateDir).toBe(tmpDir());
+    expect(deliverInput.skipQueue).toBe(true);
   });
 
   it("moves unknown-after-send entries to failed without replaying", async () => {
@@ -526,9 +556,7 @@ describe("delivery-queue recovery", () => {
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
-    expect(log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("refusing blind replay without adapter reconciliation"),
-    );
+    expectMockMessageContaining(log.warn, "refusing blind replay without adapter reconciliation");
   });
 
   it("runs recovered send commit hooks only after the queue entry is acked", async () => {
@@ -600,36 +628,43 @@ describe("delivery-queue recovery", () => {
     const deliver = vi.fn().mockResolvedValue([]);
     await runRecovery({ deliver });
 
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bestEffort: true,
-        gifPlayback: true,
-        silent: true,
-        replyToId: "root-message",
-        replyToMode: "first",
-        formatting: {
-          textLimit: 1234,
-          maxLinesPerMessage: 7,
-          tableMode: "off",
-          chunkMode: "newline",
-        },
-        gatewayClientScopes: ["operator.write"],
-        mirror: {
-          sessionKey: "agent:main:main",
-          text: "a",
-          mediaUrls: ["https://example.com/a.png"],
-        },
-        session: {
-          key: "agent:main:main",
-          agentId: "agent-main",
-          requesterAccountId: "acct-1",
-          requesterSenderId: "sender-1",
-          requesterSenderName: "Sender One",
-          requesterSenderUsername: "sender.one",
-          requesterSenderE164: "+15551234567",
-        },
-      }),
-    );
+    const deliverInput = mockCallArg(deliver) as {
+      bestEffort?: boolean;
+      gifPlayback?: boolean;
+      silent?: boolean;
+      replyToId?: string;
+      replyToMode?: string;
+      formatting?: unknown;
+      gatewayClientScopes?: string[];
+      mirror?: unknown;
+      session?: unknown;
+    };
+    expect(deliverInput.bestEffort).toBe(true);
+    expect(deliverInput.gifPlayback).toBe(true);
+    expect(deliverInput.silent).toBe(true);
+    expect(deliverInput.replyToId).toBe("root-message");
+    expect(deliverInput.replyToMode).toBe("first");
+    expect(deliverInput.formatting).toEqual({
+      textLimit: 1234,
+      maxLinesPerMessage: 7,
+      tableMode: "off",
+      chunkMode: "newline",
+    });
+    expect(deliverInput.gatewayClientScopes).toEqual(["operator.write"]);
+    expect(deliverInput.mirror).toEqual({
+      sessionKey: "agent:main:main",
+      text: "a",
+      mediaUrls: ["https://example.com/a.png"],
+    });
+    expect(deliverInput.session).toEqual({
+      key: "agent:main:main",
+      agentId: "agent-main",
+      requesterAccountId: "acct-1",
+      requesterSenderId: "sender-1",
+      requesterSenderName: "Sender One",
+      requesterSenderUsername: "sender.one",
+      requesterSenderE164: "+15551234567",
+    });
   });
 
   it("respects maxRecoveryMs time budget and bumps deferred retries", async () => {
@@ -657,7 +692,7 @@ describe("delivery-queue recovery", () => {
     expect(remaining).toHaveLength(3);
     const entriesWithUnexpectedRetryCount = remaining.filter((entry) => entry.retryCount !== 1);
     expect(entriesWithUnexpectedRetryCount).toStrictEqual([]);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("deferred to next startup"));
+    expectMockMessageContaining(log.warn, "deferred to next startup");
   });
 
   it("defers entries until backoff becomes eligible", async () => {
@@ -681,7 +716,7 @@ describe("delivery-queue recovery", () => {
       deferredBackoff: 1,
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(1);
-    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("not ready for retry yet"));
+    expectMockMessageContaining(log.info, "not ready for retry yet");
   });
 
   it("continues past high-backoff entries and recovers ready entries behind them", async () => {
@@ -712,9 +747,14 @@ describe("delivery-queue recovery", () => {
       deferredBackoff: 1,
     });
     expect(deliver).toHaveBeenCalledTimes(1);
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "demo-channel-b", to: "2", skipQueue: true }),
-    );
+    const deliverInput = mockCallArg(deliver) as {
+      channel?: string;
+      to?: string;
+      skipQueue?: boolean;
+    };
+    expect(deliverInput.channel).toBe("demo-channel-b");
+    expect(deliverInput.to).toBe("2");
+    expect(deliverInput.skipQueue).toBe(true);
 
     const remaining = await loadPendingDeliveries(tmpDir());
     expect(remaining).toHaveLength(1);

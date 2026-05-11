@@ -182,3 +182,11 @@ export {
 export type { TelegramButtonStyle, TelegramInlineButtons } from "./src/button-types.js";
 export type { StickerMetadata } from "./src/bot/types.js";
 export type { TelegramTokenResolution } from "./src/token.js";
+export {
+  escapeTelegramHtml,
+  markdownToTelegramChunks,
+  markdownToTelegramHtml,
+  markdownToTelegramHtmlChunks,
+  splitTelegramHtmlChunks,
+  type TelegramFormattedChunk,
+} from "./src/format.js";

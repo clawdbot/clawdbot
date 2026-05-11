@@ -130,7 +130,9 @@ private func gatewayErrorDetails(_ error: ErrorShape?) -> [String: ProtoAnyCodab
         details.merge(nested) { _, nestedValue in nestedValue }
     }
     if let error {
-        details["code"] = ProtoAnyCodable(error.code)
+        if details["code"] == nil {
+            details["code"] = ProtoAnyCodable(error.code)
+        }
         details["message"] = ProtoAnyCodable(error.message)
         if let retryable = error.retryable {
             details["retryable"] = ProtoAnyCodable(retryable)
@@ -423,7 +425,7 @@ public actor GatewayChannelActor {
             client["modelIdentifier"] = ProtoAnyCodable(model)
         }
         var params: [String: ProtoAnyCodable] = [
-            "minProtocol": ProtoAnyCodable(GATEWAY_PROTOCOL_VERSION),
+            "minProtocol": ProtoAnyCodable(GATEWAY_MIN_PROTOCOL_VERSION),
             "maxProtocol": ProtoAnyCodable(GATEWAY_PROTOCOL_VERSION),
             "client": ProtoAnyCodable(client),
             "caps": ProtoAnyCodable(options.caps),

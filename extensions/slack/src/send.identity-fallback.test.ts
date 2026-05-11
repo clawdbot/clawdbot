@@ -62,15 +62,16 @@ describe("sendMessageSlack customize-scope fallback", () => {
     expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
     const [firstCall] = vi.mocked(client.chat.postMessage).mock.calls[0];
     const [secondCall] = vi.mocked(client.chat.postMessage).mock.calls[1];
-    expect(firstCall).toEqual(
-      expect.objectContaining({
-        username: "Bot",
-        icon_url: "https://example.com/bot.png",
-      }),
-    );
-    expect(secondCall).not.toHaveProperty("username");
-    expect(secondCall).not.toHaveProperty("icon_url");
-    expect(secondCall).not.toHaveProperty("icon_emoji");
+    expect(firstCall).toEqual({
+      channel: "C123",
+      text: "hello",
+      username: "Bot",
+      icon_url: "https://example.com/bot.png",
+    });
+    expect(secondCall).toEqual({
+      channel: "C123",
+      text: "hello",
+    });
     expect(vi.mocked(logVerbose)).toHaveBeenCalledWith(
       "slack send: missing chat:write.customize, retrying without custom identity",
     );

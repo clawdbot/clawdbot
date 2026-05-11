@@ -242,8 +242,8 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
     // 3 COS PUTs, one per part, each to the presigned URL.
     expect(fetchSpy).toHaveBeenCalledTimes(3);
     const putUrls = fetchSpy.mock.calls.map((c) => (c[0] as { url: string }).url);
-    expect(putUrls).toEqual(
-      expect.arrayContaining([
+    expect(new Set(putUrls)).toEqual(
+      new Set([
         "https://cos.example.com/part-1",
         "https://cos.example.com/part-2",
         "https://cos.example.com/part-3",

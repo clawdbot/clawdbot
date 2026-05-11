@@ -4,7 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import {
   installRequestBodyLimitGuard,
-  isRequestBodyLimitError,
+  RequestBodyLimitError,
+  type RequestBodyLimitErrorCode,
   readJsonBodyWithLimit,
   readRequestBodyWithLimit,
 } from "./http-body.js";
@@ -19,6 +20,37 @@ async function waitForMicrotaskTurn(): Promise<void> {
   await new Promise<void>((resolve) => queueMicrotask(resolve));
 }
 
+async function expectRequestBodyLimitError(
+  promise: Promise<unknown>,
+  expected: {
+    code: RequestBodyLimitErrorCode;
+    message: string;
+    statusCode: number;
+  },
+) {
+  try {
+    await promise;
+  } catch (error) {
+    expect(error).toBeInstanceOf(RequestBodyLimitError);
+    if (!(error instanceof RequestBodyLimitError)) {
+      throw error;
+    }
+    expect({
+      name: error.name,
+      message: error.message,
+      code: error.code,
+      statusCode: error.statusCode,
+    }).toEqual({
+      name: "RequestBodyLimitError",
+      message: expected.message,
+      code: expected.code,
+      statusCode: expected.statusCode,
+    });
+    return;
+  }
+  throw new Error("Expected request body reader to reject");
+}
+
 async function expectReadPayloadTooLarge(params: {
   chunks?: string[];
   headers?: Record<string, string>;
@@ -29,8 +61,10 @@ async function expectReadPayloadTooLarge(params: {
     headers: params.headers,
     emitEnd: false,
   });
-  await expect(readRequestBodyWithLimit(req, { maxBytes: params.maxBytes })).rejects.toMatchObject({
+  await expectRequestBodyLimitError(readRequestBodyWithLimit(req, { maxBytes: params.maxBytes }), {
+    code: "PAYLOAD_TOO_LARGE",
     message: "PayloadTooLarge",
+    statusCode: 413,
   });
   await waitForMicrotaskTurn();
   expect(req.__unhandledDestroyError).toBeUndefined();
@@ -212,9 +246,11 @@ describe("http body limits", () => {
   it("timeout surfaces typed error when timeoutMs is clamped", async () => {
     const req = createMockRequest({ emitEnd: false });
     const promise = readRequestBodyWithLimit(req, { maxBytes: 128, timeoutMs: 0 });
-    await expect(promise).rejects.toSatisfy((error: unknown) =>
-      isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT"),
-    );
+    await expectRequestBodyLimitError(promise, {
+      code: "REQUEST_BODY_TIMEOUT",
+      message: "RequestBodyTimeout",
+      statusCode: 408,
+    });
     expect(req.__unhandledDestroyError).toBeUndefined();
   });
 
@@ -231,8 +267,10 @@ describe("http body limits", () => {
     const req = createMockRequest({ emitEnd: false });
     const promise = readRequestBodyWithLimit(req, { maxBytes: 128 });
     queueMicrotask(() => req.emit("close"));
-    await expect(promise).rejects.toSatisfy((error: unknown) =>
-      isRequestBodyLimitError(error, "CONNECTION_CLOSED"),
-    );
+    await expectRequestBodyLimitError(promise, {
+      code: "CONNECTION_CLOSED",
+      message: "RequestBodyConnectionClosed",
+      statusCode: 400,
+    });
   });
 });

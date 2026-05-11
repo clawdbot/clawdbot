@@ -28,10 +28,10 @@ type MatrixCredentials = NonNullable<ReturnType<typeof loadMatrixCredentials>>;
 function expectMatrixCredentials(
   credentials: ReturnType<typeof loadMatrixCredentials>,
 ): MatrixCredentials {
-  expect(credentials).toEqual(expect.objectContaining({ createdAt: expect.any(String) }));
   if (credentials === null) {
     throw new Error("Expected Matrix credentials");
   }
+  expect(typeof credentials.createdAt).toBe("string");
   return credentials;
 }
 
@@ -147,10 +147,9 @@ describe("matrix credentials storage", () => {
       ),
     ).resolves.toBe("saved");
 
-    expect(loadMatrixCredentials({}, "default")).toMatchObject({
-      accessToken: "tok-123",
-      deviceId: "DEVICE123",
-    });
+    const credentials = expectMatrixCredentials(loadMatrixCredentials({}, "default"));
+    expect(credentials.accessToken).toBe("tok-123");
+    expect(credentials.deviceId).toBe("DEVICE123");
   });
 
   it("backfill skips when newer credentials already changed the token", async () => {
@@ -179,10 +178,9 @@ describe("matrix credentials storage", () => {
       ),
     ).resolves.toBe("skipped");
 
-    expect(loadMatrixCredentials({}, "default")).toMatchObject({
-      accessToken: "tok-new",
-      deviceId: "DEVICE999",
-    });
+    const credentials = expectMatrixCredentials(loadMatrixCredentials({}, "default"));
+    expect(credentials.accessToken).toBe("tok-new");
+    expect(credentials.deviceId).toBe("DEVICE999");
   });
 
   it("serializes stale backfill writes behind newer credential saves", async () => {
@@ -244,10 +242,9 @@ describe("matrix credentials storage", () => {
       releaseFirstWrite?.();
       await Promise.all([staleBackfillPromise, newerSavePromise]);
 
-      expect(loadMatrixCredentials({}, "default")).toMatchObject({
-        accessToken: "tok-new",
-        deviceId: "DEVICE999",
-      });
+      const credentials = expectMatrixCredentials(loadMatrixCredentials({}, "default"));
+      expect(credentials.accessToken).toBe("tok-new");
+      expect(credentials.deviceId).toBe("DEVICE999");
     } finally {
       renameSpy.mockRestore();
     }
@@ -368,16 +365,14 @@ describe("matrix credentials storage", () => {
 
       expect(loaded?.accessToken).toBe("current-token");
       expect(renameSpy).not.toHaveBeenCalled();
-      expect(
-        JSON.parse(fs.readFileSync(currentPath, "utf8")) as { accessToken: string },
-      ).toMatchObject({
-        accessToken: "current-token",
-      });
-      expect(
-        JSON.parse(fs.readFileSync(legacyPath, "utf8")) as { accessToken: string },
-      ).toMatchObject({
-        accessToken: "recreated-stale-legacy-token",
-      });
+      const currentFile = JSON.parse(fs.readFileSync(currentPath, "utf8")) as {
+        accessToken?: unknown;
+      };
+      const legacyFile = JSON.parse(fs.readFileSync(legacyPath, "utf8")) as {
+        accessToken?: unknown;
+      };
+      expect(currentFile.accessToken).toBe("current-token");
+      expect(legacyFile.accessToken).toBe("recreated-stale-legacy-token");
     } finally {
       readFileSpy.mockRestore();
       renameSpy.mockRestore();

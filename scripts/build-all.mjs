@@ -118,6 +118,15 @@ export const BUILD_ALL_PROFILES = {
     "build-stamp",
     "runtime-postbuild-stamp",
   ],
+  cliStartup: [
+    "tsdown",
+    "check-cli-bootstrap-imports",
+    "runtime-postbuild",
+    "build-stamp",
+    "runtime-postbuild-stamp",
+    "write-cli-startup-metadata",
+    "write-cli-compat",
+  ],
 };
 
 export function resolveBuildAllSteps(profile = "full") {

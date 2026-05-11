@@ -85,7 +85,7 @@ describe("model override pipeline wiring", () => {
 
   async function expectBeforeModelResolve(params: {
     event: PluginHookBeforeModelResolveEvent;
-    expected: Partial<PluginHookBeforeModelResolveResult>;
+    expected: PluginHookBeforeModelResolveResult;
     withBrokenHook?: boolean;
     catchErrors?: boolean;
   }) {
@@ -116,7 +116,7 @@ describe("model override pipeline wiring", () => {
 
     expect(handlerSpy).toHaveBeenCalledTimes(1);
     expect(handlerSpy).toHaveBeenCalledWith(params.event, stubCtx);
-    expect(result).toEqual(expect.objectContaining(params.expected));
+    expect(result).toEqual(params.expected);
     return result;
   }
 

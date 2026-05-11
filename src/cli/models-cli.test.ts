@@ -106,6 +106,20 @@ describe("models cli", () => {
     return command;
   }
 
+  function expectCommandOptions(
+    command: ReturnType<typeof vi.fn>,
+    expected: Record<string, unknown>,
+  ) {
+    expect(command).toHaveBeenCalledTimes(1);
+    const options = command.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    const context = command.mock.calls[0]?.[1];
+    for (const [key, value] of Object.entries(expected)) {
+      expect(options?.[key]).toEqual(value);
+    }
+    expect(typeof context).toBe("object");
+    expect(context).not.toBeNull();
+  }
+
   it("registers github-copilot login command", async () => {
     const program = createProgram();
     const models = requireCommand(program, "models");
@@ -118,15 +132,12 @@ describe("models cli", () => {
     );
 
     expect(modelsAuthLoginCommand).toHaveBeenCalledTimes(1);
-    expect(modelsAuthLoginCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "github-copilot",
-        method: "device",
-        yes: true,
-        agent: "poe",
-      }),
-      expect.any(Object),
-    );
+    expectCommandOptions(modelsAuthLoginCommand, {
+      provider: "github-copilot",
+      method: "device",
+      yes: true,
+      agent: "poe",
+    });
   });
 
   it.each([
@@ -134,10 +145,7 @@ describe("models cli", () => {
     { label: "parent flag", args: ["models", "--agent", "poe", "status"] },
   ])("passes --agent to models status ($label)", async ({ args }) => {
     await runModelsCommand(args);
-    expect(modelsStatusCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ agent: "poe" }),
-      expect.any(Object),
-    );
+    expectCommandOptions(modelsStatusCommand, { agent: "poe" });
   });
 
   it.each([
@@ -180,16 +188,13 @@ describe("models cli", () => {
   ])("passes parent --agent to models auth $label", async ({ args, command, expected }) => {
     await runModelsCommand(args);
 
-    expect(command).toHaveBeenCalledWith(expect.objectContaining(expected), expect.any(Object));
+    expectCommandOptions(command, expected);
   });
 
   it("passes list-specific --agent and --json to models auth list", async () => {
     await runModelsCommand(["models", "auth", "list", "--agent", "poe", "--json"]);
 
-    expect(modelsAuthListCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ agent: "poe", json: true }),
-      expect.any(Object),
-    );
+    expectCommandOptions(modelsAuthListCommand, { agent: "poe", json: true });
   });
 
   it.each([

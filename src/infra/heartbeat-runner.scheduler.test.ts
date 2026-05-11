@@ -12,6 +12,7 @@ import {
 
 describe("startHeartbeatRunner", () => {
   type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];
+  type MockRunOnce = RunOnce & { mock: { calls: unknown[][] } };
   const TEST_SCHEDULER_SEED = "heartbeat-runner-test-seed";
 
   function useFakeHeartbeatTime() {
@@ -61,6 +62,43 @@ describe("startHeartbeatRunner", () => {
     });
   }
 
+  function getRunCall(runSpy: MockRunOnce, callIndex: number) {
+    const call = runSpy.mock.calls[callIndex];
+    expect(call).toBeDefined();
+    const options = call?.[0];
+    expect(typeof options).toBe("object");
+    expect(options).not.toBeNull();
+    return options as Record<string, unknown>;
+  }
+
+  function expectRunCallFields(
+    runSpy: MockRunOnce,
+    callIndex: number,
+    expected: Record<string, unknown>,
+  ) {
+    const options = getRunCall(runSpy, callIndex);
+    for (const [key, value] of Object.entries(expected)) {
+      expect(options[key]).toEqual(value);
+    }
+    return options;
+  }
+
+  function expectAgentCall(params: {
+    runSpy: MockRunOnce;
+    agentId: string;
+    expectedHeartbeatEvery?: string;
+    startIndex?: number;
+  }) {
+    const call = params.runSpy.mock.calls
+      .slice(params.startIndex ?? 0)
+      .map((entry) => entry[0] as { agentId?: string; heartbeat?: { every?: string } })
+      .find((options) => options.agentId === params.agentId);
+    expect(call).toBeDefined();
+    if (params.expectedHeartbeatEvery) {
+      expect(call?.heartbeat?.every).toBe(params.expectedHeartbeatEvery);
+    }
+  }
+
   function wake(
     reason: string,
     opts: Partial<Parameters<typeof requestHeartbeat>[0]> = {},
@@ -100,7 +138,7 @@ describe("startHeartbeatRunner", () => {
 
   async function expectWakeDispatch(params: {
     cfg: OpenClawConfig;
-    runSpy: RunOnce;
+    runSpy: MockRunOnce;
     wake: Parameters<typeof requestHeartbeat>[0];
     expectedCall: Record<string, unknown>;
   }) {
@@ -114,7 +152,7 @@ describe("startHeartbeatRunner", () => {
     await vi.advanceTimersByTimeAsync(1);
 
     expect(params.runSpy).toHaveBeenCalledTimes(1);
-    expect(params.runSpy).toHaveBeenCalledWith(expect.objectContaining(params.expectedCall));
+    expectRunCallFields(params.runSpy, 0, params.expectedCall);
 
     return runner;
   }
@@ -136,9 +174,7 @@ describe("startHeartbeatRunner", () => {
     await vi.advanceTimersByTimeAsync(firstDueMs + 1);
 
     expect(runSpy).toHaveBeenCalledTimes(1);
-    expect(runSpy.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ agentId: "main", reason: "interval" }),
-    );
+    expectRunCallFields(runSpy, 0, { agentId: "main", reason: "interval" });
 
     runner.updateConfig({
       agents: {
@@ -157,19 +193,21 @@ describe("startHeartbeatRunner", () => {
 
     await vi.advanceTimersByTimeAsync(finalDueMs - Date.now() + 1);
 
-    expect(runSpy.mock.calls.slice(1).map((call) => call[0]?.agentId)).toEqual(
-      expect.arrayContaining(["main", "ops"]),
-    );
-    const reloadedHeartbeatCalls = runSpy.mock.calls.map((call) => ({
-      agentId: call[0]?.agentId,
-      every: call[0]?.heartbeat?.every,
-    }));
-    expect(reloadedHeartbeatCalls).toEqual(
-      expect.arrayContaining([
-        { agentId: "main", every: "10m" },
-        { agentId: "ops", every: "15m" },
-      ]),
-    );
+    const reloadedAgentIds = runSpy.mock.calls.slice(1).map((call) => call[0]?.agentId);
+    expect(reloadedAgentIds).toContain("main");
+    expect(reloadedAgentIds).toContain("ops");
+    expectAgentCall({
+      runSpy,
+      agentId: "main",
+      expectedHeartbeatEvery: "10m",
+      startIndex: 1,
+    });
+    expectAgentCall({
+      runSpy,
+      agentId: "ops",
+      expectedHeartbeatEvery: "15m",
+      startIndex: 1,
+    });
 
     runner.stop();
   });
@@ -188,9 +226,9 @@ describe("startHeartbeatRunner", () => {
 
     await vi.advanceTimersByTimeAsync(Math.max(mainDueMs, opsDueMs) + 1);
 
-    expect(runSpy.mock.calls.map((call) => call[0]?.agentId)).toEqual(
-      expect.arrayContaining(["main", "ops"]),
-    );
+    const agentIds = runSpy.mock.calls.map((call) => call[0]?.agentId);
+    expect(agentIds).toContain("main");
+    expect(agentIds).toContain("ops");
 
     runner.stop();
   });
@@ -652,12 +690,10 @@ describe("startHeartbeatRunner", () => {
     await vi.advanceTimersByTimeAsync(1);
 
     expect(runSpy).toHaveBeenCalledTimes(2);
-    expect(runSpy.mock.calls[1]?.[0]).toEqual(
-      expect.objectContaining({
-        reason: "background-task-blocked",
-        sessionKey: "agent:main:main",
-      }),
-    );
+    expectRunCallFields(runSpy, 1, {
+      reason: "background-task-blocked",
+      sessionKey: "agent:main:main",
+    });
     runner.stop();
   });
 
@@ -694,9 +730,7 @@ describe("startHeartbeatRunner", () => {
     await vi.advanceTimersByTimeAsync(1);
 
     expect(runSpy).toHaveBeenCalledTimes(2);
-    expect(runSpy.mock.calls[1]?.[0]).toEqual(
-      expect.objectContaining({ reason, sessionKey: "agent:main:main" }),
-    );
+    expectRunCallFields(runSpy, 1, { reason, sessionKey: "agent:main:main" });
     runner.stop();
   });
 
@@ -738,9 +772,10 @@ describe("startHeartbeatRunner", () => {
     // first attempt was a retryable busy skip, the cooldown bookkeeping was
     // never recorded — so the retry should reach runOnce normally.
     expect(runSpy).toHaveBeenCalledTimes(2);
-    expect(runSpy.mock.calls[1]?.[0]).toEqual(
-      expect.objectContaining({ reason: "exec-event", sessionKey: "agent:main:main" }),
-    );
+    expectRunCallFields(runSpy, 1, {
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+    });
     await expect(runSpy.mock.results[1]?.value).resolves.toEqual({
       status: "ran",
       durationMs: 1,

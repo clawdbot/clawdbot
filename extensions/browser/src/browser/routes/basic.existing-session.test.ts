@@ -128,6 +128,13 @@ async function callStartRoute(params: {
   return { response, ensureBrowserAvailable };
 }
 
+function responseBodyRecord(response: { body: unknown }): Record<string, unknown> {
+  if (!response.body || typeof response.body !== "object") {
+    throw new Error("expected JSON response body");
+  }
+  return response.body as Record<string, unknown>;
+}
+
 describe("basic browser routes", () => {
   it("reports Linux no-display headless fallback for local managed profiles", async () => {
     const originalPlatform = process.platform;
@@ -143,11 +150,10 @@ describe("basic browser routes", () => {
       });
 
       expect(response.statusCode).toBe(200);
-      expect(response.body).toMatchObject({
-        profile: "openclaw",
-        headless: true,
-        headlessSource: "linux-display-fallback",
-      });
+      const body = responseBodyRecord(response);
+      expect(body.profile).toBe("openclaw");
+      expect(body.headless).toBe(true);
+      expect(body.headlessSource).toBe("linux-display-fallback");
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
       if (originalDisplay === undefined) {
@@ -186,13 +192,12 @@ describe("basic browser routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).toMatchObject({
-      profile: "openclaw",
-      pid: 222,
-      chosenBrowser: "chromium",
-      headless: true,
-      headlessSource: "request",
-    });
+    const body = responseBodyRecord(response);
+    expect(body.profile).toBe("openclaw");
+    expect(body.pid).toBe(222);
+    expect(body.chosenBrowser).toBe("chromium");
+    expect(body.headless).toBe(true);
+    expect(body.headlessSource).toBe("request");
   });
 
   it("maps existing-session status failures to JSON browser errors", async () => {
@@ -205,7 +210,7 @@ describe("basic browser routes", () => {
     });
 
     expect(response.statusCode).toBe(409);
-    expect(response.body).toMatchObject({ error: "attach failed" });
+    expect(responseBodyRecord(response).error).toBe("attach failed");
   });
 
   it("reports Chrome MCP transport without fake CDP fields", async () => {
@@ -214,17 +219,18 @@ describe("basic browser routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).toMatchObject({
-      profile: "chrome-live",
-      driver: "existing-session",
-      transport: "chrome-mcp",
-      running: true,
-      cdpPort: null,
-      cdpUrl: null,
-      userDataDir: "/tmp/brave-profile",
-      executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-      pid: 4321,
-    });
+    const body = responseBodyRecord(response);
+    expect(body.profile).toBe("chrome-live");
+    expect(body.driver).toBe("existing-session");
+    expect(body.transport).toBe("chrome-mcp");
+    expect(body.running).toBe(true);
+    expect(body.cdpPort).toBeNull();
+    expect(body.cdpUrl).toBeNull();
+    expect(body.userDataDir).toBe("/tmp/brave-profile");
+    expect(body.executablePath).toBe(
+      "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+    );
+    expect(body.pid).toBe(4321);
   });
 
   it("passes valid start headless override to local managed profiles", async () => {
@@ -243,9 +249,9 @@ describe("basic browser routes", () => {
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.body).toMatchObject({
-      error: 'Invalid headless value. Use "true" or "false".',
-    });
+    expect(responseBodyRecord(response).error).toBe(
+      'Invalid headless value. Use "true" or "false".',
+    );
     expect(ensureBrowserAvailable).not.toHaveBeenCalled();
   });
 
@@ -264,10 +270,9 @@ describe("basic browser routes", () => {
     });
 
     expect(response.statusCode).toBe(400);
-    expect(response.body).toMatchObject({
-      error:
-        'Headless start override is only supported for locally launched openclaw profiles. Profile "chrome-live" is attach-only, remote, or existing-session.',
-    });
+    expect(responseBodyRecord(response).error).toBe(
+      'Headless start override is only supported for locally launched openclaw profiles. Profile "chrome-live" is attach-only, remote, or existing-session.',
+    );
     expect(ensureBrowserAvailable).not.toHaveBeenCalled();
   });
 
@@ -280,13 +285,12 @@ describe("basic browser routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).toMatchObject({
-      profile: "chrome-live",
-      driver: "existing-session",
-      transport: "chrome-mcp",
-      running: true,
-      cdpReady: true,
-    });
+    const body = responseBodyRecord(response);
+    expect(body.profile).toBe("chrome-live");
+    expect(body.driver).toBe("existing-session");
+    expect(body.transport).toBe("chrome-mcp");
+    expect(body.running).toBe(true);
+    expect(body.cdpReady).toBe(true);
   });
 
   it("probes Chrome MCP transport only once for status", async () => {
@@ -304,10 +308,9 @@ describe("basic browser routes", () => {
     expect(isTransportAvailable).toHaveBeenCalledTimes(1);
     expect(isTransportAvailable).toHaveBeenCalledWith(5_000);
     expect(isHttpReachable).not.toHaveBeenCalled();
-    expect(response.body).toMatchObject({
-      cdpHttp: true,
-      cdpReady: true,
-      running: true,
-    });
+    const body = responseBodyRecord(response);
+    expect(body.cdpHttp).toBe(true);
+    expect(body.cdpReady).toBe(true);
+    expect(body.running).toBe(true);
   });
 });

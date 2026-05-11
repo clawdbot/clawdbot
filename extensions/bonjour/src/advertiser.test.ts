@@ -42,6 +42,14 @@ function expectDnsLabelWithinLimit(value: string) {
   expect(dnsLabelEncoder.encode(value).byteLength).toBeLessThanOrEqual(63);
 }
 
+function warnMessages(): string[] {
+  return logger.warn.mock.calls.map(([message]) => String(message));
+}
+
+function expectWarnContaining(fragment: string) {
+  expect(warnMessages().some((message) => message.includes(fragment))).toBe(true);
+}
+
 function enableAdvertiserUnitMode(hostname = "test-host") {
   // Allow advertiser to run in unit tests.
   delete process.env.VITEST;
@@ -403,17 +411,13 @@ describe("gateway bonjour advertiser", () => {
     expect(exceptionHandler).toBeTypeOf("function");
 
     expect(handler?.(new Error("CIAO PROBING CANCELLED"))).toBe(true);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("suppressing ciao cancellation"),
-    );
+    expectWarnContaining("suppressing ciao cancellation");
 
     logger.warn.mockClear();
     expect(
       handler?.(new Error("Reached illegal state! IPV4 address change from defined to undefined!")),
     ).toBe(true);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("suppressing ciao interface assertion"),
-    );
+    expectWarnContaining("suppressing ciao interface assertion");
 
     logger.warn.mockClear();
     expect(
@@ -426,9 +430,7 @@ describe("gateway bonjour advertiser", () => {
         ),
       ),
     ).toBe(true);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("suppressing ciao netmask assertion"),
-    );
+    expectWarnContaining("suppressing ciao netmask assertion");
 
     logger.warn.mockClear();
     expect(
@@ -438,9 +440,7 @@ describe("gateway bonjour advertiser", () => {
         ),
       ),
     ).toBe(true);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("suppressing ciao self-probe race"),
-    );
+    expectWarnContaining("suppressing ciao self-probe race");
 
     await started.stop();
   });
@@ -466,10 +466,8 @@ describe("gateway bonjour advertiser", () => {
       expect(createService).toHaveBeenCalledTimes(2);
     });
 
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("suppressing ciao cancellation"),
-    );
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("restarting advertiser"));
+    expectWarnContaining("suppressing ciao cancellation");
+    expect(warnMessages().some((message) => message.includes("restarting advertiser"))).toBe(true);
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(advertise).toHaveBeenCalledTimes(2);
 
@@ -497,7 +495,7 @@ describe("gateway bonjour advertiser", () => {
 
     // allow promise rejection handler to run
     await Promise.resolve();
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("advertise failed"));
+    expect(warnMessages().some((message) => message.includes("advertise failed"))).toBe(true);
 
     // watchdog first retries, then recreates the advertiser after the service
     // stays unhealthy across multiple 5s ticks.
@@ -526,7 +524,7 @@ describe("gateway bonjour advertiser", () => {
     });
 
     expect(advertise).toHaveBeenCalledTimes(1);
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("advertise threw"));
+    expect(warnMessages().some((message) => message.includes("advertise threw"))).toBe(true);
 
     await started.stop();
   });
@@ -660,7 +658,7 @@ describe("gateway bonjour advertiser", () => {
 
     await vi.advanceTimersByTimeAsync(25_000);
 
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("restarting advertiser"));
+    expect(warnMessages().some((message) => message.includes("restarting advertiser"))).toBe(true);
     expect(createService).toHaveBeenCalledTimes(2);
     expect(advertise).toHaveBeenCalledTimes(2);
     expect(destroy).toHaveBeenCalledTimes(1);
@@ -705,9 +703,7 @@ describe("gateway bonjour advertiser", () => {
 
     await vi.advanceTimersByTimeAsync(25_000);
 
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("service stuck in announcing"),
-    );
+    expectWarnContaining("service stuck in announcing");
     expect(createService).toHaveBeenCalledTimes(2);
     expect(advertise).toHaveBeenCalledTimes(3);
     expect(destroy).toHaveBeenCalledTimes(1);
@@ -733,9 +729,7 @@ describe("gateway bonjour advertiser", () => {
 
     await vi.advanceTimersByTimeAsync(55_000);
 
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("disabling advertiser after 1 stuck-state restart"),
-    );
+    expectWarnContaining("disabling advertiser after 1 stuck-state restart");
     expect(createService).toHaveBeenCalledTimes(2);
     expect(advertise).toHaveBeenCalledTimes(2);
     expect(destroy).toHaveBeenCalledTimes(2);

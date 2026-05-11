@@ -61,4 +61,37 @@ describe("buildStatusCommandReportData", () => {
       "muted(Deep probe: cmd:openclaw status --deep)",
     ]);
   });
+
+  it("adds model-pricing degradation from gateway probe health to overview rows", async () => {
+    const baseParams = createStatusCommandReportDataParams();
+    const result = await buildStatusCommandReportData(
+      createStatusCommandReportDataParams({
+        surface: {
+          ...baseParams.surface,
+          gatewayProbe: {
+            connectLatencyMs: 123,
+            error: null,
+            health: {
+              ok: true,
+              modelPricing: {
+                state: "degraded",
+                detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
+                sources: [{ source: "openrouter", state: "degraded" }],
+              },
+            },
+          },
+        },
+        health: undefined,
+      }),
+    );
+
+    expect(result.overviewRows).toEqual(
+      expect.arrayContaining([
+        {
+          Item: "Model pricing",
+          Value: "warn(degraded · OpenRouter pricing fetch failed: TypeError: fetch failed)",
+        },
+      ]),
+    );
+  });
 });

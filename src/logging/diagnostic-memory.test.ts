@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -19,11 +19,14 @@ function memoryUsage(overrides: Partial<NodeJS.MemoryUsage>): NodeJS.MemoryUsage
 
 describe("diagnostic memory", () => {
   beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-22T12:00:00.000Z"));
     resetDiagnosticEventsForTest();
     resetDiagnosticMemoryForTest();
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     resetDiagnosticEventsForTest();
     resetDiagnosticMemoryForTest();
   });
@@ -39,11 +42,17 @@ describe("diagnostic memory", () => {
     });
     stop();
 
-    expect(events).toMatchObject([
+    expect(events).toEqual([
       {
+        seq: 1,
+        ts: 1_776_859_200_000,
+        trace: undefined,
         type: "diagnostic.memory.sample",
         uptimeMs: 123,
         memory: {
+          arrayBuffersBytes: 5,
+          externalBytes: 10,
+          heapTotalBytes: 80,
           rssBytes: 4096,
           heapUsedBytes: 1024,
         },
@@ -57,6 +66,7 @@ describe("diagnostic memory", () => {
 
     emitDiagnosticMemorySample({
       now: 1000,
+      uptimeMs: 0,
       memoryUsage: memoryUsage({ rss: 2000 }),
       thresholds: {
         rssWarningBytes: 1000,
@@ -66,14 +76,38 @@ describe("diagnostic memory", () => {
     });
     stop();
 
-    expect(events).toContainEqual(
-      expect.objectContaining({
+    expect(events).toEqual([
+      {
+        seq: 1,
+        ts: 1_776_859_200_000,
+        trace: undefined,
+        type: "diagnostic.memory.sample",
+        uptimeMs: 0,
+        memory: {
+          arrayBuffersBytes: 5,
+          externalBytes: 10,
+          heapTotalBytes: 80,
+          heapUsedBytes: 40,
+          rssBytes: 2000,
+        },
+      },
+      {
+        seq: 2,
+        ts: 1_776_859_200_000,
+        trace: undefined,
         type: "diagnostic.memory.pressure",
         level: "warning",
         reason: "rss_threshold",
         thresholdBytes: 1000,
-      }),
-    );
+        memory: {
+          arrayBuffersBytes: 5,
+          externalBytes: 10,
+          heapTotalBytes: 80,
+          heapUsedBytes: 40,
+          rssBytes: 2000,
+        },
+      },
+    ]);
   });
 
   it("can check pressure without recording an idle memory sample", () => {
@@ -121,15 +155,24 @@ describe("diagnostic memory", () => {
     });
     stop();
 
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "diagnostic.memory.pressure",
-        level: "warning",
-        reason: "rss_growth",
-        rssGrowthBytes: 700,
-        windowMs: 1000,
-      }),
-    );
+    expect(events.at(-1)).toEqual({
+      seq: 3,
+      ts: 1_776_859_200_000,
+      trace: undefined,
+      type: "diagnostic.memory.pressure",
+      level: "warning",
+      reason: "rss_growth",
+      thresholdBytes: 500,
+      rssGrowthBytes: 700,
+      windowMs: 1000,
+      memory: {
+        arrayBuffersBytes: 5,
+        externalBytes: 10,
+        heapTotalBytes: 80,
+        heapUsedBytes: 40,
+        rssBytes: 1700,
+      },
+    });
   });
 
   it("throttles repeated pressure events by reason and level", () => {

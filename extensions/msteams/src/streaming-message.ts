@@ -10,7 +10,7 @@
  */
 
 import { createDraftStreamLoop, type DraftStreamLoop } from "openclaw/plugin-sdk/channel-lifecycle";
-import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /** Default throttle interval between stream updates (ms).
  * Teams docs recommend buffering tokens for 1.5-2s; limit is 1 req/s. */

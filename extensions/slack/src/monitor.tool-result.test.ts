@@ -378,7 +378,7 @@ describe("monitorSlackProvider tool results", () => {
     await runDefaultMessageAndExpectSentText("final reply");
   });
 
-  it("preserves RawBody without injecting processed room history", async () => {
+  it("includes recent channel history in Body when requireMention is false", async () => {
     setHistoryCaptureConfig({ "*": { requireMention: false } });
     const capturedCtx = captureReplyContexts<{
       Body?: string;
@@ -392,9 +392,9 @@ describe("monitorSlackProvider tool results", () => {
 
     expect(replyMock).toHaveBeenCalledTimes(2);
     const latestCtx = capturedCtx.at(-1) ?? {};
-    expect(latestCtx.Body).not.toContain(HISTORY_CONTEXT_MARKER);
-    expect(latestCtx.Body).not.toContain(CURRENT_MESSAGE_MARKER);
-    expect(latestCtx.Body).not.toContain("first");
+    expect(latestCtx.Body).toContain(HISTORY_CONTEXT_MARKER);
+    expect(latestCtx.Body).toContain("first");
+    expect(latestCtx.Body).toContain(CURRENT_MESSAGE_MARKER);
     expect(latestCtx.RawBody).toBe("second");
     expect(latestCtx.CommandBody).toBe("second");
   });

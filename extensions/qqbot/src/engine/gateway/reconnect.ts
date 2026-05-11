@@ -80,7 +80,7 @@ export class ReconnectState {
     const delay =
       customDelay ?? RECONNECT_DELAYS[Math.min(this.attempts, RECONNECT_DELAYS.length - 1)];
     this.attempts++;
-    this.log?.debug?.(`Reconnecting in ${delay}ms (attempt ${this.attempts})`);
+    this.log?.debug?.(`Reconnecting ${this.accountId} in ${delay}ms (attempt ${this.attempts})`);
     return delay;
   }
 

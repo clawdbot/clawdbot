@@ -205,11 +205,10 @@ describe("checkDepsStatus", () => {
       });
 
       await fs.writeFile(path.join(base, "pnpm-lock.yaml"), "lock", "utf8");
-      await expect(checkDepsStatus({ root: base, manager: "pnpm" })).resolves.toMatchObject({
-        manager: "pnpm",
-        status: "missing",
-        reason: "node_modules marker missing",
-      });
+      const missingDeps = await checkDepsStatus({ root: base, manager: "pnpm" });
+      expect(missingDeps.manager).toBe("pnpm");
+      expect(missingDeps.status).toBe("missing");
+      expect(missingDeps.reason).toBe("node_modules marker missing");
 
       const markerPath = path.join(base, "node_modules", ".modules.yaml");
       await fs.mkdir(path.dirname(markerPath), { recursive: true });
@@ -219,18 +218,16 @@ describe("checkDepsStatus", () => {
       await fs.utimes(markerPath, staleDate, staleDate);
       await fs.utimes(path.join(base, "pnpm-lock.yaml"), freshDate, freshDate);
 
-      await expect(checkDepsStatus({ root: base, manager: "pnpm" })).resolves.toMatchObject({
-        manager: "pnpm",
-        status: "stale",
-        reason: "lockfile newer than install marker",
-      });
+      const staleDeps = await checkDepsStatus({ root: base, manager: "pnpm" });
+      expect(staleDeps.manager).toBe("pnpm");
+      expect(staleDeps.status).toBe("stale");
+      expect(staleDeps.reason).toBe("lockfile newer than install marker");
 
       const newerMarker = new Date(Date.now() + 2_000);
       await fs.utimes(markerPath, newerMarker, newerMarker);
-      await expect(checkDepsStatus({ root: base, manager: "pnpm" })).resolves.toMatchObject({
-        manager: "pnpm",
-        status: "ok",
-      });
+      const okDeps = await checkDepsStatus({ root: base, manager: "pnpm" });
+      expect(okDeps.manager).toBe("pnpm");
+      expect(okDeps.status).toBe("ok");
     });
   });
 });
@@ -257,18 +254,18 @@ describe("checkUpdateStatus", () => {
       await fs.writeFile(path.join(root, "package-lock.json"), "lock", "utf8");
       await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
 
-      await expect(
-        checkUpdateStatus({ root, includeRegistry: false, fetchGit: false, timeoutMs: 1000 }),
-      ).resolves.toMatchObject({
+      const status = await checkUpdateStatus({
         root,
-        installKind: "package",
-        packageManager: "npm",
-        git: undefined,
-        registry: undefined,
-        deps: {
-          manager: "npm",
-        },
+        includeRegistry: false,
+        fetchGit: false,
+        timeoutMs: 1000,
       });
+      expect(status.root).toBe(root);
+      expect(status.installKind).toBe("package");
+      expect(status.packageManager).toBe("npm");
+      expect(status.git).toBeUndefined();
+      expect(status.registry).toBeUndefined();
+      expect(status.deps?.manager).toBe("npm");
     });
   });
 
@@ -285,20 +282,15 @@ describe("checkUpdateStatus", () => {
       await runCommandWithTimeout(["git", "init"], { cwd: repoRoot, timeoutMs: 1000 });
       await fs.symlink(repoRoot, linkedRoot);
 
-      await expect(
-        checkUpdateStatus({
-          root: linkedRoot,
-          includeRegistry: false,
-          fetchGit: false,
-          timeoutMs: 1000,
-        }),
-      ).resolves.toMatchObject({
+      const status = await checkUpdateStatus({
         root: linkedRoot,
-        installKind: "git",
-        git: {
-          root: linkedRoot,
-        },
+        includeRegistry: false,
+        fetchGit: false,
+        timeoutMs: 1000,
       });
+      expect(status.root).toBe(linkedRoot);
+      expect(status.installKind).toBe("git");
+      expect(status.git?.root).toBe(linkedRoot);
     });
   });
 });

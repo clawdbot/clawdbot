@@ -3,9 +3,9 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCopilotModelDefinition, getDefaultCopilotModelIds } from "./models-defaults.js";
 import { fetchCopilotUsage } from "./usage.js";
 
-vi.mock("@mariozechner/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
-    "@mariozechner/pi-ai/oauth",
+vi.mock("@earendil-works/pi-ai/oauth", async () => {
+  const actual = await vi.importActual<typeof import("@earendil-works/pi-ai/oauth")>(
+    "@earendil-works/pi-ai/oauth",
   );
   return {
     ...actual,
@@ -41,7 +41,7 @@ import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/cor
 import { fetchCopilotModelCatalog, resolveCopilotForwardCompatModel } from "./models.js";
 
 afterAll(() => {
-  vi.doUnmock("@mariozechner/pi-ai/oauth");
+  vi.doUnmock("@earendil-works/pi-ai/oauth");
   vi.doUnmock("openclaw/plugin-sdk/provider-model-shared");
   vi.doUnmock("openclaw/plugin-sdk/json-store");
   vi.doUnmock("openclaw/plugin-sdk/state-paths");
@@ -105,12 +105,13 @@ describe("github-copilot model defaults", () => {
 
     it("uses static metadata overrides for gpt-5.5 fallback rows", () => {
       const def = buildCopilotModelDefinition("gpt-5.5");
-      expect(def).toMatchObject({
+      expect(def).toEqual({
         id: "gpt-5.5",
         name: "GPT-5.5",
         api: "openai-responses",
         reasoning: true,
         input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 400_000,
         maxTokens: 128_000,
       });
@@ -212,12 +213,14 @@ describe("resolveCopilotForwardCompatModel", () => {
 
   it("uses static metadata for gpt-5.5 when live discovery rows are unavailable", () => {
     const result = requireResolvedModel(createMockCtx("gpt-5.5"));
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       id: "gpt-5.5",
       name: "GPT-5.5",
+      provider: "github-copilot",
       api: "openai-responses",
       reasoning: true,
       input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 400_000,
       maxTokens: 128_000,
     });
@@ -514,12 +517,13 @@ describe("fetchCopilotModelCatalog", () => {
     ]);
 
     const gpt55 = out.find((m) => m.id === "gpt-5.5");
-    expect(gpt55).toMatchObject({
+    expect(gpt55).toEqual({
       id: "gpt-5.5",
       name: "GPT-5.5",
       api: "openai-responses",
       reasoning: true,
       input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 400000,
       maxTokens: 128000,
     });

@@ -1,4 +1,4 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   createMantleAnthropicStreamFn,
@@ -30,6 +30,13 @@ function createTestDeps() {
   };
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
 describe("createMantleAnthropicStreamFn", () => {
   it("uses authToken bearer auth for Mantle Anthropic requests", () => {
     const stream = { kind: "anthropic-stream" };
@@ -46,31 +53,24 @@ describe("createMantleAnthropicStreamFn", () => {
     });
 
     expect(result).toBe(stream);
-    expect(deps.createClient).toHaveBeenCalledWith(
-      expect.objectContaining({
-        apiKey: null,
-        authToken: "bedrock-bearer-token",
-        baseURL: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
-        defaultHeaders: expect.objectContaining({
-          accept: "application/json",
-          "anthropic-beta": "fine-grained-tool-streaming-2025-05-14",
-          "X-Test": "model-header",
-          "X-Caller": "caller-header",
-        }),
-      }),
+    const clientOptions = requireRecord(deps.createClient.mock.calls[0]?.[0], "client options");
+    expect(clientOptions.apiKey).toBeNull();
+    expect(clientOptions.authToken).toBe("bedrock-bearer-token");
+    expect(clientOptions.baseURL).toBe("https://bedrock-mantle.us-east-1.api.aws/anthropic");
+    const defaultHeaders = requireRecord(clientOptions.defaultHeaders, "default headers");
+    expect(defaultHeaders.accept).toBe("application/json");
+    expect(defaultHeaders["anthropic-beta"]).toBe("fine-grained-tool-streaming-2025-05-14");
+    expect(defaultHeaders["X-Test"]).toBe("model-header");
+    expect(defaultHeaders["X-Caller"]).toBe("caller-header");
+
+    expect(deps.stream.mock.calls[0]?.[0]).toBe(model);
+    expect(deps.stream.mock.calls[0]?.[1]).toBe(context);
+    const streamOptions = requireRecord(deps.stream.mock.calls[0]?.[2], "stream options");
+    const client = requireRecord(streamOptions.client, "stream client");
+    expect(requireRecord(client.options, "stream client options").authToken).toBe(
+      "bedrock-bearer-token",
     );
-    expect(deps.stream).toHaveBeenCalledWith(
-      model,
-      context,
-      expect.objectContaining({
-        client: expect.objectContaining({
-          options: expect.objectContaining({
-            authToken: "bedrock-bearer-token",
-          }),
-        }),
-        thinkingEnabled: false,
-      }),
-    );
+    expect(streamOptions.thinkingEnabled).toBe(false);
   });
 
   it("omits unsupported Opus 4.7 sampling and reasoning overrides", () => {
@@ -85,14 +85,11 @@ describe("createMantleAnthropicStreamFn", () => {
       reasoning: "high",
     });
 
-    expect(deps.stream).toHaveBeenCalledWith(
-      model,
-      context,
-      expect.objectContaining({
-        temperature: undefined,
-        thinkingEnabled: false,
-      }),
-    );
+    expect(deps.stream.mock.calls[0]?.[0]).toBe(model);
+    expect(deps.stream.mock.calls[0]?.[1]).toBe(context);
+    const streamOptions = requireRecord(deps.stream.mock.calls[0]?.[2], "stream options");
+    expect(streamOptions.temperature).toBeUndefined();
+    expect(streamOptions.thinkingEnabled).toBe(false);
   });
 
   it("normalizes Mantle provider URLs to the Anthropic endpoint", () => {

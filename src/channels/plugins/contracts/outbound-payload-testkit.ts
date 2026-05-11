@@ -31,6 +31,14 @@ export type OutboundPayloadHarnessParams = {
   sendResults?: SendResultLike[];
 };
 
+function sendCall(sendMock: Mock, index: number): unknown[] {
+  const call = sendMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected send call ${index}`);
+  }
+  return call;
+}
+
 export function installChannelOutboundPayloadContractSuite(params: {
   channel: string;
   chunking: ChunkingMode;
@@ -49,8 +57,11 @@ export function installChannelOutboundPayloadContractSuite(params: {
     const result = await run();
 
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(sendMock).toHaveBeenCalledWith(to, "hello", expect.any(Object));
-    expect(result).toMatchObject({ channel: params.channel });
+    const call = sendCall(sendMock, 0);
+    expect(call[0]).toBe(to);
+    expect(call[1]).toBe("hello");
+    expect(call[2]).toBeDefined();
+    expect(result.channel).toBe(params.channel);
   });
 
   it("single media delegates to sendMedia", async () => {
@@ -60,12 +71,11 @@ export function installChannelOutboundPayloadContractSuite(params: {
     const result = await run();
 
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(sendMock).toHaveBeenCalledWith(
-      to,
-      "cap",
-      expect.objectContaining({ mediaUrl: "https://example.com/a.jpg" }),
-    );
-    expect(result).toMatchObject({ channel: params.channel });
+    const call = sendCall(sendMock, 0);
+    expect(call[0]).toBe(to);
+    expect(call[1]).toBe("cap");
+    expect((call[2] as Record<string, unknown>).mediaUrl).toBe("https://example.com/a.jpg");
+    expect(result.channel).toBe(params.channel);
   });
 
   it("multi-media iterates URLs with caption on first", async () => {
@@ -79,19 +89,16 @@ export function installChannelOutboundPayloadContractSuite(params: {
     const result = await run();
 
     expect(sendMock).toHaveBeenCalledTimes(2);
-    expect(sendMock).toHaveBeenNthCalledWith(
-      1,
-      to,
-      "caption",
-      expect.objectContaining({ mediaUrl: "https://example.com/1.jpg" }),
-    );
-    expect(sendMock).toHaveBeenNthCalledWith(
-      2,
-      to,
-      "",
-      expect.objectContaining({ mediaUrl: "https://example.com/2.jpg" }),
-    );
-    expect(result).toMatchObject({ channel: params.channel, messageId: "m-2" });
+    const first = sendCall(sendMock, 0);
+    expect(first[0]).toBe(to);
+    expect(first[1]).toBe("caption");
+    expect((first[2] as Record<string, unknown>).mediaUrl).toBe("https://example.com/1.jpg");
+    const second = sendCall(sendMock, 1);
+    expect(second[0]).toBe(to);
+    expect(second[1]).toBe("");
+    expect((second[2] as Record<string, unknown>).mediaUrl).toBe("https://example.com/2.jpg");
+    expect(result.channel).toBe(params.channel);
+    expect(result.messageId).toBe("m-2");
   });
 
   it("empty payload returns no-op", async () => {
@@ -109,8 +116,11 @@ export function installChannelOutboundPayloadContractSuite(params: {
       const result = await run();
 
       expect(sendMock).toHaveBeenCalledTimes(1);
-      expect(sendMock).toHaveBeenCalledWith(to, text, expect.any(Object));
-      expect(result).toMatchObject({ channel: params.channel });
+      const call = sendCall(sendMock, 0);
+      expect(call[0]).toBe(to);
+      expect(call[1]).toBe(text);
+      expect(call[2]).toBeDefined();
+      expect(result.channel).toBe(params.channel);
     });
     return;
   }
@@ -129,6 +139,6 @@ export function installChannelOutboundPayloadContractSuite(params: {
     for (const call of sendMock.mock.calls) {
       expect((call[1] as string).length).toBeLessThanOrEqual(chunking.maxChunkLength);
     }
-    expect(result).toMatchObject({ channel: params.channel });
+    expect(result.channel).toBe(params.channel);
   });
 }

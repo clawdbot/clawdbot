@@ -3,8 +3,6 @@ import {
   cleanSchemaForGemini,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
 } from "../agents/schema/clean-for-gemini.js";
-import type { ModelCompatConfig } from "../config/types.models.js";
-import { applyModelCompatPatch } from "../plugins/provider-model-compat.js";
 import type {
   AnyAgentTool,
   ProviderNormalizeToolSchemasContext,
@@ -13,18 +11,6 @@ import type {
 
 // Shared provider-tool helpers for plugin-owned schema compatibility rewrites.
 export { cleanSchemaForGemini, GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS };
-
-export const XAI_TOOL_SCHEMA_PROFILE = "xai";
-export const HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING = "html-entities";
-
-export const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
-  "minLength",
-  "maxLength",
-  "minItems",
-  "maxItems",
-  "minContains",
-  "maxContains",
-]);
 
 export function stripUnsupportedSchemaKeywords(
   schema: unknown,
@@ -66,26 +52,6 @@ export function stripUnsupportedSchemaKeywords(
     cleaned[key] = value;
   }
   return cleaned;
-}
-
-export function stripXaiUnsupportedKeywords(schema: unknown): unknown {
-  return stripUnsupportedSchemaKeywords(schema, XAI_UNSUPPORTED_SCHEMA_KEYWORDS);
-}
-
-export function resolveXaiModelCompatPatch(): ModelCompatConfig {
-  return {
-    toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
-    unsupportedToolSchemaKeywords: Array.from(XAI_UNSUPPORTED_SCHEMA_KEYWORDS),
-    nativeWebSearchTool: true,
-    toolCallArgumentsEncoding: HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
-  };
-}
-
-export function applyXaiModelCompat<T extends { compat?: unknown }>(model: T): T {
-  return applyModelCompatPatch(
-    model as T & { compat?: ModelCompatConfig },
-    resolveXaiModelCompatPatch(),
-  ) as T;
 }
 
 export function findUnsupportedSchemaKeywords(

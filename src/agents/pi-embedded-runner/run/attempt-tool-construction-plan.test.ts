@@ -7,6 +7,35 @@ import {
   shouldCreateBundleMcpRuntimeForAttempt,
 } from "./attempt-tool-construction-plan.js";
 
+type EmbeddedAttemptToolConstructionPlan = ReturnType<
+  typeof resolveEmbeddedAttemptToolConstructionPlan
+>;
+
+function expectConstructionPlan(
+  plan: EmbeddedAttemptToolConstructionPlan,
+  expected: {
+    constructTools?: boolean;
+    includeCoreTools?: boolean;
+    runtimeToolAllowlist?: string[];
+    coding?: Partial<EmbeddedAttemptToolConstructionPlan["codingToolConstructionPlan"]>;
+  },
+) {
+  if ("constructTools" in expected) {
+    expect(plan.constructTools).toBe(expected.constructTools);
+  }
+  if ("includeCoreTools" in expected) {
+    expect(plan.includeCoreTools).toBe(expected.includeCoreTools);
+  }
+  if ("runtimeToolAllowlist" in expected) {
+    expect(plan.runtimeToolAllowlist).toEqual(expected.runtimeToolAllowlist);
+  }
+  if (expected.coding) {
+    for (const [key, value] of Object.entries(expected.coding)) {
+      expect(plan.codingToolConstructionPlan[key as keyof typeof expected.coding]).toBe(value);
+    }
+  }
+}
+
 describe("applyEmbeddedAttemptToolsAllow", () => {
   it("keeps explicit toolsAllow authoritative after force-added tools are built", () => {
     const tools = [{ name: "exec" }, { name: "read" }, { name: "message" }];
@@ -85,10 +114,10 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
 
 describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
   it("builds all tool families when no runtime allowlist is present", () => {
-    expect(resolveEmbeddedAttemptToolConstructionPlan({})).toMatchObject({
+    expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({}), {
       constructTools: true,
       includeCoreTools: true,
-      codingToolConstructionPlan: {
+      coding: {
         includeBaseCodingTools: true,
         includeShellTools: true,
         includeChannelTools: true,
@@ -99,10 +128,10 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
   });
 
   it("short-circuits all local tool construction for explicit no-tools runs", () => {
-    expect(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [] })).toMatchObject({
+    expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [] }), {
       constructTools: false,
       includeCoreTools: false,
-      codingToolConstructionPlan: {
+      coding: {
         includeBaseCodingTools: false,
         includeShellTools: false,
         includeChannelTools: false,
@@ -113,27 +142,28 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
   });
 
   it("materializes only plugin candidates for plugin-only allowlists", () => {
-    expect(
+    expectConstructionPlan(
       resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["memory_search"] }),
-    ).toMatchObject({
-      constructTools: true,
-      includeCoreTools: false,
-      runtimeToolAllowlist: ["memory_search"],
-      codingToolConstructionPlan: {
-        includeBaseCodingTools: false,
-        includeShellTools: false,
-        includeChannelTools: true,
-        includeOpenClawTools: false,
-        includePluginTools: true,
+      {
+        constructTools: true,
+        includeCoreTools: false,
+        runtimeToolAllowlist: ["memory_search"],
+        coding: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: true,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
       },
-    });
+    );
   });
 
   it("limits known core allowlists to the matching local families", () => {
-    expect(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["read"] })).toMatchObject({
+    expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["read"] }), {
       constructTools: true,
       includeCoreTools: true,
-      codingToolConstructionPlan: {
+      coding: {
         includeBaseCodingTools: true,
         includeShellTools: false,
         includeChannelTools: false,
@@ -141,8 +171,8 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
         includePluginTools: false,
       },
     });
-    expect(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["exec"] })).toMatchObject({
-      codingToolConstructionPlan: {
+    expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["exec"] }), {
+      coding: {
         includeBaseCodingTools: false,
         includeShellTools: true,
         includeChannelTools: false,
@@ -150,88 +180,99 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
         includePluginTools: false,
       },
     });
-    expect(
+    expectConstructionPlan(
       resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["session_status"] }),
-    ).toMatchObject({
-      codingToolConstructionPlan: {
-        includeBaseCodingTools: false,
-        includeShellTools: false,
-        includeChannelTools: false,
-        includeOpenClawTools: true,
-        includePluginTools: false,
+      {
+        coding: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: true,
+          includePluginTools: false,
+        },
       },
-    });
-    expect(
+    );
+    expectConstructionPlan(
       resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["update_plan"] }),
-    ).toMatchObject({
-      codingToolConstructionPlan: {
-        includeBaseCodingTools: false,
-        includeShellTools: false,
-        includeChannelTools: false,
-        includeOpenClawTools: true,
-        includePluginTools: false,
+      {
+        coding: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: true,
+          includePluginTools: false,
+        },
       },
-    });
+    );
   });
 
   it("keeps plugin-owned catalog tools on the plugin construction path", () => {
-    expect(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["browser"] })).toMatchObject({
-      constructTools: true,
-      includeCoreTools: false,
-      codingToolConstructionPlan: {
-        includeBaseCodingTools: false,
-        includeShellTools: false,
-        includeChannelTools: true,
-        includeOpenClawTools: false,
-        includePluginTools: true,
+    expectConstructionPlan(
+      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["browser"] }),
+      {
+        constructTools: true,
+        includeCoreTools: false,
+        coding: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: true,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
       },
-    });
-    expect(
+    );
+    expectConstructionPlan(
       resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["code_execution"] }),
-    ).toMatchObject({
-      constructTools: true,
-      includeCoreTools: false,
-      codingToolConstructionPlan: {
-        includeBaseCodingTools: false,
-        includeShellTools: false,
-        includeChannelTools: true,
-        includeOpenClawTools: false,
-        includePluginTools: true,
+      {
+        constructTools: true,
+        includeCoreTools: false,
+        coding: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: true,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
       },
-    });
-    expect(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["x_search"] })).toMatchObject({
-      includeCoreTools: false,
-      codingToolConstructionPlan: {
-        includeChannelTools: true,
-        includeOpenClawTools: false,
-        includePluginTools: true,
+    );
+    expectConstructionPlan(
+      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["x_search"] }),
+      {
+        includeCoreTools: false,
+        coding: {
+          includeChannelTools: true,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
       },
-    });
+    );
   });
 
   it("keeps channel tools available for narrow channel-owned allowlists", () => {
-    expect(
+    expectConstructionPlan(
       resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["whatsapp_login"] }),
-    ).toMatchObject({
-      constructTools: true,
-      includeCoreTools: false,
-      codingToolConstructionPlan: {
-        includeBaseCodingTools: false,
-        includeShellTools: false,
-        includeChannelTools: true,
-        includeOpenClawTools: false,
-        includePluginTools: true,
+      {
+        constructTools: true,
+        includeCoreTools: false,
+        coding: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: true,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
       },
-    });
+    );
   });
 
   it("skips local construction when only bundled tool runtimes can match", () => {
-    expect(
+    expectConstructionPlan(
       resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["strict__strict_probe"] }),
-    ).toMatchObject({
-      constructTools: false,
-      includeCoreTools: false,
-    });
+      {
+        constructTools: false,
+        includeCoreTools: false,
+      },
+    );
   });
 });
 

@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { ZERO_USAGE_FIXTURE } from "./usage-fixtures.js";
 
 export function makeAssistantMessageFixture(

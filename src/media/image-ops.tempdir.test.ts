@@ -28,7 +28,14 @@ describe("image-ops temp dir", () => {
 
     expect(fs.mkdtemp).toHaveBeenCalledTimes(1);
     const [prefix] = vi.mocked(fs.mkdtemp).mock.calls[0] ?? [];
-    expect(prefix).toEqual(expect.stringMatching(/^.+openclaw-img-[0-9a-f-]+-$/u));
+    expect(typeof prefix).toBe("string");
+    const uuidPrefix = path.join(secureRoot, "openclaw-img-");
+    expect(prefix?.startsWith(uuidPrefix)).toBe(true);
+    expect(prefix?.endsWith("-")).toBe(true);
+    const uuid = prefix?.slice(uuidPrefix.length, -1) ?? "";
+    expect(uuid).toHaveLength(36);
+    expect(/^[0-9a-f-]+$/u.test(uuid)).toBe(true);
+    expect([8, 13, 18, 23].map((index) => uuid[index])).toEqual(["-", "-", "-", "-"]);
     expect(path.dirname(prefix ?? "")).toBe(secureRoot);
     expect(createdTempDir.startsWith(prefix ?? "")).toBe(true);
     let accessError: unknown;

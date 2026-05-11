@@ -212,21 +212,7 @@ describe("provider family plugin-boundary inventory", () => {
       if (actualAssignments[pluginId] === undefined) {
         throw new Error(`missing shared provider-family assignment for ${pluginId}`);
       }
-      if (expected.replayFamilies) {
-        expect(actualAssignments[pluginId]?.replayFamilies ?? []).toEqual(
-          expect.arrayContaining([...expected.replayFamilies]),
-        );
-      }
-      if (expected.streamFamilies) {
-        expect(actualAssignments[pluginId]?.streamFamilies ?? []).toEqual(
-          expect.arrayContaining([...expected.streamFamilies]),
-        );
-      }
-      if (expected.toolCompatFamilies) {
-        expect(actualAssignments[pluginId]?.toolCompatFamilies ?? []).toEqual(
-          expect.arrayContaining([...expected.toolCompatFamilies]),
-        );
-      }
+      expect(actualAssignments[pluginId]).toEqual(expected);
     }
   });
 });

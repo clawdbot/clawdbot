@@ -125,7 +125,7 @@ describe("Synology Chat TLS verification defaults", () => {
     if (!firstCall) {
       throw new Error("expected Synology Chat HTTPS request");
     }
-    expect(firstCall[1]).toMatchObject({ rejectUnauthorized: true });
+    expect(firstCall[1]?.rejectUnauthorized).toBe(true);
   });
 });
 
@@ -161,7 +161,7 @@ describe("sendMessage", () => {
     if (!firstCall) {
       throw new Error("expected Synology Chat HTTPS request");
     }
-    expect(firstCall[1]).toMatchObject({ rejectUnauthorized: false });
+    expect(firstCall[1]?.rejectUnauthorized).toBe(false);
   });
 });
 
@@ -333,11 +333,13 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
       mutableWebhookUsername: "anyone",
     });
     const httpsGet = vi.mocked(https.get);
-    expect(httpsGet).toHaveBeenCalledWith(
-      expect.stringContaining("method=user_list"),
-      expect.any(Object),
-      expect.any(Function),
-    );
+    const call = httpsGet.mock.calls[0];
+    if (!call) {
+      throw new Error("expected Synology Chat user_list request");
+    }
+    expect(String(call[0])).toBe(baseUrl.replace("method=chatbot", "method=user_list"));
+    expect(call[1]).toEqual({ rejectUnauthorized: true });
+    expect(typeof call[2]).toBe("function");
   });
 
   it("keeps user cache scoped per incoming URL", async () => {
@@ -388,6 +390,6 @@ describe("fetchChatUsers", () => {
     if (!firstCall) {
       throw new Error("expected Synology Chat HTTPS get");
     }
-    expect(firstCall[1]).toMatchObject({ rejectUnauthorized: true });
+    expect(firstCall[1]?.rejectUnauthorized).toBe(true);
   });
 });

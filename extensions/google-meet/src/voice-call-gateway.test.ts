@@ -112,7 +112,7 @@ describe("Google Meet voice-call gateway", () => {
     expect(result.dtmfSent).toBe(true);
     expect(result.introSent).toBe(false);
     expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("Skipped intro speech because realtime bridge was not ready"),
+      "[google-meet] Skipped intro speech because realtime bridge was not ready: No active realtime bridge for call",
     );
   });
 

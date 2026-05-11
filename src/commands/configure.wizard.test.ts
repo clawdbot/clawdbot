@@ -201,6 +201,34 @@ function setupBaseWizardState(config: OpenClawConfig = {}) {
   });
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).toBeTypeOf("object");
+  expect(value, label).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+function requireWriteConfig(callIndex = 0) {
+  const call = mocks.writeConfigFile.mock.calls.at(callIndex);
+  expect(call, "writeConfigFile call").toBeDefined();
+  return requireRecord(call?.[0], "written config");
+}
+
+function getGateway(config: Record<string, unknown>) {
+  return requireRecord(config.gateway, "gateway config");
+}
+
+function getWebSearch(config: Record<string, unknown>) {
+  const tools = requireRecord(config.tools, "tools config");
+  const web = requireRecord(tools.web, "web config");
+  return requireRecord(web.search, "web search config");
+}
+
+function getPluginEntry(config: Record<string, unknown>, pluginId: string) {
+  const plugins = requireRecord(config.plugins, "plugins config");
+  const entries = requireRecord(plugins.entries, "plugin entries");
+  return requireRecord(entries[pluginId], `${pluginId} entry`);
+}
+
 function queueWizardPrompts(params: { select: string[]; confirm: boolean[]; text?: string }) {
   const selectQueue = [...params.select];
   const confirmQueue = [...params.confirm];
@@ -245,11 +273,7 @@ describe("runConfigureWizard", () => {
 
     await runConfigureWizard({ command: "configure" }, createRuntime());
 
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        gateway: expect.objectContaining({ mode: "local" }),
-      }),
-    );
+    expect(getGateway(requireWriteConfig()).mode).toBe("local");
   });
   it("keeps startup gateway hint probes bounded", async () => {
     setupBaseWizardState({
@@ -268,19 +292,16 @@ describe("runConfigureWizard", () => {
 
     await runConfigureWizard({ command: "configure" }, createRuntime());
 
-    expect(mocks.probeGatewayReachable).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "ws://127.0.0.1:18789",
-        timeoutMs: 300,
-      }),
+    const probeRequests = mocks.probeGatewayReachable.mock.calls.map(([request]) =>
+      requireRecord(request, "probe request"),
     );
-    expect(mocks.probeGatewayReachable).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "wss://gateway.example.test",
-        token: "token",
-        timeoutMs: 300,
-      }),
+    const localProbe = probeRequests.find((request) => request.url === "ws://127.0.0.1:18789");
+    const remoteProbe = probeRequests.find(
+      (request) => request.url === "wss://gateway.example.test",
     );
+    expect(localProbe?.timeoutMs).toBe(300);
+    expect(remoteProbe?.token).toBe("token");
+    expect(remoteProbe?.timeoutMs).toBe(300);
   });
 
   it("exits with code 1 when configure wizard is cancelled", async () => {
@@ -308,34 +329,17 @@ describe("runConfigureWizard", () => {
 
     await runWebConfigureWizard();
 
-    expect(mocks.setupSearch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        gateway: expect.objectContaining({ mode: "local" }),
-      }),
-      expect.anything(),
-      expect.anything(),
-    );
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tools: expect.objectContaining({
-          web: expect.objectContaining({
-            search: expect.objectContaining({
-              provider: "firecrawl",
-              enabled: true,
-            }),
-          }),
-        }),
-        plugins: expect.objectContaining({
-          entries: expect.objectContaining({
-            firecrawl: expect.objectContaining({
-              enabled: true,
-              config: expect.objectContaining({
-                webSearch: expect.objectContaining({ apiKey: "fc-entered-key" }),
-              }),
-            }),
-          }),
-        }),
-      }),
+    const setupConfig = requireRecord(mocks.setupSearch.mock.calls[0]?.[0], "setupSearch config");
+    expect(getGateway(setupConfig).mode).toBe("local");
+    const written = requireWriteConfig();
+    const search = getWebSearch(written);
+    expect(search.provider).toBe("firecrawl");
+    expect(search.enabled).toBe(true);
+    const firecrawl = getPluginEntry(written, "firecrawl");
+    expect(firecrawl.enabled).toBe(true);
+    const firecrawlConfig = requireRecord(firecrawl.config, "firecrawl config");
+    expect(requireRecord(firecrawlConfig.webSearch, "firecrawl web search").apiKey).toBe(
+      "fc-entered-key",
     );
     expect(mocks.setupSearch).toHaveBeenCalledOnce();
   });
@@ -356,17 +360,7 @@ describe("runConfigureWizard", () => {
       ),
       "Web search",
     );
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tools: expect.objectContaining({
-          web: expect.objectContaining({
-            search: expect.objectContaining({
-              enabled: false,
-            }),
-          }),
-        }),
-      }),
-    );
+    expect(getWebSearch(requireWriteConfig()).enabled).toBe(false);
   });
 
   it("does not load managed search provider options when web search is disabled", async () => {
@@ -378,12 +372,12 @@ describe("runConfigureWizard", () => {
 
     await runWebConfigureWizard();
 
-    expect(mocks.resolvePluginContributionOwners).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contribution: "contracts",
-        matches: "webSearchProviders",
-      }),
+    const ownersRequest = requireRecord(
+      mocks.resolvePluginContributionOwners.mock.calls[0]?.[0],
+      "plugin owner request",
     );
+    expect(ownersRequest.contribution).toBe("contracts");
+    expect(ownersRequest.matches).toBe("webSearchProviders");
     expect(mocks.resolveSearchProviderOptions).not.toHaveBeenCalled();
     expect(mocks.setupSearch).not.toHaveBeenCalled();
   });
@@ -397,17 +391,12 @@ describe("runConfigureWizard", () => {
 
     await runConfigureWizard({ command: "configure", sections: ["channels"] }, createRuntime());
 
-    expect(mocks.setupChannels).toHaveBeenCalledWith(
-      expect.objectContaining({
-        gateway: expect.objectContaining({ mode: "local" }),
-      }),
-      expect.anything(),
-      expect.anything(),
-      expect.objectContaining({
-        deferStatusUntilSelection: true,
-        skipStatusNote: true,
-      }),
-    );
+    const setupChannelsCall = mocks.setupChannels.mock.calls[0] as Array<unknown> | undefined;
+    const setupChannelsConfig = requireRecord(setupChannelsCall?.[0], "setupChannels config");
+    expect(getGateway(setupChannelsConfig).mode).toBe("local");
+    const setupChannelsOptions = requireRecord(setupChannelsCall?.[3], "setupChannels options");
+    expect(setupChannelsOptions.deferStatusUntilSelection).toBe(true);
+    expect(setupChannelsOptions.skipStatusNote).toBe(true);
   });
 
   it("still supports keyless web search providers through the shared setup flow", async () => {
@@ -459,21 +448,11 @@ describe("runConfigureWizard", () => {
 
     await runWebConfigureWizard();
 
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tools: expect.objectContaining({
-          web: expect.objectContaining({
-            search: expect.objectContaining({
-              enabled: true,
-              openaiCodex: expect.objectContaining({
-                enabled: true,
-                mode: "cached",
-              }),
-            }),
-          }),
-        }),
-      }),
-    );
+    const search = getWebSearch(requireWriteConfig());
+    expect(search.enabled).toBe(true);
+    const codexSearch = requireRecord(search.openaiCodex, "Codex native search");
+    expect(codexSearch.enabled).toBe(true);
+    expect(codexSearch.mode).toBe("cached");
     expect(mocks.setupSearch).not.toHaveBeenCalled();
   });
 
@@ -506,21 +485,11 @@ describe("runConfigureWizard", () => {
 
     await runWebConfigureWizard();
 
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tools: expect.objectContaining({
-          web: expect.objectContaining({
-            search: expect.objectContaining({
-              enabled: true,
-              openaiCodex: expect.objectContaining({
-                enabled: false,
-                mode: "live",
-              }),
-            }),
-          }),
-        }),
-      }),
-    );
+    const search = getWebSearch(requireWriteConfig());
+    expect(search.enabled).toBe(true);
+    const codexSearch = requireRecord(search.openaiCodex, "Codex native search");
+    expect(codexSearch.enabled).toBe(false);
+    expect(codexSearch.mode).toBe("live");
     expect(mocks.setupSearch).toHaveBeenCalledOnce();
   });
 
@@ -623,23 +592,13 @@ describe("runConfigureWizard", () => {
     const retryCall = mocks.replaceConfigFile.mock.calls[1][0] as {
       nextConfig: Record<string, unknown>;
     };
-    expect(retryCall.nextConfig).toMatchObject({
-      agents: {
-        defaults: {
-          workspace: expect.stringContaining("/.openclaw/workspace"),
-        },
-      },
-      plugins: {
-        entries: {
-          "github-copilot": {
-            enabled: false,
-            config: {
-              region: "us-east-1",
-              accessToken: "plugin-wrote-this",
-            },
-          },
-        },
-      },
-    });
+    const agents = requireRecord(retryCall.nextConfig.agents, "agents config");
+    const defaults = requireRecord(agents.defaults, "agent defaults");
+    expect(String(defaults.workspace)).toContain("/.openclaw/workspace");
+    const githubCopilot = getPluginEntry(retryCall.nextConfig, "github-copilot");
+    expect(githubCopilot.enabled).toBe(false);
+    const pluginConfig = requireRecord(githubCopilot.config, "github-copilot config");
+    expect(pluginConfig.region).toBe("us-east-1");
+    expect(pluginConfig.accessToken).toBe("plugin-wrote-this");
   });
 });

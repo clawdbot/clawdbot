@@ -3,6 +3,22 @@
 import Foundation
 
 public let GATEWAY_PROTOCOL_VERSION = 4
+public let GATEWAY_MIN_PROTOCOL_VERSION = 3
+
+private struct GatewayAnyCodingKey: CodingKey, Hashable {
+    let stringValue: String
+    let intValue: Int?
+
+    init?(stringValue: String) {
+        self.stringValue = stringValue
+        self.intValue = nil
+    }
+
+    init?(intValue: Int) {
+        self.stringValue = String(intValue)
+        self.intValue = intValue
+    }
+}
 
 public enum ErrorCode: String, Codable, Sendable {
     case notLinked = "NOT_LINKED"
@@ -578,6 +594,9 @@ public struct SendParams: Codable, Sendable {
     public let agentid: String?
     public let replytoid: String?
     public let threadid: String?
+    public let forcedocument: Bool?
+    public let silent: Bool?
+    public let parsemode: String?
     public let sessionkey: String?
     public let idempotencykey: String
 
@@ -593,6 +612,9 @@ public struct SendParams: Codable, Sendable {
         agentid: String?,
         replytoid: String?,
         threadid: String?,
+        forcedocument: Bool?,
+        silent: Bool?,
+        parsemode: String?,
         sessionkey: String?,
         idempotencykey: String)
     {
@@ -607,6 +629,9 @@ public struct SendParams: Codable, Sendable {
         self.agentid = agentid
         self.replytoid = replytoid
         self.threadid = threadid
+        self.forcedocument = forcedocument
+        self.silent = silent
+        self.parsemode = parsemode
         self.sessionkey = sessionkey
         self.idempotencykey = idempotencykey
     }
@@ -623,6 +648,9 @@ public struct SendParams: Codable, Sendable {
         case agentid = "agentId"
         case replytoid = "replyToId"
         case threadid = "threadId"
+        case forcedocument = "forceDocument"
+        case silent
+        case parsemode = "parseMode"
         case sessionkey = "sessionKey"
         case idempotencykey = "idempotencyKey"
     }
@@ -5706,6 +5734,156 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
     }
 }
 
+public struct PluginsSessionActionFailureResult: Codable, Sendable {
+    public let ok: Bool
+    public let error: String
+    public let code: String?
+    public let details: AnyCodable?
+
+    public init(
+        error: String,
+        code: String?,
+        details: AnyCodable?
+    )
+    {
+        self.ok = false
+        self.error = error
+        self.code = code
+        self.details = details
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case error
+        case code
+        case details
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["ok", "error", "code", "details"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for PluginsSessionActionFailureResult: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedOk = try container.decode(Bool.self, forKey: .ok)
+        guard decodedOk == false else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .ok,
+                in: container,
+                debugDescription: "Expected ok to equal false"
+            )
+        }
+        self.ok = false
+        self.error = try container.decode(String.self, forKey: .error)
+        self.code = try container.decodeIfPresent(String.self, forKey: .code)
+        self.details = try container.decodeIfPresent(AnyCodable.self, forKey: .details)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(false, forKey: .ok)
+        try container.encode(error, forKey: .error)
+        try container.encodeIfPresent(code, forKey: .code)
+        try container.encodeIfPresent(details, forKey: .details)
+    }
+}
+
+public struct PluginsSessionActionParams: Codable, Sendable {
+    public let pluginid: String
+    public let actionid: String
+    public let sessionkey: String?
+    public let payload: AnyCodable?
+
+    public init(
+        pluginid: String,
+        actionid: String,
+        sessionkey: String?,
+        payload: AnyCodable?)
+    {
+        self.pluginid = pluginid
+        self.actionid = actionid
+        self.sessionkey = sessionkey
+        self.payload = payload
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pluginid = "pluginId"
+        case actionid = "actionId"
+        case sessionkey = "sessionKey"
+        case payload
+    }
+}
+
+public struct PluginsSessionActionSuccessResult: Codable, Sendable {
+    public let ok: Bool
+    public let result: AnyCodable?
+    public let continueagent: Bool?
+    public let reply: AnyCodable?
+
+    public init(
+        result: AnyCodable?,
+        continueagent: Bool?,
+        reply: AnyCodable?
+    )
+    {
+        self.ok = true
+        self.result = result
+        self.continueagent = continueagent
+        self.reply = reply
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case result
+        case continueagent = "continueAgent"
+        case reply
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["ok", "result", "continueAgent", "reply"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for PluginsSessionActionSuccessResult: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedOk = try container.decode(Bool.self, forKey: .ok)
+        guard decodedOk == true else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .ok,
+                in: container,
+                debugDescription: "Expected ok to equal true"
+            )
+        }
+        self.ok = true
+        self.result = try container.decodeIfPresent(AnyCodable.self, forKey: .result)
+        self.continueagent = try container.decodeIfPresent(Bool.self, forKey: .continueagent)
+        self.reply = try container.decodeIfPresent(AnyCodable.self, forKey: .reply)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(true, forKey: .ok)
+        try container.encodeIfPresent(result, forKey: .result)
+        try container.encodeIfPresent(continueagent, forKey: .continueagent)
+        try container.encodeIfPresent(reply, forKey: .reply)
+    }
+}
+
 public struct PluginsUiDescriptorsParams: Codable, Sendable {}
 
 public struct PluginsUiDescriptorsResult: Codable, Sendable {
@@ -6153,6 +6331,37 @@ public struct ShutdownEvent: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case reason
         case restartexpectedms = "restartExpectedMs"
+    }
+}
+
+public enum PluginsSessionActionResult: Codable, Sendable {
+    case success(PluginsSessionActionSuccessResult)
+    case failure(PluginsSessionActionFailureResult)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "ok"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(Bool.self, forKey: .discriminator)
+        switch discriminator {
+        case true: self = try .success(PluginsSessionActionSuccessResult(from: decoder))
+        case false: self = try .failure(PluginsSessionActionFailureResult(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown PluginsSessionActionResult discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .success(let value): try value.encode(to: encoder)
+        case .failure(let value): try value.encode(to: encoder)
+        }
     }
 }
 

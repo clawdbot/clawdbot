@@ -72,20 +72,21 @@ function expectMemoryFallbackRequest(
 
 describe("memory manager mistral provider wiring", () => {
   it("stores mistral client when mistral provider is selected", () => {
+    const mistralProvider = createProvider("mistral");
     const mistralRuntime: EmbeddingProviderRuntime = {
       id: "mistral",
       cacheKeyData: { provider: "mistral", model: "mistral-embed" },
     };
 
     const state = resolveMemoryProviderState({
-      provider: createProvider("mistral"),
+      provider: mistralProvider,
       runtime: mistralRuntime,
       fallbackFrom: undefined,
       fallbackReason: undefined,
       providerUnavailableReason: undefined,
     });
 
-    expect(state.provider).toEqual(expect.objectContaining({ id: "mistral" }));
+    expect(state.provider).toBe(mistralProvider);
     expect(state.providerRuntime).toBe(mistralRuntime);
   });
 
@@ -98,6 +99,7 @@ describe("memory manager mistral provider wiring", () => {
       id: "mistral",
       cacheKeyData: { provider: "mistral", model: "mistral-embed" },
     };
+    const mistralProvider = createProvider("mistral");
     const current = resolveMemoryProviderState({
       provider: createProvider("openai"),
       runtime: openAiRuntime,
@@ -111,14 +113,14 @@ describe("memory manager mistral provider wiring", () => {
       fallbackFrom: "openai",
       reason: "forced test",
       result: {
-        provider: createProvider("mistral"),
+        provider: mistralProvider,
         runtime: mistralRuntime,
       },
     });
 
     expect(fallbackState.fallbackFrom).toBe("openai");
     expect(fallbackState.fallbackReason).toBe("forced test");
-    expect(fallbackState.provider).toEqual(expect.objectContaining({ id: "mistral" }));
+    expect(fallbackState.provider).toBe(mistralProvider);
     expect(fallbackState.providerRuntime).toBe(mistralRuntime);
   });
 

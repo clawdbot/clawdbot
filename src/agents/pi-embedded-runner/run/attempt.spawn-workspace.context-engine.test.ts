@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { buildMemorySystemPromptAddition } from "../../../context-engine/delegate.js";
@@ -45,6 +45,52 @@ type ToolResultGuardInstallParams = {
     onMidTurnPrecheck?: (request: MidTurnPrecheckRequest) => void;
   };
 };
+type MockCallSource = {
+  mock: {
+    calls: ArrayLike<ReadonlyArray<unknown>>;
+  };
+};
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).toBeTypeOf("object");
+  expect(value, label).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+function requireRecords(value: unknown, label: string): Array<Record<string, unknown>> {
+  expect(value, label).toBeInstanceOf(Array);
+  return value as Array<Record<string, unknown>>;
+}
+
+function findRecord(
+  records: Array<Record<string, unknown>>,
+  predicate: (record: Record<string, unknown>) => boolean,
+  label: string,
+) {
+  const record = records.find(predicate);
+  if (!record) {
+    throw new Error(`expected record: ${label}`);
+  }
+  return record;
+}
+
+function mockArg(source: MockCallSource, callIndex: number, argIndex: number, label: string) {
+  const call = source.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected mock call: ${label}`);
+  }
+  return call[argIndex];
+}
+
+function mockParams(source: MockCallSource, callIndex: number, label: string) {
+  return requireRecord(mockArg(source, callIndex, 0, label), label);
+}
+
+function expectFields(actual: Record<string, unknown>, expected: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key], key).toEqual(value);
+  }
+}
 
 function createTestContextEngine(params: Partial<AttemptContextEngine>): AttemptContextEngine {
   return {
@@ -169,16 +215,19 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(seen.prompt).toBe("visible ask");
     expect(result.finalPromptText).toBe("visible ask");
-    expect(seen.messages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          role: "custom",
-          customType: "openclaw.runtime-context",
-          display: false,
-          content:
-            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-        }),
-      ]),
+    expectFields(
+      findRecord(
+        requireRecords(seen.messages, "seen messages"),
+        (message) => message.customType === "openclaw.runtime-context",
+        "runtime context message",
+      ),
+      {
+        role: "custom",
+        customType: "openclaw.runtime-context",
+        display: false,
+        content:
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      },
     );
     expect(JSON.stringify(seen.messages)).not.toContain(
       "OpenClaw runtime context for the immediately preceding user message.",
@@ -251,18 +300,17 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(hoisted.resolveEmbeddedRunSkillEntriesMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectFields(
+      mockParams(hoisted.resolveEmbeddedRunSkillEntriesMock, 0, "skill entries params"),
+      {
         workspaceDir: sandboxWorkspace,
         skillsSnapshot: undefined,
-      }),
+      },
     );
-    expect(hoisted.resolveSkillsPromptForRunMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceDir: sandboxWorkspace,
-        skillsSnapshot: undefined,
-      }),
-    );
+    expectFields(mockParams(hoisted.resolveSkillsPromptForRunMock, 0, "skills prompt params"), {
+      workspaceDir: sandboxWorkspace,
+      skillsSnapshot: undefined,
+    });
   });
 
   it("keeps before_prompt_build prependContext out of system prompt on transcriptPrompt runs", async () => {
@@ -296,15 +344,18 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(seen.prompt).toBe("visible ask");
     expect(result.finalPromptText).toBe("visible ask");
     expect(seen.systemPrompt).not.toContain("dynamic hook context");
-    expect(seen.messages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          role: "custom",
-          customType: "openclaw.runtime-context",
-          display: false,
-          content: "dynamic hook context",
-        }),
-      ]),
+    expectFields(
+      findRecord(
+        requireRecords(seen.messages, "seen messages"),
+        (message) => message.customType === "openclaw.runtime-context",
+        "hook runtime context message",
+      ),
+      {
+        role: "custom",
+        customType: "openclaw.runtime-context",
+        display: false,
+        content: "dynamic hook context",
+      },
     );
   });
 
@@ -519,9 +570,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(seenPrompt?.trim().startsWith("Reply target of current user message")).toBe(true);
     expect(result.finalPromptText).toBe(seenPrompt);
     expect(hoisted.detectAndLoadPromptImagesMock).toHaveBeenCalledTimes(1);
-    expect(hoisted.detectAndLoadPromptImagesMock.mock.calls[0]?.[0]).toMatchObject({
-      prompt: "what does this mean?",
-    });
+    expect(mockParams(hoisted.detectAndLoadPromptImagesMock, 0, "prompt image params").prompt).toBe(
+      "what does this mean?",
+    );
     const trajectoryEvents = (
       await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
     )
@@ -594,14 +645,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(seenPrompt).toBe("Continue the OpenClaw runtime event.");
     expect(result.finalPromptText).toBe("Continue the OpenClaw runtime event.");
-    expect(result.messagesSnapshot).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          role: "user",
-          content: expect.stringContaining("internal heartbeat event"),
-        }),
-      ]),
-    );
+    expect(
+      requireRecords(result.messagesSnapshot, "messages snapshot").some(
+        (message) =>
+          message.role === "user" && String(message.content).includes("internal heartbeat event"),
+      ),
+    ).toBe(false);
     const trajectoryEvents = (
       await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
     )
@@ -632,9 +681,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(sessionPrompt).not.toHaveBeenCalled();
     expect(result.finalPromptText).toBeUndefined();
     expect(result.promptError).toBeNull();
-    expect(result.messagesSnapshot).toEqual([
-      expect.objectContaining({ role: "user", content: "seed" }),
-    ]);
+    expect(result.messagesSnapshot).toHaveLength(1);
+    expectFields(requireRecord(result.messagesSnapshot[0], "messages snapshot seed"), {
+      role: "user",
+      content: "seed",
+    });
     const trajectoryEvents = (
       await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
     )
@@ -642,14 +693,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       .split("\n")
       .map((line) => JSON.parse(line) as TrajectoryEvent);
     expect(trajectoryEvents.some((event) => event.type === "prompt.submitted")).toBe(false);
-    expect(trajectoryEvents).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "prompt.skipped",
-          data: expect.objectContaining({ reason: "blank_user_prompt" }),
-        }),
-      ]),
+    const skipped = findRecord(
+      trajectoryEvents as Array<Record<string, unknown>>,
+      (event) => event.type === "prompt.skipped",
+      "prompt skipped event",
     );
+    expect(requireRecord(skipped.data, "prompt skipped data").reason).toBe("blank_user_prompt");
   });
 
   it("uses assembled context as the default precheck authority", async () => {
@@ -825,9 +874,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(seen.systemPrompt ?? "").toBe("");
     expect(result.finalPromptText).toBe("hello");
     expect(result.systemPromptReport?.systemPrompt ?? "").toBe("");
-    expect(result.messagesSnapshot).toEqual([
-      expect.objectContaining({ role: "assistant", content: "pong" }),
-    ]);
+    expect(result.messagesSnapshot).toHaveLength(1);
+    expectFields(requireRecord(result.messagesSnapshot[0], "gateway model snapshot"), {
+      role: "assistant",
+      content: "pong",
+    });
     expect(hoisted.resolveBootstrapContextForRunMock).not.toHaveBeenCalled();
     expect(bootstrap).not.toHaveBeenCalled();
     expect(assemble).not.toHaveBeenCalled();
@@ -871,7 +922,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       tempPaths,
     });
 
-    expect(events).toEqual(expect.arrayContaining(["bootstrap", "lock"]));
+    expect(events).toContain("bootstrap");
+    expect(events).toContain("lock");
     expect(events.indexOf("bootstrap")).toBeLessThan(events.indexOf("lock"));
   });
 
@@ -882,11 +934,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     await runBootstrap(sessionKey, contextEngine);
     await runAssemble(sessionKey, contextEngine);
 
-    expect(assemble).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: "gpt-test",
-      }),
-    );
+    expect(mockParams(assemble as MockCallSource, 0, "assemble params").model).toBe("gpt-test");
   });
 
   it("forwards availableTools and citationsMode to assemble", async () => {
@@ -899,12 +947,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       citationsMode: "on",
     });
 
-    expect(assemble).toHaveBeenCalledWith(
-      expect.objectContaining({
-        availableTools: new Set(["memory_search", "wiki_search"]),
-        citationsMode: "on",
-      }),
-    );
+    expectFields(mockParams(assemble as MockCallSource, 0, "assemble params"), {
+      availableTools: new Set(["memory_search", "wiki_search"]),
+      citationsMode: "on",
+    });
   });
 
   it("lets non-legacy engines opt into the active memory prompt helper", async () => {
@@ -936,10 +982,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       citationsMode: "on",
     });
 
-    expect(result).toMatchObject({
-      estimatedTokens: 1,
-      systemPromptAddition: "## Memory Recall\ntools=memory_search,wiki_search\ncitations=on",
-    });
+    const assembled = requireRecord(result, "assembled context");
+    expect(assembled.estimatedTokens).toBe(1);
+    expect(assembled.systemPromptAddition).toBe(
+      "## Memory Recall\ntools=memory_search,wiki_search\ncitations=on",
+    );
   });
 
   it("forwards sessionKey to ingestBatch when afterTurn is absent", async () => {
@@ -1017,9 +1064,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     await finalizeTurn(sessionKey, createTestContextEngine({ bootstrap, assemble, afterTurn }));
 
     expect(afterTurn).toHaveBeenCalled();
-    expect(hoisted.runContextEngineMaintenanceMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "turn" }),
-    );
+    expect(
+      hoisted.runContextEngineMaintenanceMock.mock.calls.some(
+        ([params]) => requireRecord(params, "maintenance params").reason === "turn",
+      ),
+    ).toBe(false);
   });
 
   it("runs startup maintenance for existing sessions even without bootstrap()", async () => {
@@ -1038,9 +1087,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       }),
     );
 
-    expect(hoisted.runContextEngineMaintenanceMock).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "bootstrap" }),
-    );
+    expect(
+      hoisted.runContextEngineMaintenanceMock.mock.calls.some(
+        ([params]) => requireRecord(params, "maintenance params").reason === "bootstrap",
+      ),
+    ).toBe(true);
   });
 
   it("builds prompt-cache retention, last-call usage, and cache-touch metadata", () => {
@@ -1056,19 +1107,17 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         },
         lastCacheTouchAt: 123,
       }),
-    ).toEqual(
-      expect.objectContaining({
-        retention: "short",
-        lastCallUsage: {
-          input: 10,
-          output: 5,
-          cacheRead: 40,
-          cacheWrite: 2,
-          total: 57,
-        },
-        lastCacheTouchAt: 123,
-      }),
-    );
+    ).toEqual({
+      retention: "short",
+      lastCallUsage: {
+        input: 10,
+        output: 5,
+        cacheRead: 40,
+        cacheWrite: 2,
+        total: 57,
+      },
+      lastCacheTouchAt: 123,
+    });
   });
 
   it("omits prompt-cache metadata when no cache data is available", () => {
@@ -1114,24 +1163,17 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     } as unknown as AgentMessage;
 
-    expect(
-      buildLoopPromptCacheInfo({
-        messagesSnapshot: [seedMessage, toolUseAssistant],
-        prePromptMessageCount: 1,
-        retention: "short",
-        fallbackLastCacheTouchAt: 123,
-      }),
-    ).toEqual(
-      expect.objectContaining({
-        retention: "short",
-        lastCallUsage: expect.objectContaining({
-          cacheRead: 39036,
-          cacheWrite: 59934,
-          total: 98973,
-        }),
-        lastCacheTouchAt: Date.parse("2026-04-16T16:49:59.536Z"),
-      }),
-    );
+    const promptCache = buildLoopPromptCacheInfo({
+      messagesSnapshot: [seedMessage, toolUseAssistant],
+      prePromptMessageCount: 1,
+      retention: "short",
+      fallbackLastCacheTouchAt: 123,
+    });
+    expect(promptCache?.retention).toBe("short");
+    expect(promptCache?.lastCallUsage?.cacheRead).toBe(39036);
+    expect(promptCache?.lastCallUsage?.cacheWrite).toBe(59934);
+    expect(promptCache?.lastCallUsage?.total).toBe(98973);
+    expect(promptCache?.lastCacheTouchAt).toBe(Date.parse("2026-04-16T16:49:59.536Z"));
   });
 
   it("falls back to the persisted cache touch when loop usage has no cache metrics", () => {
@@ -1146,22 +1188,15 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     } as unknown as AgentMessage;
 
-    expect(
-      buildLoopPromptCacheInfo({
-        messagesSnapshot: [seedMessage, toolUseAssistant],
-        prePromptMessageCount: 1,
-        retention: "short",
-        fallbackLastCacheTouchAt: 123,
-      }),
-    ).toEqual(
-      expect.objectContaining({
-        retention: "short",
-        lastCallUsage: expect.objectContaining({
-          total: 3,
-        }),
-        lastCacheTouchAt: 123,
-      }),
-    );
+    const promptCache = buildLoopPromptCacheInfo({
+      messagesSnapshot: [seedMessage, toolUseAssistant],
+      prePromptMessageCount: 1,
+      retention: "short",
+      fallbackLastCacheTouchAt: 123,
+    });
+    expect(promptCache?.retention).toBe("short");
+    expect(promptCache?.lastCallUsage?.total).toBe(3);
+    expect(promptCache?.lastCacheTouchAt).toBe(123);
   });
 
   it("derives a live cache touch timestamp for final afterTurn usage snapshots", () => {
@@ -1204,14 +1239,17 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       | { broke?: boolean; previousCacheRead?: number; cacheRead?: number; changes?: unknown[] }
       | undefined;
 
-    expect(observation).toEqual(
-      expect.objectContaining({
-        broke: true,
-        previousCacheRead: 5000,
-        cacheRead: 2000,
-        changes: expect.arrayContaining([expect.objectContaining({ code: "systemPrompt" })]),
-      }),
-    );
+    const observationRecord = requireRecord(observation, "prompt cache observation");
+    expectFields(observationRecord, {
+      broke: true,
+      previousCacheRead: 5000,
+      cacheRead: 2000,
+    });
+    expect(
+      requireRecords(observationRecord.changes, "prompt cache observation changes").some(
+        (change) => change.code === "systemPrompt",
+      ),
+    ).toBe(true);
   });
 
   it("skips maintenance when ingestBatch fails", async () => {
@@ -1226,9 +1264,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(ingestBatch).toHaveBeenCalled();
-    expect(hoisted.runContextEngineMaintenanceMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "turn" }),
-    );
+    expect(
+      hoisted.runContextEngineMaintenanceMock.mock.calls.some(
+        ([params]) => requireRecord(params, "maintenance params").reason === "turn",
+      ),
+    ).toBe(false);
   });
 
   it("releases the session lock even when teardown cleanup throws", async () => {
@@ -1290,9 +1330,12 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
       },
     });
 
-    expect(hoisted.installContextEngineLoopHookMock).toHaveBeenCalledWith(
-      expect.not.objectContaining({ midTurnPrecheck: expect.anything() }),
+    const loopHookParams = mockParams(
+      hoisted.installContextEngineLoopHookMock,
+      0,
+      "context engine loop hook params",
     );
+    expect(loopHookParams.midTurnPrecheck).toBeUndefined();
   });
 
   it("recovers when Pi persists the mid-turn precheck as an assistant error", async () => {
@@ -1377,10 +1420,9 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
       },
     });
 
-    expect(hoisted.installToolResultContextGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contextWindowTokens: 1_000_000,
-      }),
-    );
+    expect(
+      mockParams(hoisted.installToolResultContextGuardMock, 0, "tool-result guard params")
+        .contextWindowTokens,
+    ).toBe(1_000_000);
   });
 });

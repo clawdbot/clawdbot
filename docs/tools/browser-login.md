@@ -62,13 +62,13 @@ If the agent is sandboxed, the browser tool defaults to the sandbox. To allow ho
 }
 ```
 
-Then target the host browser:
+Then open the host browser yourself (CLI invocations always run against the host browser):
 
 ```bash
-openclaw browser open https://x.com --browser-profile openclaw --target host
+openclaw browser open https://x.com --browser-profile openclaw
 ```
 
-Or disable sandboxing for the agent that posts updates.
+The agent's `browser` tool calls can then target the host once `sandbox.browser.allowHostControl: true` is set. Alternatively, disable sandboxing for the agent that posts updates.
 
 ## Related
 

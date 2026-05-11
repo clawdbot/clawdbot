@@ -93,6 +93,8 @@ const LINE_TEST_CFG = {
 };
 
 describe("LINE send helpers", () => {
+  const fixedSentAt = 1_800_000_000_000;
+
   beforeAll(async () => {
     sendModule = await import("./send.js");
   });
@@ -109,6 +111,7 @@ describe("LINE send helpers", () => {
   });
 
   beforeEach(() => {
+    vi.setSystemTime(fixedSentAt);
     pushMessageMock.mockReset();
     replyMessageMock.mockReset();
     showLoadingAnimationMock.mockReset();
@@ -176,8 +179,40 @@ describe("LINE send helpers", () => {
       direction: "outbound",
     });
     expect(logVerboseMock).toHaveBeenCalledWith("line: pushed image to U123");
-    expect(result).toMatchObject({ messageId: "push", chatId: "U123" });
-    expect(result.receipt.primaryPlatformMessageId).toBe("push");
+    expect(result).toEqual({
+      chatId: "U123",
+      messageId: "push",
+      receipt: {
+        parts: [
+          {
+            index: 0,
+            kind: "media",
+            platformMessageId: "push",
+            raw: {
+              channel: "line",
+              chatId: "U123",
+              conversationId: "U123",
+              messageId: "push",
+              meta: { messageCount: 1 },
+            },
+            threadId: "U123",
+          },
+        ],
+        platformMessageIds: ["push"],
+        primaryPlatformMessageId: "push",
+        raw: [
+          {
+            channel: "line",
+            chatId: "U123",
+            conversationId: "U123",
+            messageId: "push",
+            meta: { messageCount: 1 },
+          },
+        ],
+        sentAt: fixedSentAt,
+        threadId: "U123",
+      },
+    });
   });
 
   it("replies when reply token is provided", async () => {
@@ -205,10 +240,40 @@ describe("LINE send helpers", () => {
       ],
     });
     expect(logVerboseMock).toHaveBeenCalledWith("line: replied to C1");
-    expect(result).toMatchObject({ messageId: "reply", chatId: "C1" });
-    expect(result.receipt.primaryPlatformMessageId).toBe("reply");
-    expect(result.receipt.threadId).toBe("C1");
-    expect(result.receipt.parts[0]?.kind).toBe("media");
+    expect(result).toEqual({
+      chatId: "C1",
+      messageId: "reply",
+      receipt: {
+        parts: [
+          {
+            index: 0,
+            kind: "media",
+            platformMessageId: "reply",
+            raw: {
+              channel: "line",
+              chatId: "C1",
+              conversationId: "C1",
+              messageId: "reply",
+              meta: { messageCount: 2 },
+            },
+            threadId: "C1",
+          },
+        ],
+        platformMessageIds: ["reply"],
+        primaryPlatformMessageId: "reply",
+        raw: [
+          {
+            channel: "line",
+            chatId: "C1",
+            conversationId: "C1",
+            messageId: "reply",
+            meta: { messageCount: 2 },
+          },
+        ],
+        sentAt: fixedSentAt,
+        threadId: "C1",
+      },
+    });
   });
 
   it("sends video with explicit image preview URL", async () => {
@@ -340,7 +405,7 @@ describe("LINE send helpers", () => {
     ).resolves.toBeUndefined();
 
     expect(logVerboseMock).toHaveBeenCalledWith(
-      expect.stringContaining("line: loading animation failed (non-fatal)"),
+      "line: loading animation failed (non-fatal): Error: unsupported",
     );
   });
 

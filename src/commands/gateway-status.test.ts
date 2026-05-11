@@ -360,6 +360,58 @@ describe("gateway-status command", () => {
     requireRecord(firstTarget.summary, "first target summary");
   });
 
+  it("surfaces degraded model-pricing health as a warning", async () => {
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+    const defaultProbeGateway = probeGateway.getMockImplementation();
+    try {
+      probeGateway.mockImplementation(async (opts: { url: string }) => {
+        const result = defaultProbeGateway
+          ? await defaultProbeGateway(opts)
+          : await mocks.probeGateway(opts);
+        return {
+          ...result,
+          health: {
+            ok: true,
+            modelPricing: {
+              state: "degraded",
+              detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
+              sources: [
+                {
+                  source: "openrouter",
+                  state: "degraded",
+                  detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
+                },
+              ],
+            },
+          },
+        };
+      });
+
+      await runGatewayStatus(runtime, { timeout: "1000", json: true });
+    } finally {
+      probeGateway.mockReset();
+      if (defaultProbeGateway) {
+        probeGateway.mockImplementation(defaultProbeGateway);
+      }
+    }
+
+    expect(runtimeErrors).toHaveLength(0);
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      degraded?: boolean;
+      warnings?: Array<{ code?: string; message?: string }>;
+    };
+    expect(parsed.degraded).toBe(true);
+    expect(parsed.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "model_pricing_degraded",
+          message:
+            "Model pricing degraded: OpenRouter pricing fetch failed: TypeError: fetch failed",
+        }),
+      ]),
+    );
+  });
+
   it("includes diagnostic next steps when no gateway is reachable or discoverable", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
     const defaultProbeGateway = probeGateway.getMockImplementation();

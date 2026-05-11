@@ -35,11 +35,18 @@ describe("iMessage message-tool artifact", () => {
       currentChannelId: "chat_id:1",
     });
 
-    expect(discovery?.actions).toEqual(
-      expect.arrayContaining(["react", "reply", "sendWithEffect", "upload-file"]),
-    );
-    expect(discovery?.actions).not.toContain("edit");
-    expect(discovery?.actions).not.toContain("sendAttachment");
+    expect(discovery?.actions).toStrictEqual([
+      "react",
+      "unsend",
+      "reply",
+      "sendWithEffect",
+      "renameGroup",
+      "setGroupIcon",
+      "addParticipant",
+      "removeParticipant",
+      "leaveGroup",
+      "upload-file",
+    ]);
   });
 
   it("hides private actions when cached bridge status is unavailable", () => {

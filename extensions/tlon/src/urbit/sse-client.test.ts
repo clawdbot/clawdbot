@@ -49,8 +49,10 @@ describe("UrbitSSEClient", () => {
 
       const body = JSON.parse(callArgs.init?.body as string);
       expect(body).toHaveLength(1);
-      expect(body[0]).toMatchObject({
+      expect(body[0]).toEqual({
+        id: 1,
         action: "subscribe",
+        ship: "example",
         app: "chat",
         path: "/dm/~zod",
       });
@@ -72,7 +74,10 @@ describe("UrbitSSEClient", () => {
       expect(mockUrbitFetch).not.toHaveBeenCalled();
       // But subscription should be queued
       expect(client.subscriptions).toHaveLength(1);
-      expect(client.subscriptions[0]).toMatchObject({
+      expect(client.subscriptions[0]).toEqual({
+        id: 1,
+        action: "subscribe",
+        ship: "example",
         app: "chat",
         path: "/dm/~zod",
       });

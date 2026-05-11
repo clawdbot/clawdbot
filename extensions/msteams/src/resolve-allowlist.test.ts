@@ -87,10 +87,13 @@ describe("resolveMSTeamsChannelAllowlist", () => {
       entries: ["19:team-general@thread.tacv2/conversation:19:roadmap@thread.tacv2"],
     });
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
+      input: "19:team-general@thread.tacv2/conversation:19:roadmap@thread.tacv2",
       resolved: true,
       teamId: "19:team-general@thread.tacv2",
+      teamName: "19:team-general@thread.tacv2",
       channelId: "19:roadmap@thread.tacv2",
+      channelName: "19:roadmap@thread.tacv2",
     });
     expect(resolveGraphToken).not.toHaveBeenCalled();
   });

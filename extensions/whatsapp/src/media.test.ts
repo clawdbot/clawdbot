@@ -53,6 +53,17 @@ function cloneStatWithDev<T extends { dev: number | bigint }>(stat: T, dev: numb
   return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { dev }) as T;
 }
 
+async function expectLocalMediaAccessCode(promise: Promise<unknown>, code: string) {
+  try {
+    await promise;
+  } catch (error) {
+    expect(error).toBeInstanceOf(LocalMediaAccessError);
+    expect((error as { code?: unknown }).code).toBe(code);
+    return;
+  }
+  throw new Error(`expected local media access error ${code}`);
+}
+
 beforeAll(async () => {
   fixtureRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-test-"),
@@ -321,9 +332,10 @@ describe("web media loading", () => {
 describe("local media root guard", () => {
   it("rejects local paths outside allowed roots", async () => {
     // Explicit roots that don't contain the temp file.
-    await expect(
+    await expectLocalMediaAccessCode(
       loadWebMedia(tinyPngFile, 1024 * 1024, { localRoots: ["/nonexistent-root"] }),
-    ).rejects.toMatchObject({ code: "path-not-allowed" });
+      "path-not-allowed",
+    );
   });
 
   it("allows local paths under an explicit root", async () => {
@@ -337,11 +349,12 @@ describe("local media root guard", () => {
     const realpathSpy = vi.spyOn(fs, "realpath");
 
     try {
-      await expect(
+      await expectLocalMediaAccessCode(
         loadWebMedia("file://attacker/share/evil.png", 1024 * 1024, {
           localRoots: [resolvePreferredOpenClawTmpDir()],
         }),
-      ).rejects.toMatchObject({ code: "invalid-file-url" });
+        "invalid-file-url",
+      );
       expect(realpathSpy).not.toHaveBeenCalled();
     } finally {
       realpathSpy.mockRestore();
@@ -381,11 +394,12 @@ describe("local media root guard", () => {
     const realpathSpy = vi.spyOn(fs, "realpath");
 
     try {
-      await expect(
+      await expectLocalMediaAccessCode(
         loadWebMedia("\\\\attacker\\share\\evil.png", 1024 * 1024, {
           localRoots: [resolvePreferredOpenClawTmpDir()],
         }),
-      ).rejects.toMatchObject({ code: "network-path-not-allowed" });
+        "network-path-not-allowed",
+      );
       expect(realpathSpy).not.toHaveBeenCalled();
     } finally {
       realpathSpy.mockRestore();
@@ -394,18 +408,13 @@ describe("local media root guard", () => {
   });
 
   it("requires readFile override for localRoots bypass", async () => {
-    await expect(
+    await expectLocalMediaAccessCode(
       loadWebMedia(tinyPngFile, {
         maxBytes: 1024 * 1024,
         localRoots: "any",
       }),
-    ).rejects.toBeInstanceOf(LocalMediaAccessError);
-    await expect(
-      loadWebMedia(tinyPngFile, {
-        maxBytes: 1024 * 1024,
-        localRoots: "any",
-      }),
-    ).rejects.toMatchObject({ code: "unsafe-bypass" });
+      "unsafe-bypass",
+    );
   });
 
   it("allows any path when localRoots is 'any'", async () => {
@@ -418,50 +427,48 @@ describe("local media root guard", () => {
   });
 
   it("rejects filesystem root entries in localRoots", async () => {
-    await expect(
+    await expectLocalMediaAccessCode(
       loadWebMedia(tinyPngFile, 1024 * 1024, {
         localRoots: [path.parse(tinyPngFile).root],
       }),
-    ).rejects.toMatchObject({ code: "invalid-root" });
+      "invalid-root",
+    );
   });
 
   it("allows default OpenClaw state workspace and sandbox roots", async () => {
     const stateDir = resolveStateDir();
     const readFile = vi.fn(async () => Buffer.from("generated-media"));
 
-    await expect(
-      loadWebMedia(path.join(stateDir, "workspace", "tmp", "render.bin"), {
+    const workspaceResult = await loadWebMedia(
+      path.join(stateDir, "workspace", "tmp", "render.bin"),
+      {
         maxBytes: 1024 * 1024,
         readFile,
-      }),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        kind: undefined,
-      }),
+      },
     );
+    expect(workspaceResult.kind).toBeUndefined();
 
-    await expect(
-      loadWebMedia(path.join(stateDir, "sandboxes", "session-1", "frame.bin"), {
+    const sandboxResult = await loadWebMedia(
+      path.join(stateDir, "sandboxes", "session-1", "frame.bin"),
+      {
         maxBytes: 1024 * 1024,
         readFile,
-      }),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        kind: undefined,
-      }),
+      },
     );
+    expect(sandboxResult.kind).toBeUndefined();
   });
 
   it("rejects default OpenClaw state per-agent workspace-* roots without explicit local roots", async () => {
     const stateDir = resolveStateDir();
     const readFile = vi.fn(async () => Buffer.from("generated-media"));
 
-    await expect(
+    await expectLocalMediaAccessCode(
       loadWebMedia(path.join(stateDir, "workspace-clawdy", "tmp", "render.bin"), {
         maxBytes: 1024 * 1024,
         readFile,
       }),
-    ).rejects.toMatchObject({ code: "path-not-allowed" });
+      "path-not-allowed",
+    );
   });
 
   it("allows per-agent workspace-* paths with explicit local roots", async () => {
@@ -469,16 +476,11 @@ describe("local media root guard", () => {
     const readFile = vi.fn(async () => Buffer.from("generated-media"));
     const agentWorkspaceDir = path.join(stateDir, "workspace-clawdy");
 
-    await expect(
-      loadWebMedia(path.join(agentWorkspaceDir, "tmp", "render.bin"), {
-        maxBytes: 1024 * 1024,
-        localRoots: [agentWorkspaceDir],
-        readFile,
-      }),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        kind: undefined,
-      }),
-    );
+    const result = await loadWebMedia(path.join(agentWorkspaceDir, "tmp", "render.bin"), {
+      maxBytes: 1024 * 1024,
+      localRoots: [agentWorkspaceDir],
+      readFile,
+    });
+    expect(result.kind).toBeUndefined();
   });
 });

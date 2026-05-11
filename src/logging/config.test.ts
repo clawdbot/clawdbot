@@ -48,7 +48,7 @@ describe("readLoggingConfig", () => {
       },
     }`);
 
-    expect(readLoggingConfig()).toMatchObject({
+    expect(readLoggingConfig()).toStrictEqual({
       level: "debug",
       file: "/tmp/openclaw-custom.log",
       maxFileBytes: 1234,
@@ -63,7 +63,7 @@ describe("readLoggingConfig", () => {
       },
     }`);
 
-    expect(readLoggingConfig()).toMatchObject({
+    expect(readLoggingConfig()).toStrictEqual({
       consoleLevel: "warn",
     });
   });

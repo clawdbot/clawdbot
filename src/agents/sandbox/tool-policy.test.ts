@@ -323,7 +323,7 @@ describe("sandbox/tool-policy", () => {
     });
 
     const sessionLine = message?.split("\n").find((line) => line.startsWith("Session: "));
-    expect(sessionLine).toEqual(expect.stringContaining("Session: "));
+    expect(sessionLine).toBe("Session: agent:…\\n12345");
     expect(sessionLine).not.toContain(sessionKey);
     expect(sessionLine).toContain("\\n");
     expect(message).toContain("openclaw sandbox explain --agent main");

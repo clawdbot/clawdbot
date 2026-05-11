@@ -4,7 +4,7 @@ import {
   listMessageReceiptPlatformIds,
 } from "openclaw/plugin-sdk/channel-message";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { sleep } from "openclaw/plugin-sdk/text-runtime";
+import { sleep } from "openclaw/plugin-sdk/text-utility-runtime";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { loadWebMedia } from "../media.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
@@ -35,9 +35,9 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/text-runtime")>(
-    "openclaw/plugin-sdk/text-runtime",
+vi.mock("openclaw/plugin-sdk/text-utility-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/text-utility-runtime")>(
+    "openclaw/plugin-sdk/text-utility-runtime",
   );
   return {
     ...actual,

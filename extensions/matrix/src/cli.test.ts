@@ -1510,9 +1510,9 @@ describe("matrix CLI verification commands", () => {
     });
 
     expect(process.exitCode).toBe(1);
-    expect(stdoutWriteMock).toHaveBeenCalledWith(
-      expect.stringContaining('"error": "Matrix requires --homeserver"'),
-    );
+    expect(JSON.parse(String(stdoutWriteMock.mock.calls[0]?.[0]))).toEqual({
+      error: "Matrix requires --homeserver",
+    });
   });
 
   it("keeps zero exit code for successful bootstrap in JSON mode", async () => {

@@ -28,12 +28,54 @@ export type WritableTrustedSafeBinDir = {
 
 let trustedSafeBinCache: TrustedSafeBinCache | null = null;
 
-function normalizeTrustedDir(value: string): string | null {
+function swapAsciiCase(value: string): string {
+  return value.replace(/[A-Za-z]/g, (char) => {
+    const lower = char.toLowerCase();
+    return char === lower ? char.toUpperCase() : lower;
+  });
+}
+
+function sameFsObject(a: fs.Stats, b: fs.Stats): boolean {
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
+function pathCaseInsensitive(value: string): boolean {
+  let candidate = value;
+  for (;;) {
+    const swapped = swapAsciiCase(candidate);
+    if (swapped !== candidate) {
+      try {
+        const original = fs.statSync(candidate);
+        try {
+          const alternate = fs.statSync(swapped);
+          return sameFsObject(original, alternate);
+        } catch {
+          return false;
+        }
+      } catch {
+        // The compared path may not exist yet; probe the closest existing parent.
+      }
+    }
+
+    const parent = path.dirname(candidate);
+    if (parent === candidate) {
+      return process.platform === "win32";
+    }
+    candidate = parent;
+  }
+}
+
+function normalizeTrustComparisonPath(value: string): string {
+  const resolved = path.resolve(value);
+  return pathCaseInsensitive(resolved) ? resolved.toLowerCase() : resolved;
+}
+
+function normalizeTrustedDir(value: string, forComparison = true): string | null {
   const trimmed = value.trim();
   if (!trimmed) {
     return null;
   }
-  return path.resolve(trimmed);
+  return forComparison ? normalizeTrustComparisonPath(trimmed) : path.resolve(trimmed);
 }
 
 export function normalizeTrustedSafeBinDirs(entries?: readonly string[] | null): string[] {
@@ -44,9 +86,9 @@ export function normalizeTrustedSafeBinDirs(entries?: readonly string[] | null):
   return Array.from(new Set(normalized));
 }
 
-function resolveTrustedSafeBinDirs(entries: readonly string[]): string[] {
+function resolveTrustedSafeBinDirs(entries: readonly string[], forComparison = true): string[] {
   const resolved = entries
-    .map((entry) => normalizeTrustedDir(entry))
+    .map((entry) => normalizeTrustedDir(entry, forComparison))
     .filter((entry): entry is string => Boolean(entry));
   return Array.from(new Set(resolved)).toSorted();
 }
@@ -92,7 +134,7 @@ export function getTrustedSafeBinDirs(
 
 export function isTrustedSafeBinPath(params: TrustedSafeBinPathParams): boolean {
   const trustedDirs = params.trustedDirs ?? getTrustedSafeBinDirs();
-  const resolvedDir = path.dirname(path.resolve(params.resolvedPath));
+  const resolvedDir = normalizeTrustComparisonPath(path.dirname(path.resolve(params.resolvedPath)));
   return trustedDirs.has(resolvedDir);
 }
 
@@ -102,7 +144,7 @@ export function listWritableExplicitTrustedSafeBinDirs(
   if (process.platform === "win32") {
     return [];
   }
-  const resolved = resolveTrustedSafeBinDirs(normalizeTrustedSafeBinDirs(entries));
+  const resolved = resolveTrustedSafeBinDirs(normalizeTrustedSafeBinDirs(entries), false);
   const hits: WritableTrustedSafeBinDir[] = [];
   for (const dir of resolved) {
     let stat: fs.Stats;

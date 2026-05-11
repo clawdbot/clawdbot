@@ -84,19 +84,26 @@ describe("resolveFirstGithubToken", () => {
   });
 
   it("resolves non-env SecretRefs when config is available", async () => {
+    const config = { secrets: { defaults: { provider: "default" } } } as never;
+    const env = {} as NodeJS.ProcessEnv;
     const result = await resolveFirstGithubToken({
-      config: { secrets: { defaults: { provider: "default" } } } as never,
-      env: {} as NodeJS.ProcessEnv,
+      config,
+      env,
     });
 
     expect(result).toEqual({
       githubToken: "resolved-profile-token",
       hasProfile: true,
     });
-    expect(resolveRequiredConfiguredSecretRefInputStringMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: "providers.github-copilot.authProfiles.github-copilot:github.tokenRef",
-      }),
-    );
+    expect(resolveRequiredConfiguredSecretRefInputStringMock).toHaveBeenCalledWith({
+      config,
+      env,
+      value: {
+        source: "file",
+        provider: "default",
+        id: "/providers/github-copilot/token",
+      },
+      path: "providers.github-copilot.authProfiles.github-copilot:github.tokenRef",
+    });
   });
 });

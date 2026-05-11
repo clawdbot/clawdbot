@@ -264,7 +264,7 @@ bash pty:true workdir:~/project background:true command:"opencode run 'Your task
 ## Pi Coding Agent
 
 ```bash
-# Install: npm install -g @mariozechner/pi-coding-agent
+# Install: npm install -g @earendil-works/pi-coding-agent
 bash pty:true workdir:~/project background:true command:"pi 'Your task'"
 
 # Non-interactive mode

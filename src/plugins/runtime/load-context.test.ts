@@ -74,18 +74,17 @@ describe("resolvePluginRuntimeLoadContext", () => {
       env,
     });
 
-    expect(context).toEqual(
-      expect.objectContaining({
-        rawConfig,
-        config: resolvedConfig,
-        activationSourceConfig: rawConfig,
-        env,
-        workspaceDir: "/resolved-workspace",
-        autoEnabledReasons: {
-          demo: ["demo configured"],
-        },
-      }),
-    );
+    expect(context).toEqual({
+      rawConfig,
+      config: resolvedConfig,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: {
+        demo: ["demo configured"],
+      },
+      workspaceDir: "/resolved-workspace",
+      env,
+      logger: context.logger,
+    });
     expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
       config: rawConfig,
       env,
@@ -128,18 +127,16 @@ describe("resolvePluginRuntimeLoadContext", () => {
         activate: false,
         onlyPluginIds: ["demo"],
       }),
-    ).toEqual(
-      expect.objectContaining({
-        config: context.config,
-        activationSourceConfig: context.activationSourceConfig,
-        autoEnabledReasons: context.autoEnabledReasons,
-        workspaceDir: "/explicit-workspace",
-        env: context.env,
-        logger: context.logger,
-        cache: false,
-        activate: false,
-        onlyPluginIds: ["demo"],
-      }),
-    );
+    ).toEqual({
+      config: context.config,
+      activationSourceConfig: context.activationSourceConfig,
+      autoEnabledReasons: context.autoEnabledReasons,
+      workspaceDir: "/explicit-workspace",
+      env: context.env,
+      logger: context.logger,
+      cache: false,
+      activate: false,
+      onlyPluginIds: ["demo"],
+    });
   });
 });

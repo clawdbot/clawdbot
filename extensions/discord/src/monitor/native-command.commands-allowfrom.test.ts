@@ -1,7 +1,7 @@
 import { ChannelType } from "discord-api-types/v10";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as pluginCommandsModule from "openclaw/plugin-sdk/plugin-runtime";
 import * as dispatcherModule from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -98,18 +98,22 @@ async function runGuildSlashCommand(params?: {
 }
 
 function expectNotUnauthorizedReply(interaction: MockCommandInteraction) {
-  expect(interaction.followUp).not.toHaveBeenCalledWith(
-    expect.objectContaining({ content: "You are not authorized to use this command." }),
-  );
+  const unauthorizedReplies = interaction.followUp.mock.calls.filter(([payload]) => {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return false;
+    }
+    return (
+      (payload as { content?: unknown }).content === "You are not authorized to use this command."
+    );
+  });
+  expect(unauthorizedReplies).toEqual([]);
 }
 
 function expectUnauthorizedReply(interaction: MockCommandInteraction) {
-  expect(interaction.followUp).toHaveBeenCalledWith(
-    expect.objectContaining({
-      content: "You are not authorized to use this command.",
-      ephemeral: true,
-    }),
-  );
+  expect(interaction.followUp).toHaveBeenCalledWith({
+    content: "You are not authorized to use this command.",
+    ephemeral: true,
+  });
   expect(interaction.reply).not.toHaveBeenCalled();
 }
 
@@ -457,9 +461,7 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     const dispatchCall = vi.mocked(dispatcherModule.dispatchReplyWithDispatcher).mock.calls[0]?.[0];
     await dispatchCall?.dispatcherOptions.deliver({ text: longReply }, { kind: "final" });
 
-    expect(interaction.followUp).toHaveBeenCalledWith(
-      expect.objectContaining({ content: longReply }),
-    );
+    expect(interaction.followUp).toHaveBeenCalledWith({ content: longReply, ephemeral: true });
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 

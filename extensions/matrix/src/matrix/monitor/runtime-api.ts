@@ -5,7 +5,7 @@
 export type { NormalizedLocation } from "openclaw/plugin-sdk/channel-location";
 export type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 export type { BlockReplyContext, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-export type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+export type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 export {
   addAllowlistUserEntriesFromConfigEntry,

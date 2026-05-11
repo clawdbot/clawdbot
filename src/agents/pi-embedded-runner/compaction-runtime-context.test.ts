@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { addSession, resetProcessRegistryForTests } from "../bash-process-registry.js";
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
@@ -127,6 +127,8 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
   });
 
   it("preserves scoped active process session references for compaction", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-02T03:04:05.000Z"));
     const active = createProcessSessionFixture({
       id: "sess-active",
       command: "sleep 600",
@@ -151,17 +153,24 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       config: {} as OpenClawConfig,
     });
 
-    expect(result.activeProcessSessions).toEqual([
-      expect.objectContaining({
-        sessionId: "sess-active",
-        status: "running",
-        command: "sleep 600",
-        pid: 1234,
-      }),
-    ]);
-    expect(result.activeProcessSessions).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ sessionId: "sess-other" })]),
-    );
+    try {
+      expect(result.activeProcessSessions).toEqual([
+        {
+          command: "sleep 600",
+          cwd: "/tmp",
+          name: "sleep 600",
+          pid: 1234,
+          runtimeMs: 1_767_323_044_000,
+          sessionId: "sess-active",
+          startedAt: 1_000,
+          status: "running",
+          tail: "",
+          truncated: false,
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("omits active process session references when no safe scope is available", () => {

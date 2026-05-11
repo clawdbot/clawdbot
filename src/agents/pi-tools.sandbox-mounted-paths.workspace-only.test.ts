@@ -9,6 +9,7 @@ import {
   createSandboxedWriteTool,
   wrapToolWorkspaceRootGuardWithOptions,
 } from "./pi-tools.read.js";
+import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
 import {
   expectReadWriteEditTools,
   expectReadWriteTools,
@@ -68,6 +69,15 @@ function createSandboxFsTools(params: { sandbox: UnsafeMountedSandbox; workspace
   }
   return tools.map((tool) =>
     wrapToolWorkspaceRootGuardWithOptions(tool, params.sandbox.workspaceDir, {
+      additionalContainerMounts:
+        tool.name === "read" && params.sandbox.workspaceAccess === "ro"
+          ? [
+              {
+                containerRoot: SANDBOX_AGENT_WORKSPACE_MOUNT,
+                hostRoot: params.sandbox.agentWorkspaceDir,
+              },
+            ]
+          : undefined,
       containerWorkdir: params.sandbox.containerWorkdir,
     }),
   );
@@ -113,6 +123,34 @@ describe("tools.fs.workspaceOnly", () => {
       ).rejects.toThrow(/Path escapes sandbox root/i);
       expect(await fs.readFile(path.join(agentRoot, "secret.txt"), "utf8")).toBe("shh");
     });
+  });
+
+  it("allows read-only agent workspace mounts for sandbox reads only", async () => {
+    await withUnsafeMountedSandboxHarness(
+      async ({ agentRoot, sandbox }) => {
+        await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");
+
+        const tools = createSandboxFsTools({ sandbox, workspaceOnly: true });
+        const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
+
+        const readResult = await readTool?.execute("t1", { path: "/agent/secret.txt" });
+        expect(getTextContent(readResult)).toContain("shh");
+
+        await expect(
+          writeTool?.execute("t2", { path: "/agent/owned.txt", content: "x" }),
+        ).rejects.toThrow(/Path escapes sandbox root/i);
+        const missingOwnedFile = await fs
+          .stat(path.join(agentRoot, "owned.txt"))
+          .catch((error: unknown) => error);
+        expect((missingOwnedFile as NodeJS.ErrnoException).code).toBe("ENOENT");
+
+        await expect(
+          editTool?.execute("t3", { path: "/agent/secret.txt", oldText: "shh", newText: "nope" }),
+        ).rejects.toThrow(/Path escapes sandbox root/i);
+        expect(await fs.readFile(path.join(agentRoot, "secret.txt"), "utf8")).toBe("shh");
+      },
+      { workspaceAccess: "ro" },
+    );
   });
 
   it("enforces apply_patch workspace-only in sandbox mounts by default", async () => {

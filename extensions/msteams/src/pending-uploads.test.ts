@@ -36,10 +36,13 @@ describe("pending-uploads", () => {
         conversationId: "conv-1",
       });
 
-      expect(requirePendingUpload(id)).toMatchObject({
-        filename: "file.txt",
-        conversationId: "conv-1",
-      });
+      const upload = requirePendingUpload(id);
+      expect(upload.id).toBe(id);
+      expect(upload.buffer.toString()).toBe("data");
+      expect(upload.filename).toBe("file.txt");
+      expect(upload.contentType).toBe("text/plain");
+      expect(upload.conversationId).toBe("conv-1");
+      expect(upload.createdAt).toBe(Date.now());
     });
 
     it("stores consentCardActivityId when provided", () => {
@@ -72,7 +75,7 @@ describe("pending-uploads", () => {
         conversationId: "conv-1",
       });
 
-      expect(requirePendingUpload(id)).toMatchObject({ filename: "file.txt" });
+      expect(requirePendingUpload(id).filename).toBe("file.txt");
       vi.advanceTimersByTime(5 * 60 * 1000 + 1);
       // After TTL the in-memory check also gates access
       expect(getPendingUpload(id)).toBeUndefined();

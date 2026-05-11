@@ -1,4 +1,4 @@
-import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/text-runtime";
+import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const A2UI_PATH = "/__openclaw__/a2ui";
 

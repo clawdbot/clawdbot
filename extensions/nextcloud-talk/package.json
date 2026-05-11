@@ -53,5 +53,8 @@
       "publishToClawHub": true,
       "publishToNpm": true
     }
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
   }
 }

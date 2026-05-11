@@ -1,3 +1,4 @@
+import { readFile, unlink } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { buildContextReply } from "./commands-context-report.js";
@@ -154,5 +155,53 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Actual context usage (cached): 900 tok");
     expect(result.text).toContain("Session tokens (cached): 900 total / ctx=8,192");
     expect(result.text).not.toContain("Actual context usage (cached): 111 tok");
+  });
+
+  it("renders context map as sensitive local PNG media", async () => {
+    const result = await buildContextReply(
+      makeParams("/context map", false, {
+        contextTokens: 8_192,
+        totalTokens: 900,
+      }),
+    );
+    if (!result.mediaUrl) {
+      throw new Error("missing context map media path");
+    }
+    try {
+      const png = await readFile(result.mediaUrl);
+      expect(result.text).toContain("Context treemap");
+      expect(result.text).toContain("Source: run");
+      expect(result.text).toContain("Actual cached context: 900 tok");
+      expect(result.trustedLocalMedia).toBe(true);
+      expect(result.sensitiveMedia).toBe(true);
+      expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+      expect(png.subarray(12, 16).toString("ascii")).toBe("IHDR");
+      expect(png.readUInt32BE(16)).toBe(1280);
+      expect(png.readUInt32BE(20)).toBe(860);
+    } finally {
+      await unlink(result.mediaUrl);
+    }
+  });
+
+  it("does not render context map from an estimated report", async () => {
+    const params = makeParams("/context map", false);
+    const report = params.sessionEntry?.systemPromptReport;
+    if (!report) {
+      throw new Error("missing context report");
+    }
+    params.sessionEntry = {
+      ...params.sessionEntry,
+      systemPromptReport: {
+        ...report,
+        source: "estimate",
+      },
+    } as SessionEntry;
+
+    const result = await buildContextReply(params);
+
+    expect(result.text).toContain("Context treemap unavailable.");
+    expect(result.text).toContain("No actual run context is cached for this session yet.");
+    expect(result.text).not.toContain("Source: estimate");
+    expect(result.mediaUrl).toBeUndefined();
   });
 });

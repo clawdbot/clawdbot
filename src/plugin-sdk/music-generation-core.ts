@@ -1,4 +1,8 @@
-// Shared music-generation implementation helpers for bundled and third-party plugins.
+/**
+ * @deprecated Public SDK subpath has no bundled extension production imports.
+ * Prefer plugin-owned music provider surfaces until a current shared contract
+ * is needed by bundled extensions.
+ */
 
 export type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 export type { FallbackAttempt } from "../agents/model-fallback.types.js";

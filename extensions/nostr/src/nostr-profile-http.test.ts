@@ -430,7 +430,7 @@ describe("nostr-profile-http", () => {
       // The schema validation catches non-https URLs before SSRF check
       expect(data.error).toBe("Validation failed");
       expect(Array.isArray(data.details)).toBe(true);
-      expect(data.details).toEqual(expect.arrayContaining([expect.stringContaining("https")]));
+      expect(data.details).toEqual(["picture: URL must use https:// protocol"]);
     });
 
     it("does not persist if all relays fail", async () => {

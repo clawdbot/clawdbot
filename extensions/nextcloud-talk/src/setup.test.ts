@@ -56,36 +56,47 @@ describe("nextcloud talk setup", () => {
       setNextcloudTalkAccountConfig(cfg, DEFAULT_ACCOUNT_ID, {
         apiUser: "bot",
       }),
-    ).toMatchObject({
+    ).toEqual({
       channels: {
         "nextcloud-talk": {
+          enabled: true,
+          baseUrl: "https://cloud.example.com",
+          botSecret: "top-secret",
           apiUser: "bot",
+          accounts: {
+            work: {
+              botSecret: "work-secret",
+              botSecretFile: "/tmp/work-secret",
+              apiPassword: "api-secret",
+            },
+          },
         },
       },
     });
 
-    expect(clearNextcloudTalkAccountFields(cfg, DEFAULT_ACCOUNT_ID, ["botSecret"])).toMatchObject({
+    expect(clearNextcloudTalkAccountFields(cfg, DEFAULT_ACCOUNT_ID, ["botSecret"])).toEqual({
       channels: {
         "nextcloud-talk": {
           baseUrl: "https://cloud.example.com",
+          accounts: {
+            work: {
+              botSecret: "work-secret",
+              botSecretFile: "/tmp/work-secret",
+              apiPassword: "api-secret",
+            },
+          },
         },
       },
     });
     expect(
       clearNextcloudTalkAccountFields(cfg, DEFAULT_ACCOUNT_ID, ["botSecret"]),
-    ).not.toMatchObject({
-      channels: {
-        "nextcloud-talk": {
-          botSecret: expect.anything(),
-        },
-      },
-    });
+    ).not.toHaveProperty(["channels", "nextcloud-talk", "botSecret"]);
 
-    expect(
-      clearNextcloudTalkAccountFields(cfg, "work", ["botSecret", "botSecretFile"]),
-    ).toMatchObject({
+    expect(clearNextcloudTalkAccountFields(cfg, "work", ["botSecret", "botSecretFile"])).toEqual({
       channels: {
         "nextcloud-talk": {
+          baseUrl: "https://cloud.example.com",
+          botSecret: "top-secret",
           accounts: {
             work: {
               apiPassword: "api-secret",
@@ -104,10 +115,12 @@ describe("nextcloud talk setup", () => {
     };
 
     expect(nextcloudTalkDmPolicy.getCurrent(base)).toBe("pairing");
-    expect(nextcloudTalkDmPolicy.setPolicy(base, "open")).toMatchObject({
+    expect(nextcloudTalkDmPolicy.setPolicy(base, "open")).toEqual({
       channels: {
         "nextcloud-talk": {
+          enabled: true,
           dmPolicy: "open",
+          allowFrom: ["*"],
         },
       },
     });
@@ -269,9 +282,10 @@ describe("nextcloud talk setup", () => {
           baseUrl: "https://cloud.example.com",
         },
       } as never),
-    ).toMatchObject({
+    ).toEqual({
       channels: {
         "nextcloud-talk": {
+          enabled: true,
           accounts: {
             work: {
               enabled: true,

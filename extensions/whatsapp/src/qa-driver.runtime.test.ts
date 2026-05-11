@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { WAMessage } from "@whiskeysockets/baileys";
+import type { WAMessage } from "baileys";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startWhatsAppQaDriverSession } from "./qa-driver.runtime.js";
 
@@ -71,11 +71,15 @@ describe("startWhatsAppQaDriverSession", () => {
     expect(mocks.jidToE164).toHaveBeenCalledWith("12345@lid", {
       authDir: "/tmp/openclaw-whatsapp-auth",
     });
-    expect(session.getObservedMessages()).toMatchObject([
+    const observedMessages = session.getObservedMessages();
+    const observedAt = observedMessages[0]?.observedAt;
+    expect(observedAt).toBe(new Date(observedAt ?? "").toISOString());
+    expect(observedMessages).toEqual([
       {
         fromJid: "12345@lid",
         fromPhoneE164: "+15551234567",
         messageId: "message-1",
+        observedAt,
         text: "hello",
       },
     ]);

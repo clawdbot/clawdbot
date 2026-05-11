@@ -239,6 +239,31 @@ function createAdvancedFinalizeArgs(params: AdvancedFinalizeArgs = {}) {
   };
 }
 
+function requireMockArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
+function expectNoteContains(
+  prompter: ReturnType<typeof buildWizardPrompter>,
+  expected: string,
+  title: string,
+): void {
+  const calls = vi.mocked(prompter.note).mock.calls;
+  expect(calls.some((call) => call[0].includes(expected) && call[1] === title)).toBe(true);
+}
+
+function expectNoteTitleNotCalled(
+  prompter: ReturnType<typeof buildWizardPrompter>,
+  title: string,
+): void {
+  const calls = vi.mocked(prompter.note).mock.calls;
+  expect(calls.every((call) => call[1] !== title)).toBe(true);
+}
+
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
     launchTuiCli.mockClear();
@@ -339,12 +364,12 @@ describe("finalizeSetupWizard", () => {
       }
     }
 
-    expect(probeGatewayReachable).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "ws://127.0.0.1:18789",
-        password: "resolved-gateway-password", // pragma: allowlist secret
-      }),
-    );
+    const probeParams = requireMockArg(probeGatewayReachable) as {
+      url?: string;
+      password?: string;
+    };
+    expect(probeParams.url).toBe("ws://127.0.0.1:18789");
+    expect(probeParams.password).toBe("resolved-gateway-password"); // pragma: allowlist secret
     expect(launchTuiCli).toHaveBeenCalledWith({
       local: true,
       deliver: false,
@@ -547,8 +572,9 @@ describe("finalizeSetupWizard", () => {
       }),
     );
 
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("selected but unavailable under the current plugin policy"),
+    expectNoteContains(
+      prompter,
+      "selected but unavailable under the current plugin policy",
       "Web search",
     );
     expect(resolveExistingKey).not.toHaveBeenCalled();
@@ -573,8 +599,9 @@ describe("finalizeSetupWizard", () => {
 
     await finalizeSetupWizard(createAdvancedFinalizeArgs({ prompter }));
 
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("Web search is available via Perplexity Search (auto-detected)."),
+    expectNoteContains(
+      prompter,
+      "Web search is available via Perplexity Search (auto-detected).",
       "Web search",
     );
   });
@@ -602,10 +629,9 @@ describe("finalizeSetupWizard", () => {
       }),
     );
 
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "Web search is enabled, so your agent can look things up online when needed.",
-      ),
+    expectNoteContains(
+      prompter,
+      "Web search is enabled, so your agent can look things up online when needed.",
       "Web search",
     );
   });
@@ -645,22 +671,18 @@ describe("finalizeSetupWizard", () => {
       runtime: createRuntime(),
     });
 
-    expect(healthCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        json: false,
-        timeoutMs: 10_000,
-        token: "session-token",
-        config: expect.objectContaining({
-          gateway: expect.objectContaining({
-            auth: expect.objectContaining({
-              mode: "token",
-              token: "session-token",
-            }),
-          }),
-        }),
-      }),
-      expect.any(Object),
-    );
+    const healthArgs = requireMockArg(healthCommand) as {
+      json?: boolean;
+      timeoutMs?: number;
+      token?: string;
+      config?: OpenClawConfig;
+    };
+    expect(healthArgs.json).toBe(false);
+    expect(healthArgs.timeoutMs).toBe(10_000);
+    expect(healthArgs.token).toBe("session-token");
+    expect(healthArgs.config?.gateway?.auth?.mode).toBe("token");
+    expect(healthArgs.config?.gateway?.auth?.token).toBe("session-token");
+    expect(requireMockArg(healthCommand, 0, 1)).toBeTypeOf("object");
   });
 
   it("uses the resolved setup password for health checks", async () => {
@@ -703,29 +725,27 @@ describe("finalizeSetupWizard", () => {
       runtime: createRuntime(),
     });
 
-    expect(waitForGatewayReachable).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "ws://127.0.0.1:18789",
-        token: undefined,
-        password: "session-password",
-      }),
-    );
-    expect(healthCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        json: false,
-        timeoutMs: 10_000,
-        token: undefined,
-        password: "session-password",
-        config: expect.objectContaining({
-          gateway: expect.objectContaining({
-            auth: expect.objectContaining({
-              mode: "password",
-            }),
-          }),
-        }),
-      }),
-      expect.any(Object),
-    );
+    const waitArgs = requireMockArg(waitForGatewayReachable) as {
+      url?: string;
+      token?: string;
+      password?: string;
+    };
+    expect(waitArgs.url).toBe("ws://127.0.0.1:18789");
+    expect(waitArgs.token).toBeUndefined();
+    expect(waitArgs.password).toBe("session-password");
+    const healthArgs = requireMockArg(healthCommand) as {
+      json?: boolean;
+      timeoutMs?: number;
+      token?: string;
+      password?: string;
+      config?: OpenClawConfig;
+    };
+    expect(healthArgs.json).toBe(false);
+    expect(healthArgs.timeoutMs).toBe(10_000);
+    expect(healthArgs.token).toBeUndefined();
+    expect(healthArgs.password).toBe("session-password");
+    expect(healthArgs.config?.gateway?.auth?.mode).toBe("password");
+    expect(requireMockArg(healthCommand, 0, 1)).toBeTypeOf("object");
   });
 
   it("shows actionable gateway guidance instead of a hard error in no-daemon onboarding", async () => {
@@ -765,15 +785,12 @@ describe("finalizeSetupWizard", () => {
     });
 
     expect(runtime.error).not.toHaveBeenCalledWith("health failed");
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("Setup was run without Gateway service install"),
-      "Gateway",
-    );
-    expect(prompter.note).not.toHaveBeenCalledWith(expect.any(String), "Dashboard ready");
+    expectNoteContains(prompter, "Setup was run without Gateway service install", "Gateway");
+    expectNoteTitleNotCalled(prompter, "Dashboard ready");
   });
 
   it("does not show a Codex native search summary when web search is globally disabled", async () => {
-    const note = vi.fn(async () => {});
+    const note = vi.fn(async (_message: string, _title?: string) => {});
     const prompter = buildWizardPrompter({
       note,
       select: vi.fn(async () => "later") as never,
@@ -816,9 +833,6 @@ describe("finalizeSetupWizard", () => {
       runtime: createRuntime(),
     });
 
-    expect(note).not.toHaveBeenCalledWith(
-      expect.stringContaining("Codex native search:"),
-      "Codex native search",
-    );
+    expect(note.mock.calls.every((call) => call[1] !== "Codex native search")).toBe(true);
   });
 });

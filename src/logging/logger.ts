@@ -21,7 +21,7 @@ import {
 import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
-import { redactSensitiveText } from "./redact.js";
+import { redactSecrets, redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
 import type { LoggerSettings } from "./types.js";
@@ -444,10 +444,20 @@ function buildDiagnosticLogRecord(logObj: TsLogRecord) {
   };
 }
 
+function isLogRedactionDisabled(): boolean {
+  return readLoggingConfig()?.redactSensitive === "off";
+}
+
+function redactLogRecordForTransport<T extends LogObj>(record: T): T {
+  return isLogRedactionDisabled() ? record : redactSecrets(record);
+}
+
 function attachDiagnosticEventTransport(logger: TsLogger<LogObj>): void {
   logger.attachTransport((logObj: LogObj) => {
     try {
-      emitDiagnosticEvent(buildDiagnosticLogRecord(logObj as TsLogRecord));
+      emitDiagnosticEvent(
+        buildDiagnosticLogRecord(redactLogRecordForTransport(logObj) as TsLogRecord),
+      );
     } catch {
       // never block on logging failures
     }
@@ -518,6 +528,8 @@ export function isFileLogLevelEnabled(level: LogLevel): boolean {
 function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   const logger = new TsLogger<LogObj>({
     name: "openclaw",
+    // Custom structured redaction runs at each transport boundary; avoid tslog pre-masking divergent records.
+    maskValuesOfKeys: [],
     minLevel: levelToMinLevel(settings.level),
     type: "hidden", // no ansi formatting
   });
@@ -552,9 +564,8 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
       const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
       const traceFields = buildTraceFileLogFields(logObj as TsLogRecord);
       const structuredFields = buildStructuredFileLogFields(logObj as TsLogRecord);
-      const line = redactSensitiveText(
-        JSON.stringify({ ...logObj, time, ...structuredFields, ...traceFields }),
-      );
+      const record = { ...logObj, time, ...structuredFields, ...traceFields };
+      const line = redactSensitiveText(JSON.stringify(redactLogRecordForTransport(record)));
       const payload = `${line}\n`;
       const payloadBytes = Buffer.byteLength(payload, "utf8");
       const nextBytes = currentFileBytes + payloadBytes;

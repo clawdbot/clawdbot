@@ -2172,9 +2172,9 @@ describe("AcpSessionManager", () => {
     });
 
     const internals = manager as unknown as {
-      actorTailBySession: Map<string, Promise<void>>;
+      actorQueue: { getTailMapForTesting(): Map<string, Promise<void>> };
     };
-    expect(internals.actorTailBySession.size).toBe(0);
+    expect(internals.actorQueue.getTailMapForTesting().size).toBe(0);
   });
 
   it("surfaces backend failures raised after a done event", async () => {

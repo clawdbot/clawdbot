@@ -361,6 +361,21 @@ async function readPackageJson(tarball) {
   };
 }
 
+export async function readPackageBuildSourceSha(tarball) {
+  const raw = await run("tar", ["-xOf", tarball, "package/dist/build-info.json"], {
+    capture: true,
+  }).then(
+    (value) => value,
+    () => "",
+  );
+  if (!raw.trim()) {
+    return "";
+  }
+  const buildInfo = JSON.parse(raw);
+  const commit = typeof buildInfo.commit === "string" ? buildInfo.commit.trim() : "";
+  return /^[0-9a-f]{40}$/iu.test(commit) ? commit.toLowerCase() : "";
+}
+
 async function appendGithubOutputs(file, outputs) {
   if (!file) {
     return;
@@ -463,6 +478,12 @@ async function resolveCandidate(options) {
     `OpenClaw package tarball check finished in ${Math.round((Date.now() - checkStartedAt) / 1000)}s`,
   );
   const pkg = await readPackageJson(target);
+  if (!packageSourceSha) {
+    packageSourceSha = await readPackageBuildSourceSha(target);
+    if (packageSourceSha && !packageTrustedReason) {
+      packageTrustedReason = "package-build-info";
+    }
+  }
   const metadata = {
     name: pkg.name,
     packageRef,

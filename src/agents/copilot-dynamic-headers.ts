@@ -1,4 +1,4 @@
-import type { Context } from "@mariozechner/pi-ai";
+import type { Context } from "@earendil-works/pi-ai";
 import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "../plugin-sdk/provider-auth.js";
 
 export { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "../plugin-sdk/provider-auth.js";

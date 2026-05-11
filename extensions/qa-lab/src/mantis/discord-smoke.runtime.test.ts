@@ -24,6 +24,16 @@ function emptyResponse(status = 204) {
   return new Response(null, { status });
 }
 
+function fetchGuardCallsWithMethod(method: string) {
+  return fetchWithSsrFGuard.mock.calls.filter(([request]) => {
+    const init =
+      typeof request === "object" && request !== null
+        ? (request as { init?: RequestInit }).init
+        : undefined;
+    return init?.method === method;
+  });
+}
+
 describe("mantis discord smoke runtime", () => {
   let repoRoot: string;
   let tokenFile: string;
@@ -109,15 +119,11 @@ describe("mantis discord smoke runtime", () => {
       tokenSource: string;
       message: { id: string; posted: boolean; reactionAdded: boolean };
     };
-    expect(summary).toMatchObject({
-      status: "pass",
-      tokenSource: "file",
-      message: {
-        id: "1500000000000000001",
-        posted: true,
-        reactionAdded: true,
-      },
-    });
+    expect(summary.status).toBe("pass");
+    expect(summary.tokenSource).toBe("file");
+    expect(summary.message.id).toBe("1500000000000000001");
+    expect(summary.message.posted).toBe(true);
+    expect(summary.message.reactionAdded).toBe(true);
     expect(await fs.readFile(result.summaryPath, "utf8")).not.toContain("test-token");
     expect(await fs.readFile(result.reportPath, "utf8")).not.toContain("test-token");
   });
@@ -135,11 +141,7 @@ describe("mantis discord smoke runtime", () => {
     });
 
     expect(result.status).toBe("pass");
-    expect(fetchWithSsrFGuard).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        init: expect.objectContaining({ method: "POST" }),
-      }),
-    );
+    expect(fetchGuardCallsWithMethod("POST")).toHaveLength(0);
   });
 
   it("redacts Discord target metadata in public artifacts", async () => {
@@ -171,13 +173,18 @@ describe("mantis discord smoke runtime", () => {
       expect(text).not.toContain("1500000000000000001");
     }
     expect(summaryText).not.toContain("Mantis");
-    expect(JSON.parse(summaryText)).toMatchObject({
-      metadataRedaction: true,
-      bot: { id: "<redacted>", username: "<redacted>" },
-      guild: { id: "<redacted>", name: "<redacted>" },
-      channel: { id: "<redacted>", name: "<redacted>" },
-      message: { id: "<redacted>" },
-    });
+    const summary = JSON.parse(summaryText) as {
+      bot?: { id: string; username?: string };
+      channel?: { id: string; name?: string; type?: number };
+      guild?: { id: string; name?: string };
+      message?: { id: string };
+      metadataRedaction: boolean;
+    };
+    expect(summary.metadataRedaction).toBe(true);
+    expect(summary.bot).toEqual({ id: "<redacted>", username: "<redacted>" });
+    expect(summary.guild).toEqual({ id: "<redacted>", name: "<redacted>" });
+    expect(summary.channel).toEqual({ id: "<redacted>", name: "<redacted>", type: 0 });
+    expect(summary.message?.id).toBe("<redacted>");
   });
 
   it("fails before calling Discord when required ids are missing", async () => {
@@ -244,11 +251,7 @@ describe("mantis discord smoke runtime", () => {
     expect(result.status).toBe("fail");
     const errorText = await fs.readFile(path.join(result.outputDir, "error.txt"), "utf8");
     expect(errorText).toContain("is not in guild");
-    expect(fetchWithSsrFGuard).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        init: expect.objectContaining({ method: "POST" }),
-      }),
-    );
+    expect(fetchGuardCallsWithMethod("POST")).toHaveLength(0);
   });
 
   it("redacts response guild ids in mismatch failure artifacts", async () => {

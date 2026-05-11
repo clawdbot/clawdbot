@@ -16,18 +16,54 @@ describe("buildSlackInteractiveBlocks", () => {
         ],
       }),
     ).toEqual([
-      expect.objectContaining({
+      {
         type: "actions",
         block_id: "openclaw_reply_select_1",
-      }),
-      expect.objectContaining({
+        elements: [
+          {
+            type: "static_select",
+            action_id: "openclaw:reply_select:1",
+            placeholder: {
+              type: "plain_text",
+              text: "Pick one",
+              emoji: true,
+            },
+            options: [
+              {
+                text: {
+                  type: "plain_text",
+                  text: "Alpha",
+                  emoji: true,
+                },
+                value: "alpha",
+              },
+            ],
+          },
+        ],
+      },
+      {
         type: "section",
-        text: expect.objectContaining({ text: "then" }),
-      }),
-      expect.objectContaining({
+        text: {
+          type: "mrkdwn",
+          text: "then",
+        },
+      },
+      {
         type: "actions",
         block_id: "openclaw_reply_buttons_1",
-      }),
+        elements: [
+          {
+            type: "button",
+            action_id: "openclaw:reply_button:1:1",
+            text: {
+              type: "plain_text",
+              text: "Retry",
+              emoji: true,
+            },
+            value: "retry",
+          },
+        ],
+      },
     ]);
   });
 
@@ -158,10 +194,16 @@ describe("buildSlackInteractiveBlocks", () => {
 
     expect(buttonBlock.elements).toHaveLength(2);
     expect(buttonBlock.elements?.[0]?.value).toBe("a".repeat(2000));
-    expect(buttonBlock.elements?.[1]).toEqual(
-      expect.objectContaining({ url: "https://example.com/docs" }),
-    );
-    expect(buttonBlock.elements?.[1]).not.toHaveProperty("value");
+    expect(buttonBlock.elements?.[1]).toEqual({
+      type: "button",
+      action_id: "openclaw:reply_button:1:3",
+      text: {
+        type: "plain_text",
+        text: "Docs",
+        emoji: true,
+      },
+      url: "https://example.com/docs",
+    });
   });
 
   it("drops Slack button URLs beyond Block Kit limits", () => {
@@ -227,13 +269,16 @@ describe("buildSlackInteractiveBlocks", () => {
       elements?: Array<{ value?: string; url?: string }>;
     };
 
-    expect(buttonBlock.elements?.[0]).toEqual(
-      expect.objectContaining({
-        type: "button",
-        url: "https://example.com/docs",
-      }),
-    );
-    expect(buttonBlock.elements?.[0]).not.toHaveProperty("value");
+    expect(buttonBlock.elements?.[0]).toEqual({
+      type: "button",
+      action_id: "openclaw:reply_button:1:1",
+      text: {
+        type: "plain_text",
+        text: "Docs",
+        emoji: true,
+      },
+      url: "https://example.com/docs",
+    });
   });
 
   it("maps supported button styles to Slack Block Kit styles", () => {

@@ -1,10 +1,10 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import {
   AuthStorage as PiAuthStorageClass,
   ModelRegistry as PiModelRegistryClass,
   type AuthStorage,
   type ModelRegistry,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -28,6 +28,7 @@ import {
   shouldUnconditionallySuppress,
 } from "../model-suppression.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
+import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
   attachModelProviderRequestTransport,
   resolveProviderRequestConfig,
@@ -563,7 +564,8 @@ function applyConfiguredProviderOverrides(params: {
     providerConfig.maxTokens === undefined &&
     requestTimeoutMs === undefined &&
     !providerHeaders &&
-    !providerRequest
+    !providerRequest &&
+    !providerConfig.localService
   ) {
     const resolvedParams = mergeModelParams(
       readModelParams(discoveredModel.params),
@@ -621,29 +623,32 @@ function applyConfiguredProviderOverrides(params: {
     capability: "llm",
     transport: "stream",
   });
-  return attachModelProviderRequestTransport(
-    {
-      ...discoveredModel,
-      api: requestConfig.api ?? "openai-responses",
-      baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
-      reasoning: metadataOverrideModel?.reasoning ?? discoveredModel.reasoning,
-      input: normalizedInput,
-      cost: metadataOverrideModel?.cost ?? discoveredModel.cost,
-      contextWindow: resolvedContextWindow ?? discoveredModel.contextWindow,
-      contextTokens:
-        metadataOverrideModel?.contextTokens ??
-        providerConfig.contextTokens ??
-        discoveredModel.contextTokens,
-      maxTokens:
-        typeof resolvedContextWindow === "number"
-          ? Math.min(resolvedMaxTokens, resolvedContextWindow)
-          : resolvedMaxTokens,
-      ...(resolvedParams ? { params: resolvedParams } : {}),
-      ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
-      headers: requestConfig.headers,
-      compat: metadataOverrideModel?.compat ?? discoveredModel.compat,
-    },
-    providerRequest,
+  return attachModelProviderLocalService(
+    attachModelProviderRequestTransport(
+      {
+        ...discoveredModel,
+        api: requestConfig.api ?? "openai-responses",
+        baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
+        reasoning: metadataOverrideModel?.reasoning ?? discoveredModel.reasoning,
+        input: normalizedInput,
+        cost: metadataOverrideModel?.cost ?? discoveredModel.cost,
+        contextWindow: resolvedContextWindow ?? discoveredModel.contextWindow,
+        contextTokens:
+          metadataOverrideModel?.contextTokens ??
+          providerConfig.contextTokens ??
+          discoveredModel.contextTokens,
+        maxTokens:
+          typeof resolvedContextWindow === "number"
+            ? Math.min(resolvedMaxTokens, resolvedContextWindow)
+            : resolvedMaxTokens,
+        ...(resolvedParams ? { params: resolvedParams } : {}),
+        ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
+        headers: requestConfig.headers,
+        compat: metadataOverrideModel?.compat ?? discoveredModel.compat,
+      },
+      providerRequest,
+    ),
+    providerConfig.localService,
   );
 }
 function resolveExplicitModelWithRegistry(params: {
@@ -870,40 +875,43 @@ function resolveConfiguredFallbackModel(params: {
     cfg,
     agentDir,
     workspaceDir,
-    model: attachModelProviderRequestTransport(
-      {
-        id: modelId,
-        name: modelId,
-        api: requestConfig.api ?? "openai-responses",
-        provider,
-        baseUrl: requestConfig.baseUrl,
-        reasoning: configuredModel?.reasoning ?? false,
-        input: resolveProviderModelInput({
+    model: attachModelProviderLocalService(
+      attachModelProviderRequestTransport(
+        {
+          id: modelId,
+          name: modelId,
+          api: requestConfig.api ?? "openai-responses",
           provider,
-          modelId,
-          modelName: configuredModel?.name ?? modelId,
-          input: configuredModel?.input,
-        }),
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow:
-          configuredModel?.contextWindow ??
-          providerConfig?.contextWindow ??
-          providerConfig?.models?.[0]?.contextWindow ??
-          DEFAULT_CONTEXT_TOKENS,
-        contextTokens:
-          configuredModel?.contextTokens ??
-          providerConfig?.contextTokens ??
-          providerConfig?.models?.[0]?.contextTokens,
-        maxTokens:
-          configuredModel?.maxTokens ??
-          providerConfig?.maxTokens ??
-          providerConfig?.models?.[0]?.maxTokens ??
-          DEFAULT_CONTEXT_TOKENS,
-        ...(resolvedParams ? { params: resolvedParams } : {}),
-        ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
-        headers: requestConfig.headers,
-      } as Model<Api>,
-      providerRequest,
+          baseUrl: requestConfig.baseUrl,
+          reasoning: configuredModel?.reasoning ?? false,
+          input: resolveProviderModelInput({
+            provider,
+            modelId,
+            modelName: configuredModel?.name ?? modelId,
+            input: configuredModel?.input,
+          }),
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow:
+            configuredModel?.contextWindow ??
+            providerConfig?.contextWindow ??
+            providerConfig?.models?.[0]?.contextWindow ??
+            DEFAULT_CONTEXT_TOKENS,
+          contextTokens:
+            configuredModel?.contextTokens ??
+            providerConfig?.contextTokens ??
+            providerConfig?.models?.[0]?.contextTokens,
+          maxTokens:
+            configuredModel?.maxTokens ??
+            providerConfig?.maxTokens ??
+            providerConfig?.models?.[0]?.maxTokens ??
+            DEFAULT_CONTEXT_TOKENS,
+          ...(resolvedParams ? { params: resolvedParams } : {}),
+          ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
+          headers: requestConfig.headers,
+        } as Model<Api>,
+        providerRequest,
+      ),
+      providerConfig?.localService,
     ),
     runtimeHooks,
   });

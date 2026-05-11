@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { resolveQQBotCommandsAllowFrom, resolveSlashCommandAuth } from "./slash-command-auth.js";
 import { getWrittenQQBotConfig, installCommandRuntime } from "./slash-command-test-support.js";
@@ -33,16 +33,13 @@ describe("QQBot framework slash commands", () => {
     const commands = getFrameworkCommands();
     const names = commands.map((command) => command.name);
 
-    expect(names).toEqual(
-      expect.arrayContaining(["bot-approve", "bot-clear-storage", "bot-logs", "bot-streaming"]),
-    );
+    expect(names).toContain("bot-approve");
+    expect(names).toContain("bot-clear-storage");
+    expect(names).toContain("bot-logs");
+    expect(names).toContain("bot-streaming");
     for (const commandName of ["bot-approve", "bot-clear-storage", "bot-logs", "bot-streaming"]) {
-      expect(commands).toContainEqual(
-        expect.objectContaining({
-          name: commandName,
-          c2cOnly: true,
-        }),
-      );
+      const command = commands.find((entry) => entry.name === commandName);
+      expect(command?.c2cOnly).toBe(true);
     }
   });
 
@@ -65,13 +62,10 @@ describe("QQBot framework slash commands", () => {
     const commands = registry.getFrameworkCommands();
 
     expect(commands.map((command) => command.name)).toEqual(["private-admin", "shared-admin"]);
-    expect(commands).toContainEqual(
-      expect.objectContaining({
-        name: "private-admin",
-        c2cOnly: true,
-      }),
-    );
-    expect(commands.find((command) => command.name === "shared-admin")?.c2cOnly).toBeUndefined();
+    const privateAdmin = commands.find((command) => command.name === "private-admin");
+    const sharedAdmin = commands.find((command) => command.name === "shared-admin");
+    expect(privateAdmin?.c2cOnly).toBe(true);
+    expect(sharedAdmin?.c2cOnly).toBeUndefined();
   });
 
   it("routes bot-streaming through the auth-gated framework registry", () => {

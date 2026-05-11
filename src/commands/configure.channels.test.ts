@@ -42,18 +42,41 @@ async function removeUnsafeChannelConfig(unsafeChannel: string) {
   );
 }
 
+function selectArg(index = 0): {
+  message?: string;
+  options?: Array<{ value: unknown; label: string }>;
+} {
+  const call = select.mock.calls[index];
+  expect(call).toBeDefined();
+  return call?.[0] as { message?: string; options?: Array<{ value: unknown; label: string }> };
+}
+
+function confirmArg(index = 0): { message?: string } {
+  const call = confirm.mock.calls[index];
+  expect(call).toBeDefined();
+  return call?.[0] as { message?: string };
+}
+
+function expectOption(
+  options: Array<{ value: unknown; label: string }> | undefined,
+  value: unknown,
+  label: string,
+) {
+  expect(
+    options?.some(
+      (option) => option.label === label && JSON.stringify(option.value) === JSON.stringify(value),
+    ),
+  ).toBe(true);
+}
+
+function optionLabels(options: Array<{ value: unknown; label: string }> | undefined) {
+  return options?.map((option) => ({ value: option.value, label: option.label }));
+}
+
 function expectUnknownChannelRemovalPrompt(unsafeChannel: string, label: string) {
-  expect(select).toHaveBeenCalledWith(
-    expect.objectContaining({
-      options: expect.arrayContaining([
-        expect.objectContaining({ value: channelChoice(unsafeChannel), label }),
-      ]),
-    }),
-  );
-  expect(confirm).toHaveBeenCalledWith(
-    expect.objectContaining({
-      message: `Delete ${label} configuration from ~/.openclaw/openclaw.json?`,
-    }),
+  expectOption(selectArg().options, channelChoice(unsafeChannel), label);
+  expect(confirmArg().message).toBe(
+    `Delete ${label} configuration from ~/.openclaw/openclaw.json?`,
   );
   expect(note).toHaveBeenCalledWith(
     `${label} removed from config.\nNote: credentials/sessions on disk are unchanged.`,
@@ -87,17 +110,14 @@ describe("removeChannelConfigWizard", () => {
       {} as never,
     );
 
-    expect(select).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Remove which channel config?",
-        options: [
-          expect.objectContaining({ value: channelChoice("telegram"), label: "Telegram" }),
-          expect.objectContaining({ value: channelChoice("twitch"), label: "Twitch" }),
-          expect.objectContaining({ value: channelChoice("unknown"), label: "unknown" }),
-          { value: doneChoice, label: "Done" },
-        ],
-      }),
-    );
+    const prompt = selectArg();
+    expect(prompt.message).toBe("Remove which channel config?");
+    expect(optionLabels(prompt.options)).toEqual([
+      { value: channelChoice("telegram"), label: "Telegram" },
+      { value: channelChoice("twitch"), label: "Twitch" },
+      { value: channelChoice("unknown"), label: "unknown" },
+      { value: doneChoice, label: "Done" },
+    ]);
   });
 
   it("deletes the selected channel block from openclaw.json", async () => {
@@ -113,10 +133,8 @@ describe("removeChannelConfigWizard", () => {
       {} as never,
     );
 
-    expect(confirm).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Delete Telegram configuration from ~/.openclaw/openclaw.json?",
-      }),
+    expect(confirmArg().message).toBe(
+      "Delete Telegram configuration from ~/.openclaw/openclaw.json?",
     );
     expect(next.channels).toEqual({ twitch: { token: "secret" } });
     expect(note).toHaveBeenCalledWith(
@@ -138,11 +156,7 @@ describe("removeChannelConfigWizard", () => {
       {} as never,
     );
 
-    expect(confirm).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Delete done configuration from ~/.openclaw/openclaw.json?",
-      }),
-    );
+    expect(confirmArg().message).toBe("Delete done configuration from ~/.openclaw/openclaw.json?");
     expect(next.channels).toEqual({ telegram: { token: "secret" } });
     expect(note).toHaveBeenCalledWith(
       "done removed from config.\nNote: credentials/sessions on disk are unchanged.",
@@ -185,14 +199,10 @@ describe("removeChannelConfigWizard", () => {
       {} as never,
     );
 
-    expect(select).toHaveBeenCalledWith(
-      expect.objectContaining({
-        options: [
-          expect.objectContaining({ value: channelChoice("telegram"), label: "Telegram" }),
-          { value: doneChoice, label: "Done" },
-        ],
-      }),
-    );
+    expect(optionLabels(selectArg().options)).toEqual([
+      { value: channelChoice("telegram"), label: "Telegram" },
+      { value: doneChoice, label: "Done" },
+    ]);
   });
 
   it("sanitizes known channel labels before rendering prompts", async () => {
@@ -211,17 +221,9 @@ describe("removeChannelConfigWizard", () => {
       {} as never,
     );
 
-    expect(select).toHaveBeenCalledWith(
-      expect.objectContaining({
-        options: expect.arrayContaining([
-          expect.objectContaining({ value: channelChoice("telegram"), label: "Telegram\\nBot" }),
-        ]),
-      }),
-    );
-    expect(confirm).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Delete Telegram\\nBot configuration from ~/.openclaw/openclaw.json?",
-      }),
+    expectOption(selectArg().options, channelChoice("telegram"), "Telegram\\nBot");
+    expect(confirmArg().message).toBe(
+      "Delete Telegram\\nBot configuration from ~/.openclaw/openclaw.json?",
     );
     expect(note).toHaveBeenCalledWith(
       "Telegram\\nBot removed from config.\nNote: credentials/sessions on disk are unchanged.",

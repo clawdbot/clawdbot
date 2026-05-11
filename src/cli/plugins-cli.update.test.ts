@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   loadConfig,
@@ -35,6 +35,23 @@ function createTrackedPluginConfig(params: {
       },
     },
   } as OpenClawConfig;
+}
+
+function expectRestartNoticeLogged() {
+  expect(
+    runtimeLogs.some((message) =>
+      message.includes("Restart the gateway to load plugins and hooks."),
+    ),
+  ).toBe(true);
+}
+
+function expectSingleCallParams(mockFn: ReturnType<typeof vi.fn>) {
+  expect(mockFn).toHaveBeenCalledTimes(1);
+  const params = mockFn.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+  if (params === undefined) {
+    throw new Error("expected call params");
+  }
+  return params;
 }
 
 describe("plugins cli update", () => {
@@ -132,19 +149,12 @@ describe("plugins cli update", () => {
 
     await runPluginsCommand(["plugins", "update", "demo-hooks"]);
 
-    expect(updateNpmInstalledHookPacks).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: cfg,
-        hookIds: ["demo-hooks"],
-      }),
-    );
+    const hookUpdateParams = expectSingleCallParams(updateNpmInstalledHookPacks);
+    expect(hookUpdateParams.config).toBe(cfg);
+    expect(hookUpdateParams.hookIds).toEqual(["demo-hooks"]);
     expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
-    expect(runtimeLogs).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("Restart the gateway to load plugins and hooks."),
-      ]),
-    );
+    expectRestartNoticeLogged();
   });
 
   it("exits when update is called without id and without --all", async () => {
@@ -194,13 +204,10 @@ describe("plugins cli update", () => {
       "--dangerously-force-unsafe-install",
     ]);
 
-    expect(updateNpmInstalledPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config,
-        pluginIds: ["openclaw-codex-app-server"],
-        dangerouslyForceUnsafeInstall: true,
-      }),
-    );
+    const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
+    expect(updateParams.config).toEqual(config);
+    expect(updateParams.pluginIds).toEqual(["openclaw-codex-app-server"]);
+    expect(updateParams.dangerouslyForceUnsafeInstall).toBe(true);
   });
 
   it("writes updated config when updater reports changes", async () => {
@@ -239,13 +246,10 @@ describe("plugins cli update", () => {
 
     await runPluginsCommand(["plugins", "update", "alpha"]);
 
-    expect(updateNpmInstalledPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: cfg,
-        pluginIds: ["alpha"],
-        dryRun: false,
-      }),
-    );
+    const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
+    expect(updateParams.config).toEqual(cfg);
+    expect(updateParams.pluginIds).toEqual(["alpha"]);
+    expect(updateParams.dryRun).toBe(false);
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
       nextConfig.plugins?.installs,
     );
@@ -255,11 +259,7 @@ describe("plugins cli update", () => {
       installRecords: nextConfig.plugins?.installs,
       reason: "source-changed",
     });
-    expect(runtimeLogs).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("Restart the gateway to load plugins and hooks."),
-      ]),
-    );
+    expectRestartNoticeLogged();
   });
 
   it("exits non-zero when a plugin update reports an error after persisting successes", async () => {

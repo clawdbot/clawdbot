@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { RemindCronAction } from "../../engine/tools/remind-logic.js";
 
 const { callGatewayToolMock } = vi.hoisted(() => ({
   callGatewayToolMock: vi.fn(),
@@ -9,6 +10,22 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
 }));
 
 import { createRemindTool } from "./remind.js";
+
+type CronAddToolPayload = {
+  job?: {
+    sessionTarget?: string;
+    payload?: {
+      kind?: string;
+      message?: string;
+    };
+    delivery?: {
+      mode?: string;
+      channel?: string;
+      to?: string;
+      accountId?: string;
+    };
+  };
+};
 
 describe("bridge/tools/remind", () => {
   beforeEach(() => {
@@ -34,22 +51,19 @@ describe("bridge/tools/remind", () => {
       time: "5m",
     });
 
-    expect(callGatewayToolMock).toHaveBeenCalledWith(
-      "cron.add",
-      { timeoutMs: 60_000 },
-      {
-        job: expect.objectContaining({
-          sessionTarget: "isolated",
-          payload: { kind: "agentTurn", message: expect.stringContaining("drink water") },
-          delivery: {
-            mode: "announce",
-            channel: "qqbot",
-            to: "qqbot:c2c:user-openid",
-            accountId: "bot2",
-          },
-        }),
-      },
-    );
+    const addCall = callGatewayToolMock.mock.calls[0];
+    const addPayload = addCall?.[2] as CronAddToolPayload | undefined;
+    expect(addCall?.[0]).toBe("cron.add");
+    expect(addCall?.[1]).toEqual({ timeoutMs: 60_000 });
+    expect(addPayload?.job?.sessionTarget).toBe("isolated");
+    expect(addPayload?.job?.payload?.kind).toBe("agentTurn");
+    expect(addPayload?.job?.payload?.message).toContain("drink water");
+    expect(addPayload?.job?.delivery).toEqual({
+      mode: "announce",
+      channel: "qqbot",
+      to: "qqbot:c2c:user-openid",
+      accountId: "bot2",
+    });
     expect(result.details).toEqual({
       ok: true,
       action: "add",
@@ -74,7 +88,7 @@ describe("bridge/tools/remind", () => {
   });
 
   it("supports injected cron scheduler dependencies for engine-level tests", async () => {
-    const callCron = vi.fn(async () => ({ id: "job-1" }));
+    const callCron = vi.fn(async (_params: unknown) => ({ id: "job-1" }));
     const tool = createRemindTool(
       {
         senderIsOwner: true,
@@ -89,19 +103,22 @@ describe("bridge/tools/remind", () => {
       time: "5m",
     });
 
-    expect(callCron).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "add",
-        job: expect.objectContaining({
-          delivery: expect.objectContaining({ to: "qqbot:c2c:user-openid", accountId: "bot2" }),
-        }),
-      }),
-    );
+    const cronParams = callCron.mock.calls[0]?.[0] as RemindCronAction | undefined;
+    expect(cronParams?.action).toBe("add");
+    if (cronParams?.action !== "add") {
+      throw new Error("Expected add reminder cron params");
+    }
+    expect(cronParams.job.delivery).toEqual({
+      mode: "announce",
+      channel: "qqbot",
+      to: "qqbot:c2c:user-openid",
+      accountId: "bot2",
+    });
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
   it("does not schedule when sender ownership is missing", async () => {
-    const callCron = vi.fn(async () => ({ id: "job-1" }));
+    const callCron = vi.fn(async (_params: unknown) => ({ id: "job-1" }));
     const tool = createRemindTool(
       {
         deliveryContext: { to: "qqbot:c2c:user-openid", accountId: "bot2" },

@@ -449,10 +449,10 @@ export async function executePreparedCliRun(
             throw new Error("Claude live session requires JSONL streaming parser");
           }
           params.onExecutionPhase?.({
-            phase: "model_call_started",
+            phase: "process_spawned",
             provider: params.provider,
             model: context.modelId,
-            firstModelCallStarted: true,
+            backend: context.backendResolved.id,
           });
           claudeSkillsPluginCleanupOwned = true;
           const ownedPreparedBackendCleanup = context.preparedBackend.cleanup;
@@ -536,10 +536,10 @@ export async function executePreparedCliRun(
         let stderrParseExceeded = false;
 
         params.onExecutionPhase?.({
-          phase: "model_call_started",
+          phase: "process_spawned",
           provider: params.provider,
           model: context.modelId,
-          firstModelCallStarted: true,
+          backend: context.backendResolved.id,
         });
         const managedRun = await supervisor.spawn({
           sessionId: params.sessionId,
