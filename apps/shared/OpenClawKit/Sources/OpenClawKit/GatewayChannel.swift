@@ -465,7 +465,11 @@ public actor GatewayChannelActor {
         let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
         let connectNonce = try await self.waitForConnectChallenge()
         if includeDeviceIdentity, let identity {
-            let payload = GatewayDeviceAuthPayload.buildV3(
+            // Managed gateways deployed before v3 metadata payload support still
+            // verify v2 signatures. Newer gateways accept both v3 and v2, so v2
+            // is the safest cross-version client payload until the fleet is
+            // uniformly upgraded.
+            let payload = GatewayDeviceAuthPayload.buildV2(
                 deviceId: identity.deviceId,
                 clientId: clientId,
                 clientMode: clientMode,
@@ -473,9 +477,7 @@ public actor GatewayChannelActor {
                 scopes: scopes,
                 signedAtMs: signedAtMs,
                 token: selectedAuth.signatureToken,
-                nonce: connectNonce,
-                platform: platform,
-                deviceFamily: InstanceIdentity.deviceFamily)
+                nonce: connectNonce)
             if let device = GatewayDeviceAuthPayload.signedDeviceDictionary(
                 payload: payload,
                 identity: identity,

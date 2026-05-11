@@ -63,6 +63,10 @@ public enum DeviceAuthStore {
         self.writeStore(store)
     }
 
+    public static func clearAll() {
+        try? FileManager.default.removeItem(at: fileURL())
+    }
+
     private static func normalizeRole(_ role: String) -> String {
         role.trimmingCharacters(in: .whitespacesAndNewlines)
     }

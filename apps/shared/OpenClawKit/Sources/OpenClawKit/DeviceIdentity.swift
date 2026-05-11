@@ -137,6 +137,10 @@ public enum DeviceIdentityStore {
         return self.base64UrlEncode(data)
     }
 
+    public static func reset() {
+        try? FileManager.default.removeItem(at: self.fileURL())
+    }
+
     private static func normalizedRawIdentity(_ identity: DeviceIdentity) -> DeviceIdentity? {
         guard !identity.deviceId.isEmpty,
               let publicKeyData = Data(base64Encoded: identity.publicKey),
