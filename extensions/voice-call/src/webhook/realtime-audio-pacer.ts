@@ -12,7 +12,7 @@ for (let i = 0; i < MULAW_LINEAR_SAMPLES.length; i += 1) {
   MULAW_LINEAR_SAMPLES[i] = decodeMulawSample(i);
 }
 
-type RealtimeTwilioAudioQueueItem =
+type RealtimeAudioQueueItem =
   | {
       chunk: Buffer;
       durationMs: number;
@@ -23,10 +23,16 @@ type RealtimeTwilioAudioQueueItem =
       type: "mark";
     };
 
-export type RealtimeTwilioAudioPacerSendJson = (message: unknown) => boolean;
+export type RealtimeAudioSend = (message: string) => boolean;
 
-export class RealtimeTwilioAudioPacer {
-  private queue: RealtimeTwilioAudioQueueItem[] = [];
+export interface RealtimeAudioSerializer {
+  media(payloadBase64: string): string;
+  clear(): string;
+  mark(name: string): string;
+}
+
+export class RealtimeAudioPacer {
+  private queue: RealtimeAudioQueueItem[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
   private queuedAudioBytes = 0;
   private closed = false;
@@ -35,8 +41,8 @@ export class RealtimeTwilioAudioPacer {
     private readonly params: {
       maxQueuedAudioBytes?: number;
       onBackpressure?: () => void;
-      sendJson: RealtimeTwilioAudioPacerSendJson;
-      streamSid: string;
+      send: RealtimeAudioSend;
+      serializer: RealtimeAudioSerializer;
     },
   ) {}
 
@@ -77,7 +83,7 @@ export class RealtimeTwilioAudioPacer {
     this.clearTimer();
     this.queue = [];
     this.queuedAudioBytes = 0;
-    this.params.sendJson({ event: "clear", streamSid: this.params.streamSid });
+    this.params.send(this.params.serializer.clear());
     return clearedAudioBytes;
   }
 
@@ -121,18 +127,10 @@ export class RealtimeTwilioAudioPacer {
     let sent = true;
     if (item.type === "audio") {
       this.queuedAudioBytes = Math.max(0, this.queuedAudioBytes - item.chunk.length);
-      sent = this.params.sendJson({
-        event: "media",
-        streamSid: this.params.streamSid,
-        media: { payload: item.chunk.toString("base64") },
-      });
+      sent = this.params.send(this.params.serializer.media(item.chunk.toString("base64")));
       delayMs = item.durationMs || TELEPHONY_CHUNK_MS;
     } else {
-      sent = this.params.sendJson({
-        event: "mark",
-        streamSid: this.params.streamSid,
-        mark: { name: item.name },
-      });
+      sent = this.params.send(this.params.serializer.mark(item.name));
     }
 
     if (!sent) {

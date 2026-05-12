@@ -112,6 +112,94 @@ function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): ReplyPaylo
   );
 }
 
+function buildSilentFallbackFailurePayload(params: {
+  fallbackTransition: ReturnType<typeof resolveFallbackTransition>;
+  fallbackFailureKnown: boolean;
+  isHeartbeat: boolean;
+  hasSuccessfulSideEffectDelivery: boolean;
+  allowEmptyAssistantReplyAsSilent?: boolean;
+  silentExpected?: boolean;
+}): ReplyPayload | undefined {
+  if (
+    params.isHeartbeat ||
+    params.allowEmptyAssistantReplyAsSilent === true ||
+    params.silentExpected === true ||
+    params.hasSuccessfulSideEffectDelivery ||
+    !params.fallbackTransition.fallbackActive ||
+    !params.fallbackFailureKnown
+  ) {
+    return undefined;
+  }
+  return markReplyPayloadForSourceSuppressionDelivery({
+    text:
+      `⚠️ I couldn't reach the configured model backend ${params.fallbackTransition.selectedModelRef}. ` +
+      `Fallback used ${params.fallbackTransition.activeModelRef}, but it produced no visible reply.`,
+    isError: true,
+  });
+}
+
+function hasNonEmptyStringArray(value: unknown): boolean {
+  return Array.isArray(value) && value.some((entry) => typeof entry === "string" && entry.trim());
+}
+
+function hasCommittedMessagingTargetDeliveryEvidence(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return false;
+    }
+    const record = entry as { text?: unknown; mediaUrls?: unknown };
+    if ("text" in record || "mediaUrls" in record) {
+      return (
+        (typeof record.text === "string" && record.text.trim().length > 0) ||
+        hasNonEmptyStringArray(record.mediaUrls)
+      );
+    }
+    return true;
+  });
+}
+
+function hasSuccessfulSideEffectDelivery(params: {
+  blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
+  directlySentBlockKeys?: Set<string>;
+  messagingToolSentTexts?: string[];
+  messagingToolSentMediaUrls?: string[];
+  messagingToolSentTargets?: unknown[];
+  successfulCronAdds?: number;
+  didSendDeterministicApprovalPrompt?: boolean;
+}): boolean {
+  return (
+    (params.blockReplyPipeline?.didStream() && !params.blockReplyPipeline.isAborted()) ||
+    (params.directlySentBlockKeys?.size ?? 0) > 0 ||
+    hasNonEmptyStringArray(params.messagingToolSentTexts) ||
+    hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
+    hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets) ||
+    (params.successfulCronAdds ?? 0) > 0 ||
+    params.didSendDeterministicApprovalPrompt === true
+  );
+}
+
+function resolveConfiguredFallbackModel(params: {
+  run: FollowupRun["run"];
+  fallbackStateEntry?: SessionEntry;
+}): { provider: string; model: string; persistedAutoFallback: boolean } {
+  const entry = params.fallbackStateEntry;
+  if (entry?.modelOverrideSource === "auto") {
+    const originProvider = normalizeOptionalString(entry.modelOverrideFallbackOriginProvider);
+    const originModel = normalizeOptionalString(entry.modelOverrideFallbackOriginModel);
+    if (originProvider && originModel) {
+      return { provider: originProvider, model: originModel, persistedAutoFallback: true };
+    }
+  }
+  return {
+    provider: params.run.provider,
+    model: params.run.model,
+    persistedAutoFallback: false,
+  };
+}
+
 function buildInlinePluginStatusPayload(params: {
   entry: SessionEntry | undefined;
   includeTraceLines: boolean;
@@ -1436,10 +1524,14 @@ export async function runReplyAgent(params: {
     const providerUsed =
       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
     const verboseEnabled = resolvedVerboseLevel !== "off";
-    const selectedProvider = followupRun.run.provider;
-    const selectedModel = followupRun.run.model;
     const fallbackStateEntry =
       activeSessionEntry ?? (sessionKey ? activeSessionStore?.[sessionKey] : undefined);
+    const configuredFallbackModel = resolveConfiguredFallbackModel({
+      run: followupRun.run,
+      fallbackStateEntry,
+    });
+    const selectedProvider = configuredFallbackModel.provider;
+    const selectedModel = configuredFallbackModel.model;
     const fallbackTransition = resolveFallbackTransition({
       selectedProvider,
       selectedModel,
@@ -1512,10 +1604,45 @@ export async function runReplyAgent(params: {
       cliSessionBinding,
     });
 
+    const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
+      const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
+        fallbackTransition,
+        fallbackFailureKnown:
+          fallbackAttempts.length > 0 || configuredFallbackModel.persistedAutoFallback,
+        isHeartbeat,
+        hasSuccessfulSideEffectDelivery: hasSuccessfulSideEffectDelivery({
+          blockReplyPipeline,
+          directlySentBlockKeys,
+          messagingToolSentTexts: runResult.messagingToolSentTexts,
+          messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+          messagingToolSentTargets: runResult.messagingToolSentTargets,
+          successfulCronAdds: runResult.successfulCronAdds,
+          didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
+        }),
+        allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
+        silentExpected: followupRun.run.silentExpected,
+      });
+      if (!silentFallbackFailurePayload) {
+        return undefined;
+      }
+      replyOperation.fail(
+        "run_failed",
+        new Error(
+          `configured model backend ${fallbackTransition.selectedModelRef} failed and fallback ${fallbackTransition.activeModelRef} produced no visible reply`,
+        ),
+      );
+      await signalTypingIfNeeded([silentFallbackFailurePayload], typingSignals);
+      return returnWithQueuedFollowupDrain(silentFallbackFailurePayload);
+    };
+
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
     if (payloadArray.length === 0) {
+      const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
+      if (silentFallbackFailurePayload) {
+        return silentFallbackFailurePayload;
+      }
       return returnWithQueuedFollowupDrain(undefined);
     }
 
@@ -1548,6 +1675,10 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     if (replyPayloads.length === 0) {
+      const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
+      if (silentFallbackFailurePayload) {
+        return silentFallbackFailurePayload;
+      }
       return returnWithQueuedFollowupDrain(undefined);
     }
 

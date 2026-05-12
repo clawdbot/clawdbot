@@ -228,10 +228,14 @@ describe("startControlUiResponsivenessObserver", () => {
     }
 
     expect(host.eventLogBuffer).toHaveLength(250);
-    expect(
-      host.eventLogBuffer.filter((entry) => entry.event === "control-ui.longtask"),
-    ).toHaveLength(50);
-    expect(host.eventLogBuffer.map((entry) => entry.event)).toContain("gateway.event");
+    const eventCounts = host.eventLogBuffer.reduce<Record<string, number>>((counts, entry) => {
+      counts[entry.event] = (counts[entry.event] ?? 0) + 1;
+      return counts;
+    }, {});
+    expect(eventCounts).toEqual({
+      "gateway.event": 200,
+      "control-ui.longtask": 50,
+    });
   });
 
   it("returns null when responsiveness entries are unsupported or observe fails", () => {

@@ -16,8 +16,6 @@ describe("markdownToIRWithMeta tableMode block", () => {
         placeholderOffset: ir.text.indexOf("After"),
       },
     ]);
-    expect(ir.text).toContain("Before");
-    expect(ir.text).toContain("After");
-    expect(ir.text).not.toContain("| Name | Age |");
+    expect(ir.text).toBe("Before\n\nAfter");
   });
 });

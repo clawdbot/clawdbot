@@ -316,8 +316,8 @@ describe("loadControlUiBootstrapConfig", () => {
     await loadControlUiBootstrapConfig(state);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    const [, firstInit] = fetchMock.mock.calls[0] ?? [];
-    const [, secondInit] = fetchMock.mock.calls[1] ?? [];
+    const [, firstInit] = fetchMock.mock.calls.at(0) ?? [];
+    const [, secondInit] = fetchMock.mock.calls.at(1) ?? [];
     expect((firstInit?.headers as Record<string, string> | undefined)?.Authorization).toBe(
       "Bearer stale-token",
     );

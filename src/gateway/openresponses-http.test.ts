@@ -161,6 +161,14 @@ function requireSessionKey(value: string | undefined, label: string): string {
   return value;
 }
 
+function firstAgentOpts(callIndex = 0): Record<string, unknown> {
+  const call = agentCommand.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`expected agentCommand call #${callIndex + 1}`);
+  }
+  return call[0] as Record<string, unknown>;
+}
+
 async function ensureResponseConsumed(res: Response) {
   if (res.bodyUsed) {
     return;
@@ -286,7 +294,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         { "x-openclaw-agent-id": "beta" },
       );
       expect(resHeader.status).toBe(200);
-      const optsHeader = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsHeader = firstAgentOpts();
       expect((optsHeader as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
         /^agent:beta:/,
       );
@@ -298,7 +306,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       mockAgentOnce([{ text: "hello" }]);
       const resModel = await postResponses(port, { model: "openclaw/beta", input: "hi" });
       expect(resModel.status).toBe(200);
-      const optsModel = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsModel = firstAgentOpts();
       expect((optsModel as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
         /^agent:beta:/,
       );
@@ -307,7 +315,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       mockAgentOnce([{ text: "hello" }]);
       const resDefaultAlias = await postResponses(port, { model: "openclaw/default", input: "hi" });
       expect(resDefaultAlias.status).toBe(200);
-      const optsDefaultAlias = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsDefaultAlias = firstAgentOpts();
       expect((optsDefaultAlias as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
         /^agent:main:/,
       );
@@ -320,7 +328,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         { "x-openclaw-message-channel": "custom-client-channel" },
       );
       expect(resChannelHeader.status).toBe(200);
-      const optsChannelHeader = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsChannelHeader = firstAgentOpts();
       expect((optsChannelHeader as { messageChannel?: string } | undefined)?.messageChannel).toBe(
         "custom-client-channel",
       );
@@ -336,7 +344,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         { "x-openclaw-model": "openai/gpt-5.4" },
       );
       expect(resModelOverride.status).toBe(200);
-      const optsModelOverride = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsModelOverride = firstAgentOpts();
       expect((optsModelOverride as { model?: string } | undefined)?.model).toBe("openai/gpt-5.4");
       await ensureResponseConsumed(resModelOverride);
 
@@ -377,7 +385,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         input: "hi",
       });
       expect(resUser.status).toBe(200);
-      const optsUser = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsUser = firstAgentOpts();
       expect((optsUser as { sessionKey?: string } | undefined)?.sessionKey ?? "").toContain(
         "openresponses-user:alice",
       );
@@ -389,7 +397,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         input: "hello world",
       });
       expect(resString.status).toBe(200);
-      const optsString = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsString = firstAgentOpts();
       expect((optsString as { message?: string } | undefined)?.message).toBe("hello world");
       await ensureResponseConsumed(resString);
 
@@ -399,7 +407,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         input: [{ type: "message", role: "user", content: "hello there" }],
       });
       expect(resArray.status).toBe(200);
-      const optsArray = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsArray = firstAgentOpts();
       expect((optsArray as { message?: string } | undefined)?.message).toBe("hello there");
       await ensureResponseConsumed(resArray);
 
@@ -413,7 +421,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ],
       });
       expect(resSystemDeveloper.status).toBe(200);
-      const optsSystemDeveloper = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsSystemDeveloper = firstAgentOpts();
       const extraSystemPrompt =
         (optsSystemDeveloper as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ??
         "";
@@ -428,7 +436,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         instructions: "Always respond in French.",
       });
       expect(resInstructions.status).toBe(200);
-      const optsInstructions = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsInstructions = firstAgentOpts();
       const instructionPrompt =
         (optsInstructions as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
       expect(instructionPrompt).toContain("Always respond in French.");
@@ -445,7 +453,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ],
       });
       expect(resHistory.status).toBe(200);
-      const optsHistory = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsHistory = firstAgentOpts();
       const historyMessage = (optsHistory as { message?: string } | undefined)?.message ?? "";
       expect(historyMessage).toContain(HISTORY_CONTEXT_MARKER);
       expect(historyMessage).toContain("User: Hello, who are you?");
@@ -463,7 +471,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ],
       });
       expect(resFunctionOutput.status).toBe(200);
-      const optsFunctionOutput = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsFunctionOutput = firstAgentOpts();
       const functionOutputMessage =
         (optsFunctionOutput as { message?: string } | undefined)?.message ?? "";
       expect(functionOutputMessage).toContain("Sunny, 70F.");
@@ -492,7 +500,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ],
       });
       expect(resInputFile.status).toBe(200);
-      const optsInputFile = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsInputFile = firstAgentOpts();
       const inputFileMessage = (optsInputFile as { message?: string } | undefined)?.message ?? "";
       const inputFilePrompt =
         (optsInputFile as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
@@ -525,7 +533,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ],
       });
       expect(resInputFileWhitespace.status).toBe(200);
-      const optsInputFileWhitespace = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsInputFileWhitespace = firstAgentOpts();
       const inputFileWhitespacePrompt =
         (optsInputFileWhitespace as { extraSystemPrompt?: string } | undefined)
           ?.extraSystemPrompt ?? "";
@@ -557,7 +565,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ],
       });
       expect(resInputFileInjection.status).toBe(200);
-      const optsInputFileInjection = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsInputFileInjection = firstAgentOpts();
       const inputFileInjectionPrompt =
         (optsInputFileInjection as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ??
         "";
@@ -579,7 +587,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         tool_choice: "none",
       });
       expect(resToolNone.status).toBe(200);
-      const optsToolNone = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsToolNone = firstAgentOpts();
       expect(
         (optsToolNone as { clientTools?: unknown[] } | undefined)?.clientTools,
       ).toBeUndefined();
@@ -605,7 +613,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         tool_choice: { type: "function", function: { name: "get_time" } },
       });
       expect(resToolChoice.status).toBe(200);
-      const optsToolChoice = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsToolChoice = firstAgentOpts();
       const clientTools =
         (
           optsToolChoice as
@@ -635,7 +643,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         max_output_tokens: 123,
       });
       expect(resMaxTokens.status).toBe(200);
-      const optsMaxTokens = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsMaxTokens = firstAgentOpts();
       expect(
         (optsMaxTokens as { streamParams?: { maxTokens?: number } } | undefined)?.streamParams
           ?.maxTokens,
@@ -800,9 +808,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       input: "hi",
     });
     expect(writeScopeResponse.status).toBe(200);
-    const writeScopeOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
-      | { senderIsOwner?: boolean }
-      | undefined;
+    const writeScopeOpts = firstAgentOpts() as { senderIsOwner?: boolean } | undefined;
     expect(writeScopeOpts?.senderIsOwner).toBe(false);
     await ensureResponseConsumed(writeScopeResponse);
 
@@ -815,9 +821,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       { "x-openclaw-scopes": "operator.admin, operator.write" },
     );
     expect(adminScopeResponse.status).toBe(200);
-    const adminScopeOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
-      | { senderIsOwner?: boolean }
-      | undefined;
+    const adminScopeOpts = firstAgentOpts() as { senderIsOwner?: boolean } | undefined;
     expect(adminScopeOpts?.senderIsOwner).toBe(true);
     await ensureResponseConsumed(adminScopeResponse);
 
@@ -836,9 +840,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       { "x-openclaw-scopes": "operator.admin, operator.write" },
     );
     expect(streamingResponse.status).toBe(200);
-    const streamingOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
-      | { senderIsOwner?: boolean }
-      | undefined;
+    const streamingOpts = firstAgentOpts() as { senderIsOwner?: boolean } | undefined;
     expect(streamingOpts?.senderIsOwner).toBe(true);
     const streamingEvents = parseSseEvents(await streamingResponse.text());
     expect(streamingEvents.map((event) => event.event)).toContain("response.completed");
@@ -865,9 +867,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       });
 
       expect(res.status).toBe(200);
-      const firstCall = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { senderIsOwner?: boolean }
-        | undefined;
+      const firstCall = firstAgentOpts() as { senderIsOwner?: boolean } | undefined;
       expect(firstCall?.senderIsOwner).toBe(true);
       await ensureResponseConsumed(res);
     } finally {
@@ -1133,9 +1133,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     });
     expect(firstResponse.status).toBe(200);
     const firstJson = (await firstResponse.json()) as { id?: string };
-    const firstOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
-      | { sessionKey?: string }
-      | undefined;
+    const firstOpts = firstAgentOpts() as { sessionKey?: string } | undefined;
     expect(firstJson.id).toMatch(/^resp_/);
     const firstSessionKey = requireSessionKey(firstOpts?.sessionKey, "first response");
 
@@ -1150,9 +1148,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       input: [{ type: "function_call_output", call_id: "call_1", output: "Sunny, 70F." }],
     });
     expect(secondResponse.status).toBe(200);
-    const secondOpts = (agentCommand.mock.calls[1] as unknown[] | undefined)?.[0] as
-      | { sessionKey?: string }
-      | undefined;
+    const secondOpts = agentCommand.mock.calls.at(1)?.[0] as { sessionKey?: string } | undefined;
     expect(secondOpts?.sessionKey).toBe(firstSessionKey);
     await ensureResponseConsumed(secondResponse);
   });
@@ -1172,9 +1168,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     });
     expect(firstResponse.status).toBe(200);
     const firstJson = (await firstResponse.json()) as { id?: string };
-    const firstOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
-      | { sessionKey?: string }
-      | undefined;
+    const firstOpts = firstAgentOpts() as { sessionKey?: string } | undefined;
     expect(firstOpts?.sessionKey ?? "").toContain("openresponses-user:alice");
 
     agentCommand.mockResolvedValueOnce({
@@ -1189,9 +1183,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       input: "hello again",
     });
     expect(secondResponse.status).toBe(200);
-    const secondOpts = (agentCommand.mock.calls[1] as unknown[] | undefined)?.[0] as
-      | { sessionKey?: string }
-      | undefined;
+    const secondOpts = agentCommand.mock.calls.at(1)?.[0] as { sessionKey?: string } | undefined;
     expect(secondOpts?.sessionKey).toBe(firstOpts?.sessionKey);
     await ensureResponseConsumed(secondResponse);
   });

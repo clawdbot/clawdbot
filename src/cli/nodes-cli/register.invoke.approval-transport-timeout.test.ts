@@ -34,6 +34,14 @@ vi.mock("../progress.js", () => ({
   withProgress: (_opts: unknown, fn: () => unknown) => fn(),
 }));
 
+function firstGatewayCall(): Record<string, unknown> {
+  const [callOpts] = callGatewaySpy.mock.calls[0] ?? [];
+  if (!callOpts) {
+    throw new Error("expected gateway call");
+  }
+  return callOpts;
+}
+
 describe("exec approval transport timeout (#12098)", () => {
   const approvalTransportFloorMs = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS + 10_000;
 
@@ -48,7 +56,7 @@ describe("exec approval transport timeout (#12098)", () => {
     });
 
     expect(callGatewaySpy).toHaveBeenCalledTimes(1);
-    const callOpts = callGatewaySpy.mock.calls.at(0)![0];
+    const callOpts = firstGatewayCall();
     expect(callOpts.method).toBe("exec.approval.request");
     expect(callOpts.timeoutMs).toBe(35_000);
   });
@@ -67,7 +75,7 @@ describe("exec approval transport timeout (#12098)", () => {
     );
 
     expect(callGatewaySpy).toHaveBeenCalledTimes(1);
-    const callOpts = callGatewaySpy.mock.calls.at(0)![0];
+    const callOpts = firstGatewayCall();
     expect(callOpts.timeoutMs).toBeGreaterThanOrEqual(approvalTimeoutMs);
     expect(callOpts.timeoutMs).toBe(approvalTransportFloorMs);
   });
@@ -89,7 +97,7 @@ describe("exec approval transport timeout (#12098)", () => {
       { transportTimeoutMs },
     );
 
-    const callOpts = callGatewaySpy.mock.calls.at(0)![0];
+    const callOpts = firstGatewayCall();
     expect(callOpts.timeoutMs).toBe(approvalTransportFloorMs);
   });
 
@@ -107,7 +115,7 @@ describe("exec approval transport timeout (#12098)", () => {
       { transportTimeoutMs },
     );
 
-    const callOpts = callGatewaySpy.mock.calls.at(0)![0];
+    const callOpts = firstGatewayCall();
     expect(callOpts.timeoutMs).toBe(approvalTransportFloorMs);
   });
 });

@@ -545,7 +545,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext(), bot });
 
-    const streamParams = createTelegramDraftStream.mock.calls[0]?.[0] as Parameters<
+    const streamParams = mockCallArg(createTelegramDraftStream) as Parameters<
       NonNullable<TelegramBotDeps["createTelegramDraftStream"]>
     >[0];
     streamParams.onSupersededPreview?.({
@@ -753,7 +753,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       replyToMode: "off",
     });
 
-    expect(deliverReplies.mock.calls[0]?.[0]).not.toHaveProperty("replyQuoteByMessageId.1001");
+    expect(expectDeliverRepliesParams({})).not.toHaveProperty("replyQuoteByMessageId.1001");
   });
 
   it("keeps answer draft stream for selected quotes when reply mode is off", async () => {
@@ -1070,7 +1070,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: { streaming: { mode: "partial" } },
     });
 
-    expect(answerDraftStream.update.mock.calls[0]?.[0]).toContain("Exec");
+    expect(mockCallArg(answerDraftStream.update)).toContain("Exec");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Done ");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "Done answer");
     expect(answerDraftStream.update).toHaveBeenLastCalledWith("Done answer.");
@@ -1838,9 +1838,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(deliverReplies).toHaveBeenCalledTimes(1);
-    const replies = deliverReplies.mock.calls[0]?.[0]?.replies as
-      | Array<{ text?: string }>
-      | undefined;
+    const replies = expectDeliverRepliesParams({}).replies as Array<{ text?: string }> | undefined;
     const replyText = replies?.[0]?.text?.trim();
     if (!replyText) {
       throw new Error("expected non-empty Telegram reply text");

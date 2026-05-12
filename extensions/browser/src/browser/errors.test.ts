@@ -5,8 +5,8 @@ describe("BrowserTabNotFoundError", () => {
   it("teaches agents that bare numbers are not stable tab targets", () => {
     const err = new BrowserTabNotFoundError({ input: "2" });
 
-    expect(err.message).toContain('browser tab "2" not found');
-    expect(err.message).toContain("Numeric values are not tab targets");
-    expect(err.message).toContain("openclaw browser tab select 2");
+    expect(err.message).toBe(
+      'tab not found: browser tab "2" not found. Numeric values are not tab targets; use a stable tab id like "t1", a label, or a raw targetId. For positional selection, use "openclaw browser tab select 2".',
+    );
   });
 });

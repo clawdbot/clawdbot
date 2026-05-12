@@ -565,6 +565,21 @@ describe("emitExecSystemEvent", () => {
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
+
+  it("skips heartbeat wake for subagent session keys", () => {
+    emitExecSystemEvent("Exec finished", {
+      sessionKey: "agent:main:subagent:abc-123",
+      contextKey: "exec:run-sub",
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
+      sessionKey: "agent:main:subagent:abc-123",
+      contextKey: "exec:run-sub",
+      deliveryContext: undefined,
+      trusted: false,
+    });
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("formatExecFailureReason", () => {

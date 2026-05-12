@@ -247,7 +247,7 @@ describe("sessionsCleanupCommand", () => {
       appliedCount: 1,
     });
     expect(mocks.runSessionsCleanup).toHaveBeenCalledOnce();
-    const cleanupCall = mocks.runSessionsCleanup.mock.calls[0]?.[0];
+    const cleanupCall = mocks.runSessionsCleanup.mock.calls.at(0)?.[0];
     expect(cleanupCall?.cfg).toEqual({ session: { store: "/cfg/sessions.json" } });
     expect(cleanupCall?.opts.enforce).toBe(true);
     expect(cleanupCall?.opts.activeKey).toBe("agent:main:main");
@@ -284,7 +284,7 @@ describe("sessionsCleanupCommand", () => {
     );
 
     expect(mocks.callGateway).toHaveBeenCalledOnce();
-    const gatewayCall = mocks.callGateway.mock.calls[0]?.[0];
+    const gatewayCall = mocks.callGateway.mock.calls.at(0)?.[0];
     expect(gatewayCall?.method).toBe("sessions.cleanup");
     expect(gatewayCall?.params.enforce).toBe(true);
     expect(gatewayCall?.requiredMethods).toEqual(["sessions.cleanup"]);

@@ -332,6 +332,26 @@ describe("buildMinimaxSpeechProvider", () => {
       await rm(tempStateDir, { recursive: true, force: true });
     });
 
+    function firstFetchCall(): unknown[] {
+      const call = vi.mocked(globalThis.fetch).mock.calls.at(0);
+      if (!call) {
+        throw new Error("Expected MiniMax TTS fetch call");
+      }
+      return call as unknown[];
+    }
+
+    function firstFetchInit(): RequestInit | undefined {
+      return firstFetchCall().at(1) as RequestInit | undefined;
+    }
+
+    function firstFetchBody(): Record<string, unknown> {
+      const init = firstFetchInit();
+      if (typeof init?.body !== "string") {
+        throw new Error("Expected MiniMax TTS fetch init body");
+      }
+      return JSON.parse(init.body) as Record<string, unknown>;
+    }
+
     it("makes correct API call and decodes hex response", async () => {
       const hexAudio = Buffer.from("fake-audio-data").toString("hex");
       const mockFetch = vi.mocked(globalThis.fetch);
@@ -356,15 +376,14 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(result.audioBuffer.toString()).toBe("fake-audio-data");
 
       expect(mockFetch).toHaveBeenCalledOnce();
-      const [url, init] = mockFetch.mock.calls[0];
+      const url = firstFetchCall().at(0);
       expect(url).toBe("https://api.minimaxi.com/v1/t2a_v2");
-      if (!init?.body) {
-        throw new Error("Expected MiniMax TTS fetch init body");
-      }
-      const body = JSON.parse(init.body as string);
+      const body = firstFetchBody();
       expect(body.model).toBe("speech-2.8-hd");
       expect(body.text).toBe("Hello world");
-      expect(body.voice_setting.voice_id).toBe("English_expressive_narrator");
+      expect((body.voice_setting as Record<string, unknown>).voice_id).toBe(
+        "English_expressive_narrator",
+      );
       expect(transcodeAudioBufferToOpusMock).not.toHaveBeenCalled();
     });
 
@@ -421,12 +440,13 @@ describe("buildMinimaxSpeechProvider", () => {
         timeoutMs: 30000,
       });
 
-      const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string);
+      const body = firstFetchBody();
       expect(body.model).toBe("speech-01-240228");
-      expect(body.voice_setting.voice_id).toBe("custom_voice");
-      expect(body.voice_setting.speed).toBe(1.5);
-      expect(body.voice_setting.vol).toBe(1.5);
-      expect(body.voice_setting.pitch).toBe(0);
+      const voiceSetting = body.voice_setting as Record<string, unknown>;
+      expect(voiceSetting.voice_id).toBe("custom_voice");
+      expect(voiceSetting.speed).toBe(1.5);
+      expect(voiceSetting.vol).toBe(1.5);
+      expect(voiceSetting.pitch).toBe(0);
     });
 
     it("uses a MiniMax Token Plan env var when no API key is configured", async () => {
@@ -444,7 +464,7 @@ describe("buildMinimaxSpeechProvider", () => {
         timeoutMs: 30000,
       });
 
-      const [, init] = vi.mocked(globalThis.fetch).mock.calls[0];
+      const init = firstFetchInit();
       expect(init?.headers).toEqual({
         Authorization: "Bearer sk-cp-env",
         "Content-Type": "application/json",
@@ -485,7 +505,8 @@ describe("buildMinimaxSpeechProvider", () => {
         timeoutMs: 30000,
       });
 
-      const [url, init] = vi.mocked(globalThis.fetch).mock.calls[0];
+      const url = firstFetchCall().at(0);
+      const init = firstFetchInit();
       expect(url).toBe("https://api.minimaxi.com/v1/t2a_v2");
       expect(init?.headers).toEqual({
         Authorization: "Bearer portal-token",
@@ -528,8 +549,28 @@ describe("buildMinimaxSpeechProvider", () => {
         throw new Error("Expected MiniMax provider listVoices");
       }
       const voices = await listVoices({} as never);
-      expect(voices.length).toBeGreaterThan(0);
-      expect(voices[0].id).toBe("English_expressive_narrator");
+      expect(voices).toStrictEqual([
+        {
+          id: "English_expressive_narrator",
+          name: "English_expressive_narrator",
+        },
+        {
+          id: "Chinese (Mandarin)_Warm_Girl",
+          name: "Chinese (Mandarin)_Warm_Girl",
+        },
+        {
+          id: "Chinese (Mandarin)_Lively_Girl",
+          name: "Chinese (Mandarin)_Lively_Girl",
+        },
+        {
+          id: "Chinese (Mandarin)_Gentle_Boy",
+          name: "Chinese (Mandarin)_Gentle_Boy",
+        },
+        {
+          id: "Chinese (Mandarin)_Steady_Boy",
+          name: "Chinese (Mandarin)_Steady_Boy",
+        },
+      ]);
     });
   });
 });

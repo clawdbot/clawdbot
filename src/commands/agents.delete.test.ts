@@ -128,7 +128,7 @@ describe("agents delete command", () => {
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
       expect(gatewayMocks.callGateway).toHaveBeenCalledOnce();
-      const gatewayCall = gatewayMocks.callGateway.mock.calls[0]?.[0];
+      const gatewayCall = gatewayMocks.callGateway.mock.calls.at(0)?.[0];
       expect(gatewayCall?.method).toBe("agents.delete");
       expect(gatewayCall?.params).toEqual({ agentId: "ops", deleteFiles: true });
       expect(gatewayCall?.requiredMethods).toEqual(["agents.delete"]);

@@ -146,6 +146,23 @@ function requireFirstSignCall(): [privateKey: string, payload: string] {
   return [privateKey, payload];
 }
 
+function expectSignedPayloadFields(
+  payload: string | undefined,
+  params: { scopes: string[]; token: string; nonce: string },
+) {
+  expect(payload?.split("|")).toEqual([
+    "v2",
+    "device-1",
+    "openclaw-control-ui",
+    "webchat",
+    "operator",
+    params.scopes.join(","),
+    expect.stringMatching(/^\d+$/),
+    params.token,
+    params.nonce,
+  ]);
+}
+
 function expectLatestRequestTiming(
   onRequestTiming: ReturnType<typeof vi.fn>,
   expected: Partial<RequestTimingPayload>,
@@ -314,8 +331,6 @@ describe("GatewayBrowserClient", () => {
 
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
-    expect(connectFrame.params?.scopes).toContain("operator.admin");
-    expect(connectFrame.params?.scopes).toContain("operator.pairing");
   });
 
   it("reuses cached device token scopes when connecting from bootstrap handoff", async () => {
@@ -334,9 +349,12 @@ describe("GatewayBrowserClient", () => {
 
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth?.token).toBe("bootstrap-device-token");
+    expect(connectFrame.params?.scopes).toEqual([
+      "operator.approvals",
+      "operator.read",
+      "operator.write",
+    ]);
     expect(connectFrame.params?.scopes).toEqual(storedEntry.scopes);
-    expect(connectFrame.params?.scopes).not.toContain("operator.admin");
-    expect(connectFrame.params?.scopes).not.toContain("operator.pairing");
   });
 
   it("reports browser security errors from WebSocket construction without retrying", async () => {
@@ -366,7 +384,9 @@ describe("GatewayBrowserClient", () => {
     const closeError = requireRecord(close.error, "close error");
     const closeErrorDetails = requireRecord(closeError.details, "close error details");
     expect(closeError.code).toBe("BROWSER_WEBSOCKET_SECURITY_ERROR");
-    expect(String(closeError.message)).toContain("Use wss://");
+    expect(closeError.message).toBe(
+      "Browser refused the Gateway WebSocket for security reasons. Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789.",
+    );
     expect(closeErrorDetails.code).toBe("BROWSER_WEBSOCKET_SECURITY_ERROR");
     expect(closeErrorDetails.browserErrorName).toBe("SecurityError");
     expect(wsInstances).toHaveLength(0);
@@ -402,7 +422,7 @@ describe("GatewayBrowserClient", () => {
     const closeError = requireRecord(close.error, "close error");
     const closeErrorDetails = requireRecord(closeError.details, "close error details");
     expect(closeError.code).toBe("BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR");
-    expect(String(closeError.message)).toContain("Could not create the Gateway WebSocket");
+    expect(closeError.message).toBe("Could not create the Gateway WebSocket: constructor failed");
     expect(closeErrorDetails.code).toBe("BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR");
     expect(closeErrorDetails.browserErrorName).toBe("TypeError");
     expect(closeErrorDetails.browserMessage).toBe("constructor failed");
@@ -515,8 +535,11 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.params?.auth?.token).toBe("shared-auth-token");
     const [privateKey, signedPayload] = requireFirstSignCall();
     expect(privateKey).toBe("private-key");
-    expect(signedPayload).toContain("|shared-auth-token|nonce-1");
-    expect(signedPayload).not.toContain("stored-device-token");
+    expectSignedPayloadFields(signedPayload, {
+      scopes: [...CONTROL_UI_OPERATOR_SCOPES],
+      token: "shared-auth-token",
+      nonce: "nonce-1",
+    });
   });
 
   it("sends explicit shared token on insecure first connect without cached device fallback", async () => {
@@ -571,7 +594,17 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.params?.auth?.token).toBe("stored-device-token");
     const [privateKey, signedPayload] = requireFirstSignCall();
     expect(privateKey).toBe("private-key");
-    expect(signedPayload).toContain("|stored-device-token|nonce-1");
+    expectSignedPayloadFields(signedPayload, {
+      scopes: [
+        "operator.admin",
+        "operator.approvals",
+        "operator.pairing",
+        "operator.read",
+        "operator.write",
+      ],
+      token: "stored-device-token",
+      nonce: "nonce-1",
+    });
   });
 
   it("ignores cached operator device tokens that do not include read access", async () => {
@@ -592,7 +625,11 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth?.token).toBeUndefined();
     const [, signedPayload] = requireFirstSignCall();
-    expect(signedPayload).not.toContain("under-scoped-device-token");
+    expectSignedPayloadFields(signedPayload, {
+      scopes: [...CONTROL_UI_OPERATOR_SCOPES],
+      token: "",
+      nonce: "nonce-1",
+    });
   });
 
   it("retries once with device token after token mismatch when shared token is explicit", async () => {
@@ -621,6 +658,34 @@ describe("GatewayBrowserClient", () => {
     expect(wsInstances).toHaveLength(2);
 
     vi.useRealTimers();
+  });
+
+  it("reconnects without cached device token for DNS hosts beginning with a 127 label", async () => {
+    useNodeFakeTimers();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.example.invalid:18789",
+      token: "shared-auth-token",
+    });
+
+    try {
+      const { ws: firstWs, connectFrame: firstConnect } = await startConnect(client);
+      expect(firstConnect.params?.auth?.token).toBe("shared-auth-token");
+      expect(firstConnect.params?.auth?.deviceToken).toBeUndefined();
+
+      emitRetryableTokenMismatch(firstWs, firstConnect.id);
+      await expectSocketClosed(firstWs);
+      firstWs.emitClose(4008, "connect failed");
+
+      await vi.advanceTimersByTimeAsync(800);
+      const secondWs = getLatestWebSocket();
+      expect(secondWs).not.toBe(firstWs);
+      const { connectFrame: secondConnect } = await continueConnect(secondWs, "nonce-2");
+      expect(secondConnect.params?.auth?.token).toBe("shared-auth-token");
+      expect(secondConnect.params?.auth?.deviceToken).toBeUndefined();
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("retries startup-unavailable connect responses without terminal callbacks", async () => {
@@ -765,7 +830,11 @@ describe("GatewayBrowserClient", () => {
     const { connectFrame } = await continueConnect(secondWs, "nonce-current");
     expect(connectFrame.method).toBe("connect");
     const signedPayload = signDevicePayloadMock.mock.calls.at(-1)?.[1];
-    expect(signedPayload).toContain("|shared-auth-token|nonce-current");
+    expectSignedPayloadFields(signedPayload, {
+      scopes: [...CONTROL_UI_OPERATOR_SCOPES],
+      token: "shared-auth-token",
+      nonce: "nonce-current",
+    });
 
     client.stop();
     vi.useRealTimers();
@@ -908,6 +977,44 @@ describe("shouldRetryWithDeviceToken", () => {
         url: "ws://127.0.0.1:18789",
       }),
     ).toBe(true);
+  });
+
+  it("allows a bounded retry for loopback IPv4 addresses in the 127 block", () => {
+    expect(
+      shouldRetryWithDeviceToken({
+        deviceTokenRetryBudgetUsed: false,
+        authDeviceToken: undefined,
+        explicitGatewayToken: "shared-auth-token",
+        deviceIdentity: {
+          deviceId: "device-1",
+          privateKey: "private-key", // pragma: allowlist secret
+          publicKey: "public-key", // pragma: allowlist secret
+        },
+        storedToken: "stored-device-token",
+        canRetryWithDeviceTokenHint: true,
+        url: "ws://127.255.10.42:18789",
+      }),
+    ).toBe(true);
+  });
+
+  it("blocks the retry for DNS hosts beginning with a 127 label", () => {
+    for (const url of ["ws://127.example.invalid:18789", "ws://127.0.0.1.example.invalid:18789"]) {
+      expect(
+        shouldRetryWithDeviceToken({
+          deviceTokenRetryBudgetUsed: false,
+          authDeviceToken: undefined,
+          explicitGatewayToken: "shared-auth-token",
+          deviceIdentity: {
+            deviceId: "device-1",
+            privateKey: "private-key", // pragma: allowlist secret
+            publicKey: "public-key", // pragma: allowlist secret
+          },
+          storedToken: "stored-device-token",
+          canRetryWithDeviceTokenHint: true,
+          url,
+        }),
+      ).toBe(false);
+    }
   });
 
   it("blocks the retry after the one-shot budget is spent", () => {

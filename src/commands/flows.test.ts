@@ -88,7 +88,7 @@ describe("flows commands", () => {
       const runtime = createRuntime();
       await flowsListCommand({ json: true, status: "blocked" }, runtime);
 
-      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]));
+      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls.at(0)?.[0]));
 
       expect(payload).toStrictEqual({
         count: 1,

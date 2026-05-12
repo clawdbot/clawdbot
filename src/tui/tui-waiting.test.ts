@@ -26,15 +26,8 @@ describe("tui-waiting", () => {
       phrases: ["hello"],
     });
 
-    expect(msg).toContain("connected");
-    expect(msg).toContain("3s");
-    // text is wrapped per-char; check it appears in order
-    expect(msg).toContain("h");
-    expect(msg).toContain("e");
-    expect(msg).toContain("l");
-    expect(msg).toContain("o");
-    // shimmer should contain both highlighted and dim parts
-    expect(msg).toContain("<b><a>");
-    expect(msg).toContain("<d>");
+    expect(msg).toBe(
+      "<b><a>h</a></b><b><a>e</a></b><d>l</d><d>l</d><d>o</d><d>…</d> • 3s | connected",
+    );
   });
 });

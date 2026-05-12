@@ -105,10 +105,7 @@ describe("cron tool", () => {
       },
     });
 
-    const call = callGatewayMock.mock.calls.at(0)?.[0] as {
-      params?: { delivery?: TestDelivery };
-    };
-    return call?.params?.delivery;
+    return (readGatewayCall().params as { delivery?: TestDelivery } | undefined)?.delivery;
   }
 
   async function executeAddAndReadSessionKey(params: {
@@ -534,10 +531,7 @@ describe("cron tool", () => {
       },
     });
 
-    const call = callGatewayMock.mock.calls.at(0)?.[0] as {
-      params?: { agentId?: unknown };
-    };
-    expect(call?.params?.agentId).toBeNull();
+    expect(readGatewayCall().params?.agentId).toBeNull();
   });
 
   it("infers session agentId when job.agentId is omitted", async () => {
@@ -721,10 +715,7 @@ describe("cron tool", () => {
       },
     });
 
-    const call = callGatewayMock.mock.calls.at(0)?.[0] as {
-      method?: string;
-      params?: { agentId?: string | null };
-    };
+    const call = readGatewayCall();
     expect(call.method).toBe("cron.add");
     expect(call.params?.agentId).toBeNull();
   });
@@ -1066,11 +1057,9 @@ describe("cron tool", () => {
       name: "flat-name-should-be-ignored",
     });
 
-    const call = callGatewayMock.mock.calls.at(0)?.[0] as {
-      params?: { name?: string; payload?: { text?: string } };
-    };
+    const call = readGatewayCall();
     expect(call?.params?.name).toBe("nested-job");
-    expect(call?.params?.payload?.text).toBe("from nested");
+    expect((call?.params?.payload as { text?: string } | undefined)?.text).toBe("from nested");
   });
 
   it("does not infer delivery when mode is none", async () => {

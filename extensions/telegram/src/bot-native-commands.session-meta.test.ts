@@ -476,6 +476,14 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function firstMockArg(mockFn: ReturnType<typeof vi.fn>, label: string, callIndex = 0): unknown {
+  const call = mockFn.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex}`);
+  }
+  return call.at(0);
+}
+
 function expectRecordFields(
   value: unknown,
   expected: Record<string, unknown>,
@@ -867,7 +875,13 @@ describe("registerTelegramNativeCommands — session metadata", () => {
 
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
     const dispatcherOptions = requireRecord(
-      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0].dispatcherOptions,
+      requireRecord(
+        firstMockArg(
+          replyMocks.dispatchReplyWithBufferedBlockDispatcher,
+          "dispatchReplyWithBufferedBlockDispatcher",
+        ),
+        "dispatch reply params",
+      ).dispatcherOptions,
       "dispatcher options",
     );
     expect(dispatcherOptions.beforeDeliver).toBeTypeOf("function");
@@ -901,7 +915,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     });
     await handler(createTelegramPrivateCommandContext());
 
-    const deliveredCall = deliveryMocks.deliverReplies.mock.calls[0]?.[0] as
+    const deliveredCall = firstMockArg(deliveryMocks.deliverReplies, "deliverReplies") as
       | DeliverRepliesParams
       | undefined;
     const deliveredPayload = deliveredCall?.replies?.[0];
@@ -970,7 +984,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     });
     await handler(createTelegramPrivateCommandContext());
 
-    const deliveredCall = deliveryMocks.deliverReplies.mock.calls[0]?.[0] as
+    const deliveredCall = firstMockArg(deliveryMocks.deliverReplies, "deliverReplies") as
       | DeliverRepliesParams
       | undefined;
     const deliveryParams = requireValue(deliveredCall, "silent error delivery params");
@@ -1308,7 +1322,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     );
 
     expectRecordFields(
-      sessionMocks.resolveAndPersistSessionFile.mock.calls[0]?.[0],
+      firstMockArg(sessionMocks.resolveAndPersistSessionFile, "resolveAndPersistSessionFile"),
       {
         sessionId: "sess-topic",
         sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
@@ -1360,7 +1374,9 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await handler(createTelegramPrivateCommandContext({ match: "status" }));
 
     const deliveryCall = requireValue(
-      deliveryMocks.deliverReplies.mock.calls[0]?.[0],
+      firstMockArg(deliveryMocks.deliverReplies, "deliverReplies") as
+        | DeliverRepliesParams
+        | undefined,
       "empty response delivery params",
     );
     expect(deliveryCall.replies).toEqual([{ text: "No response generated. Please try again." }]);

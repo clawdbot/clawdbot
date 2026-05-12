@@ -126,6 +126,7 @@ All long-lived state must survive restarts, rebuilds, and reboots.
 | ------------------- | ------------------------------------------------------ | ---------------------- | ------------------------------------------------------------- |
 | Gateway config      | `/home/node/.openclaw/`                                | Host volume mount      | Includes `openclaw.json`, `.env`                              |
 | Model auth profiles | `/home/node/.openclaw/agents/`                         | Host volume mount      | `agents/<agentId>/agent/auth-profiles.json` (OAuth, API keys) |
+| Auth profile key    | `/home/node/.config/openclaw/`                         | Host volume mount      | Local encryption key for OAuth auth profile token material    |
 | Skill configs       | `/home/node/.openclaw/skills/`                         | Host volume mount      | Skill-level state                                             |
 | Agent workspace     | `/home/node/.openclaw/workspace/`                      | Host volume mount      | Code and agent artifacts                                      |
 | WhatsApp session    | `/home/node/.openclaw/`                                | Host volume mount      | Preserves QR login                                            |

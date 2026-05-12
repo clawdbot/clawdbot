@@ -159,7 +159,7 @@ export function expectResolvedTelegramTimezone(
   userTimezone = "America/New_York",
 ): void {
   expect(resolveReplyDirectives).toHaveBeenCalledTimes(1);
-  const call = resolveReplyDirectives.mock.calls[0]?.[0] as
+  const call = resolveReplyDirectives.mock.calls.at(0)?.[0] as
     | {
         cfg?: {
           channels?: { telegram?: { botToken?: unknown } };

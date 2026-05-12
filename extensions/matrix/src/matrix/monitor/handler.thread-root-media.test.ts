@@ -14,7 +14,7 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 function readFirstMockArg(fn: unknown): unknown {
-  return (fn as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0];
+  return (fn as { mock: { calls: unknown[][] } }).mock.calls.at(0)?.[0];
 }
 
 describe("createMatrixRoomMessageHandler thread root media", () => {
@@ -79,7 +79,7 @@ describe("createMatrixRoomMessageHandler thread root media", () => {
 
     expect(formatAgentEnvelope).toHaveBeenCalledTimes(1);
     const envelope = requireRecord(
-      formatAgentEnvelope.mock.calls[0]?.[0],
+      formatAgentEnvelope.mock.calls.at(0)?.[0],
       "format agent envelope params",
     );
     expect(String(envelope.body)).toContain("replying");

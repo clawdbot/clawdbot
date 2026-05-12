@@ -37,6 +37,14 @@ function requireBackupPath(result: { backupPath?: string }): string {
   return result.backupPath;
 }
 
+function requireFirstLogMessage(log: ReturnType<typeof vi.fn>): string {
+  const message = log.mock.calls[0]?.[0];
+  if (typeof message !== "string") {
+    throw new Error("expected first log message");
+  }
+  return message;
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -93,7 +101,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.repaired).toBe(false);
     expect(result.reason).toBe("invalid session header");
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls.at(0)?.[0]).toContain("invalid session header");
+    expect(requireFirstLogMessage(warn)).toContain("invalid session header");
   });
 
   it("returns a detailed reason when read errors are not ENOENT", async () => {
@@ -145,7 +153,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.rewrittenAssistantMessages).toBe(1);
     await expect(fs.readFile(requireBackupPath(result), "utf-8")).resolves.toBe(original);
     expect(debug).toHaveBeenCalledTimes(1);
-    const debugMessage = debug.mock.calls.at(0)?.[0] as string;
+    const debugMessage = requireFirstLogMessage(debug);
     expect(debugMessage).toContain("rewrote 1 assistant message(s)");
     expect(debugMessage).not.toContain("dropped");
 
@@ -182,7 +190,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.repaired).toBe(true);
     expect(result.rewrittenUserMessages).toBe(1);
     expect(result.droppedBlankUserMessages).toBe(0);
-    expect(debug.mock.calls.at(0)?.[0]).toContain("rewrote 1 user message(s)");
+    expect(requireFirstLogMessage(debug)).toContain("rewrote 1 user message(s)");
 
     const repaired = await fs.readFile(file, "utf-8");
     const repairedLines = repaired.trim().split("\n");
@@ -279,7 +287,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(1);
     expect(result.rewrittenAssistantMessages).toBe(1);
-    const debugMessage = debug.mock.calls.at(0)?.[0] as string;
+    const debugMessage = requireFirstLogMessage(debug);
     expect(debugMessage).toContain("dropped 1 malformed line(s)");
     expect(debugMessage).toContain("rewrote 1 assistant message(s)");
   });

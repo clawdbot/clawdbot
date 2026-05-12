@@ -5,13 +5,25 @@ import { describe, expect, it } from "vitest";
 type SlashCommandsModule = typeof import("./slash-commands.js");
 const browserImportPath: string = "./slash-commands.ts?browser-import";
 
+function importLines(source: string): string[] {
+  return source
+    .split(/\r?\n/u)
+    .filter((line) => line.startsWith("import "))
+    .map((line) => line.trim());
+}
+
 describe("slash command browser import", () => {
   it("builds fallback commands from the browser-safe shared registry", async () => {
     const mod = (await import(browserImportPath)) as SlashCommandsModule;
 
     const thinkCommand = mod.SLASH_COMMANDS.find((command) => command.name === "think");
-    expect(thinkCommand?.name).toBe("think");
-    expect(thinkCommand?.category).toBe("model");
+    expect(thinkCommand).toMatchObject({
+      key: "think",
+      name: "think",
+      category: "model",
+      executeLocal: true,
+      args: "[level]",
+    });
   });
 
   it("keeps provider thinking runtime out of the Control UI import path", async () => {
@@ -26,11 +38,30 @@ describe("slash command browser import", () => {
     );
     const mod = (await import(browserImportPath)) as SlashCommandsModule;
 
-    expect(mod.SLASH_COMMANDS.map((command) => command.name)).toContain("think");
-    expect(slashCommands).toContain("commands-registry.shared.js");
-    expect(sharedRegistry).toContain("thinking.shared.js");
-    expect(sharedRegistry).not.toContain("./thinking.js");
-    expect(sharedRegistry).not.toContain("provider-thinking");
-    expect(serverRegistry).toContain('from "./thinking.js"');
+    expect(mod.SLASH_COMMANDS.find((command) => command.name === "think")).toMatchObject({
+      key: "think",
+      category: "model",
+      executeLocal: true,
+    });
+    expect(importLines(slashCommands)).toEqual([
+      'import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";',
+      'import type { CommandEntry, CommandsListResult } from "../../../../src/gateway/protocol/index.js";',
+      'import type { GatewayBrowserClient } from "../gateway.ts";',
+      'import type { IconName } from "../icons.ts";',
+      'import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";',
+    ]);
+    expect(importLines(sharedRegistry)).toEqual([
+      'import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";',
+      'import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";',
+      "import type {",
+      'import { BASE_THINKING_LEVELS, type ThinkLevel } from "./thinking.shared.js";',
+    ]);
+    expect(importLines(serverRegistry)).toEqual([
+      'import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";',
+      'import { getActivePluginChannelRegistryVersionFromState } from "../plugins/runtime-channel-state.js";',
+      "import {",
+      'import type { ChatCommandDefinition } from "./commands-registry.types.js";',
+      'import { listThinkingLevels } from "./thinking.js";',
+    ]);
   });
 });

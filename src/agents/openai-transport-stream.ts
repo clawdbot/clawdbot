@@ -70,6 +70,7 @@ import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transpor
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
 const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
 const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
+const AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS = 30_000;
 const log = createSubsystemLogger("openai-transport");
 
 type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
@@ -649,6 +650,61 @@ function resolveOpenAIStrictToolFlagWithDiagnostics(
   return strict;
 }
 
+function createResponsesFirstEventTimeoutError(model: Model<Api>, timeoutMs: number): Error {
+  return new Error(
+    `Azure OpenAI Responses stream did not deliver a first event within ${timeoutMs}ms after HTTP streaming headers. ` +
+      `provider=${model.provider} model=${model.id}. ` +
+      "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
+  );
+}
+
+function withResponsesFirstEventTimeout(
+  openaiStream: AsyncIterable<unknown>,
+  model: Model<Api>,
+  timeoutMs: number | undefined,
+): AsyncIterable<unknown> {
+  if (timeoutMs === undefined || timeoutMs <= 0 || !Number.isFinite(timeoutMs)) {
+    return openaiStream;
+  }
+  return {
+    async *[Symbol.asyncIterator]() {
+      const iterator = openaiStream[Symbol.asyncIterator]();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const clear = () => {
+        if (timer) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+      };
+      try {
+        const first = await new Promise<IteratorResult<unknown>>((resolve, reject) => {
+          timer = setTimeout(
+            () => reject(createResponsesFirstEventTimeoutError(model, timeoutMs)),
+            timeoutMs,
+          );
+          iterator.next().then(resolve, reject);
+        }).finally(clear);
+        if (first.done) {
+          return;
+        }
+        yield first.value;
+        for (;;) {
+          const next = await iterator.next();
+          if (next.done) {
+            return;
+          }
+          yield next.value;
+        }
+      } catch (error) {
+        void iterator.return?.().catch(() => undefined);
+        throw error;
+      } finally {
+        clear();
+      }
+    },
+  };
+}
+
 async function processResponsesStream(
   openaiStream: AsyncIterable<unknown>,
   output: MutableAssistantOutput,
@@ -660,6 +716,7 @@ async function processResponsesStream(
       usage: MutableAssistantOutput["usage"],
       serviceTier?: ResponseCreateParamsStreaming["service_tier"],
     ) => void;
+    firstEventTimeoutMs?: number;
   },
 ) {
   let currentItem: Record<string, unknown> | null = null;
@@ -669,7 +726,12 @@ async function processResponsesStream(
   const eventTypes = new Map<string, number>();
   const sseDebugMode = resolveModelSseDebugMode();
   const blockIndex = () => output.content.length - 1;
-  for await (const rawEvent of openaiStream) {
+  const guardedStream = withResponsesFirstEventTimeout(
+    openaiStream,
+    model,
+    options?.firstEventTimeoutMs,
+  );
+  for await (const rawEvent of guardedStream) {
     const event = rawEvent as Record<string, unknown>;
     const type = stringifyUnknown(event.type);
     eventCount += 1;
@@ -1421,7 +1483,9 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
             `elapsedMs=${Date.now() - requestStartedAt}`,
         );
         stream.push({ type: "start", partial: output as never });
-        await processResponsesStream(responseStream, output, stream, model);
+        await processResponsesStream(responseStream, output, stream, model, {
+          firstEventTimeoutMs: AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,
+        });
         if (options?.signal?.aborted) {
           throw new Error("Request was aborted");
         }
@@ -2455,7 +2519,9 @@ export const __testing = {
   sanitizeOpenAICodexResponsesParams,
   buildOpenAICompletionsClientConfig,
   processOpenAICompletionsStream,
+  processResponsesStream,
   formatModelTransportDebugBaseUrl,
   summarizeResponsesPayload,
   summarizeResponsesTools,
+  withResponsesFirstEventTimeout,
 };

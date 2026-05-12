@@ -22,8 +22,8 @@ describe("Discord gateway metadata", () => {
     expect(resolved.usedFallback).toBe(true);
     expect(resolved.info.url).toBe("wss://gateway.discord.gg/");
     const logs = runtime.log.mock.calls.map((call) => String(call[0])).join("\n");
-    expect(logs).toContain("gateway metadata lookup failed transiently");
-    expect(logs).toContain("Error 1015");
-    expect(logs).not.toContain("<html");
+    expect(logs).toBe(
+      "discord: gateway metadata lookup failed transiently; using default gateway url (Failed to get gateway information from Discord: fetch failed | Discord API /gateway/bot failed (429): Error 1015 rate limited)",
+    );
   });
 });

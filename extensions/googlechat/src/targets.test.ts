@@ -109,6 +109,14 @@ async function expectDownloadToRejectForResponse(response: Response) {
   ).rejects.toThrow(/max bytes/i);
 }
 
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call.at(argIndex);
+}
+
 describe("normalizeGoogleChatTarget", () => {
   it("normalizes provider prefixes", () => {
     expect(normalizeGoogleChatTarget("googlechat:users/123")).toBe("users/123");
@@ -215,9 +223,13 @@ describe("sendGoogleChatMessage", () => {
       thread: "spaces/AAA/threads/xyz",
     });
 
-    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    const url = mockCallArg(fetchMock);
+    const init = mockCallArg(fetchMock, 0, 1) as RequestInit | undefined;
     expect(String(url)).toContain("messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
-    const body = JSON.parse(String(init?.body)) as {
+    if (typeof init?.body !== "string") {
+      throw new Error("Expected Google Chat request body");
+    }
+    const body = JSON.parse(init.body) as {
       text?: unknown;
       thread?: { name?: unknown };
     };
@@ -234,7 +246,7 @@ describe("sendGoogleChatMessage", () => {
       text: "hello",
     });
 
-    const [url] = fetchMock.mock.calls[0] ?? [];
+    const url = mockCallArg(fetchMock);
     expect(String(url)).not.toContain("messageReplyOption=");
   });
 });
@@ -270,7 +282,7 @@ describe("verifyGoogleChatRequest", () => {
       }),
     ).resolves.toBe("access-token");
 
-    const googleAuthOptions = mocks.googleAuthCtor.mock.calls[0]?.[0] as {
+    const googleAuthOptions = mockCallArg(mocks.googleAuthCtor) as {
       clientOptions?: { transporter?: { defaults?: { fetchImplementation?: unknown } } };
       credentials?: { client_email?: string; token_uri?: string };
     };
@@ -300,7 +312,7 @@ describe("verifyGoogleChatRequest", () => {
       }),
     ).resolves.toEqual({ ok: true });
 
-    const oauthOptions = mocks.oauthCtor.mock.calls[0]?.[0] as {
+    const oauthOptions = mockCallArg(mocks.oauthCtor) as {
       transporter?: { defaults?: { fetchImplementation?: unknown } };
     };
     expect(typeof oauthOptions.transporter?.defaults?.fetchImplementation).toBe("function");

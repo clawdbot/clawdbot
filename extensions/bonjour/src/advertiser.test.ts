@@ -50,6 +50,14 @@ function expectWarnContaining(fragment: string) {
   expect(warnMessages().some((message) => message.includes(fragment))).toBe(true);
 }
 
+function mockCall(mock: ReturnType<typeof vi.fn>, index = 0): unknown[] {
+  const call = mock.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  return call;
+}
+
 function enableAdvertiserUnitMode(hostname = "test-host") {
   // Allow advertiser to run in unit tests.
   delete process.env.VITEST;
@@ -311,7 +319,7 @@ describe("gateway bonjour advertiser", () => {
       const started = await startAdvertiser({ gatewayPort: 18789 });
       childProcessModule.exec('arp -a | findstr /C:"---"', () => {});
 
-      const execCall = execMock.mock.calls[0];
+      const execCall = mockCall(execMock);
       expect(execCall?.[0]).toBe('arp -a | findstr /C:"---"');
       expect(execCall?.[1]).toEqual({ windowsHide: true });
       expect(execCall?.[2]).toBeTypeOf("function");
@@ -422,10 +430,10 @@ describe("gateway bonjour advertiser", () => {
       sshPort: 2222,
     });
 
-    const handler = registerUnhandledRejectionHandler.mock.calls[0]?.[0] as
+    const handler = mockCall(registerUnhandledRejectionHandler).at(0) as
       | ((reason: unknown) => boolean)
       | undefined;
-    const exceptionHandler = registerUncaughtExceptionHandler.mock.calls[0]?.[0] as
+    const exceptionHandler = mockCall(registerUncaughtExceptionHandler).at(0) as
       | ((reason: unknown) => boolean)
       | undefined;
     expect(handler).toBeTypeOf("function");
@@ -478,7 +486,7 @@ describe("gateway bonjour advertiser", () => {
       sshPort: 2222,
     });
 
-    const handler = registerUnhandledRejectionHandler.mock.calls[0]?.[0] as
+    const handler = mockCall(registerUnhandledRejectionHandler).at(0) as
       | ((reason: unknown) => boolean)
       | undefined;
     expect(handler?.(new Error("CIAO ANNOUNCEMENT CANCELLED"))).toBe(true);

@@ -39,6 +39,14 @@ async function* chunks(parts: Buffer[]): AsyncGenerator<Buffer> {
   }
 }
 
+function saveMediaBufferCall(): unknown[] {
+  const call = saveMediaBufferMock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("Expected saveMediaBuffer call");
+  }
+  return call;
+}
+
 describe("downloadLineMedia", () => {
   beforeAll(async () => {
     ({ downloadLineMedia } = await import("./download.js"));
@@ -70,11 +78,11 @@ describe("downloadLineMedia", () => {
     const result = await downloadLineMedia("mid-jpeg", "token");
 
     expect(saveMediaBufferMock).toHaveBeenCalledTimes(1);
-    const call = saveMediaBufferMock.mock.calls[0];
-    expect((call?.[0] as Buffer).equals(jpeg)).toBe(true);
-    expect(call?.[1]).toBe("image/jpeg");
-    expect(call?.[2]).toBe("inbound");
-    expect(call?.[3]).toBe(10 * 1024 * 1024);
+    const call = saveMediaBufferCall();
+    expect((call[0] as Buffer).equals(jpeg)).toBe(true);
+    expect(call[1]).toBe("image/jpeg");
+    expect(call[2]).toBe("inbound");
+    expect(call[3]).toBe(10 * 1024 * 1024);
     expect(result).toEqual({
       path: "/home/user/.openclaw/media/inbound/saved-media",
       contentType: "image/jpeg",
@@ -91,7 +99,7 @@ describe("downloadLineMedia", () => {
 
     expect(result.size).toBe(jpeg.length);
     expect(result.contentType).toBe("image/jpeg");
-    for (const arg of saveMediaBufferMock.mock.calls[0] ?? []) {
+    for (const arg of saveMediaBufferCall()) {
       if (typeof arg === "string") {
         expect(arg).not.toContain(messageId);
       }
@@ -114,8 +122,8 @@ describe("downloadLineMedia", () => {
     const result = await downloadLineMedia("mid-audio", "token");
 
     expect(result.contentType).toBe("audio/mp4");
-    expect(saveMediaBufferMock.mock.calls[0]?.[1]).toBe("audio/mp4");
-    expect(saveMediaBufferMock.mock.calls[0]?.[2]).toBe("inbound");
+    expect(saveMediaBufferCall()[1]).toBe("audio/mp4");
+    expect(saveMediaBufferCall()[2]).toBe("inbound");
   });
 
   it("detects MP4 video from ftyp major brand (isom)", async () => {
@@ -127,7 +135,7 @@ describe("downloadLineMedia", () => {
     const result = await downloadLineMedia("mid-mp4", "token");
 
     expect(result.contentType).toBe("video/mp4");
-    expect(saveMediaBufferMock.mock.calls[0]?.[1]).toBe("video/mp4");
+    expect(saveMediaBufferCall()[1]).toBe("video/mp4");
   });
 
   it("propagates media store failures", async () => {

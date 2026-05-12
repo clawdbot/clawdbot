@@ -1,7 +1,6 @@
 import { isCommandFlagEnabled, type CommandFlagKey } from "../../config/commands.flags.js";
 import { logVerbose } from "../../globals.js";
 import { redactIdentifier } from "../../logging/redact-identifier.js";
-import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "./commands-types.js";
 
@@ -44,7 +43,7 @@ export function rejectNonOwnerCommand(
   return { shouldContinue: false };
 }
 
-export function requireGatewayClientScopeForInternalChannel(
+export function requireGatewayClientScope(
   params: HandleCommandsParams,
   config: {
     label: string;
@@ -52,10 +51,10 @@ export function requireGatewayClientScopeForInternalChannel(
     missingText: string;
   },
 ): CommandHandlerResult | null {
-  if (!isInternalMessageChannel(params.command.channel)) {
+  const scopes = params.ctx.GatewayClientScopes;
+  if (!Array.isArray(scopes)) {
     return null;
   }
-  const scopes = params.ctx.GatewayClientScopes ?? [];
   if (config.allowedScopes.some((scope) => scopes.includes(scope))) {
     return null;
   }

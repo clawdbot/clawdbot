@@ -111,6 +111,18 @@ function makeEchoTracker() {
   };
 }
 
+function mockObjectArg(mockFn: ReturnType<typeof vi.fn>, label: string, callIndex = 0) {
+  const call = mockFn.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`Expected ${label} call ${callIndex}`);
+  }
+  const arg = call.at(0);
+  if (!arg || typeof arg !== "object") {
+    throw new Error(`Expected ${label} call ${callIndex} object argument`);
+  }
+  return arg as Record<string, unknown>;
+}
+
 describe("createWebOnMessageHandler audio preflight", () => {
   beforeEach(() => {
     events.length = 0;
@@ -164,7 +176,7 @@ describe("createWebOnMessageHandler audio preflight", () => {
 
     expect(events).toEqual(["ack", "stt"]);
     expect(processMessageMock).toHaveBeenCalledTimes(1);
-    const [processParams] = processMessageMock.mock.calls[0] ?? [];
+    const processParams = mockObjectArg(processMessageMock, "processMessage");
     expect(processParams.preflightAudioTranscript).toBe("transcribed voice note");
     expect(processParams.ackAlreadySent).toBe(true);
     expect(processParams.ackReaction).toBe(ackReactionHandle);
@@ -204,7 +216,7 @@ describe("createWebOnMessageHandler audio preflight", () => {
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
     expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
     expect(processMessageMock).toHaveBeenCalledTimes(1);
-    const [processParams] = processMessageMock.mock.calls[0] ?? [];
+    const processParams = mockObjectArg(processMessageMock, "processMessage");
     expect(processParams).not.toHaveProperty("preflightAudioTranscript");
     expect(processParams).not.toHaveProperty("ackAlreadySent");
     expect(processParams).not.toHaveProperty("ackReaction");
@@ -293,15 +305,15 @@ describe("createWebOnMessageHandler audio preflight", () => {
     await handler(makeGroupAudioMsg());
 
     expect(applyGroupGatingMock).toHaveBeenCalledTimes(2);
-    const [firstGatingParams] = applyGroupGatingMock.mock.calls[0] ?? [];
+    const firstGatingParams = mockObjectArg(applyGroupGatingMock, "applyGroupGating");
     expect(firstGatingParams.deferMissingMention).toBe(true);
     expect(firstGatingParams).not.toHaveProperty("mentionText");
     expect(events).toEqual(["ack", "stt"]);
-    const [secondGatingParams] = applyGroupGatingMock.mock.calls[1] ?? [];
+    const secondGatingParams = mockObjectArg(applyGroupGatingMock, "applyGroupGating", 1);
     expect(secondGatingParams.mentionText).toBe("transcribed voice note");
     expect(secondGatingParams).not.toHaveProperty("deferMissingMention");
     expect(processMessageMock).toHaveBeenCalledTimes(1);
-    const [processParams] = processMessageMock.mock.calls[0] ?? [];
+    const processParams = mockObjectArg(processMessageMock, "processMessage");
     expect(processParams.preflightAudioTranscript).toBe("transcribed voice note");
     expect(processParams.ackAlreadySent).toBe(true);
     expect(processParams.ackReaction).toBe(ackReactionHandle);

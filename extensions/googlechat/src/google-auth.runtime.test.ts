@@ -71,6 +71,14 @@ afterAll(() => {
   vi.resetModules();
 });
 
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call.at(argIndex);
+}
+
 describe("googlechat google auth runtime", () => {
   it("routes Google auth fetches through the SSRF guard and preserves explicit proxy mTLS", async () => {
     const release = vi.fn();
@@ -127,7 +135,7 @@ describe("googlechat google auth runtime", () => {
       method: "POST",
     } as RequestInit);
 
-    expect(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
+    expect(mockCallArg(mocks.fetchWithSsrFGuard)).not.toHaveProperty("fetchImpl");
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -150,7 +158,7 @@ describe("googlechat google auth runtime", () => {
       (globalThis as Record<string, unknown>).fetch = originalFetch;
     }
 
-    expect(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
+    expect(mockCallArg(mocks.fetchWithSsrFGuard)).not.toHaveProperty("fetchImpl");
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -352,10 +360,10 @@ describe("googlechat google auth runtime", () => {
       const responseInterceptorAdd = transport.interceptors.response.add as unknown as ReturnType<
         typeof vi.fn
       >;
-      const requestInterceptor = requestInterceptorAdd.mock.calls[0]?.[0] as
+      const requestInterceptor = mockCallArg(requestInterceptorAdd) as
         | { resolved?: unknown }
         | undefined;
-      const responseInterceptor = responseInterceptorAdd.mock.calls[0]?.[0] as
+      const responseInterceptor = mockCallArg(responseInterceptorAdd) as
         | { resolved?: unknown }
         | undefined;
 

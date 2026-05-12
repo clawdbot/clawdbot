@@ -83,6 +83,14 @@ function expectFields(record: Record<string, unknown>, expected: Record<string, 
   }
 }
 
+function requireMockCall(mock: MockCalls, label: string, index = 0): unknown[] {
+  const call = mock.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`expected ${label} call ${index}`);
+  }
+  return call;
+}
+
 function expectRpcCall(params: {
   mock: MockCalls;
   method: string;
@@ -90,7 +98,7 @@ function expectRpcCall(params: {
   options?: Record<string, unknown>;
 }) {
   expect(params.mock.mock.calls).toHaveLength(1);
-  const [method, rpcParams, options] = params.mock.mock.calls[0] ?? [];
+  const [method, rpcParams, options] = requireMockCall(params.mock, "rpc");
   expect(method).toBe(params.method);
   if (params.rpcParams) {
     expectFields(requireRecord(rpcParams, "rpc params"), params.rpcParams);
@@ -110,13 +118,13 @@ function expectRpcCall(params: {
 
 function expectSingleObjectCall(mock: MockCalls, expected: Record<string, unknown>) {
   expect(mock.mock.calls).toHaveLength(1);
-  const [payload] = mock.mock.calls[0] ?? [];
+  const [payload] = requireMockCall(mock, "single object");
   expectFields(requireRecord(payload, "call payload"), expected);
 }
 
 function expectContainerFetchCall(expected: Record<string, unknown>) {
   expect(mockContainerFetchAttachment.mock.calls).toHaveLength(1);
-  const [attachmentId, options] = mockContainerFetchAttachment.mock.calls[0] ?? [];
+  const [attachmentId, options] = requireMockCall(mockContainerFetchAttachment, "container fetch");
   expect(attachmentId).toBe("attachment-123");
   expectFields(requireRecord(options, "container fetch options"), expected);
 }
@@ -614,7 +622,7 @@ describe("fetchAttachment", () => {
       groupId: "group-123",
     });
 
-    const callParams = mockNativeRpcRequest.mock.calls[0][1];
+    const callParams = requireMockCall(mockNativeRpcRequest, "native RPC")[1];
     expect(callParams).toHaveProperty("groupId", "group-123");
     expect(callParams).not.toHaveProperty("recipient");
   });

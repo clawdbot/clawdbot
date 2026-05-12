@@ -127,7 +127,14 @@ function mockCallArg(
   callIndex: number,
   argIndex: number,
 ) {
-  return mockFn.mock.calls[callIndex]?.[argIndex];
+  const call = mockFn.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex} to exist`);
+  }
+  if (!(argIndex in call)) {
+    throw new Error(`Expected mock call ${callIndex} argument ${argIndex} to exist`);
+  }
+  return call[argIndex];
 }
 
 describe("matrix message actions", () => {
@@ -168,8 +175,8 @@ describe("matrix message actions", () => {
     );
 
     expect(result).toEqual({ eventId: "evt-edit" });
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("!room:example.org");
-    const content = expectRecordFields(sendMessage.mock.calls[0]?.[1], {
+    expect(mockCallArg(sendMessage, 0, 0)).toBe("!room:example.org");
+    const content = expectRecordFields(mockCallArg(sendMessage, 0, 1), {
       "m.mentions": { user_ids: ["@bob:example.org"] },
     });
     expectRecordFields(content["m.new_content"], {
@@ -191,8 +198,8 @@ describe("matrix message actions", () => {
     );
 
     expect(result).toEqual({ eventId: "evt-edit" });
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("!room:example.org");
-    const content = expectRecordFields(sendMessage.mock.calls[0]?.[1], {
+    expect(mockCallArg(sendMessage, 0, 0)).toBe("!room:example.org");
+    const content = expectRecordFields(mockCallArg(sendMessage, 0, 1), {
       "m.mentions": {},
     });
     expectRecordFields(content["m.new_content"], {
@@ -287,9 +294,9 @@ describe("matrix message actions", () => {
 
     const result = await readMatrixMessages("room:!room:example.org", { client });
 
-    expect(hydrateEvents.mock.calls[0]?.[0]).toBe("!room:example.org");
+    expect(mockCallArg(hydrateEvents, 0, 0)).toBe("!room:example.org");
     expect(
-      (hydrateEvents.mock.calls[0]?.[1] as Array<Record<string, unknown>> | undefined)?.some(
+      (mockCallArg(hydrateEvents, 0, 1) as Array<Record<string, unknown>>).some(
         (event) => event.event_id === "$enc",
       ),
     ).toBe(true);

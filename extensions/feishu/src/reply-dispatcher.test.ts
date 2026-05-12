@@ -112,6 +112,11 @@ afterAll(() => {
 
 describe("createFeishuReplyDispatcher streaming behavior", () => {
   type ReplyDispatcherArgs = Parameters<typeof createFeishuReplyDispatcher>[0];
+  type TypingDispatcherOptions = {
+    onReplyStart?: () => Promise<void> | void;
+    onIdle?: () => Promise<void> | void;
+    deliver: (payload: { text: string }, meta: { kind: string }) => Promise<void> | void;
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -177,7 +182,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       chatId: "oc_chat",
     });
 
-    return createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    return firstMockArg(createReplyDispatcherWithTypingMock, "reply dispatcher options");
   }
 
   function createRuntimeLogger() {
@@ -227,7 +232,39 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     callIndex = 0,
     argIndex = 0,
   ): Record<string, unknown> {
-    return expectRecordFields(mock.mock.calls[callIndex]?.[argIndex], label, expected);
+    return expectRecordFields(mockArg(mock, callIndex, argIndex, label), label, expected);
+  }
+
+  function mockArg(
+    mock: ReturnType<typeof vi.fn>,
+    callIndex: number,
+    argIndex: number,
+    label: string,
+  ) {
+    const call = mock.mock.calls[callIndex];
+    if (!call) {
+      throw new Error(`missing ${label} call ${callIndex + 1}`);
+    }
+    return call[argIndex];
+  }
+
+  function firstMockArg(mock: ReturnType<typeof vi.fn>, label: string, argIndex = 0) {
+    return mockArg(mock, 0, argIndex, label);
+  }
+
+  function firstTypingDispatcherOptions(): TypingDispatcherOptions {
+    return firstMockArg(
+      createReplyDispatcherWithTypingMock,
+      "reply dispatcher options",
+    ) as TypingDispatcherOptions;
+  }
+
+  function firstStreamingCloseText(instanceIndex = 0): string {
+    const close = streamingInstances[instanceIndex]?.close;
+    if (!close) {
+      throw new Error(`Expected streaming instance ${instanceIndex}`);
+    }
+    return String(firstMockArg(close, "streaming close"));
   }
 
   function expectLastMockArgFields(
@@ -248,9 +285,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     if (!start) {
       throw new Error(`Expected streaming instance ${instanceIndex}`);
     }
-    expect(start.mock.calls[0]?.[0]).toBe("oc_chat");
-    expect(start.mock.calls[0]?.[1]).toBe("chat_id");
-    return expectRecordFields(start.mock.calls[0]?.[2], "streaming start options", expected);
+    expect(firstMockArg(start, "streaming start")).toBe("oc_chat");
+    expect(firstMockArg(start, "streaming start", 1)).toBe("chat_id");
+    return expectRecordFields(
+      firstMockArg(start, "streaming start", 2),
+      "streaming start options",
+      expected,
+    );
   }
 
   function streamingUpdateTexts(instanceIndex = 0): string[] {
@@ -280,7 +321,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       replyToMessageId: "om_parent",
     });
 
-    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    const options = firstTypingDispatcherOptions();
     await options.onReplyStart?.();
 
     expect(addTypingIndicatorMock).not.toHaveBeenCalled();
@@ -296,7 +337,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       messageCreateTimeMs: Date.now() - 3 * 60_000,
     });
 
-    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    const options = firstTypingDispatcherOptions();
     await options.onReplyStart?.();
 
     expect(addTypingIndicatorMock).not.toHaveBeenCalled();
@@ -312,7 +353,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       messageCreateTimeMs: Math.floor((Date.now() - 3 * 60_000) / 1000),
     });
 
-    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    const options = firstTypingDispatcherOptions();
     await options.onReplyStart?.();
 
     expect(addTypingIndicatorMock).not.toHaveBeenCalled();
@@ -328,7 +369,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       messageCreateTimeMs: Date.now() - 30_000,
     });
 
-    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    const options = firstTypingDispatcherOptions();
     await options.onReplyStart?.();
 
     expect(addTypingIndicatorMock).toHaveBeenCalledTimes(1);
@@ -353,7 +394,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.deliver({ text: "plain text" }, { kind: "final" });
 
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageFeishuMock.mock.calls[0]?.[0]).not.toHaveProperty("mentions");
+    expect(firstMockArg(sendMessageFeishuMock, "send message params")).not.toHaveProperty(
+      "mentions",
+    );
   });
 
   it("does not attach automatic mentions to card replies", async () => {
@@ -374,7 +417,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.deliver({ text: "card text" }, { kind: "final" });
 
     expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
-    expect(sendStructuredCardFeishuMock.mock.calls[0]?.[0]).not.toHaveProperty("mentions");
+    expect(firstMockArg(sendStructuredCardFeishuMock, "structured card params")).not.toHaveProperty(
+      "mentions",
+    );
   });
 
   it("suppresses internal block payload delivery", async () => {
@@ -1017,7 +1062,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     }
 
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
-    const closeArg = streamingInstances[0].close.mock.calls[0][0] as string;
+    const closeArg = firstStreamingCloseText();
     expect(closeArg).toContain("> 💭 **Thinking**");
     expect(closeArg).toContain("---");
     expect(closeArg).toContain("answer part final");
@@ -1075,7 +1120,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
-    const closeArg = streamingInstances[0].close.mock.calls[0][0] as string;
+    const closeArg = firstStreamingCloseText();
     expect(closeArg).toContain("> 💭 **Thinking**");
     expect(closeArg).toContain("> deep thought");
     expect(closeArg).not.toContain("Reasoning:");
@@ -1095,7 +1140,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.onIdle?.();
 
     expect(streamingInstances).toHaveLength(1);
-    const closeArg = streamingInstances[0].close.mock.calls[0][0] as string;
+    const closeArg = firstStreamingCloseText();
     expect(closeArg).not.toContain("Thinking");
     expect(closeArg).toBe("```ts\ncode\n```");
   });
@@ -1432,7 +1477,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         chatId: "oc_chat",
       });
 
-      const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+      const options = firstTypingDispatcherOptions();
 
       // First deliver with markdown triggers startStreaming - which will fail
       await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });

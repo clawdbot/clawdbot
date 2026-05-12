@@ -84,14 +84,21 @@ function findGatewayHandler(
   return registerGatewayMethod.mock.calls.find((call) => call[0] === method)?.[1];
 }
 
+function readGatewayMethodOptions(
+  registerGatewayMethod: ReturnType<typeof vi.fn>,
+  method: string,
+): unknown {
+  return registerGatewayMethod.mock.calls.find((call) => call[0] === method)?.[2];
+}
+
 function readRespondPayload(respond: { mock: { calls: Array<Array<unknown>> } }): unknown {
-  const call = respond.mock.calls[0];
+  const call = respond.mock.calls.at(0);
   expect(call?.[0]).toBe(true);
   return call?.[1];
 }
 
 function readRespondError(respond: { mock: { calls: Array<Array<unknown>> } }): unknown {
-  const call = respond.mock.calls[0];
+  const call = respond.mock.calls.at(0);
   expect(call?.[0]).toBe(false);
   expect(call?.[1]).toBeUndefined();
   return call?.[2];
@@ -152,6 +159,27 @@ describe("memory-wiki gateway methods", () => {
       items: [],
       total: 0,
     } as never);
+  });
+
+  it("registers Obsidian CLI methods with write scope", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+
+    registerMemoryWikiGatewayMethods({ api, config });
+
+    expect(
+      Object.fromEntries(
+        registerGatewayMethod.mock.calls
+          .filter(([method]) => typeof method === "string" && method.startsWith("wiki.obsidian."))
+          .map(([method, , options]) => [method, options]),
+      ),
+    ).toEqual({
+      "wiki.obsidian.status": { scope: "operator.read" },
+      "wiki.obsidian.search": { scope: "operator.write" },
+      "wiki.obsidian.open": { scope: "operator.write" },
+      "wiki.obsidian.command": { scope: "operator.write" },
+      "wiki.obsidian.daily": { scope: "operator.write" },
+    });
   });
 
   it("returns wiki status over the gateway", async () => {
@@ -458,6 +486,20 @@ describe("memory-wiki gateway methods", () => {
     expect(readRespondPayload(respond)).toEqual({
       items: [],
       total: 0,
+    });
+  });
+
+  it("registers wiki.ingest with admin scope and keeps compile at write scope", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+
+    registerMemoryWikiGatewayMethods({ api, config });
+
+    expect(readGatewayMethodOptions(registerGatewayMethod, "wiki.compile")).toEqual({
+      scope: "operator.write",
+    });
+    expect(readGatewayMethodOptions(registerGatewayMethod, "wiki.ingest")).toEqual({
+      scope: "operator.admin",
     });
   });
 

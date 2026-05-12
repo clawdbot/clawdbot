@@ -81,7 +81,7 @@ describe("startQaLiveLaneGateway", () => {
     });
 
     expect(startQaProviderServer).toHaveBeenCalledWith("mock-openai");
-    const gatewayOptions = startQaGatewayChild.mock.calls[0]?.[0] as
+    const gatewayOptions = startQaGatewayChild.mock.calls.at(0)?.[0] as
       | { providerBaseUrl?: string; providerMode?: string; transportBaseUrl?: string }
       | undefined;
     expect(gatewayOptions?.transportBaseUrl).toBe("http://127.0.0.1:43123");
@@ -104,7 +104,7 @@ describe("startQaLiveLaneGateway", () => {
       controlUiEnabled: false,
     });
 
-    const [{ mutateConfig }] = startQaGatewayChild.mock.calls[0] ?? [];
+    const [{ mutateConfig }] = startQaGatewayChild.mock.calls.at(0) ?? [];
     if (!mutateConfig) {
       throw new Error("expected gateway config mutator");
     }
@@ -173,7 +173,7 @@ describe("startQaLiveLaneGateway", () => {
     });
 
     expect(startQaProviderServer).toHaveBeenCalledWith("live-frontier");
-    const gatewayOptions = startQaGatewayChild.mock.calls[0]?.[0] as
+    const gatewayOptions = startQaGatewayChild.mock.calls.at(0)?.[0] as
       | { providerBaseUrl?: string; providerMode?: string; transportBaseUrl?: string }
       | undefined;
     expect(gatewayOptions?.transportBaseUrl).toBe("http://127.0.0.1:43123");

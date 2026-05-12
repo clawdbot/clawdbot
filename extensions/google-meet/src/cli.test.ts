@@ -811,7 +811,7 @@ describe("google-meet CLI", () => {
         ],
         { from: "user" },
       );
-      const gatewayCall = callGatewayFromCli.mock.calls[0] as unknown as
+      const gatewayCall = callGatewayFromCli.mock.calls.at(0) as unknown as
         | [
             string,
             { json?: boolean; timeout?: unknown },
@@ -1144,7 +1144,7 @@ describe("google-meet CLI", () => {
       expectFields(checks[0], { id: "oauth-config", ok: true });
       expectFields(checks[1], { id: "oauth-token", ok: true });
       expect(ensureRuntime).not.toHaveBeenCalled();
-      const body = fetchMock.mock.calls[0]?.[1]?.body as URLSearchParams;
+      const body = fetchMock.mock.calls.at(0)?.[1]?.body as URLSearchParams;
       expect(body.get("grant_type")).toBe("refresh_token");
     } finally {
       stdout.restore();

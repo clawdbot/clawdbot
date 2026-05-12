@@ -155,6 +155,14 @@ async function queueChannelPostAlbum(
   await Promise.all([first, second]);
 }
 
+function replyPayload(): Record<string, unknown> {
+  const call = replySpy.mock.calls.at(0);
+  if (!call || !call[0] || typeof call[0] !== "object") {
+    throw new Error("Expected reply payload");
+  }
+  return call[0] as Record<string, unknown>;
+}
+
 describe("createTelegramBot channel_post media", () => {
   beforeAll(() => {
     createTelegramBot = (opts) =>
@@ -191,7 +199,7 @@ describe("createTelegramBot channel_post media", () => {
       await flushChannelPostMediaGroup(setTimeoutSpy);
 
       expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = replySpy.mock.calls[0]?.[0] as { Body?: string };
+      const payload = replyPayload() as { Body?: string };
       expect(payload.Body).toContain("album caption");
     } finally {
       setTimeoutSpy.mockRestore();
@@ -229,7 +237,7 @@ describe("createTelegramBot channel_post media", () => {
       await flushChannelPostMediaGroupForDelay(setTimeoutSpy, 75);
 
       expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = replySpy.mock.calls[0]?.[0] as { Body?: string };
+      const payload = replyPayload() as { Body?: string };
       expect(payload.Body).toContain("configured album");
     } finally {
       setTimeoutSpy.mockRestore();
@@ -273,7 +281,7 @@ describe("createTelegramBot channel_post media", () => {
       await vi.advanceTimersByTimeAsync(TELEGRAM_TEST_TIMINGS.textFragmentGapMs + 100);
 
       expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = replySpy.mock.calls[0]?.[0] as { RawBody?: string };
+      const payload = replyPayload() as { RawBody?: string };
       expect(payload.RawBody).toContain(part1.slice(0, 32));
       expect(payload.RawBody).toContain(part2.slice(0, 32));
     } finally {
@@ -377,7 +385,7 @@ describe("createTelegramBot channel_post media", () => {
       await flushChannelPostMediaGroup(setTimeoutSpy);
 
       expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = replySpy.mock.calls[0]?.[0] as { Body?: string };
+      const payload = replyPayload() as { Body?: string };
       expect(payload.Body).toContain("partial album");
     } finally {
       setTimeoutSpy.mockRestore();

@@ -46,15 +46,37 @@ function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
   };
 }
 
-function renderNodesText(overrides: Partial<NodesProps>): string {
+function renderNodesContainer(overrides: Partial<NodesProps>): HTMLDivElement {
   const container = document.createElement("div");
   render(renderNodes(baseProps(overrides)), container);
-  return container.textContent ?? "";
+  return container;
+}
+
+function getDevicesCard(container: Element): Element {
+  const card = Array.from(container.querySelectorAll(".card")).find(
+    (candidate) => candidate.querySelector(".card-title")?.textContent?.trim() === "Devices",
+  );
+  expect(card).toBeInstanceOf(Element);
+  if (!(card instanceof Element)) {
+    throw new Error("Expected devices card");
+  }
+  return card;
+}
+
+function getPendingDeviceDetails(container: Element): string[] {
+  const item = getDevicesCard(container).querySelector(".list-item");
+  expect(item).toBeInstanceOf(Element);
+  if (!(item instanceof Element)) {
+    throw new Error("Expected pending device item");
+  }
+  return Array.from(item.querySelectorAll(".list-main > .muted")).map(
+    (line) => line.textContent?.trim() ?? "",
+  );
 }
 
 describe("nodes devices pending rendering", () => {
   it("shows requested and approved access for a scope upgrade", () => {
-    const text = renderNodesText({
+    const container = renderNodesContainer({
       devicesList: {
         pending: [
           {
@@ -76,15 +98,17 @@ describe("nodes devices pending rendering", () => {
         ],
       },
     });
+    const details = getPendingDeviceDetails(container);
 
-    expect(text).toContain("scope upgrade requires approval");
-    expect(text).toContain("requested: roles: operator");
-    expect(text).toContain("approved now: roles: operator");
-    expect(text).toContain("operator.admin, operator.read");
+    expect(details[0]).toMatch(/^scope upgrade requires approval \u00b7 requested /u);
+    expect(details.slice(1)).toEqual([
+      "requested: roles: operator \u00b7 scopes: operator.admin, operator.read, operator.write",
+      "approved now: roles: operator \u00b7 scopes: operator.read",
+    ]);
   });
 
   it("normalizes pending device ids before matching paired access", () => {
-    const text = renderNodesText({
+    const container = renderNodesContainer({
       devicesList: {
         pending: [
           {
@@ -106,13 +130,14 @@ describe("nodes devices pending rendering", () => {
         ],
       },
     });
+    const details = getPendingDeviceDetails(container);
 
-    expect(text).toContain("scope upgrade requires approval");
-    expect(text).toContain("approved now: roles: operator");
+    expect(details[0]).toMatch(/^scope upgrade requires approval \u00b7 requested /u);
+    expect(details.at(-1)).toBe("approved now: roles: operator \u00b7 scopes: operator.read");
   });
 
   it("does not show upgrade context for key-mismatched pending requests", () => {
-    const text = renderNodesText({
+    const container = renderNodesContainer({
       devicesList: {
         pending: [
           {
@@ -136,14 +161,17 @@ describe("nodes devices pending rendering", () => {
         ],
       },
     });
+    const details = getPendingDeviceDetails(container);
 
-    expect(text).toContain("new device pairing request");
-    expect(text).not.toContain("scope upgrade requires approval");
-    expect(text).not.toContain("approved now:");
+    expect(details[0]).toMatch(/^new device pairing request \u00b7 requested /u);
+    expect(details).toEqual([
+      details[0] ?? "",
+      "requested: roles: operator \u00b7 scopes: operator.admin, operator.read, operator.write",
+    ]);
   });
 
   it("falls back to roles when role is absent", () => {
-    const text = renderNodesText({
+    const container = renderNodesContainer({
       devicesList: {
         pending: [
           {
@@ -157,8 +185,8 @@ describe("nodes devices pending rendering", () => {
         paired: [],
       },
     });
+    const details = getPendingDeviceDetails(container);
 
-    expect(text).toContain("requested: roles: node, operator");
-    expect(text).toContain("scopes: operator.read");
+    expect(details[1]).toBe("requested: roles: node, operator \u00b7 scopes: operator.read");
   });
 });

@@ -454,3 +454,91 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/gradium/**"
+"extensions: amazon-bedrock":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/amazon-bedrock/**"
+"extensions: anthropic-vertex":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/anthropic-vertex/**"
+"extensions: brave":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/brave/**"
+"extensions: chutes":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/chutes/**"
+"extensions: diffs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/diffs/**"
+"extensions: elevenlabs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/elevenlabs/**"
+"extensions: firecrawl":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/firecrawl/**"
+"extensions: github-copilot":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/github-copilot/**"
+"extensions: google":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/google/**"
+"extensions: microsoft":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/microsoft/**"
+"extensions: mistral":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mistral/**"
+"extensions: ollama":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/ollama/**"
+"extensions: opencode":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/opencode/**"
+"extensions: opencode-go":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/opencode-go/**"
+"extensions: openrouter":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/openrouter/**"
+"extensions: openshell":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/openshell/**"
+"extensions: perplexity":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/perplexity/**"
+"extensions: sglang":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/sglang/**"
+"extensions: thread-ownership":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/thread-ownership/**"
+"extensions: vllm":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vllm/**"
+"extensions: xai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/xai/**"
+"extensions: zai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/zai/**"

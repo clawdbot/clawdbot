@@ -141,8 +141,8 @@ function installPollingStallWatchdogHarness(
 
 function expectTelegramBotTransportSequence(firstTransport: unknown, secondTransport: unknown) {
   expect(createTelegramBotMock).toHaveBeenCalledTimes(2);
-  expect(createTelegramBotMock.mock.calls[0]?.[0]?.telegramTransport).toBe(firstTransport);
-  expect(createTelegramBotMock.mock.calls[1]?.[0]?.telegramTransport).toBe(secondTransport);
+  expect(createTelegramBotMock.mock.calls.at(0)?.[0]?.telegramTransport).toBe(firstTransport);
+  expect(createTelegramBotMock.mock.calls.at(1)?.[0]?.telegramTransport).toBe(secondTransport);
 }
 
 function makeTelegramTransport() {

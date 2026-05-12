@@ -500,6 +500,7 @@ public struct AgentEvent: Codable, Sendable {
     public let stream: String
     public let ts: Int
     public let spawnedby: String?
+    public let isheartbeat: Bool?
     public let data: [String: AnyCodable]
 
     public init(
@@ -508,6 +509,7 @@ public struct AgentEvent: Codable, Sendable {
         stream: String,
         ts: Int,
         spawnedby: String?,
+        isheartbeat: Bool?,
         data: [String: AnyCodable])
     {
         self.runid = runid
@@ -515,6 +517,7 @@ public struct AgentEvent: Codable, Sendable {
         self.stream = stream
         self.ts = ts
         self.spawnedby = spawnedby
+        self.isheartbeat = isheartbeat
         self.data = data
     }
 
@@ -524,6 +527,7 @@ public struct AgentEvent: Codable, Sendable {
         case stream
         case ts
         case spawnedby = "spawnedBy"
+        case isheartbeat = "isHeartbeat"
         case data
     }
 }
@@ -971,6 +975,7 @@ public struct NodePairRequestParams: Codable, Sendable {
     public let modelidentifier: String?
     public let caps: [String]?
     public let commands: [String]?
+    public let permissions: [String: AnyCodable]?
     public let remoteip: String?
     public let silent: Bool?
 
@@ -985,6 +990,7 @@ public struct NodePairRequestParams: Codable, Sendable {
         modelidentifier: String?,
         caps: [String]?,
         commands: [String]?,
+        permissions: [String: AnyCodable]?,
         remoteip: String?,
         silent: Bool?)
     {
@@ -998,6 +1004,7 @@ public struct NodePairRequestParams: Codable, Sendable {
         self.modelidentifier = modelidentifier
         self.caps = caps
         self.commands = commands
+        self.permissions = permissions
         self.remoteip = remoteip
         self.silent = silent
     }
@@ -1013,6 +1020,7 @@ public struct NodePairRequestParams: Codable, Sendable {
         case modelidentifier = "modelIdentifier"
         case caps
         case commands
+        case permissions
         case remoteip = "remoteIp"
         case silent
     }

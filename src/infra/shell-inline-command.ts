@@ -1,15 +1,56 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export const POSIX_INLINE_COMMAND_FLAGS = new Set(["-lc", "-c", "--command"]);
+
+function expandPowerShellSwitchPrefixForms(match: string, smallestMatch: string): string[] {
+  const forms: string[] = [];
+  for (let length = smallestMatch.length; length <= match.length; length += 1) {
+    const prefix = match.slice(0, length);
+    forms.push(`-${prefix}`, `--${prefix}`, `/${prefix}`);
+  }
+  return forms;
+}
+
+function expandPowerShellSwitchForms(names: readonly string[]): string[] {
+  return names.flatMap((name) => {
+    const normalized = normalizeLowercaseStringOrEmpty(name);
+    return [`-${normalized}`, `--${normalized}`, `/${normalized}`];
+  });
+}
+
+const POWERSHELL_COMMAND_FLAGS = [
+  ...expandPowerShellSwitchPrefixForms("command", "c"),
+  ...expandPowerShellSwitchPrefixForms("commandwithargs", "cwa"),
+  ...expandPowerShellSwitchForms(["cwa"]),
+];
+const POWERSHELL_FILE_FLAGS = expandPowerShellSwitchPrefixForms("file", "f");
+const POWERSHELL_INLINE_FILE_FLAGS = new Set(POWERSHELL_FILE_FLAGS);
+
 export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
-  "-c",
-  "-command",
-  "--command",
-  "-f",
-  "-file",
-  "-encodedcommand",
-  "-enc",
-  "-e",
+  ...POWERSHELL_COMMAND_FLAGS,
+  ...POWERSHELL_FILE_FLAGS,
+  ...expandPowerShellSwitchPrefixForms("encodedcommand", "e"),
+  ...expandPowerShellSwitchPrefixForms("ec", "e"),
+]);
+
+const POWERSHELL_INLINE_REST_COMMAND_FLAGS = new Set(POWERSHELL_COMMAND_FLAGS);
+
+const POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
+  ...expandPowerShellSwitchPrefixForms("configurationfile", "conf"),
+  ...expandPowerShellSwitchPrefixForms("configurationname", "config"),
+  ...expandPowerShellSwitchPrefixForms("custompipename", "cus"),
+  ...expandPowerShellSwitchPrefixForms("encodedarguments", "encodeda"),
+  ...expandPowerShellSwitchPrefixForms("executionpolicy", "ex"),
+  ...expandPowerShellSwitchPrefixForms("inputformat", "inp"),
+  ...expandPowerShellSwitchPrefixForms("outputformat", "o"),
+  ...expandPowerShellSwitchPrefixForms("psconsolefile", "pscf"),
+  ...expandPowerShellSwitchPrefixForms("settingsfile", "settings"),
+  ...expandPowerShellSwitchPrefixForms("token", "to"),
+  ...expandPowerShellSwitchPrefixForms("utctimestamp", "utc"),
+  ...expandPowerShellSwitchPrefixForms("version", "v"),
+  ...expandPowerShellSwitchPrefixForms("windowstyle", "w"),
+  ...expandPowerShellSwitchPrefixForms("workingdirectory", "w"),
+  ...expandPowerShellSwitchForms(["ea", "ep", "if", "of", "wd"]),
 ]);
 
 const POSIX_SHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
@@ -105,10 +146,20 @@ function advancePosixInlineOptionScan(token: string): number {
   return 1;
 }
 
+function isPowerShellOptionToken(token: string): boolean {
+  return token.startsWith("-") || /^\/[A-Za-z][A-Za-z0-9]*$/.test(token);
+}
+
 export function resolveInlineCommandMatch(
   argv: string[],
   flags: ReadonlySet<string>,
-  options: { allowCombinedC?: boolean } = {},
+  options: {
+    allowCombinedC?: boolean;
+    isOptionToken?: (token: string) => boolean;
+    restValueFlags?: ReadonlySet<string>;
+    stopAtFirstNonOption?: boolean;
+    valueOptions?: ReadonlySet<string>;
+  } = {},
 ): { command: string | null; valueTokenIndex: number | null } {
   for (let i = 1; i < argv.length; ) {
     const token = argv[i]?.trim();
@@ -123,6 +174,14 @@ export function resolveInlineCommandMatch(
     const comparableToken = options.allowCombinedC ? token : lower;
     if (flags.has(comparableToken)) {
       const valueTokenIndex = i + 1 < argv.length ? i + 1 : null;
+      if (options.restValueFlags?.has(comparableToken)) {
+        const command = argv
+          .slice(i + 1)
+          .map((arg) => arg.trim())
+          .join(" ")
+          .trim();
+        return { command: command ? command : null, valueTokenIndex };
+      }
       const command = argv[i + 1]?.trim();
       return { command: command ? command : null, valueTokenIndex };
     }
@@ -135,12 +194,41 @@ export function resolveInlineCommandMatch(
       const command = argv[valueTokenIndex]?.trim();
       return { command: command ? command : null, valueTokenIndex };
     }
+    if (options.valueOptions?.has(lower)) {
+      i += 2;
+      continue;
+    }
+    const isOptionToken =
+      options.isOptionToken?.(token) ?? (token.startsWith("-") || token.startsWith("+"));
+    if (options.stopAtFirstNonOption && !isOptionToken) {
+      break;
+    }
     if (options.allowCombinedC && !token.startsWith("-") && !token.startsWith("+")) {
       break;
     }
     i += options.allowCombinedC ? advancePosixInlineOptionScan(token) : 1;
   }
   return { command: null, valueTokenIndex: null };
+}
+
+export function resolvePowerShellInlineCommandMatch(argv: string[]): {
+  command: string | null;
+  valueTokenIndex: number | null;
+} {
+  return resolveInlineCommandMatch(argv, POWERSHELL_INLINE_COMMAND_FLAGS, {
+    isOptionToken: isPowerShellOptionToken,
+    restValueFlags: POWERSHELL_INLINE_REST_COMMAND_FLAGS,
+    stopAtFirstNonOption: true,
+    valueOptions: POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES,
+  });
+}
+
+export function isPowerShellInlineRestCommandFlag(token: string): boolean {
+  return POWERSHELL_INLINE_REST_COMMAND_FLAGS.has(normalizeLowercaseStringOrEmpty(token));
+}
+
+export function isPowerShellInlineFileCommandFlag(token: string): boolean {
+  return POWERSHELL_INLINE_FILE_FLAGS.has(normalizeLowercaseStringOrEmpty(token));
 }
 
 export function hasPosixInteractiveStartupBeforeInlineCommand(

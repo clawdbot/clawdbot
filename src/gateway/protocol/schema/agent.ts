@@ -31,6 +31,7 @@ export const AgentEventSchema = Type.Object(
     stream: NonEmptyString,
     ts: Type.Integer({ minimum: 0 }),
     spawnedBy: Type.Optional(NonEmptyString),
+    isHeartbeat: Type.Optional(Type.Boolean()),
     data: Type.Record(Type.String(), Type.Unknown()),
   },
   { additionalProperties: false },

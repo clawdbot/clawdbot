@@ -10,7 +10,7 @@ import { resolveApprovalCommandAuthorization } from "../../infra/channel-approva
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveChannelAccountId } from "./channel-context.js";
-import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
+import { requireGatewayClientScope } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
 const COMMAND_REGEX = /^\/?approve(?:\s|$)/i;
@@ -181,7 +181,7 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     return { shouldContinue: false };
   }
 
-  const missingScope = requireGatewayClientScopeForInternalChannel(params, {
+  const missingScope = requireGatewayClientScope(params, {
     label: "/approve",
     allowedScopes: ["operator.approvals", "operator.admin"],
     missingText: "❌ /approve requires operator.approvals for gateway clients.",

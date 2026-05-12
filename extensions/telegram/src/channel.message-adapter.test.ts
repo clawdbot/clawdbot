@@ -42,7 +42,6 @@ describe("telegram channel message adapter", () => {
       expect(sendMessageTelegramMock).toHaveBeenLastCalledWith("12345", "hello", {
         cfg: {},
         verbose: false,
-        textMode: "html",
         messageThreadId: undefined,
         replyToMessageId: undefined,
         accountId: undefined,
@@ -65,7 +64,6 @@ describe("telegram channel message adapter", () => {
       expect(sendMessageTelegramMock).toHaveBeenLastCalledWith("12345", "caption", {
         cfg: {},
         verbose: false,
-        textMode: "html",
         messageThreadId: undefined,
         replyToMessageId: undefined,
         accountId: undefined,
@@ -91,7 +89,6 @@ describe("telegram channel message adapter", () => {
       expect(sendMessageTelegramMock).toHaveBeenLastCalledWith("12345", "payload", {
         cfg: {},
         verbose: false,
-        textMode: "html",
         messageThreadId: undefined,
         replyToMessageId: undefined,
         accountId: undefined,
@@ -120,7 +117,6 @@ describe("telegram channel message adapter", () => {
       expect(sendMessageTelegramMock).toHaveBeenLastCalledWith("12345", "threaded", {
         cfg: {},
         verbose: false,
-        textMode: "html",
         messageThreadId: 12,
         replyToMessageId: 900,
         accountId: undefined,
@@ -151,7 +147,6 @@ describe("telegram channel message adapter", () => {
         {
           cfg: {},
           verbose: false,
-          textMode: "html",
           messageThreadId: undefined,
           replyToMessageId: undefined,
           accountId: undefined,
@@ -171,7 +166,6 @@ describe("telegram channel message adapter", () => {
         {
           cfg: {},
           verbose: false,
-          textMode: "html",
           messageThreadId: undefined,
           replyToMessageId: undefined,
           accountId: undefined,

@@ -120,7 +120,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     MessageThreadId?: number;
     Body?: string;
   } => {
-    const ctx = replySpy.mock.calls[0]?.[0];
+    const ctx = replySpy.mock.calls.at(0)?.at(0);
     if (!ctx || typeof ctx !== "object") {
       throw new Error("expected heartbeat reply context");
     }
@@ -140,7 +140,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     },
   ) => {
     expect(sendTelegram).toHaveBeenCalledTimes(1);
-    const [to, text, options] = sendTelegram.mock.calls[0] ?? [];
+    const [to, text, options] = sendTelegram.mock.calls.at(0) ?? [];
     expect(to).toBe(params.to);
     expect(text).toBe(params.text);
     expect((options as { messageThreadId?: number } | undefined)?.messageThreadId).toBe(
@@ -202,7 +202,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
             telegram: sendTelegram,
           },
         });
-        const calledCtx = (getReplySpy.mock.calls[0]?.[0] ?? null) as {
+        const calledCtx = (getReplySpy.mock.calls.at(0)?.at(0) ?? null) as {
           Provider?: string;
           Body?: string;
           SessionKey?: string;
@@ -352,8 +352,14 @@ describe("Ghost reminder bug (issue #13317)", () => {
       expect(second.status).toBe("ran");
       expect(getReplySpy).toHaveBeenCalledTimes(2);
 
-      const firstCtx = getReplySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
-      const secondCtx = getReplySpy.mock.calls[1]?.[0] as { Provider?: string; Body?: string };
+      const firstCtx = getReplySpy.mock.calls.at(0)?.at(0) as {
+        Provider?: string;
+        Body?: string;
+      };
+      const secondCtx = getReplySpy.mock.calls.at(1)?.at(0) as {
+        Provider?: string;
+        Body?: string;
+      };
       expect(firstCtx.Provider).toBe("cron-event");
       expect(firstCtx.Body).toContain("Cron: QMD maintenance completed");
       expect(secondCtx.Provider).toBe("heartbeat");
@@ -600,10 +606,10 @@ describe("Ghost reminder bug (issue #13317)", () => {
 
       expect(result.status).toBe("ran");
       expect(getFirstReplyContext(replySpy).SessionKey).toBe(`${sessionKey}:heartbeat`);
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sendTelegram.mock.calls[0]?.[0]).toBe("-100155462274");
-      const options = sendTelegram.mock.calls[0]?.[2] as { messageThreadId?: number } | undefined;
-      expect(options?.messageThreadId).toBeUndefined();
+      expectTelegramSend(sendTelegram, {
+        to: "-100155462274",
+        text: "Restart complete",
+      });
     });
   });
   it("keeps output-bearing exec-event delivery pinned to the original Telegram topic when session route drifts", async () => {

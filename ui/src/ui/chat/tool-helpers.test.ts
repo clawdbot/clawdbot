@@ -43,9 +43,13 @@ describe("tool-helpers", () => {
       const input = '{"outer":{"inner":"value"}}';
       const result = formatToolOutputForSidebar(input);
 
-      expect(result).toContain("```json");
-      expect(result).toContain('"outer"');
-      expect(result).toContain('"inner"');
+      expect(result).toBe(`\`\`\`json
+{
+  "outer": {
+    "inner": "value"
+  }
+}
+\`\`\``);
     });
 
     it("returns plain text for non-JSON content", () => {
@@ -73,8 +77,11 @@ describe("tool-helpers", () => {
       const input = '   {"trimmed": true}   ';
       const result = formatToolOutputForSidebar(input);
 
-      expect(result).toContain("```json");
-      expect(result).toContain('"trimmed"');
+      expect(result).toBe(`\`\`\`json
+{
+  "trimmed": true
+}
+\`\`\``);
     });
 
     it("handles whitespace-only string", () => {
@@ -95,8 +102,7 @@ describe("tool-helpers", () => {
       const input = "a".repeat(150);
       const result = getTruncatedPreview(input);
 
-      expect(result.length).toBe(101); // 100 chars + ellipsis
-      expect(result.endsWith("…")).toBe(true);
+      expect(result).toBe(`${"a".repeat(100)}…`);
     });
 
     it("truncates to max lines", () => {
@@ -111,7 +117,7 @@ describe("tool-helpers", () => {
       const input = "Line 1\nLine 2\nLine 3";
       const result = getTruncatedPreview(input);
 
-      expect(result.endsWith("…")).toBe(true);
+      expect(result).toBe("Line 1\nLine 2…");
     });
 
     it("does not add ellipsis when all lines fit", () => {
@@ -119,7 +125,6 @@ describe("tool-helpers", () => {
       const result = getTruncatedPreview(input);
 
       expect(result).toBe("Line 1\nLine 2");
-      expect(result.endsWith("…")).toBe(false);
     });
 
     it("handles single line within limits", () => {
@@ -135,8 +140,7 @@ describe("tool-helpers", () => {
       const input = `${longLine}\n${longLine}`;
       const result = getTruncatedPreview(input);
 
-      expect(result.length).toBe(101); // 100 + ellipsis
-      expect(result.endsWith("…")).toBe(true);
+      expect(result).toBe(`${"x".repeat(80)}\n${"x".repeat(19)}…`);
     });
   });
 });

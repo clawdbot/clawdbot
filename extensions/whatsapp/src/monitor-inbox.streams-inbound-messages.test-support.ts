@@ -267,7 +267,7 @@ describe("web monitor inbox", () => {
     expect(inbound.groupSubject).toBe("Recovered Group");
     expect(inbound.senderE164).toBe("+444");
     expect(inbound.chatType).toBe("group");
-    expect(onMessage.mock.calls[0]?.[0].groupParticipants).toBeUndefined();
+    expect(onMessage.mock.calls.at(0)?.[0].groupParticipants).toBeUndefined();
 
     await second.listener.close();
   });

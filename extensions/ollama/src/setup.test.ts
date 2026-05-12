@@ -70,6 +70,14 @@ function createOllamaFetchMock(params: {
   });
 }
 
+function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0) {
+  return mock.mock.calls.at(index);
+}
+
+function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0) {
+  return mockCall(mock, index)?.at(argIndex);
+}
+
 function createLocalPrompter(): WizardPrompter {
   return {
     select: vi.fn().mockResolvedValueOnce("local-only"),
@@ -151,7 +159,7 @@ describe("ollama setup", () => {
       prompter,
     });
 
-    const baseUrlPrompt = text.mock.calls[0]?.[0] as {
+    const baseUrlPrompt = mockCallArg(text) as {
       message?: string;
       initialValue?: string;
       placeholder?: string;
@@ -164,7 +172,7 @@ describe("ollama setup", () => {
       validate: baseUrlPrompt.validate,
     });
     expect(typeof baseUrlPrompt.validate).toBe("function");
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://host.docker.internal:11434/api/tags");
+    expect(mockCallArg(fetchMock)).toBe("http://host.docker.internal:11434/api/tags");
     expect(result.config.models?.providers?.ollama?.baseUrl).toBe(
       "http://host.docker.internal:11434",
     );
@@ -485,8 +493,8 @@ describe("ollama setup", () => {
         });
 
         expect(fetchMock).toHaveBeenCalledTimes(2);
-        expect(fetchMock.mock.calls[1][0]).toContain("/api/pull");
-        const pullInit = fetchMock.mock.calls[1][1];
+        expect(mockCallArg(fetchMock, 1)).toContain("/api/pull");
+        const pullInit = mockCallArg(fetchMock, 1, 1) as RequestInit | undefined;
         expect(pullInit?.signal).toBeInstanceOf(AbortSignal);
         expect(pullInit?.signal?.aborted).toBe(false);
 
@@ -522,7 +530,7 @@ describe("ollama setup", () => {
           prompter,
         }).catch((err: unknown) => err);
 
-        await vi.waitFor(() => expect(fetchMock.mock.calls[1]?.[0]).toContain("/api/pull"));
+        await vi.waitFor(() => expect(mockCallArg(fetchMock, 1)).toContain("/api/pull"));
 
         await vi.advanceTimersByTimeAsync(300_000);
         const pullError = await pullPromise;
@@ -595,8 +603,8 @@ describe("ollama setup", () => {
         prompter,
       });
 
-      expect(fetchMock.mock.calls[0]?.[0]).toBe("http://127.0.0.1:11435/api/tags");
-      expect(fetchMock.mock.calls[1]?.[0]).toBe("http://127.0.0.1:11435/api/pull");
+      expect(mockCallArg(fetchMock)).toBe("http://127.0.0.1:11435/api/tags");
+      expect(mockCallArg(fetchMock, 1)).toBe("http://127.0.0.1:11435/api/pull");
     });
 
     it("skips pull for cloud models", async () => {
@@ -680,7 +688,7 @@ describe("ollama setup", () => {
       runtime,
     });
 
-    const pullRequest = fetchMock.mock.calls[1]?.[1];
+    const pullRequest = mockCallArg(fetchMock, 1, 1) as RequestInit | undefined;
     expect(JSON.parse(requestBodyText(pullRequest?.body))).toEqual({ name: "llama3.2:latest" });
     expect(result.agents?.defaults?.model).toEqual({ primary: "ollama/llama3.2:latest" });
   });

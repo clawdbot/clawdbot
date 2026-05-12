@@ -816,13 +816,13 @@ describe("getHealthSnapshot", () => {
     };
 
     expect(imessage.configured).toBe(true);
-    expect(imessage.probe).toMatchObject({
+    expect(imessage.probe).toEqual({
       ok: false,
       error:
         "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
     });
     expect(imessage.probe?.privateApi).toBeUndefined();
-    expect(imessage.accounts?.default?.probe).toMatchObject({
+    expect(imessage.accounts?.default?.probe).toEqual({
       ok: false,
       error:
         "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",

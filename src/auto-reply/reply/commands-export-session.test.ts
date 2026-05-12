@@ -126,6 +126,33 @@ function makeParams(): HandleCommandsParams {
   } as unknown as HandleCommandsParams;
 }
 
+function writeFileArg(callIndex: number, argIndex: number): unknown {
+  const call = hoisted.writeFileMock.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`Expected writeFile call ${callIndex}`);
+  }
+  if (!(argIndex in call)) {
+    throw new Error(`Expected writeFile call ${callIndex} argument ${argIndex}`);
+  }
+  return call[argIndex];
+}
+
+function writeFilePath(callIndex: number): string {
+  const value = writeFileArg(callIndex, 0);
+  if (typeof value !== "string") {
+    throw new Error(`Expected writeFile call ${callIndex} path`);
+  }
+  return value;
+}
+
+function writtenHtml(): string {
+  const value = writeFileArg(0, 1);
+  if (typeof value !== "string") {
+    throw new Error("Expected exported HTML");
+  }
+  return value;
+}
+
 describe("buildExportSessionReply", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -213,8 +240,7 @@ describe("buildExportSessionReply", () => {
   it("injects scripts and session data through the real export template", async () => {
     await buildExportSessionReply(makeParams());
 
-    const html = hoisted.writeFileMock.mock.calls[0]?.[1];
-    expect(typeof html).toBe("string");
+    const html = writtenHtml();
     expect(html).not.toContain("{{CSS}}");
     expect(html).not.toContain("{{JS}}");
     expect(html).not.toContain("{{SESSION_DATA}}");
@@ -251,12 +277,12 @@ describe("buildExportSessionReply", () => {
       "/tmp/workspace",
       "openclaw-session-session--2026-05-05T10-11-12-2.html",
     );
-    expect(hoisted.writeFileMock.mock.calls[0]?.[0]).toBe(expectedBase);
-    expect(hoisted.writeFileMock.mock.calls[0]?.[2]).toEqual({
+    expect(writeFilePath(0)).toBe(expectedBase);
+    expect(writeFileArg(0, 2)).toEqual({
       encoding: "utf-8",
       flag: "wx",
     });
-    expect(hoisted.writeFileMock.mock.calls[1]?.[0]).toBe(expectedSuffix);
+    expect(writeFilePath(1)).toBe(expectedSuffix);
     expect(reply.text).toContain("📄 File: openclaw-session-session--2026-05-05T10-11-12-2.html");
   });
 
@@ -281,7 +307,7 @@ describe("buildExportSessionReply", () => {
 
     await buildExportSessionReply(makeParams());
 
-    const html = hoisted.writeFileMock.mock.calls[0]?.[1];
+    const html = writtenHtml();
     expect(html).toContain("$&$1");
     expect(html).toContain("const marker = '$&$1';");
     expect(html).toContain("const markedMarker = '$&$1';");

@@ -216,8 +216,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     if (!reply?.text) {
       throw new Error("expected direct silent reply rewrite to produce visible text");
     }
-    expect(reply.text.trim().length).toBeGreaterThan(0);
-    expect(reply.text.trim()).not.toBe("NO_REPLY");
+    expect(reply.text).toBe("Nothing additional from me.");
   });
 
   it("drops bare silent replies for groups when policy allows silence", () => {
@@ -311,8 +310,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         if (!reply?.text) {
           throw new Error("expected visible silent-reply fallback text");
         }
-        expect(reply.text.length).toBeGreaterThan(0);
-        expect(reply.text).not.toBe("NO_REPLY");
+        expect(reply.text).toBe("No extra notes from me.");
       } finally {
         registerPendingSpawnedChildrenQuery(previousQuery);
       }

@@ -481,4 +481,179 @@ describe("telegram message cache", () => {
     expect(context.find((entry) => entry.node.messageId === "33868")?.isReplyTarget).toBe(true);
     expect(context.find((entry) => entry.node.messageId === "34477")).toBeUndefined();
   });
+
+  it("does not select messages before the latest session reset command", () => {
+    const cache = createTelegramMessageCache();
+    const beforeSession = Date.parse("2026-05-10T12:40:00.000Z");
+    const sessionStartedAt = Date.parse("2026-05-10T17:30:43.980Z");
+    const afterSession = Date.parse("2026-05-11T23:36:00.000Z");
+    const staleInstruction = "okay so we just flip in openclaw? if yes do it up";
+    const record = (params: {
+      id: number;
+      text: string;
+      timestampMs: number;
+      replyTo?: { id: number; text: string; timestampMs: number };
+    }) =>
+      cache.record({
+        accountId: "default",
+        chatId: 7,
+        threadId: 22534,
+        msg: {
+          chat: { id: 7, type: "supergroup", title: "Ops", is_forum: true },
+          message_thread_id: 22534,
+          message_id: params.id,
+          date: Math.floor(params.timestampMs / 1000),
+          text: params.text,
+          from: { id: params.id, is_bot: false, first_name: "Requester" },
+          ...(params.replyTo
+            ? {
+                reply_to_message: {
+                  chat: { id: 7, type: "supergroup", title: "Ops", is_forum: true },
+                  message_thread_id: 22534,
+                  message_id: params.replyTo.id,
+                  date: Math.floor(params.replyTo.timestampMs / 1000),
+                  text: params.replyTo.text,
+                  from: { id: params.replyTo.id, is_bot: false, first_name: "Requester" },
+                } as Message["reply_to_message"],
+              }
+            : {}),
+        } as Message,
+      });
+
+    record({ id: 84669, text: "earlier topic setup", timestampMs: beforeSession - 1000 });
+    record({ id: 84670, text: staleInstruction, timestampMs: beforeSession });
+    record({ id: 84671, text: "old reply context", timestampMs: beforeSession + 1000 });
+    record({ id: 85000, text: "/new", timestampMs: sessionStartedAt });
+    record({
+      id: 87183,
+      text: "post-reset context",
+      timestampMs: afterSession - 60_000,
+      replyTo: { id: 84670, text: staleInstruction, timestampMs: beforeSession },
+    });
+    record({ id: 87184, text: "how does this determine stability?", timestampMs: afterSession });
+
+    const replyChainNodes = buildTelegramReplyChain({
+      cache,
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat: { id: 7, type: "supergroup", title: "Ops", is_forum: true },
+        message_thread_id: 22534,
+        message_id: 87185,
+        date: Math.floor(afterSession / 1000) + 30,
+        text: "follow up",
+        from: { id: 87185, is_bot: false, first_name: "Requester" },
+        reply_to_message: {
+          chat: { id: 7, type: "supergroup", title: "Ops", is_forum: true },
+          message_thread_id: 22534,
+          message_id: 84670,
+          date: Math.floor(beforeSession / 1000),
+          text: staleInstruction,
+          from: { id: 84670, is_bot: false, first_name: "Requester" },
+        } as Message["reply_to_message"],
+      } as Message,
+    });
+
+    const context = buildTelegramConversationContext({
+      cache,
+      accountId: "default",
+      chatId: 7,
+      messageId: "87185",
+      threadId: 22534,
+      replyChainNodes,
+      recentLimit: 10,
+      replyTargetWindowSize: 1,
+    });
+
+    expect(context.map((entry) => entry.node.messageId)).toEqual(["87183", "87184"]);
+    expect(context.map((entry) => entry.node.body)).not.toContain(staleInstruction);
+  });
+
+  it("does not select messages before the persisted session start when the reset command is absent", () => {
+    const cache = createTelegramMessageCache();
+    const beforeSession = Date.parse("2026-05-10T12:40:00.000Z");
+    const sessionStartedAt = Date.parse("2026-05-10T17:30:43.127Z");
+    const afterSession = Date.parse("2026-05-11T23:36:00.000Z");
+    const staleInstruction = "okay so we just flip in openclaw? if yes do it up";
+    const record = (params: {
+      id: number;
+      text: string;
+      timestampMs: number;
+      replyTo?: { id: number; text: string; timestampMs: number };
+    }) =>
+      cache.record({
+        accountId: "default",
+        chatId: -1001234567890,
+        threadId: 22534,
+        msg: {
+          chat: {
+            id: -1001234567890,
+            type: "supergroup",
+            title: "Ops",
+            is_forum: true,
+          },
+          message_thread_id: 22534,
+          message_id: params.id,
+          date: Math.floor(params.timestampMs / 1000),
+          text: params.text,
+          from: { id: 101, is_bot: false, first_name: "Requester" },
+          ...(params.replyTo
+            ? {
+                reply_to_message: {
+                  chat: {
+                    id: -1001234567890,
+                    type: "supergroup",
+                    title: "Ops",
+                    is_forum: true,
+                  },
+                  message_thread_id: 22534,
+                  message_id: params.replyTo.id,
+                  date: Math.floor(params.replyTo.timestampMs / 1000),
+                  text: params.replyTo.text,
+                  from: { id: 101, is_bot: false, first_name: "Requester" },
+                } as Message["reply_to_message"],
+              }
+            : {}),
+        } as Message,
+      });
+
+    record({
+      id: 84649,
+      text: "tools.toolSearch: true",
+      timestampMs: beforeSession - 5 * 60_000,
+    });
+    record({ id: 84670, text: staleInstruction, timestampMs: beforeSession });
+    record({ id: 87184, text: "how does this determine stability?", timestampMs: afterSession });
+    const current = record({
+      id: 87227,
+      text: "what config change?",
+      timestampMs: afterSession + 2 * 60 * 60_000,
+      replyTo: { id: 84670, text: staleInstruction, timestampMs: beforeSession },
+    })?.sourceMessage;
+    if (!current) {
+      throw new Error("expected current Telegram message");
+    }
+
+    const replyChainNodes = buildTelegramReplyChain({
+      cache,
+      accountId: "default",
+      chatId: -1001234567890,
+      msg: current,
+    });
+    const context = buildTelegramConversationContext({
+      cache,
+      accountId: "default",
+      chatId: -1001234567890,
+      messageId: "87227",
+      threadId: 22534,
+      replyChainNodes,
+      recentLimit: 10,
+      replyTargetWindowSize: 1,
+      minTimestampMs: sessionStartedAt,
+    });
+
+    expect(context.map((entry) => entry.node.messageId)).toEqual(["87184"]);
+    expect(context.map((entry) => entry.node.body)).not.toContain(staleInstruction);
+    expect(context.map((entry) => entry.node.body)).not.toContain("tools.toolSearch: true");
+  });
 });

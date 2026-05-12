@@ -89,7 +89,7 @@ describe("agent handler session create events", () => {
       req: { id: "req-agent-create-event" } as never,
     });
 
-    const responseCall = respond.mock.calls[0] as
+    const responseCall = respond.mock.calls.at(0) as
       | [boolean, { status?: string; runId?: string }, unknown, { runId?: string }]
       | undefined;
     expect(responseCall?.[0]).toBe(true);
@@ -99,7 +99,7 @@ describe("agent handler session create events", () => {
     expect(responseCall?.[3]?.runId).toBe("idem-agent-create-event");
     await vi.waitFor(
       () => {
-        const call = broadcastToConnIds.mock.calls[0] as
+        const call = broadcastToConnIds.mock.calls.at(0) as
           | [
               string,
               { sessionKey?: string; reason?: string },

@@ -54,11 +54,19 @@ function createInvokeParams(params: Record<string, unknown>) {
 }
 
 function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
-  const arg = mock.mock.calls[0]?.[0];
+  const arg = mock.mock.calls.at(0)?.at(0);
   if (arg === undefined) {
     throw new Error(`Expected ${label}`);
   }
   return arg;
+}
+
+function respondCall(respond: ReturnType<typeof vi.fn>): RespondCall {
+  const call = respond.mock.calls.at(0) as RespondCall | undefined;
+  if (!call) {
+    throw new Error("expected respond call");
+  }
+  return call;
 }
 
 describe("tools.catalog handler", () => {
@@ -71,38 +79,36 @@ describe("tools.catalog handler", () => {
   it("rejects invalid params", async () => {
     const { respond, invoke } = createInvokeParams({ extra: true });
     await invoke();
-    const call = respond.mock.calls[0] as RespondCall | undefined;
-    expect(call?.[0]).toBe(false);
-    expect(call?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
-    expect(call?.[2]?.message).toContain("invalid tools.catalog params");
+    const call = respondCall(respond);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
+    expect(call[2]?.message).toContain("invalid tools.catalog params");
   });
 
   it("rejects unknown agent ids", async () => {
     const { respond, invoke } = createInvokeParams({ agentId: "unknown-agent" });
     await invoke();
-    const call = respond.mock.calls[0] as RespondCall | undefined;
-    expect(call?.[0]).toBe(false);
-    expect(call?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
-    expect(call?.[2]?.message).toContain("unknown agent id");
+    const call = respondCall(respond);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
+    expect(call[2]?.message).toContain("unknown agent id");
   });
 
   it("returns core groups including tts and excludes plugins when includePlugins=false", async () => {
     const { respond, invoke } = createInvokeParams({ includePlugins: false });
     await invoke();
-    const call = respond.mock.calls[0] as RespondCall | undefined;
-    expect(call?.[0]).toBe(true);
-    const payload = call?.[1] as
-      | {
-          agentId: string;
-          groups: Array<{
-            id: string;
-            source: "core" | "plugin";
-            tools: Array<{ id: string; source: "core" | "plugin" }>;
-          }>;
-        }
-      | undefined;
-    expect(payload?.agentId).toBe("main");
-    const groups = payload?.groups ?? [];
+    const call = respondCall(respond);
+    expect(call[0]).toBe(true);
+    const payload = call[1] as {
+      agentId: string;
+      groups: Array<{
+        id: string;
+        source: "core" | "plugin";
+        tools: Array<{ id: string; source: "core" | "plugin" }>;
+      }>;
+    };
+    expect(payload.agentId).toBe("main");
+    const groups = payload.groups ?? [];
     expect(groups.some((group) => group.source === "plugin")).toBe(false);
     const media = groups.find((group) => group.id === "media");
     expect(media?.tools.map((tool) => `${tool.source}:${tool.id}`) ?? []).toContain("core:tts");
@@ -111,23 +117,21 @@ describe("tools.catalog handler", () => {
   it("includes plugin groups with plugin metadata", async () => {
     const { respond, invoke } = createInvokeParams({});
     await invoke();
-    const call = respond.mock.calls[0] as RespondCall | undefined;
-    expect(call?.[0]).toBe(true);
-    const payload = call?.[1] as
-      | {
-          groups: Array<{
-            source: "core" | "plugin";
-            pluginId?: string;
-            tools: Array<{
-              id: string;
-              source: "core" | "plugin";
-              pluginId?: string;
-              optional?: boolean;
-            }>;
-          }>;
-        }
-      | undefined;
-    const pluginGroups = (payload?.groups ?? []).filter((group) => group.source === "plugin");
+    const call = respondCall(respond);
+    expect(call[0]).toBe(true);
+    const payload = call[1] as {
+      groups: Array<{
+        source: "core" | "plugin";
+        pluginId?: string;
+        tools: Array<{
+          id: string;
+          source: "core" | "plugin";
+          pluginId?: string;
+          optional?: boolean;
+        }>;
+      }>;
+    };
+    const pluginGroups = payload.groups.filter((group) => group.source === "plugin");
     expect(pluginGroups.length).toBeGreaterThan(0);
     const voiceCall = pluginGroups
       .flatMap((group) => group.tools)
@@ -148,20 +152,18 @@ describe("tools.catalog handler", () => {
   it("summarizes plugin tool descriptions the same way as the effective inventory", async () => {
     const { respond, invoke } = createInvokeParams({});
     await invoke();
-    const call = respond.mock.calls[0] as RespondCall | undefined;
-    expect(call?.[0]).toBe(true);
-    const payload = call?.[1] as
-      | {
-          groups: Array<{
-            source: "core" | "plugin";
-            tools: Array<{
-              id: string;
-              description: string;
-            }>;
-          }>;
-        }
-      | undefined;
-    const matrixRoom = (payload?.groups ?? [])
+    const call = respondCall(respond);
+    expect(call[0]).toBe(true);
+    const payload = call[1] as {
+      groups: Array<{
+        source: "core" | "plugin";
+        tools: Array<{
+          id: string;
+          description: string;
+        }>;
+      }>;
+    };
+    const matrixRoom = payload.groups
       .filter((group) => group.source === "plugin")
       .flatMap((group) => group.tools)
       .find((tool) => tool.id === "matrix_room");

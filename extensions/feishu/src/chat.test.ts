@@ -74,7 +74,7 @@ describe("registerFeishuChatTools", () => {
     );
 
     expect(registerTool).toHaveBeenCalledTimes(1);
-    const tool = registerTool.mock.calls[0]?.[0];
+    const tool = registerTool.mock.calls.at(0)?.[0];
     expect(tool?.name).toBe("feishu_chat");
 
     chatGetMock.mockResolvedValueOnce({
@@ -205,7 +205,7 @@ describe("registerFeishuChatTools", () => {
       }),
     );
 
-    const tool = registerTool.mock.calls[0]?.[0];
+    const tool = registerTool.mock.calls.at(0)?.[0];
     contactUserGetMock.mockRejectedValueOnce(
       Object.assign(new Error("Request failed with status code 400"), {
         response: {

@@ -484,6 +484,111 @@ describe("extractShellWrapperCommand", () => {
       expectedCommand: { isWrapper: true, command: "Get-Date" },
     },
     {
+      argv: ["pwsh", "-Command", "allowed.exe", ";", "unlisted.exe"],
+      expectedInline: "allowed.exe ; unlisted.exe",
+      expectedCommand: { isWrapper: true, command: "allowed.exe ; unlisted.exe" },
+    },
+    {
+      argv: ["cmd.exe", "-c", "echo", "hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["cmd", "-k", "echo", "hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["pwsh", "-ec", "ZQBjAGgAbwA="],
+      expectedInline: "ZQBjAGgAbwA=",
+      expectedCommand: { isWrapper: true, command: "ZQBjAGgAbwA=" },
+    },
+    {
+      argv: ["pwsh", "/NoProfile", "/ec", "ZQBjAGgAbwA="],
+      expectedInline: "ZQBjAGgAbwA=",
+      expectedCommand: { isWrapper: true, command: "ZQBjAGgAbwA=" },
+    },
+    {
+      argv: ["pwsh", "-WorkingDir", "/tmp/project", "/ec", "ZQBjAGgAbwA="],
+      expectedInline: "ZQBjAGgAbwA=",
+      expectedCommand: { isWrapper: true, command: "ZQBjAGgAbwA=" },
+    },
+    {
+      argv: ["pwsh", "-if", "XML", "-EncodedCommand", "ZQBjAGgAbwA="],
+      expectedInline: "ZQBjAGgAbwA=",
+      expectedCommand: { isWrapper: true, command: "ZQBjAGgAbwA=" },
+    },
+    {
+      argv: ["pwsh", "-config", "SomeConfig", "-ec", "ZQBjAGgAbwA="],
+      expectedInline: "ZQBjAGgAbwA=",
+      expectedCommand: { isWrapper: true, command: "ZQBjAGgAbwA=" },
+    },
+    {
+      argv: ["pwsh", "-win", "hidden", "/ec", "ZQBjAGgAbwA="],
+      expectedInline: "ZQBjAGgAbwA=",
+      expectedCommand: { isWrapper: true, command: "ZQBjAGgAbwA=" },
+    },
+    {
+      argv: ["pwsh", "-ea", "stop", "-Command", "Get-Date"],
+      expectedInline: "Get-Date",
+      expectedCommand: { isWrapper: true, command: "Get-Date" },
+    },
+    {
+      argv: ["pwsh", "-ep", "Bypass", "-Command", "Get-Date"],
+      expectedInline: "Get-Date",
+      expectedCommand: { isWrapper: true, command: "Get-Date" },
+    },
+    {
+      argv: ["pwsh", "-cus", "pipe-name", "-ec", "ZQBjAGgAbwA="],
+      expectedInline: "ZQBjAGgAbwA=",
+      expectedCommand: { isWrapper: true, command: "ZQBjAGgAbwA=" },
+    },
+    {
+      argv: ["pwsh", "-to", "token-value", "-Command", "Get-Date"],
+      expectedInline: "Get-Date",
+      expectedCommand: { isWrapper: true, command: "Get-Date" },
+    },
+    {
+      argv: ["pwsh", "-utc", "1234", "-Command", "Get-Date"],
+      expectedInline: "Get-Date",
+      expectedCommand: { isWrapper: true, command: "Get-Date" },
+    },
+    {
+      argv: ["pwsh", "-encodeda", "YQByAGcA", "-Command", "Get-Date"],
+      expectedInline: "Get-Date",
+      expectedCommand: { isWrapper: true, command: "Get-Date" },
+    },
+    {
+      argv: ["pwsh", "-en", "ZQBjAGgAbwA="],
+      expectedInline: "ZQBjAGgAbwA=",
+      expectedCommand: { isWrapper: true, command: "ZQBjAGgAbwA=" },
+    },
+    {
+      argv: ["pwsh", "-File", "script.ps1", "-ExtraArg"],
+      expectedInline: "script.ps1",
+      expectedCommand: { isWrapper: true, command: "script.ps1" },
+    },
+    {
+      argv: ["pwsh", "--commandwithargs", "allowed.exe", ";", "unlisted.exe"],
+      expectedInline: "allowed.exe ; unlisted.exe",
+      expectedCommand: { isWrapper: true, command: "allowed.exe ; unlisted.exe" },
+    },
+    {
+      argv: ["pwsh", "-CommandWithArgs", "allowed.exe", ";", "unlisted.exe"],
+      expectedInline: "allowed.exe ; unlisted.exe",
+      expectedCommand: { isWrapper: true, command: "allowed.exe ; unlisted.exe" },
+    },
+    {
+      argv: ["pwsh", "-cwa", "Write-Output", "hi"],
+      expectedInline: "Write-Output hi",
+      expectedCommand: { isWrapper: true, command: "Write-Output hi" },
+    },
+    {
+      argv: ["pwsh", "script.ps1", "-en", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
+      expectedInline: null,
+      expectedCommand: { isWrapper: false, command: null },
+    },
+    {
       argv: ["bash", "script.sh"],
       expectedInline: null,
       expectedCommand: { isWrapper: false, command: null },

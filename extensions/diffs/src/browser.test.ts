@@ -128,7 +128,7 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(launchMock).toHaveBeenCalledTimes(1);
     expect(pages).toHaveLength(1);
     expect(pages[0]?.pdf).toHaveBeenCalledTimes(1);
-    const pdfCall = pages[0]?.pdf.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    const pdfCall = pages[0]?.pdf.mock.calls.at(0)?.[0] as Record<string, unknown> | undefined;
     if (!pdfCall) {
       throw new Error("expected PDF render call");
     }
@@ -404,8 +404,8 @@ describe("diffs plugin registration", () => {
     registerDiffsPlugin(api as unknown as OpenClawPluginApi);
 
     expect(on).toHaveBeenCalledTimes(1);
-    expect(on.mock.calls[0]?.[0]).toBe("before_prompt_build");
-    const beforePromptBuild = on.mock.calls[0]?.[1];
+    expect(on.mock.calls.at(0)?.[0]).toBe("before_prompt_build");
+    const beforePromptBuild = on.mock.calls.at(0)?.[1];
     const promptResult = await beforePromptBuild?.({}, {});
     expect(promptResult?.prependSystemContext).toBe(
       [

@@ -11,7 +11,6 @@ import {
 } from "./chat-model.test-helpers.ts";
 
 type ChatModelStateInput = Parameters<typeof resolveChatModelSelectState>[0];
-type ResolvedChatModelState = ReturnType<typeof resolveChatModelSelectState>;
 
 function createChatModelState(
   params: Partial<Omit<ChatModelStateInput, "sessionKey">> = {},
@@ -23,19 +22,6 @@ function createChatModelState(
     sessionsResult: createSessionsListResult({ model: null, modelProvider: null }),
     ...params,
   };
-}
-
-function expectOptionValues(
-  resolved: ResolvedChatModelState,
-  params: { include?: string[]; exclude?: string[] },
-) {
-  const values = resolved.options.map((option) => option.value);
-  for (const value of params.include ?? []) {
-    expect(values).toContain(value);
-  }
-  for (const value of params.exclude ?? []) {
-    expect(values).not.toContain(value);
-  }
 }
 
 describe("chat-model-select-state", () => {
@@ -70,7 +56,10 @@ describe("chat-model-select-state", () => {
 
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
-    expectOptionValues(resolved, { include: ["openai/gpt-5-mini"], exclude: ["gpt-5-mini"] });
+    expect(resolved.options).toEqual([
+      { value: "openai/gpt-5", label: "GPT-5" },
+      { value: "openai/gpt-5-mini", label: "GPT-5 Mini" },
+    ]);
   });
 
   it("prefers catalog provider matches over stale session providers", () => {
@@ -95,10 +84,10 @@ describe("chat-model-select-state", () => {
 
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
-    expectOptionValues(resolved, {
-      include: ["openai/gpt-5-mini"],
-      exclude: ["zai/openai/gpt-5-mini"],
-    });
+    expect(resolved.options).toEqual([
+      { value: "openai/gpt-5-mini", label: "gpt-5-mini · openai" },
+      { value: "openai/gpt-5", label: "gpt-5 · openai" },
+    ]);
   });
 
   it("builds picker options without introducing a bare duplicate", () => {
@@ -112,7 +101,10 @@ describe("chat-model-select-state", () => {
 
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
-    expectOptionValues(resolved, { include: ["openai/gpt-5-mini"], exclude: ["gpt-5-mini"] });
+    expect(resolved.options).toEqual([
+      { value: "openai/gpt-5", label: "GPT-5" },
+      { value: "openai/gpt-5-mini", label: "GPT-5 Mini" },
+    ]);
   });
 
   it("uses catalog names for the default label and matching picker options", () => {
@@ -134,10 +126,12 @@ describe("chat-model-select-state", () => {
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.currentOverride).toBe("nvidia/moonshotai/kimi-k2.5");
     expect(resolved.defaultLabel).toBe("Default (Kimi K2.5 (NVIDIA))");
-    expect(resolved.options).toContainEqual({
-      value: "nvidia/moonshotai/kimi-k2.5",
-      label: "Kimi K2.5 (NVIDIA)",
-    });
+    expect(resolved.options).toEqual([
+      {
+        value: "nvidia/moonshotai/kimi-k2.5",
+        label: "Kimi K2.5 (NVIDIA)",
+      },
+    ]);
   });
 
   it("disambiguates duplicate friendly names in picker options and default labels", () => {
@@ -165,14 +159,16 @@ describe("chat-model-select-state", () => {
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.currentOverride).toBe("anthropic/claude-3-7-sonnet");
     expect(resolved.defaultLabel).toBe("Default (Claude Sonnet · openrouter)");
-    expect(resolved.options).toContainEqual({
-      value: "anthropic/claude-3-7-sonnet",
-      label: "Claude Sonnet · anthropic",
-    });
-    expect(resolved.options).toContainEqual({
-      value: "openrouter/claude-3-7-sonnet",
-      label: "Claude Sonnet · openrouter",
-    });
+    expect(resolved.options).toEqual([
+      {
+        value: "anthropic/claude-3-7-sonnet",
+        label: "Claude Sonnet · anthropic",
+      },
+      {
+        value: "openrouter/claude-3-7-sonnet",
+        label: "Claude Sonnet · openrouter",
+      },
+    ]);
   });
 
   it("falls back to id and provider when duplicate names share the same provider", () => {
@@ -202,13 +198,15 @@ describe("chat-model-select-state", () => {
     expect(resolved.defaultLabel).toBe(
       "Default (Claude Sonnet · claude-3-7-sonnet-thinking · anthropic)",
     );
-    expect(resolved.options).toContainEqual({
-      value: "anthropic/claude-3-7-sonnet",
-      label: "Claude Sonnet · claude-3-7-sonnet · anthropic",
-    });
-    expect(resolved.options).toContainEqual({
-      value: "anthropic/claude-3-7-sonnet-thinking",
-      label: "Claude Sonnet · claude-3-7-sonnet-thinking · anthropic",
-    });
+    expect(resolved.options).toEqual([
+      {
+        value: "anthropic/claude-3-7-sonnet",
+        label: "Claude Sonnet · claude-3-7-sonnet · anthropic",
+      },
+      {
+        value: "anthropic/claude-3-7-sonnet-thinking",
+        label: "Claude Sonnet · claude-3-7-sonnet-thinking · anthropic",
+      },
+    ]);
   });
 });

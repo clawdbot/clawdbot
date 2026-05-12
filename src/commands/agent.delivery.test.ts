@@ -369,7 +369,7 @@ describe("deliverAgentCommandResult", () => {
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
     expect(
-      JSON.parse(String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0])),
+      JSON.parse(String((runtime.log as ReturnType<typeof vi.fn>).mock.calls.at(0)?.[0])),
     ).toEqual({
       payloads: [
         {

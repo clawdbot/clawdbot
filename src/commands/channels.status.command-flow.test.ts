@@ -243,7 +243,7 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
 
     expect(errors.join("\n")).toContain("Gateway not reachable");
     expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledOnce();
-    const configResolutionRequest = mocks.resolveCommandConfigWithSecrets.mock.calls[0]?.[0];
+    const configResolutionRequest = mocks.resolveCommandConfigWithSecrets.mock.calls.at(0)?.[0];
     expect(configResolutionRequest?.commandName).toBe("channels status");
     expect(configResolutionRequest?.mode).toBe("read_only_status");
     expect(

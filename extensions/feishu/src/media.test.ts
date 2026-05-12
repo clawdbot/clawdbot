@@ -350,9 +350,8 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(fileData.file).toEqual(Buffer.from("remote-mp3"));
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("file");
     expect(result.voiceIntentDegradedToFile).toBe(true);
-    const warnCall = warnSpy.mock.calls[0];
-    expect(warnCall?.[0]).toContain("audioAsVoice transcode failed");
-    expect(warnCall?.[1]).toBeInstanceOf(Error);
+    expect(mockCallArg<string>(warnSpy, 0, 0)).toContain("audioAsVoice transcode failed");
+    expect(mockCallArg<unknown>(warnSpy, 0, 1)).toBeInstanceOf(Error);
     warnSpy.mockRestore();
   });
 
@@ -444,8 +443,9 @@ describe("sendMediaFeishu msg_type routing", () => {
       replyInThread: false,
     });
 
-    const callData = messageReplyMock.mock.calls[0][0].data;
-    expect(callData).not.toHaveProperty("reply_in_thread");
+    expect(callData<Record<string, unknown>>(messageReplyMock)).not.toHaveProperty(
+      "reply_in_thread",
+    );
   });
 
   it("passes mediaLocalRoots as localRoots to loadWebMedia for local paths (#27884)", async () => {
@@ -577,8 +577,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       fileName: "测试文档.pdf",
     });
 
-    const createCall = fileCreateMock.mock.calls[0][0];
-    expect(createCall.data.file_name).toBe("测试文档.pdf");
+    expect(callData<{ file_name?: string }>(fileCreateMock).file_name).toBe("测试文档.pdf");
   });
 
   it("preserves ASCII filenames unchanged for file uploads", async () => {
@@ -589,8 +588,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       fileName: "report-2026.pdf",
     });
 
-    const createCall = fileCreateMock.mock.calls[0][0];
-    expect(createCall.data.file_name).toBe("report-2026.pdf");
+    expect(callData<{ file_name?: string }>(fileCreateMock).file_name).toBe("report-2026.pdf");
   });
 
   it("preserves special Unicode characters (em-dash, full-width brackets) in filenames", async () => {
@@ -601,8 +599,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       fileName: "报告—详情（2026）.md",
     });
 
-    const createCall = fileCreateMock.mock.calls[0][0];
-    expect(createCall.data.file_name).toBe("报告—详情（2026）.md");
+    expect(callData<{ file_name?: string }>(fileCreateMock).file_name).toBe("报告—详情（2026）.md");
   });
 });
 

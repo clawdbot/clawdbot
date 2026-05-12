@@ -40,7 +40,11 @@ async function callEnvironmentMethod(
     respond,
     context: mockContext(),
   } as never);
-  return respond.mock.calls[0];
+  const call = respond.mock.calls.at(0);
+  if (call === undefined) {
+    throw new Error("expected environments handler to respond");
+  }
+  return call;
 }
 
 beforeEach(() => {

@@ -31,7 +31,7 @@ describe("warnLegacyOpenClawEnvVars", () => {
     });
 
     expect(emitWarning).toHaveBeenCalledOnce();
-    const [message, options] = emitWarning.mock.calls[0] as [
+    const [message, options] = emitWarning.mock.calls.at(0) as [
       string,
       { code: string; type: string },
     ];

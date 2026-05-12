@@ -234,7 +234,7 @@ describe("telegramPlugin outbound attachments", () => {
       to: "12345",
       text: "hi **boss**",
     });
-    expect(sendMessageTelegram.mock.calls[0]?.[2]).not.toHaveProperty("textMode");
+    expect(sendMessageTelegram.mock.calls.at(0)?.[2]).not.toHaveProperty("textMode");
 
     await sendText({
       cfg: createTelegramConfig(),
@@ -242,7 +242,7 @@ describe("telegramPlugin outbound attachments", () => {
       text: "<b>hi boss</b>",
       formatting: { parseMode: "HTML" },
     });
-    expect(sendMessageTelegram.mock.calls[1]?.[2]?.textMode).toBe("html");
+    expect(sendMessageTelegram.mock.calls.at(1)?.[2]?.textMode).toBe("html");
   });
 
   it("preserves explicit HTML parse mode for payload media captions", async () => {
@@ -264,6 +264,6 @@ describe("telegramPlugin outbound attachments", () => {
       formatting: { parseMode: "HTML" },
     });
 
-    expect(sendMessageTelegram.mock.calls[0]?.[2]?.textMode).toBe("html");
+    expect(sendMessageTelegram.mock.calls.at(0)?.[2]?.textMode).toBe("html");
   });
 });

@@ -11,6 +11,17 @@ vi.mock("./client.js", () => ({
 const { getMatrixDeviceHealth, listMatrixOwnDevices, pruneMatrixStaleGatewayDevices } =
   await import("./devices.js");
 
+function expectResolvedActionClientCall(): void {
+  expect(withResolvedActionClientMock).toHaveBeenCalledTimes(1);
+  const call = withResolvedActionClientMock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("Expected resolved action client call");
+  }
+  expect(call[0]).toEqual({ accountId: "poe" });
+  expect(call[1]).toBeTypeOf("function");
+  expect(withStartedActionClientMock).not.toHaveBeenCalled();
+}
+
 describe("matrix device actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -33,10 +44,7 @@ describe("matrix device actions", () => {
 
     const result = await listMatrixOwnDevices({ accountId: "poe" });
 
-    expect(withResolvedActionClientMock).toHaveBeenCalledTimes(1);
-    expect(withResolvedActionClientMock.mock.calls[0]?.[0]).toEqual({ accountId: "poe" });
-    expect(withResolvedActionClientMock.mock.calls[0]?.[1]).toBeTypeOf("function");
-    expect(withStartedActionClientMock).not.toHaveBeenCalled();
+    expectResolvedActionClientCall();
     expect(result).toEqual([
       {
         deviceId: "A7hWrQ70ea",
@@ -93,10 +101,7 @@ describe("matrix device actions", () => {
         },
       ],
     });
-    expect(withResolvedActionClientMock).toHaveBeenCalledTimes(1);
-    expect(withResolvedActionClientMock.mock.calls[0]?.[0]).toEqual({ accountId: "poe" });
-    expect(withResolvedActionClientMock.mock.calls[0]?.[1]).toBeTypeOf("function");
-    expect(withStartedActionClientMock).not.toHaveBeenCalled();
+    expectResolvedActionClientCall();
   });
 
   it("prunes stale OpenClaw-managed devices but preserves the current device", async () => {
@@ -210,9 +215,6 @@ describe("matrix device actions", () => {
         },
       ],
     });
-    expect(withResolvedActionClientMock).toHaveBeenCalledTimes(1);
-    expect(withResolvedActionClientMock.mock.calls[0]?.[0]).toEqual({ accountId: "poe" });
-    expect(withResolvedActionClientMock.mock.calls[0]?.[1]).toBeTypeOf("function");
-    expect(withStartedActionClientMock).not.toHaveBeenCalled();
+    expectResolvedActionClientCall();
   });
 });

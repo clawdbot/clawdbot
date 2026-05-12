@@ -250,6 +250,31 @@ describe("validateProviderConfig", () => {
         "plugins.entries.voice-call.config.realtime.enabled and plugins.entries.voice-call.config.streaming.enabled cannot both be true",
       );
     });
+
+    it("accepts realtime.enabled with provider=telnyx", () => {
+      const config = createBaseConfig("telnyx");
+      config.realtime.enabled = true;
+      config.inboundPolicy = "allowlist";
+
+      const result = validateProviderConfig(config);
+
+      expect(result.errors).not.toContain(
+        'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
+      );
+    });
+
+    it("rejects realtime.enabled with providers that do not support it yet", () => {
+      const config = createBaseConfig("plivo");
+      config.realtime.enabled = true;
+      config.inboundPolicy = "allowlist";
+
+      const result = validateProviderConfig(config);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain(
+        'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
+      );
+    });
   });
 });
 

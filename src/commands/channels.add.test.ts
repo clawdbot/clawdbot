@@ -162,6 +162,10 @@ function setupOptions() {
   );
 }
 
+function setupChannelArg(index: number) {
+  return mockArg(channelWizardMocks.setupChannels, 0, index, `setup channel arg ${index}`);
+}
+
 function applyAccountConfigCall(fn: MockCallSource, index = 0) {
   return requireRecord(
     mockArg(fn, index, 0, `apply account config ${index}`),
@@ -454,9 +458,9 @@ describe("channelsAddCommand", () => {
     await channelsAddCommand({}, runtime, { hasFlags: false });
 
     expect(channelWizardMocks.prompter.intro).toHaveBeenCalledWith("Channel setup");
-    expect(channelWizardMocks.setupChannels.mock.calls[0]?.[0]).toBe(config);
-    expect(channelWizardMocks.setupChannels.mock.calls[0]?.[1]).toBe(runtime);
-    expect(channelWizardMocks.setupChannels.mock.calls[0]?.[2]).toBe(channelWizardMocks.prompter);
+    expect(setupChannelArg(0)).toBe(config);
+    expect(setupChannelArg(1)).toBe(runtime);
+    expect(setupChannelArg(2)).toBe(channelWizardMocks.prompter);
     expect(setupOptions().deferStatusUntilSelection).toBe(true);
     expect(setupOptions().skipStatusNote).toBe(true);
     expect(setupOptions().promptAccountIds).toBe(true);
@@ -1025,7 +1029,10 @@ describe("channelsAddCommand", () => {
     expect(configMocks.writeConfigFile.mock.invocationCallOrder[0]).toBeLessThan(
       afterAccountConfigWritten.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
-    const hookCall = requireRecord(afterAccountConfigWritten.mock.calls[0]?.[0], "hook call");
+    const hookCall = requireRecord(
+      mockArg(afterAccountConfigWritten, 0, 0, "hook call"),
+      "hook call",
+    );
     expect(hookCall.previousCfg).toBe(baseConfigSnapshot.config);
     expect(requireRecord(hookCall.cfg, "hook config").channels).toEqual({
       signal: {

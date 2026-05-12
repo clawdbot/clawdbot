@@ -157,7 +157,7 @@ describe("handleGatewayPostJsonEndpoint", () => {
       },
     );
 
-    const [, requestAuth] = (resolveOperatorScopes.mock.calls[0] as unknown as
+    const [, requestAuth] = (resolveOperatorScopes.mock.calls.at(0) as unknown as
       | [IncomingMessage, { authMethod?: string; trustDeclaredOperatorScopes: boolean }]
       | undefined) ?? [undefined, undefined];
     expect(requestAuth?.authMethod).toBe("token");

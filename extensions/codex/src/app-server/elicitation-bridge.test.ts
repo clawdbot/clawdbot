@@ -13,6 +13,22 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => (
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
+function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0) {
+  return mock.mock.calls.at(index);
+}
+
+function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0) {
+  return mockCall(mock, index)?.at(argIndex);
+}
+
+function gatewayToolCall(index = 0) {
+  return mockCall(mockCallGatewayTool, index);
+}
+
+function gatewayToolArg(index = 0, argIndex = 0) {
+  return mockCallArg(mockCallGatewayTool, index, argIndex);
+}
+
 function createParams(): EmbeddedRunAttemptParams {
   return {
     sessionKey: "agent:main:session-1",
@@ -262,11 +278,11 @@ describe("Codex app-server elicitation bridge", () => {
       content: null,
       _meta: null,
     });
-    const approvalRequestCall = mockCallGatewayTool.mock.calls[0];
+    const approvalRequestCall = gatewayToolCall();
     expect(approvalRequestCall?.[0]).toBe("plugin.approval.request");
     expect(approvalRequestCall?.[1]).toStrictEqual({ timeoutMs: 130_000 });
     expect(approvalRequestCall?.[3]).toStrictEqual({ expectFinal: false });
-    const approvalRequest = approvalRequestCall?.[2] as {
+    const approvalRequest = gatewayToolArg(0, 2) as {
       description: string;
     };
     expect(approvalRequest.description).toContain("App: GitHub");
@@ -314,7 +330,7 @@ describe("Codex app-server elicitation bridge", () => {
       turnId: "turn-1",
     });
 
-    const approvalRequest = mockCallGatewayTool.mock.calls[0]?.[2] as {
+    const approvalRequest = gatewayToolArg(0, 2) as {
       title: string;
       description: string;
     };
@@ -369,7 +385,7 @@ describe("Codex app-server elicitation bridge", () => {
       turnId: "turn-1",
     });
 
-    const approvalRequest = mockCallGatewayTool.mock.calls[0]?.[2] as {
+    const approvalRequest = gatewayToolArg(0, 2) as {
       title: string;
       description: string;
     };
@@ -427,7 +443,7 @@ describe("Codex app-server elicitation bridge", () => {
       turnId: "turn-1",
     });
 
-    const approvalRequest = mockCallGatewayTool.mock.calls[0]?.[2] as {
+    const approvalRequest = gatewayToolArg(0, 2) as {
       description: string;
     };
     expect(approvalRequest.description).toContain("- repo: openclaw/openclaw");
@@ -471,7 +487,7 @@ describe("Codex app-server elicitation bridge", () => {
       turnId: "turn-1",
     });
 
-    const approvalRequest = mockCallGatewayTool.mock.calls[0]?.[2] as {
+    const approvalRequest = gatewayToolArg(0, 2) as {
       description: string;
     };
     expect(approvalRequest.description).toContain("payload");
@@ -504,7 +520,7 @@ describe("Codex app-server elicitation bridge", () => {
       turnId: "turn-1",
     });
 
-    const approvalRequest = mockCallGatewayTool.mock.calls[0]?.[2] as {
+    const approvalRequest = gatewayToolArg(0, 2) as {
       description: string;
     };
     expect(approvalRequest.description).toContain("p0");
@@ -938,11 +954,11 @@ describe("Codex app-server elicitation bridge", () => {
       },
       _meta: null,
     });
-    const approvalRequestCall = mockCallGatewayTool.mock.calls[0];
+    const approvalRequestCall = gatewayToolCall();
     expect(approvalRequestCall?.[0]).toBe("plugin.approval.request");
     expect(approvalRequestCall?.[1]).toStrictEqual({ timeoutMs: 130_000 });
     expect(approvalRequestCall?.[3]).toStrictEqual({ expectFinal: false });
-    const approvalRequest = approvalRequestCall?.[2] as {
+    const approvalRequest = gatewayToolArg(0, 2) as {
       title: string;
       description: string;
     };
@@ -1029,7 +1045,7 @@ describe("Codex app-server elicitation bridge", () => {
       content: null,
       _meta: null,
     });
-    const [warningMessage, warningDetails] = warn.mock.calls[0] ?? [];
+    const [warningMessage, warningDetails] = mockCall(warn) ?? [];
     expect(warningMessage).toBe(
       "codex MCP approval elicitation approved without a mappable response",
     );

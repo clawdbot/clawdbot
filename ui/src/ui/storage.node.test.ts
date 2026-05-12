@@ -571,14 +571,18 @@ describe("loadSettings default gateway URL derivation", () => {
       sessionKey: "agent:current:main",
       lastActiveSessionKey: "agent:current:main",
     });
-    const scopes = Object.keys(scopedSessions);
-    expect(scopes).toHaveLength(10);
-    // oldest stale entries should be evicted
-    expect(scopes).not.toContain("wss://stale-0.example:8443");
-    expect(scopes).not.toContain("wss://stale-1.example:8443");
-    // newest stale entries and the current gateway should be retained
-    expect(scopes).toContain("wss://stale-10.example:8443");
-    expect(scopes).toContain("wss://gateway.example:8443");
+    expect(Object.keys(scopedSessions)).toEqual([
+      "wss://stale-2.example:8443",
+      "wss://stale-3.example:8443",
+      "wss://stale-4.example:8443",
+      "wss://stale-5.example:8443",
+      "wss://stale-6.example:8443",
+      "wss://stale-7.example:8443",
+      "wss://stale-8.example:8443",
+      "wss://stale-9.example:8443",
+      "wss://stale-10.example:8443",
+      "wss://gateway.example:8443",
+    ]);
   });
 
   it("persists local user identity separately from gateway settings", () => {

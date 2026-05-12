@@ -224,7 +224,7 @@ describe("openrouter provider hooks", () => {
     );
 
     expect(baseStreamFn).toHaveBeenCalledOnce();
-    const firstCall = baseStreamFn.mock.calls[0];
+    const firstCall = baseStreamFn.mock.calls.at(0);
     const firstModel = firstCall?.[0];
     const compat = (firstModel as { compat?: { openRouterRouting?: { order?: unknown } } }).compat;
     expect(compat?.openRouterRouting?.order).toEqual(["moonshot"]);

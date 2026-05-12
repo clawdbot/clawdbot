@@ -167,6 +167,25 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-silent", chatId: "12345" });
   });
 
+  it("does not plain-text sanitize Telegram HTML before durable delivery", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-html", chatId: "12345" });
+
+    await telegramOutbound.sendText!({
+      cfg: {} as never,
+      to: "12345",
+      text: "<b>Morning</b> <code>oauth2</code>",
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(
+      sendMessageTelegramMock,
+      0,
+      "12345",
+      "<b>Morning</b> <code>oauth2</code>",
+    );
+    expect(options.textMode).toBeUndefined();
+  });
+
   it("forwards audioAsVoice payload media to Telegram voice sends", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-voice", chatId: "12345" });
 

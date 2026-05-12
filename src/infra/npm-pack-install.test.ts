@@ -92,7 +92,11 @@ describe("installFromNpmSpecArchive", () => {
     expect(installFromArchive).not.toHaveBeenCalled();
     const withTempDirMock = vi.mocked(withTempDir);
     expect(withTempDirMock).toHaveBeenCalledTimes(1);
-    const [tempDirPrefix, tempDirCallback] = withTempDirMock.mock.calls[0];
+    const tempDirCall = withTempDirMock.mock.calls.at(0);
+    if (tempDirCall === undefined) {
+      throw new Error("expected temp dir call");
+    }
+    const [tempDirPrefix, tempDirCallback] = tempDirCall;
     expect(tempDirPrefix).toBe("openclaw-test-");
     expect(tempDirCallback).toBeTypeOf("function");
   });

@@ -264,7 +264,7 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
 
     // Progress callback hit 3 times with monotonically-increasing counts.
     expect(onProgress).toHaveBeenCalledTimes(3);
-    const last = onProgress.mock.calls[2][0];
+    const last = onProgress.mock.calls.at(2)?.[0];
     expect(last.completedParts).toBe(3);
     expect(last.totalParts).toBe(3);
     expect(last.uploadedBytes).toBe(FIXTURE_BUFFER.length);

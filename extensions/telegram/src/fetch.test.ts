@@ -175,6 +175,14 @@ function getDispatcherFromUndiciCall(nth: number) {
   return dispatcher;
 }
 
+function constructorOptions(ctor: ReturnType<typeof vi.fn>, label: string): unknown {
+  const call = ctor.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`missing ${label} constructor call`);
+  }
+  return call[0];
+}
+
 function buildFetchFallbackError(code: string) {
   const connectErr = Object.assign(new Error(`connect ${code} api.telegram.org:443`), {
     code,
@@ -400,7 +408,10 @@ describe("resolveTelegramFetch", () => {
     await resolved("https://api.telegram.org/botx/getMe");
 
     expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
-    expect(EnvHttpProxyAgentCtor.mock.calls[0]?.[0]?.httpsProxy).toBe("http://127.0.0.1:7890");
+    const envProxyOptions = constructorOptions(EnvHttpProxyAgentCtor, "env proxy") as {
+      httpsProxy?: string;
+    };
+    expect(envProxyOptions.httpsProxy).toBe("http://127.0.0.1:7890");
     expect(AgentCtor).not.toHaveBeenCalled();
 
     const dispatcher = getDispatcherFromUndiciCall(1);
@@ -420,11 +431,12 @@ describe("resolveTelegramFetch", () => {
     await resolved("https://api.telegram.org/botTOKEN/getMe");
 
     expect(ProxyAgentCtor).toHaveBeenCalledTimes(1);
-    const proxyOptions = ProxyAgentCtor.mock.calls[0]?.[0] as
-      | { allowH2?: boolean; uri?: string }
-      | undefined;
-    expect(proxyOptions?.allowH2).toBe(false);
-    expect(proxyOptions?.uri).toBe("http://127.0.0.1:7777");
+    const proxyOptions = constructorOptions(ProxyAgentCtor, "debug proxy") as {
+      allowH2?: boolean;
+      uri?: string;
+    };
+    expect(proxyOptions.allowH2).toBe(false);
+    expect(proxyOptions.uri).toBe("http://127.0.0.1:7777");
   });
 
   it("uses OPENCLAW_PROXY_URL as a Telegram explicit proxy when proxy env is absent", async () => {
@@ -441,12 +453,14 @@ describe("resolveTelegramFetch", () => {
     await transport.fetch("https://api.telegram.org/botTOKEN/getMe");
 
     expect(ProxyAgentCtor).toHaveBeenCalledTimes(1);
-    const proxyOptions = ProxyAgentCtor.mock.calls[0]?.[0] as
-      | { allowH2?: boolean; uri?: string; requestTls?: { autoSelectFamily?: boolean } }
-      | undefined;
-    expect(proxyOptions?.allowH2).toBe(false);
-    expect(proxyOptions?.uri).toBe("http://127.0.0.1:7788");
-    expect(proxyOptions?.requestTls?.autoSelectFamily).toBe(false);
+    const proxyOptions = constructorOptions(ProxyAgentCtor, "OpenClaw proxy") as {
+      allowH2?: boolean;
+      uri?: string;
+      requestTls?: { autoSelectFamily?: boolean };
+    };
+    expect(proxyOptions.allowH2).toBe(false);
+    expect(proxyOptions.uri).toBe("http://127.0.0.1:7788");
+    expect(proxyOptions.requestTls?.autoSelectFamily).toBe(false);
     expect(EnvHttpProxyAgentCtor).not.toHaveBeenCalled();
     expect(AgentCtor).not.toHaveBeenCalled();
     const dispatcherPolicy = transport.dispatcherAttempts?.[0]?.dispatcherPolicy as
@@ -642,10 +656,14 @@ describe("resolveTelegramFetch", () => {
     await resolved("https://api.telegram.org/botx/sendMessage");
 
     expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
-    const proxyOptions = EnvHttpProxyAgentCtor.mock.calls[0]?.[0];
-    expect(proxyOptions?.allowH2).toBe(false);
-    expect(proxyOptions?.httpProxy).toBe("http://127.0.0.1:7891");
-    expect(proxyOptions?.httpsProxy).toBe("http://127.0.0.1:7891");
+    const proxyOptions = constructorOptions(EnvHttpProxyAgentCtor, "env proxy") as {
+      allowH2?: boolean;
+      httpProxy?: string;
+      httpsProxy?: string;
+    };
+    expect(proxyOptions.allowH2).toBe(false);
+    expect(proxyOptions.httpProxy).toBe("http://127.0.0.1:7891");
+    expect(proxyOptions.httpsProxy).toBe("http://127.0.0.1:7891");
     expect(AgentCtor).not.toHaveBeenCalled();
 
     expect(transport.dispatcherAttempts?.[0]?.dispatcherPolicy?.mode).toBe("env-proxy");

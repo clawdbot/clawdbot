@@ -55,7 +55,7 @@ describe("noteSessionLockHealth", () => {
     });
 
     expect(note).toHaveBeenCalledTimes(1);
-    const [message, title] = note.mock.calls[0] as [string, string];
+    const [message, title] = note.mock.calls.at(0) as [string, string];
     expect(title).toBe("Session locks");
     expect(message).toContain("Found 1 session lock file");
     expect(message).toContain(`pid=${process.pid} (alive)`);
@@ -88,7 +88,7 @@ describe("noteSessionLockHealth", () => {
     });
 
     expect(note).toHaveBeenCalledTimes(1);
-    const [message] = note.mock.calls[0] as [string, string];
+    const [message] = note.mock.calls.at(0) as [string, string];
     expect(message).toContain("[removed]");
     expect(message).toContain("Removed 1 stale session lock file");
 
@@ -114,7 +114,7 @@ describe("noteSessionLockHealth", () => {
     });
 
     expect(note).toHaveBeenCalledTimes(1);
-    const [message] = note.mock.calls[0] as [string, string];
+    const [message] = note.mock.calls.at(0) as [string, string];
     expect(message).toContain("stale=yes (non-openclaw-owner)");
     expect(message).toContain("[removed]");
     expect(message).toContain("Removed 1 stale session lock file");

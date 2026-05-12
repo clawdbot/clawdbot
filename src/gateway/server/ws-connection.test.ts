@@ -124,7 +124,7 @@ async function connectTestWs(
   return {
     clients,
     socket,
-    passed: attachGatewayWsMessageHandlerMock.mock.calls[0]?.[0] as unknown,
+    passed: attachGatewayWsMessageHandlerMock.mock.calls.at(0)?.[0] as unknown,
   };
 }
 
@@ -296,7 +296,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     onConnection?.(socket, upgradeReq);
     await waitForLazyMessageHandler();
 
-    const passed = attachGatewayWsMessageHandlerMock.mock.calls[0]?.[0] as {
+    const passed = attachGatewayWsMessageHandlerMock.mock.calls.at(0)?.[0] as {
       setClient: (client: unknown) => boolean;
     };
     expect(

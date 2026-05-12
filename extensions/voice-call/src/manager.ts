@@ -4,7 +4,7 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { VoiceCallConfig } from "./config.js";
-import type { CallManagerContext } from "./manager/context.js";
+import type { CallManagerContext, StreamSessionIssuer } from "./manager/context.js";
 import { processEvent as processManagerEvent } from "./manager/events.js";
 import { getCallByProviderCallId as getCallByProviderCallIdFromMaps } from "./manager/lookup.js";
 import {
@@ -86,6 +86,13 @@ export class CallManager {
   >();
   private maxDurationTimers = new Map<CallId, NodeJS.Timeout>();
   private initialMessageInFlight = new Set<CallId>();
+
+  /**
+   * Carrier-side stream session issuer. Wired by the runtime when realtime is
+   * enabled so the manager can pre-issue stream URLs for providers (e.g.
+   * Telnyx) that attach Media Streaming at dial or answer time.
+   */
+  streamSessionIssuer: StreamSessionIssuer | undefined;
 
   constructor(config: VoiceCallConfig, storePath?: string) {
     this.config = config;
@@ -339,6 +346,7 @@ export class CallManager {
       onCallAnswered: (call) => {
         this.maybeSpeakInitialMessageOnAnswered(call);
       },
+      streamSessionIssuer: this.streamSessionIssuer,
     };
   }
 

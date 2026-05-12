@@ -167,6 +167,10 @@ function requireFirstCallParam(calls: ReadonlyArray<readonly unknown[]>, label: 
   return call[0];
 }
 
+function requireFirstSynthesisRequest(label: string): Record<string, unknown> {
+  return requireRecord(requireFirstCallParam(synthesizeMock.mock.calls, label), label);
+}
+
 function requireAttempt(attempts: unknown[] | undefined, index: number) {
   if (!attempts) {
     throw new Error("expected synthesis attempts");
@@ -371,10 +375,7 @@ describe("speech-core native voice-note routing", () => {
 
     expect(result.success).toBe(true);
     expect(synthesizeMock).toHaveBeenCalled();
-    const request = requireRecord(
-      synthesizeMock.mock.calls[0]?.[0],
-      "runtime snapshot synthesis request",
-    );
+    const request = requireFirstSynthesisRequest("runtime snapshot synthesis request");
     expect(request.cfg).toBe(runtimeConfig);
     const providerConfig = requireRecord(request.providerConfig, "provider config");
     expect(providerConfig.apiKey).toBe("resolved-minimax-key");
@@ -426,7 +427,7 @@ describe("speech-core native voice-note routing", () => {
       });
 
       expect(synthesizeMock).toHaveBeenCalled();
-      const request = requireRecord(synthesizeMock.mock.calls[0]?.[0], "hidden TTS request");
+      const request = requireFirstSynthesisRequest("hidden TTS request");
       expect(request.text).toBe("hello");
       expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
       expect(result.audioAsVoice).toBe(true);
@@ -547,7 +548,7 @@ describe("speech-core native voice-note routing", () => {
       });
 
       expect(synthesizeMock).toHaveBeenCalled();
-      const request = requireRecord(synthesizeMock.mock.calls[0]?.[0], "persona synthesis request");
+      const request = requireFirstSynthesisRequest("persona synthesis request");
       const providerConfig = requireRecord(request.providerConfig, "persona provider config");
       expect(providerConfig.model).toBe("base-model");
       expect(providerConfig.voice).toBe("persona-voice");
@@ -889,10 +890,7 @@ describe("speech-core per-agent TTS config", () => {
       });
 
       expect(synthesizeMock).toHaveBeenCalled();
-      const request = requireRecord(
-        synthesizeMock.mock.calls[0]?.[0],
-        "agent persona synthesis request",
-      );
+      const request = requireFirstSynthesisRequest("agent persona synthesis request");
       const providerConfig = requireRecord(request.providerConfig, "agent persona provider config");
       expect(providerConfig.model).toBe("base-model");
       expect(providerConfig.voice).toBe("agent-voice");

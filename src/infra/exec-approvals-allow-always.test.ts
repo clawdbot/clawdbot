@@ -9,6 +9,8 @@ import {
   makeTempDir,
 } from "./exec-approvals-test-helpers.js";
 import {
+  analyzeArgvCommand,
+  evaluateExecAllowlist,
   evaluateShellAllowlist,
   requiresExecApproval,
   resolveAllowAlwaysPatterns,
@@ -292,6 +294,69 @@ describe("resolveAllowAlwaysPatterns", () => {
       ),
     ).toBeNull();
   });
+
+  it.each([
+    {
+      name: "empty PowerShell file argument",
+      argvPrefix: [],
+      fileFlag: "-File",
+      scriptArgs: [""],
+      expectedArgPattern: "^\x00$",
+    },
+    {
+      name: "PowerShell file alias argument",
+      argvPrefix: [],
+      fileFlag: "-fi",
+      scriptArgs: ["arg"],
+      expectedArgPattern: "^arg\x00$",
+    },
+    {
+      name: "empty PowerShell file argument after dispatch unwrap",
+      argvPrefix: ["env"],
+      fileFlag: "/file",
+      scriptArgs: [""],
+      expectedArgPattern: "^\x00$",
+    },
+  ])(
+    "persists allow-always patterns for $name",
+    ({ argvPrefix, fileFlag, scriptArgs, expectedArgPattern }) => {
+      const dir = makeTempDir();
+      makeExecutable(dir, "env");
+      makeExecutable(dir, "pwsh");
+      const scriptPath = path.join(dir, "script.ps1");
+      fs.writeFileSync(scriptPath, "");
+      fs.chmodSync(scriptPath, 0o755);
+      try {
+        const env = makePathEnv(dir);
+        const analysis = analyzeArgvCommand({
+          argv: [...argvPrefix, "pwsh", fileFlag, scriptPath, ...scriptArgs],
+          cwd: dir,
+          env,
+        });
+        expect(analysis.ok).toBe(true);
+
+        const entries = resolveAllowAlwaysPatternEntries({
+          segments: analysis.segments,
+          cwd: dir,
+          env,
+          platform: "win32",
+        });
+        expect(entries).toEqual([{ pattern: scriptPath, argPattern: expectedArgPattern }]);
+
+        const result = evaluateExecAllowlist({
+          analysis,
+          allowlist: entries,
+          safeBins: new Set(),
+          cwd: dir,
+          env,
+          platform: "win32",
+        });
+        expect(result.allowlistSatisfied).toBe(true);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("keeps inline awk programs out of allow-always persistence in strict inline-eval mode", () => {
     if (process.platform === "win32") {

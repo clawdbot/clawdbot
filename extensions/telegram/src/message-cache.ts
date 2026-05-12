@@ -496,6 +496,88 @@ function compareCachedMessageNodes(
   return (left.messageId ?? "").localeCompare(right.messageId ?? "");
 }
 
+const SESSION_BOUNDARY_COMMAND_RE = /^\/(?:new|reset)(?:@[A-Za-z0-9_]+)?(?:\s|$)/i;
+const SOFT_RESET_COMMAND_RE = /^\/reset(?:@[A-Za-z0-9_]+)?\s+soft(?:\s|$)/i;
+
+function isSessionBoundaryCommandNode(node: TelegramCachedMessageNode): boolean {
+  const body = node.body?.trim();
+  return Boolean(
+    body && SESSION_BOUNDARY_COMMAND_RE.test(body) && !SOFT_RESET_COMMAND_RE.test(body),
+  );
+}
+
+function isAfterSessionBoundary(
+  node: TelegramCachedMessageNode,
+  boundary?: TelegramCachedMessageNode,
+): boolean {
+  if (!boundary) {
+    return true;
+  }
+  const nodeId = Number(node.messageId);
+  const boundaryId = Number(boundary.messageId);
+  if (Number.isFinite(nodeId) && Number.isFinite(boundaryId)) {
+    return nodeId > boundaryId;
+  }
+  if (
+    typeof node.timestamp === "number" &&
+    Number.isFinite(node.timestamp) &&
+    typeof boundary.timestamp === "number" &&
+    Number.isFinite(boundary.timestamp)
+  ) {
+    return node.timestamp > boundary.timestamp;
+  }
+  return true;
+}
+
+function normalizeSessionBoundaryTimestamp(timestampMs?: number): number | undefined {
+  if (typeof timestampMs !== "number" || !Number.isFinite(timestampMs)) {
+    return undefined;
+  }
+  return Math.floor(timestampMs / 1000) * 1000;
+}
+
+function isAtOrAfterSessionBoundaryTimestamp(
+  node: TelegramCachedMessageNode,
+  boundaryTimestampMs?: number,
+): boolean {
+  if (boundaryTimestampMs === undefined) {
+    return true;
+  }
+  return typeof node.timestamp !== "number" || !Number.isFinite(node.timestamp)
+    ? true
+    : node.timestamp >= boundaryTimestampMs;
+}
+
+function resolveSessionBoundaryNode(params: {
+  cache: TelegramMessageCache;
+  accountId: string;
+  chatId: string | number;
+  messageId?: string;
+  threadId?: number;
+}): TelegramCachedMessageNode | undefined {
+  if (!params.messageId) {
+    return undefined;
+  }
+  const candidates = params.cache
+    .recentBefore({
+      accountId: params.accountId,
+      chatId: params.chatId,
+      messageId: params.messageId,
+      ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
+      limit: Number.MAX_SAFE_INTEGER,
+    })
+    .filter(isSessionBoundaryCommandNode);
+  const current = params.cache.get({
+    accountId: params.accountId,
+    chatId: params.chatId,
+    messageId: params.messageId,
+  });
+  if (current && isSessionBoundaryCommandNode(current)) {
+    candidates.push(current);
+  }
+  return candidates.toSorted(compareCachedMessageNodes).at(-1);
+}
+
 export function buildTelegramReplyChain(params: {
   cache: TelegramMessageCache;
   accountId: string;
@@ -539,11 +621,20 @@ export function buildTelegramConversationContext(params: {
   replyChainNodes: TelegramCachedMessageNode[];
   recentLimit: number;
   replyTargetWindowSize: number;
+  minTimestampMs?: number;
 }): TelegramConversationContextNode[] {
   const selected = new Map<string, TelegramConversationContextNode>();
   const replyTargetIds = new Set<string>();
+  const sessionBoundary = resolveSessionBoundaryNode(params);
+  const sessionBoundaryTimestamp = normalizeSessionBoundaryTimestamp(params.minTimestampMs);
   const addNode = (node: TelegramCachedMessageNode, flags?: { replyTarget?: boolean }) => {
     if (!node.messageId || node.messageId === params.messageId) {
+      return;
+    }
+    if (!isAfterSessionBoundary(node, sessionBoundary)) {
+      return;
+    }
+    if (!isAtOrAfterSessionBoundaryTimestamp(node, sessionBoundaryTimestamp)) {
       return;
     }
     const existing = selected.get(node.messageId);

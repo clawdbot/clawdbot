@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { ExecApprovalFollowupTarget } from "./bash-tools.exec-host-shared.js";
 import type { ExecApprovalFollowupFactory } from "./bash-tools.exec-types.js";
 
@@ -137,6 +137,43 @@ vi.mock("../infra/command-analysis/inline-eval.js", () => ({
 
 let processGatewayAllowlist: typeof import("./bash-tools.exec-host-gateway.js").processGatewayAllowlist;
 type GatewayAllowlistParams = Parameters<typeof processGatewayAllowlist>[0];
+
+function requireBuildFollowupTargetInput(callIndex: number): ExecApprovalFollowupTarget {
+  const call = buildExecApprovalFollowupTargetMock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected build followup target call ${callIndex}`);
+  }
+  return call[0];
+}
+
+function requireSentFollowupTarget(
+  callIndex: number,
+): Parameters<SendExecApprovalFollowupResult>[0] {
+  const call = sendExecApprovalFollowupResultMock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected sent followup call ${callIndex}`);
+  }
+  return call[0];
+}
+
+function requireSentFollowupText(callIndex: number): string {
+  const call = sendExecApprovalFollowupResultMock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected sent followup call ${callIndex}`);
+  }
+  return call[1] ?? "";
+}
+
+function requireApprovalFollowupInput(
+  mock: Mock<ExecApprovalFollowupFactory>,
+  callIndex: number,
+): Parameters<ExecApprovalFollowupFactory>[0] {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected approval followup call ${callIndex}`);
+  }
+  return call[0];
+}
 
 describe("processGatewayAllowlist", () => {
   beforeAll(async () => {
@@ -311,10 +348,7 @@ describe("processGatewayAllowlist", () => {
       sessionKey: "agent:main:telegram:direct:123",
     });
 
-    const followupTargetInput = buildExecApprovalFollowupTargetMock.mock.calls.at(0)?.[0] as
-      | { sessionKey?: string }
-      | undefined;
-    expect(followupTargetInput?.sessionKey).toBe("agent:main:telegram:direct:123");
+    expect(requireBuildFollowupTargetInput(0).sessionKey).toBe("agent:main:telegram:direct:123");
   });
 
   it("formats diagnostics approvals as direct pasteable followups", async () => {
@@ -375,31 +409,18 @@ describe("processGatewayAllowlist", () => {
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
     });
-    const followupTargetInput = buildExecApprovalFollowupTargetMock.mock.calls.at(0)?.[0] as
-      | { direct?: boolean }
-      | undefined;
-    expect(followupTargetInput?.direct).toBe(true);
+    expect(requireBuildFollowupTargetInput(0).direct).toBe(true);
 
-    const followupTarget = sendExecApprovalFollowupResultMock.mock.calls.at(0)?.[0] as
-      | { direct?: boolean }
-      | null
-      | undefined;
+    const followupTarget = requireSentFollowupTarget(0);
     expect(followupTarget?.direct).toBe(true);
-    const followupText = sendExecApprovalFollowupResultMock.mock.calls.at(0)?.[1] ?? "";
+    const followupText = requireSentFollowupText(0);
     expect(followupText).toContain("Diagnostics export created.");
     expect(followupText).toContain("Path: /tmp/openclaw-diagnostics.zip");
     expect(followupText).toContain("Contents (2 files):");
     expect(followupText).toContain("OpenAI Codex harness:");
     expect(followupText).toContain("Codex diagnostics sent to OpenAI servers:");
     expect(followupText).toContain("Codex thread id: `thread-1`");
-    const approvalInput = approvalFollowup.mock.calls.at(0)?.[0] as
-      | {
-          approvalId?: string;
-          sessionId?: string;
-          trigger?: string;
-          outcome?: { status?: string; exitCode?: number | null };
-        }
-      | undefined;
+    const approvalInput = requireApprovalFollowupInput(approvalFollowup, 0);
     expect(approvalInput?.approvalId).toBe("req-1");
     expect(approvalInput?.sessionId).toBe("sess-1");
     expect(approvalInput?.trigger).toBe("diagnostics");

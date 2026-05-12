@@ -105,7 +105,7 @@ describe("scanStatusJsonFast", () => {
     await scanStatusJsonFast({}, {} as never);
 
     expect(mocks.getStatusSummary).toHaveBeenCalledOnce();
-    const summaryOptions = mocks.getStatusSummary.mock.calls[0]?.[0] as
+    const summaryOptions = mocks.getStatusSummary.mock.calls.at(0)?.[0] as
       | { includeChannelSummary?: unknown }
       | undefined;
     expect(summaryOptions?.includeChannelSummary).toBe(false);
@@ -135,7 +135,7 @@ describe("scanStatusJsonFast", () => {
     });
     expect(mocks.resolveMemorySearchConfig).toHaveBeenCalled();
     expect(mocks.getMemorySearchManager).toHaveBeenCalledOnce();
-    expect(mocks.getMemorySearchManager.mock.calls[0]?.[0]).toStrictEqual({
+    expect(mocks.getMemorySearchManager.mock.calls.at(0)?.[0]).toStrictEqual({
       cfg: createStatusMemorySearchConfig(),
       agentId: "main",
       purpose: "status",

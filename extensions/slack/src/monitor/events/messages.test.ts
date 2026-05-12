@@ -221,7 +221,7 @@ describe("registerSlackMessageEvents", () => {
     });
 
     expect(handleSlackMessage).toHaveBeenCalledTimes(1);
-    const call = handleSlackMessage.mock.calls[0] as unknown as
+    const call = handleSlackMessage.mock.calls.at(0) as unknown as
       | [{ subtype?: string; channel?: string; user?: string }, { source?: string }]
       | undefined;
     expect(call?.[0]?.subtype).toBe("thread_broadcast");
@@ -239,7 +239,7 @@ describe("registerSlackMessageEvents", () => {
     });
 
     expect(handleSlackMessage).toHaveBeenCalledTimes(1);
-    const call = handleSlackMessage.mock.calls[0] as unknown as
+    const call = handleSlackMessage.mock.calls.at(0) as unknown as
       | [
           {
             channel?: string;

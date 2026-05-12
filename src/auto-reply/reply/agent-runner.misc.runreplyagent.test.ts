@@ -618,7 +618,7 @@ describe("runReplyAgent block streaming", () => {
     });
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0][0].text).toBe("Hello");
+    expect(onBlockReply.mock.calls.at(0)?.[0].text).toBe("Hello");
     expect(result).toBeUndefined();
   });
 
@@ -1962,7 +1962,7 @@ describe("runReplyAgent claude-cli routing", () => {
 
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     expectRecordFields(
-      runCliAgentMock.mock.calls[0]?.[0],
+      runCliAgentMock.mock.calls.at(0)?.[0],
       { provider: "claude-cli" },
       "CLI run params",
     );
@@ -2406,7 +2406,7 @@ describe("runReplyAgent fallback reasoning tags", () => {
 
     await createRun();
 
-    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as EmbeddedPiAgentParams | undefined;
+    const call = runEmbeddedPiAgentMock.mock.calls.at(0)?.[0] as EmbeddedPiAgentParams | undefined;
     expect(call?.enforceFinalTag).toBe(true);
   });
 

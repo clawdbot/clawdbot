@@ -222,7 +222,7 @@ describe("createTelegramBot command menu", () => {
 
     await commandsSynced;
 
-    const registered = setMyCommandsSpy.mock.calls[0]?.[0] as Array<{
+    const registered = setMyCommandsSpy.mock.calls.at(0)?.[0] as Array<{
       command: string;
       description: string;
     }>;

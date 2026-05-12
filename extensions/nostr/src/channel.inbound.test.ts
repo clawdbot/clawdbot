@@ -101,6 +101,14 @@ async function startGatewayHarness(params: {
   return { harness, bus, cleanup };
 }
 
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call.at(argIndex);
+}
+
 describe("nostr inbound gateway path", () => {
   afterEach(() => {
     mocks.normalizePubkey.mockClear();
@@ -114,7 +122,7 @@ describe("nostr inbound gateway path", () => {
       }),
     });
 
-    const options = mocks.startNostrBus.mock.calls[0]?.[0] as {
+    const options = mockCallArg(mocks.startNostrBus) as {
       authorizeSender: (params: {
         senderPubkey: string;
         reply: (text: string) => Promise<void>;
@@ -129,7 +137,7 @@ describe("nostr inbound gateway path", () => {
       }),
     ).resolves.toBe("pairing");
     expect(sendPairingReply).toHaveBeenCalledTimes(1);
-    expect(sendPairingReply.mock.calls[0]?.[0]).toContain("Pairing code:");
+    expect(mockCallArg(sendPairingReply)).toContain("Pairing code:");
 
     cleanup.stop();
   });
@@ -146,7 +154,7 @@ describe("nostr inbound gateway path", () => {
       } as never,
     });
 
-    const options = mocks.startNostrBus.mock.calls[0]?.[0] as {
+    const options = mockCallArg(mocks.startNostrBus) as {
       onMessage: (
         senderPubkey: string,
         text: string,
@@ -163,7 +171,11 @@ describe("nostr inbound gateway path", () => {
 
     expect(harness.recordInboundSession).toHaveBeenCalledTimes(1);
     expect(harness.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
-    const ctx = harness.dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0]?.ctx;
+    const ctx = (
+      mockCallArg(harness.dispatchReplyWithBufferedBlockDispatcher) as {
+        ctx?: Record<string, unknown>;
+      }
+    ).ctx;
     expect(ctx?.BodyForAgent).toBe("hello from nostr");
     expect(ctx?.SenderId).toBe("sender-pubkey");
     expect(ctx?.MessageSid).toBe("event-123");

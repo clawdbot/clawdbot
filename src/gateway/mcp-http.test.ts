@@ -519,7 +519,7 @@ describe("mcp loopback server", () => {
     expect(response.status).toBe(200);
     expect(payload.result?.isError).toBe(false);
     expect(execute).toHaveBeenCalledTimes(1);
-    const [callId, params, signal] = execute.mock.calls[0] ?? [];
+    const [callId, params, signal] = execute.mock.calls.at(0) ?? [];
     expect(callId).toMatch(/^mcp-/);
     expect(params).toEqual({ body: "hello" });
     expect(signal).toBeInstanceOf(AbortSignal);

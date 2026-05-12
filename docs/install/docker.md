@@ -51,6 +51,7 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
 
     - prompt for provider API keys
     - generate a gateway token and write it to `.env`
+    - create the auth-profile secret key directory
     - start the gateway via Docker Compose
 
     During setup, pre-start onboarding and config writes run through
@@ -257,19 +258,23 @@ For gotchas and troubleshooting, see [Bonjour discovery](/gateway/bonjour).
 
 ### Storage and persistence
 
-Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw` and
-`OPENCLAW_WORKSPACE_DIR` to `/home/node/.openclaw/workspace`, so those paths
-survive container replacement. When either variable is unset, the bundled
-`docker-compose.yml` falls back to `${HOME}/.openclaw` (and
-`${HOME}/.openclaw/workspace` for the workspace mount), or `/tmp/.openclaw`
-when `HOME` itself is also missing. That keeps `docker compose up` from
-emitting an empty-source volume spec on bare environments.
+Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw`,
+`OPENCLAW_WORKSPACE_DIR` to `/home/node/.openclaw/workspace`, and
+`OPENCLAW_AUTH_PROFILE_SECRET_DIR` to `/home/node/.config/openclaw`, so those
+paths survive container replacement. When any variable is unset, the bundled
+`docker-compose.yml` falls back under `${HOME}`, or `/tmp` when `HOME` itself is
+also missing. That keeps `docker compose up` from emitting an empty-source
+volume spec on bare environments.
 
 That mounted config directory is where OpenClaw keeps:
 
 - `openclaw.json` for behavior config
 - `agents/<agentId>/agent/auth-profiles.json` for stored provider OAuth/API-key auth
 - `.env` for env-backed runtime secrets such as `OPENCLAW_GATEWAY_TOKEN`
+
+The auth-profile secret key directory stores the local encryption key used for
+OAuth-backed auth profile token material. Keep it with your Docker host state,
+but separate from `OPENCLAW_CONFIG_DIR`.
 
 Installed downloadable plugins store their package state under the mounted
 OpenClaw home, so plugin install records and package roots survive container

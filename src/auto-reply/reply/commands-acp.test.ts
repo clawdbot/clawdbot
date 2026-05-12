@@ -1144,7 +1144,7 @@ describe("/acp command", () => {
     expectBoundIntroTextToExclude("session ids: pending (available after the first reply)");
     expectGatewayMethodNotCalled("sessions.patch");
     expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(1);
-    const upsertArgs = hoisted.upsertAcpSessionMetaMock.mock.calls[0]?.[0] as
+    const upsertArgs = hoisted.upsertAcpSessionMetaMock.mock.calls.at(0)?.[0] as
       | {
           sessionKey: string;
           mutate: (
@@ -1632,7 +1632,7 @@ describe("/acp command", () => {
       reason: "manual",
     });
     expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(1);
-    const clearMetaArgs = hoisted.upsertAcpSessionMetaMock.mock.calls[0]?.[0] as
+    const clearMetaArgs = hoisted.upsertAcpSessionMetaMock.mock.calls.at(0)?.[0] as
       | {
           sessionKey: string;
           mutate: (current: unknown, entry: { sessionId: string; updatedAt: number }) => unknown;

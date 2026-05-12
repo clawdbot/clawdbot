@@ -437,7 +437,7 @@ describe("scheduleRestartSentinelWake", () => {
     });
     expect(mocks.ackDelivery).toHaveBeenCalledWith("queue-1");
     expect(mocks.failDelivery).not.toHaveBeenCalled();
-    expect(mocks.enqueueSystemEvent.mock.calls[0]?.[0]).toBe("restart message");
+    expect(mocks.enqueueSystemEvent.mock.calls.at(0)?.[0]).toBe("restart message");
     expectNthSystemEventFields(0, {
       sessionKey: "agent:main:main",
     });
@@ -1118,7 +1118,7 @@ describe("scheduleRestartSentinelWake", () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
     expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
-    expect(mocks.enqueueSystemEvent.mock.calls[1]?.[0]).toBe("continue");
+    expect(mocks.enqueueSystemEvent.mock.calls.at(1)?.[0]).toBe("continue");
     expectNthSystemEventFields(1, {
       sessionKey: "agent:main:main",
     });
@@ -1239,7 +1239,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.enqueueSystemEvent.mock.calls[0]?.[0]).toBe("restart message");
+    expect(mocks.enqueueSystemEvent.mock.calls.at(0)?.[0]).toBe("restart message");
     expectNthSystemEventFields(0, {
       sessionKey: "agent:main:matrix:channel:!lowercased:example.org",
     });

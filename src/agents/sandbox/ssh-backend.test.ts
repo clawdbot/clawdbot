@@ -68,6 +68,18 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function requireMockRecordArg(mock: ReturnType<typeof vi.fn>, callIndex: number, label: string) {
+  return requireRecord(mock.mock.calls[callIndex]?.[0], label);
+}
+
+function requireSshRunCommandParams(callIndex = 0) {
+  return requireMockRecordArg(sshMocks.runSshSandboxCommand, callIndex, "ssh run command params");
+}
+
+function requireSshUploadParams(callIndex: number, label: string) {
+  return requireMockRecordArg(sshMocks.uploadDirectoryToSshTarget, callIndex, label);
+}
+
 function createBackendSandboxConfig(params?: { binds?: string[]; target?: string }): SandboxConfig {
   return {
     mode: "all",
@@ -177,16 +189,14 @@ describe("ssh sandbox backend", () => {
       actualConfigLabel: "peter@example.com:2222",
       configLabelMatch: true,
     });
-    const sessionSettings = requireRecord(
-      sshMocks.createSshSandboxSessionFromSettings.mock.calls.at(0)?.[0],
+    const sessionSettings = requireMockRecordArg(
+      sshMocks.createSshSandboxSessionFromSettings,
+      0,
       "ssh session settings",
     );
     expect(sessionSettings.target).toBe("peter@example.com:2222");
     expect(sessionSettings.workspaceRoot).toBe("/remote/openclaw");
-    const commandParams = requireRecord(
-      sshMocks.runSshSandboxCommand.mock.calls.at(0)?.[0],
-      "ssh run command params",
-    );
+    const commandParams = requireSshRunCommandParams();
     expect(commandParams.remoteCommand).toContain("/remote/openclaw/openclaw-ssh-agent-worker");
   });
 
@@ -205,10 +215,7 @@ describe("ssh sandbox backend", () => {
       config: createConfig(),
     });
 
-    const commandParams = requireRecord(
-      sshMocks.runSshSandboxCommand.mock.calls.at(0)?.[0],
-      "ssh run command params",
-    );
+    const commandParams = requireSshRunCommandParams();
     expect(commandParams.allowFailure).toBe(true);
     expect(commandParams.remoteCommand).toContain('rm -rf -- "$1"');
   });
@@ -293,10 +300,7 @@ describe("ssh sandbox backend", () => {
     ]);
     expect(execSpec.argv.at(-1)).toContain("/remote/openclaw/openclaw-ssh-agent-worker");
     expect(sshMocks.uploadDirectoryToSshTarget).toHaveBeenCalledTimes(2);
-    const workspaceUploadParams = requireRecord(
-      sshMocks.uploadDirectoryToSshTarget.mock.calls.at(0)?.[0],
-      "workspace upload params",
-    );
+    const workspaceUploadParams = requireSshUploadParams(0, "workspace upload params");
     expect(workspaceUploadParams.localDir).toBe("/tmp/workspace");
     expect(workspaceUploadParams.remoteDir).toContain("/workspace");
     const agentUploadParams = requireRecord(

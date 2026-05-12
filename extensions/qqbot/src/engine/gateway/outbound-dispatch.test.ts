@@ -202,7 +202,7 @@ describe("dispatchOutbound", () => {
       accountId: "qq-main",
     });
     expect(audioFileToSilkBase64Mock).toHaveBeenCalledWith("/tmp/openclaw-qqbot/tts.wav");
-    const sentMedia = sendMediaMock.mock.calls[0]?.[0] as
+    const sentMedia = sendMediaMock.mock.calls.at(0)?.[0] as
       | { kind?: string; source?: unknown; msgId?: string; ttsText?: string }
       | undefined;
     expect(sentMedia?.kind).toBe("voice");

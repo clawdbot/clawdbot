@@ -78,7 +78,7 @@ type MockWithCalls = {
 };
 
 function firstObjectArg(mock: MockWithCalls): Record<string, unknown> {
-  const value = mock.mock.calls[0]?.[0];
+  const value = mock.mock.calls.at(0)?.[0];
   if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("expected first mock call object argument");
   }
@@ -86,7 +86,7 @@ function firstObjectArg(mock: MockWithCalls): Record<string, unknown> {
 }
 
 function objectArgAt(mock: MockWithCalls, index: number): Record<string, unknown> {
-  const value = mock.mock.calls[0]?.[index];
+  const value = mock.mock.calls.at(0)?.[index];
   if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`expected first mock call argument ${index} to be an object`);
   }
@@ -171,7 +171,7 @@ describe("createMatrixRoomMessageHandler media failures", () => {
     expect(ctx.RawBody).toBe("[matrix image attachment unavailable]");
     expect(ctx.CommandBody).toBe("[matrix image attachment unavailable]");
     expect(ctx.MediaPath).toBeUndefined();
-    expect(logger.warn.mock.calls[0]?.[0]).toBe("matrix media download failed");
+    expect(logger.warn.mock.calls.at(0)?.[0]).toBe("matrix media download failed");
     const warningMetadata = objectArgAt(logger.warn, 1);
     expect(warningMetadata.eventId).toBe("$event1");
     expect(warningMetadata.msgtype).toBe("m.image");

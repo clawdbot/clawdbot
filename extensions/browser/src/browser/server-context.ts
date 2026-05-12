@@ -3,6 +3,7 @@ import {
   resolveCdpReachabilityPolicy,
 } from "./cdp-reachability-policy.js";
 import { usesFastLoopbackCdpProbeClass } from "./cdp-timeouts.js";
+import { redactCdpUrl } from "./cdp.helpers.js";
 import { listChromeMcpTabs } from "./chrome-mcp.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
@@ -226,7 +227,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
         name,
         transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
         cdpPort: capabilities.usesChromeMcp ? null : profile.cdpPort,
-        cdpUrl: capabilities.usesChromeMcp ? null : profile.cdpUrl,
+        cdpUrl: capabilities.usesChromeMcp ? null : (redactCdpUrl(profile.cdpUrl) ?? null),
         color: profile.color,
         driver: profile.driver,
         running,

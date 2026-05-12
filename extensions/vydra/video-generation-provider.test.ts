@@ -41,12 +41,12 @@ describe("vydra video-generation provider", () => {
       cfg: {},
     });
 
-    const createCall = fetchMock.mock.calls[0];
+    const createCall = fetchMock.mock.calls.at(0);
     expect(createCall?.[0]).toBe("https://www.vydra.ai/api/v1/models/veo3");
     const createInit = createCall?.[1] as { method?: string; body?: unknown } | undefined;
     expect(createInit?.method).toBe("POST");
     expect(createInit?.body).toBe(JSON.stringify({ prompt: "tiny city at sunrise" }));
-    const pollCall = fetchMock.mock.calls[1];
+    const pollCall = fetchMock.mock.calls.at(1);
     expect(pollCall?.[0]).toBe("https://www.vydra.ai/api/v1/jobs/job-123");
     const pollInit = pollCall?.[1] as { method?: string } | undefined;
     expect(pollInit?.method).toBe("GET");
@@ -101,7 +101,7 @@ describe("vydra video-generation provider", () => {
       inputImages: [{ url: "https://example.com/reference.png" }],
     });
 
-    const createCall = fetchMock.mock.calls[0];
+    const createCall = fetchMock.mock.calls.at(0);
     expect(createCall?.[0]).toBe("https://www.vydra.ai/api/v1/models/kling");
     const createInit = createCall?.[1] as { method?: string; body?: unknown } | undefined;
     expect(createInit?.method).toBe("POST");

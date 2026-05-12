@@ -120,11 +120,11 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
 }
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
-  const call = mock.mock.calls[callIndex];
+  const call = mock.mock.calls.at(callIndex);
   if (!call) {
     throw new Error(`Expected mock call ${callIndex}`);
   }
-  return call[argIndex];
+  return call.at(argIndex);
 }
 
 function expectRespondOk(mock: ReturnType<typeof vi.fn>, expected?: Record<string, unknown>) {
@@ -287,9 +287,10 @@ describe("talk.catalog handler", () => {
       },
       undefined,
     );
-    expect(JSON.stringify(respond.mock.calls[0]?.[1])).not.toContain("speech-key");
-    expect(JSON.stringify(respond.mock.calls[0]?.[1])).not.toContain("stt-key");
-    expect(JSON.stringify(respond.mock.calls[0]?.[1])).not.toContain("live-key");
+    const responsePayload = JSON.stringify(mockCallArg(respond, 0, 1));
+    expect(responsePayload).not.toContain("speech-key");
+    expect(responsePayload).not.toContain("stt-key");
+    expect(responsePayload).not.toContain("live-key");
   });
 });
 
@@ -714,7 +715,7 @@ describe("talk.session unified handlers", () => {
         getRuntimeConfig: () => ({}) as OpenClawConfig,
       } as never,
     });
-    const session = createRespond.mock.calls[0]?.[1] as { sessionId: string; token: string };
+    const session = mockCallArg(createRespond, 0, 1) as { sessionId: string; token: string };
 
     const createResult = expectRespondOk(createRespond, {
       transport: "managed-room",
@@ -823,7 +824,7 @@ describe("talk.session unified handlers", () => {
         getRuntimeConfig: () => ({}) as OpenClawConfig,
       } as never,
     });
-    const session = createRespond.mock.calls[0]?.[1] as { sessionId: string; token: string };
+    const session = mockCallArg(createRespond, 0, 1) as { sessionId: string; token: string };
 
     const unjoinedStartRespond = vi.fn();
     await talkHandlers["talk.session.startTurn"]({
@@ -964,7 +965,7 @@ describe("talk.session unified handlers", () => {
       } as never,
     });
 
-    const session = createRespond.mock.calls[0]?.[1] as { sessionId: string };
+    const session = mockCallArg(createRespond, 0, 1) as { sessionId: string };
     const createResult = expectRespondOk(createRespond, {
       transport: "managed-room",
       brain: "direct-tools",
@@ -1188,7 +1189,7 @@ describe("talk.client.create handler", () => {
       configuredProviderId: "openai",
       providerConfigs: { openai: { apiKey: "openai-key" } },
     });
-    const createInput = createBrowserSession.mock.calls[0]?.[0] as Record<string, unknown>;
+    const createInput = mockCallArg(createBrowserSession) as Record<string, unknown>;
     expectRecordFields(createInput, {
       model: "gpt-realtime",
       voice: "alloy",

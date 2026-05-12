@@ -457,8 +457,8 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       instructions: "Be concise.",
     });
 
-    expect(execFileSyncMock.mock.calls[0]?.[0]).toBe("/usr/bin/security");
-    expect(execFileSyncMock.mock.calls[0]?.[1]).toEqual([
+    expect(execFileSyncMock.mock.calls.at(0)?.[0]).toBe("/usr/bin/security");
+    expect(execFileSyncMock.mock.calls.at(0)?.[1]).toEqual([
       "find-generic-password",
       "-s",
       "openclaw",
@@ -466,7 +466,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       "OPENAI_REALTIME_BROWSER_TEST",
       "-w",
     ]);
-    expectRecordFields(execFileSyncMock.mock.calls[0]?.[2], "security command options", {
+    expectRecordFields(execFileSyncMock.mock.calls.at(0)?.[2], "security command options", {
       encoding: "utf8",
       timeout: 5000,
     });

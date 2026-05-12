@@ -7,6 +7,9 @@ type InsertBlocksClient = Parameters<typeof insertBlocksInBatches>[0];
 type DocxDescendantCreate = Lark.Client["docx"]["documentBlockDescendant"]["create"];
 type DocxDescendantCreateParams = Parameters<DocxDescendantCreate>[0];
 type DocxDescendantCreateResponse = Awaited<ReturnType<DocxDescendantCreate>>;
+type RequiredDocxDescendantCreateParams = NonNullable<DocxDescendantCreateParams> & {
+  data: NonNullable<NonNullable<DocxDescendantCreateParams>["data"]>;
+};
 
 function createDocxDescendantClient(create: DocxDescendantCreate): InsertBlocksClient {
   return {
@@ -45,6 +48,24 @@ function createSuccessfulDocxDescendantCreateMock() {
   );
 }
 
+function createCallParams(
+  createMock: ReturnType<typeof createSuccessfulDocxDescendantCreateMock>,
+  index = 0,
+): RequiredDocxDescendantCreateParams {
+  const call = createMock.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`Expected DOCX descendant create call ${index}`);
+  }
+  const params = call.at(0);
+  if (!params) {
+    throw new Error(`Expected DOCX descendant create params ${index}`);
+  }
+  if (!params.data) {
+    throw new Error(`Expected DOCX descendant create data ${index}`);
+  }
+  return params as RequiredDocxDescendantCreateParams;
+}
+
 describe("insertBlocksInBatches", () => {
   it("builds the source block map once for large flat trees", async () => {
     const blockCount = BATCH_SIZE + 200;
@@ -65,8 +86,8 @@ describe("insertBlocksInBatches", () => {
 
     expect(counting.getIterations()).toBe(1);
     expect(createMock).toHaveBeenCalledTimes(2);
-    expect(createMock.mock.calls[0]?.[0]?.data.children_id).toHaveLength(BATCH_SIZE);
-    expect(createMock.mock.calls[1]?.[0]?.data.children_id).toHaveLength(200);
+    expect(createCallParams(createMock).data.children_id).toHaveLength(BATCH_SIZE);
+    expect(createCallParams(createMock, 1).data.children_id).toHaveLength(200);
     expect(result.children).toHaveLength(blockCount);
   });
 
@@ -83,9 +104,13 @@ describe("insertBlocksInBatches", () => {
     await insertBlocksInBatches(client, "doc_1", blocks, ["root_a", "root_b"]);
 
     expect(createMock).toHaveBeenCalledTimes(1);
-    expect(createMock.mock.calls[0]?.[0]?.data.children_id).toEqual(["root_a", "root_b"]);
-    expect(
-      createMock.mock.calls[0]?.[0]?.data.descendants.map((block) => block.block_id ?? ""),
-    ).toEqual(["root_a", "child_a", "root_b", "child_b"]);
+    const createParams = createCallParams(createMock);
+    expect(createParams.data.children_id).toEqual(["root_a", "root_b"]);
+    expect(createParams.data.descendants.map((block) => block.block_id ?? "")).toEqual([
+      "root_a",
+      "child_a",
+      "root_b",
+      "child_b",
+    ]);
   });
 });

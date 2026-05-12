@@ -45,12 +45,14 @@ describe("acp setSessionMode", () => {
     await expect(agent.setSessionMode(createSetSessionModeRequest("high"))).rejects.toThrow(
       "gateway rejected mode change",
     );
-    expect(calls).toContainEqual([
-      "sessions.patch",
-      {
-        key: "agent:main:main",
-        thinkingLevel: "high",
-      },
+    expect(calls).toStrictEqual([
+      [
+        "sessions.patch",
+        {
+          key: "agent:main:main",
+          thinkingLevel: "high",
+        },
+      ],
     ]);
   });
 
@@ -61,12 +63,22 @@ describe("acp setSessionMode", () => {
     await expect(agent.setSessionMode(createSetSessionModeRequest("low"))).resolves.toStrictEqual(
       {},
     );
-    expect(calls).toContainEqual([
-      "sessions.patch",
-      {
-        key: "agent:main:main",
-        thinkingLevel: "low",
-      },
+    expect(calls).toStrictEqual([
+      [
+        "sessions.patch",
+        {
+          key: "agent:main:main",
+          thinkingLevel: "low",
+        },
+      ],
+      [
+        "sessions.list",
+        {
+          includeDerivedTitles: true,
+          limit: 200,
+          search: "agent:main:main",
+        },
+      ],
     ]);
   });
 

@@ -252,7 +252,7 @@ describe("web monitor inbox", () => {
     await settleInboundWork();
 
     expect(onMessage).toHaveBeenCalledTimes(1);
-    const payload = onMessage.mock.calls[0][0];
+    const payload = onMessage.mock.calls.at(0)?.[0];
     expect(payload.chatType).toBe("group");
     expect(payload.senderE164).toBe("+999");
 
@@ -340,7 +340,7 @@ describe("web monitor inbox", () => {
 
     // Should call onMessage because sender is in groupAllowFrom
     expect(onMessage).toHaveBeenCalledTimes(1);
-    const payload = onMessage.mock.calls[0][0];
+    const payload = onMessage.mock.calls.at(0)?.[0];
     expect(payload.chatType).toBe("group");
     expect(payload.senderE164).toBe("+15551234567");
 
@@ -374,7 +374,7 @@ describe("web monitor inbox", () => {
 
     // Should call onMessage because wildcard allows all senders
     expect(onMessage).toHaveBeenCalledTimes(1);
-    const payload = onMessage.mock.calls[0][0];
+    const payload = onMessage.mock.calls.at(0)?.[0];
     expect(payload.chatType).toBe("group");
 
     await listener.close();

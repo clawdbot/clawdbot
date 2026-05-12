@@ -90,7 +90,7 @@ describe("runQaManualLane", () => {
     });
 
     expect(startQaProviderServer).toHaveBeenCalledWith("mock-openai");
-    const [gatewayOptions] = startQaGatewayChild.mock.calls[0] ?? [];
+    const [gatewayOptions] = startQaGatewayChild.mock.calls.at(0) ?? [];
     expect(gatewayOptions?.repoRoot).toBe("/tmp/openclaw-repo");
     expect(gatewayOptions?.providerMode).toBe("mock-openai");
     expect(gatewayOptions?.providerBaseUrl).toBe("http://127.0.0.1:44080/v1");
@@ -120,7 +120,7 @@ describe("runQaManualLane", () => {
       repoRoot: "/tmp/openclaw-repo",
       embeddedGateway: "disabled",
     });
-    const [gatewayOptions] = startQaGatewayChild.mock.calls[0] ?? [];
+    const [gatewayOptions] = startQaGatewayChild.mock.calls.at(0) ?? [];
     expect(gatewayOptions?.providerMode).toBe("live-frontier");
     expect(gatewayOptions?.providerBaseUrl).toBeUndefined();
     expect(result.reply).toBe("Protocol note: mock reply.");

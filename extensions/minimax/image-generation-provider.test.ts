@@ -49,7 +49,7 @@ describe("minimax image-generation provider", () => {
 
   function expectImageGenerationUrl(fetchMock: ReturnType<typeof vi.fn>, url: string) {
     expect(fetchMock).toHaveBeenCalled();
-    const [actualUrl, init] = fetchMock.mock.calls[0] as [string, RequestInit | undefined];
+    const [actualUrl, init] = fetchMock.mock.calls.at(0) as [string, RequestInit | undefined];
     expect(actualUrl).toBe(url);
     expect(init?.method).toBe("POST");
   }
@@ -83,7 +83,7 @@ describe("minimax image-generation provider", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls.at(0) as [string, RequestInit];
     expect(url).toBe("https://api.minimax.io/v1/image_generation");
     expect(init.method).toBe("POST");
     expect(init.body).toBe(

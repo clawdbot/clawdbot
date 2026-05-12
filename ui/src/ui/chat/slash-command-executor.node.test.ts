@@ -877,9 +877,9 @@ describe("executeSlashCommand directives", () => {
       "",
     );
 
-    // Should NOT show DeepSeek defaults (xhigh, max) for an Anthropic session
-    expect(status.content).not.toContain("xhigh");
-    expect(status.content).not.toContain("max");
+    expect(status.content).toBe(
+      "Current thinking level: high.\nOptions: default, off, minimal, low, medium, high.",
+    );
   });
 
   it("reports the current verbose level for bare /verbose", async () => {

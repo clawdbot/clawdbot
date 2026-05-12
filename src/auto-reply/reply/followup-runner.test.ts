@@ -1331,7 +1331,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     ).resolves.toBeUndefined();
 
     expect(requireMockCallArg(persistSpy, 0).providerUsed).toBe("anthropic");
-    expect(persistSpy.mock.calls[0]?.[0]?.usageIsContextSnapshot).toBeUndefined();
+    expect(persistSpy.mock.calls.at(0)?.[0]?.usageIsContextSnapshot).toBeUndefined();
     persistSpy.mockRestore();
   });
 

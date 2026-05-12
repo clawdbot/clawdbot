@@ -233,7 +233,7 @@ describe("update.run timeout normalization", () => {
     await invokeUpdateRun({ timeoutMs: 1 });
 
     expect(runGatewayUpdateMock).toHaveBeenCalledTimes(1);
-    const updateCall = runGatewayUpdateMock.mock.calls[0] as unknown as
+    const updateCall = runGatewayUpdateMock.mock.calls.at(0) as unknown as
       | [{ timeoutMs?: number }]
       | undefined;
     const updateParams = updateCall?.[0];
@@ -328,7 +328,7 @@ describe("update.run restart scheduling", () => {
 
     expect(runGatewayUpdateMock).toHaveBeenCalledTimes(1);
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
-    const restartCall = scheduleGatewaySigusr1RestartMock.mock.calls[0] as unknown as
+    const restartCall = scheduleGatewaySigusr1RestartMock.mock.calls.at(0) as unknown as
       | [{ delayMs?: number; reason?: string; skipCooldown?: boolean; skipDeferral?: boolean }]
       | undefined;
     const restartParams = restartCall?.[0];
@@ -385,10 +385,10 @@ describe("update.status", () => {
     } as never);
 
     expect(respond).toHaveBeenCalledTimes(1);
-    const response = respond.mock.calls[0]?.[1] as
+    const response = respond.mock.calls.at(0)?.[1] as
       | { sentinel?: { kind?: string; status?: string } }
       | undefined;
-    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls.at(0)?.[0]).toBe(true);
     expect(response?.sentinel?.kind).toBe("update");
     expect(response?.sentinel?.status).toBe("ok");
   });

@@ -125,7 +125,7 @@ describe("resolvePreferredProviderForAuthChoice", () => {
       }),
     ).resolves.toBe("demo-provider");
     expect(resolvePluginProviders).toHaveBeenCalledOnce();
-    const [pluginProviderOptions] = resolvePluginProviders.mock.calls[0] as unknown as [
+    const [pluginProviderOptions] = resolvePluginProviders.mock.calls.at(0) as unknown as [
       ResolvePluginProvidersOptions,
     ];
     expect(pluginProviderOptions?.mode).toBe("setup");

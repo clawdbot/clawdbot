@@ -74,7 +74,7 @@ describe("loginOpenAICodexDeviceCode", () => {
       await vi.advanceTimersByTimeAsync(1);
       const credentials = await credentialsPromise;
 
-      const userCodeRequest = fetchMock.mock.calls[0];
+      const userCodeRequest = fetchMock.mock.calls.at(0);
       expect(userCodeRequest?.[0]).toBe("https://auth.openai.com/api/accounts/deviceauth/usercode");
       expect(userCodeRequest?.[1]?.method).toBe("POST");
       expect(userCodeRequest?.[1]?.headers).toEqual({
@@ -84,7 +84,7 @@ describe("loginOpenAICodexDeviceCode", () => {
         "User-Agent": "openclaw/2026.3.22",
       });
 
-      const deviceTokenRequest = fetchMock.mock.calls[1];
+      const deviceTokenRequest = fetchMock.mock.calls.at(1);
       expect(deviceTokenRequest?.[0]).toBe("https://auth.openai.com/api/accounts/deviceauth/token");
       expect(deviceTokenRequest?.[1]?.method).toBe("POST");
       expect(deviceTokenRequest?.[1]?.headers).toEqual({
@@ -94,7 +94,7 @@ describe("loginOpenAICodexDeviceCode", () => {
         "User-Agent": "openclaw/2026.3.22",
       });
 
-      const oauthTokenRequest = fetchMock.mock.calls[3];
+      const oauthTokenRequest = fetchMock.mock.calls.at(3);
       expect(oauthTokenRequest?.[0]).toBe("https://auth.openai.com/oauth/token");
       expect(oauthTokenRequest?.[1]?.method).toBe("POST");
       expect(oauthTokenRequest?.[1]?.headers).toEqual({

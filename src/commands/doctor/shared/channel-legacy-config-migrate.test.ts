@@ -128,7 +128,7 @@ describe("bundled channel legacy config migrations", () => {
     });
 
     expect(applyPluginDoctorCompatibilityMigrations).toHaveBeenCalledOnce();
-    const migrationCall = applyPluginDoctorCompatibilityMigrations.mock.calls[0];
+    const migrationCall = applyPluginDoctorCompatibilityMigrations.mock.calls.at(0);
     expect(typeof migrationCall?.[0]).toBe("object");
     expect(migrationCall?.[1]?.config).toStrictEqual({
       channels: {
@@ -198,7 +198,7 @@ describe("bundled channel legacy config migrations", () => {
     const result = applyChannelDoctorCompatibilityMigrations(config);
 
     expect(applyPluginDoctorCompatibilityMigrations).toHaveBeenCalledOnce();
-    const migrationCall = applyPluginDoctorCompatibilityMigrations.mock.calls[0];
+    const migrationCall = applyPluginDoctorCompatibilityMigrations.mock.calls.at(0);
     expect(typeof migrationCall?.[0]).toBe("object");
     expect(migrationCall?.[1]).toStrictEqual({
       config,

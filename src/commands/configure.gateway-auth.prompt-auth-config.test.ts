@@ -210,6 +210,18 @@ function makeRuntime(): RuntimeEnv {
   };
 }
 
+function promptModelAllowlistOptions(index = 0) {
+  return mocks.promptModelAllowlist.mock.calls.at(index)?.at(0) as
+    | {
+        allowedKeys?: string[];
+        initialSelections?: string[];
+        loadCatalog?: boolean;
+        message?: string;
+        preferredProvider?: string;
+      }
+    | undefined;
+}
+
 const noopPrompter = {} as WizardPrompter;
 
 function createKilocodeProvider() {
@@ -431,7 +443,7 @@ describe("promptAuthConfig", () => {
     await promptAuthConfig({}, makeRuntime(), noopPrompter);
 
     expect(mocks.promptModelAllowlist).toHaveBeenCalledOnce();
-    expect(mocks.promptModelAllowlist.mock.calls[0]?.[0]?.preferredProvider).toBe("openai");
+    expect(promptModelAllowlistOptions()?.preferredProvider).toBe("openai");
   });
 
   it("keeps the selected provider scope when existing config has another provider", async () => {
@@ -461,7 +473,7 @@ describe("promptAuthConfig", () => {
     await promptAuthConfig(existingConfig, makeRuntime(), noopPrompter);
 
     expect(mocks.promptModelAllowlist).toHaveBeenCalledOnce();
-    expect(mocks.promptModelAllowlist.mock.calls[0]?.[0]?.preferredProvider).toBe("github-copilot");
+    expect(promptModelAllowlistOptions()?.preferredProvider).toBe("github-copilot");
   });
 
   it("loads the selected provider catalog after auth enables that plugin", async () => {
@@ -504,8 +516,8 @@ describe("promptAuthConfig", () => {
 
     await promptAuthConfig(existingConfig, makeRuntime(), noopPrompter);
 
-    expect(mocks.promptModelAllowlist.mock.calls[0]?.[0]?.preferredProvider).toBe("github-copilot");
-    expect(mocks.promptModelAllowlist.mock.calls[0]?.[0]?.loadCatalog).toBe(true);
+    expect(promptModelAllowlistOptions()?.preferredProvider).toBe("github-copilot");
+    expect(promptModelAllowlistOptions()?.loadCatalog).toBe(true);
   });
 
   it("loads configured provider models after Ollama Cloud + Local and Cloud only setup", async () => {
@@ -534,7 +546,7 @@ describe("promptAuthConfig", () => {
     await promptAuthConfig({}, makeRuntime(), noopPrompter);
 
     expect(mocks.promptModelAllowlist).toHaveBeenCalledOnce();
-    const allowlistOptions = mocks.promptModelAllowlist.mock.calls[0]?.[0];
+    const allowlistOptions = promptModelAllowlistOptions();
     expect(allowlistOptions?.preferredProvider).toBe("ollama");
     expect(allowlistOptions?.loadCatalog).toBe(true);
   });
@@ -575,7 +587,7 @@ describe("promptAuthConfig", () => {
     await promptAuthConfig({}, makeRuntime(), noopPrompter);
 
     expect(mocks.promptModelAllowlist).toHaveBeenCalledOnce();
-    const allowlistOptions = mocks.promptModelAllowlist.mock.calls[0]?.[0];
+    const allowlistOptions = promptModelAllowlistOptions();
     expect(allowlistOptions?.preferredProvider).toBe("github-copilot");
     expect(allowlistOptions?.loadCatalog).toBe(true);
   });
@@ -614,7 +626,7 @@ describe("promptAuthConfig", () => {
 
     await promptAuthConfig({}, makeRuntime(), noopPrompter);
 
-    const call = mocks.promptModelAllowlist.mock.calls[0]?.[0];
+    const call = promptModelAllowlistOptions();
     expect(call?.preferredProvider).toBe("github-copilot");
     expect(call?.loadCatalog).toBe(true);
   });

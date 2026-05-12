@@ -118,6 +118,24 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     });
   });
 
+  it("canonicalizes provider-qualified retired Gemini 3 Pro preview requests", () => {
+    const model = resolveGoogleGeminiForwardCompatModel({
+      providerId: "google",
+      ctx: createContext({
+        provider: "google",
+        modelId: "google/gemini-3-pro-preview",
+        models: [createTemplateModel("google", "gemini-3.1-pro-preview")],
+      }),
+    });
+
+    expectModelFields(model, {
+      provider: "google",
+      id: "google/gemini-3.1-pro-preview",
+      api: "google-generative-ai",
+      reasoning: true,
+    });
+  });
+
   it("keeps Gemini CLI 3.1 clones sourced from CLI templates when both catalogs exist", () => {
     const model = resolveGoogleGeminiForwardCompatModel({
       providerId: "google-gemini-cli",

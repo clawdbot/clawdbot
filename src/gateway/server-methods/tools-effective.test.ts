@@ -90,7 +90,11 @@ function resolveEffectiveToolInventoryArg(callIndex = 0): Record<string, unknown
   const calls = runtimeMocks.resolveEffectiveToolInventory.mock.calls as unknown as Array<
     [Record<string, unknown>]
   >;
-  return calls[callIndex]?.[0];
+  return calls.at(callIndex)?.[0];
+}
+
+function firstRespondCall(respond: ReturnType<typeof vi.fn>): RespondCall | undefined {
+  return respond.mock.calls.at(0) as RespondCall | undefined;
 }
 
 describe("tools.effective handler", () => {
@@ -105,7 +109,7 @@ describe("tools.effective handler", () => {
   it("rejects invalid params", async () => {
     const { respond, invoke } = createInvokeParams({ includePlugins: false });
     await invoke();
-    const call = respond.mock.calls[0] as RespondCall | undefined;
+    const call = firstRespondCall(respond);
     expect(call?.[0]).toBe(false);
     expect(call?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
     expect(call?.[2]?.message).toContain("invalid tools.effective params");
@@ -114,7 +118,7 @@ describe("tools.effective handler", () => {
   it("rejects missing sessionKey", async () => {
     const { respond, invoke } = createInvokeParams({});
     await invoke();
-    const call = respond.mock.calls[0] as RespondCall | undefined;
+    const call = firstRespondCall(respond);
     expect(call?.[0]).toBe(false);
     expect(call?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
     expect(call?.[2]?.message).toContain("invalid tools.effective params");
@@ -123,7 +127,7 @@ describe("tools.effective handler", () => {
   it("rejects caller-supplied auth context params", async () => {
     const { respond, invoke } = createInvokeParams({ senderIsOwner: true });
     await invoke();
-    const call = respond.mock.calls[0] as RespondCall | undefined;
+    const call = firstRespondCall(respond);
     expect(call?.[0]).toBe(false);
     expect(call?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
     expect(call?.[2]?.message).toContain("invalid tools.effective params");
@@ -135,7 +139,7 @@ describe("tools.effective handler", () => {
       agentId: "unknown-agent",
     });
     await invoke();
-    const call = respond.mock.calls[0] as RespondCall | undefined;
+    const call = firstRespondCall(respond);
     expect(call?.[0]).toBe(false);
     expect(call?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
     expect(call?.[2]?.message).toContain("unknown agent id");
@@ -151,7 +155,7 @@ describe("tools.effective handler", () => {
     } as never);
     const { respond, invoke } = createInvokeParams({ sessionKey: "missing-session" });
     await invoke();
-    const call = respond.mock.calls[0] as RespondCall | undefined;
+    const call = firstRespondCall(respond);
     expect(call?.[0]).toBe(false);
     expect(call?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
     expect(call?.[2]?.message).toContain('unknown session key "missing-session"');
@@ -160,7 +164,7 @@ describe("tools.effective handler", () => {
   it("returns the effective runtime inventory", async () => {
     const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
     await invoke();
-    const call = respond.mock.calls[0] as RespondCall | undefined;
+    const call = firstRespondCall(respond);
     expect(call?.[0]).toBe(true);
     const payload = call?.[1] as ToolsEffectivePayload | undefined;
     expect(payload?.agentId).toBe("main");
@@ -190,8 +194,8 @@ describe("tools.effective handler", () => {
     await second.invoke();
 
     expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(1);
-    expect((first.respond.mock.calls[0] as RespondCall | undefined)?.[0]).toBe(true);
-    expect((second.respond.mock.calls[0] as RespondCall | undefined)?.[0]).toBe(true);
+    expect(firstRespondCall(first.respond)?.[0]).toBe(true);
+    expect(firstRespondCall(second.respond)?.[0]).toBe(true);
   });
 
   it("invalidates the cache when only the channel registry version changes", async () => {
@@ -203,7 +207,7 @@ describe("tools.effective handler", () => {
     await second.invoke();
 
     expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(2);
-    expect((second.respond.mock.calls[0] as RespondCall | undefined)?.[0]).toBe(true);
+    expect(firstRespondCall(second.respond)?.[0]).toBe(true);
   });
 
   it("coalesces identical cache misses while inventory resolution is pending", async () => {
@@ -213,8 +217,8 @@ describe("tools.effective handler", () => {
     await Promise.all([first.invoke(), second.invoke()]);
 
     expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(1);
-    expect((first.respond.mock.calls[0] as RespondCall | undefined)?.[0]).toBe(true);
-    expect((second.respond.mock.calls[0] as RespondCall | undefined)?.[0]).toBe(true);
+    expect(firstRespondCall(first.respond)?.[0]).toBe(true);
+    expect(firstRespondCall(second.respond)?.[0]).toBe(true);
   });
 
   it("returns stale cached inventory immediately while refreshing in the background", async () => {
@@ -271,7 +275,7 @@ describe("tools.effective handler", () => {
     const stale = createInvokeParams({ sessionKey: "main:abc" });
     await stale.invoke();
 
-    expect((stale.respond.mock.calls[0] as RespondCall | undefined)?.[1]).toBe(stalePayload);
+    expect(firstRespondCall(stale.respond)?.[1]).toBe(stalePayload);
     expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(1);
 
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -279,7 +283,7 @@ describe("tools.effective handler", () => {
 
     const fresh = createInvokeParams({ sessionKey: "main:abc" });
     await fresh.invoke();
-    expect((fresh.respond.mock.calls[0] as RespondCall | undefined)?.[1]).toBe(refreshedPayload);
+    expect(firstRespondCall(fresh.respond)?.[1]).toBe(refreshedPayload);
   });
 
   it("falls back to origin.threadId when delivery context omits thread metadata", async () => {
@@ -316,7 +320,7 @@ describe("tools.effective handler", () => {
     await invoke();
 
     expect(resolveEffectiveToolInventoryArg()?.currentThreadTs).toBe("42");
-    expect((respond.mock.calls[0] as RespondCall | undefined)?.[0]).toBe(true);
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
   });
 
   it("passes senderIsOwner=true for admin-scoped callers", async () => {
@@ -348,7 +352,7 @@ describe("tools.effective handler", () => {
       },
     } as never);
     await invoke();
-    const call = respond.mock.calls[0] as RespondCall | undefined;
+    const call = firstRespondCall(respond);
     expect(call?.[0]).toBe(false);
     expect(call?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
     expect(call?.[2]?.message).toContain('unknown agent id "other"');

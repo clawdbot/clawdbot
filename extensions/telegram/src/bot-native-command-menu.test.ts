@@ -33,6 +33,25 @@ function syncMenuCommandsWithMocks(options: SyncMenuOptions): void {
   });
 }
 
+function setMyCommandsCall(setMyCommands: ReturnType<typeof vi.fn>, index: number): unknown[] {
+  const call = setMyCommands.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`Expected setMyCommands call ${index}`);
+  }
+  return call;
+}
+
+function setMyCommandsPayload(
+  setMyCommands: ReturnType<typeof vi.fn>,
+  index: number,
+): Array<unknown> {
+  const payload = setMyCommandsCall(setMyCommands, index).at(0);
+  if (!Array.isArray(payload)) {
+    throw new Error(`Expected setMyCommands call ${index} to include a command payload`);
+  }
+  return payload;
+}
+
 describe("bot-native-command-menu", () => {
   it("caps menu entries to Telegram limit", () => {
     const allCommands = Array.from({ length: 105 }, (_, i) => ({
@@ -362,13 +381,15 @@ describe("bot-native-command-menu", () => {
     await vi.waitFor(() => {
       expect(setMyCommands).toHaveBeenCalledTimes(3);
     });
-    const firstPayload = setMyCommands.mock.calls[0]?.[0] as Array<unknown>;
-    const secondPayload = setMyCommands.mock.calls[1]?.[0] as Array<unknown>;
-    const thirdPayload = setMyCommands.mock.calls[2]?.[0] as Array<unknown>;
+    const firstPayload = setMyCommandsPayload(setMyCommands, 0);
+    const secondPayload = setMyCommandsPayload(setMyCommands, 1);
+    const thirdPayload = setMyCommandsPayload(setMyCommands, 2);
     expect(firstPayload).toHaveLength(100);
     expect(secondPayload).toHaveLength(80);
     expect(thirdPayload).toHaveLength(80);
-    expect(setMyCommands.mock.calls[2]?.[1]).toEqual({ scope: { type: "all_group_chats" } });
+    expect(setMyCommandsCall(setMyCommands, 2).at(1)).toEqual({
+      scope: { type: "all_group_chats" },
+    });
     expect(runtimeLog).toHaveBeenCalledWith(
       "Telegram rejected 100 commands (BOT_COMMANDS_TOO_MUCH); retrying with 80.",
     );

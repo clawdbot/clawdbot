@@ -262,7 +262,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   expect(compacted.payload?.key).toBe("agent:main:main");
   expect(compacted.payload?.compacted).toBe(true);
   expect(embeddedRunMock.compactEmbeddedPiSession).toHaveBeenCalledTimes(1);
-  const compactionCall = embeddedRunMock.compactEmbeddedPiSession.mock.calls[0]?.[0] as
+  const compactionCall = embeddedRunMock.compactEmbeddedPiSession.mock.calls.at(0)?.[0] as
     | {
         agentHarnessId?: string;
         allowGatewaySubagentBinding?: boolean;

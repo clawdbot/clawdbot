@@ -360,7 +360,7 @@ describe("agentCommand ACP runtime routing", () => {
         message: "  ping\n",
         chunks: ["  ACP_OK\n"],
       });
-      const runTurnInput = runTurn.mock.calls[0]?.[0] as
+      const runTurnInput = runTurn.mock.calls.at(0)?.[0] as
         | { mode?: string; sessionKey?: string; text?: string }
         | undefined;
       expect(runTurnInput?.sessionKey).toBe("agent:codex:acp:test");
@@ -489,7 +489,7 @@ describe("agentCommand ACP runtime routing", () => {
 
       await agentCommand({ message: "ping", sessionKey: "agent:kimi:acp:test" }, runtime);
 
-      const runTurnInput = runTurn.mock.calls[0]?.[0] as
+      const runTurnInput = runTurn.mock.calls.at(0)?.[0] as
         | { sessionKey?: string; text?: string }
         | undefined;
       expect(runTurnInput?.sessionKey).toBe("agent:kimi:acp:test");

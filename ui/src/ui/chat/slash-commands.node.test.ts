@@ -101,7 +101,7 @@ describe("parseSlashCommand", () => {
     expectRecordFields(side.command, "side command", { key: "btw", name: "btw" });
     expect(
       requireArray(requireRecord(side.command, "side command").aliases, "side aliases"),
-    ).toContain("side");
+    ).toEqual(["side"]);
     expect(side.args).toBe("what changed?");
   });
 
@@ -114,9 +114,7 @@ describe("parseSlashCommand", () => {
     expectRecordFields(think, "think command", {
       name: "think",
     });
-    const aliases = requireArray(think.aliases, "think aliases");
-    expect(aliases).toContain("thinking");
-    expect(aliases).toContain("t");
+    expect(requireArray(think.aliases, "think aliases")).toEqual(["thinking", "t"]);
   });
 
   it("keeps a single local /steer entry with the control-ui metadata", () => {
@@ -129,7 +127,7 @@ describe("parseSlashCommand", () => {
       args: "[id] <message>",
       executeLocal: true,
     });
-    expect(requireArray(steer.aliases, "steer aliases")).toContain("tell");
+    expect(requireArray(steer.aliases, "steer aliases")).toEqual(["tell"]);
   });
 
   it("keeps focus as a local slash command", () => {
@@ -336,7 +334,12 @@ describe("parseSlashCommand", () => {
       includeArgs: true,
       scope: "text",
     });
-    expect(SLASH_COMMANDS.map((entry) => entry.name)).toContain("pair");
+    expectRecordFields(requireCommandByName("pair"), "pair command", {
+      name: "pair",
+      description: "Generate setup codes.",
+      executeLocal: false,
+      tier: "standard",
+    });
   });
 
   it("falls back safely when the gateway returns malformed command payload shapes", async () => {
@@ -374,7 +377,11 @@ describe("parseSlashCommand", () => {
       agentId: "main",
     });
     expect(SLASH_COMMANDS.find((entry) => entry.name === "pair")).toBeUndefined();
-    expect(SLASH_COMMANDS.map((entry) => entry.name)).toContain("help");
+    expectRecordFields(requireCommandByName("help"), "help command", {
+      key: "help",
+      name: "help",
+      executeLocal: true,
+    });
 
     await refreshSlashCommands({
       client: { request } as never,
@@ -434,7 +441,12 @@ describe("parseSlashCommand", () => {
     }
     await pending;
 
-    expect(SLASH_COMMANDS.map((entry) => entry.name)).toContain("pair");
+    expectRecordFields(requireCommandByName("pair"), "pair command", {
+      name: "pair",
+      description: "Generate setup codes.",
+      executeLocal: false,
+      tier: "standard",
+    });
     expect(SLASH_COMMANDS.find((entry) => entry.name === "dreaming")).toBeUndefined();
   });
 });

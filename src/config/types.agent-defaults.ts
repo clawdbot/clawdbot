@@ -95,6 +95,17 @@ export type AgentContextLimitsConfig = {
   postCompactionMaxChars?: number;
 };
 
+export type AgentRunRetriesConfig = {
+  /** Base number of run retry iterations (default: 24). */
+  base?: number;
+  /** Additional run retry iterations per fallback profile (default: 8). */
+  perProfile?: number;
+  /** Minimum limit for run retry iterations (default: 32). */
+  min?: number;
+  /** Maximum limit for run retry iterations (default: 160). */
+  max?: number;
+};
+
 export type CliBackendConfig = {
   /** CLI command to execute (absolute path or on PATH). */
   command: string;
@@ -299,6 +310,8 @@ export type AgentDefaultsConfig = {
   contextPruning?: AgentContextPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
+  /** Outer run loop retry iteration boundaries. */
+  runRetries?: AgentRunRetriesConfig;
   /** Embedded Pi runner hardening and compatibility controls. */
   embeddedPi?: {
     /**

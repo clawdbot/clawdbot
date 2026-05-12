@@ -40,6 +40,26 @@ const aggregates = {
   daily: [],
 } as unknown as UsageAggregates;
 
+function directText(element: Element | null | undefined): string | undefined {
+  return Array.from(element?.childNodes ?? [])
+    .filter((node) => node.nodeType === Node.TEXT_NODE)
+    .map((node) => node.textContent ?? "")
+    .join("")
+    .trim();
+}
+
+function getSummaryCards(container: HTMLElement): Array<{
+  title: string | undefined;
+  value: string | undefined;
+  sub: string | undefined;
+}> {
+  return Array.from(container.querySelectorAll(".usage-summary-card")).map((card) => ({
+    title: directText(card.querySelector(".usage-summary-title")),
+    value: card.querySelector(".usage-summary-value")?.textContent?.trim(),
+    sub: card.querySelector(".usage-summary-sub")?.textContent?.trim(),
+  }));
+}
+
 describe("renderUsageInsights", () => {
   it("includes cache writes in cache-hit-rate denominator", () => {
     const container = document.createElement("div");
@@ -62,9 +82,11 @@ describe("renderUsageInsights", () => {
       container,
     );
 
-    expect(container.textContent).toContain("30.0%");
-    expect(container.textContent).toContain("300 cached");
-    expect(container.textContent).toContain("1.0K prompt");
+    expect(getSummaryCards(container)).toContainEqual({
+      title: "Cache Hit Rate",
+      value: "30.0%",
+      sub: "300 cached · 1.0K prompt",
+    });
   });
 });
 

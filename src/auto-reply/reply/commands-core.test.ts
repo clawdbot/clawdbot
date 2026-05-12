@@ -60,7 +60,7 @@ describe("emitResetCommandHooks", () => {
     });
 
     expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1);
-    const [, ctx] = hookRunnerMocks.runBeforeReset.mock.calls[0] ?? [];
+    const [, ctx] = hookRunnerMocks.runBeforeReset.mock.calls.at(0) ?? [];
     return ctx;
   }
 
@@ -136,7 +136,7 @@ describe("emitResetCommandHooks", () => {
     });
 
     await vi.waitFor(() => expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1));
-    const [event, ctx] = hookRunnerMocks.runBeforeReset.mock.calls[0] as unknown as [
+    const [event, ctx] = hookRunnerMocks.runBeforeReset.mock.calls.at(0) as unknown as [
       Record<string, unknown>,
       Record<string, unknown>,
     ];

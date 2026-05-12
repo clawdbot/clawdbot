@@ -24,7 +24,7 @@ import {
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
-  requireGatewayClientScopeForInternalChannel,
+  requireGatewayClientScope,
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { parseConfigCommand } from "./config-commands.js";
@@ -65,7 +65,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
 
   let parsedWritePath: string[] | undefined;
   if (configCommand.action === "set" || configCommand.action === "unset") {
-    const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
+    const missingAdminScope = requireGatewayClientScope(params, {
       label: "/config write",
       allowedScopes: ["operator.admin"],
       missingText: "❌ /config set|unset requires operator.admin for gateway clients.",

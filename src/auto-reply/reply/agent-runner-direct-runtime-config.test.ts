@@ -316,7 +316,7 @@ describe("runReplyAgent runtime config", () => {
 
     expect(resolveQueuedReplyExecutionConfigMock).not.toHaveBeenCalled();
     expect(enqueueFollowupRunMock).toHaveBeenCalledTimes(1);
-    const enqueueCall = enqueueFollowupRunMock.mock.calls[0];
+    const enqueueCall = enqueueFollowupRunMock.mock.calls.at(0);
     expect(enqueueCall?.[0]).toBe("main");
     expect(enqueueCall?.[1]).toBe(followupRun);
     expect(enqueueCall?.[2]).toBe(resolvedQueue);

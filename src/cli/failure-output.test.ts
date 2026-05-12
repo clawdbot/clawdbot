@@ -10,11 +10,13 @@ describe("formatCliFailureLines", () => {
       env: {},
     });
 
-    expect(lines).toContain("[openclaw] Could not start the CLI.");
-    expect(lines).toContain("[openclaw] Reason: config file is invalid");
-    expect(lines).toContain("[openclaw] Debug: set OPENCLAW_DEBUG=1 to include the stack trace.");
-    expect(lines).toContain("[openclaw] Try: openclaw doctor");
-    expect(lines).toContain("[openclaw] Help: openclaw --help");
+    expect(lines).toEqual([
+      "[openclaw] Could not start the CLI.",
+      "[openclaw] Reason: config file is invalid",
+      "[openclaw] Debug: set OPENCLAW_DEBUG=1 to include the stack trace.",
+      "[openclaw] Try: openclaw doctor",
+      "[openclaw] Help: openclaw --help",
+    ]);
   });
 
   it("prints stack details when debug output is requested", () => {
@@ -24,7 +26,12 @@ describe("formatCliFailureLines", () => {
       env: { OPENCLAW_DEBUG: "1" },
     });
 
-    expect(lines).toContain("[openclaw] Stack:");
+    expect(lines.slice(0, 4)).toEqual([
+      "[openclaw] The CLI command failed.",
+      "[openclaw] Reason: boom",
+      "[openclaw] Stack:",
+      "[openclaw] Error: boom",
+    ]);
     expect(lines.some((line) => line.includes("Error: boom"))).toBe(true);
   });
 });

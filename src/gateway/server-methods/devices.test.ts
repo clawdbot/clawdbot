@@ -113,7 +113,7 @@ function mockRotateOperatorTokenSuccess(): void {
 function expectRespondedErrorMessage(opts: GatewayRequestHandlerOptions, message: string): void {
   const respond = opts.respond as ReturnType<typeof vi.fn>;
   expect(respond).toHaveBeenCalledTimes(1);
-  const call = respond.mock.calls[0] as unknown as [boolean, unknown, { message?: string }];
+  const call = respond.mock.calls.at(0) as unknown as [boolean, unknown, { message?: string }];
   expect(call[0]).toBe(false);
   expect(call[1]).toBeUndefined();
   expect(call[2]?.message).toBe(message);

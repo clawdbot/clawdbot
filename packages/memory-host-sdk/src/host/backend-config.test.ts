@@ -42,8 +42,8 @@ const rootMemoryConfig = (workspaceDir: string): OpenClawConfig =>
     },
   }) as OpenClawConfig;
 
-const collectionNames = (resolved: ResolvedMemoryBackendConfig): Set<string> =>
-  new Set((resolved.qmd?.collections ?? []).map((collection) => collection.name));
+const collectionNames = (resolved: ResolvedMemoryBackendConfig): string[] =>
+  (resolved.qmd?.collections ?? []).map((collection) => collection.name).toSorted();
 
 function requireQmdConfig(
   resolved: ResolvedMemoryBackendConfig,
@@ -73,7 +73,9 @@ const customQmdCollections = (
   (resolved.qmd?.collections ?? []).filter((collection) => collection.kind === "custom");
 
 const customCollectionPaths = (resolved: ResolvedMemoryBackendConfig): string[] =>
-  customQmdCollections(resolved).map((collection) => collection.path);
+  customQmdCollections(resolved)
+    .map((collection) => collection.path)
+    .toSorted();
 
 let fixtureRoot: string;
 let fixtureId = 0;
@@ -125,10 +127,7 @@ describe("resolveMemoryBackendConfig", () => {
     expect(qmd.update.commandTimeoutMs).toBe(30_000);
     expect(qmd.update.updateTimeoutMs).toBe(120_000);
     expect(qmd.update.embedTimeoutMs).toBe(120_000);
-    const names = new Set(qmd.collections.map((collection) => collection.name));
-    expect(names.has("memory-root-main")).toBe(true);
-    expect(names.has("memory-dir-main")).toBe(true);
-    expect(names.has("memory-alt-main")).toBe(false);
+    expect(collectionNames(resolved)).toStrictEqual(["memory-dir-main", "memory-root-main"]);
     expect(requireQmdCollection(resolved, "memory-root-main").pattern).toBe("MEMORY.md");
   });
 
@@ -138,7 +137,7 @@ describe("resolveMemoryBackendConfig", () => {
       const cfg = rootMemoryConfig(workspaceDir);
       const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
       expect(requireQmdCollection(resolved, "memory-root-main").pattern).toBe("MEMORY.md");
-      expect(collectionNames(resolved).has("memory-alt-main")).toBe(false);
+      expect(collectionNames(resolved)).toStrictEqual(["memory-dir-main", "memory-root-main"]);
     });
   });
 
@@ -148,7 +147,7 @@ describe("resolveMemoryBackendConfig", () => {
       const cfg = rootMemoryConfig(workspaceDir);
       const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
       expect(requireQmdCollection(resolved, "memory-root-main").pattern).toBe("MEMORY.md");
-      expect(collectionNames(resolved).has("memory-alt-main")).toBe(false);
+      expect(collectionNames(resolved)).toStrictEqual(["memory-dir-main", "memory-root-main"]);
     });
   });
 
@@ -216,10 +215,8 @@ describe("resolveMemoryBackendConfig", () => {
     const devResolved = resolveMemoryBackendConfig({ cfg, agentId: "dev" });
     const mainNames = collectionNames(mainResolved);
     const devNames = collectionNames(devResolved);
-    expect(mainNames.has("memory-dir-main")).toBe(true);
-    expect(devNames.has("memory-dir-dev")).toBe(true);
-    expect(mainNames.has("workspace-main")).toBe(true);
-    expect(devNames.has("workspace-dev")).toBe(true);
+    expect(mainNames).toStrictEqual(["memory-dir-main", "memory-root-main", "workspace-main"]);
+    expect(devNames).toStrictEqual(["memory-dir-dev", "memory-root-dev", "workspace-dev"]);
   });
 
   it("merges default and per-agent qmd extra collections", () => {
@@ -267,8 +264,7 @@ describe("resolveMemoryBackendConfig", () => {
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     const names = collectionNames(resolved);
-    expect(names.has("team-notes")).toBe(true);
-    expect(names.has("notes-main")).toBe(true);
+    expect(names).toStrictEqual(["notes-main", "team-notes"]);
   });
 
   it("preserves explicit custom collection names for paths outside the workspace", () => {
@@ -292,10 +288,8 @@ describe("resolveMemoryBackendConfig", () => {
     const devResolved = resolveMemoryBackendConfig({ cfg, agentId: "dev" });
     const mainNames = collectionNames(mainResolved);
     const devNames = collectionNames(devResolved);
-    expect(mainNames.has("memory-dir-main")).toBe(true);
-    expect(devNames.has("memory-dir-dev")).toBe(true);
-    expect(mainNames.has("notion-mirror")).toBe(true);
-    expect(devNames.has("notion-mirror")).toBe(true);
+    expect(mainNames).toStrictEqual(["memory-dir-main", "memory-root-main", "notion-mirror"]);
+    expect(devNames).toStrictEqual(["memory-dir-dev", "memory-root-dev", "notion-mirror"]);
   });
 
   it("keeps symlinked workspace paths agent-scoped when deciding custom collection names", async () => {
@@ -319,8 +313,7 @@ describe("resolveMemoryBackendConfig", () => {
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     const names = collectionNames(resolved);
-    expect(names.has("workspace-main")).toBe(true);
-    expect(names.has("workspace")).toBe(false);
+    expect(names).toStrictEqual(["workspace-main"]);
   });
 
   it("keeps unresolved child paths under a symlinked workspace agent-scoped", async () => {
@@ -348,8 +341,7 @@ describe("resolveMemoryBackendConfig", () => {
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     const names = collectionNames(resolved);
-    expect(names.has("notes-main")).toBe(true);
-    expect(names.has("notes")).toBe(false);
+    expect(names).toStrictEqual(["notes-main"]);
   });
 
   it("resolves qmd update timeout overrides", () => {
@@ -443,9 +435,10 @@ describe("memorySearch.extraPaths integration", () => {
     const result = resolveMemoryBackendConfig({ cfg, agentId: "test-agent" });
     expect(result.backend).toBe("qmd");
     const paths = customCollectionPaths(result);
-    expect(paths.length).toBeGreaterThanOrEqual(2);
-    expect(paths).toContain(resolveComparablePath("/home/user/docs"));
-    expect(paths).toContain(resolveComparablePath("/home/user/vault"));
+    expect(paths).toStrictEqual([
+      resolveComparablePath("/home/user/docs"),
+      resolveComparablePath("/home/user/vault"),
+    ]);
   });
 
   it("merges default and per-agent memorySearch.extraPaths for QMD collections", () => {
@@ -471,8 +464,10 @@ describe("memorySearch.extraPaths integration", () => {
     const result = resolveMemoryBackendConfig({ cfg, agentId: "my-agent" });
     expect(result.backend).toBe("qmd");
     const paths = customCollectionPaths(result);
-    expect(paths).toContain(resolveComparablePath("/agent/specific/path"));
-    expect(paths).toContain(resolveComparablePath("/default/path"));
+    expect(paths).toStrictEqual([
+      resolveComparablePath("/agent/specific/path"),
+      resolveComparablePath("/default/path"),
+    ]);
   });
 
   it("falls back to defaults when agent has no overrides", () => {
@@ -498,7 +493,7 @@ describe("memorySearch.extraPaths integration", () => {
     const result = resolveMemoryBackendConfig({ cfg, agentId: "my-agent" });
     expect(result.backend).toBe("qmd");
     const paths = customCollectionPaths(result);
-    expect(paths).toContain(resolveComparablePath("/default/path"));
+    expect(paths).toStrictEqual([resolveComparablePath("/default/path")]);
   });
 
   it("deduplicates merged memorySearch.extraPaths for QMD collections", () => {
@@ -525,10 +520,10 @@ describe("memorySearch.extraPaths integration", () => {
     const result = resolveMemoryBackendConfig({ cfg, agentId: "my-agent" });
     const paths = customCollectionPaths(result);
 
-    expect(
-      paths.filter((collectionPath) => collectionPath === resolveComparablePath("/shared/path")),
-    ).toHaveLength(1);
-    expect(paths).toContain(resolveComparablePath("/agent-only"));
+    expect(paths).toStrictEqual([
+      resolveComparablePath("/agent-only"),
+      resolveComparablePath("/shared/path"),
+    ]);
   });
 
   it("keeps unnamed extra paths agent-scoped even when they resolve outside the workspace", () => {
@@ -544,9 +539,9 @@ describe("memorySearch.extraPaths integration", () => {
       },
     } as OpenClawConfig;
     const result = resolveMemoryBackendConfig({ cfg, agentId: "my-agent" });
-    expect(customQmdCollections(result).map((collection) => collection.name)).toContain(
+    expect(customQmdCollections(result).map((collection) => collection.name)).toStrictEqual([
       "custom-1-my-agent",
-    );
+    ]);
   });
 
   it("matches per-agent memorySearch.extraPaths using normalized agent ids", () => {
@@ -569,7 +564,9 @@ describe("memorySearch.extraPaths integration", () => {
 
     const result = resolveMemoryBackendConfig({ cfg, agentId: "my-agent" });
 
-    expect(customCollectionPaths(result)).toContain(resolveComparablePath("/agent/mixed-case"));
+    expect(customCollectionPaths(result)).toStrictEqual([
+      resolveComparablePath("/agent/mixed-case"),
+    ]);
   });
 
   it("deduplicates identical roots shared by memory.qmd.paths and memorySearch.extraPaths", () => {

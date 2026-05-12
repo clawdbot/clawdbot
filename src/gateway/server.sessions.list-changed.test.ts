@@ -44,7 +44,7 @@ function expectFields(record: Record<string, unknown>, expected: Record<string, 
 
 function expectRespondPayload(respond: MockCalls): Record<string, unknown> {
   expect(respond.mock.calls).toHaveLength(1);
-  const [ok, payload, error] = respond.mock.calls[0] ?? [];
+  const [ok, payload, error] = respond.mock.calls.at(0) ?? [];
   expect(ok).toBe(true);
   expect(error).toBeUndefined();
   return requireRecord(payload, "response payload");
@@ -70,7 +70,7 @@ function expectChangedBroadcast(
   expected: Record<string, unknown>,
 ): Record<string, unknown> {
   expect(broadcastToConnIds.mock.calls).toHaveLength(1);
-  const [event, payload, connIds, options] = broadcastToConnIds.mock.calls[0] ?? [];
+  const [event, payload, connIds, options] = broadcastToConnIds.mock.calls.at(0) ?? [];
   expect(event).toBe("sessions.changed");
   expect(connIds).toEqual(new Set(["conn-1"]));
   expect(options).toEqual({ dropIfSlow: true });

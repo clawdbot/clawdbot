@@ -281,7 +281,7 @@ describe("session.message websocket events", () => {
       if (!appended.ok) {
         throw new Error(`append failed: ${appended.reason}`);
       }
-      const emitParams = requireRecord(emitSpy.mock.calls[0]?.[0], "transcript update params");
+      const emitParams = requireRecord(emitSpy.mock.calls.at(0)?.[0], "transcript update params");
       expect(emitParams.sessionFile).toBe(appended.sessionFile);
       expect(emitParams.sessionKey).toBe("agent:main:main");
       expect(emitParams.messageId).toBe(appended.messageId);

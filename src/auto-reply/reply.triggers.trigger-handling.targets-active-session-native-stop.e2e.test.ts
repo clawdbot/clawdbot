@@ -233,7 +233,7 @@ async function expectNextRunUsesTargetSession(
   );
 
   expect(params.runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-  const runParams = params.runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
+  const runParams = params.runEmbeddedPiAgentMock.mock.calls.at(0)?.[0] as
     | Record<string, unknown>
     | undefined;
   if (!runParams) {
@@ -473,7 +473,7 @@ describe("trigger handling", () => {
         expect(text, testCase.label).not.toMatch(/Thinking level set/i);
         expect(runEmbeddedPiAgentMock, testCase.label).toHaveBeenCalledOnce();
         if (testCase.assertPrompt) {
-          const prompt = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
+          const prompt = runEmbeddedPiAgentMock.mock.calls.at(0)?.[0]?.prompt ?? "";
           expect(prompt).toContain("Give me the status");
           expect(prompt).not.toContain("/thinking high");
           expect(prompt).not.toContain("/think high");
@@ -515,7 +515,7 @@ describe("trigger handling", () => {
         testCase.setup(cfg);
         await getReplyFromConfig(BASE_MESSAGE, { isHeartbeat: true }, cfg);
 
-        const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
+        const call = runEmbeddedPiAgentMock.mock.calls.at(0)?.[0];
         expect(call?.provider).toBe(testCase.expected.provider);
         expect(call?.model).toBe(testCase.expected.model);
       }
@@ -573,7 +573,7 @@ describe("trigger handling", () => {
       const text = maybeReplyText(res);
       expect(text?.startsWith("⚙️ Compacted")).toBe(true);
       expect(getCompactEmbeddedPiSessionMock()).toHaveBeenCalledOnce();
-      expect(getCompactEmbeddedPiSessionMock().mock.calls[0]?.[0]?.sessionFile).toContain(
+      expect(getCompactEmbeddedPiSessionMock().mock.calls.at(0)?.[0]?.sessionFile).toContain(
         join("agents", "worker1", "sessions"),
       );
     });

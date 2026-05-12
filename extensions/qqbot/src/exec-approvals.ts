@@ -216,3 +216,22 @@ export const isQQBotExecApprovalClientEnabled = qqbotExecApprovalProfile.isClien
 export const isQQBotExecApprovalApprover = qqbotExecApprovalProfile.isApprover;
 export const isQQBotExecApprovalAuthorizedSender = qqbotExecApprovalProfile.isAuthorizedSender;
 export const shouldHandleQQBotExecApprovalRequest = qqbotExecApprovalProfile.shouldHandleRequest;
+
+export function authorizeQQBotApprovalAction(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  senderId?: string | null;
+  approvalKind: "exec" | "plugin";
+}): { authorized: boolean; reason?: string } {
+  if (resolveQQBotExecApprovalConfig(params) === undefined) {
+    return { authorized: true };
+  }
+
+  const authorized =
+    params.approvalKind === "plugin"
+      ? isQQBotExecApprovalApprover(params)
+      : isQQBotExecApprovalAuthorizedSender(params);
+  return authorized
+    ? { authorized: true }
+    : { authorized: false, reason: "You are not authorized to approve this request." };
+}

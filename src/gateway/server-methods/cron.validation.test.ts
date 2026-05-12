@@ -183,7 +183,7 @@ function expectResponseError(
   respond: ReturnType<typeof vi.fn>,
   expected: { code?: string; messageIncludes?: string },
 ) {
-  const call = respond.mock.calls[0];
+  const call = respond.mock.calls.at(0);
   if (!call) {
     throw new Error("expected response call");
   }

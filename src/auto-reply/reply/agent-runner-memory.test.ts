@@ -623,7 +623,7 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    const compactCall = compactEmbeddedPiSessionMock.mock.calls[0]?.[0] as {
+    const compactCall = compactEmbeddedPiSessionMock.mock.calls.at(0)?.[0] as {
       currentTokenCount?: number;
     };
     expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(100_000);
@@ -732,7 +732,7 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    const compactCall = compactEmbeddedPiSessionMock.mock.calls[0]?.[0] as {
+    const compactCall = compactEmbeddedPiSessionMock.mock.calls.at(0)?.[0] as {
       currentTokenCount?: number;
     };
     expect(compactCall.currentTokenCount).toBeGreaterThan(100_000);
@@ -791,7 +791,7 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    const compactCall = compactEmbeddedPiSessionMock.mock.calls[0]?.[0] as {
+    const compactCall = compactEmbeddedPiSessionMock.mock.calls.at(0)?.[0] as {
       currentTokenCount?: number;
     };
     expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(96_000);

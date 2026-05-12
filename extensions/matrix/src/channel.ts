@@ -450,6 +450,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           }).map(projectMatrixConversationBinding),
       },
       messaging: {
+        defaultMarkdownTableMode: "bullets",
         targetPrefixes: ["matrix"],
         normalizeTarget: normalizeMatrixMessagingTarget,
         resolveInboundConversation: ({ to, conversationId, threadId }) =>

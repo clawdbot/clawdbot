@@ -95,14 +95,12 @@ describe("config validation allowed-values metadata", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.issues).not.toContainEqual({
-        path: "bindings.0",
-        message: "Invalid input",
-      });
-      expect(result.issues).toContainEqual({
-        path: "bindings.0.acp",
-        message: 'Unrecognized key: "agent"',
-      });
+      expect(result.issues).toEqual([
+        {
+          path: "bindings.0.acp",
+          message: 'Unrecognized key: "agent"',
+        },
+      ]);
     }
   });
 
@@ -121,14 +119,12 @@ describe("config validation allowed-values metadata", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.issues).not.toContainEqual({
-        path: "bindings.0.type",
-        message: 'Invalid input: expected "route"',
-      });
-      expect(result.issues).toContainEqual({
-        path: "bindings.0",
-        message: 'Unrecognized key: "extraTopLevel"',
-      });
+      expect(result.issues).toEqual([
+        {
+          path: "bindings.0",
+          message: 'Unrecognized key: "extraTopLevel"',
+        },
+      ]);
     }
   });
 
@@ -141,18 +137,12 @@ describe("config validation allowed-values metadata", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.issues).not.toContainEqual({
-        path: "agents.list.0.model",
-        message: "Invalid input: expected string, received boolean",
-      });
-      expect(result.issues).not.toContainEqual({
-        path: "agents.list.0.model",
-        message: "Invalid input: expected object, received boolean",
-      });
-      expect(result.issues).toContainEqual({
-        path: "agents.list.0.model",
-        message: "Invalid input",
-      });
+      expect(result.issues).toEqual([
+        {
+          path: "agents.list.0.model",
+          message: "Invalid input",
+        },
+      ]);
     }
   });
 });

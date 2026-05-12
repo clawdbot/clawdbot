@@ -142,7 +142,7 @@ describe("parseMessageWithAttachments", () => {
     // ctx.MediaPaths so the workspace stage surfaces a real path.
     expect(parsed.message).toBe("read this");
     expect(saveMediaBufferMock).toHaveBeenCalledOnce();
-    expect(saveMediaBufferMock.mock.calls[0]?.[1]).toBe("application/pdf");
+    expect(saveMediaBufferMock.mock.calls.at(0)?.[1]).toBe("application/pdf");
     expect(logs).toHaveLength(0);
   });
 
@@ -155,7 +155,7 @@ describe("parseMessageWithAttachments", () => {
     ]);
     expect(parsed.offloadedRefs).toHaveLength(1);
     expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/octet-stream");
-    expect(saveMediaBufferMock.mock.calls[0]?.[1]).toBe("application/octet-stream");
+    expect(saveMediaBufferMock.mock.calls.at(0)?.[1]).toBe("application/octet-stream");
     expect(parsed.message).toBe("take a look");
     expect(logs).toHaveLength(0);
   });

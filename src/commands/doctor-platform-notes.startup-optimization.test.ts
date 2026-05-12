@@ -27,7 +27,7 @@ describe("noteStartupOptimizationHints", () => {
     );
 
     expect(noteFn).toHaveBeenCalledTimes(1);
-    const [message, title] = noteFn.mock.calls[0] ?? [];
+    const [message, title] = noteFn.mock.calls.at(0) ?? [];
     expect(title).toBe("Startup optimization");
     expect(message).toBe(
       [
@@ -54,7 +54,7 @@ describe("noteStartupOptimizationHints", () => {
     );
 
     expect(noteFn).toHaveBeenCalledTimes(1);
-    const [message] = noteFn.mock.calls[0] ?? [];
+    const [message] = noteFn.mock.calls.at(0) ?? [];
     expect(message).toBe(
       [
         "- NODE_DISABLE_COMPILE_CACHE is set; startup compile cache is disabled.",

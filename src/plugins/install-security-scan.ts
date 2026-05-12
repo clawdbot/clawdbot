@@ -35,6 +35,12 @@ export type SkillInstallSpecMetadata = {
   targetDir?: string;
 };
 
+export type PackageExecutableScanMetadata = {
+  runtimeExtensions?: readonly string[];
+  runtimeSetupEntry?: string;
+  setupEntry?: string;
+};
+
 async function loadInstallSecurityScanRuntime() {
   return await import("./install-security-scan.runtime.js");
 }
@@ -59,6 +65,7 @@ export async function scanPackageInstallSource(
     extensions: string[];
     logger: InstallScanLogger;
     packageDir: string;
+    packageMetadata?: PackageExecutableScanMetadata;
     pluginId: string;
     requestKind?: PluginInstallRequestKind;
     requestedSpecifier?: string;

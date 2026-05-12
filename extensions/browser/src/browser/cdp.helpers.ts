@@ -187,6 +187,20 @@ export function getHeadersWithAuth(url: string, headers: Record<string, string> 
   return mergedHeaders;
 }
 
+function stripUrlCredentials(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.username && !parsed.password) {
+      return url;
+    }
+    parsed.username = "";
+    parsed.password = "";
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 export function appendCdpPath(cdpUrl: string, path: string): string {
   const url = new URL(cdpUrl);
   const basePath = url.pathname.replace(/\/$/, "");
@@ -350,13 +364,14 @@ export async function fetchCdpChecked(
   };
   try {
     const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
+    const fetchUrl = stripUrlCredentials(url);
     const res = await withNoProxyForCdpUrl(url, async () => {
-      const parsedUrl = new URL(url);
+      const parsedUrl = new URL(fetchUrl);
       const policy = isLoopbackHost(parsedUrl.hostname)
         ? withAllowedHostname(ssrfPolicy, parsedUrl.hostname)
         : (ssrfPolicy ?? { allowPrivateNetwork: true });
       const guarded = await fetchWithSsrFGuard({
-        url,
+        url: fetchUrl,
         init: { ...init, headers },
         signal: ctrl.signal,
         policy,

@@ -19,9 +19,9 @@ describe("typing mode schema reuse", () => {
     if (sessionResult.success || agentDefaultsResult.success) {
       throw new Error("Expected unsupported typingMode values to fail schema validation.");
     }
-    expect(sessionResult.error.issues.map((issue) => issue.path.join("."))).toContain("typingMode");
-    expect(agentDefaultsResult.error.issues.map((issue) => issue.path.join("."))).toContain(
+    expect(sessionResult.error.issues.map((issue) => issue.path.join("."))).toEqual(["typingMode"]);
+    expect(agentDefaultsResult.error.issues.map((issue) => issue.path.join("."))).toEqual([
       "typingMode",
-    );
+    ]);
   });
 });

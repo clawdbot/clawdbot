@@ -381,7 +381,7 @@ describe("agentCommand", () => {
       );
 
       expect(pluginRegistryMocks.ensurePluginRegistryLoaded).toHaveBeenCalledOnce();
-      const registryLoad = pluginRegistryMocks.ensurePluginRegistryLoaded.mock.calls[0]?.[0];
+      const registryLoad = pluginRegistryMocks.ensurePluginRegistryLoaded.mock.calls.at(0)?.[0];
       expect(registryLoad?.scope).toBe("all");
       expect(registryLoad?.config).toBeTypeOf("object");
       expect(registryLoad?.activationSourceConfig).toBeTypeOf("object");

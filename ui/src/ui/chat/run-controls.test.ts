@@ -77,7 +77,7 @@ describe("chat run controls", () => {
     expect(stopButton.title).toBe("Stop");
     stopButton.click();
     expect(onAbort).toHaveBeenCalledTimes(1);
-    expect(container.textContent).not.toContain("New session");
+    expect(container.querySelector('button[title="New session"]')).toBeNull();
 
     const onNewSession = vi.fn();
     const onSend = vi.fn();
@@ -105,7 +105,7 @@ describe("chat run controls", () => {
     sendButton.click();
     expect(onStoreDraft).toHaveBeenCalledWith(" run this ");
     expect(onSend).toHaveBeenCalledTimes(1);
-    expect(container.textContent).not.toContain("Stop");
+    expect(container.querySelector(".chat-send-btn--stop")).toBeNull();
   });
 
   it("queues draft text while an active run is abortable", () => {
@@ -159,7 +159,7 @@ describe("chat run controls", () => {
     getButton(container, `button[title="${t("chat.runControls.newSession")}"]`);
     getButton(container, `button[title="${t("chat.runControls.export")}"]`);
     getButton(container, `button[title="${t("chat.runControls.send")}"]`);
-    expect(container.textContent).not.toContain("New session");
+    expect(container.querySelector('button[title="New session"]')).toBeNull();
   });
 });
 
@@ -196,9 +196,11 @@ describe("chat status indicators", () => {
       );
 
       let indicator = container.querySelector(".compaction-indicator--active");
-      expect(indicator?.textContent).toContain("Compacting context...");
+      expect(indicator?.textContent?.trim()).toBe("Compacting context...");
       indicator = container.querySelector(".compaction-indicator--fallback");
-      expect(indicator?.textContent).toContain("Fallback active: deepinfra/moonshotai/Kimi-K2.5");
+      expect(indicator?.textContent?.trim()).toBe(
+        "Fallback active: deepinfra/moonshotai/Kimi-K2.5",
+      );
 
       renderIndicators(
         {
@@ -217,9 +219,9 @@ describe("chat status indicators", () => {
         },
       );
       indicator = container.querySelector(".compaction-indicator--complete");
-      expect(indicator?.textContent).toContain("Context compacted");
+      expect(indicator?.textContent?.trim()).toBe("Context compacted");
       indicator = container.querySelector(".compaction-indicator--fallback-cleared");
-      expect(indicator?.textContent).toContain("Fallback cleared: fireworks/minimax-m2p5");
+      expect(indicator?.textContent?.trim()).toBe("Fallback cleared: fireworks/minimax-m2p5");
 
       nowSpy.mockReturnValue(20_000);
       renderIndicators(
@@ -275,12 +277,15 @@ describe("context notice", () => {
     expect(lowUsage.warning).toBe(false);
     expect(lowUsage.compactRecommended).toBe(false);
     render(renderContextNotice(lowUsageSession, 200_000), container);
-    expect(container.textContent).toContain("23% context used");
-    expect(container.textContent).toContain("46k / 200k");
-    expect(container.querySelectorAll(".context-notice--usage")).toHaveLength(1);
+    const lowNotice = container.querySelector<HTMLElement>(".context-notice--usage");
+    expect(lowNotice).toBeInstanceOf(HTMLElement);
+    expect([...lowNotice!.classList]).toEqual(["context-notice", "context-notice--usage"]);
+    expect(lowNotice!.textContent?.replace(/\s+/gu, " ").trim()).toBe(
+      "23% context used 46k / 200k",
+    );
+    expect(lowNotice!.querySelector(".context-notice__detail")?.textContent).toBe("46k / 200k");
     expect(container.querySelectorAll(".context-notice__meter")).toHaveLength(1);
     expect(container.querySelector(".context-notice__icon")).toBeNull();
-    expect(container.textContent).not.toContain("757.3k / 200k");
 
     const session: GatewaySessionRow = {
       key: "main",
@@ -292,29 +297,29 @@ describe("context notice", () => {
     };
     render(renderContextNotice(session, 200_000), container);
 
-    expect(container.textContent).toContain("95% context used");
-    expect(container.textContent).toContain("190k / 200k");
     expect(getContextNoticeViewModel(session, 200_000)?.compactRecommended).toBe(true);
-    expect(container.textContent).not.toContain("757.3k / 200k");
     const notice = container.querySelector<HTMLElement>(".context-notice");
-    expect(notice?.classList.contains("context-notice--warning")).toBe(true);
-    expect(notice?.getAttribute("title")).toBe("Session context usage: 190k / 200k (95%)");
-    expect(notice?.style.getPropertyValue("--ctx-color")).toContain("rgb(");
-    expect(notice?.style.getPropertyValue("--ctx-color")).toContain("4, 5, 6");
-    expect(notice?.style.getPropertyValue("--ctx-color")).not.toContain("NaN");
-    expect(notice?.style.getPropertyValue("--ctx-bg")).not.toContain("NaN");
+    expect(notice).toBeInstanceOf(HTMLElement);
+    expect(notice!.textContent?.replace(/\s+/gu, " ").trim()).toBe("95% context used 190k / 200k");
+    expect(notice!.querySelector(".context-notice__detail")?.textContent).toBe("190k / 200k");
+    expect([...notice!.classList]).toEqual(["context-notice", "context-notice--warning"]);
+    expect(notice!.getAttribute("title")).toBe("Session context usage: 190k / 200k (95%)");
+    expect(notice!.style.getPropertyValue("--ctx-color")).toBe("rgb(4, 5, 6)");
+    expect(notice!.style.getPropertyValue("--ctx-bg")).toBe("rgba(4, 5, 6, 0.15999999999999998)");
 
     const icon = container.querySelector<SVGElement>(".context-notice__icon");
-    expect(icon?.tagName.toLowerCase()).toBe("svg");
-    expect(icon?.classList.contains("context-notice__icon")).toBe(true);
-    expect(icon?.getAttribute("width")).toBe("16");
-    expect(icon?.getAttribute("height")).toBe("16");
-    expect(icon?.querySelectorAll("path")).toHaveLength(1);
+    expect(icon).toBeInstanceOf(SVGElement);
+    expect(icon!.tagName.toLowerCase()).toBe("svg");
+    expect([...icon!.classList]).toEqual(["context-notice__icon"]);
+    expect(icon!.getAttribute("width")).toBe("16");
+    expect(icon!.getAttribute("height")).toBe("16");
+    expect(icon!.querySelectorAll("path")).toHaveLength(1);
 
     const onCompact = vi.fn();
     render(renderContextNotice(session, 200_000, { onCompact }), container);
-    expect(container.textContent).toContain("Compact");
-    getButton(container, ".context-notice__action").click();
+    const compactButton = getButton(container, ".context-notice__action");
+    expect(compactButton.textContent?.trim()).toBe("Compact");
+    compactButton.click();
     expect(onCompact).toHaveBeenCalledTimes(1);
 
     expect(
@@ -366,10 +371,20 @@ describe("side result render", () => {
       container,
     );
 
-    expect(container.textContent).toContain("BTW");
-    expect(container.textContent).toContain("what changed?");
-    expect(container.textContent).toContain("Not saved to chat history");
-    expect(container.querySelectorAll(".chat-side-result")).toHaveLength(1);
+    const sideResult = container.querySelector<HTMLElement>(".chat-side-result");
+    expect(sideResult).toBeInstanceOf(HTMLElement);
+    expect([...sideResult!.classList]).toEqual(["chat-side-result"]);
+    expect(sideResult!.getAttribute("aria-label")).toBe("BTW side result");
+    expect(sideResult!.querySelector(".chat-side-result__label")?.textContent).toBe("BTW");
+    expect(sideResult!.querySelector(".chat-side-result__meta")?.textContent).toBe(
+      "Not saved to chat history",
+    );
+    expect(sideResult!.querySelector(".chat-side-result__question")?.textContent).toBe(
+      "what changed?",
+    );
+    expect(sideResult!.querySelector(".chat-side-result__body")?.textContent?.trim()).toBe(
+      "The web UI now renders **BTW** separately.",
+    );
 
     const button = container.querySelector<HTMLButtonElement>(".chat-side-result__dismiss");
     expect(button).toBeInstanceOf(HTMLButtonElement);
@@ -392,6 +407,8 @@ describe("side result render", () => {
       container,
     );
 
-    expect(container.querySelectorAll(".chat-side-result--error")).toHaveLength(1);
+    const errorResult = container.querySelector<HTMLElement>(".chat-side-result--error");
+    expect(errorResult).toBeInstanceOf(HTMLElement);
+    expect([...errorResult!.classList]).toEqual(["chat-side-result", "chat-side-result--error"]);
   });
 });

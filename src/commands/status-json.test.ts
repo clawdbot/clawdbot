@@ -75,6 +75,34 @@ function createScanResult() {
   };
 }
 
+function createExpectedStatusPayload() {
+  return {
+    ok: true,
+    configuredChannels: [],
+    os: { platform: "linux" },
+    update: { installKind: "npm", git: { tag: null, branch: null } },
+    updateChannel: "stable",
+    updateChannelSource: "config",
+    memory: null,
+    memoryPlugin: null,
+    gateway: {
+      mode: "local",
+      url: "ws://127.0.0.1:18789",
+      urlSource: "config",
+      misconfigured: false,
+      reachable: false,
+      connectLatencyMs: null,
+      self: null,
+      error: null,
+      authWarning: null,
+    },
+    gatewayService: { installed: false },
+    nodeService: { installed: false },
+    agents: [],
+    secretDiagnostics: [],
+  };
+}
+
 describe("statusJsonCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -97,20 +125,7 @@ describe("statusJsonCommand", () => {
     expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
     expect(logs).toStrictEqual([expect.any(String)]);
     const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
-    expect(payload).toMatchObject({
-      ok: true,
-      configuredChannels: [],
-      os: { platform: "linux" },
-      update: { installKind: "npm", git: { tag: null, branch: null } },
-      updateChannel: "stable",
-      updateChannelSource: "config",
-      memory: null,
-      memoryPlugin: null,
-      gatewayService: { installed: false },
-      nodeService: { installed: false },
-      agents: [],
-      secretDiagnostics: [],
-    });
+    expect(payload).toEqual(createExpectedStatusPayload());
     expect(payload).not.toHaveProperty("securityAudit");
   });
 
@@ -120,7 +135,7 @@ describe("statusJsonCommand", () => {
     await statusJsonCommand({ all: true }, runtime);
 
     expect(mocks.runSecurityAudit).toHaveBeenCalledOnce();
-    const auditInput = mocks.runSecurityAudit.mock.calls[0]?.[0] as
+    const auditInput = mocks.runSecurityAudit.mock.calls.at(0)?.[0] as
       | {
           config?: unknown;
           sourceConfig?: unknown;
@@ -147,8 +162,8 @@ describe("statusJsonCommand", () => {
     ]);
     expect(logs).toStrictEqual([expect.any(String)]);
     const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
-    expect(payload).toMatchObject({
-      ok: true,
+    expect(payload).toEqual({
+      ...createExpectedStatusPayload(),
       securityAudit: {
         summary: { critical: 1, warn: 0, info: 0 },
         findings: [],

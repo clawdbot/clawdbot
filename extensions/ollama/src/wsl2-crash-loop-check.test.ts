@@ -119,7 +119,7 @@ describe("wsl2 crash-loop check", () => {
     await checkWsl2CrashLoopRisk(logger);
 
     expect(logger.warn).toHaveBeenCalledTimes(1);
-    const message = String(logger.warn.mock.calls[0]?.[0]);
+    const message = String(logger.warn.mock.calls.at(0)?.[0]);
     expect(message).toContain("WSL2 crash-loop risk");
     expect(message).toContain("sudo systemctl disable ollama");
     expect(message).toContain("autoMemoryReclaim=disabled");

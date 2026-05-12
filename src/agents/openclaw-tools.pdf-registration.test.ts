@@ -16,6 +16,6 @@ describe("createOpenClawTools PDF registration", () => {
     });
 
     expect(pdfTool?.name).toBe("pdf");
-    expect(collectPresentOpenClawTools([pdfTool]).map((tool) => tool.name)).toContain("pdf");
+    expect(collectPresentOpenClawTools([pdfTool]).map((tool) => tool.name)).toEqual(["pdf"]);
   });
 });

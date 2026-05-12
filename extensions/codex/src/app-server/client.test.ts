@@ -57,8 +57,8 @@ describe("CodexAppServerClient", () => {
     harness.process.stdout.write('{"token":"secret-value"} trailing\n');
 
     await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
-    expect(warn.mock.calls[0]?.[0]).toBe("failed to parse codex app-server message");
-    const metadata = warn.mock.calls[0]?.[1] as
+    expect(warn.mock.calls.at(0)?.[0]).toBe("failed to parse codex app-server message");
+    const metadata = warn.mock.calls.at(0)?.[1] as
       | {
           error?: unknown;
           errorMessage?: string;

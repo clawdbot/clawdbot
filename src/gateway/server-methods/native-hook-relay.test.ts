@@ -55,7 +55,7 @@ describe("native hook relay gateway method", () => {
       context: {} as never,
     });
 
-    const call = respond.mock.calls[0] as
+    const call = respond.mock.calls.at(0) as
       | [boolean, unknown, { code?: string; message?: string }]
       | undefined;
     expect(call?.[0]).toBe(false);

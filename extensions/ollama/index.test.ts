@@ -95,7 +95,7 @@ function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>)
   );
 
   expect(registerProviderMock).toHaveBeenCalledTimes(1);
-  return registerProviderMock.mock.calls[0]?.[0];
+  return registerProviderMock.mock.calls.at(0)?.[0];
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -106,7 +106,7 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 function requireConfiguredStreamParams(): Record<string, unknown> {
-  return requireRecord(createConfiguredOllamaStreamFnMock.mock.calls[0]?.[0], "stream params");
+  return requireRecord(createConfiguredOllamaStreamFnMock.mock.calls.at(0)?.[0], "stream params");
 }
 
 function captureWrappedOllamaPayload(

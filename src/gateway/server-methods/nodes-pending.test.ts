@@ -100,7 +100,7 @@ describe("node.pending handlers", () => {
       isWebchatConnect: () => false,
     });
 
-    const call = respond.mock.calls[0] as RespondCall | undefined;
+    const call = respond.mock.calls.at(0) as RespondCall | undefined;
     expect(call?.[0]).toBe(false);
     expect(call?.[2]?.message).toContain("connected device identity");
   });
@@ -166,7 +166,7 @@ describe("node.pending handlers", () => {
       timeoutMs: 3_000,
     });
     expect(mocks.maybeSendNodeWakeNudge).not.toHaveBeenCalled();
-    const call = respond.mock.calls[0] as
+    const call = respond.mock.calls.at(0) as
       | [boolean, { nodeId?: string; revision?: number; wakeTriggered?: boolean }, unknown?]
       | undefined;
     expect(call?.[0]).toBe(true);

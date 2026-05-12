@@ -168,7 +168,7 @@ describe("entry compile cache", () => {
       "child process bridge attach",
     );
     expect(bridgeChild).toBe(child);
-    expect(bridgeOptions).toEqual(expect.objectContaining({ onSignal: expect.any(Function) }));
+    expect(bridgeOptions).toEqual({ onSignal: expect.any(Function) });
 
     child.emit("exit", 0, null);
 

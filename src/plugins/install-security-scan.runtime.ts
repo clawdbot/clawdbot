@@ -4,6 +4,7 @@ import { tryReadJson } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   findBlockedPackageDirectoryInPath,
   findBlockedPackageFileAliasInPath,
@@ -14,6 +15,7 @@ import {
 import { getGlobalHookRunner } from "./hook-runner-global.js";
 import { createBeforeInstallHookPayload } from "./install-policy-context.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
+import { listBuiltRuntimeEntryCandidates } from "./package-entrypoints.js";
 
 type InstallScanLogger = {
   warn?: (message: string) => void;
@@ -43,6 +45,12 @@ type PackageManifest = {
   optionalDependencies?: Record<string, string>;
   overrides?: unknown;
   peerDependencies?: Record<string, string>;
+};
+
+type PackageExecutableScanMetadata = {
+  runtimeExtensions?: readonly string[];
+  runtimeSetupEntry?: string;
+  setupEntry?: string;
 };
 
 type PackageManifestTraversalLimits = {
@@ -591,6 +599,45 @@ async function scanDirectoryTarget(params: {
   }
 }
 
+function readStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => normalizeOptionalString(entry))
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+function collectPackageExecutableScanEntries(params: {
+  extensions: string[];
+  packageMetadata?: PackageExecutableScanMetadata;
+}): string[] {
+  const entries: string[] = [];
+  const metadata = params.packageMetadata;
+  const runtimeExtensions = readStringList(metadata?.runtimeExtensions);
+  for (const [index, extensionEntry] of params.extensions.entries()) {
+    entries.push(extensionEntry);
+    const runtimeEntry = runtimeExtensions[index];
+    if (runtimeEntry) {
+      entries.push(runtimeEntry);
+      continue;
+    }
+    entries.push(...listBuiltRuntimeEntryCandidates(extensionEntry));
+  }
+
+  const setupEntry = normalizeOptionalString(metadata?.setupEntry);
+  if (setupEntry) {
+    entries.push(setupEntry);
+  }
+  const runtimeSetupEntry = normalizeOptionalString(metadata?.runtimeSetupEntry);
+  if (runtimeSetupEntry) {
+    entries.push(runtimeSetupEntry);
+  } else if (setupEntry) {
+    entries.push(...listBuiltRuntimeEntryCandidates(setupEntry));
+  }
+  return [...new Set(entries)];
+}
+
 function buildBlockedScanResult(params: {
   builtinScan: BuiltinInstallScan;
   dangerouslyForceUnsafeInstall?: boolean;
@@ -805,6 +852,7 @@ export async function scanPackageInstallSourceRuntime(
     extensions: string[];
     logger: InstallScanLogger;
     packageDir: string;
+    packageMetadata?: PackageExecutableScanMetadata;
     pluginId: string;
     requestKind?: PluginInstallRequestKind;
     requestedSpecifier?: string;
@@ -824,17 +872,21 @@ export async function scanPackageInstallSourceRuntime(
   }
 
   const forcedScanEntries: string[] = [];
-  for (const entry of params.extensions) {
+  const executableEntries = collectPackageExecutableScanEntries({
+    extensions: params.extensions,
+    ...(params.packageMetadata ? { packageMetadata: params.packageMetadata } : {}),
+  });
+  for (const entry of executableEntries) {
     const resolvedEntry = path.resolve(params.packageDir, entry);
     if (!isPathInside(params.packageDir, resolvedEntry)) {
       params.logger.warn?.(
-        `extension entry escapes plugin directory and will not be scanned: ${entry}`,
+        `plugin executable entry escapes plugin directory and will not be scanned: ${entry}`,
       );
       continue;
     }
     if (extensionUsesSkippedScannerPath(entry)) {
       params.logger.warn?.(
-        `extension entry is in a hidden/node_modules path and will receive targeted scan coverage: ${entry}`,
+        `plugin executable entry is in a hidden/node_modules path and will receive targeted scan coverage: ${entry}`,
       );
     }
     forcedScanEntries.push(resolvedEntry);

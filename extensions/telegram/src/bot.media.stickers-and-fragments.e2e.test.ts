@@ -124,7 +124,7 @@ describe("telegram stickers", () => {
       expect(cachedSticker?.setName).toBe("NewSet");
       expect(media?.stickerMetadata?.fileId).toBe("new_file_id");
       expect(media?.stickerMetadata?.cachedDescription).toBe("Cached description");
-      const [fetchUrl, fetchOptions] = proxyFetch.mock.calls[0] ?? [];
+      const [fetchUrl, fetchOptions] = proxyFetch.mock.calls.at(0) ?? [];
       expect(fetchUrl).toBe("https://api.telegram.org/file/bottok/stickers/sticker.webp");
       expect(fetchOptions?.redirect).toBe("manual");
     },
@@ -240,7 +240,7 @@ describe("telegram text fragments", () => {
         await flushScheduledTimerForDelay(setTimeoutSpy, TELEGRAM_TEST_TIMINGS.textFragmentGapMs);
 
         expect(replySpy).toHaveBeenCalledTimes(1);
-        const payload = replySpy.mock.calls[0][0] as { RawBody?: string };
+        const payload = replySpy.mock.calls.at(0)?.[0] as { RawBody?: string };
         expect(payload.RawBody).toContain(part1.slice(0, 32));
         expect(payload.RawBody).toContain(part2.slice(0, 32));
       } finally {

@@ -414,7 +414,7 @@ describe("mattermost inbound user posts", () => {
 
     expect(mockState.enqueueSystemEvent).not.toHaveBeenCalled();
     expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-    const ctx = mockState.dispatchReplyFromConfig.mock.calls[0]?.[0].ctx;
+    const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
     expect(ctx?.BodyForAgent).toBe("hello from mattermost");
     expect(ctx?.ConversationLabel).toBe("Town Square id:chan-1");
     expect(ctx?.MessageSid).toBe("post-1");
@@ -484,7 +484,7 @@ describe("mattermost inbound user posts", () => {
     await monitor;
 
     expect(runtimeCore.channel.session.recordInboundSession).toHaveBeenCalledTimes(1);
-    const [recordCall] = runtimeCore.channel.session.recordInboundSession.mock.calls[0] ?? [];
+    const [recordCall] = runtimeCore.channel.session.recordInboundSession.mock.calls.at(0) ?? [];
     expect(recordCall?.storePath).toBe("/tmp/openclaw-test-sessions.json");
     expect(recordCall?.sessionKey).toBe("mattermost:default:channel:chan-1");
     const updateLastRoute = recordCall?.updateLastRoute;

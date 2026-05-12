@@ -229,7 +229,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(nativeDetails?.details?.backend).toBe("codex-app-server");
     expect(nativeDetails?.details?.threadId).toBe("thread-1");
     expect(compact).toHaveBeenCalledTimes(1);
-    const [compactCall] = compact.mock.calls[0] ?? [];
+    const [compactCall] = compact.mock.calls.at(0) ?? [];
     expect(compactCall).toStrictEqual({
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
@@ -242,7 +242,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       runtimeContext: { workspaceDir: tempDir, provider: "codex" },
     });
     expect(maintain).toHaveBeenCalledTimes(1);
-    const [maintainCall] = maintain.mock.calls[0] ?? [];
+    const [maintainCall] = maintain.mock.calls.at(0) ?? [];
     const maintainParams = maintainCall as
       | {
           sessionId?: string;

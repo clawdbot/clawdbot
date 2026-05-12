@@ -74,10 +74,12 @@ describe("loadSqliteVecExtension", () => {
 
     const result = await loadSqliteVecExtension({ db: db as never });
 
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("sqlite-vec package is not installed.");
-    expect(result.error).toContain("agents.defaults.memorySearch.store.vector.extensionPath");
-    expect(result.error).toContain("agent-specific memorySearch.store.vector.extensionPath");
+    expect(result).toEqual({
+      ok: false,
+      error: expect.stringMatching(
+        /^sqlite-vec package is not installed\. Set agents\.defaults\.memorySearch\.store\.vector\.extensionPath, or an agent-specific memorySearch\.store\.vector\.extensionPath, to a sqlite-vec loadable extension path\. Original error: (?:\[vitest\] There was an error when mocking a module\. If you are using "vi\.mock" factory, make sure there are no top level variables inside, since this call is hoisted to top of the file\. Read more: https:\/\/vitest\.dev\/api\/vi\.html#vi-mock \| )?Cannot find package 'sqlite-vec' imported from sqlite-vec\.test\.ts$/u,
+      ),
+    });
     expect(result.error).not.toContain("memory.store.vector.extensionPath");
     expect(db.enableLoadExtension).toHaveBeenCalledWith(true);
     expect(db.loadExtension).not.toHaveBeenCalled();
@@ -149,9 +151,10 @@ describe("loadSqliteVecExtension", () => {
 
     const result = await loadSqliteVecExtension({ db: db as never });
 
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("sqlite-vec-linux-x64");
-    expect(result.error).toContain("agents.defaults.memorySearch.store.vector.extensionPath");
-    expect(result.error).toContain("dlopen failed: file not found");
+    expect(result).toEqual({
+      ok: false,
+      error:
+        "sqlite-vec platform variant sqlite-vec-linux-x64 failed to load from /install/node_modules/sqlite-vec-linux-x64/vec0.so. Set agents.defaults.memorySearch.store.vector.extensionPath, or an agent-specific memorySearch.store.vector.extensionPath, to a sqlite-vec loadable extension path. Original error: dlopen failed: file not found",
+    });
   });
 });

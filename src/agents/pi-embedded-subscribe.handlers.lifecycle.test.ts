@@ -57,8 +57,9 @@ async function handleAgentEndAndReadWarnMeta(ctx: EmbeddedPiSubscribeContext) {
 
   const warn = vi.mocked(ctx.log.warn);
   expect(warn).toHaveBeenCalledTimes(1);
-  expect(warn.mock.calls.at(0)?.[0]).toBe("embedded run agent end");
-  return readRecord(warn.mock.calls.at(0)?.[1]);
+  const [message, meta] = firstMockCall(warn);
+  expect(message).toBe("embedded run agent end");
+  return readRecord(meta);
 }
 
 function readRecord(value: unknown): Record<string, unknown> {
@@ -66,6 +67,18 @@ function readRecord(value: unknown): Record<string, unknown> {
     throw new Error("expected metadata record");
   }
   return value as Record<string, unknown>;
+}
+
+function firstMockCall(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }) {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected first mock call");
+  }
+  return call;
+}
+
+function firstWarnMeta(ctx: EmbeddedPiSubscribeContext): Record<string, unknown> {
+  return readRecord(firstMockCall(vi.mocked(ctx.log.warn))[1]);
 }
 
 describe("handleAgentEnd", () => {
@@ -137,8 +150,7 @@ describe("handleAgentEnd", () => {
 
     await handleAgentEnd(ctx);
 
-    const warn = vi.mocked(ctx.log.warn);
-    const meta = readRecord(warn.mock.calls.at(0)?.[1]);
+    const meta = firstWarnMeta(ctx);
     expect(meta.consoleMessage).toBe(
       "embedded run agent end: runId=run-1 isError=true model=claude sonnet 4 provider=anthropic]8;;https://evil.test error=LLM request failed: connection refused by the provider endpoint. rawError=connection refused",
     );
@@ -162,8 +174,7 @@ describe("handleAgentEnd", () => {
 
     await handleAgentEnd(ctx);
 
-    const warn = vi.mocked(ctx.log.warn);
-    const meta = readRecord(warn.mock.calls.at(0)?.[1]);
+    const meta = firstWarnMeta(ctx);
     expect(meta.event).toBe("embedded_run_agent_end");
     expect(meta.error).toBe("x-api-key: ***");
     expect(meta.rawErrorPreview).toBe("x-api-key: ***");
@@ -189,7 +200,7 @@ describe("handleAgentEnd", () => {
 
     await handleAgentEnd(ctx);
 
-    const meta = readRecord(vi.mocked(ctx.log.warn).mock.calls.at(0)?.[1]);
+    const meta = firstWarnMeta(ctx);
     expect(meta.failoverReason).toBe("auth");
     expect(meta.providerRuntimeFailureKind).toBe("auth_scope");
     expect(meta.httpCode).toBe("401");
@@ -207,8 +218,7 @@ describe("handleAgentEnd", () => {
 
     await handleAgentEnd(ctx);
 
-    const warnMeta = vi.mocked(ctx.log.warn).mock.calls.at(0)?.[1];
-    const meta = readRecord(warnMeta);
+    const meta = firstWarnMeta(ctx);
     expect(meta.providerRuntimeFailureKind).toBe("auth_html_403");
     expect(meta.rawErrorPreview).toBe("403 <!DOCTYPE html><html><body>Access denied</body></html>");
     expect(meta.error).toBe(

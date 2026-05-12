@@ -141,9 +141,20 @@ function createFinalDeliveryFailureHandler(finalizeInboundContext: (ctx: unknown
 }
 
 function inboundHistoryBodies(finalizeInboundContext: ReturnType<typeof vi.fn>, callIndex: number) {
-  const ctx = finalizeInboundContext.mock.calls[callIndex]?.[0] as Record<string, unknown>;
+  const ctx = finalizeInboundContextCall(finalizeInboundContext, callIndex);
   const history = ctx["InboundHistory"] as Array<{ body: string }> | undefined;
   return history?.map((entry) => entry.body) ?? [];
+}
+
+function finalizeInboundContextCall(
+  finalizeInboundContext: ReturnType<typeof vi.fn>,
+  callIndex: number,
+) {
+  const ctx = finalizeInboundContext.mock.calls.at(callIndex)?.[0];
+  if (!ctx || typeof ctx !== "object") {
+    throw new Error(`Expected finalizeInboundContext call ${callIndex + 1}`);
+  }
+  return ctx as Record<string, unknown>;
 }
 
 function expectSomeBodyContaining(bodies: readonly string[], fragment: string) {
@@ -175,7 +186,7 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
     // Trigger B — history must contain [msg A] only, not the trigger itself
     await handler(DEFAULT_ROOM, makeRoomTriggerEvent({ eventId: "$b", body: "msg B", ts: 2000 }));
     expect(finalizeInboundContext).toHaveBeenCalledOnce();
-    const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
+    const ctx = finalizeInboundContextCall(finalizeInboundContext, 0);
     const history = ctx["InboundHistory"] as Array<{ body: string; sender: string }>;
     expect(history).toHaveLength(1);
     expect(history[0]?.body).toContain("msg A");
@@ -203,7 +214,7 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
     currentAgentId = "agent_a";
     await handler(DEFAULT_ROOM, makeRoomTriggerEvent({ eventId: "$b", body: "msg B", ts: 2000 }));
     {
-      const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
+      const ctx = finalizeInboundContextCall(finalizeInboundContext, 0);
       const history = ctx["InboundHistory"] as Array<{ body: string }>;
       expect(history).toHaveLength(1);
       expect(history[0]?.body).toContain("msg A");
@@ -223,7 +234,7 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
     currentAgentId = "agent_b";
     await handler(DEFAULT_ROOM, makeRoomTriggerEvent({ eventId: "$d", body: "msg D", ts: 4000 }));
     {
-      const ctx = finalizeInboundContext.mock.calls[2]?.[0] as Record<string, unknown>;
+      const ctx = finalizeInboundContextCall(finalizeInboundContext, 2);
       const history = ctx["InboundHistory"] as Array<unknown> | undefined;
       expect(history ?? []).toHaveLength(0);
     }
@@ -250,7 +261,7 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
     }
 
     await handler(DEFAULT_ROOM, makeRoomTriggerEvent({ eventId: "$t", body: "trigger", ts: 5000 }));
-    const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
+    const ctx = finalizeInboundContextCall(finalizeInboundContext, 0);
     const history = ctx["InboundHistory"] as Array<{ body: string }>;
     expect(history).toHaveLength(2);
     expect(history[0]?.body).toContain("pending 3");
@@ -273,7 +284,7 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
     await handler(DEFAULT_ROOM, makeRoomPlainEvent({ eventId: "$p", body: "pending" }));
     await handler(DEFAULT_ROOM, makeRoomTriggerEvent({ eventId: "$t", body: "trigger" }));
 
-    const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
+    const ctx = finalizeInboundContextCall(finalizeInboundContext, 0);
     const history = ctx["InboundHistory"] as Array<unknown> | undefined;
     expect(history ?? []).toHaveLength(0);
   });
@@ -545,7 +556,7 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
     );
     expect(finalizeInboundContext).toHaveBeenCalledOnce();
     {
-      const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
+      const ctx = finalizeInboundContextCall(finalizeInboundContext, 0);
       const history = ctx["InboundHistory"] as Array<{ body: string }>;
       expect(history).toHaveLength(1);
       expect(history[0]?.body).toContain("pending msg");
@@ -581,10 +592,10 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
     );
 
     expect(finalizeInboundContext).toHaveBeenCalledTimes(2);
-    const firstHistory = (finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>)[
+    const firstHistory = finalizeInboundContextCall(finalizeInboundContext, 0)[
       "InboundHistory"
     ] as Array<{ body: string }>;
-    const retryHistory = (finalizeInboundContext.mock.calls[1]?.[0] as Record<string, unknown>)[
+    const retryHistory = finalizeInboundContextCall(finalizeInboundContext, 1)[
       "InboundHistory"
     ] as Array<{ body: string }>;
 
@@ -683,7 +694,7 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
     releaseFirstGetUserId?.();
     await Promise.all([plainPromise, triggerPromise]);
 
-    const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
+    const ctx = finalizeInboundContextCall(finalizeInboundContext, 0);
     const history = ctx["InboundHistory"] as Array<{ body: string }>;
     expect(history.map((entry) => entry.body)).toEqual(["msg A"]);
   });

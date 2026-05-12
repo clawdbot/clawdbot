@@ -198,7 +198,7 @@ function expectSecurityConnectError(
   onConnectError: ReturnType<typeof vi.fn>,
   params?: { expectTailscaleHint?: boolean },
 ) {
-  const error = onConnectError.mock.calls[0]?.[0] as Error;
+  const error = onConnectError.mock.calls.at(0)?.[0] as Error;
   expect(error.message).toContain("SECURITY ERROR");
   expect(error.message).toContain("openclaw doctor --fix");
   if (params?.expectTailscaleHint) {
@@ -905,7 +905,7 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
 
     await vi.waitFor(() => {
-      const error = onConnectError.mock.calls[0]?.[0] as Error | undefined;
+      const error = onConnectError.mock.calls.at(0)?.[0] as Error | undefined;
       expect(error?.message).toBe("gateway client stopped");
     });
     expect(logDebugMock).toHaveBeenCalledWith(
@@ -1018,7 +1018,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectChallenge(ws);
 
     const loadTokenParams = expectRecordFields(
-      loadDeviceAuthTokenMock.mock.calls[0]?.[0],
+      loadDeviceAuthTokenMock.mock.calls.at(0)?.[0],
       {
         role: "operator",
         env,
@@ -1196,7 +1196,7 @@ describe("GatewayClient connect auth payload", () => {
       failureDetails: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
     });
     const clearTokenParams = expectRecordFields(
-      clearDeviceAuthTokenMock.mock.calls[0]?.[0],
+      clearDeviceAuthTokenMock.mock.calls.at(0)?.[0],
       { role: "operator" },
       "clear device token params",
     );

@@ -136,11 +136,11 @@ function requireMockCallArg(
   argIndex: number,
   label: string,
 ) {
-  const call = mockCalls[index];
+  const call = mockCalls.at(index);
   if (!call) {
     throw new Error(`expected ${label} call ${index + 1}`);
   }
-  return call[argIndex];
+  return call.at(argIndex);
 }
 
 function requireGeneratedVideo(result: OpenRouterVideoResult, index: number) {
@@ -236,7 +236,10 @@ describe("openrouter video generation provider", () => {
     });
 
     expectRecordFields(
-      requireRecord(resolveProviderHttpRequestConfigMock.mock.calls[0]?.[0], "request config"),
+      requireRecord(
+        requireMockCallArg(resolveProviderHttpRequestConfigMock.mock.calls, 0, 0, "request config"),
+        "request config",
+      ),
       {
         baseUrl: "https://custom.openrouter.test/openrouter/api/v1",
         defaultBaseUrl: "https://openrouter.ai/api/v1",
@@ -343,8 +346,10 @@ describe("openrouter video generation provider", () => {
       "https://custom.openrouter.test/openrouter/api/v1/videos/models",
       "openrouter-video-models",
     );
-    expect(fetchWithTimeoutGuardedMock.mock.calls[0]?.[2]).toBe(12_345);
-    expect(fetchWithTimeoutGuardedMock.mock.calls[0]?.[3]).toBeTypeOf("function");
+    expect(requireMockCallArg(fetchWithTimeoutGuardedMock.mock.calls, 0, 2, "fetch")).toBe(12_345);
+    expect(requireMockCallArg(fetchWithTimeoutGuardedMock.mock.calls, 0, 3, "fetch")).toBeTypeOf(
+      "function",
+    );
     const resolvedCapabilities = requireRecord(capabilities, "resolved capabilities");
     expect(resolvedCapabilities.providerOptions).toEqual({
       callback_url: "string",
@@ -477,7 +482,10 @@ describe("openrouter video generation provider", () => {
       ).provider,
     ).toBe("openrouter");
     expectRecordFields(
-      requireRecord(resolveProviderHttpRequestConfigMock.mock.calls[0]?.[0], "request config"),
+      requireRecord(
+        requireMockCallArg(resolveProviderHttpRequestConfigMock.mock.calls, 0, 0, "request config"),
+        "request config",
+      ),
       {
         provider: "openrouter",
         capability: "video",

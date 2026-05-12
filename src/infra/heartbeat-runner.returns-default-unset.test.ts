@@ -217,6 +217,17 @@ function expectReplyCall(
   }
 }
 
+function replyBody(
+  replySpy: ReturnType<typeof vi.fn>,
+  index = 0,
+): { Body?: string; ForceSenderIsOwnerFalse?: boolean; Provider?: string } {
+  return requireRecord(replySpy.mock.calls.at(index)?.at(0), `reply call ${index} body`) as {
+    Body?: string;
+    ForceSenderIsOwnerFalse?: boolean;
+    Provider?: string;
+  };
+}
+
 beforeAll(async () => {
   previousRegistry = getActivePluginRegistry();
 
@@ -1470,7 +1481,7 @@ describe("runHeartbeatOnce", () => {
       expect(res.status).toBe("ran");
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
       expect(replySpy).toHaveBeenCalledTimes(1);
-      const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+      const calledCtx = replyBody(replySpy);
       const expectedPath = path.join(workspaceDir, "HEARTBEAT.md").replace(/\\/g, "/");
       expect(calledCtx.Body).toContain(`use workspace file ${expectedPath} (exact case)`);
       expect(calledCtx.Body).toContain("Do not read docs/heartbeat.md.");
@@ -1541,7 +1552,7 @@ Some global directive after tasks.
 
     expect(res.status).toBe("ran");
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+    const calledCtx = replyBody(replySpy);
     expect(calledCtx.Body).toContain("- inbox: Check urgent inbox items");
     expect(calledCtx.Body).toContain("- calendar: Check calendar changes");
     expect(calledCtx.Body).toContain("Additional context from HEARTBEAT.md");
@@ -1612,7 +1623,7 @@ tasks:
 
     expect(res.status).toBe("ran");
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+    const calledCtx = replyBody(replySpy);
     expect(calledCtx.Body).toContain("- inbox: Check urgent inbox items");
     expect(calledCtx.Body).toContain("- calendar: Check calendar changes");
     expect(calledCtx.Body).toContain("Additional context from HEARTBEAT.md");
@@ -1750,7 +1761,7 @@ tasks:
         expect(replySpy, name).toHaveBeenCalledTimes(expectedReplyCalls);
         expect(sendWhatsApp, name).toHaveBeenCalledTimes(expectedSendCalls);
         if (expectCronContext) {
-          const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
+          const calledCtx = replyBody(replySpy);
           expect(calledCtx.Provider, name).toBe("cron-event");
           expect(calledCtx.Body, name).toContain("scheduled reminder has been triggered");
         }
@@ -1808,7 +1819,7 @@ tasks:
       });
       expect(res.status).toBe("ran");
       expect(sendWhatsApp).toHaveBeenCalledTimes(0);
-      const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
+      const calledCtx = replyBody(replySpy);
       expect(calledCtx.Provider).toBe("cron-event");
       expect(calledCtx.Body).toContain("Handle this reminder internally");
       expect(calledCtx.Body).not.toContain("Please relay this reminder to the user");
@@ -1865,11 +1876,7 @@ tasks:
       });
       expect(res.status).toBe("ran");
       expect(sendWhatsApp).toHaveBeenCalledTimes(0);
-      const calledCtx = replySpy.mock.calls[0]?.[0] as {
-        Provider?: string;
-        Body?: string;
-        ForceSenderIsOwnerFalse?: boolean;
-      };
+      const calledCtx = replyBody(replySpy);
       expect(calledCtx.Provider).toBe("exec-event");
       expect(calledCtx.ForceSenderIsOwnerFalse).toBe(true);
       expect(calledCtx.Body).toContain("Handle the result internally");

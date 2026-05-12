@@ -53,10 +53,14 @@ describe("tool-cards", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Tool input");
-    expect(container.textContent).toContain("Tool output");
-    expect(container.textContent).toContain("https://example.com");
-    expect(container.textContent).toContain("Opened page");
+    const blocks = Array.from(container.querySelectorAll(".chat-tool-card__block"));
+    expect(
+      blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
+    ).toEqual(["Tool input", "Tool output"]);
+    expect(blocks.map((block) => block.querySelector("code")?.textContent)).toEqual([
+      '{\n  "url": "https://example.com"\n}',
+      "Opened page",
+    ]);
   });
 
   it("renders expanded tool calls without an inline output block when no output is present", () => {
@@ -74,10 +78,14 @@ describe("tool-cards", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Tool input");
-    expect(container.textContent).toContain('"thread": true');
-    expect(container.textContent).not.toContain("Tool output");
-    expect(container.textContent).not.toContain("No output");
+    const blocks = Array.from(container.querySelectorAll(".chat-tool-card__block"));
+    expect(
+      blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
+    ).toEqual(["Tool input"]);
+    expect(blocks[0]?.querySelector("code")?.textContent).toBe(
+      '{\n  "mode": "session",\n  "thread": true\n}',
+    );
+    expect(container.querySelector(".chat-tool-card__block-empty")).toBeNull();
   });
 
   it("labels collapsed tool calls with the display summary", () => {
@@ -95,10 +103,12 @@ describe("tool-cards", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Sessions Spawn");
-    expect(container.textContent).not.toContain("Tool input");
     const summaryButton = container.querySelector("button.chat-tool-msg-summary");
+    expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
+      "Sessions Spawn",
+    );
     expect(summaryButton?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
   });
 
   it("keeps raw details for legacy canvas tool output without rendering tool-row previews", () => {
@@ -139,17 +149,23 @@ describe("tool-cards", () => {
     const rawToggle = container.querySelector<HTMLButtonElement>(".chat-tool-card__raw-toggle");
     const rawBody = container.querySelector<HTMLElement>(".chat-tool-card__raw-body");
 
-    expect(container.textContent).toContain("Counter demo");
     expect(container.querySelector(".chat-tool-card__preview-frame")).toBeNull();
-    expect(rawToggle?.getAttribute("aria-expanded")).toBe("false");
-    expect(rawBody?.hidden).toBe(true);
-
     expect(rawToggle).toBeInstanceOf(HTMLButtonElement);
+    expect(rawBody).toBeInstanceOf(HTMLElement);
+    expect([...rawToggle!.classList]).toEqual(["chat-tool-card__raw-toggle"]);
+    expect(rawToggle!.textContent?.trim()).toBe("Raw details");
+    expect(rawToggle!.getAttribute("aria-expanded")).toBe("false");
+    expect(rawBody!.hidden).toBe(true);
+
     rawToggle!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    expect(rawToggle?.getAttribute("aria-expanded")).toBe("true");
-    expect(rawBody?.hidden).toBe(false);
-    expect(rawBody?.textContent).toContain('"kind":"canvas"');
+    expect(rawToggle!.getAttribute("aria-expanded")).toBe("true");
+    expect(rawBody!.hidden).toBe(false);
+    expect(rawBody!.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Tool output");
+    expect(JSON.parse(rawBody!.querySelector("code")?.textContent ?? "{}")).toMatchObject({
+      kind: "canvas",
+      view: { id: "cv_counter", title: "Counter demo" },
+    });
   });
 
   it("opens assistant-surface canvas payloads in the sidebar when explicitly requested", () => {
@@ -190,7 +206,7 @@ describe("tool-cards", () => {
 
     const sidebarButton = container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn");
     expect(sidebarButton).toBeInstanceOf(HTMLButtonElement);
-    expect(sidebarButton?.classList.contains("chat-tool-card__action-btn")).toBe(true);
+    expect([...sidebarButton!.classList]).toEqual(["chat-tool-card__action-btn"]);
     sidebarButton!.click();
 
     const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");

@@ -51,7 +51,7 @@ describe("bridge/tools/remind", () => {
       time: "5m",
     });
 
-    const addCall = callGatewayToolMock.mock.calls[0];
+    const addCall = callGatewayToolMock.mock.calls.at(0);
     const addPayload = addCall?.[2] as CronAddToolPayload | undefined;
     expect(addCall?.[0]).toBe("cron.add");
     expect(addCall?.[1]).toEqual({ timeoutMs: 60_000 });
@@ -103,7 +103,7 @@ describe("bridge/tools/remind", () => {
       time: "5m",
     });
 
-    const cronParams = callCron.mock.calls[0]?.[0] as RemindCronAction | undefined;
+    const cronParams = callCron.mock.calls.at(0)?.[0] as RemindCronAction | undefined;
     expect(cronParams?.action).toBe("add");
     if (cronParams?.action !== "add") {
       throw new Error("Expected add reminder cron params");

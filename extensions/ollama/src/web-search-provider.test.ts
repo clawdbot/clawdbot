@@ -110,6 +110,28 @@ function expectOllamaWebSearchRequest(
   expect(request.init.signal).toBeInstanceOf(AbortSignal);
 }
 
+function fetchCall(index = 0): unknown[] {
+  const call = fetchWithSsrFGuardMock.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`expected guarded fetch call ${index}`);
+  }
+  return call;
+}
+
+function fetchRequest(index = 0): {
+  init?: { headers?: Record<string, string> };
+  url?: string;
+} {
+  const request = fetchCall(index).at(0);
+  if (!request || typeof request !== "object") {
+    throw new Error(`expected guarded fetch request ${index}`);
+  }
+  return request as {
+    init?: { headers?: Record<string, string> };
+    url?: string;
+  };
+}
+
 function expectSingleSearchResultUrl(results: unknown, url: string) {
   if (!Array.isArray(results)) {
     throw new Error("Expected search results array");
@@ -220,7 +242,7 @@ describe("ollama web search provider", () => {
     }
     const result = await tool.execute({ query: "openclaw docs", count: 3 });
 
-    expectOllamaWebSearchRequest(fetchWithSsrFGuardMock.mock.calls[0], {
+    expectOllamaWebSearchRequest(fetchCall(), {
       url: "http://ollama.local:11434/api/experimental/web_search",
       query: "openclaw docs",
       maxResults: 3,
@@ -293,8 +315,8 @@ describe("ollama web search provider", () => {
 
     expect(result.count).toBe(1);
     expect(fetchWithSsrFGuardMock.mock.calls).toHaveLength(1);
-    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0].url).toBe("https://ollama.com/api/web_search");
-    expectOllamaWebSearchRequest(fetchWithSsrFGuardMock.mock.calls[0], {
+    expect(fetchRequest().url).toBe("https://ollama.com/api/web_search");
+    expectOllamaWebSearchRequest(fetchCall(), {
       url: "https://ollama.com/api/web_search",
       headers: {
         "Content-Type": "application/json",
@@ -339,12 +361,8 @@ describe("ollama web search provider", () => {
       });
 
       expect(result.count).toBe(1);
-      const firstHeaders = fetchWithSsrFGuardMock.mock.calls[0]?.[0].init?.headers as
-        | Record<string, string>
-        | undefined;
-      const cloudHeaders = fetchWithSsrFGuardMock.mock.calls[2]?.[0].init?.headers as
-        | Record<string, string>
-        | undefined;
+      const firstHeaders = fetchRequest().init?.headers;
+      const cloudHeaders = fetchRequest(2).init?.headers;
       expect(firstHeaders?.Authorization).toBeUndefined();
       expect(cloudHeaders?.Authorization).toBe("Bearer cloud-secret");
       expect(fetchWithSsrFGuardMock.mock.calls.map((call) => call[0].url)).toEqual([
@@ -352,9 +370,7 @@ describe("ollama web search provider", () => {
         "http://ollama.local:11434/api/web_search",
         "https://ollama.com/api/web_search",
       ]);
-      expect(fetchWithSsrFGuardMock.mock.calls[2]?.[0].url).toBe(
-        "https://ollama.com/api/web_search",
-      );
+      expect(fetchRequest(2).url).toBe("https://ollama.com/api/web_search");
     } finally {
       if (original === undefined) {
         delete process.env.OLLAMA_API_KEY;

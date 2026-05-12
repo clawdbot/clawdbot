@@ -104,6 +104,7 @@ function createEnv(
     OPENCLAW_GATEWAY_TOKEN: "test-token",
     OPENCLAW_CONFIG_DIR: join(sandbox.rootDir, "config"),
     OPENCLAW_WORKSPACE_DIR: join(sandbox.rootDir, "openclaw"),
+    OPENCLAW_AUTH_PROFILE_SECRET_DIR: join(sandbox.rootDir, "auth-profile-secrets"),
   };
 
   for (const [key, value] of Object.entries(overrides)) {
@@ -258,11 +259,17 @@ describe("scripts/docker/setup.sh", () => {
     expect(envFile).toContain("OPENCLAW_EXTRA_MOUNTS=");
     expect(envFile).toContain("OPENCLAW_HOME_VOLUME=openclaw-home"); // pragma: allowlist secret
     expect(envFile).toContain("OPENCLAW_DISABLE_BONJOUR=");
+    expect(envFile).toContain(
+      `OPENCLAW_AUTH_PROFILE_SECRET_DIR=${join(activeSandbox.rootDir, "auth-profile-secrets")}`,
+    );
     const extraCompose = await readFile(
       join(activeSandbox.rootDir, "docker-compose.extra.yml"),
       "utf8",
     );
     expect(extraCompose).toContain("openclaw-home:/home/node");
+    expect(extraCompose).toContain(
+      `${join(activeSandbox.rootDir, "auth-profile-secrets")}:/home/node/.config/openclaw`,
+    );
     expect(extraCompose).toContain("volumes:");
     expect(extraCompose).toContain("openclaw-home:");
     const log = await readDockerLog(activeSandbox);
@@ -381,6 +388,27 @@ describe("scripts/docker/setup.sh", () => {
     expect(chownIdx).toBeGreaterThanOrEqual(0);
     expect(onboardIdx).toBeGreaterThan(chownIdx);
     expect(log).toContain("run --rm --no-deps --user root --entrypoint sh openclaw-gateway -c");
+  });
+
+  it("precreates auth profile secret key dir outside the mounted state dir", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    const configDir = join(activeSandbox.rootDir, "config-auth-profile-key");
+    const workspaceDir = join(activeSandbox.rootDir, "workspace-auth-profile-key");
+    const secretDir = join(activeSandbox.rootDir, "auth-profile-secret-key");
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_CONFIG_DIR: configDir,
+      OPENCLAW_WORKSPACE_DIR: workspaceDir,
+      OPENCLAW_AUTH_PROFILE_SECRET_DIR: secretDir,
+    });
+
+    expect(result.status).toBe(0);
+    const secretDirStat = await stat(secretDir);
+    expect(secretDirStat.isDirectory()).toBe(true);
+    expect(secretDir.startsWith(`${configDir}/`)).toBe(false);
+
+    const log = await readDockerLog(activeSandbox);
+    expect(log).toContain("find /home/node/.config/openclaw -xdev");
   });
 
   it("reuses existing config token when OPENCLAW_GATEWAY_TOKEN is unset", async () => {
@@ -643,6 +671,15 @@ describe("scripts/docker/setup.sh", () => {
     expect(compose.match(/OPENCLAW_GATEWAY_TOKEN: \$\{OPENCLAW_GATEWAY_TOKEN:-\}/g)).toHaveLength(
       2,
     );
+  });
+
+  it("keeps docker-compose auth profile secret key source durable outside state", async () => {
+    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
+    expect(
+      compose.split(
+        "${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-${HOME:-/tmp}/.openclaw-auth-profile-secrets}:/home/node/.config/openclaw",
+      ),
+    ).toHaveLength(3);
   });
 
   it("keeps docker-compose optional env files aligned across services", async () => {

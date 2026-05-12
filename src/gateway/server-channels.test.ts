@@ -124,6 +124,24 @@ async function waitForMicrotaskCondition(
   throw new Error(message);
 }
 
+function firstSleepWithAbortCall(): [number, AbortSignal | undefined] {
+  const call = hoisted.sleepWithAbort.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected sleepWithAbort call");
+  }
+  return call as [number, AbortSignal | undefined];
+}
+
+function firstStartAccountContext(
+  startAccount: ReturnType<typeof vi.fn>,
+): ChannelGatewayContext<TestAccount> {
+  const ctx = startAccount.mock.calls.at(0)?.at(0);
+  if (!ctx || typeof ctx !== "object") {
+    throw new Error("expected channel start context");
+  }
+  return ctx as ChannelGatewayContext<TestAccount>;
+}
+
 function installTestRegistry(
   ...plugins: Array<
     ChannelPlugin<TestAccount> | { plugin: ChannelPlugin<TestAccount>; origin: string }
@@ -395,11 +413,9 @@ describe("server-channels auto restart", () => {
       () => hoisted.sleepWithAbort.mock.calls.length > 0,
       "expected recovery restart backoff to be scheduled",
     );
-    const sleepCall = hoisted.sleepWithAbort.mock.calls[0] as
-      | [number, AbortSignal | undefined]
-      | undefined;
-    expect(sleepCall?.[0]).toBe(10);
-    expect(sleepCall?.[1]).toBeInstanceOf(AbortSignal);
+    const sleepCall = firstSleepWithAbortCall();
+    expect(sleepCall[0]).toBe(10);
+    expect(sleepCall[1]).toBeInstanceOf(AbortSignal);
 
     await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
     await vi.advanceTimersByTimeAsync(10);
@@ -455,7 +471,7 @@ describe("server-channels auto restart", () => {
 
     await manager.startChannels();
     expect(startAccount).toHaveBeenCalledTimes(1);
-    const [ctx] = startAccount.mock.calls[0] ?? [];
+    const ctx = firstStartAccountContext(startAccount);
     expect((ctx?.channelRuntime as { marker?: string } | undefined)?.marker).toBe(
       "channel-runtime",
     );
@@ -476,7 +492,7 @@ describe("server-channels auto restart", () => {
     await manager.startChannel("slack");
 
     expect(startAccount).toHaveBeenCalledTimes(1);
-    const [ctx] = startAccount.mock.calls[0] ?? [];
+    const ctx = firstStartAccountContext(startAccount);
     expect(ctx?.log).toBe(channelLogs.slack);
     expect(ctx?.runtime).toBe(channelRuntimeEnvs.slack);
     expect((ctx?.log as SubsystemLogger | undefined)?.subsystem).toBe("channels/slack");
@@ -548,7 +564,7 @@ describe("server-channels auto restart", () => {
 
     expect(resolveChannelRuntime).toHaveBeenCalledTimes(1);
     expect(startAccount).toHaveBeenCalledTimes(1);
-    const [ctx] = startAccount.mock.calls[0] ?? [];
+    const ctx = firstStartAccountContext(startAccount);
     expect((ctx?.channelRuntime as { marker?: string } | undefined)?.marker).toBe(
       "lazy-channel-runtime",
     );
@@ -576,7 +592,7 @@ describe("server-channels auto restart", () => {
     expect(resolveStartupChannelRuntime).toHaveBeenCalledTimes(1);
     expect(resolveChannelRuntime).not.toHaveBeenCalled();
     expect(startAccount).toHaveBeenCalledTimes(1);
-    const [ctx] = startAccount.mock.calls[0] ?? [];
+    const ctx = firstStartAccountContext(startAccount);
     expect((ctx?.channelRuntime as { marker?: string } | undefined)?.marker).toBe(
       "startup-channel-runtime",
     );
@@ -603,7 +619,7 @@ describe("server-channels auto restart", () => {
 
     expect(resolveStartupChannelRuntime).not.toHaveBeenCalled();
     expect(resolveChannelRuntime).toHaveBeenCalledTimes(1);
-    const [ctx] = startAccount.mock.calls[0] ?? [];
+    const ctx = firstStartAccountContext(startAccount);
     expect((ctx?.channelRuntime as { marker?: string } | undefined)?.marker).toBe(
       "full-channel-runtime",
     );

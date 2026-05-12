@@ -365,7 +365,7 @@ function expectFailureAnnounceCall(params: {
   message: string;
 }) {
   expect(sendFailureNotificationAnnounceMock).toHaveBeenCalledTimes(1);
-  const call = sendFailureNotificationAnnounceMock.mock.calls[0];
+  const call = sendFailureNotificationAnnounceMock.mock.calls.at(0);
   if (!call) {
     throw new Error("expected failure announcement call");
   }

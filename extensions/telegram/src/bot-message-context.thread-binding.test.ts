@@ -68,7 +68,7 @@ async function buildForumTopicMessageContext(accountId?: string) {
 function expectRouteArgs(): Record<string, unknown> {
   expect(resolveTelegramConversationRouteMock).toHaveBeenCalledTimes(1);
   return (
-    resolveTelegramConversationRouteMock.mock.calls[0] as unknown as [Record<string, unknown>]
+    resolveTelegramConversationRouteMock.mock.calls.at(0) as unknown as [Record<string, unknown>]
   )[0];
 }
 

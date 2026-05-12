@@ -160,7 +160,7 @@ describe("push-apns.relay", () => {
       });
 
       expect(sender).toHaveBeenCalledTimes(1);
-      const sent = sender.mock.calls[0]?.[0] as
+      const sent = sender.mock.calls.at(0)?.[0] as
         | {
             relayConfig?: { baseUrl?: string; timeoutMs?: number };
             sendGrant?: string;
@@ -221,7 +221,7 @@ describe("push-apns.relay", () => {
       const result = await sendApnsRelayPush(createRelayPushParams());
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      const fetchOptions = fetchMock.mock.calls[0]?.[1] as { redirect?: unknown } | undefined;
+      const fetchOptions = fetchMock.mock.calls.at(0)?.[1] as { redirect?: unknown } | undefined;
       expect(fetchOptions?.redirect).toBe("manual");
       expect(result.ok).toBe(false);
       expect(result.status).toBe(302);

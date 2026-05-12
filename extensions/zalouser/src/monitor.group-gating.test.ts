@@ -54,6 +54,32 @@ function createConfig(): OpenClawConfig {
 
 const createRuntimeEnv = () => createZalouserRuntimeEnv();
 
+type DispatchReplyCallArg = {
+  ctx?: {
+    Body?: string;
+    BodyForCommands?: string;
+    CommandAuthorized?: boolean;
+    CommandBody?: string;
+    InboundHistory?: unknown;
+    OriginatingTo?: string;
+    SessionKey?: string;
+    To?: string;
+    WasMentioned?: boolean;
+  };
+};
+
+function mockCallArg(mock: unknown, label: string, index = 0) {
+  const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.at(index);
+  if (!call) {
+    throw new Error(`Expected ${label} call ${index + 1}`);
+  }
+  return call[0];
+}
+
+function dispatchReplyCall(mock: unknown, index = 0): DispatchReplyCallArg {
+  return mockCallArg(mock, "dispatch reply", index) as DispatchReplyCallArg;
+}
+
 function installRuntime(params: {
   commandAuthorized?: boolean;
   replyPayload?: { text?: string; mediaUrl?: string; mediaUrls?: string[] };
@@ -414,7 +440,7 @@ describe("zalouser monitor group mention gating", () => {
     });
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
     expect(resolveCommandAuthorizedFromAuthorizers).not.toHaveBeenCalled();
-    const callArg = dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0];
+    const callArg = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
     expect(callArg?.ctx?.CommandAuthorized).toBe(params.expectedCommandAuthorized);
   }
 
@@ -492,7 +518,7 @@ describe("zalouser monitor group mention gating", () => {
       message: createGroupMessage(params.message),
     });
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
-    return dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0];
+    return dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
   }
 
   it("skips unmentioned group messages when requireMention=true", async () => {
@@ -748,7 +774,7 @@ describe("zalouser monitor group mention gating", () => {
       dangerouslyAllowNameMatching: true,
       expectedDispatches: 1,
     });
-    const callArg = dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0];
+    const callArg = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
     expect(callArg?.ctx?.To).toBe("zalouser:group:g-attacker-001");
   });
 
@@ -806,12 +832,17 @@ describe("zalouser monitor group mention gating", () => {
     const { dispatchReplyWithBufferedBlockDispatcher, resolveAgentRoute, buildAgentSessionKey } =
       await processOpenDmMessage();
 
-    const routeInput = resolveAgentRoute.mock.calls[0]?.[0];
+    const routeInput = mockCallArg(resolveAgentRoute, "resolve agent route") as {
+      peer?: unknown;
+    };
     expect(routeInput?.peer).toEqual({ kind: "direct", id: "321" });
-    const sessionKeyInput = buildAgentSessionKey.mock.calls[0]?.[0];
+    const sessionKeyInput = mockCallArg(buildAgentSessionKey, "build agent session key") as {
+      dmScope?: string;
+      peer?: unknown;
+    };
     expect(sessionKeyInput?.peer).toEqual({ kind: "direct", id: "321" });
     expect(sessionKeyInput?.dmScope).toBe("per-channel-peer");
-    const callArg = dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0];
+    const callArg = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
     expect(callArg?.ctx?.SessionKey).toBe("agent:main:zalouser:direct:321");
   });
 
@@ -821,7 +852,7 @@ describe("zalouser monitor group mention gating", () => {
         input?.sessionKey === "agent:main:zalouser:group:321" ? 123 : undefined,
     });
 
-    const callArg = dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0];
+    const callArg = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
     expect(callArg?.ctx?.SessionKey).toBe("agent:main:zalouser:group:321");
   });
 
@@ -907,7 +938,7 @@ describe("zalouser monitor group mention gating", () => {
       historyState,
     });
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
-    const firstDispatch = dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0];
+    const firstDispatch = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
     expect(firstDispatch?.ctx?.InboundHistory).toEqual([
       {
         sender: "Alice",
@@ -915,7 +946,7 @@ describe("zalouser monitor group mention gating", () => {
         timestamp: 1700000000000,
       },
     ]);
-    expect(String(firstDispatch?.ctx?.Body ?? "")).toContain("first unmentioned line");
+    expect(firstDispatch?.ctx?.Body ?? "").toContain("first unmentioned line");
 
     await __testing.processMessage({
       message: createGroupMessage({
@@ -929,7 +960,7 @@ describe("zalouser monitor group mention gating", () => {
       historyState,
     });
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(2);
-    const secondDispatch = dispatchReplyWithBufferedBlockDispatcher.mock.calls[1]?.[0];
+    const secondDispatch = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher, 1);
     expect(secondDispatch?.ctx?.InboundHistory).toStrictEqual([]);
   });
 });

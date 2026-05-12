@@ -38,6 +38,27 @@ type MockRequestHandler = (
   options: RequestOptions,
   callback?: RequestCallback,
 ) => ClientRequest;
+type MockHttpCall = [
+  string | URL,
+  RequestOptions & { rejectUnauthorized?: boolean },
+  RequestCallback?,
+];
+
+function firstHttpsRequestCall(label = "Synology Chat HTTPS request"): MockHttpCall {
+  const call = vi.mocked(https.request).mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call as MockHttpCall;
+}
+
+function firstHttpsGetCall(label = "Synology Chat HTTPS get"): MockHttpCall {
+  const call = vi.mocked(https.get).mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call as MockHttpCall;
+}
 
 function createMockResponseEmitter(statusCode: number): IncomingMessage {
   const res = new EventEmitter() as Partial<IncomingMessage>;
@@ -120,11 +141,7 @@ describe("Synology Chat TLS verification defaults", () => {
   it.each(tlsVerificationDefaultCases)("$name verifies TLS by default", async ({ invoke }) => {
     mockSuccessResponse();
     await settleTimers(invoke());
-    const httpsRequest = vi.mocked(https.request);
-    const firstCall = httpsRequest.mock.calls[0];
-    if (!firstCall) {
-      throw new Error("expected Synology Chat HTTPS request");
-    }
+    const firstCall = firstHttpsRequestCall();
     expect(firstCall[1]?.rejectUnauthorized).toBe(true);
   });
 });
@@ -147,20 +164,15 @@ describe("sendMessage", () => {
   it("includes user_ids when userId is numeric", async () => {
     mockSuccessResponse();
     await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", 42));
-    const httpsRequest = vi.mocked(https.request);
-    expect(httpsRequest).toHaveBeenCalled();
-    const callArgs = httpsRequest.mock.calls[0];
+    expect(vi.mocked(https.request)).toHaveBeenCalled();
+    const callArgs = firstHttpsRequestCall();
     expect(callArgs[0]).toBe("https://nas.example.com/incoming");
   });
 
   it("only disables TLS verification when explicitly requested", async () => {
     mockSuccessResponse();
     await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", undefined, true));
-    const httpsRequest = vi.mocked(https.request);
-    const firstCall = httpsRequest.mock.calls[0];
-    if (!firstCall) {
-      throw new Error("expected Synology Chat HTTPS request");
-    }
+    const firstCall = firstHttpsRequestCall();
     expect(firstCall[1]?.rejectUnauthorized).toBe(false);
   });
 });
@@ -332,11 +344,7 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
       incomingUrl: baseUrl,
       mutableWebhookUsername: "anyone",
     });
-    const httpsGet = vi.mocked(https.get);
-    const call = httpsGet.mock.calls[0];
-    if (!call) {
-      throw new Error("expected Synology Chat user_list request");
-    }
+    const call = firstHttpsGetCall("Synology Chat user_list request");
     expect(String(call[0])).toBe(baseUrl.replace("method=chatbot", "method=user_list"));
     expect(call[1]).toEqual({ rejectUnauthorized: true });
     expect(typeof call[2]).toBe("function");
@@ -385,11 +393,7 @@ describe("fetchChatUsers", () => {
 
     await fetchChatUsers(freshUrl);
 
-    const httpsGet = vi.mocked(https.get);
-    const firstCall = httpsGet.mock.calls[0];
-    if (!firstCall) {
-      throw new Error("expected Synology Chat HTTPS get");
-    }
+    const firstCall = firstHttpsGetCall();
     expect(firstCall[1]?.rejectUnauthorized).toBe(true);
   });
 });

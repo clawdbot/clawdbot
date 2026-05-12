@@ -109,7 +109,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
       { timeoutMs: 10_000 },
     );
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    expect(String(runtime.log.mock.calls[0][0])).toContain(
+    expect(String(runtime.log.mock.calls.at(0)?.[0])).toContain(
       "imessage: watch.subscribe startup failed (attempt 1/3): Error: imsg rpc timeout (watch.subscribe); retrying",
     );
     expect(
@@ -141,7 +141,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     expect((monitorError as Error).message).toContain("imsg rpc timeout (watch.subscribe)");
     expect(createIMessageRpcClientMock).toHaveBeenCalledTimes(3);
     expect(runtime.error).toHaveBeenCalledTimes(1);
-    expect(String(runtime.error.mock.calls[0][0])).toContain(
+    expect(String(runtime.error.mock.calls.at(0)?.[0])).toContain(
       "imessage: monitor failed: Error: imsg rpc timeout (watch.subscribe)",
     );
   });

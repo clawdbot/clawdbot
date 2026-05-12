@@ -305,7 +305,7 @@ describe("channel doctor compatibility mutations", () => {
       cfg,
       READ_ONLY_CHANNEL_DOCTOR_OPTIONS,
     );
-    expect(collectEmptyAllowlistExtraWarnings.mock.calls[0]?.[0]).not.toHaveProperty("cfg");
+    expect(collectEmptyAllowlistExtraWarnings.mock.calls.at(0)?.[0]).not.toHaveProperty("cfg");
   });
 
   it("reuses empty allowlist doctor entries across per-account hooks", () => {

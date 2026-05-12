@@ -93,7 +93,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
     expect(result.id).toBe("dm-channel-456");
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(onRetry).toHaveBeenCalledTimes(1);
-    const retryCall = onRetry.mock.calls[0];
+    const retryCall = onRetry.mock.calls.at(0);
     expect(retryCall?.[0]).toBe(1);
     expect(retryCall?.[1]).toBeGreaterThanOrEqual(10);
     expect(retryCall?.[1]).toBeLessThanOrEqual(20);

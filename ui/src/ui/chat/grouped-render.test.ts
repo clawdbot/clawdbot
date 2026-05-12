@@ -516,7 +516,11 @@ describe("grouped chat rendering", () => {
     const userConfirm = container.querySelector<HTMLElement>(
       ".chat-group.user .chat-delete-confirm",
     );
-    expect(userConfirm?.classList.contains("chat-delete-confirm--left")).toBe(true);
+    expect(userConfirm).toBeInstanceOf(HTMLElement);
+    expect([...userConfirm!.classList]).toEqual([
+      "chat-delete-confirm",
+      "chat-delete-confirm--left",
+    ]);
 
     const assistantDeleteButton = container.querySelector<HTMLButtonElement>(
       ".chat-group.assistant .chat-group-delete",
@@ -527,7 +531,11 @@ describe("grouped chat rendering", () => {
     const assistantConfirm = container.querySelector<HTMLElement>(
       ".chat-group.assistant .chat-delete-confirm",
     );
-    expect(assistantConfirm?.classList.contains("chat-delete-confirm--right")).toBe(true);
+    expect(assistantConfirm).toBeInstanceOf(HTMLElement);
+    expect([...assistantConfirm!.classList]).toEqual([
+      "chat-delete-confirm",
+      "chat-delete-confirm--right",
+    ]);
   });
 
   it("removes the delete confirm outside-click listener when Cancel dismisses it", () => {
@@ -623,10 +631,11 @@ describe("grouped chat rendering", () => {
     );
     const meta = cached.querySelector<HTMLDetailsElement>("details.msg-meta");
     expect(meta?.open).toBe(false);
-    expect(meta?.querySelector("summary")?.textContent).toContain("Context");
+    expect(meta?.querySelector(".msg-meta__summary span:last-child")?.textContent).toBe("Context");
     expect(cached.querySelector(".msg-meta__ctx")?.textContent).toBe("44% ctx");
-    expect(cached.textContent).toContain("R438.4k");
-    expect(cached.textContent).toContain("W307");
+    expect(
+      Array.from(cached.querySelectorAll(".msg-meta__cache")).map((node) => node.textContent),
+    ).toEqual(["R438.4k", "W307"]);
 
     const outputHeavy = renderUsage(
       {
@@ -663,7 +672,7 @@ describe("grouped chat rendering", () => {
     );
 
     expect(container.querySelector(".msg-meta__ctx")?.textContent).toBe("42% ctx");
-    expect(container.textContent).toContain("↑214.5k");
+    expect(container.querySelector(".msg-meta__tokens")?.textContent).toBe("↑214.5k");
   });
 
   it("renders full dates with message and streaming timestamps", () => {
@@ -738,17 +747,20 @@ describe("grouped chat rendering", () => {
       isToolMessageExpanded: () => false,
     });
 
-    expect(container.textContent).not.toContain("Input");
-    expect(container.textContent).not.toContain("Output");
+    expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
 
     renderAssistantMessage(container, message, {
       isToolMessageExpanded: () => true,
     });
 
-    expect(container.textContent).toContain("Tool input");
-    expect(container.textContent).toContain("Tool output");
-    expect(container.textContent).toContain("https://example.com");
-    expect(container.textContent).toContain("Opened page");
+    const blocks = Array.from(container.querySelectorAll(".chat-tool-card__block"));
+    expect(
+      blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
+    ).toEqual(["Tool input", "Tool output"]);
+    expect(blocks.map((block) => block.querySelector("code")?.textContent)).toEqual([
+      '{\n  "url": "https://example.com"\n}',
+      "Opened page",
+    ]);
   });
 
   it("renders expanded standalone tool-call rows", () => {
@@ -773,15 +785,19 @@ describe("grouped chat rendering", () => {
 
     expectElement(container, ".chat-bubble--tool-shell", HTMLElement);
     const summary = container.querySelector<HTMLElement>(".chat-tool-msg-summary");
-    expect(summary?.textContent).toContain("sessions_spawn");
-    expect(container.textContent).not.toContain('"thread": true');
+    expect(summary?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
+      "sessions_spawn",
+    );
+    expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
 
     renderAssistantMessage(container, message, {
       isToolMessageExpanded: () => true,
     });
 
-    expect(container.textContent).toContain("Tool input");
-    expect(container.textContent).toContain('"thread": true');
+    expect(container.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Tool input");
+    expect(container.querySelector(".chat-tool-card__block code")?.textContent).toBe(
+      '{\n  "mode": "session",\n  "thread": true\n}',
+    );
   });
 
   it("renders expanded tool output rows and their json content", () => {
@@ -832,11 +848,18 @@ describe("grouped chat rendering", () => {
       },
     );
 
-    expect(container.textContent).toContain("Tool input");
-    expect(container.textContent).toContain('"thread": true');
-    expect(container.textContent).toContain("Tool output");
-    expect(container.textContent).toContain('"status": "error"');
-    expect(container.textContent).toContain('"childSessionKey": "agent:test:subagent:abc123"');
+    const blocks = Array.from(container.querySelectorAll(".chat-tool-card__block"));
+    expect(
+      blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
+    ).toEqual(["Tool input", "Tool output"]);
+    expect(blocks[0]?.querySelector("code")?.textContent).toBe(
+      '{\n  "mode": "session",\n  "thread": true\n}',
+    );
+    expect(JSON.parse(blocks[1]?.querySelector("code")?.textContent ?? "{}")).toEqual({
+      status: "error",
+      error: "Session mode is unavailable for this target.",
+      childSessionKey: "agent:test:subagent:abc123",
+    });
   });
 
   it("collapses an inline tool call while keeping matching tool output visible", () => {
@@ -875,16 +898,26 @@ describe("grouped chat rendering", () => {
       isToolMessageExpanded: () => true,
     });
 
-    expect(container.textContent).toContain("Tool input");
-    expect(container.textContent).toContain('"thread": true');
-    expect(container.textContent).toContain('"status": "error"');
+    expect(container.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Tool input");
+    expect(container.querySelector(".chat-tool-card__block code")?.textContent).toBe(
+      '{\n  "mode": "session",\n  "thread": true\n}',
+    );
+    expect(
+      JSON.parse(container.querySelector(".chat-json-content code")?.textContent ?? "{}"),
+    ).toEqual({
+      status: "error",
+    });
 
     renderMessageGroups(container, groups, {
       isToolMessageExpanded: (messageId) => !messageId.startsWith("toolmsg:assistant:"),
     });
 
-    expect(container.textContent).not.toContain("Tool input");
-    expect(container.textContent).toContain('"status": "error"');
+    expect(container.querySelector(".chat-tool-card__block")).toBeNull();
+    expect(
+      JSON.parse(container.querySelector(".chat-json-content code")?.textContent ?? "{}"),
+    ).toEqual({
+      status: "error",
+    });
   });
 
   it("renders assistant MEDIA attachments, voice-note badge, and reply pill", () => {
@@ -901,24 +934,29 @@ describe("grouped chat rendering", () => {
       { showToolCalls: false },
     );
 
-    expect(container.querySelector(".chat-reply-pill")?.textContent).toContain(
+    expect(container.querySelector(".chat-reply-pill__label")?.textContent?.trim()).toBe(
       "Replying to current message",
     );
-    expectElement(container, ".chat-message-image", HTMLImageElement);
-    expectElement(container, "audio", HTMLAudioElement);
-    expect(container.querySelector(".chat-assistant-attachment-badge")?.textContent).toContain(
+    expect(container.querySelector(".chat-text")?.textContent?.trim()).toBe("Here is the image.");
+    expect(expectElement(container, ".chat-message-image", HTMLImageElement).src).toBe(
+      "https://example.com/photo.png",
+    );
+    expect(expectElement(container, "audio", HTMLAudioElement).src).toBe(
+      "https://example.com/voice.ogg",
+    );
+    expect(container.querySelector(".chat-assistant-attachment-badge")?.textContent?.trim()).toBe(
       "Voice note",
     );
-    expect(container.textContent).toContain("Here is the image.");
-    expect(container.textContent).not.toContain("[[reply_to_current]]");
-    expect(container.textContent).not.toContain("[[audio_as_voice]]");
-    expect(container.textContent).not.toContain("MEDIA:https://example.com/photo.png");
   });
 
   it("renders allowed transcript and content image variants", async () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      expect(url).toContain("meta=1");
+      const mediaUrl = new URL(url, "http://control.test");
+      expect(mediaUrl.pathname).toBe("/openclaw/__openclaw__/assistant-media");
+      expect([...mediaUrl.searchParams.keys()].toSorted()).toEqual(["meta", "source"]);
+      expect(mediaUrl.searchParams.get("meta")).toBe("1");
+      expect(mediaUrl.searchParams.get("source")).toMatch(/^\/tmp\/openclaw\/.+\.(png|jpg)$/u);
       const headers = init?.headers as Headers;
       expect(headers.get("Authorization")).toBe("Bearer session-token");
       return {
@@ -1028,7 +1066,7 @@ describe("grouped chat rendering", () => {
     const documentLink = container.querySelector<HTMLAnchorElement>(
       ".chat-assistant-attachment-card__link",
     );
-    expect(documentLink?.textContent).toContain("user-upload.pdf");
+    expect(documentLink?.textContent?.trim()).toBe("user-upload.pdf");
     expect(documentLink?.getAttribute("href")).toBe("/__openclaw__/media/user-upload.pdf");
     vi.unstubAllGlobals();
   });
@@ -1144,8 +1182,11 @@ describe("grouped chat rendering", () => {
     );
 
     expectElement(container, ".chat-bubble", HTMLElement);
-    expectElement(container, ".chat-tool-card__preview-frame", HTMLIFrameElement);
-    expect(container.textContent).toContain("Tic-Tac-Toe");
+    const iframe = expectElement(container, ".chat-tool-card__preview-frame", HTMLIFrameElement);
+    expect(iframe.getAttribute("title")).toBe("Tic-Tac-Toe");
+    expect(container.querySelector(".chat-tool-card__preview-label")?.textContent?.trim()).toBe(
+      "Tic-Tac-Toe",
+    );
   });
 
   it("opens only safe assistant image URLs in a hardened new tab", () => {
@@ -1223,7 +1264,11 @@ describe("grouped chat rendering", () => {
       );
 
     renderMessage();
-    expect(container.textContent).toContain("Checking...");
+    expect(
+      Array.from(container.querySelectorAll(".chat-assistant-attachment-badge")).map((badge) =>
+        badge.textContent?.trim(),
+      ),
+    ).toEqual(["Checking...", "Checking..."]);
     await flushAssistantAttachmentAvailabilityChecks();
 
     const [, fetchInit] = requireFetchCallForUrl(
@@ -1242,7 +1287,8 @@ describe("grouped chat rendering", () => {
     expect(docLink?.getAttribute("href")).toBe(
       "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest-doc.pdf&mediaTicket=ticket-local",
     );
-    expect(container.textContent).not.toContain("test image.png");
+    expect(image?.getAttribute("alt")).toBe("test image.png");
+    expect(container.querySelector(".chat-assistant-attachment-card__title")).toBeNull();
     vi.unstubAllGlobals();
   });
 
@@ -1340,7 +1386,12 @@ describe("grouped chat rendering", () => {
 
     renderWithToken(null);
     await flushAssistantAttachmentAvailabilityChecks();
-    expect(container.textContent).toContain("Unavailable");
+    expect(container.querySelector(".chat-assistant-attachment-badge")?.textContent?.trim()).toBe(
+      "Unavailable",
+    );
+    expect(
+      container.querySelector(".chat-assistant-attachment-card__reason")?.textContent?.trim(),
+    ).toBe("Attachment unavailable");
 
     renderWithToken("fresh-token");
     await flushAssistantAttachmentAvailabilityChecks();
@@ -1356,13 +1407,11 @@ describe("grouped chat rendering", () => {
       "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&meta=1",
     );
     expectSameOriginGet(secondFetchInit);
-    expectElement(container, ".chat-message-image", HTMLImageElement);
-    expect(
-      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
-    ).toBe(
+    const image = expectElement(container, ".chat-message-image", HTMLImageElement);
+    expect(image.getAttribute("src")).toBe(
       "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&mediaTicket=ticket-fresh",
     );
-    expect(container.textContent).not.toContain("Unavailable");
+    expect(container.querySelector(".chat-assistant-attachment-badge")).toBeNull();
     vi.unstubAllGlobals();
   });
 
@@ -1391,7 +1440,8 @@ describe("grouped chat rendering", () => {
     );
     expect(image?.getAttribute("src")).toBe("/media/inbound/test-image.png");
     expect(docLink?.getAttribute("href")).toBe("/__openclaw__/media/test-doc.pdf");
-    expect(container.textContent).not.toContain("Unavailable");
+    expect(container.querySelector(".chat-assistant-attachment-badge")).toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-card--blocked")).toBeNull();
   });
 
   it("renders blocked local assistant files as unavailable with a reason", () => {
@@ -1413,11 +1463,17 @@ describe("grouped chat rendering", () => {
     );
 
     expect(container.querySelector(".chat-assistant-attachment-card__link")).toBeNull();
-    expect(container.textContent).toContain("private.pdf");
-    expect(container.textContent).toContain("Unavailable");
-    expect(container.textContent).toContain("Outside allowed folders");
-    expect(container.textContent).toContain("Blocked");
-    expect(container.textContent).toContain("Done");
+    const blockedCard = container.querySelector(".chat-assistant-attachment-card--blocked");
+    expect(blockedCard?.querySelector(".chat-assistant-attachment-card__title")?.textContent).toBe(
+      "private.pdf",
+    );
+    expect(blockedCard?.querySelector(".chat-assistant-attachment-badge")?.textContent).toBe(
+      "Unavailable",
+    );
+    expect(
+      blockedCard?.querySelector(".chat-assistant-attachment-card__reason")?.textContent?.trim(),
+    ).toBe("Outside allowed folders");
+    expect(container.querySelector(".chat-text")?.textContent?.trim()).toBe("Blocked\nDone");
   });
 
   it("allows platform-specific local assistant attachments inside preview roots", async () => {
@@ -1499,7 +1555,12 @@ describe("grouped chat rendering", () => {
       expect(fetchUrl).toBe(expectedUrl);
       expectSameOriginGet(fetchInit);
     }
-    expect(container.textContent).not.toContain("Outside allowed folders");
+    expect(
+      Array.from(container.querySelectorAll(".chat-assistant-attachment-badge")).map((badge) =>
+        badge.textContent?.trim(),
+      ),
+    ).toEqual(["Checking..."]);
+    expect(container.querySelector(".chat-assistant-attachment-card__reason")).toBeNull();
     vi.unstubAllGlobals();
   });
 
@@ -1539,15 +1600,24 @@ describe("grouped chat rendering", () => {
     renderMessage();
     await flushAssistantAttachmentAvailabilityChecks();
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(container.textContent).toContain("Unavailable");
+    expect(container.querySelector(".chat-assistant-attachment-badge")?.textContent?.trim()).toBe(
+      "Unavailable",
+    );
+    expect(
+      container.querySelector(".chat-assistant-attachment-card__reason")?.textContent?.trim(),
+    ).toBe("Attachment unavailable");
 
     vi.advanceTimersByTime(5_001);
     renderMessage();
     await flushAssistantAttachmentAvailabilityChecks();
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expectElement(container, ".chat-message-image", HTMLImageElement);
-    expect(container.textContent).not.toContain("Unavailable");
+    expect(
+      expectElement(container, ".chat-message-image", HTMLImageElement).getAttribute("src"),
+    ).toBe(
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&mediaTicket=ticket-retry",
+    );
+    expect(container.querySelector(".chat-assistant-attachment-badge")).toBeNull();
 
     vi.useRealTimers();
     vi.unstubAllGlobals();
@@ -1630,9 +1700,14 @@ describe("grouped chat rendering", () => {
     const allPreviews = container.querySelectorAll(".chat-tool-card__preview-frame");
     expect(allPreviews).toHaveLength(1);
     const bubble = expectElement(container, ".chat-group.assistant .chat-bubble", HTMLElement);
-    expectElement(bubble, ".chat-tool-card__preview-frame", HTMLIFrameElement);
-    expect(bubble.textContent).toContain("This item is ready.");
-    expect(bubble.textContent).toContain("Live history preview");
+    const iframe = expectElement(bubble, ".chat-tool-card__preview-frame", HTMLIFrameElement);
+    expect(iframe.getAttribute("src")).toBe(
+      "/__openclaw__/canvas/documents/cv_canvas_live_history/index.html",
+    );
+    expect(bubble.querySelector(".chat-text")?.textContent?.trim()).toBe("This item is ready.");
+    expect(bubble.querySelector(".chat-tool-card__preview-label")?.textContent?.trim()).toBe(
+      "Live history preview",
+    );
   });
 
   it("renders hidden assistant_message canvas results with the configured sandbox", () => {
@@ -1666,9 +1741,15 @@ describe("grouped chat rendering", () => {
     expect(iframe.getAttribute("src")).toBe(
       "/__openclaw__/canvas/documents/cv_inline_default/index.html",
     );
-    expect(container.textContent).toContain("Inline canvas result.");
-    expect(container.textContent).toContain("Inline demo");
-    expect(container.textContent).toContain("Raw details");
+    expect(container.querySelector(".chat-text")?.textContent?.trim()).toBe(
+      "Inline canvas result.",
+    );
+    expect(container.querySelector(".chat-tool-card__preview-label")?.textContent?.trim()).toBe(
+      "Inline demo",
+    );
+    expect(container.querySelector(".chat-tool-card__raw-toggle")?.textContent?.trim()).toBe(
+      "Raw details",
+    );
 
     renderCanvas({ embedSandboxMode: "trusted", suffix: "trusted" });
     iframe = expectElement(container, ".chat-tool-card__preview-frame", HTMLIFrameElement);
@@ -1724,11 +1805,20 @@ describe("grouped chat rendering", () => {
     const allPreviews = container.querySelectorAll(".chat-tool-card__preview-frame");
     expect(allPreviews).toHaveLength(1);
     const bubble = expectElement(container, ".chat-group.assistant .chat-bubble", HTMLElement);
-    expectElement(bubble, ".chat-tool-card__preview-frame", HTMLIFrameElement);
-    expect(container.textContent).toContain("Tool output");
-    expect(container.textContent).toContain("canvas_render");
-    expect(container.textContent).toContain("Inline canvas result.");
-    expect(container.textContent).toContain("Inline demo");
+    const iframe = expectElement(bubble, ".chat-tool-card__preview-frame", HTMLIFrameElement);
+    expect(iframe.getAttribute("src")).toBe(
+      "/__openclaw__/canvas/documents/cv_inline_visible/index.html",
+    );
+    expect(bubble.querySelector(".chat-text")?.textContent?.trim()).toBe("Inline canvas result.");
+    expect(bubble.querySelector(".chat-tool-card__preview-label")?.textContent?.trim()).toBe(
+      "Inline demo",
+    );
+    expect(
+      container.querySelector(".chat-group.tool .chat-tool-msg-summary__label")?.textContent,
+    ).toBe("Tool output");
+    expect(
+      container.querySelector(".chat-group.tool .chat-tool-msg-summary__names")?.textContent,
+    ).toBe("canvas_render");
   });
 
   it("opens generic tool details instead of a canvas preview from tool rows", () => {

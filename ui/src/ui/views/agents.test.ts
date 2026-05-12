@@ -34,6 +34,24 @@ function createSkill() {
   };
 }
 
+function directText(element: Element | null | undefined): string | undefined {
+  return Array.from(element?.childNodes ?? [])
+    .filter((node) => node.nodeType === Node.TEXT_NODE)
+    .map((node) => node.textContent ?? "")
+    .join("")
+    .trim();
+}
+
+function expectAgentTab(container: Element, text: string): HTMLButtonElement {
+  const button = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).find(
+    (candidate) => directText(candidate) === text,
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`Expected agent tab "${text}"`);
+  }
+  return button;
+}
+
 function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
   return {
     basePath: "",
@@ -276,11 +294,9 @@ describe("renderAgents", () => {
     );
     await Promise.resolve();
 
-    let skillsTab = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).find(
-      (button) => button.textContent?.includes("Skills"),
-    );
+    let skillsTab = expectAgentTab(container, "Skills");
 
-    expect(skillsTab?.textContent?.trim()).toBe("Skills");
+    expect(skillsTab.textContent?.trim()).toBe("Skills");
 
     render(
       renderAgents(
@@ -302,11 +318,10 @@ describe("renderAgents", () => {
     );
     await Promise.resolve();
 
-    skillsTab = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).find(
-      (button) => button.textContent?.includes("Skills"),
-    );
+    skillsTab = expectAgentTab(container, "Skills");
 
-    expect(skillsTab?.textContent?.trim()).toContain("1");
+    expect(directText(skillsTab)).toBe("Skills");
+    expect(skillsTab.querySelector(".agent-tab-count")?.textContent).toBe("1");
   });
 
   it("keeps the Cron Jobs tab label while localizing channel refresh never state", async () => {
@@ -335,8 +350,9 @@ describe("renderAgents", () => {
         (button) => button.textContent?.trim(),
       );
 
-      expect(tabLabels).toContain("Cron Jobs");
-      expect(container.textContent).toContain("上次刷新：从未");
+      expect(tabLabels).toEqual(["概览", "文件", "工具", "技能", "频道", "Cron Jobs"]);
+      const cards = container.querySelectorAll("section.card");
+      expect(cards[1]?.querySelector(".muted")?.textContent?.trim()).toBe("上次刷新：从未");
     } finally {
       await i18n.setLocale("en");
       vi.unstubAllGlobals();
@@ -392,7 +408,9 @@ describe("renderAgentFiles", () => {
     expect(container.querySelector(".md-preview-dialog__chip strong")?.textContent).toBe(
       "Saved Preview",
     );
-    expect(container.textContent).toContain("Markdown Preview");
+    expect(container.querySelector(".md-preview-dialog__eyebrow span")?.textContent?.trim()).toBe(
+      "Markdown Preview",
+    );
   });
 
   it("renders preview header controls as icon-only buttons with accessible labels", () => {
@@ -491,18 +509,31 @@ describe("renderAgentFiles", () => {
     expect(dialog).toBeInstanceOf(HTMLDialogElement);
     expect(panel).toBeInstanceOf(HTMLElement);
     expect(expandButton).toBeInstanceOf(HTMLButtonElement);
-    expandButton!.click();
+    const previewPanel = panel!;
+    const previewExpandButton = expandButton!;
+    previewExpandButton.click();
 
-    expect(panel?.classList.contains("fullscreen")).toBe(true);
-    expect(expandButton?.classList.contains("is-fullscreen")).toBe(true);
-    expect(expandButton?.getAttribute("aria-pressed")).toBe("true");
-    expect(expandButton?.getAttribute("aria-label")).toBe("Collapse preview");
+    expect([...previewPanel.classList]).toEqual(["md-preview-dialog__panel", "fullscreen"]);
+    expect([...previewExpandButton.classList]).toEqual([
+      "btn",
+      "btn--sm",
+      "md-preview-icon-btn",
+      "md-preview-expand-btn",
+      "is-fullscreen",
+    ]);
+    expect(previewExpandButton.getAttribute("aria-pressed")).toBe("true");
+    expect(previewExpandButton.getAttribute("aria-label")).toBe("Collapse preview");
 
     dialog!.dispatchEvent(new Event("close"));
 
-    expect(panel?.classList.contains("fullscreen")).toBe(false);
-    expect(expandButton?.classList.contains("is-fullscreen")).toBe(false);
-    expect(expandButton?.getAttribute("aria-pressed")).toBe("false");
-    expect(expandButton?.getAttribute("aria-label")).toBe("Expand preview");
+    expect([...previewPanel.classList]).toEqual(["md-preview-dialog__panel"]);
+    expect([...previewExpandButton.classList]).toEqual([
+      "btn",
+      "btn--sm",
+      "md-preview-icon-btn",
+      "md-preview-expand-btn",
+    ]);
+    expect(previewExpandButton.getAttribute("aria-pressed")).toBe("false");
+    expect(previewExpandButton.getAttribute("aria-label")).toBe("Expand preview");
   });
 });

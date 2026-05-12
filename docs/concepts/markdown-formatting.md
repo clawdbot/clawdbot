@@ -65,7 +65,7 @@ Markdown tables are not consistently supported across chat clients. Use
 `markdown.tables` to control conversion per channel (and per account).
 
 - `code`: render tables as code blocks (default for most channels).
-- `bullets`: convert each row into bullet points (default for Signal + WhatsApp).
+- `bullets`: convert each row into bullet points (default for Matrix, Signal, and WhatsApp).
 - `off`: disable table parsing and conversion; raw table text passes through.
 
 Config keys:

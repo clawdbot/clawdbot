@@ -912,8 +912,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await runBasicAgentCommand();
 
     expect(state.trajectoryRecordEventMock).toHaveBeenCalledTimes(1);
-    expect(state.trajectoryRecordEventMock.mock.calls.at(0)?.[0]).toBe("model.fallback_step");
-    expectRecordFields(state.trajectoryRecordEventMock.mock.calls.at(0)?.[1], {
+    expect(mockCallArg(state.trajectoryRecordEventMock, 0, 0)).toBe("model.fallback_step");
+    expectRecordFields(mockCallArg(state.trajectoryRecordEventMock, 0, 1), {
       fallbackStepType: "fallback_step",
       fallbackStepFromModel: "ollama/llama3",
       fallbackStepToModel: "openai/gpt-5.4",
@@ -1125,9 +1125,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     await runBasicAgentCommand();
 
-    const attemptParams = state.runAgentAttemptMock.mock.calls.at(0)?.[0] as
-      | { skillsSnapshot?: Record<string, unknown> }
-      | undefined;
+    const attemptParams = mockCallArg(state.runAgentAttemptMock) as {
+      skillsSnapshot?: Record<string, unknown>;
+    };
     expectRecordFields(attemptParams?.skillsSnapshot, {
       prompt: "persisted prompt",
       skills: [{ name: "cli-skill" }],
@@ -1182,7 +1182,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       isFallbackRetry: true,
     });
     const deliveryParams = requireRecord(
-      state.deliverAgentCommandResultMock.mock.calls.at(0)?.[0],
+      mockCallArg(state.deliverAgentCommandResultMock),
       "delivery params",
     );
     const result = requireRecord(deliveryParams.result, "delivery result");
@@ -1261,7 +1261,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
 
     expect(state.acpRunTurnMock).toHaveBeenCalledTimes(1);
-    const runTurnParams = state.acpRunTurnMock.mock.calls.at(0)?.[0] as { text?: string };
+    const runTurnParams = mockCallArg(state.acpRunTurnMock) as { text?: string };
     expect(runTurnParams.text).toContain("A background task completed.");
     expect(runTurnParams.text).toContain("inspect ACP delivery");
     expect(runTurnParams.text).toContain("child output");
@@ -1269,7 +1269,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(runTurnParams.text).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
 
     expect(state.persistAcpTurnTranscriptMock).toHaveBeenCalledTimes(1);
-    const transcriptParams = state.persistAcpTurnTranscriptMock.mock.calls.at(0)?.[0] as {
+    const transcriptParams = mockCallArg(state.persistAcpTurnTranscriptMock) as {
       body?: string;
       transcriptBody?: string;
     };

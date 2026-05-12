@@ -1268,7 +1268,7 @@ describe("handleSendChat", () => {
     expect(host.chatRunId).toBe("run-main");
     expect(host.chatStream).toBe("Working...");
     expect(host.chatMessage).toBe("/btw what changed?");
-    expect(host.lastError).toContain("network down");
+    expect(host.lastError).toBe("network down");
   });
 
   it("clears BTW side results when /clear resets chat history", async () => {
@@ -1431,7 +1431,24 @@ describe("handleSendChat", () => {
 
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
     expect(getChatAttachmentPreviewUrl(attachment)).toBe("blob:brief");
-    expect(JSON.stringify(host.chatMessages)).not.toContain("JVBERi0xLjQK");
+    expect(host.chatMessages).toStrictEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "summarize" },
+          {
+            type: "attachment",
+            attachment: {
+              url: "blob:brief",
+              kind: "document",
+              label: "brief.pdf",
+              mimeType: "application/pdf",
+            },
+          },
+        ],
+        timestamp: expect.any(Number),
+      },
+    ]);
   });
 
   it("releases queued attachment payloads when the queued item is removed", () => {

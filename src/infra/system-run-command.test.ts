@@ -46,6 +46,10 @@ describe("system run command helpers", () => {
     expect(extractShellCommandFromArgv(["cmd.exe", "/d", "/s", "/c", "echo hi"])).toBe("echo hi");
   });
 
+  test("extractShellCommandFromArgv extracts cmd.exe -c command", () => {
+    expect(extractShellCommandFromArgv(["cmd.exe", "/d", "/s", "-c", "echo hi"])).toBe("echo hi");
+  });
+
   test("extractShellCommandFromArgv unwraps /usr/bin/env shell wrappers", () => {
     expect(extractShellCommandFromArgv(["/usr/bin/env", "bash", "-c", "echo hi"])).toBe("echo hi");
     expect(extractShellCommandFromArgv(["/usr/bin/env", "FOO=bar", "zsh", "-c", "echo hi"])).toBe(
@@ -73,10 +77,34 @@ describe("system run command helpers", () => {
     },
     { argv: ["fish", "-c", "echo hi"], expected: "echo hi" },
     { argv: ["pwsh", "-Command", "Get-Date"], expected: "Get-Date" },
+    {
+      argv: ["pwsh", "-Command", "allowed.exe", ";", "unlisted.exe"],
+      expected: "allowed.exe ; unlisted.exe",
+    },
+    {
+      argv: ["pwsh", "-CommandWithArgs", "allowed.exe", ";", "unlisted.exe"],
+      expected: "allowed.exe ; unlisted.exe",
+    },
     { argv: ["pwsh", "-File", "script.ps1"], expected: "script.ps1" },
+    {
+      argv: ["pwsh", "-File", "script.ps1", "-ExtraArg"],
+      expected: "script.ps1",
+    },
     { argv: ["powershell", "-f", "script.ps1"], expected: "script.ps1" },
+    { argv: ["pwsh", "-ec", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
+    { argv: ["pwsh", "/NoProfile", "/ec", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
+    { argv: ["pwsh", "-en", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
+    { argv: ["pwsh", "-ea", "stop", "-Command", "Get-Date"], expected: "Get-Date" },
+    { argv: ["pwsh", "-cus", "pipe-name", "-ec", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
     { argv: ["pwsh", "-EncodedCommand", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
     { argv: ["powershell", "-enc", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
+    { argv: ["pwsh", "-ec", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
+    { argv: ["pwsh", "-en", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
+    { argv: ["pwsh", "/NoProfile", "/ec", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
+    { argv: ["pwsh", "-win", "hidden", "/ec", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
+    { argv: ["pwsh", "-if", "XML", "-EncodedCommand", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
+    { argv: ["pwsh", "-config", "SomeConfig", "-ec", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
+    { argv: ["pwsh", "-cwa", "Write-Output", "hi"], expected: "Write-Output hi" },
     { argv: ["busybox", "sh", "-c", "echo hi"], expected: "echo hi" },
     { argv: ["toybox", "ash", "-c", "echo hi"], expected: "echo hi" },
   ])("extractShellCommandFromArgv unwraps %j", ({ argv, expected }) => {
@@ -88,6 +116,13 @@ describe("system run command helpers", () => {
       null,
     );
     expect(extractShellCommandFromArgv(["/usr/bin/env", "FOO=bar"])).toBe(null);
+  });
+
+  test("extractShellCommandFromArgv keeps omitted PowerShell file args out of shell payloads", () => {
+    expect(extractShellCommandFromArgv(["pwsh", "script.ps1", "-en", "ZQBjAGgAbwA="])).toBe(null);
+    expect(extractShellCommandFromArgv(["/usr/bin/pwsh", "/tmp/script.ps1", "/ec", "AAA"])).toBe(
+      null,
+    );
   });
 
   test("extractShellCommandFromArgv includes trailing cmd.exe args after /c", () => {
@@ -171,6 +206,18 @@ describe("system run command helpers", () => {
       }),
     );
     expect(res.previewText).toBe("echo hi");
+  });
+
+  test("validateSystemRunCommandConsistency accepts PowerShell command-with-args payload text", () => {
+    const res = expectValidResult(
+      validateSystemRunCommandConsistency({
+        argv: ["pwsh", "-cwa", "Write-Output", "hi"],
+        rawCommand: "Write-Output hi",
+        allowLegacyShellText: true,
+      }),
+    );
+    expect(res.shellPayload).toBe("Write-Output hi");
+    expect(res.previewText).toBe("Write-Output hi");
   });
 
   test("validateSystemRunCommandConsistency rejects shell-only rawCommand for env assignment prelude", () => {

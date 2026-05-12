@@ -53,6 +53,18 @@ async function loadWithMocks(params: {
   return { module, discoverSpy, loadRecordsSpy };
 }
 
+function firstDiscoverOptions(discoverSpy: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const call = discoverSpy.mock.calls[0];
+  if (!call) {
+    throw new Error("expected discovery call");
+  }
+  const [options] = call;
+  if (!options || typeof options !== "object") {
+    throw new Error("expected discovery options");
+  }
+  return options as Record<string, unknown>;
+}
+
 describe("listChannelCatalogEntries", () => {
   it("forwards lazily loaded install records to discovery when origin is unspecified", async () => {
     const { module, discoverSpy, loadRecordsSpy } = await loadWithMocks({});
@@ -62,7 +74,7 @@ describe("listChannelCatalogEntries", () => {
     expect(loadRecordsSpy).toHaveBeenCalledTimes(1);
     expect(loadRecordsSpy).toHaveBeenCalledWith({ env: ENV });
     expect(discoverSpy).toHaveBeenCalledTimes(1);
-    expect(discoverSpy.mock.calls.at(0)?.[0]).toStrictEqual({
+    expect(firstDiscoverOptions(discoverSpy)).toStrictEqual({
       env: ENV,
       installRecords: RECORDS,
       workspaceDir: undefined,
@@ -76,7 +88,7 @@ describe("listChannelCatalogEntries", () => {
 
     expect(loadRecordsSpy).not.toHaveBeenCalled();
     expect(discoverSpy).toHaveBeenCalledTimes(1);
-    expect(discoverSpy.mock.calls.at(0)?.[0]).not.toHaveProperty("installRecords");
+    expect(firstDiscoverOptions(discoverSpy)).not.toHaveProperty("installRecords");
   });
 
   it("uses caller-supplied install records verbatim and does not load the ledger", async () => {
@@ -91,7 +103,7 @@ describe("listChannelCatalogEntries", () => {
     module.listChannelCatalogEntries({ env: ENV, installRecords: supplied });
 
     expect(loadRecordsSpy).not.toHaveBeenCalled();
-    expect(discoverSpy.mock.calls.at(0)?.[0]).toStrictEqual({
+    expect(firstDiscoverOptions(discoverSpy)).toStrictEqual({
       env: ENV,
       installRecords: supplied,
       workspaceDir: undefined,
@@ -106,7 +118,7 @@ describe("listChannelCatalogEntries", () => {
     module.listChannelCatalogEntries({ env: ENV });
 
     expect(loadRecordsSpy).toHaveBeenCalledTimes(1);
-    expect(discoverSpy.mock.calls.at(0)?.[0]).not.toHaveProperty("installRecords");
+    expect(firstDiscoverOptions(discoverSpy)).not.toHaveProperty("installRecords");
   });
 
   it("treats ledger read errors as a soft fallback (no installRecords propagated)", async () => {
@@ -120,6 +132,6 @@ describe("listChannelCatalogEntries", () => {
 
     expect(loadRecordsSpy).toHaveBeenCalledTimes(1);
     expect(discoverSpy).toHaveBeenCalledTimes(1);
-    expect(discoverSpy.mock.calls.at(0)?.[0]).not.toHaveProperty("installRecords");
+    expect(firstDiscoverOptions(discoverSpy)).not.toHaveProperty("installRecords");
   });
 });

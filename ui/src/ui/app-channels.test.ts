@@ -139,10 +139,10 @@ describe("channel config actions", () => {
 
     await handleChannelConfigSave(host);
 
-    expect(host.lastError).toContain("Config hash mismatch");
+    expect(host.lastError).toBe("Error: Config hash mismatch");
     expect(host.configFormDirty).toBe(true);
     expect(host.configForm).toEqual({ gateway: { mode: "local" } });
     expect(requireConfigSnapshot(host).config).toEqual({ gateway: { mode: "remote" } });
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("channels.status");
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["config.set", "config.get"]);
   });
 });

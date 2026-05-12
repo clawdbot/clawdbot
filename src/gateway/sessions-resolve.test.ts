@@ -118,7 +118,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
     });
 
     expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(1);
-    const updateSessionStoreCall = hoisted.updateSessionStoreMock.mock.calls[0];
+    const updateSessionStoreCall = hoisted.updateSessionStoreMock.mock.calls.at(0);
     expect(updateSessionStoreCall?.[0]).toBe(storePath);
     expect(typeof updateSessionStoreCall?.[1]).toBe("function");
     expect(hoisted.listSessionsFromStoreMock).toHaveBeenCalledWith({

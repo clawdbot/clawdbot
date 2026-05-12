@@ -7,9 +7,9 @@ describe("formatCliParseErrorOutput", () => {
       argv: ["node", "openclaw", "wat"],
     });
 
-    expect(output).toContain('OpenClaw does not know the command "wat".');
-    expect(output).toContain("openclaw --help");
-    expect(output).toContain("openclaw plugins list");
+    expect(output).toBe(
+      'OpenClaw does not know the command "wat".\nTry: openclaw --help\nPlugin command? openclaw plugins list\nDocs: https://docs.openclaw.ai/cli\n',
+    );
   });
 
   it("points unknown options at the active command help", () => {
@@ -17,8 +17,9 @@ describe("formatCliParseErrorOutput", () => {
       argv: ["node", "openclaw", "channels", "status", "--wat"],
     });
 
-    expect(output).toContain('OpenClaw does not recognize option "--wat".');
-    expect(output).toContain("openclaw channels status --help");
+    expect(output).toBe(
+      'OpenClaw does not recognize option "--wat".\nTry: openclaw channels status --help\n',
+    );
   });
 
   it("points missing required arguments at command help", () => {
@@ -26,7 +27,8 @@ describe("formatCliParseErrorOutput", () => {
       argv: ["node", "openclaw", "plugins", "install"],
     });
 
-    expect(output).toContain('Missing required argument "name".');
-    expect(output).toContain("openclaw plugins install --help");
+    expect(output).toBe(
+      'Missing required argument "name".\nTry: openclaw plugins install --help\n',
+    );
   });
 });

@@ -35,6 +35,8 @@ describe("ACP install hints", () => {
 
   it("returns generic plugin hint for non-acpx backend", () => {
     const cfg = withAcpConfig({ backend: "custom-backend" });
-    expect(resolveAcpInstallCommandHint(cfg)).toContain('ACP backend "custom-backend"');
+    expect(resolveAcpInstallCommandHint(cfg)).toBe(
+      'Install and enable the plugin that provides ACP backend "custom-backend".',
+    );
   });
 });

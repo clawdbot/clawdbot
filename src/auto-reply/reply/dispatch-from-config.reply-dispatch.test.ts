@@ -109,7 +109,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     });
 
     expect(runtimePluginMocks.ensureRuntimePluginsLoaded).toHaveBeenCalledOnce();
-    const runtimeLoadCall = runtimePluginMocks.ensureRuntimePluginsLoaded.mock.calls[0]?.[0] as
+    const runtimeLoadCall = runtimePluginMocks.ensureRuntimePluginsLoaded.mock.calls.at(0)?.[0] as
       | { config?: unknown; workspaceDir?: unknown }
       | undefined;
     expect(runtimeLoadCall?.config).toBe(emptyConfig);
@@ -118,7 +118,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
 
     expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledOnce();
     const [replyDispatchEvent, replyDispatchRuntime] =
-      (hookMocks.runner.runReplyDispatch.mock.calls[0] as
+      (hookMocks.runner.runReplyDispatch.mock.calls.at(0) as
         | [
             {
               sessionKey?: string;

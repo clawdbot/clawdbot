@@ -44,7 +44,7 @@ describe("noteOpenAIOAuthTlsPrerequisites", () => {
     }
 
     expect(note).toHaveBeenCalledTimes(1);
-    const [message, title] = note.mock.calls[0] as [string, string];
+    const [message, title] = note.mock.calls.at(0) as [string, string];
     expect(title).toBe("OAuth TLS prerequisites");
     expect(message).toContain("brew postinstall ca-certificates");
   });

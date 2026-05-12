@@ -235,7 +235,7 @@ async function expectSignedRawBodyWins(params: { rawBody: string | Buffer; signe
   expect(res.status).toHaveBeenCalledWith(200);
   expect(onEvents).toHaveBeenCalledTimes(1);
   const processedBody = (
-    onEvents.mock.calls[0] as unknown as [{ events?: Array<{ source?: { userId?: string } }> }]
+    onEvents.mock.calls.at(0) as unknown as [{ events?: Array<{ source?: { userId?: string } }> }]
   )?.[0];
   expect(processedBody?.events?.[0]?.source?.userId).toBe(params.signedUserId);
   expect(processedBody?.events?.[0]?.source?.userId).not.toBe("tampered-user");
@@ -414,7 +414,7 @@ describe("createLineNodeWebhookHandler", () => {
 
     expect(res.statusCode).toBe(200);
     expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
-    const [payload] = bot.handleWebhook.mock.calls[0] as unknown as [ParsedLineWebhookPayload];
+    const [payload] = bot.handleWebhook.mock.calls.at(0) as unknown as [ParsedLineWebhookPayload];
     expect(payload.events).toEqual([{ type: "message" }]);
   });
 
@@ -494,7 +494,7 @@ describe("createLineWebhookMiddleware", () => {
     const { res, onEvents } = await invokeWebhook({ body });
     expect(res.status).toHaveBeenCalledWith(200);
     expect(onEvents).toHaveBeenCalledTimes(1);
-    const [payload] = onEvents.mock.calls[0] as unknown as [ParsedLineWebhookPayload];
+    const [payload] = onEvents.mock.calls.at(0) as unknown as [ParsedLineWebhookPayload];
     expect(payload.events).toEqual(expectedEvents);
   });
 

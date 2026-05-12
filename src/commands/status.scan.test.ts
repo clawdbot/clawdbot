@@ -71,6 +71,22 @@ function configureScanStatus(
   mocks.callGateway.mockResolvedValue(null);
 }
 
+function firstCallArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
+  const arg = mock.mock.calls.at(0)?.at(0);
+  if (arg === undefined) {
+    throw new Error(`expected ${label}`);
+  }
+  return arg;
+}
+
+function firstBuildChannelsTableCall(): unknown[] {
+  const call = mocks.buildChannelsTable.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected buildChannelsTable call");
+  }
+  return call;
+}
+
 describe("scanStatus", () => {
   it("passes sourceConfig into buildChannelsTable for summary-mode status output", async () => {
     const sourceConfig = createStatusScanConfig({
@@ -90,7 +106,7 @@ describe("scanStatus", () => {
     await scanStatus({ json: false }, {} as never);
 
     expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
-    expect(mocks.buildChannelsTable.mock.calls[0]).toStrictEqual([
+    expect(firstBuildChannelsTableCall()).toStrictEqual([
       resolvedConfig,
       {
         showSecrets: true,
@@ -128,7 +144,7 @@ describe("scanStatus", () => {
       }),
     ).toBe(false);
     expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
-    expect(mocks.buildChannelsTable.mock.calls[0]).toStrictEqual([
+    expect(firstBuildChannelsTableCall()).toStrictEqual([
       cfg,
       {
         showSecrets: true,
@@ -167,7 +183,7 @@ describe("scanStatus", () => {
     await scanStatus({ json: false, deep: true, timeoutMs: 5000 }, {} as never);
 
     expect(mocks.callGateway).toHaveBeenCalledOnce();
-    expect(mocks.callGateway.mock.calls[0]?.[0]).toStrictEqual({
+    expect(firstCallArg(mocks.callGateway, "callGateway args")).toStrictEqual({
       config: cfg,
       method: "channels.status",
       params: {
@@ -177,7 +193,7 @@ describe("scanStatus", () => {
       timeoutMs: 2500,
     });
     expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
-    expect(mocks.buildChannelsTable.mock.calls[0]).toStrictEqual([
+    expect(firstBuildChannelsTableCall()).toStrictEqual([
       cfg,
       {
         showSecrets: true,
@@ -276,7 +292,7 @@ describe("scanStatus", () => {
     await scanStatus({ json: true }, {} as never);
 
     expect(mocks.getMemorySearchManager).toHaveBeenCalledOnce();
-    expect(mocks.getMemorySearchManager.mock.calls[0]?.[0]).toStrictEqual({
+    expect(firstCallArg(mocks.getMemorySearchManager, "memory search manager args")).toStrictEqual({
       cfg: createStatusMemorySearchConfig(),
       agentId: "main",
       purpose: "status",
@@ -305,7 +321,7 @@ describe("scanStatus", () => {
     // Verify plugin logs were routed to stderr during loading and restored after
     expect(loggingStateRef.forceConsoleToStderr).toBe(false);
     expect(mocks.probeGateway).toHaveBeenCalledOnce();
-    expect(mocks.probeGateway.mock.calls[0]?.[0]).toStrictEqual({
+    expect(firstCallArg(mocks.probeGateway, "probeGateway args")).toStrictEqual({
       url: "ws://127.0.0.1:18789",
       auth: {},
       preauthHandshakeTimeoutMs: undefined,

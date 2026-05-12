@@ -45,7 +45,7 @@ import {
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
-  requireGatewayClientScopeForInternalChannel,
+  requireGatewayClientScope,
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { parsePluginsCommand } from "./plugins-commands.js";
@@ -425,15 +425,16 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
-  const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
-    label: "/plugins write",
-    allowedScopes: ["operator.admin"],
-    missingText: "❌ /plugins install|enable|disable requires operator.admin for gateway clients.",
-  });
-  if (missingAdminScope) {
-    return missingAdminScope;
-  }
   if (isPluginsWriteAction(pluginsCommand.action)) {
+    const missingAdminScope = requireGatewayClientScope(params, {
+      label: "/plugins write",
+      allowedScopes: ["operator.admin"],
+      missingText:
+        "❌ /plugins install|enable|disable requires operator.admin for gateway clients.",
+    });
+    if (missingAdminScope) {
+      return missingAdminScope;
+    }
     const nixModeWrite = rejectNixModePluginWrite();
     if (nixModeWrite) {
       return nixModeWrite;

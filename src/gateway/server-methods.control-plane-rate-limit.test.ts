@@ -79,6 +79,18 @@ describe("gateway control-plane write rate limit", () => {
     return respond;
   }
 
+  function respondCall(respond: ReturnType<typeof vi.fn>) {
+    const call = respond.mock.calls.at(0);
+    if (!call) {
+      throw new Error("Expected response call");
+    }
+    return call as [
+      boolean,
+      unknown,
+      { code?: string; details?: unknown; retryAfterMs?: number; retryable?: boolean }?,
+    ];
+  }
+
   it("allows 3 control-plane writes and blocks the 4th in the same minute", async () => {
     const handlerCalls = vi.fn();
     const handler: GatewayRequestHandler = (opts) => {
@@ -95,9 +107,10 @@ describe("gateway control-plane write rate limit", () => {
     const blocked = await runRequest({ method: "config.patch", context, client, handler });
 
     expect(handlerCalls).toHaveBeenCalledTimes(3);
-    const error = blocked.mock.calls[0]?.[2] as { code?: string; retryable?: boolean } | undefined;
-    expect(blocked.mock.calls[0]?.[0]).toBe(false);
-    expect(blocked.mock.calls[0]?.[1]).toBeUndefined();
+    const blockedCall = respondCall(blocked);
+    const error = blockedCall[2];
+    expect(blockedCall[0]).toBe(false);
+    expect(blockedCall[1]).toBeUndefined();
     expect(error?.code).toBe("UNAVAILABLE");
     expect(error?.retryable).toBe(true);
     expect(logWarn).toHaveBeenCalledTimes(1);
@@ -117,9 +130,10 @@ describe("gateway control-plane write rate limit", () => {
     await runRequest({ method: "update.run", context, client, handler });
 
     const blocked = await runRequest({ method: "update.run", context, client, handler });
-    expect(blocked.mock.calls[0]?.[0]).toBe(false);
-    expect(blocked.mock.calls[0]?.[1]).toBeUndefined();
-    expect(blocked.mock.calls[0]?.[2]?.code).toBe("UNAVAILABLE");
+    const blockedCall = respondCall(blocked);
+    expect(blockedCall[0]).toBe(false);
+    expect(blockedCall[1]).toBeUndefined();
+    expect(blockedCall[2]?.code).toBe("UNAVAILABLE");
 
     vi.advanceTimersByTime(60_001);
 
@@ -145,9 +159,10 @@ describe("gateway control-plane write rate limit", () => {
       const blocked = await runRequest({ method, context, client, handler });
 
       expect(handlerCalls).not.toHaveBeenCalled();
-      const error = blocked.mock.calls[0]?.[2];
-      expect(blocked.mock.calls[0]?.[0]).toBe(false);
-      expect(blocked.mock.calls[0]?.[1]).toBeUndefined();
+      const blockedCall = respondCall(blocked);
+      const error = blockedCall[2];
+      expect(blockedCall[0]).toBe(false);
+      expect(blockedCall[1]).toBeUndefined();
       expect(error?.code).toBe("UNAVAILABLE");
       expect(error?.retryable).toBe(true);
       expect(error?.retryAfterMs).toBe(500);

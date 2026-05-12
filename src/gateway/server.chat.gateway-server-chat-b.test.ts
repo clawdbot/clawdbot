@@ -295,12 +295,14 @@ describe("gateway server chat", () => {
       }, FAST_WAIT_OPTS);
 
       await callSend("duplicate");
-      expect(responses).toContainEqual({
-        id: "duplicate",
-        ok: true,
-        payload: { runId: "idem-attachment-race", status: "started" },
-        error: undefined,
-      });
+      expect(responses).toEqual([
+        {
+          id: "duplicate",
+          ok: true,
+          payload: { runId: "idem-attachment-race", status: "started" },
+          error: undefined,
+        },
+      ]);
 
       firstCatalog.resolve([
         {
@@ -312,12 +314,20 @@ describe("gateway server chat", () => {
       ]);
       await first;
 
-      expect(responses).toContainEqual({
-        id: "first",
-        ok: true,
-        payload: { runId: "idem-attachment-race", status: "in_flight" },
-        error: undefined,
-      });
+      expect(responses).toEqual([
+        {
+          id: "duplicate",
+          ok: true,
+          payload: { runId: "idem-attachment-race", status: "started" },
+          error: undefined,
+        },
+        {
+          id: "first",
+          ok: true,
+          payload: { runId: "idem-attachment-race", status: "in_flight" },
+          error: undefined,
+        },
+      ]);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.addChatRun).toHaveBeenCalledTimes(1);
       dispatchRelease.resolve();
@@ -407,22 +417,32 @@ describe("gateway server chat", () => {
 
       const first = Promise.resolve(callSend("first", "idem-active-a"));
       await vi.waitFor(() => {
-        expect(responses).toContainEqual({
-          id: "first",
-          ok: true,
-          payload: { runId: "idem-active-a", status: "started" },
-          error: undefined,
-        });
+        expect(responses).toEqual([
+          {
+            id: "first",
+            ok: true,
+            payload: { runId: "idem-active-a", status: "started" },
+            error: undefined,
+          },
+        ]);
       }, FAST_WAIT_OPTS);
 
       await callSend("duplicate", "idem-active-b");
 
-      expect(responses).toContainEqual({
-        id: "duplicate",
-        ok: true,
-        payload: { runId: "idem-active-a", status: "in_flight" },
-        error: undefined,
-      });
+      expect(responses).toEqual([
+        {
+          id: "first",
+          ok: true,
+          payload: { runId: "idem-active-a", status: "started" },
+          error: undefined,
+        },
+        {
+          id: "duplicate",
+          ok: true,
+          payload: { runId: "idem-active-a", status: "in_flight" },
+          error: undefined,
+        },
+      ]);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.addChatRun).toHaveBeenCalledTimes(1);
 
@@ -521,18 +541,20 @@ describe("gateway server chat", () => {
         expect(context.removeChatRun).toHaveBeenCalledTimes(2);
       }, FAST_WAIT_OPTS);
 
-      expect(responses).toContainEqual({
-        id: "first",
-        ok: true,
-        payload: { runId: "idem-sequential-a", status: "started" },
-        error: undefined,
-      });
-      expect(responses).toContainEqual({
-        id: "second",
-        ok: true,
-        payload: { runId: "idem-sequential-b", status: "started" },
-        error: undefined,
-      });
+      expect(responses).toEqual([
+        {
+          id: "first",
+          ok: true,
+          payload: { runId: "idem-sequential-a", status: "started" },
+          error: undefined,
+        },
+        {
+          id: "second",
+          ok: true,
+          payload: { runId: "idem-sequential-b", status: "started" },
+          error: undefined,
+        },
+      ]);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
       expect(context.addChatRun).toHaveBeenCalledTimes(2);
     } finally {

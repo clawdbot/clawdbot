@@ -127,7 +127,7 @@ describe("applyNonInteractiveAuthChoice", () => {
       "custom-models-custom-local/local-large",
     );
     expect(resolveNonInteractiveApiKey).toHaveBeenCalledOnce();
-    const [apiKeyParams] = resolveNonInteractiveApiKey.mock.calls[0] ?? [];
+    const [apiKeyParams] = resolveNonInteractiveApiKey.mock.calls.at(0) ?? [];
     expect(apiKeyParams?.provider).toBe("custom-models-custom-local");
     expect(apiKeyParams?.flagName).toBe("--custom-api-key");
     expect(apiKeyParams?.envVar).toBe("CUSTOM_API_KEY");

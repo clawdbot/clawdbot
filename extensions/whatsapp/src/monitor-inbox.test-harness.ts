@@ -272,7 +272,7 @@ export function buildNotifyMessageUpsert(params: {
 
 export function expectPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
   expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-  const sendCall = sock.sendMessage.mock.calls[0];
+  const sendCall = sock.sendMessage.mock.calls.at(0);
   expect(sendCall?.[0]).toBe(jid);
   expectInboxPairingReplyText((sendCall?.[1] as { text?: string } | undefined)?.text ?? "", {
     channel: "whatsapp",

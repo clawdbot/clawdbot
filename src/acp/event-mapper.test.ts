@@ -14,7 +14,6 @@ describe("extractToolCallLocations", () => {
     if (locations === undefined) {
       throw new Error("expected bounded tool-call locations");
     }
-    expect(locations.length).toBeLessThan(20);
-    expect(locations).not.toContainEqual({ path: "/tmp/file-19.txt" });
+    expect(locations).toEqual([{ path: "/tmp/file-0.txt" }, { path: "/tmp/file-1.txt" }]);
   });
 });

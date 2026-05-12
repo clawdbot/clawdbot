@@ -23,7 +23,7 @@ function createOutputBuffer() {
 
 describe("run-additional-boundary-checks", () => {
   it("runs prompt snapshot drift checks in CI", () => {
-    expect(BOUNDARY_CHECKS).toContainEqual({
+    expect(BOUNDARY_CHECKS[0]).toEqual({
       label: "prompt:snapshots:check",
       command: "pnpm",
       args: ["prompt:snapshots:check"],
@@ -58,7 +58,7 @@ describe("run-additional-boundary-checks", () => {
   });
 
   it("keeps the raw HTTP/2 import guard in source boundary checks", () => {
-    expect(BOUNDARY_CHECKS).toContainEqual({
+    expect(BOUNDARY_CHECKS[6]).toEqual({
       label: "lint:tmp:no-raw-http2-imports",
       command: "pnpm",
       args: ["run", "lint:tmp:no-raw-http2-imports"],

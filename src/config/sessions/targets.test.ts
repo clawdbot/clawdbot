@@ -170,10 +170,12 @@ describe("resolveAgentSessionStoreTargetsSync", () => {
 
       expect(
         resolveAgentSessionStoreTargetsSync(cfg, "retired-agent", { env: process.env }),
-      ).toContainEqual({
-        agentId: "retired-agent",
-        storePath: storePaths["Retired Agent"],
-      });
+      ).toEqual([
+        {
+          agentId: "retired-agent",
+          storePath: storePaths["Retired Agent"],
+        },
+      ]);
     });
   });
 });
@@ -314,10 +316,12 @@ describe("resolveAllAgentSessionStoreTargets", () => {
       const mainStorePath = await resolveRealStorePath(mainSessionsDir);
       const targets = await resolveAllAgentSessionStoreTargets(cfg, { env: process.env });
 
-      expect(targets).toContainEqual({
-        agentId: "main",
-        storePath: mainStorePath,
-      });
+      expect(targets).toEqual([
+        {
+          agentId: "main",
+          storePath: mainStorePath,
+        },
+      ]);
       expect(
         targets.some((target) => target.storePath === path.join(junkSessionsDir, "sessions.json")),
       ).toBe(false);

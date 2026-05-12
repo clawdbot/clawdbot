@@ -96,6 +96,14 @@ function createCatalogEntry(id: string, label: string): ChannelPluginCatalogEntr
   } as unknown as ChannelPluginCatalogEntry;
 }
 
+function loggedText(runtime: ReturnType<typeof createTestRuntime>): string {
+  const value = runtime.log.mock.calls.at(0)?.[0];
+  if (typeof value !== "string") {
+    throw new Error("expected runtime log text");
+  }
+  return value;
+}
+
 describe("channels list", () => {
   beforeEach(() => {
     mocks.readConfigFileSnapshot.mockReset();
@@ -118,7 +126,7 @@ describe("channels list", () => {
 
     await channelsListCommand({ json: true }, runtime);
 
-    const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as Record<string, unknown>;
+    const payload = JSON.parse(loggedText(runtime)) as Record<string, unknown>;
     expect(payload.auth).toBeUndefined();
     expect(payload).toHaveProperty("chat");
   });
@@ -148,7 +156,7 @@ describe("channels list", () => {
     expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(config, {
       includeSetupFallbackPlugins: true,
     });
-    const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as {
+    const payload = JSON.parse(loggedText(runtime)) as {
       chat?: Record<string, { accounts: string[]; installed: boolean; origin: string }>;
     };
     expect(payload.chat?.telegram).toEqual({
@@ -167,7 +175,7 @@ describe("channels list", () => {
 
     await channelsListCommand({ json: true }, runtime);
 
-    const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as {
+    const payload = JSON.parse(loggedText(runtime)) as {
       usage?: unknown;
     };
     expect(payload.usage).toBeUndefined();
@@ -204,7 +212,7 @@ describe("channels list", () => {
     expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(config, {
       includeSetupFallbackPlugins: true,
     });
-    const output = stripAnsi(runtime.log.mock.calls[0]?.[0] as string);
+    const output = stripAnsi(loggedText(runtime));
     expect(output).toContain("Chat channels:");
     expect(output).toContain("Telegram default:");
     expect(output).toContain("installed");
@@ -227,7 +235,7 @@ describe("channels list", () => {
 
     await channelsListCommand({}, runtime);
 
-    const output = stripAnsi(runtime.log.mock.calls[0]?.[0] as string);
+    const output = stripAnsi(loggedText(runtime));
     expect(output).toContain("Chat channels:");
     expect(output).not.toContain("QQ Bot");
     // Hint user about --all
@@ -248,7 +256,7 @@ describe("channels list", () => {
 
     await channelsListCommand({ all: true }, runtime);
 
-    const output = stripAnsi(runtime.log.mock.calls[0]?.[0] as string);
+    const output = stripAnsi(loggedText(runtime));
     expect(output).toContain("QQ Bot");
     expect(output).toContain("not installed");
     expect(output).toContain("not configured");
@@ -271,14 +279,14 @@ describe("channels list", () => {
 
     // Without --all: discord should not appear.
     await channelsListCommand({}, runtime);
-    const noAllOutput = stripAnsi(runtime.log.mock.calls[0]?.[0] as string);
+    const noAllOutput = stripAnsi(loggedText(runtime));
     expect(noAllOutput).not.toContain("Discord default:");
 
     runtime.log.mockClear();
 
     // With --all: discord is rendered with installed + not configured + disabled.
     await channelsListCommand({ all: true }, runtime);
-    const allOutput = stripAnsi(runtime.log.mock.calls[0]?.[0] as string);
+    const allOutput = stripAnsi(loggedText(runtime));
     expect(allOutput).toContain("Discord default:");
     expect(allOutput).toContain("installed");
     expect(allOutput).toContain("not configured");
@@ -311,7 +319,7 @@ describe("channels list", () => {
 
     await channelsListCommand({ json: true, all: true }, runtime);
 
-    const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as {
+    const payload = JSON.parse(loggedText(runtime)) as {
       chat: Record<string, { origin: string; installed: boolean }>;
     };
     expect(payload.chat.telegram?.origin).toBe("configured");
@@ -344,7 +352,7 @@ describe("channels list", () => {
 
       await channelsListCommand({ all: true }, runtime);
 
-      const output = stripAnsi(runtime.log.mock.calls[0]?.[0] as string);
+      const output = stripAnsi(loggedText(runtime));
       expect(output).toContain("WeCom");
       expect(output).toContain("installed");
       expect(output).not.toContain("not installed");
@@ -355,7 +363,7 @@ describe("channels list", () => {
       // not written a config entry for it).
       runtime.log.mockClear();
       await channelsListCommand({ json: true, all: true }, runtime);
-      const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as {
+      const payload = JSON.parse(loggedText(runtime)) as {
         chat: Record<string, { origin: string; installed: boolean }>;
       };
       expect(payload.chat.wecom?.origin).toBe("available");

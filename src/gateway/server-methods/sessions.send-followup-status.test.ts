@@ -110,7 +110,7 @@ describe("sessions.send completed subagent follow-up status", () => {
       isWebchatConnect: () => false,
     });
 
-    const call = respondMock.mock.calls[0] as
+    const call = respondMock.mock.calls.at(0) as
       | [boolean, { runId?: string; status?: string; messageSeq?: number }, unknown?, unknown?]
       | undefined;
     expect(call?.[0]).toBe(true);

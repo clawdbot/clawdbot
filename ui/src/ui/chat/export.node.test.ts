@@ -19,9 +19,11 @@ describe("chat export", () => {
       "Bot",
     );
 
-    expect(markdown).toContain("# Chat with Bot");
-    expect(markdown).toContain("## Bot (2026-03-11T12:00:00.000Z)");
-    expect(markdown).toContain("Final answer");
-    expect(markdown).not.toContain("scratchpad");
+    expect(markdown).toBe(`# Chat with Bot
+
+## Bot (2026-03-11T12:00:00.000Z)
+
+Final answer
+`);
   });
 });

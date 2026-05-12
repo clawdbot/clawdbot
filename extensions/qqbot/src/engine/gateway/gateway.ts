@@ -181,7 +181,9 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     }
   };
 
-  const handleInteraction = createInteractionHandler(account, ctx.runtime, log);
+  const handleInteraction = createInteractionHandler(account, ctx.runtime, log, {
+    getActiveCfg: () => activeCfgProvider.getActiveCfg(),
+  });
 
   const connection = new GatewayConnection({
     account,

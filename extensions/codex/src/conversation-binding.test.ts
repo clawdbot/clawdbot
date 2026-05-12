@@ -29,6 +29,14 @@ import {
 
 let tempDir: string;
 
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call.at(argIndex);
+}
+
 describe("codex conversation binding", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-binding-"));
@@ -92,10 +100,15 @@ describe("codex conversation binding", () => {
       modelProvider: "openai",
     });
 
-    const authOrderParams = agentRuntimeMocks.resolveAuthProfileOrder.mock.calls[0]?.[0];
+    const authOrderParams = mockCallArg(agentRuntimeMocks.resolveAuthProfileOrder) as {
+      cfg?: unknown;
+      provider?: unknown;
+    };
     expect(authOrderParams?.cfg).toBe(config);
     expect(authOrderParams?.provider).toBe("openai-codex");
-    const sharedClientParams = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0];
+    const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
+      authProfileId?: unknown;
+    };
     expect(sharedClientParams?.authProfileId).toBe("openai-codex:default");
     expect(requests).toHaveLength(1);
     expect(requests[0]?.method).toBe("thread/start");
@@ -149,7 +162,9 @@ describe("codex conversation binding", () => {
       modelProvider: "openai",
     });
 
-    const sharedClientParams = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0];
+    const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
+      authProfileId?: unknown;
+    };
     expect(sharedClientParams?.authProfileId).toBe("work");
     expect(requests).toHaveLength(1);
     expect(requests[0]?.method).toBe("thread/start");
@@ -327,7 +342,9 @@ describe("codex conversation binding", () => {
       "thread/start",
       "turn/start",
     ]);
-    const sharedClientParams = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0];
+    const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
+      authProfileId?: unknown;
+    };
     expect(sharedClientParams?.authProfileId).toBe("work");
     expect(requests[1]?.params.model).toBe("gpt-5.4-mini");
     expect(requests[1]?.params.approvalPolicy).toBe("on-request");

@@ -22,8 +22,30 @@ describe("renderQaMarkdownReport", () => {
       ],
     });
 
-    expect(report).toContain("```text");
-    expect(report).toContain("USER Alice: hello");
-    expect(report).toContain("ASSISTANT OpenClaw: my precious build");
+    expect(report).toBe(`# QA
+
+- Started: 2026-04-08T10:00:00.000Z
+- Finished: 2026-04-08T10:00:02.000Z
+- Duration ms: 2000
+- Passed: 1
+- Failed: 0
+
+
+## Scenarios
+
+### Character vibes: Gollum improv
+
+- Status: pass
+- Steps:
+  - [x] records transcript
+    - Details:
+
+\`\`\`text
+USER Alice: hello
+
+ASSISTANT OpenClaw: my precious build
+\`\`\`
+
+`);
   });
 });

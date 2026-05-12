@@ -7,6 +7,17 @@ vi.mock("../../commands/health.js", () => ({
   getHealthSnapshot: getHealthSnapshotMock,
 }));
 
+function healthSnapshotCallArg(index = 0) {
+  return getHealthSnapshotMock.mock.calls.at(index)?.at(0) as
+    | {
+        eventLoop?: unknown;
+        includeSensitive?: boolean;
+        probe?: boolean;
+        runtimeSnapshot?: unknown;
+      }
+    | undefined;
+}
+
 function createHealthSummary(): HealthSummary {
   return {
     ok: true,
@@ -57,7 +68,7 @@ describe("refreshGatewayHealthSnapshot", () => {
       includeSensitive: false,
       runtimeSnapshot: undefined,
     });
-    expect(Object.hasOwn(getHealthSnapshotMock.mock.calls[0]?.[0] ?? {}, "eventLoop")).toBe(false);
+    expect(Object.hasOwn(healthSnapshotCallArg() ?? {}, "eventLoop")).toBe(false);
     resolveSnapshot?.(createHealthSummary());
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
   });
@@ -84,8 +95,8 @@ describe("refreshGatewayHealthSnapshot", () => {
     });
 
     expect(getHealthSnapshotMock).toHaveBeenCalledTimes(2);
-    expect(getHealthSnapshotMock.mock.calls[0]?.[0]?.eventLoop).toBe(eventLoop);
-    expect(Object.hasOwn(getHealthSnapshotMock.mock.calls[1]?.[0] ?? {}, "eventLoop")).toBe(false);
+    expect(healthSnapshotCallArg()?.eventLoop).toBe(eventLoop);
+    expect(Object.hasOwn(healthSnapshotCallArg(1) ?? {}, "eventLoop")).toBe(false);
   });
 
   it("captures runtime snapshots for completed refreshes and guards snapshot failures", async () => {
@@ -109,15 +120,16 @@ describe("refreshGatewayHealthSnapshot", () => {
     expect(getHealthSnapshotMock).toHaveBeenCalledTimes(2);
     expect(
       getHealthSnapshotMock.mock.calls
-        .map((call) => call[0]?.probe)
+        .map((_call, index) => healthSnapshotCallArg(index)?.probe)
         .toSorted((a, b) => Number(a) - Number(b)),
     ).toEqual([false, true]);
-    expect(getHealthSnapshotMock.mock.calls.map((call) => call[0]?.includeSensitive)).toEqual([
-      false,
-      false,
-    ]);
-    expect(getHealthSnapshotMock.mock.calls[0]?.[0]?.runtimeSnapshot).toBe(runtimeSnapshot);
-    expect(getHealthSnapshotMock.mock.calls[1]?.[0]?.runtimeSnapshot).toBeUndefined();
+    expect(
+      getHealthSnapshotMock.mock.calls.map(
+        (_call, index) => healthSnapshotCallArg(index)?.includeSensitive,
+      ),
+    ).toEqual([false, false]);
+    expect(healthSnapshotCallArg()?.runtimeSnapshot).toBe(runtimeSnapshot);
+    expect(healthSnapshotCallArg(1)?.runtimeSnapshot).toBeUndefined();
   });
 
   it("does not cache or broadcast sensitive health refreshes", async () => {
@@ -171,8 +183,8 @@ describe("refreshGatewayHealthSnapshot", () => {
     const safe = healthState.refreshGatewayHealthSnapshot({ probe: false });
 
     expect(getHealthSnapshotMock).toHaveBeenCalledTimes(2);
-    expect(getHealthSnapshotMock.mock.calls[0]?.[0]?.includeSensitive).toBe(true);
-    expect(getHealthSnapshotMock.mock.calls[1]?.[0]?.includeSensitive).toBe(false);
+    expect(healthSnapshotCallArg()?.includeSensitive).toBe(true);
+    expect(healthSnapshotCallArg(1)?.includeSensitive).toBe(false);
 
     resolveSensitive?.();
     resolveSafe?.();

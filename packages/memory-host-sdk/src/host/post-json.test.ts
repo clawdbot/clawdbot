@@ -67,7 +67,7 @@ describe("postJson", () => {
     }
 
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain("post failed: 502 bad gateway");
+    expect((error as Error).message).toBe("post failed: 502 bad gateway");
     expect((error as { status?: unknown }).status).toBe(502);
   });
 });

@@ -23,6 +23,7 @@ type EventContext = Pick<
   | "transcriptWaiters"
   | "maxDurationTimers"
   | "onCallAnswered"
+  | "streamSessionIssuer"
 >;
 
 function shouldAcceptInbound(config: EventContext["config"], from: string | undefined): boolean {
@@ -195,10 +196,26 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
     case "call.initiated":
       transitionState(call, "initiated");
       if (call.direction === "inbound" && call.providerCallId && ctx.provider?.answerCall) {
+        const inboundStreamSession =
+          ctx.config.realtime?.enabled && ctx.provider.name === "telnyx" && ctx.streamSessionIssuer
+            ? ctx.streamSessionIssuer({
+                providerName: "telnyx",
+                callId: call.callId,
+                from: call.from,
+                to: call.to,
+                direction: "inbound",
+              })
+            : undefined;
         void ctx.provider
           .answerCall({
             callId: call.callId,
             providerCallId: call.providerCallId,
+            ...(inboundStreamSession
+              ? {
+                  streamUrl: inboundStreamSession.streamUrl,
+                  streamAuthToken: inboundStreamSession.token,
+                }
+              : {}),
           })
           .catch((err) => {
             const message = formatErrorMessage(err);

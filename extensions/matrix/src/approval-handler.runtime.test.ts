@@ -32,6 +32,10 @@ function expectRecordFields(value: unknown, expected: Record<string, unknown>) {
   return actual;
 }
 
+function mockCall<T extends readonly unknown[]>(mock: { mock: { calls: T[] } }, index = 0) {
+  return mock.mock.calls.at(index);
+}
+
 function buildMatrixReceipt(messageIds: readonly string[], roomId = "!room:example.org") {
   return {
     primaryPlatformMessageId: messageIds[0],
@@ -204,7 +208,7 @@ describe("matrixApprovalNativeRuntime", () => {
       pendingPayload,
     });
 
-    const [target, text, options] = sendSingleTextMessage.mock.calls[0] ?? [];
+    const [target, text, options] = mockCall(sendSingleTextMessage) ?? [];
     expect(target).toBe("room:!room:example.org");
     expect(String(text)).toContain("echo hi");
     const extraContent = (options as { extraContent?: Record<string, unknown> } | undefined)
@@ -254,7 +258,7 @@ describe("matrixApprovalNativeRuntime", () => {
       pendingPayload,
     });
 
-    const [target, text, options] = sendSingleTextMessage.mock.calls[0] ?? [];
+    const [target, text, options] = mockCall(sendSingleTextMessage) ?? [];
     expect(target).toBe("room:!room:example.org");
     expect(String(text)).toContain("deploy");
     const extraContent = (options as { extraContent?: Record<string, unknown> } | undefined)
@@ -284,10 +288,10 @@ describe("matrixApprovalNativeRuntime", () => {
       agentId: "agent-1",
       severity: "critical",
     });
-    expect(reactMessage.mock.calls[0]?.[0]).toBe("!room:example.org");
-    expect(reactMessage.mock.calls[0]?.[1]).toBe("$plugin-approval");
-    expect(reactMessage.mock.calls[0]?.[2]).toBe("✅");
-    expectRecordFields(reactMessage.mock.calls[0]?.[3], { accountId: "default" });
+    expect(mockCall(reactMessage)?.[0]).toBe("!room:example.org");
+    expect(mockCall(reactMessage)?.[1]).toBe("$plugin-approval");
+    expect(mockCall(reactMessage)?.[2]).toBe("✅");
+    expectRecordFields(mockCall(reactMessage)?.[3], { accountId: "default" });
   });
 
   it("binds Matrix approval reactions before publishing option reactions", async () => {
@@ -468,16 +472,16 @@ describe("matrixApprovalNativeRuntime", () => {
       pendingPayload,
     });
 
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("room:!room:example.org");
-    expect(sendMessage.mock.calls[0]?.[1]).toBe(pendingPayload.text);
-    expectRecordFields(sendMessage.mock.calls[0]?.[2], {
+    expect(mockCall(sendMessage)?.[0]).toBe("room:!room:example.org");
+    expect(mockCall(sendMessage)?.[1]).toBe(pendingPayload.text);
+    expectRecordFields(mockCall(sendMessage)?.[2], {
       accountId: "default",
       extraContent: pendingPayload.extraContent,
     });
-    expect(reactMessage.mock.calls[0]?.[0]).toBe("!room:example.org");
-    expect(reactMessage.mock.calls[0]?.[1]).toBe("$primary");
-    expect(typeof reactMessage.mock.calls[0]?.[2]).toBe("string");
-    expectRecordFields(reactMessage.mock.calls[0]?.[3], { accountId: "default" });
+    expect(mockCall(reactMessage)?.[0]).toBe("!room:example.org");
+    expect(mockCall(reactMessage)?.[1]).toBe("$primary");
+    expect(typeof mockCall(reactMessage)?.[2]).toBe("string");
+    expectRecordFields(mockCall(reactMessage)?.[3], { accountId: "default" });
     expectRecordFields(entry, {
       roomId: "!room:example.org",
       platformMessageIds: ["$primary", "$last"],

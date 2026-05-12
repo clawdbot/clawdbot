@@ -111,7 +111,7 @@ function expectInvalidRequestResponse(
   respond: ReturnType<typeof vi.fn>,
   expectedMessagePart: string,
 ) {
-  const call = respond.mock.calls[0] as RespondCall | undefined;
+  const call = respond.mock.calls.at(0) as RespondCall | undefined;
   expect(call?.[0]).toBe(false);
   expect(call?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
   expect(call?.[2]?.message).toContain(expectedMessagePart);
@@ -157,7 +157,7 @@ describe("push.test handler", () => {
     await invoke();
 
     expect(sendApnsAlert).toHaveBeenCalledTimes(1);
-    const call = respond.mock.calls[0] as RespondCall | undefined;
+    const call = respond.mock.calls.at(0) as RespondCall | undefined;
     expect(call?.[0]).toBe(true);
     const result = call?.[1] as ApnsPushResult | undefined;
     expect(result?.ok).toBe(true);
@@ -216,7 +216,7 @@ describe("push.test handler", () => {
       },
     });
     expect(sendApnsAlert).toHaveBeenCalledTimes(1);
-    const call = respond.mock.calls[0] as RespondCall | undefined;
+    const call = respond.mock.calls.at(0) as RespondCall | undefined;
     expect(call?.[0]).toBe(true);
     const result = call?.[1] as ApnsPushResult | undefined;
     expect(result?.ok).toBe(true);

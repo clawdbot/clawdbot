@@ -145,7 +145,7 @@ describe("agents bind/unbind commands", () => {
     await agentsBindCommand({ bind: ["telegram"] }, runtime);
 
     expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
-    const writtenConfig = writeConfigFileMock.mock.calls[0]?.[0] as
+    const writtenConfig = writeConfigFileMock.mock.calls.at(0)?.[0] as
       | { bindings?: unknown }
       | undefined;
     expect(writtenConfig?.bindings).toStrictEqual([
@@ -163,7 +163,7 @@ describe("agents bind/unbind commands", () => {
     await agentsBindCommand({ bind: ["external-chat:work"] }, runtime);
 
     expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
-    const writtenConfig = writeConfigFileMock.mock.calls[0]?.[0] as
+    const writtenConfig = writeConfigFileMock.mock.calls.at(0)?.[0] as
       | { bindings?: unknown }
       | undefined;
     expect(writtenConfig?.bindings).toStrictEqual([
@@ -192,7 +192,7 @@ describe("agents bind/unbind commands", () => {
     await agentsUnbindCommand({ agent: "ops", all: true }, runtime);
 
     expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
-    const writtenConfig = writeConfigFileMock.mock.calls[0]?.[0] as
+    const writtenConfig = writeConfigFileMock.mock.calls.at(0)?.[0] as
       | { bindings?: unknown }
       | undefined;
     expect(writtenConfig?.bindings).toStrictEqual([

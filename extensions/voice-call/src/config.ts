@@ -868,9 +868,14 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     );
   }
 
-  if (config.realtime.enabled && config.provider && config.provider !== "twilio") {
+  if (
+    config.realtime.enabled &&
+    config.provider &&
+    config.provider !== "twilio" &&
+    config.provider !== "telnyx"
+  ) {
     errors.push(
-      'plugins.entries.voice-call.config.provider must be "twilio" when realtime.enabled is true',
+      'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
     );
   }
 

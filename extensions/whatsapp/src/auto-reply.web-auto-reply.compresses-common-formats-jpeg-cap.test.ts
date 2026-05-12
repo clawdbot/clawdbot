@@ -75,11 +75,27 @@ describe("web auto-reply", () => {
 
   function getSingleImagePayload(sendMedia: ReturnType<typeof vi.fn>) {
     expect(sendMedia).toHaveBeenCalledTimes(1);
-    return sendMedia.mock.calls[0][0] as {
+    return imagePayloadAt(sendMedia, 0);
+  }
+
+  function imagePayloadAt(sendMedia: ReturnType<typeof vi.fn>, callIndex: number) {
+    const call = sendMedia.mock.calls.at(callIndex);
+    if (!call) {
+      throw new Error(`Expected sendMedia call ${callIndex}`);
+    }
+    return call[0] as {
       image: Buffer;
       caption?: string;
       mimetype?: string;
     };
+  }
+
+  function replyText(reply: ReturnType<typeof vi.fn>): string {
+    const call = reply.mock.calls.at(0);
+    if (!call || typeof call[0] !== "string") {
+      throw new Error("Expected text reply call");
+    }
+    return call[0];
   }
 
   async function withMediaCap<T>(mediaMaxMb: number, run: () => Promise<T>): Promise<T> {
@@ -215,11 +231,7 @@ describe("web auto-reply", () => {
             chatId: `conv-${index}`,
           });
           expect(sendMedia).toHaveBeenCalledTimes(beforeCalls + 1);
-          const payload = sendMedia.mock.calls[beforeCalls]?.[0] as {
-            image: Buffer;
-            caption?: string;
-            mimetype?: string;
-          };
+          const payload = imagePayloadAt(sendMedia, beforeCalls);
           expect(payload.image.length).toBeLessThanOrEqual(SMALL_MEDIA_CAP_BYTES);
           expect(payload.mimetype).toBe("image/jpeg");
         }
@@ -310,7 +322,7 @@ describe("web auto-reply", () => {
     await dispatch("msg-pdf");
 
     expect(sendMedia).toHaveBeenCalledTimes(1);
-    const payload = sendMedia.mock.calls[0][0] as {
+    const payload = imagePayloadAt(sendMedia, 0) as {
       document?: Buffer;
       caption?: string;
       fileName?: string;
@@ -355,7 +367,7 @@ describe("web auto-reply", () => {
     await dispatch("msg1");
 
     expect(sendMedia).toHaveBeenCalledTimes(1);
-    const fallback = reply.mock.calls[0]?.[0] as string;
+    const fallback = replyText(reply);
     expect(fallback).toContain("hi");
     expect(fallback).toContain("Media failed");
     fetchMock.mockRestore();
@@ -381,7 +393,7 @@ describe("web auto-reply", () => {
     await dispatch("msg1");
 
     expect(sendMedia).not.toHaveBeenCalled();
-    const fallback = reply.mock.calls[0]?.[0] as string;
+    const fallback = replyText(reply);
     expect(fallback).toContain("caption");
     expect(fallback).toContain("Media failed");
     expect(fallback).not.toContain("404");

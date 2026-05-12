@@ -448,7 +448,7 @@ describe("memory plugin e2e", () => {
       expect(providerOptions.provider).toBe("openai");
       expect(providerOptions.fallback).toBe("none");
       expect(providerOptions.model).toBe("text-embedding-3-small");
-      expect(createProvider.mock.calls[0][0]).not.toHaveProperty("remote");
+      expect(createProvider.mock.calls.at(0)?.[0]).not.toHaveProperty("remote");
       expect(embedQuery).toHaveBeenCalledWith("project memory");
     } finally {
       vi.doUnmock("openclaw/plugin-sdk/memory-core-host-engine-embeddings");

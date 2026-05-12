@@ -904,8 +904,8 @@ describe("web auto-reply connection", () => {
         });
 
         expect(resolver).toHaveBeenCalledTimes(2);
-        const firstArgs = resolver.mock.calls[0][0];
-        const secondArgs = resolver.mock.calls[1][0];
+        const firstArgs = resolver.mock.calls.at(0)?.[0];
+        const secondArgs = resolver.mock.calls.at(1)?.[0];
         const firstTimestamp = formatEnvelopeTimestamp(new Date("2025-01-01T00:00:00Z"));
         const secondTimestamp = formatEnvelopeTimestamp(new Date("2025-01-01T01:00:00Z"));
         const firstPattern = escapeRegExp(firstTimestamp);

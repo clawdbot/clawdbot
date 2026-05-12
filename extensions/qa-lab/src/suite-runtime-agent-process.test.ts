@@ -94,7 +94,7 @@ describe("qa suite runtime agent process helpers", () => {
     child.emit("exit", 0);
 
     await expect(pending).resolves.toBe("ok");
-    const spawnCall = spawnMock.mock.calls[0];
+    const spawnCall = spawnMock.mock.calls.at(0);
     expect(spawnCall?.[0]).toBe("/usr/bin/node");
     expect(spawnCall?.[1]).toEqual([path.join("/repo", "dist", "index.js"), "qa", "suite"]);
     expect((spawnCall?.[2] as { cwd?: string; env?: unknown } | undefined)?.cwd).toBe(
@@ -132,7 +132,7 @@ describe("qa suite runtime agent process helpers", () => {
     child.emit("exit", 0);
 
     await expect(pending).resolves.toBe("ok");
-    const spawnCall = spawnMock.mock.calls[0];
+    const spawnCall = spawnMock.mock.calls.at(0);
     expect(spawnCall?.[0]).toBe("/usr/bin/node");
     expect(spawnCall?.[1]).toEqual([
       path.join("/repo", "dist", "index.js"),
@@ -253,7 +253,7 @@ describe("qa suite runtime agent process helpers", () => {
         message: "hello",
       }),
     ).resolves.toEqual({ runId: "run-1" });
-    const gatewayArgs = gatewayCall.mock.calls[0] as unknown as
+    const gatewayArgs = gatewayCall.mock.calls.at(0) as unknown as
       | [string, unknown, unknown]
       | undefined;
     expect(gatewayArgs?.[0]).toBe("agent");

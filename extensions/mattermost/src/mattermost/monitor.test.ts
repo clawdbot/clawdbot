@@ -114,7 +114,7 @@ describe("mattermost mention gating", () => {
     expect(decision.dropReason).toBeNull();
     expect(decision.shouldRequireMention).toBe(false);
     expect(resolver).toHaveBeenCalledTimes(1);
-    const [resolverCall] = resolver.mock.calls[0] ?? [];
+    const [resolverCall] = resolver.mock.calls.at(0) ?? [];
     expect(resolverCall).toStrictEqual({
       cfg,
       channel: "mattermost",
@@ -493,7 +493,8 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
 
     expect(updateMattermostPostSpy).toHaveBeenCalledTimes(1);
-    const [updateClient, updatePostId, updateParams] = updateMattermostPostSpy.mock.calls[0] ?? [];
+    const [updateClient, updatePostId, updateParams] =
+      updateMattermostPostSpy.mock.calls.at(0) ?? [];
     expect(updateClient).toBe(client);
     expect(updatePostId).toBe("preview-post-1");
     expect(updateParams).toStrictEqual({ message: "Final answer" });

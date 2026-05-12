@@ -14,8 +14,8 @@ describe("formatAuthDoctorHint", () => {
       provider: "qwen-portal",
     });
 
-    expect(hint).toContain("openclaw onboard --auth-choice qwen-api-key");
-    expect(hint).toContain("qwen-api-key-cn");
-    expect(hint).not.toContain("--provider qwen");
+    expect(hint).toBe(
+      "Qwen OAuth via portal.qwen.ai has been deprecated. Please migrate to Qwen Cloud Coding Plan. Run: openclaw onboard --auth-choice qwen-api-key (or qwen-api-key-cn for the China endpoint). Legacy modelstudio auth-choice ids still work.",
+    );
   });
 });

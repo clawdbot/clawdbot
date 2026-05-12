@@ -80,8 +80,8 @@ describe("session-updates lifecycle hooks", () => {
     expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1);
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
 
-    const [endEvent, endContext] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
-    const [startEvent, startContext] = hookRunnerMocks.runSessionStart.mock.calls[0] ?? [];
+    const [endEvent, endContext] = hookRunnerMocks.runSessionEnd.mock.calls.at(0) ?? [];
+    const [startEvent, startContext] = hookRunnerMocks.runSessionStart.mock.calls.at(0) ?? [];
 
     expect(endEvent?.sessionId).toBe("s1");
     expect(endEvent?.sessionKey).toBe(sessionKey);

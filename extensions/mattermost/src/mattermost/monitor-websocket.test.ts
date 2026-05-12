@@ -236,7 +236,7 @@ describe("mattermost websocket monitor", () => {
       post_id: "post-1",
       emoji_name: "thumbsup",
     });
-    const payload = onReaction.mock.calls[0]?.[0];
+    const payload = onReaction.mock.calls.at(0)?.[0];
     expect(payload).toEqual({
       event: "reaction_added",
       data: { reaction },

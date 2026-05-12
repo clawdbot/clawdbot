@@ -438,16 +438,26 @@ describe("EmbeddedTuiBackend", () => {
     });
     await flushMicrotasks();
 
-    expect(events).toContainEqual({
-      event: "chat.side_result",
-      payload: {
-        kind: "btw",
-        runId: "run-side-1",
-        sessionKey: "agent:main:main",
-        question: "what changed?",
-        text: "alias answer",
+    expect(events).toEqual([
+      {
+        event: "chat.side_result",
+        payload: {
+          kind: "btw",
+          runId: "run-side-1",
+          sessionKey: "agent:main:main",
+          question: "what changed?",
+          text: "alias answer",
+        },
       },
-    });
+      {
+        event: "chat",
+        payload: {
+          runId: "run-side-1",
+          sessionKey: "agent:main:main",
+          state: "final",
+        },
+      },
+    ]);
   });
 
   it("registers tool-first local runs before forwarding agent events", async () => {
@@ -566,7 +576,7 @@ describe("EmbeddedTuiBackend", () => {
       await flushMicrotasks();
 
       expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
-      const ingressOptions = agentCommandFromIngressMock.mock.calls[0]?.[0] as
+      const ingressOptions = agentCommandFromIngressMock.mock.calls.at(0)?.[0] as
         | { timeout?: unknown }
         | undefined;
       expect(ingressOptions?.timeout).toBe("300");

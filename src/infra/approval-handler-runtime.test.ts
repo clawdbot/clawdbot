@@ -154,7 +154,7 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     await approvalRuntime.stop();
 
     expect(unbindPending).toHaveBeenCalledOnce();
-    const stopUnbind = unbindPending.mock.calls[0]?.[0];
+    const stopUnbind = unbindPending.mock.calls.at(0)?.[0];
     expect(stopUnbind?.request).toBe(request);
     expect(stopUnbind?.approvalKind).toBe("plugin");
   });
@@ -183,7 +183,7 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     } as never);
 
     expect(unbindPending).toHaveBeenCalledTimes(1);
-    const unbind = unbindPending.mock.calls[0]?.[0];
+    const unbind = unbindPending.mock.calls.at(0)?.[0];
     expect(unbind?.entry).toEqual({ messageId: "1" });
     expect(unbind?.binding).toEqual({ bindingId: "bound-1" });
     expect(unbind?.request).toBe(request);
@@ -226,7 +226,7 @@ describe("createChannelApprovalHandlerFromCapability", () => {
 
     expect(unbindPending).toHaveBeenCalledTimes(2);
     expect(buildResolvedResult).toHaveBeenCalledTimes(1);
-    expect(buildResolvedResult.mock.calls[0]?.[0]?.entry).toEqual({ messageId: "2" });
+    expect(buildResolvedResult.mock.calls.at(0)?.[0]?.entry).toEqual({ messageId: "2" });
   });
 
   it("continues stop-time unbind cleanup when one binding throws", async () => {

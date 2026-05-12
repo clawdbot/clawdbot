@@ -150,8 +150,10 @@ describe("startGatewayDiscovery", () => {
 
     expect(result.bonjourStop).toBeTypeOf("function");
     await result.bonjourStop?.();
-    expect(logs.warn.mock.calls).toContainEqual([
-      "gateway discovery service timed out after 10ms (stuck-discovery, plugin=stuck-discovery); continuing startup",
+    expect(logs.warn.mock.calls).toEqual([
+      [
+        "gateway discovery service timed out after 10ms (stuck-discovery, plugin=stuck-discovery); continuing startup",
+      ],
     ]);
 
     vi.useRealTimers();
@@ -227,9 +229,35 @@ describe("startGatewayDiscovery", () => {
     expect(zoneParams.displayName).toBe("Lab Mac (OpenClaw)");
     expect(zoneParams.tailnetIPv4).toBe("100.64.0.10");
     expect(zoneParams.tailnetDns).toBe("gateway.tailnet.example.ts.net");
-    expect(logs.info.mock.calls).toContainEqual([
-      "wide-area DNS-SD updated (openclaw.internal. → /tmp/openclaw.internal.db)",
+    expect(logs.info.mock.calls).toEqual([
+      ["wide-area DNS-SD updated (openclaw.internal. → /tmp/openclaw.internal.db)"],
     ]);
     expect(result.bonjourStop).toBeNull();
+  });
+
+  it("omits the CLI path from wide-area DNS-SD in minimal mode", async () => {
+    process.env.NODE_ENV = "development";
+    delete process.env.VITEST;
+
+    const logs = makeLogs();
+
+    await startGatewayDiscovery({
+      machineDisplayName: "Lab Mac",
+      port: 18789,
+      gatewayTls: { enabled: false },
+      wideAreaDiscoveryEnabled: true,
+      wideAreaDiscoveryDomain: "openclaw.internal.",
+      tailscaleMode: "serve",
+      mdnsMode: "minimal",
+      gatewayDiscoveryServices: [],
+      logDiscovery: logs,
+    });
+
+    const [zoneParams] = mocks.writeWideAreaGatewayZone.mock.calls.at(-1) ?? [];
+    if (zoneParams === undefined) {
+      throw new Error("Expected wide-area gateway zone to be written");
+    }
+    expect(zoneParams.cliPath).toBeUndefined();
+    expect(mocks.resolveBonjourCliPath).not.toHaveBeenCalled();
   });
 });

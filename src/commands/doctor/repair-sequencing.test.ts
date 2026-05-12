@@ -306,7 +306,7 @@ describe("doctor repair sequencing", () => {
 
     expect(events).toEqual(["bundled-shadow-cleanup", "openclaw-peer-links", "missing-installs"]);
     expect(mocks.maybeRepairStaleManagedNpmBundledPlugins).toHaveBeenCalledOnce();
-    const cleanupCall = mocks.maybeRepairStaleManagedNpmBundledPlugins.mock.calls[0]?.[0];
+    const cleanupCall = mocks.maybeRepairStaleManagedNpmBundledPlugins.mock.calls.at(0)?.[0];
     expect(cleanupCall?.config.plugins?.entries?.["google-meet"]).toEqual({ enabled: true });
     expect(cleanupCall?.prompter).toEqual({ shouldRepair: true });
     expect(mocks.maybeRepairManagedNpmOpenClawPeerLinks).toHaveBeenCalledWith(

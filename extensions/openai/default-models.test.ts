@@ -5,7 +5,8 @@ import { applyOpenAIConfig, applyOpenAIProviderConfig, OPENAI_DEFAULT_MODEL } fr
 describe("openai default models", () => {
   it("adds allowlist entry for the default model", () => {
     const next = applyOpenAIProviderConfig({});
-    expect(Object.keys(next.agents?.defaults?.models ?? {})).toContain(OPENAI_DEFAULT_MODEL);
+    expect(Object.keys(next.agents?.defaults?.models ?? {})).toEqual([OPENAI_DEFAULT_MODEL]);
+    expect(next.agents?.defaults?.models?.[OPENAI_DEFAULT_MODEL]).toEqual({ alias: "GPT" });
   });
 
   it("preserves existing alias for the default model", () => {

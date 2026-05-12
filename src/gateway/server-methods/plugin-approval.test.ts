@@ -356,7 +356,7 @@ describe("createPluginApprovalHandlers", () => {
         },
       );
       await handlers["plugin.approval.request"](opts);
-      const result = respond.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+      const result = respond.mock.calls.at(0)?.[1] as Record<string, unknown> | undefined;
       expectPluginApprovalId(result?.id, "generated plugin approval id");
     });
 
@@ -374,7 +374,7 @@ describe("createPluginApprovalHandlers", () => {
       await handlers["plugin.approval.request"](opts);
 
       expect(createSpy).toHaveBeenCalledTimes(1);
-      expectPluginApprovalId(createSpy.mock.calls[0]?.[2], "manager.create approval id");
+      expectPluginApprovalId(createSpy.mock.calls.at(0)?.[2], "manager.create approval id");
     });
 
     it("rejects plugin-provided id field", async () => {

@@ -117,7 +117,7 @@ function requireFirstArg(
   mockFn: { mock: { calls: unknown[][] } },
   label: string,
 ): Record<string, unknown> {
-  const arg = mockFn.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+  const arg = mockFn.mock.calls.at(0)?.[0] as Record<string, unknown> | undefined;
   if (!arg) {
     throw new Error(`expected ${label} to be called`);
   }

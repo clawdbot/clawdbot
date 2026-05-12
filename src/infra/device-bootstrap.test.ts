@@ -97,6 +97,54 @@ describe("device bootstrap tokens", () => {
     expect(parsed[issued.token]?.publicKey).toBe("public-key-123");
   });
 
+  it("rejects changing the requested profile while a bound use is pending", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      profile: {
+        roles: ["operator"],
+        scopes: ["operator.approvals", "operator.read", "operator.write"],
+      },
+    });
+
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "operator",
+        scopes: ["operator.read"],
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "operator",
+        scopes: ["operator.write", "operator.approvals"],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "operator",
+        scopes: ["operator.read"],
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    await expect(
+      redeemDeviceBootstrapTokenProfile({
+        baseDir,
+        token: issued.token,
+        role: "operator",
+        scopes: ["operator.read"],
+      }),
+    ).resolves.toEqual({
+      recorded: true,
+      fullyRedeemed: false,
+    });
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "operator",
+        scopes: ["operator.write", "operator.approvals"],
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
   it("loads the issued bootstrap profile for a valid token", async () => {
     const baseDir = await createTempDir();
     const issued = await issueDeviceBootstrapToken({ baseDir });

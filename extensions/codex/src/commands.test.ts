@@ -146,8 +146,24 @@ function requireRecord(value: unknown, message: string): Record<string, unknown>
   return value as Record<string, unknown>;
 }
 
+function mockCall(mockFn: ReturnType<typeof vi.fn>, callIndex = 0): ReadonlyArray<unknown> {
+  const call = mockFn.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected mock call ${callIndex + 1}`);
+  }
+  return call;
+}
+
+function mockArg(mockFn: ReturnType<typeof vi.fn>, callIndex: number, argIndex: number) {
+  return mockCall(mockFn, callIndex)[argIndex];
+}
+
 function requireRequestParams(call: unknown[] | undefined): Record<string, unknown> {
   return requireRecord(call?.[2], "expected request params object");
+}
+
+function requestParams(mockFn: ReturnType<typeof vi.fn>, callIndex = 0): Record<string, unknown> {
+  return requireRecord(mockArg(mockFn, callIndex, 2), "expected request params object");
 }
 
 function expectedDiagnosticsTargetBlock(params: {
@@ -291,7 +307,7 @@ describe("codex command", () => {
       text: "Codex models:\n- gpt-5.4",
     });
     expect(deps.requestOptions).toHaveBeenCalledWith(undefined, 100, config);
-    const modelsRequest = listCodexAppServerModels.mock.calls[0]?.[0];
+    const modelsRequest = mockArg(listCodexAppServerModels, 0, 0) as { config?: unknown };
     expect(modelsRequest?.config).toBe(config);
   });
 
@@ -1636,14 +1652,14 @@ describe("codex command", () => {
       ].join("\n"),
     });
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
-    expect(safeCodexControlRequest.mock.calls[0]?.[0]).toBeUndefined();
-    expect(safeCodexControlRequest.mock.calls[0]?.[1]).toBe(CODEX_CONTROL_METHODS.feedback);
-    const firstFeedbackParams = requireRequestParams(safeCodexControlRequest.mock.calls[0]);
+    expect(mockArg(safeCodexControlRequest, 0, 0)).toBeUndefined();
+    expect(mockArg(safeCodexControlRequest, 0, 1)).toBe(CODEX_CONTROL_METHODS.feedback);
+    const firstFeedbackParams = requestParams(safeCodexControlRequest);
     expect(firstFeedbackParams.threadId).toBe("thread-111");
     expect(firstFeedbackParams.includeLogs).toBe(true);
-    expect(safeCodexControlRequest.mock.calls[1]?.[0]).toBeUndefined();
-    expect(safeCodexControlRequest.mock.calls[1]?.[1]).toBe(CODEX_CONTROL_METHODS.feedback);
-    const secondFeedbackParams = requireRequestParams(safeCodexControlRequest.mock.calls[1]);
+    expect(mockArg(safeCodexControlRequest, 1, 0)).toBeUndefined();
+    expect(mockArg(safeCodexControlRequest, 1, 1)).toBe(CODEX_CONTROL_METHODS.feedback);
+    const secondFeedbackParams = requestParams(safeCodexControlRequest, 1);
     expect(secondFeedbackParams.threadId).toBe("thread-222");
     expect(secondFeedbackParams.includeLogs).toBe(true);
   });
@@ -1865,9 +1881,9 @@ describe("codex command", () => {
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
-    expect(safeCodexControlRequest.mock.calls[0]?.[0]).toBeUndefined();
-    expect(safeCodexControlRequest.mock.calls[0]?.[1]).toBe(CODEX_CONTROL_METHODS.feedback);
-    const feedbackParams = requireRequestParams(safeCodexControlRequest.mock.calls[0]);
+    expect(mockArg(safeCodexControlRequest, 0, 0)).toBeUndefined();
+    expect(mockArg(safeCodexControlRequest, 0, 1)).toBe(CODEX_CONTROL_METHODS.feedback);
+    const feedbackParams = requestParams(safeCodexControlRequest);
     expect(feedbackParams.classification).toBe("bug");
     expect(feedbackParams.threadId).toBe("thread-private");
     expect(feedbackParams.includeLogs).toBe(true);
@@ -1940,9 +1956,9 @@ describe("codex command", () => {
     const token = readDiagnosticsConfirmationToken(request);
     await handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps });
 
-    expect(safeCodexControlRequest.mock.calls[0]?.[0]).toBeUndefined();
-    expect(safeCodexControlRequest.mock.calls[0]?.[1]).toBe(CODEX_CONTROL_METHODS.feedback);
-    const feedbackParams = requireRequestParams(safeCodexControlRequest.mock.calls[0]);
+    expect(mockArg(safeCodexControlRequest, 0, 0)).toBeUndefined();
+    expect(mockArg(safeCodexControlRequest, 0, 1)).toBe(CODEX_CONTROL_METHODS.feedback);
+    const feedbackParams = requestParams(safeCodexControlRequest);
     expect(feedbackParams.reason).toBe("x".repeat(2048));
   });
 
@@ -2578,7 +2594,7 @@ describe("codex command", () => {
     expect(result.text).toContain("/repo \uff3btrusted\uff3d\uff08https://evil\uff09");
     expect(result.text).not.toContain("<@U123>");
     expect(result.text).not.toContain("[trusted](https://evil)");
-    const bindingRequest = requestConversationBinding.mock.calls[0]?.[0];
+    const bindingRequest = mockArg(requestConversationBinding, 0, 0) as { summary?: string };
     expect(bindingRequest?.summary).toBe(
       "Codex app-server thread thread-123 &lt;\uff20U123&gt; in /repo \uff3btrusted\uff3d\uff08https://evil\uff09",
     );

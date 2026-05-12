@@ -491,7 +491,7 @@ describe("fetchCopilotModelCatalog", () => {
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const [calledUrl, calledInit] = fetchImpl.mock.calls[0];
+    const [calledUrl, calledInit] = fetchImpl.mock.calls.at(0) ?? [];
     expect(calledUrl).toBe("https://api.githubcopilot.com/models");
     expect((calledInit as RequestInit).method).toBe("GET");
     expect(((calledInit as RequestInit).headers as Record<string, string>).Authorization).toBe(
@@ -539,7 +539,7 @@ describe("fetchCopilotModelCatalog", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
-    expect(fetchImpl.mock.calls[0][0]).toBe("https://api.githubcopilot.com/models");
+    expect(fetchImpl.mock.calls.at(0)?.[0]).toBe("https://api.githubcopilot.com/models");
   });
 
   it("dedupes by id when API returns duplicates", async () => {

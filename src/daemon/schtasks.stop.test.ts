@@ -183,7 +183,14 @@ describe("Scheduled Task stop/restart cleanup", () => {
       expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
       expectGatewayTermination(5151);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
-      expect(schtasksCalls).toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+      expect(schtasksCalls).toEqual([
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Gateway"],
+        ["/End", "/TN", "OpenClaw Gateway"],
+        ["/Run", "/TN", "OpenClaw Gateway"],
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Gateway", "/V", "/FO", "LIST"],
+      ]);
     });
   });
 

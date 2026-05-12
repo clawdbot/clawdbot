@@ -12,6 +12,8 @@ import {
 } from "./pi-embedded-subscribe.openai-responses.test-helpers.js";
 
 type TextEndBlockReplyHarness = ReturnType<typeof createTextEndBlockReplyHarness>;
+type OnBlockReplyMock = ReturnType<typeof vi.fn>;
+type BlockReplyPayload = { text?: string };
 
 function emitOpenAiResponsesTextEvent(params: {
   emit: TextEndBlockReplyHarness["emit"];
@@ -89,13 +91,25 @@ async function emitSuppressedCommentary(params: {
 }
 
 function expectSingleBlockReplyText(params: {
-  onBlockReply: ReturnType<typeof vi.fn>;
+  onBlockReply: OnBlockReplyMock;
   subscription: TextEndBlockReplyHarness["subscription"];
   text: string;
 }) {
   expect(params.onBlockReply).toHaveBeenCalledTimes(1);
-  expect(params.onBlockReply.mock.calls.at(0)?.[0]?.text).toBe(params.text);
+  expect(requireBlockReplyPayload(params.onBlockReply).text).toBe(params.text);
   expect(params.subscription.assistantTexts).toEqual([params.text]);
+}
+
+function requireBlockReplyPayload(onBlockReply: OnBlockReplyMock): BlockReplyPayload {
+  const call = onBlockReply.mock.calls[0];
+  if (!call) {
+    throw new Error("expected first block reply call");
+  }
+  const payload = call[0];
+  if (!payload || typeof payload !== "object") {
+    throw new Error("expected first block reply payload");
+  }
+  return payload as BlockReplyPayload;
 }
 
 describe("subscribeEmbeddedPiSession", () => {
@@ -110,7 +124,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await vi.waitFor(() => {
       expect(onBlockReply).toHaveBeenCalledTimes(1);
     });
-    const payload = onBlockReply.mock.calls.at(0)?.[0];
+    const payload = requireBlockReplyPayload(onBlockReply);
     expect(payload?.text).toBe("Hello block");
     expect(subscription.assistantTexts).toEqual(["Hello block"]);
 
@@ -147,7 +161,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await vi.waitFor(() => {
       expect(onBlockReply).toHaveBeenCalledTimes(1);
     });
-    expect(onBlockReply.mock.calls.at(0)?.[0]?.text).toBe("Final visible reply.");
+    expect(requireBlockReplyPayload(onBlockReply).text).toBe("Final visible reply.");
     expect(subscription.assistantTexts).toEqual(["Final visible reply."]);
   });
 
@@ -198,7 +212,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls.at(0)?.[0]?.text).toBe("Legacy answer");
+    expect(requireBlockReplyPayload(onBlockReply).text).toBe("Legacy answer");
     expect(subscription.assistantTexts).toEqual(["Legacy answer"]);
 
     emit({
@@ -260,7 +274,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls.at(0)?.[0]?.text).toBe("Hello world");
+    expect(requireBlockReplyPayload(onBlockReply).text).toBe("Hello world");
     expect(subscription.assistantTexts).toEqual(["Hello world"]);
   });
 
@@ -286,7 +300,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls.at(0)?.[0]?.text).toBe("Done.");
+    expect(requireBlockReplyPayload(onBlockReply).text).toBe("Done.");
     expect(subscription.assistantTexts).toEqual(["Done."]);
   });
 

@@ -28,11 +28,15 @@ describe("config io shell env expected keys", () => {
     const { resolveShellEnvExpectedKeys } = await import("./shell-env-expected-keys.js");
 
     const expectedKeys = resolveShellEnvExpectedKeys({} as NodeJS.ProcessEnv);
-    expect(expectedKeys).toContain("OPENAI_API_KEY");
-    expect(expectedKeys).toContain("ARCEEAI_API_KEY");
-    expect(expectedKeys).toContain("FIREWORKS_ALT_API_KEY");
-    expect(expectedKeys).toContain("DISCORD_BOT_TOKEN");
-    expect(expectedKeys).toContain("SLACK_BOT_TOKEN");
-    expect(expectedKeys).toContain("OPENCLAW_GATEWAY_TOKEN");
+    expect(expectedKeys).toEqual([
+      "OPENAI_API_KEY",
+      "ARCEEAI_API_KEY",
+      "FIREWORKS_ALT_API_KEY",
+      "DISCORD_BOT_TOKEN",
+      "SLACK_BOT_TOKEN",
+      "SLACK_APP_TOKEN",
+      "OPENCLAW_GATEWAY_TOKEN",
+      "OPENCLAW_GATEWAY_PASSWORD",
+    ]);
   });
 });

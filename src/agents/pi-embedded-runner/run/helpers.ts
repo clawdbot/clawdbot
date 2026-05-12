@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { generateSecureToken } from "../../../infra/secure-random.js";
 import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
+import { resolveAgentConfig } from "../../agent-scope-config.js";
 import { extractAssistantVisibleText } from "../../pi-embedded-utils.js";
 import { derivePromptTokens, normalizeUsage } from "../../usage.js";
 import type { EmbeddedPiAgentMeta } from "../types.js";
@@ -71,11 +72,22 @@ const MIN_RUN_RETRY_ITERATIONS = 32;
 const MAX_RUN_RETRY_ITERATIONS = 160;
 
 // Defensive guard for the outer run loop across all retry branches.
-export function resolveMaxRunRetryIterations(profileCandidateCount: number): number {
-  const scaled =
-    BASE_RUN_RETRY_ITERATIONS +
-    Math.max(1, profileCandidateCount) * RUN_RETRY_ITERATIONS_PER_PROFILE;
-  return Math.min(MAX_RUN_RETRY_ITERATIONS, Math.max(MIN_RUN_RETRY_ITERATIONS, scaled));
+export function resolveMaxRunRetryIterations(
+  profileCandidateCount: number,
+  cfg?: OpenClawConfig,
+  agentId?: string,
+): number {
+  const configRetries =
+    (cfg && agentId ? resolveAgentConfig(cfg, agentId)?.runRetries : undefined) ??
+    cfg?.agents?.defaults?.runRetries;
+
+  const base = Math.max(1, configRetries?.base ?? BASE_RUN_RETRY_ITERATIONS);
+  const perProfile = Math.max(0, configRetries?.perProfile ?? RUN_RETRY_ITERATIONS_PER_PROFILE);
+  const minLimit = Math.max(1, configRetries?.min ?? MIN_RUN_RETRY_ITERATIONS);
+  const maxLimit = Math.max(minLimit, configRetries?.max ?? MAX_RUN_RETRY_ITERATIONS);
+
+  const scaled = base + Math.max(1, profileCandidateCount) * perProfile;
+  return Math.min(maxLimit, Math.max(minLimit, scaled));
 }
 
 export function resolveActiveErrorContext(params: {

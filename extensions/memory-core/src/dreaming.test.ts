@@ -2249,7 +2249,7 @@ describe("short-term dreaming trigger", () => {
       const dreamsText = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
       expect(dreamsText).toContain("A diary entry.");
     });
-    expect(subagent.run.mock.calls[0]?.[0]?.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(subagent.run.mock.calls.at(0)?.[0]?.model).toBe("anthropic/claude-sonnet-4-6");
   });
 
   it("skips dreaming promotion cleanly when limit is zero", async () => {

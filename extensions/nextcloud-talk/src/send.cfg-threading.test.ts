@@ -270,7 +270,7 @@ describe("nextcloud-talk send cfg threading", () => {
             accountId: "work",
           });
           expect(result?.receipt.platformMessageIds).toEqual(["22346"]);
-          const mediaSendCall = fetchMock.mock.calls[1];
+          const mediaSendCall = fetchMock.mock.calls.at(1);
           expect(mediaSendCall?.[0]).toBe(
             "https://nextcloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/abc123/message",
           );

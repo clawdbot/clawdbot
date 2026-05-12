@@ -199,6 +199,18 @@ async function createFailedQmdSearchHarness(params: { agentId: string; errorMess
   return { cfg, manager: requireManager(first), firstResult: first };
 }
 
+function qmdCreateParams(index = 0): Record<string, unknown> {
+  const call = createQmdManagerMock.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`expected QMD manager create call ${index}`);
+  }
+  const params = call.at(0);
+  if (!params || typeof params !== "object") {
+    throw new Error(`expected QMD manager create params ${index}`);
+  }
+  return params as Record<string, unknown>;
+}
+
 async function expectPendingQmdReplacement(params: {
   agentId: string;
   firstCfg: OpenClawConfig;
@@ -454,7 +466,7 @@ describe("getMemorySearchManager caching", () => {
     requireManager(second);
     expect(first.manager).toBe(second.manager);
     expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
-    const createParams = createQmdManagerMock.mock.calls[0]?.[0];
+    const createParams = qmdCreateParams();
     expect(createParams?.agentId).toBe("main-agent");
     expect(createParams?.mode).toBe("full");
   });
@@ -700,8 +712,8 @@ describe("getMemorySearchManager caching", () => {
 
     expect(cliManager).toBe(cliPrimary);
     expect(cliManager).not.toBe(fullManager);
-    const fullCreateParams = createQmdManagerMock.mock.calls[0]?.[0];
-    const cliCreateParams = createQmdManagerMock.mock.calls[1]?.[0];
+    const fullCreateParams = qmdCreateParams();
+    const cliCreateParams = qmdCreateParams(1);
     expect(fullCreateParams?.agentId).toBe(agentId);
     expect(fullCreateParams?.mode).toBe("full");
     expect(cliCreateParams?.agentId).toBe(agentId);
@@ -772,7 +784,7 @@ describe("getMemorySearchManager caching", () => {
     expect(status.files).toBe(10);
     expect(status.chunks).toBe(42);
     expect(status.sourceCounts).toEqual([{ source: "memory", files: 10, chunks: 42 }]);
-    const createParams = createQmdManagerMock.mock.calls[0]?.[0];
+    const createParams = qmdCreateParams();
     expect(createParams?.agentId).toBe(agentId);
     expect(createParams?.mode).toBe("status");
   });

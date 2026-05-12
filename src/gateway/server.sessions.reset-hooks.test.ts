@@ -26,7 +26,7 @@ type HookEventRecord = Record<string, unknown> & {
 };
 
 function firstHookCall(mock: { mock: { calls: unknown[][] } }): [HookEventRecord, HookEventRecord] {
-  const call = mock.mock.calls[0];
+  const call = mock.mock.calls.at(0);
   if (!call) {
     throw new Error("Expected hook call");
   }

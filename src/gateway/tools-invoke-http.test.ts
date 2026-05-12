@@ -394,7 +394,7 @@ const expectOkInvokeResponse = async (res: Response) => {
 };
 
 const firstHookCallArg = () => {
-  const call = hookMocks.runBeforeToolCallHook.mock.calls[0];
+  const call = hookMocks.runBeforeToolCallHook.mock.calls.at(0);
   if (!call) {
     throw new Error("Expected before-tool-call hook");
   }
@@ -411,7 +411,7 @@ const invokeToolsRpc = async (params: Record<string, unknown>, scopes = ["operat
     req: { type: "req", id: "req-rpc-1", method: "tools.invoke" },
     isWebchatConnect: () => false,
   });
-  return respond.mock.calls[0] as
+  return respond.mock.calls.at(0) as
     | [boolean, { ok?: boolean; toolName?: string; output?: unknown; error?: unknown }?, unknown?]
     | undefined;
 };

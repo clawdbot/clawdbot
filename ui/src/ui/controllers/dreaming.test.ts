@@ -677,8 +677,9 @@ describe("dreaming controller", () => {
       path: "plugins.entries.memory-lancedb.config",
     });
     expect(hasRequestMethodCall(request, "config.patch")).toBe(false);
-    expect(state.dreamingStatusError).toContain("memory-lancedb");
-    expect(state.dreamingStatusError).toContain("does not support dreaming settings");
+    expect(state.dreamingStatusError).toBe(
+      'Selected memory plugin "memory-lancedb" does not support dreaming settings.',
+    );
   });
 
   it("reads dreaming enabled state from the selected memory slot plugin", () => {
@@ -744,7 +745,7 @@ describe("dreaming controller", () => {
 
     expect(ok).toBe(false);
     expect(request).not.toHaveBeenCalled();
-    expect(state.dreamingStatusError).toContain("Config hash missing");
+    expect(state.dreamingStatusError).toBe("Config hash missing; refresh and retry.");
   });
 
   it("loads dream diary content", async () => {
@@ -759,7 +760,7 @@ describe("dreaming controller", () => {
 
     expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
     expect(state.dreamDiaryPath).toBe("DREAMS.md");
-    expect(state.dreamDiaryContent).toContain("glacier");
+    expect(state.dreamDiaryContent).toBe("## Dream Diary\n- recurring glacier thoughts");
     expect(state.dreamDiaryError).toBeNull();
   });
 
@@ -783,7 +784,7 @@ describe("dreaming controller", () => {
 
     await loadDreamDiary(state);
 
-    expect(state.dreamDiaryError).toContain("dream diary read failed");
+    expect(state.dreamDiaryError).toBe("Error: dream diary read failed");
     expect(state.dreamDiaryLoading).toBe(false);
   });
 

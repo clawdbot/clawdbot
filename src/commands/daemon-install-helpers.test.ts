@@ -49,6 +49,18 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
+function firstMockArg(mockFn: ReturnType<typeof vi.fn>, label: string): Record<string, any> {
+  const call = mockFn.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`Expected ${label} call`);
+  }
+  const arg = call.at(0);
+  if (!arg || typeof arg !== "object") {
+    throw new Error(`Expected ${label} first argument`);
+  }
+  return arg as Record<string, any>;
+}
+
 describe("resolveGatewayDevMode", () => {
   it("detects dev mode for src ts entrypoints", () => {
     expect(resolveGatewayDevMode(["node", "/Users/me/openclaw/src/cli/index.ts"])).toBe(true);
@@ -128,7 +140,10 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment).toEqual({ OPENCLAW_PORT: "3000" });
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
     expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
-    const serviceEnvRequest = mocks.buildServiceEnvironment.mock.calls[0]?.[0];
+    const serviceEnvRequest = firstMockArg(
+      mocks.buildServiceEnvironment,
+      "buildServiceEnvironment",
+    );
     expect(serviceEnvRequest?.env).toStrictEqual({ HOME: isolatedHome });
     expect(serviceEnvRequest?.port).toBe(3000);
     expect(serviceEnvRequest?.extraPathDirs).toStrictEqual(["/custom"]);
@@ -145,7 +160,9 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
-    expect(mocks.buildServiceEnvironment.mock.calls[0]?.[0]?.extraPathDirs).toBeUndefined();
+    expect(
+      firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").extraPathDirs,
+    ).toBeUndefined();
   });
 
   it("emits warnings when renderSystemNodeWarning returns one", async () => {
@@ -184,7 +201,9 @@ describe("buildGatewayInstallPlan", () => {
 
     expect(plan.workingDirectory).toBe(path.join(isolatedHome, ".openclaw"));
     expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
-    expect(mocks.buildServiceEnvironment.mock.calls[0]?.[0]?.platform).toBe("darwin");
+    expect(firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").platform).toBe(
+      "darwin",
+    );
   });
 
   it("does not invent a working directory for non-macOS service installs", async () => {
@@ -221,11 +240,14 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledOnce();
-    expect(mocks.resolveGatewayProgramArguments.mock.calls[0]?.[0]?.wrapperPath).toBe(wrapperPath);
+    expect(
+      firstMockArg(mocks.resolveGatewayProgramArguments, "resolveGatewayProgramArguments")
+        .wrapperPath,
+    ).toBe(wrapperPath);
     expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
-    expect(mocks.buildServiceEnvironment.mock.calls[0]?.[0]?.env?.OPENCLAW_WRAPPER).toBe(
-      wrapperPath,
-    );
+    expect(
+      firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").env?.OPENCLAW_WRAPPER,
+    ).toBe(wrapperPath);
     expect(plan.environment.OPENCLAW_WRAPPER).toBe(wrapperPath);
   });
 

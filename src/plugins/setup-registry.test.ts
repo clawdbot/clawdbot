@@ -176,6 +176,29 @@ function requireRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function mockCall(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  callIndex = 0,
+): ReadonlyArray<unknown> {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex + 1}`);
+  }
+  return call;
+}
+
+function mockArg(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  callIndex: number,
+  argIndex: number,
+): unknown {
+  return mockCall(mock, callIndex)[argIndex];
+}
+
+function firstRecordArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }) {
+  return requireRecord(mockArg(mock, 0, 0));
+}
+
 afterEach(() => {
   setPluginSetupRegistryModuleLoaderFactoryForTest?.(undefined);
   cleanupTrackedTempDirs(tempDirs);
@@ -218,10 +241,10 @@ describe("setup-registry module loader", () => {
     }
 
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mocks.createJiti.mock.calls.at(0)?.[0]).toBe(
+    expect(mockArg(mocks.createJiti, 0, 0)).toBe(
       pathToFileURL(path.join(pluginRoot, "setup-api.js"), { windows: true }).href,
     );
-    expect(requireRecord(mocks.createJiti.mock.calls.at(0)?.[1]).tryNative).toBe(true);
+    expect(requireRecord(mockArg(mocks.createJiti, 0, 1)).tryNative).toBe(true);
   });
 
   it("passes explicit plugin id scope into setup manifest reads", () => {
@@ -238,9 +261,7 @@ describe("setup-registry module loader", () => {
     });
 
     expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(1);
-    expect(requireRecord(mocks.loadPluginManifestRegistry.mock.calls.at(0)?.[0]).pluginIds).toEqual(
-      ["test-plugin"],
-    );
+    expect(firstRecordArg(mocks.loadPluginManifestRegistry).pluginIds).toEqual(["test-plugin"]);
   });
 
   it("skips setup-api loading when config has no relevant migration triggers", () => {
@@ -338,7 +359,7 @@ describe("setup-registry module loader", () => {
 
     expect(result.changes).toEqual(["amazon-bedrock"]);
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mocks.createJiti.mock.calls.at(0)?.[0]).toBe(path.join(bedrockRoot, "setup-api.js"));
+    expect(mockArg(mocks.createJiti, 0, 0)).toBe(path.join(bedrockRoot, "setup-api.js"));
   });
 
   it("still loads explicitly configured plugin entries without manifest trigger metadata", () => {
@@ -403,7 +424,7 @@ describe("setup-registry module loader", () => {
     expect(provider.label).toBe("Amazon Bedrock");
     expect(resolvePluginSetupProvider({ provider: "legacy-bedrock", env: {} })).toBeUndefined();
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mocks.createJiti.mock.calls.at(0)?.[0]).toBe(path.join(pluginRoot, "setup-api.js"));
+    expect(mockArg(mocks.createJiti, 0, 0)).toBe(path.join(pluginRoot, "setup-api.js"));
   });
 
   it("treats explicit descriptor-only setup as a runtime cutoff", () => {
@@ -632,7 +653,7 @@ describe("setup-registry module loader", () => {
     expect(second).toEqual(first);
     expect(resolvePluginSetupCliBackend({ backend: "legacy-openai-cli", env: {} })).toBeUndefined();
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mocks.createJiti.mock.calls.at(0)?.[0]).toBe(path.join(openaiRoot, "setup-api.js"));
+    expect(mockArg(mocks.createJiti, 0, 0)).toBe(path.join(openaiRoot, "setup-api.js"));
   });
 
   it("keeps synchronously registered cli backends even when register returns a promise", () => {

@@ -28,7 +28,7 @@ describe("runStartupSessionMigration", () => {
     });
     expect(migrate).toHaveBeenCalledOnce();
     expect(log.info).toHaveBeenCalledOnce();
-    expect(log.info.mock.calls[0][0]).toContain("canonicalized orphaned session keys");
+    expect(log.info.mock.calls.at(0)?.[0]).toContain("canonicalized orphaned session keys");
     expect(log.warn).not.toHaveBeenCalled();
   });
 
@@ -45,7 +45,7 @@ describe("runStartupSessionMigration", () => {
     });
     expect(log.info).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledOnce();
-    expect(log.warn.mock.calls[0][0]).toContain("session key migration warnings");
+    expect(log.warn.mock.calls.at(0)?.[0]).toContain("session key migration warnings");
   });
 
   it("silently continues when no changes needed", async () => {
@@ -69,7 +69,7 @@ describe("runStartupSessionMigration", () => {
       deps: { migrateOrphanedSessionKeys: migrate },
     });
     expect(log.warn).toHaveBeenCalledOnce();
-    expect(log.warn.mock.calls[0][0]).toContain("migration failed during startup");
-    expect(log.warn.mock.calls[0][0]).toContain("disk full");
+    expect(log.warn.mock.calls.at(0)?.[0]).toContain("migration failed during startup");
+    expect(log.warn.mock.calls.at(0)?.[0]).toContain("disk full");
   });
 });

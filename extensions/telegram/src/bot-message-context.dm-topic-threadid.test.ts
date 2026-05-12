@@ -99,7 +99,7 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
 
     expect(ctx?.ctxPayload.ReplyToBody).toBe("parent");
     expect(buildChannelTurnContextMock).toHaveBeenCalledOnce();
-    const [turnOptions] = buildChannelTurnContextMock.mock.calls[0] ?? [];
+    const [turnOptions] = buildChannelTurnContextMock.mock.calls.at(0) ?? [];
     expect(turnOptions?.channel).toBe("telegram");
     expect(turnOptions?.from).toBe("telegram:1234");
     expect(turnOptions?.message.rawBody).toBe("hello");

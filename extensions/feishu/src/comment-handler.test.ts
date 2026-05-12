@@ -63,6 +63,17 @@ function buildResolvedRoute(matchedBy: "binding.channel" | "default" = "binding.
   };
 }
 
+function mockCallArg(mockFn: ReturnType<typeof vi.fn>, label: string, callIndex = 0, argIndex = 0) {
+  const call = mockFn.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex}`);
+  }
+  if (!(argIndex in call)) {
+    throw new Error(`expected ${label} call ${callIndex} argument ${argIndex}`);
+  }
+  return call[argIndex];
+}
+
 function createTestRuntime(overrides?: {
   readAllowFromStore?: () => Promise<unknown[]>;
   upsertPairingRequest?: () => Promise<{ code: string; created: boolean }>;
@@ -257,7 +268,7 @@ describe("handleFeishuCommentEvent", () => {
     >;
 
     expect(finalizeInboundContext).toHaveBeenCalledTimes(1);
-    const finalizedContext = finalizeInboundContext.mock.calls[0]?.[0] as
+    const finalizedContext = mockCallArg(finalizeInboundContext, "finalizeInboundContext") as
       | Record<string, unknown>
       | undefined;
     expect({
@@ -278,7 +289,7 @@ describe("handleFeishuCommentEvent", () => {
       messageThreadId: "reply_1",
     });
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
-    const recordArgs = recordInboundSession.mock.calls[0]?.[0] as
+    const recordArgs = mockCallArg(recordInboundSession, "recordInboundSession") as
       | { sessionKey?: string }
       | undefined;
     expect(recordArgs?.sessionKey).toBe("agent:main:feishu:direct:comment-doc:docx:doc_token_1");
@@ -345,7 +356,7 @@ describe("handleFeishuCommentEvent", () => {
     });
 
     expect(maybeCreateDynamicAgentMock).toHaveBeenCalledTimes(1);
-    const dynamicAgentArgs = maybeCreateDynamicAgentMock.mock.calls[0]?.[0] as
+    const dynamicAgentArgs = mockCallArg(maybeCreateDynamicAgentMock, "maybeCreateDynamicAgent") as
       | { configWritesAllowed?: boolean; senderOpenId?: string }
       | undefined;
     expect(dynamicAgentArgs?.senderOpenId).toBe("ou_sender");
@@ -380,7 +391,13 @@ describe("handleFeishuCommentEvent", () => {
     });
 
     expect(deliverCommentThreadTextMock).toHaveBeenCalledTimes(1);
-    const [pairingClient, pairingReply] = deliverCommentThreadTextMock.mock.calls[0] ?? [];
+    const pairingClient = mockCallArg(deliverCommentThreadTextMock, "deliverCommentThreadText");
+    const pairingReply = mockCallArg(
+      deliverCommentThreadTextMock,
+      "deliverCommentThreadText",
+      0,
+      1,
+    );
     expect(pairingClient).toBe(createFeishuClientMock.mock.results[0]?.value);
     expect(pairingReply).toEqual({
       file_token: "doc_token_1",
@@ -442,7 +459,10 @@ describe("handleFeishuCommentEvent", () => {
     });
 
     expect(createFeishuCommentReplyDispatcherMock).toHaveBeenCalledTimes(1);
-    const dispatcherArgs = createFeishuCommentReplyDispatcherMock.mock.calls[0]?.[0] as
+    const dispatcherArgs = mockCallArg(
+      createFeishuCommentReplyDispatcherMock,
+      "createFeishuCommentReplyDispatcher",
+    ) as
       | {
           commentId?: string;
           fileToken?: string;

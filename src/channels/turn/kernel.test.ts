@@ -654,7 +654,10 @@ describe("channel turn kernel", () => {
     expect(events).toEqual(["record", "cleanup"]);
     expect(runDispatch).not.toHaveBeenCalled();
     expect(onPreDispatchFailure).toHaveBeenCalledWith(recordError);
-    expect(loggedEvents(log)).toContainEqual({ stage: "record", event: "error" });
+    expect(loggedEvents(log)).toEqual([
+      { stage: "record", event: "start" },
+      { stage: "record", event: "error" },
+    ]);
   });
 
   it("normalizes visible dispatch checks", () => {

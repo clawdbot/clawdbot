@@ -24,7 +24,13 @@ import { generateDtmfRedirectTwiml, generateNotifyTwiml } from "./twiml.js";
 
 type InitiateContext = Pick<
   CallManagerContext,
-  "activeCalls" | "providerCallIdMap" | "provider" | "config" | "storePath" | "webhookUrl"
+  | "activeCalls"
+  | "providerCallIdMap"
+  | "provider"
+  | "config"
+  | "storePath"
+  | "webhookUrl"
+  | "streamSessionIssuer"
 >;
 
 type SpeakContext = Pick<
@@ -201,6 +207,17 @@ export async function initiateCall(
       );
     }
 
+    const streamSession =
+      ctx.config.realtime?.enabled && ctx.provider.name === "telnyx" && ctx.streamSessionIssuer
+        ? ctx.streamSessionIssuer({
+            providerName: "telnyx",
+            callId,
+            from,
+            to,
+            direction: "outbound",
+          })
+        : undefined;
+
     const result = await ctx.provider.initiateCall({
       callId,
       from,
@@ -208,6 +225,9 @@ export async function initiateCall(
       webhookUrl: ctx.webhookUrl,
       inlineTwiml,
       preConnectTwiml,
+      ...(streamSession
+        ? { streamUrl: streamSession.streamUrl, streamAuthToken: streamSession.token }
+        : {}),
     });
 
     callRecord.providerCallId = result.providerCallId;

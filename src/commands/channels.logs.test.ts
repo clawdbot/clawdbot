@@ -38,7 +38,7 @@ function logLine(params: { module: string; message: string }) {
 }
 
 function readJsonPayload() {
-  return JSON.parse(String(runtime.log.mock.calls[0]?.[0])) as {
+  return JSON.parse(String(runtime.log.mock.calls.at(0)?.[0])) as {
     file: string;
     channel: string;
     lines: Array<{ message: string }>;

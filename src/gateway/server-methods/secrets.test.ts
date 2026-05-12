@@ -53,7 +53,7 @@ function expectRespondError(
   respond: ReturnType<typeof vi.fn>,
   expected: { code: string; message?: string },
 ): void {
-  const call = respond.mock.calls[0];
+  const call = respond.mock.calls.at(0);
   expect(call?.[0]).toBe(false);
   expect(call?.[1]).toBeUndefined();
   const error = requireRecord(call?.[2]);

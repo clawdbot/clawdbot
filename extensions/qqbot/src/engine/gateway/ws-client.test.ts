@@ -27,6 +27,14 @@ beforeAll(async () => {
   ({ createQQWSClient } = await import("./ws-client.js"));
 });
 
+function expectWebSocketCtorCall(expected: unknown[]): void {
+  const call = webSocketCtorMock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("Expected WebSocket constructor call");
+  }
+  expect(call).toEqual(expected);
+}
+
 describe("createQQWSClient", () => {
   beforeEach(() => {
     priorProxyEnv = {};
@@ -56,7 +64,7 @@ describe("createQQWSClient", () => {
 
     expect(webSocketCtorMock).toHaveBeenCalledTimes(1);
     expect(proxyAgentCtorMock).not.toHaveBeenCalled();
-    expect(webSocketCtorMock.mock.calls[0]).toEqual([
+    expectWebSocketCtorCall([
       "wss://qq.example.test/ws",
       {
         headers: { "User-Agent": "openclaw-qqbot-test" },
@@ -74,7 +82,7 @@ describe("createQQWSClient", () => {
 
     expect(webSocketCtorMock).toHaveBeenCalledTimes(1);
     expect(proxyAgentCtorMock).toHaveBeenCalledTimes(1);
-    expect(webSocketCtorMock.mock.calls[0]).toEqual([
+    expectWebSocketCtorCall([
       "wss://qq.example.test/ws",
       {
         agent: { proxied: true },
@@ -93,7 +101,7 @@ describe("createQQWSClient", () => {
 
     expect(webSocketCtorMock).toHaveBeenCalledTimes(1);
     expect(proxyAgentCtorMock).toHaveBeenCalledTimes(1);
-    expect(webSocketCtorMock.mock.calls[0]).toEqual([
+    expectWebSocketCtorCall([
       "wss://qq.example.test/ws",
       {
         agent: { proxied: true },
@@ -112,7 +120,7 @@ describe("createQQWSClient", () => {
 
     expect(webSocketCtorMock).toHaveBeenCalledTimes(1);
     expect(proxyAgentCtorMock).toHaveBeenCalledTimes(1);
-    expect(webSocketCtorMock.mock.calls[0]).toEqual([
+    expectWebSocketCtorCall([
       "wss://qq.example.test/ws",
       {
         agent: { proxied: true },

@@ -1,6 +1,6 @@
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
+import { requireGatewayClientScope } from "./command-gates.js";
 import {
   COMMAND,
   type AcpAction,
@@ -104,7 +104,7 @@ export const handleAcpCommand: CommandHandler = async (params, _allowTextCommand
   }
 
   if (ACP_MUTATING_ACTIONS.has(action)) {
-    const scopeBlock = requireGatewayClientScopeForInternalChannel(params, {
+    const scopeBlock = requireGatewayClientScope(params, {
       label: "/acp",
       allowedScopes: ["operator.admin"],
       missingText: "This /acp action requires operator.admin on the internal channel.",

@@ -8,7 +8,7 @@ import {
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
-  requireGatewayClientScopeForInternalChannel,
+  requireGatewayClientScope,
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { parseMcpCommand } from "./mcp-commands.js";
@@ -86,7 +86,7 @@ export const handleMcpCommand: CommandHandler = async (params, allowTextCommands
     };
   }
 
-  const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
+  const missingAdminScope = requireGatewayClientScope(params, {
     label: "/mcp write",
     allowedScopes: ["operator.admin"],
     missingText: "❌ /mcp set|unset requires operator.admin for gateway clients.",

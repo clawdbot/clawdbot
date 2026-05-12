@@ -10,6 +10,30 @@ import {
   watchTelegramFetch,
 } from "./bot.media.test-utils.js";
 
+type ReplyPayload = { Body: string; MediaPaths?: string[] } & Record<string, unknown>;
+
+function replyPayload(replySpy: ReturnType<typeof vi.fn>, index = 0): ReplyPayload {
+  const payload = replySpy.mock.calls.at(index)?.at(0);
+  if (typeof payload !== "object" || payload === null) {
+    throw new Error(`expected reply payload ${index}`);
+  }
+  return payload as ReplyPayload;
+}
+
+function downloadRequest(
+  fetchSpy: ReturnType<typeof vi.spyOn>,
+  index: number,
+): {
+  filePathHint?: string;
+  url?: string;
+} {
+  const request = fetchSpy.mock.calls.at(index)?.at(0);
+  if (typeof request !== "object" || request === null) {
+    throw new Error(`expected download request ${index}`);
+  }
+  return request as { filePathHint?: string; url?: string };
+}
+
 describe("telegram inbound media", () => {
   // Parallel vitest shards can make this suite slower than the standalone run.
   const INBOUND_MEDIA_TEST_TIMEOUT_MS = process.platform === "win32" ? 120_000 : 90_000;
@@ -46,7 +70,7 @@ describe("telegram inbound media", () => {
             expect(downloadRequest?.url).toBe("https://api.telegram.org/file/bottok/photos/1.jpg");
             expect(downloadRequest?.filePathHint).toBe("photos/1.jpg");
             expect(params.replySpy).toHaveBeenCalledTimes(1);
-            const payload = params.replySpy.mock.calls[0][0];
+            const payload = replyPayload(params.replySpy);
             expect(payload.Body).toContain("<media:image>");
           },
         },
@@ -120,7 +144,7 @@ describe("telegram inbound media", () => {
 
         expect(runtimeError).not.toHaveBeenCalled();
         expect(replySpy).toHaveBeenCalledTimes(1);
-        const payload = replySpy.mock.calls[0]?.[0] as { Body?: string; MediaPaths?: string[] };
+        const payload = replyPayload(replySpy);
         expect(payload.Body).toContain("<media:image>");
         expect(payload.MediaPaths).toContain(inboundPath);
       } finally {
@@ -222,7 +246,7 @@ describe("telegram inbound media", () => {
       });
 
       expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = replySpy.mock.calls[0][0] as Record<string, unknown>;
+      const payload = replyPayload(replySpy);
       testCase.assert(payload);
     }
   });
@@ -292,8 +316,8 @@ describe("telegram media groups", () => {
         );
 
         expect(runtimeError).not.toHaveBeenCalled();
-        const firstDownloadRequest = fetchSpy.mock.calls[0]?.[0] as { url?: string } | undefined;
-        const secondDownloadRequest = fetchSpy.mock.calls[1]?.[0] as { url?: string } | undefined;
+        const firstDownloadRequest = downloadRequest(fetchSpy, 0);
+        const secondDownloadRequest = downloadRequest(fetchSpy, 1);
         expect(firstDownloadRequest?.url).toBe(
           "http://127.0.0.1:8081/custom-bot-api/file/bottok/photos/photo1.jpg",
         );
@@ -341,7 +365,7 @@ describe("telegram media groups", () => {
             ],
             expectedReplyCount: 1,
             assert: (replySpy: ReturnType<typeof vi.fn>) => {
-              const payload = replySpy.mock.calls[0]?.[0];
+              const payload = replyPayload(replySpy);
               expect(payload?.Body).toContain("Here are my photos");
               expect(payload?.MediaPaths).toHaveLength(2);
             },
@@ -452,7 +476,7 @@ describe("telegram forwarded bursts", () => {
         });
 
         expect(runtimeError).not.toHaveBeenCalled();
-        const payload = replySpy.mock.calls[0][0];
+        const payload = replyPayload(replySpy);
         expect(payload.Body).toContain("Look at this");
         expect(payload.MediaPaths).toHaveLength(1);
       } finally {

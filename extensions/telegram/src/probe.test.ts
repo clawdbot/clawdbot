@@ -209,7 +209,7 @@ describe("probeTelegram retry logic", () => {
       allows_users_to_create_topics: false,
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.telegram.org/bottest-token/getMe");
+    expect(fetchMock.mock.calls.at(0)?.[0]).toBe("https://api.telegram.org/bottest-token/getMe");
   });
 
   it("uses resolver-scoped Telegram fetch with probe network options", async () => {

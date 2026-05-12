@@ -457,7 +457,7 @@ describe("QmdMemoryManager", () => {
     };
     const initialUpdateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(initialUpdateCalls).toHaveLength(0);
-    const [, watchOptions] = watchMock.mock.calls[0] as unknown as [
+    const [, watchOptions] = watchMock.mock.calls.at(0) as unknown as [
       string[],
       { ignored?: (watchPath: string) => boolean },
     ];
@@ -3719,7 +3719,7 @@ describe("QmdMemoryManager", () => {
     const firstSync = first.manager.sync({ reason: "manual", force: true });
     await vi.advanceTimersByTimeAsync(0);
     expect(embedChildren).toHaveLength(1);
-    const lockCall = withFileLockMock.mock.calls[0] as
+    const lockCall = withFileLockMock.mock.calls.at(0) as
       | [
           string,
           {

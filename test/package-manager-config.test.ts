@@ -25,6 +25,6 @@ describe("package manager build policy", () => {
 
     expect(packageJson.pnpm).toBeUndefined();
     expect(workspace.allowBuilds?.["@discordjs/opus"]).toBe(false);
-    expect(workspace.onlyBuiltDependencies ?? []).not.toContain("@discordjs/opus");
+    expect(workspace.onlyBuiltDependencies).toBeUndefined();
   });
 });

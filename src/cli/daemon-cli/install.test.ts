@@ -174,11 +174,7 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 function expectFirstInstallPlanCallOmitsToken() {
-  const [firstArg] =
-    (buildGatewayInstallPlanMock.mock.calls.at(0) as [Record<string, unknown>] | undefined) ?? [];
-  if (firstArg === undefined) {
-    throw new Error("expected first install-plan call");
-  }
+  const firstArg = readFirstInstallPlanArg();
   expect("token" in firstArg).toBe(false);
 }
 
@@ -193,12 +189,29 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 }
 
 function readFirstInstallPlanArg(): Record<string, unknown> {
-  const [firstArg] =
-    (buildGatewayInstallPlanMock.mock.calls.at(0) as [Record<string, unknown>] | undefined) ?? [];
+  const [firstArg] = buildGatewayInstallPlanMock.mock.calls[0] ?? [];
   if (!firstArg) {
     throw new Error("Expected gateway install plan arg");
   }
-  return firstArg;
+  return firstArg as Record<string, unknown>;
+}
+
+function readFirstConfigWriteParams(): {
+  nextConfig?: { gateway?: { auth?: { token?: string } } };
+} {
+  const [params] = replaceConfigFileMock.mock.calls[0] ?? [];
+  if (!params || typeof params !== "object") {
+    throw new Error("expected first config write params");
+  }
+  return params as { nextConfig?: { gateway?: { auth?: { token?: string } } } };
+}
+
+function readFirstNodeStartupTlsEnvironmentArg(): Record<string, unknown> {
+  const [params] = resolveNodeStartupTlsEnvironmentMock.mock.calls[0] ?? [];
+  if (!params || typeof params !== "object") {
+    throw new Error("expected node startup TLS environment params");
+  }
+  return params as Record<string, unknown>;
 }
 
 function expectLastEmittedResult(result: string): void {
@@ -375,9 +388,7 @@ describe("runDaemonInstall", () => {
 
     expect(actionState.failed).toStrictEqual([]);
     expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
-    const writeParams = replaceConfigFileMock.mock.calls.at(0)?.[0] as {
-      nextConfig?: { gateway?: { auth?: { token?: string } } };
-    };
+    const writeParams = readFirstConfigWriteParams();
     expect(writeParams.nextConfig?.gateway?.auth?.token).toBe("minted-token");
     expectFields(readFirstInstallPlanArg(), { port: 18789 });
     expectFirstInstallPlanCallOmitsToken();
@@ -601,7 +612,7 @@ describe("runDaemonInstall", () => {
     await runDaemonInstall({ json: true });
 
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
-    expectFields(resolveNodeStartupTlsEnvironmentMock.mock.calls.at(0)?.[0], {
+    expectFields(readFirstNodeStartupTlsEnvironmentArg(), {
       execPath: "/home/test/.nvm/versions/node/v22.18.0/bin/node",
     });
   });

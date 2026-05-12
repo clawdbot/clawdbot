@@ -91,11 +91,11 @@ async function expectSkippedRecovery(store: ReturnType<typeof sessions.loadSessi
 }
 
 function getResumeMessage() {
-  const call = vi.mocked(gateway.callGateway).mock.calls.at(0);
-  if (call === undefined) {
-    throw new Error("expected resume gateway call");
-  }
-  const params = call[0].params as Record<string, unknown>;
+  const call = requireRecord(
+    firstCallParam(vi.mocked(gateway.callGateway).mock.calls, "resume gateway"),
+    "resume gateway params",
+  );
+  const params = call.params as Record<string, unknown>;
   return params.message as string;
 }
 
@@ -112,6 +112,14 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
     throw new Error(`expected ${label} to be a record`);
   }
   return value as Record<string, unknown>;
+}
+
+function requireFirstUpdateSessionStoreCall() {
+  const call = vi.mocked(sessions.updateSessionStore).mock.calls[0];
+  if (call === undefined) {
+    throw new Error("expected update session store call");
+  }
+  return call;
 }
 
 describe("subagent-orphan-recovery", () => {
@@ -150,11 +158,10 @@ describe("subagent-orphan-recovery", () => {
 
     // Should have called callGateway to resume the session
     expect(gateway.callGateway).toHaveBeenCalledOnce();
-    const callArgs = vi.mocked(gateway.callGateway).mock.calls.at(0);
-    if (callArgs === undefined) {
-      throw new Error("expected gateway resume call");
-    }
-    const opts = callArgs[0];
+    const opts = requireRecord(
+      firstCallParam(vi.mocked(gateway.callGateway).mock.calls, "gateway resume"),
+      "gateway resume params",
+    );
     expect(opts.method).toBe("agent");
     const params = opts.params as Record<string, unknown>;
     expect(params.sessionKey).toBe("agent:main:subagent:test-session-1");
@@ -372,10 +379,7 @@ describe("subagent-orphan-recovery", () => {
       getActiveRuns: () => createActiveRuns(createTestRunRecord()),
     });
 
-    const updateCall = vi.mocked(sessions.updateSessionStore).mock.calls.at(0);
-    if (updateCall === undefined) {
-      throw new Error("expected update session store call");
-    }
+    const updateCall = requireFirstUpdateSessionStoreCall();
     const updater = updateCall[1];
     if (typeof updater !== "function") {
       throw new Error("expected update session store callback");
@@ -424,10 +428,7 @@ describe("subagent-orphan-recovery", () => {
     expect(gateway.callGateway).not.toHaveBeenCalled();
     expect(sessions.updateSessionStore).toHaveBeenCalledOnce();
 
-    const updateCall = vi.mocked(sessions.updateSessionStore).mock.calls.at(0);
-    if (updateCall === undefined) {
-      throw new Error("expected update session store call");
-    }
+    const updateCall = requireFirstUpdateSessionStoreCall();
     const updater = updateCall[1];
     if (typeof updater !== "function") {
       throw new Error("expected update session store callback");

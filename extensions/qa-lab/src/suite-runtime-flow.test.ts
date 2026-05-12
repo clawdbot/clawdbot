@@ -227,7 +227,7 @@ describe("qa suite runtime flow", () => {
 
     expect(result).toEqual({ api: "ok" });
     expect(createQaScenarioRuntimeApi).toHaveBeenCalledTimes(1);
-    const call = createQaScenarioRuntimeApi.mock.calls[0]?.[0] as {
+    const call = createQaScenarioRuntimeApi.mock.calls.at(0)?.[0] as {
       env: typeof env;
       scenario: typeof scenario;
       deps: {

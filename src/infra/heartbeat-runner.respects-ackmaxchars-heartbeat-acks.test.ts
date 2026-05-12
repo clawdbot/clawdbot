@@ -462,7 +462,7 @@ describe("runHeartbeatOnce ack handling", () => {
       });
 
       expect(sendTelegram).toHaveBeenCalledTimes(1);
-      const [chatId, text, options] = sendTelegram.mock.calls[0] ?? [];
+      const [chatId, text, options] = sendTelegram.mock.calls.at(0) ?? [];
       expect(chatId).toBe(TELEGRAM_GROUP);
       expect(text).toBe("Hello from heartbeat");
       expect(options?.accountId).toBe(params.expectedAccountId);

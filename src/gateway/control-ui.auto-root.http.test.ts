@@ -56,7 +56,7 @@ describe("handleControlUiHttpRequest auto-detected root", () => {
 
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
-      expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("console.log('hi');");
+      expect(String(end.mock.calls.at(0)?.[0] ?? "")).toBe("console.log('hi');");
     });
   });
 
@@ -77,7 +77,7 @@ describe("handleControlUiHttpRequest auto-detected root", () => {
 
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
-      expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("<html>fallback-hardlink</html>\n");
+      expect(String(end.mock.calls.at(0)?.[0] ?? "")).toBe("<html>fallback-hardlink</html>\n");
     });
   });
 

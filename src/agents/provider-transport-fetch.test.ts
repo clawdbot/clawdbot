@@ -440,6 +440,53 @@ describe("buildGuardedModelFetch", () => {
     expect(items).toEqual([{ ok: true }]);
   });
 
+  it("continues reading until split SSE frames produce a parser-visible event", async () => {
+    const encoder = new TextEncoder();
+    let pulls = 0;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          pull(controller) {
+            pulls += 1;
+            if (pulls === 1) {
+              controller.enqueue(encoder.encode("event: response.created\n"));
+              return;
+            }
+            if (pulls === 2) {
+              controller.enqueue(encoder.encode('data: {"ok"'));
+              return;
+            }
+            if (pulls === 3) {
+              controller.enqueue(encoder.encode(": true}\n\n"));
+              return;
+            }
+            controller.close();
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+      finalUrl: "https://api.openai.com/v1/responses",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "moonshotai/kimi-k2.6",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      { method: "POST" },
+    );
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+
+    expect(items).toEqual([{ ok: true }]);
+  });
+
   it("synthesizes SSE frames for JSON bodies returned to streaming OpenAI SDK requests", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response('  {"ok": true}  ', {
@@ -497,6 +544,54 @@ describe("buildGuardedModelFetch", () => {
 
     expect(cloneSpy).not.toHaveBeenCalled();
     expect(response.headers.get("content-type")).toBe("application/json");
+  });
+
+  it("continues reading split JSON bodies before synthesizing streaming SSE frames", async () => {
+    const encoder = new TextEncoder();
+    let pulls = 0;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          pull(controller) {
+            pulls += 1;
+            if (pulls === 1) {
+              controller.enqueue(encoder.encode('{"ok"'));
+              return;
+            }
+            if (pulls === 2) {
+              controller.enqueue(encoder.encode(": true}"));
+              return;
+            }
+            controller.close();
+          },
+        }),
+        { headers: { "content-type": "application/json; charset=utf-8" } },
+      ),
+      finalUrl: "https://openrouter.ai/api/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "moonshotai/kimi-k2.6",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "moonshotai/kimi-k2.6", stream: true }),
+      },
+    );
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    expect(items).toEqual([{ ok: true }]);
   });
 
   it("preserves JSON bodies when the request is not streaming", async () => {

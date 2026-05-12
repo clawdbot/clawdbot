@@ -56,7 +56,7 @@ function readFirstReachabilityCall(
   return call;
 }
 
-function createManagedProfileState() {
+function createManagedProfileState(profileOverrides?: Record<string, unknown>) {
   return {
     resolved: {
       enabled: true,
@@ -80,6 +80,7 @@ function createManagedProfileState() {
           headless: false,
           headlessSource: "default",
           attachOnly: false,
+          ...profileOverrides,
         },
         isHttpReachable: async () => false,
         isTransportAvailable: async () => false,
@@ -213,6 +214,19 @@ describe("basic browser routes", () => {
     expect(body.chosenBrowser).toBe("chromium");
     expect(body.headless).toBe(true);
     expect(body.headlessSource).toBe("request");
+  });
+
+  it("redacts CDP URL credentials from status responses", async () => {
+    const response = await callBasicRouteWithState({
+      query: { profile: "openclaw" },
+      state: createManagedProfileState({
+        cdpUrl: "http://openclaw:relay-token@127.0.0.1:18800",
+      }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = responseBodyRecord(response);
+    expect(body.cdpUrl).toBe("http://127.0.0.1:18800");
   });
 
   it("maps existing-session status failures to JSON browser errors", async () => {

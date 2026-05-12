@@ -78,6 +78,22 @@ function requireRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function firstRespondCall(
+  opts: GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> },
+) {
+  return opts.respond.mock.calls.at(0);
+}
+
+function firstEnsureAuthProfileStoreCall() {
+  return mocks.ensureAuthProfileStore.mock.calls.at(0);
+}
+
+function firstBuildAuthHealthSummaryCall() {
+  return mocks.buildAuthHealthSummary.mock.calls.at(0) as unknown as
+    | [{ providers?: string[] }]
+    | undefined;
+}
+
 function createOpenAiCodexOauthHealthSummary(): AuthHealthSummary {
   const profile = {
     profileId: "openai-codex:default",
@@ -127,7 +143,7 @@ describe("models.authStatus", () => {
     await handler(opts);
 
     expect(opts.respond).toHaveBeenCalledTimes(1);
-    const [ok, payload, error] = opts.respond.mock.calls[0] ?? [];
+    const [ok, payload, error] = firstRespondCall(opts) ?? [];
     expect(ok).toBe(true);
     expect(error).toBeUndefined();
     const result = payload as ModelAuthStatusResult;
@@ -230,8 +246,8 @@ describe("models.authStatus", () => {
     await handler(createOptions());
 
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledTimes(1);
-    expect(mocks.ensureAuthProfileStore.mock.calls[0]?.[0]).toBe("/tmp/agent");
-    const [, options] = mocks.ensureAuthProfileStore.mock.calls[0] ?? [];
+    expect(firstEnsureAuthProfileStoreCall()?.[0]).toBe("/tmp/agent");
+    const [, options] = firstEnsureAuthProfileStoreCall() ?? [];
     const externalCli = requireRecord(requireRecord(options).externalCli);
     expect(externalCli.mode).toBe("scoped");
     expect(externalCli.allowKeychainPrompt).toBe(false);
@@ -245,8 +261,8 @@ describe("models.authStatus", () => {
     await handler(createOptions());
 
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledTimes(1);
-    expect(mocks.ensureAuthProfileStore.mock.calls[0]?.[0]).toBe("/tmp/agent");
-    const [, options] = mocks.ensureAuthProfileStore.mock.calls[0] ?? [];
+    expect(firstEnsureAuthProfileStoreCall()?.[0]).toBe("/tmp/agent");
+    const [, options] = firstEnsureAuthProfileStoreCall() ?? [];
     const externalCli = requireRecord(requireRecord(options).externalCli);
     expect(externalCli.mode).toBe("none");
     expect(externalCli.allowKeychainPrompt).toBe(false);
@@ -260,7 +276,7 @@ describe("models.authStatus", () => {
     const opts = createOptions();
     await handler(opts);
 
-    const [ok, payload] = opts.respond.mock.calls[0] ?? [];
+    const [ok, payload] = firstRespondCall(opts) ?? [];
     expect(ok).toBe(true);
     const result = payload as ModelAuthStatusResult;
     expect(result.providers).toHaveLength(1);
@@ -313,7 +329,7 @@ describe("models.authStatus", () => {
 
     const opts = createOptions();
     await handler(opts);
-    const [, payload] = opts.respond.mock.calls[0] ?? [];
+    const [, payload] = firstRespondCall(opts) ?? [];
     const serialised = JSON.stringify(payload);
     expect(serialised).not.toContain("sk-SECRET-TOKEN");
     expect(serialised).not.toContain("rt-SECRET-REFRESH");
@@ -332,9 +348,7 @@ describe("models.authStatus", () => {
       },
     });
     await handler(createOptions());
-    const call = mocks.buildAuthHealthSummary.mock.calls[0] as unknown as
-      | [{ providers?: string[] }]
-      | undefined;
+    const call = firstBuildAuthHealthSummaryCall();
     expect(call?.[0]?.providers).toBeUndefined();
   });
 
@@ -359,9 +373,7 @@ describe("models.authStatus", () => {
       },
     });
     await handler(createOptions());
-    const call = mocks.buildAuthHealthSummary.mock.calls[0] as unknown as
-      | [{ providers?: string[] }]
-      | undefined;
+    const call = firstBuildAuthHealthSummaryCall();
     expect(call?.[0]?.providers).toEqual(["openai-codex"]);
   });
 
@@ -383,9 +395,7 @@ describe("models.authStatus", () => {
     });
     try {
       await handler(createOptions());
-      const call = mocks.buildAuthHealthSummary.mock.calls[0] as unknown as
-        | [{ providers?: string[] }]
-        | undefined;
+      const call = firstBuildAuthHealthSummaryCall();
       expect(call?.[0]?.providers).toBeUndefined();
     } finally {
       delete process.env.MODELS_AUTH_STATUS_TEST_SET_KEY;
@@ -410,9 +420,7 @@ describe("models.authStatus", () => {
       },
     });
     await handler(createOptions());
-    const call = mocks.buildAuthHealthSummary.mock.calls[0] as unknown as
-      | [{ providers?: string[] }]
-      | undefined;
+    const call = firstBuildAuthHealthSummaryCall();
     expect(call?.[0]?.providers).toBeUndefined();
   });
 
@@ -447,7 +455,7 @@ describe("models.authStatus", () => {
     });
     const opts = createOptions();
     await handler(opts);
-    const [, payload] = opts.respond.mock.calls[0] ?? [];
+    const [, payload] = firstRespondCall(opts) ?? [];
     const result = payload as ModelAuthStatusResult;
     expect(result.providers[0]?.status).toBe("missing");
   });
@@ -482,7 +490,7 @@ describe("models.authStatus", () => {
 
     const opts = createOptions();
     await handler(opts);
-    const [, payload] = opts.respond.mock.calls[0] ?? [];
+    const [, payload] = firstRespondCall(opts) ?? [];
     const result = payload as ModelAuthStatusResult;
     expect(result.providers[0]?.status).toBe("missing");
   });
@@ -494,7 +502,7 @@ describe("models.authStatus", () => {
 
     const opts = createOptions();
     await handler(opts);
-    const [ok, payload, error] = opts.respond.mock.calls[0] ?? [];
+    const [ok, payload, error] = firstRespondCall(opts) ?? [];
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
     expect(String(requireRecord(error).code)).toMatch(/unavailable/i);

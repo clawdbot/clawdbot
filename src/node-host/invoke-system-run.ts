@@ -30,7 +30,7 @@ import {
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
 import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-binding.js";
-import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
+import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { logWarn } from "../logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -112,6 +112,7 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
   segments: ExecCommandSegment[];
+  segmentSatisfiedBy: import("../infra/exec-approvals.js").ExecSegmentSatisfiedBy[];
   plannedAllowlistArgv: string[] | undefined;
   isWindows: boolean;
   approvedCwdSnapshot: ApprovedCwdSnapshot | undefined;
@@ -389,20 +390,26 @@ async function evaluateSystemRunPolicyPhase(
     onWarning: warnWritableTrustedDirOnce,
   });
   const bins = autoAllowSkills ? await opts.skillBins.current() : [];
-  let { analysisOk, allowlistMatches, allowlistSatisfied, segments, segmentAllowlistEntries } =
-    evaluateSystemRunAllowlist({
-      shellCommand: parsed.shellPayload,
-      argv: parsed.argv,
-      approvals,
-      security,
-      safeBins,
-      safeBinProfiles,
-      trustedSafeBinDirs,
-      cwd: parsed.cwd,
-      env: parsed.env,
-      skillBins: bins,
-      autoAllowSkills,
-    });
+  let {
+    analysisOk,
+    allowlistMatches,
+    allowlistSatisfied,
+    segments,
+    segmentAllowlistEntries,
+    segmentSatisfiedBy,
+  } = evaluateSystemRunAllowlist({
+    shellCommand: parsed.shellPayload,
+    argv: parsed.argv,
+    approvals,
+    security,
+    safeBins,
+    safeBinProfiles,
+    trustedSafeBinDirs,
+    cwd: parsed.cwd,
+    env: parsed.env,
+    skillBins: bins,
+    autoAllowSkills,
+  });
   const strictInlineEval =
     agentExec?.strictInlineEval === true || cfg.tools?.exec?.strictInlineEval === true;
   const inlineEvalHit = strictInlineEval ? detectPolicyInlineEval(segments) : null;
@@ -517,6 +524,7 @@ async function evaluateSystemRunPolicyPhase(
     analysisOk,
     allowlistSatisfied,
     segments,
+    segmentSatisfiedBy,
     plannedAllowlistArgv: plannedAllowlistArgv ?? undefined,
     isWindows,
     approvedCwdSnapshot,
@@ -577,13 +585,33 @@ async function executeSystemRunPhase(
     return;
   }
 
+  const execArgv = resolveSystemRunExecArgv({
+    plannedAllowlistArgv: phase.plannedAllowlistArgv,
+    argv: phase.argv,
+    security: phase.security,
+    isWindows: phase.isWindows,
+    policy: phase.policy,
+    shellCommand: phase.shellPayload,
+    segments: phase.segments,
+    segmentSatisfiedBy: phase.segmentSatisfiedBy,
+    cwd: phase.cwd,
+    env: phase.env,
+  });
+  if (!execArgv) {
+    await sendSystemRunDenied(opts, phase.execution, {
+      reason: "execution-plan-miss",
+      message: "SYSTEM_RUN_DENIED: execution plan mismatch",
+    });
+    return;
+  }
+
   const useMacAppExec = opts.preferMacAppExecHost;
   if (useMacAppExec) {
     const execRequest: ExecHostRequest = {
-      command: phase.plannedAllowlistArgv ?? phase.argv,
+      command: execArgv,
       // Forward canonical display text so companion approval/prompt surfaces bind to
       // the exact command context already validated on the node-host.
-      rawCommand: phase.commandText || null,
+      rawCommand: execArgv === phase.argv ? phase.commandText || null : formatExecCommand(execArgv),
       cwd: phase.cwd ?? null,
       env: phase.envOverrides ?? null,
       timeoutMs: phase.timeoutMs ?? null,
@@ -652,16 +680,6 @@ async function executeSystemRunPhase(
     });
     return;
   }
-
-  const execArgv = resolveSystemRunExecArgv({
-    plannedAllowlistArgv: phase.plannedAllowlistArgv,
-    argv: phase.argv,
-    security: phase.security,
-    isWindows: phase.isWindows,
-    policy: phase.policy,
-    shellCommand: phase.shellPayload,
-    segments: phase.segments,
-  });
 
   const result = await opts.runCommand(execArgv, phase.cwd, phase.env, phase.timeoutMs);
   applyOutputTruncation(result);

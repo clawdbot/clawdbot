@@ -22,7 +22,7 @@ import {
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
-  requireGatewayClientScopeForInternalChannel,
+  requireGatewayClientScope,
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
@@ -421,7 +421,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     return { shouldContinue: false, reply: { text: lines.join("\n") } };
   }
 
-  const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
+  const missingAdminScope = requireGatewayClientScope(params, {
     label: "/allowlist write",
     allowedScopes: ["operator.admin"],
     missingText: "❌ /allowlist add|remove requires operator.admin for gateway clients.",

@@ -917,7 +917,7 @@ describe("whatsapp inbound dispatch", () => {
       replyKind: "final",
       conversationId: "+1000",
     });
-    expect(warnMock.mock.calls[0]?.[1]).toBe("auto-reply was not accepted by WhatsApp provider");
+    expect(warnMock.mock.calls.at(0)?.[1]).toBe("auto-reply was not accepted by WhatsApp provider");
   });
 
   it("returns true for tool-only media turns after delivering media", async () => {

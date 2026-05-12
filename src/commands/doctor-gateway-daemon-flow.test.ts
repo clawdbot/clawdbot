@@ -307,7 +307,7 @@ describe("maybeRepairGatewayDaemon", () => {
     });
 
     expect(readGatewayRestartHandoffSync).toHaveBeenCalledOnce();
-    const [handoffEnv] = readGatewayRestartHandoffSync.mock.calls[0] as unknown as [
+    const [handoffEnv] = readGatewayRestartHandoffSync.mock.calls.at(0) as unknown as [
       { OPENCLAW_STATE_DIR?: string; OPENCLAW_CONFIG_PATH?: string },
     ];
     expect(handoffEnv?.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-service");

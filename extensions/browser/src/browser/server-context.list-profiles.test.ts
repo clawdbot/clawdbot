@@ -61,4 +61,36 @@ describe("browser server-context listProfiles", () => {
     expect(profiles[0]?.name).toBe("manual-cdp");
     expect(profiles[0]?.running).toBe(true);
   });
+
+  it("redacts CDP URL credentials from profile status", async () => {
+    const state = makeBrowserServerState({
+      profile: {
+        name: "manual-cdp",
+        cdpUrl: "http://openclaw:relay-token@127.0.0.1:9222",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        cdpPort: 9222,
+        color: "#00AA00",
+        driver: "openclaw",
+        headless: false,
+        attachOnly: true,
+      },
+      resolvedOverrides: {
+        defaultProfile: "manual-cdp",
+        ssrfPolicy: {},
+      },
+    });
+    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
+    isChromeReachable.mockResolvedValue(true);
+
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const profiles = await ctx.listProfiles();
+
+    expect(isChromeReachable).toHaveBeenCalledWith(
+      "http://openclaw:relay-token@127.0.0.1:9222",
+      state.resolved.remoteCdpTimeoutMs,
+      undefined,
+    );
+    expect(profiles[0]?.cdpUrl).toBe("http://127.0.0.1:9222");
+  });
 });

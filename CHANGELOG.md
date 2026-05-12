@@ -6,15 +6,47 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- fix: harden safe-bin argument validation [AI]. (#80999) Thanks @pgondhi987.
+- fix: scan plugin runtime entries during install [AI]. (#80998) Thanks @pgondhi987.
+- Codex harness: keep auth-profile-backed media tools such as `image_generate` available when OpenAI auth lives in the agent's auth-profile store instead of environment variables.
+- Require auth for sandbox browser CDP relay [AI]. (#81002) Thanks @pgondhi987.
+- fix: detect carried exec command forms [AI]. (#81000) Thanks @pgondhi987.
+- Reject truncated exec approval commands [AI]. (#81001) Thanks @pgondhi987.
+- Enforce inline shell wrapper payload matching [AI]. (#80978) Thanks @pgondhi987.
+- fix(node-pairing): replace changed pending requests [AI]. (#80894) Thanks @pgondhi987.
+- Rate limit Google Chat webhook requests [AI]. (#80974) Thanks @pgondhi987.
+- Docker: mount the auth-profile secret key directory so OAuth-backed auth profiles survive container rebuilds. (#80991)
+- Onboarding: accept Codex auth profiles for canonical OpenAI model checks, avoiding false missing-auth warnings. (#80913) Thanks @rubencu.
+- fix(feishu): normalize webhook rate-limit client keys [AI]. (#80975) Thanks @pgondhi987.
+- fix(auth): prevent bootstrap pairing scope changes [AI]. (#80976) Thanks @pgondhi987.
+- Validate Control UI loopback retry endpoints [AI]. (#80900) Thanks @pgondhi987.
+- Harden exported markdown link rendering [AI]. (#80902) Thanks @pgondhi987.
+- fix(gateway): honor minimal discovery mode for wide-area DNS-SD [AI]. (#80903) Thanks @pgondhi987.
+- slack: enforce reaction notification policy [AI]. (#80907) Thanks @pgondhi987.
+- Enforce gateway command scopes by caller context [AI]. (#80891) Thanks @pgondhi987.
+- Enforce Slack plugin approval button authorization [AI]. (#80899) Thanks @pgondhi987.
+- Recognize PowerShell -ec inline commands [AI]. (#80893) Thanks @pgondhi987.
+- fix(qqbot): authorize approval button callbacks [AI]. (#80892) Thanks @pgondhi987.
+- Telegram: render supported HTML tags in streamed and durable replies instead of showing literal markup. (#80977)
+- Scrub streamable MCP redirect headers [AI]. (#80906) Thanks @pgondhi987.
+- fix(memory-wiki): require admin scope for ingest [AI]. (#80897) Thanks @pgondhi987.
+- memory-wiki: require write scope for Obsidian search [AI]. (#80904) Thanks @pgondhi987.
 - Build: skip copied metadata for bundled plugins that are excluded from build entries, preventing update/status rebuilds from advertising missing QQ Bot runtime files. (#80925)
 - Control UI/sessions: nest subagent sessions under their parent session in the session picker dropdown using a visual `└─ ` prefix, making the parent-child relationship clear. Fixes #77628. (#78623) Thanks @chinar-amrutkar.
+- Auto-reply: surface a visible error when the configured model backend fails and fallback produces no visible reply, while preserving intentional silent turns and side-effect-only deliveries. (#80917) Thanks @dutifulbob.
+- Agents/exec: skip redundant heartbeat wake-ups for subagent session exec completions, preventing spurious LLM invocations on parent sessions. Fixes #66748. (#66749) Thanks @ggzeng.
+- Provider streams: keep OpenAI-compatible SSE and JSON fallback streams draining across split chunks and fail Azure Responses streams with a bounded first-event diagnostic instead of stalling. Refs #80926. (#80927) Thanks @galiniliev and @CaptainTimon.
 
 ### Changes
 
+- Voice Call/Telnyx: add realtime media-streaming call support for conversational voice calls. (#81024) Thanks @dynamite-bud.
+- Gateway/OpenAI HTTP: honor `max_completion_tokens` and `max_tokens` on inbound `/v1/chat/completions` requests so client-provided token caps reach the upstream provider via `streamParams.maxTokens`, with `max_completion_tokens` taking precedence when both are sent. Thanks @Lellansin.
 - Models/OpenAI CLI auth: make `openclaw models auth login --provider openai` start the ChatGPT/Codex account login by default, while `--method api-key` remains the explicit OpenAI API-key setup path.
+- Google/Gemini: normalize retired Gemini 3 Pro Preview ids inside explicit SDK OAuth auth-result config patches, so provider helpers emit `google/gemini-3.1-pro-preview` for Gemini 3.1 testing.
 - Google/Gemini: normalize retired Gemini 3 Pro Preview ids inside SDK OAuth auth-result default config patches, so helper-built provider auth flows emit `google/gemini-3.1-pro-preview` for Gemini 3.1 testing.
 - Google/Gemini: normalize retired Gemini 3 Pro Preview ids returned by direct `openclaw models auth login --set-default` provider auth flows before writing config, so Gemini testing targets `google/gemini-3.1-pro-preview`.
 - Google/Gemini: normalize retired Gemini 3 Pro Preview ids in provider catalog rows when API-key onboarding only reapplies the agent default, so emitted config keeps testing `google/gemini-3.1-pro-preview`.
+- Google/Gemini: canonicalize provider-qualified retired Gemini 3 Pro Preview refs during Google forward-compatible model resolution, so emitted config uses `google/gemini-3.1-pro-preview` for Gemini 3.1 testing.
 - Docs/subagents: document `agents.defaults.subagents.announceTimeoutMs` in the sub-agent and configuration references. (#75509) Thanks @akrimm702.
 - Cron: add direct `cron.get`, `openclaw cron get <id>`, and agent-tool `get` support for inspecting one stored cron job by id. (#75117) Thanks @samzong.
 - Agents/tools: add per-sender tool policies with canonical channel-scoped sender keys, so operators can restrict dangerous tools by requester identity across global, agent, group, core, bundled, and plugin tool surfaces. (#66933) Thanks @JerranC.
@@ -76,13 +108,17 @@ Docs: https://docs.openclaw.ai
 - Plugin SDK/media-understanding: add `extractStructuredWithModel(...)` plus the optional provider-side `extractStructured(...)` seam so trusted plugins can run bounded image-first structured extraction with optional supplemental text context through provider-owned runtimes such as Codex.
 - Exec approvals: add `tools.exec.commandHighlighting` so parser-derived command highlighting in approval prompts can be enabled globally or per agent. (#79348) Thanks @jesse-merhi.
 - Codex app-server: mirror native Codex subagent spawn lifecycle events into Task Registry so app-server child agents appear in task/status surfaces without relying on transcript text. (#79512) Thanks @mbelinky.
+- Gateway: expose optional `isHeartbeat` metadata on agent event payloads so clients can distinguish scheduled heartbeat runs from ordinary chat runs. (#80610) Thanks @medns.
+- Agents: add `agents.defaults.runRetries` and `agents.list[].runRetries` config for embedded Pi runner retry loop limits. (#80661) Thanks @medns.
 
 ### Fixes
 
+- Matrix: stop running `npm install`/`pnpm install` at runtime from a parent-derived plugin path; missing Matrix runtime dependencies now fail with repair guidance instead of mutating the wrong `node_modules` tree. Fixes #80758. (#80876) Thanks @kinjitakabe.
 - CLI/media: render terminal QR codes with full-block characters by default so the bundled `qrcode` terminal renderer does not emit a pathologically dense ANSI final row in compact half-block mode that breaks scanning in some terminals. Fixes #77820. Thanks @KrasimirKralev.
 - Agents/compaction: read post-compaction AGENTS.md refresh context from the queued run workspace instead of the runner process cwd, so CLI-backed follow-up turns re-inject the correct workspace startup rules after compaction. Fixes #70541. (#75532) Thanks @vyctorbrzezowski.
 - Agents/read tool: treat positive offsets beyond EOF as empty ranges instead of surfacing the upstream read error, so stale pagination cursors no longer crash tool calls while unrelated read failures still fail loud. Fixes #62466. (#75536) Thanks @vyctorbrzezowski.
 - Google/Gemini: normalize retired Gemini 3 Pro Preview refs left in Google API-key onboarding model allowlists and fallbacks, so setup-emitted config keeps testing `google/gemini-3.1-pro-preview` instead of `google/gemini-3-pro-preview`.
+- Telegram/context: bound selected topic context to the active session so messages from before `/new` or `/reset` are not replayed into later turns. (#80848) Thanks @VACInc.
 - Google/Gemini: normalize retired nested Gemini 3 Pro Preview ids when resolving exact configured proxy-provider refs, so `kilocode/google/gemini-3-pro-preview` resolves to `kilocode/google/gemini-3.1-pro-preview` for Gemini 3.1 testing.
 - CLI: strip generic OSC terminal escape payloads from sanitized output fields, preventing clipboard/title escape bodies from leaking into commitment tables and other terminal-safe text. Thanks @shakkernerd.
 - Codex app-server: match connector-backed plugin approval elicitations by stable connector id so enabled destructive actions no longer fall through to display-name-only rejection.
@@ -96,6 +132,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/session-end: fire a typed `session_end` plugin hook with reason `shutdown` (or `restart` when a restart is expected) for every session that was still active when the gateway process stops. Previously SIGTERM/SIGINT/restart paths closed the gateway without enumerating active sessions, leaving downstream `session_end` plugins (e.g. claude-mem) with ghost rows accumulating across restarts. The new shutdown finalizer drains an in-memory tracker that is populated by `session_start` and forgotten by replace / reset / delete / compaction emitters, so previously-finalized sessions are never double-fired. The drain is bounded to a 2 s total budget so a slow plugin cannot block process exit. Adds `"shutdown"` and `"restart"` to `PluginHookSessionEndReason`. Fixes #57790. Thanks @pandadev66.
 - Codex app-server: clamp Codex code-mode sandboxing to workspace-write when an OpenClaw sandbox is active, preventing Docker gateway socket access from becoming a danger-full-access Codex turn.
 - TUI: exit immediately on Ctrl+C/SIGINT after gateway disconnect and bound shutdown drain so terminal teardown cannot strand sessions. Fixes #75379. (#75381) Thanks @udaymanish6.
+- Matrix: default outbound markdown tables to bullet lists instead of fenced code blocks. Fixes #78990. (#80890) Thanks @kinjitakabe.
 - Bonjour/Gateway: treat active ciao probing and fresh name-conflict renames as in-progress so the mDNS watchdog waits for probe settlement before retrying, preventing rapid re-advertise loops on Windows, WSL, and other multicast-hostile hosts. (#74778) Refs #74242. Thanks @fuller-stack-dev.
 - Providers/MiniMax: send a minimal Anthropic-compatible user fallback when message conversion filters a turn to an empty payload, so MiniMax M2.7 no longer returns `chat content is empty` after tool-heavy sessions. Fixes #74589. Thanks @neeravmakwana and @DerekEXS.
 - Tools/media: preserve implicit allow-all semantics from `tools.alsoAllow`-only policies when preconstructing built-in media generation and PDF tools, so configured media tools become live without forcing `tools.allow: ["*", ...]`. Fixes #77841. Thanks @trialanderrorstudios.
@@ -319,6 +356,7 @@ Docs: https://docs.openclaw.ai
 - Agents: abort generic repeated no-progress tool loops at the critical threshold when identical calls keep returning identical outcomes. (#80668) Thanks @frankekn.
 - Exec approvals: omit generated command highlights for non-POSIX Windows and shell-wrapper approval commands until those command languages have native highlighting support. (#80566) Thanks @jesse-merhi.
 - Telegram: keep verbose tool progress and result drafts separate from the final assistant answer so tool output no longer blends into the final Telegram message. (#80294) Thanks @jalehman.
+- Plugin SDK/Windows: enable the native require fast path for root `openclaw/plugin-sdk` dist aliases instead of forcing Jiti transforms. (#80878) Thanks @medns.
 
 ## 2026.5.9
 

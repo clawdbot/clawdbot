@@ -46,6 +46,14 @@ function mockEmbeddingFetch(embedding: number[]) {
   return fetchMock;
 }
 
+function firstFetchInit(fetchMock: ReturnType<typeof mockEmbeddingFetch>): RequestInit | undefined {
+  const call = fetchMock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected embedding fetch call");
+  }
+  return call.at(1) as RequestInit | undefined;
+}
+
 function readEmbeddingRequestBody(init: RequestInit | undefined): { input?: unknown } {
   if (typeof init?.body !== "string") {
     throw new Error("expected JSON string request body");
@@ -54,7 +62,7 @@ function readEmbeddingRequestBody(init: RequestInit | undefined): { input?: unkn
 }
 
 function readFirstEmbeddingInput(fetchMock: ReturnType<typeof mockEmbeddingFetch>): unknown {
-  const [, init] = (fetchMock.mock.calls[0] ?? []) as unknown as [string, RequestInit | undefined];
+  const init = firstFetchInit(fetchMock);
   const body = readEmbeddingRequestBody(init);
   return body.input;
 }
@@ -379,10 +387,7 @@ describe("ollama embedding provider", () => {
 
     await provider.embedQuery("hello");
 
-    const [, init] = (fetchMock.mock.calls[0] ?? []) as unknown as [
-      string,
-      RequestInit | undefined,
-    ];
+    const init = firstFetchInit(fetchMock);
     const headers = init?.headers as Record<string, string> | undefined;
     expect(headers?.Authorization).toBeUndefined();
   });
@@ -433,10 +438,7 @@ describe("ollama embedding provider", () => {
 
     await provider.embedQuery("hello");
 
-    const [, init] = (fetchMock.mock.calls[0] ?? []) as unknown as [
-      string,
-      RequestInit | undefined,
-    ];
+    const init = firstFetchInit(fetchMock);
     const headers = init?.headers as Record<string, string> | undefined;
     expect(headers?.Authorization).toBeUndefined();
   });
@@ -486,10 +488,7 @@ describe("ollama embedding provider", () => {
 
     await provider.embedQuery("hello");
 
-    const [, init] = (fetchMock.mock.calls[0] ?? []) as unknown as [
-      string,
-      RequestInit | undefined,
-    ];
+    const init = firstFetchInit(fetchMock);
     const headers = init?.headers as Record<string, string> | undefined;
     expect(headers?.Authorization).toBeUndefined();
   });

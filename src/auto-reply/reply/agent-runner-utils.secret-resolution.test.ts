@@ -70,7 +70,7 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
 
     expect(resolved).toBe(scopedResolved);
     expect(hoisted.resolveCommandSecretRefsViaGatewayMock).toHaveBeenCalledTimes(2);
-    const baseCall = hoisted.resolveCommandSecretRefsViaGatewayMock.mock.calls[0]?.[0] as {
+    const baseCall = hoisted.resolveCommandSecretRefsViaGatewayMock.mock.calls.at(0)?.[0] as {
       config: OpenClawConfig;
       commandName: string;
       targetIds: Set<string>;
@@ -83,7 +83,7 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
       channel: "discord",
       accountId: "work",
     });
-    const scopedCall = hoisted.resolveCommandSecretRefsViaGatewayMock.mock.calls[1]?.[0] as {
+    const scopedCall = hoisted.resolveCommandSecretRefsViaGatewayMock.mock.calls.at(1)?.[0] as {
       config: OpenClawConfig;
       commandName: string;
       targetIds: Set<string>;
@@ -134,7 +134,7 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
       messageProvider: "discord",
     });
 
-    const baseCall = hoisted.resolveCommandSecretRefsViaGatewayMock.mock.calls[0]?.[0] as {
+    const baseCall = hoisted.resolveCommandSecretRefsViaGatewayMock.mock.calls.at(0)?.[0] as {
       config: OpenClawConfig;
       commandName: string;
     };

@@ -87,7 +87,7 @@ async function withAcmeSpeechProvider(
 
 function expectSingleSynthesizeSpeechCall() {
   expect(synthesizeSpeechMock).toHaveBeenCalledTimes(1);
-  const params = synthesizeSpeechMock.mock.calls[0]?.[0];
+  const params = synthesizeSpeechMock.mock.calls.at(0)?.[0];
   if (params === undefined) {
     throw new Error("expected synthesizeSpeech call params");
   }

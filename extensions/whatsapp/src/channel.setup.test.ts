@@ -194,7 +194,7 @@ describe("whatsapp setup wizard", () => {
       forceAllowFrom: true,
     });
 
-    const prompt = harness.text.mock.calls[0]?.[0] as
+    const prompt = harness.text.mock.calls.at(0)?.[0] as
       | { validate?: (value: string) => string | undefined }
       | undefined;
     if (!prompt?.validate) {

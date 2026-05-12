@@ -45,7 +45,7 @@ describe("tavily client X-Client-Source header", () => {
     await runTavilySearch({ query: "test query" });
 
     expect(postTrustedWebToolsJson).toHaveBeenCalledOnce();
-    const params = postTrustedWebToolsJson.mock.calls[0][0];
+    const params = postTrustedWebToolsJson.mock.calls.at(0)?.[0];
     expect(params.extraHeaders).toEqual({ "X-Client-Source": "openclaw" });
   });
 
@@ -53,7 +53,7 @@ describe("tavily client X-Client-Source header", () => {
     await runTavilyExtract({ urls: ["https://example.com"] });
 
     expect(postTrustedWebToolsJson).toHaveBeenCalledOnce();
-    const params = postTrustedWebToolsJson.mock.calls[0][0];
+    const params = postTrustedWebToolsJson.mock.calls.at(0)?.[0];
     expect(params.extraHeaders).toEqual({ "X-Client-Source": "openclaw" });
   });
 });

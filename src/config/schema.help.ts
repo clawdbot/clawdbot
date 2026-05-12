@@ -1436,6 +1436,23 @@ export const FIELD_HELP: Record<string, string> = {
     "User-prompt template used for the pre-compaction memory flush turn when generating memory candidates. Use this only when you need custom extraction instructions beyond the default memory flush behavior.",
   "agents.defaults.compaction.memoryFlush.systemPrompt":
     "System-prompt override for the pre-compaction memory flush turn to control extraction style and safety constraints. Use carefully so custom instructions do not reduce memory quality or leak sensitive context.",
+  "agents.defaults.runRetries":
+    "Outer run loop retry iteration boundaries for the embedded Pi runner to prevent infinite execution loops during failure recovery.",
+  "agents.defaults.runRetries.base":
+    "Base number of run retry iterations for the embedded Pi runner's outer run loop (default: 24).",
+  "agents.defaults.runRetries.perProfile":
+    "Additional run retry iterations granted per fallback profile candidate (default: 8).",
+  "agents.defaults.runRetries.min":
+    "Minimum absolute limit for run retry iterations (default: 32).",
+  "agents.defaults.runRetries.max":
+    "Maximum absolute limit for run retry iterations to prevent runaway execution (default: 160).",
+  "agents.list[].runRetries":
+    "Optional per-agent override for the embedded Pi runner's outer run loop retry iteration boundaries.",
+  "agents.list[].runRetries.base": "Base number of run retry iterations for this agent.",
+  "agents.list[].runRetries.perProfile":
+    "Additional run retry iterations granted per fallback profile candidate for this agent.",
+  "agents.list[].runRetries.min": "Minimum absolute limit for run retry iterations for this agent.",
+  "agents.list[].runRetries.max": "Maximum absolute limit for run retry iterations for this agent.",
   "agents.defaults.embeddedPi":
     "Embedded Pi runner hardening controls for how workspace-local Pi settings are trusted and applied in OpenClaw sessions.",
   "agents.defaults.embeddedPi.projectSettingsPolicy":

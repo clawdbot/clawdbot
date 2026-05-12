@@ -316,7 +316,7 @@ export function describeGithubCopilotProviderDiscoveryContract(params: {
         },
       });
       const copilotCall = requireRecord(
-        resolveCopilotApiTokenMock.mock.calls[0]?.[0],
+        resolveCopilotApiTokenMock.mock.calls.at(0)?.[0],
         "copilot token params",
       );
       expect(copilotCall.githubToken).toBe("github-env-token");

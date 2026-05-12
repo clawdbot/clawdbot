@@ -104,12 +104,12 @@ describe("collectStatusScanOverview", () => {
     });
 
     expect(mocks.callGateway).toHaveBeenCalledOnce();
-    const gatewayRequest = mocks.callGateway.mock.calls[0]?.[0];
+    const gatewayRequest = mocks.callGateway.mock.calls.at(0)?.[0];
     expect(gatewayRequest?.method).toBe("channels.status");
     expect(gatewayRequest?.url).toBe("ws://127.0.0.1:18789");
     expect(gatewayRequest?.token).toBe("tok");
     expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
-    const channelTableCall = mocks.buildChannelsTable.mock.calls[0];
+    const channelTableCall = mocks.buildChannelsTable.mock.calls.at(0);
     expect(typeof channelTableCall?.[0]).toBe("object");
     expect(channelTableCall?.[1]?.includeSetupFallbackPlugins).toBe(true);
     expect(channelTableCall?.[1]?.showSecrets).toBe(false);
@@ -128,7 +128,7 @@ describe("collectStatusScanOverview", () => {
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
-    const channelTableCall = mocks.buildChannelsTable.mock.calls[0];
+    const channelTableCall = mocks.buildChannelsTable.mock.calls.at(0);
     expect(typeof channelTableCall?.[0]).toBe("object");
     expect(channelTableCall?.[1]?.includeSetupFallbackPlugins).toBe(false);
     expect(channelTableCall?.[1]?.showSecrets).toBe(false);

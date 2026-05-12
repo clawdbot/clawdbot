@@ -43,7 +43,7 @@ async function writeIdentityFile(workspace: string, lines: string[]) {
 }
 
 function getWrittenMainIdentity() {
-  const [written] = configMocks.writeConfigFile.mock.calls[0] ?? [];
+  const [written] = configMocks.writeConfigFile.mock.calls.at(0) ?? [];
   if (!written) {
     throw new Error("expected written agent config");
   }

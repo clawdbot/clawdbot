@@ -56,7 +56,7 @@ describe("matrix profile actions", () => {
     });
 
     expect(withResolvedActionClientMock).toHaveBeenCalledTimes(1);
-    const [wrapperOpts, run, mode] = withResolvedActionClientMock.mock.calls[0] ?? [];
+    const [wrapperOpts, run, mode] = withResolvedActionClientMock.mock.calls.at(0) ?? [];
     expect(wrapperOpts).toEqual({
       accountId: "ops",
       displayName: "  Ops Bot  ",
@@ -67,7 +67,7 @@ describe("matrix profile actions", () => {
     expect(mode).toBe("persist");
 
     expect(syncMatrixOwnProfileMock).toHaveBeenCalledTimes(1);
-    const syncCall = syncMatrixOwnProfileMock.mock.calls[0]?.[0] as
+    const syncCall = syncMatrixOwnProfileMock.mock.calls.at(0)?.[0] as
       | {
           client: unknown;
           userId: string;
@@ -105,7 +105,7 @@ describe("matrix profile actions", () => {
       avatarPath: "/tmp/avatar.png",
     });
 
-    const call = syncMatrixOwnProfileMock.mock.calls[0]?.[0] as
+    const call = syncMatrixOwnProfileMock.mock.calls.at(0)?.[0] as
       | {
           loadAvatarFromUrl: (url: string, maxBytes: number) => Promise<unknown>;
           loadAvatarFromPath: (path: string, maxBytes: number) => Promise<unknown>;

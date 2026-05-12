@@ -630,6 +630,20 @@ describe("overflow compaction in run loop", () => {
     expect(result.messagingToolSentTexts).toEqual(["already delivered"]);
   });
 
+  it("propagates deterministic approval prompt delivery from attempts", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [],
+        didSendDeterministicApprovalPrompt: true,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(result.payloads).toBeUndefined();
+    expect(result.didSendDeterministicApprovalPrompt).toBe(true);
+  });
+
   it("returns a timeout payload instead of a partial assistant fragment after stream timeout", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({

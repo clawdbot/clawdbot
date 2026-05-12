@@ -46,7 +46,9 @@ describe("local embedding provider", () => {
     const embedding = await provider.embedQuery("test query");
     const magnitude = Math.sqrt(embedding.reduce((sum, value) => sum + value * value, 0));
 
-    expect(DEFAULT_LOCAL_MODEL).toContain("embeddinggemma");
+    expect(DEFAULT_LOCAL_MODEL).toBe(
+      "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf",
+    );
     expect(magnitude).toBeCloseTo(1, 5);
     expect(runtime.resolveModelFile).toHaveBeenCalledWith(DEFAULT_LOCAL_MODEL, undefined);
     expect(runtime.getEmbeddingFor).toHaveBeenCalledWith("test query");

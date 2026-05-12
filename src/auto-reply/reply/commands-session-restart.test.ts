@@ -128,7 +128,7 @@ describe("handleRestartCommand", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(mocks.writeRestartSentinel).toHaveBeenCalledOnce();
-    const sentinelPayload = mocks.writeRestartSentinel.mock.calls[0]?.[0];
+    const sentinelPayload = mocks.writeRestartSentinel.mock.calls.at(0)?.[0];
     expect(sentinelPayload?.kind).toBe("restart");
     expect(sentinelPayload?.status).toBe("ok");
     expect(typeof sentinelPayload?.ts).toBe("number");
@@ -166,7 +166,7 @@ describe("handleRestartCommand", () => {
       await scheduledArgs?.emitHooks?.beforeEmit?.();
 
       expect(mocks.writeRestartSentinel).toHaveBeenCalledOnce();
-      const sentinelPayload = mocks.writeRestartSentinel.mock.calls[0]?.[0];
+      const sentinelPayload = mocks.writeRestartSentinel.mock.calls.at(0)?.[0];
       expect(sentinelPayload?.kind).toBe("restart");
       expect(sentinelPayload?.status).toBe("ok");
       expect(sentinelPayload?.sessionKey).toBe("agent:main:telegram:direct:123:thread:thread-1");

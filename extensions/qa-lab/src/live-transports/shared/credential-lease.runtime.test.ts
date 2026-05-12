@@ -11,6 +11,32 @@ function jsonResponse(payload: unknown, status = 200) {
   });
 }
 
+type FetchMock = { mock: { calls: Parameters<typeof fetch>[] } };
+
+function fetchCall(fetchImpl: FetchMock, index = 0): Parameters<typeof fetch> {
+  const call = fetchImpl.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`expected fetch call ${index}`);
+  }
+  return call;
+}
+
+function fetchUrl(fetchImpl: FetchMock, index = 0): string {
+  const url = fetchCall(fetchImpl, index)[0];
+  if (typeof url !== "string") {
+    throw new Error(`expected fetch call ${index} URL`);
+  }
+  return url;
+}
+
+function fetchInit(fetchImpl: FetchMock, index = 0): RequestInit {
+  const init = fetchCall(fetchImpl, index)[1];
+  if (!init || typeof init !== "object") {
+    throw new Error(`expected fetch call ${index} init`);
+  }
+  return init;
+}
+
 describe("credential lease runtime", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -73,9 +99,8 @@ describe("credential lease runtime", () => {
     await lease.release();
 
     expect(fetchImpl).toHaveBeenCalledTimes(3);
-    const firstCall = fetchImpl.mock.calls[0];
-    expect(firstCall?.[0]).toContain("/qa-credentials/v1/acquire");
-    const firstInit = firstCall?.[1];
+    expect(fetchUrl(fetchImpl)).toContain("/qa-credentials/v1/acquire");
+    const firstInit = fetchInit(fetchImpl);
     const headers = firstInit?.headers as Record<string, string>;
     expect(headers.authorization).toBe("Bearer maintainer-secret");
   });
@@ -123,10 +148,10 @@ describe("credential lease runtime", () => {
       sutToken: "sut",
     });
     expect(fetchImpl).toHaveBeenCalledTimes(3);
-    expect(fetchImpl.mock.calls[1]?.[0]).toBe(
+    expect(fetchUrl(fetchImpl, 1)).toBe(
       "https://qa-cred.example.convex.site/qa-credentials/v1/payload-chunk",
     );
-    const chunkRequestBody = fetchImpl.mock.calls[1]?.[1]?.body;
+    const chunkRequestBody = fetchInit(fetchImpl, 1).body;
     expect(chunkRequestBody).toBeTypeOf("string");
     const chunkRequest = JSON.parse(chunkRequestBody as string) as {
       credentialId?: string;
@@ -161,8 +186,7 @@ describe("credential lease runtime", () => {
         payload as { groupId: string; driverToken: string; sutToken: string },
     });
 
-    const firstCall = fetchImpl.mock.calls[0];
-    const firstInit = firstCall?.[1];
+    const firstInit = fetchInit(fetchImpl);
     const headers = firstInit?.headers as Record<string, string>;
     expect(headers.authorization).toBe("Bearer maintainer-secret");
   });
@@ -191,8 +215,7 @@ describe("credential lease runtime", () => {
         payload as { groupId: string; driverToken: string; sutToken: string },
     });
 
-    const firstCall = fetchImpl.mock.calls[0];
-    const firstInit = firstCall?.[1];
+    const firstInit = fetchInit(fetchImpl);
     const headers = firstInit?.headers as Record<string, string>;
     expect(headers.authorization).toBe("Bearer ci-secret");
   });
@@ -294,8 +317,7 @@ describe("credential lease runtime", () => {
         payload as { groupId: string; driverToken: string; sutToken: string },
     });
 
-    const firstCall = fetchImpl.mock.calls[0];
-    expect(firstCall?.[0]).toBe("http://127.0.0.1:3210/qa-credentials/v1/acquire");
+    expect(fetchUrl(fetchImpl)).toBe("http://127.0.0.1:3210/qa-credentials/v1/acquire");
   });
 
   it("rejects unsafe endpoint prefix overrides", async () => {
@@ -346,7 +368,7 @@ describe("credential lease runtime", () => {
     ).rejects.toThrow("bad payload shape");
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(fetchImpl.mock.calls[1]?.[0]).toBe(
+    expect(fetchUrl(fetchImpl, 1)).toBe(
       "https://qa-cred.example.convex.site/qa-credentials/v1/release",
     );
   });

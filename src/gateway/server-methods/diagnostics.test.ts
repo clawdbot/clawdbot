@@ -48,7 +48,7 @@ describe("diagnostics gateway methods", () => {
     });
 
     expect(respond).toHaveBeenCalledTimes(1);
-    expect(respond.mock.calls[0]).toEqual([
+    expect(respond.mock.calls.at(0)).toEqual([
       true,
       {
         generatedAt: now.toISOString(),
@@ -84,7 +84,9 @@ describe("diagnostics gateway methods", () => {
       },
       undefined,
     ]);
-    expect(Object.keys(respond.mock.calls[0]?.[1] as Record<string, unknown>).toSorted()).toEqual([
+    expect(
+      Object.keys(respond.mock.calls.at(0)?.[1] as Record<string, unknown>).toSorted(),
+    ).toEqual([
       "capacity",
       "count",
       "dropped",

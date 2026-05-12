@@ -133,12 +133,24 @@ const BASE_USAGE_RANGE = {
   limit: 10,
 } as const;
 
+function mockCall(mockFn: ReturnType<typeof vi.fn>, callIndex = 0): ReadonlyArray<unknown> {
+  const call = mockFn.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected mock call ${callIndex + 1}`);
+  }
+  return call;
+}
+
+function mockArg(mockFn: ReturnType<typeof vi.fn>, callIndex: number, argIndex: number) {
+  return mockCall(mockFn, callIndex)[argIndex];
+}
+
 function expectSuccessfulSessionsUsage(
   respond: ReturnType<typeof vi.fn>,
 ): Array<{ key: string; agentId: string }> {
   expect(respond).toHaveBeenCalledTimes(1);
-  expect(respond.mock.calls[0]?.[0]).toBe(true);
-  const result = respond.mock.calls[0]?.[1] as {
+  expect(mockArg(respond, 0, 0)).toBe(true);
+  const result = mockArg(respond, 0, 1) as {
     sessions: Array<{ key: string; agentId: string }>;
   };
   return result.sessions;
@@ -154,8 +166,12 @@ describe("sessions.usage", () => {
     const respond = await runSessionsUsage(BASE_USAGE_RANGE);
 
     expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(discoverAllSessions).mock.calls[0]?.[0]?.agentId).toBe("main");
-    expect(vi.mocked(discoverAllSessions).mock.calls[1]?.[0]?.agentId).toBe("opus");
+    expect((mockArg(vi.mocked(discoverAllSessions), 0, 0) as { agentId?: string }).agentId).toBe(
+      "main",
+    );
+    expect((mockArg(vi.mocked(discoverAllSessions), 1, 0) as { agentId?: string }).agentId).toBe(
+      "opus",
+    );
 
     const sessions = expectSuccessfulSessionsUsage(respond);
     expect(sessions).toHaveLength(2);
@@ -279,8 +295,8 @@ describe("sessions.usage", () => {
         });
 
         expect(respond).toHaveBeenCalledTimes(1);
-        expect(respond.mock.calls[0]?.[0]).toBe(true);
-        const result = respond.mock.calls[0]?.[1] as {
+        expect(mockArg(respond, 0, 0)).toBe(true);
+        const result = mockArg(respond, 0, 1) as {
           sessions: Array<{
             key: string;
             scope?: string;
@@ -351,8 +367,8 @@ describe("sessions.usage", () => {
     });
 
     expect(respond).toHaveBeenCalledTimes(1);
-    expect(respond.mock.calls[0]?.[0]).toBe(false);
-    const error = respond.mock.calls[0]?.[2] as { message?: string } | undefined;
+    expect(mockArg(respond, 0, 0)).toBe(false);
+    const error = mockArg(respond, 0, 2) as { message?: string } | undefined;
     expect(error?.message).toContain("Invalid session reference");
   });
 
@@ -362,7 +378,9 @@ describe("sessions.usage", () => {
     });
 
     expect(vi.mocked(loadSessionUsageTimeSeries)).toHaveBeenCalled();
-    expect(vi.mocked(loadSessionUsageTimeSeries).mock.calls[0]?.[0]?.agentId).toBe("opus");
+    expect(
+      (mockArg(vi.mocked(loadSessionUsageTimeSeries), 0, 0) as { agentId?: string }).agentId,
+    ).toBe("opus");
   });
 
   it("passes parsed agentId into sessions.usage.logs", async () => {
@@ -371,7 +389,9 @@ describe("sessions.usage", () => {
     });
 
     expect(vi.mocked(loadSessionLogs)).toHaveBeenCalled();
-    expect(vi.mocked(loadSessionLogs).mock.calls[0]?.[0]?.agentId).toBe("opus");
+    expect((mockArg(vi.mocked(loadSessionLogs), 0, 0) as { agentId?: string }).agentId).toBe(
+      "opus",
+    );
   });
 
   it("rejects traversal-style keys in timeseries/log lookups", async () => {

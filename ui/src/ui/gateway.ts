@@ -98,13 +98,26 @@ export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): 
   );
 }
 
+function isLoopbackIPv4Host(host: string): boolean {
+  const octets = host.split(".");
+  if (octets.length !== 4 || octets[0] !== "127") {
+    return false;
+  }
+  return octets.every((octet) => {
+    if (!/^\d+$/.test(octet)) {
+      return false;
+    }
+    const value = Number(octet);
+    return value >= 0 && value <= 255;
+  });
+}
+
 function isTrustedRetryEndpoint(url: string): boolean {
   try {
     const gatewayUrl = new URL(url, window.location.href);
     const host = gatewayUrl.hostname.trim().toLowerCase();
-    const isLoopbackHost =
-      host === "localhost" || host === "::1" || host === "[::1]" || host === "127.0.0.1";
-    const isLoopbackIPv4 = host.startsWith("127.");
+    const isLoopbackHost = host === "localhost" || host === "::1" || host === "[::1]";
+    const isLoopbackIPv4 = isLoopbackIPv4Host(host);
     if (isLoopbackHost || isLoopbackIPv4) {
       return true;
     }

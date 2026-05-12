@@ -2498,7 +2498,7 @@ describe("memory-core dreaming phases", () => {
     });
 
     expect(subagent.run).toHaveBeenCalledTimes(1);
-    const firstRun = subagent.run.mock.calls[0]?.[0];
+    const firstRun = subagent.run.mock.calls.at(0)?.[0];
     expect(firstRun?.message).toContain("Move backups to S3 Glacier.");
     expect(firstRun?.message).toContain("Keep retention at 365 days.");
     expect(firstRun?.model).toBe("anthropic/claude-sonnet-4-6");
@@ -2561,7 +2561,7 @@ describe("memory-core dreaming phases", () => {
     });
 
     expect(subagent.run).toHaveBeenCalledTimes(1);
-    const firstRun = subagent.run.mock.calls[0]?.[0];
+    const firstRun = subagent.run.mock.calls.at(0)?.[0];
     expect(firstRun?.message).toContain("Move backups to S3 Glacier.");
     expect(firstRun?.message).toContain("Keep retention at 365 days.");
     expect(firstRun?.model).toBe("xai/grok-4.1-fast");

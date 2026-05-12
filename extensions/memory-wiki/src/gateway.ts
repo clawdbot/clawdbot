@@ -26,6 +26,8 @@ import { initializeMemoryWikiVault } from "./vault.js";
 
 const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;
+const ADMIN_SCOPE = "operator.admin" as const;
+const LOCAL_FILE_INGEST_SCOPE = ADMIN_SCOPE;
 type GatewayMethodContext = Parameters<
   Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]
 >[0];
@@ -216,7 +218,7 @@ export function registerMemoryWikiGatewayMethods(params: {
         respondError(respond, error);
       }
     },
-    { scope: WRITE_SCOPE },
+    { scope: LOCAL_FILE_INGEST_SCOPE },
   );
 
   api.registerGatewayMethod(
@@ -367,7 +369,7 @@ export function registerMemoryWikiGatewayMethods(params: {
         respondError(respond, error);
       }
     },
-    { scope: READ_SCOPE },
+    { scope: WRITE_SCOPE },
   );
 
   api.registerGatewayMethod(

@@ -34,6 +34,70 @@ const mockState = vi.hoisted(() => ({
   uploadMattermostFile: vi.fn(),
 }));
 
+type MattermostPostParams = {
+  channelId?: string;
+  message?: string;
+  props?: {
+    attachments?: Array<{
+      actions?: Array<{ id?: string; name?: string }>;
+    }>;
+  };
+};
+
+type MattermostUploadParams = {
+  channelId?: string;
+  fileName?: string;
+  contentType?: string;
+};
+
+type MattermostDirectRetryOptions = {
+  maxRetries?: number;
+  initialDelayMs?: number;
+  maxDelayMs?: number;
+  timeoutMs?: number;
+  onRetry?: () => void;
+};
+
+function mockCall(mock: unknown, label: string, index = 0): unknown[] {
+  const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
+  const call = calls?.at(index);
+  if (!call) {
+    throw new Error(`Expected ${label} call ${index + 1}`);
+  }
+  return call;
+}
+
+function uploadMattermostFileCall() {
+  return mockCall(mockState.uploadMattermostFile, "uploadMattermostFile") as [
+    unknown,
+    MattermostUploadParams?,
+  ];
+}
+
+function createMattermostPostParams() {
+  const params = mockCall(mockState.createMattermostPost, "createMattermostPost")[1] as
+    | MattermostPostParams
+    | undefined;
+  if (!params) {
+    throw new Error("Expected createMattermostPost params");
+  }
+  return params;
+}
+
+function createMattermostPostCall() {
+  return mockCall(mockState.createMattermostPost, "createMattermostPost") as [
+    unknown,
+    MattermostPostParams?,
+  ];
+}
+
+function directChannelRetryCall() {
+  return mockCall(
+    mockState.createMattermostDirectChannelWithRetry,
+    "createMattermostDirectChannelWithRetry",
+  ) as [unknown, unknown, MattermostDirectRetryOptions?];
+}
+
 vi.mock("../../runtime-api.js", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
 }));
@@ -257,7 +321,7 @@ describe("sendMessageMattermost", () => {
         mediaLocalRoots: ["/tmp/agent-workspace"],
       },
     );
-    const uploadCall = mockState.uploadMattermostFile.mock.calls[0];
+    const uploadCall = uploadMattermostFileCall();
     expect(uploadCall?.[0]).toEqual({});
     expect(uploadCall?.[1]?.channelId).toBe("town-square");
     expect(uploadCall?.[1]?.fileName).toBe("photo.png");
@@ -277,7 +341,7 @@ describe("sendMessageMattermost", () => {
       buttons: [[{ callback_data: "mdlprov", text: "Browse providers" }]],
     });
 
-    const postCall = mockState.createMattermostPost.mock.calls[0];
+    const postCall = createMattermostPostCall();
     expect(postCall?.[0]).toEqual({});
     expect(postCall?.[1]?.channelId).toBe("town-square");
     expect(postCall?.[1]?.message).toBe("Pick a model");
@@ -312,12 +376,12 @@ describe("sendMessageMattermost", () => {
     });
 
     expect(mockState.fetchMattermostUser).toHaveBeenCalledWith({}, userId);
-    const dmRetryCall = mockState.createMattermostDirectChannelWithRetry.mock.calls[0];
+    const dmRetryCall = directChannelRetryCall();
     expect(dmRetryCall?.[0]).toEqual({});
     expect(dmRetryCall?.[1]).toEqual(["bot-user", userId]);
     expect(Object.keys(dmRetryCall?.[2] ?? {})).toEqual(["onRetry"]);
     expect(dmRetryCall?.[2]?.onRetry).toBeTypeOf("function");
-    const uploadCall = mockState.uploadMattermostFile.mock.calls[0];
+    const uploadCall = uploadMattermostFileCall();
     expect(uploadCall?.[0]).toEqual({});
     expect(uploadCall?.[1]?.channelId).toBe("dm-channel-1");
     expect(result.channelId).toBe("dm-channel-1");
@@ -349,7 +413,7 @@ describe("sendMessageMattermost", () => {
 
     expect(mockState.fetchMattermostUser).toHaveBeenCalledWith({}, channelId);
     expect(mockState.createMattermostDirectChannelWithRetry).not.toHaveBeenCalled();
-    const uploadCall = mockState.uploadMattermostFile.mock.calls[0];
+    const uploadCall = uploadMattermostFileCall();
     expect(uploadCall?.[0]).toEqual({});
     expect(uploadCall?.[1]?.channelId).toBe(channelId);
     expect(result.channelId).toBe(channelId);
@@ -471,7 +535,7 @@ describe("sendMessageMattermost user-first resolution", () => {
 
     expect(mockState.fetchMattermostUser).toHaveBeenCalledTimes(1);
     expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1);
-    const params = mockState.createMattermostPost.mock.calls[0]?.[1];
+    const params = createMattermostPostParams();
     expect(params.channelId).toBe("dm-channel-id");
     expect(res.channelId).toBe("dm-channel-id");
     expect(res.messageId).toBe("post-id");
@@ -490,7 +554,7 @@ describe("sendMessageMattermost user-first resolution", () => {
 
     expect(mockState.fetchMattermostUser).toHaveBeenCalledTimes(1);
     expect(mockState.createMattermostDirectChannelWithRetry).not.toHaveBeenCalled();
-    const params = mockState.createMattermostPost.mock.calls[0]?.[1];
+    const params = createMattermostPostParams();
     expect(params.channelId).toBe(channelId);
     expect(res.channelId).toBe(channelId);
   });
@@ -545,7 +609,7 @@ describe("sendMessageMattermost user-first resolution", () => {
 
     expect(mockState.fetchMattermostUser).not.toHaveBeenCalled();
     expect(mockState.createMattermostDirectChannelWithRetry).not.toHaveBeenCalled();
-    const params = mockState.createMattermostPost.mock.calls[0]?.[1];
+    const params = createMattermostPostParams();
     expect(params.channelId).toBe(chanId);
     expect(res.channelId).toBe(chanId);
   });
@@ -567,7 +631,7 @@ describe("sendMessageMattermost user-first resolution", () => {
       dmRetryOptions: retryOptions,
     });
 
-    const retryCall = mockState.createMattermostDirectChannelWithRetry.mock.calls[0];
+    const retryCall = directChannelRetryCall();
     expect(retryCall?.[0]).toEqual({});
     expect(retryCall?.[1]).toEqual(["bot-id", userId]);
     expect(retryCall?.[2]?.maxRetries).toBe(retryOptions.maxRetries);
@@ -595,7 +659,7 @@ describe("sendMessageMattermost user-first resolution", () => {
 
     await sendMessageMattermost(`user:${userId}`, "hello", { cfg: TEST_CFG });
 
-    const retryCall = mockState.createMattermostDirectChannelWithRetry.mock.calls[0];
+    const retryCall = directChannelRetryCall();
     expect(retryCall?.[0]).toEqual({});
     expect(retryCall?.[1]).toEqual(["bot-id", userId]);
     expect(retryCall?.[2]?.maxRetries).toBe(4);
@@ -629,7 +693,7 @@ describe("sendMessageMattermost user-first resolution", () => {
       dmRetryOptions: overrideOptions,
     });
 
-    const retryCall = mockState.createMattermostDirectChannelWithRetry.mock.calls[0];
+    const retryCall = directChannelRetryCall();
     expect(retryCall?.[0]).toEqual({});
     expect(retryCall?.[1]).toEqual(["bot-id", userId]);
     expect(retryCall?.[2]?.maxRetries).toBe(overrideOptions.maxRetries);

@@ -136,6 +136,69 @@ describe("registerSlackReactionEvents", () => {
       },
       expectedCalls: 0,
     },
+    {
+      name: "blocks reactions when reaction notifications are off",
+      input: { overrides: { dmPolicy: "open", reactionMode: "off" } },
+      expectedCalls: 0,
+    },
+    {
+      name: "blocks own-mode reactions on messages not authored by the bot",
+      input: {
+        overrides: { dmPolicy: "open", reactionMode: "own" },
+        event: {
+          ...buildReactionEvent(),
+          item_user: "U_OTHER",
+        },
+      },
+      expectedCalls: 0,
+    },
+    {
+      name: "allows own-mode reactions on messages authored by the bot",
+      input: {
+        overrides: { dmPolicy: "open", reactionMode: "own" },
+        event: {
+          ...buildReactionEvent(),
+          item_user: "U_BOT",
+        },
+      },
+      expectedCalls: 1,
+    },
+    {
+      name: "blocks reactions from senders outside the reaction allowlist",
+      input: {
+        overrides: {
+          dmPolicy: "open",
+          reactionMode: "allowlist",
+          reactionAllowlist: ["U2"],
+        },
+        event: buildReactionEvent({ user: "U1" }),
+      },
+      expectedCalls: 0,
+    },
+    {
+      name: "blocks allowlist-mode reactions when the reaction allowlist is empty",
+      input: {
+        overrides: {
+          dmPolicy: "open",
+          reactionMode: "allowlist",
+          reactionAllowlist: [],
+        },
+        event: buildReactionEvent({ user: "U1" }),
+      },
+      expectedCalls: 0,
+    },
+    {
+      name: "allows reactions from senders inside the reaction allowlist",
+      input: {
+        overrides: {
+          dmPolicy: "open",
+          reactionMode: "allowlist",
+          reactionAllowlist: ["U1"],
+        },
+        event: buildReactionEvent({ user: "U1" }),
+      },
+      expectedCalls: 1,
+    },
   ];
 
   it.each(cases)("$name", async ({ input, expectedCalls }) => {
@@ -159,6 +222,65 @@ describe("registerSlackReactionEvents", () => {
     await executeReactionCase({ trackEvent });
 
     expect(trackEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks queued reaction events as untrusted external content", async () => {
+    await executeReactionCase();
+
+    expect(reactionQueueMock).toHaveBeenCalledWith(expect.any(String), {
+      sessionKey: "agent:main:main",
+      contextKey: "slack:reaction:added:D1:123.456:U1:thumbsup",
+      trusted: false,
+    });
+  });
+
+  it("drops off-mode reactions before resolving Slack context", async () => {
+    reactionQueueMock.mockClear();
+    const harness = createSlackSystemEventTestHarness({ reactionMode: "off" });
+    const resolveChannelName = vi.fn(harness.ctx.resolveChannelName);
+    const resolveUserName = vi.fn(harness.ctx.resolveUserName);
+    harness.ctx.resolveChannelName = resolveChannelName;
+    harness.ctx.resolveUserName = resolveUserName;
+    registerSlackReactionEvents({ ctx: harness.ctx });
+    const handler = requireReactionHandler(
+      harness.getHandler("reaction_added") as ReactionHandler | null,
+      "added",
+    );
+
+    await handler({
+      event: buildReactionEvent({ user: "U777", channel: "D123" }),
+      body: {},
+    });
+
+    expect(resolveChannelName).not.toHaveBeenCalled();
+    expect(resolveUserName).not.toHaveBeenCalled();
+    expect(reactionQueueMock).not.toHaveBeenCalled();
+  });
+
+  it("drops own-mode reactions on non-bot messages before resolving Slack context", async () => {
+    reactionQueueMock.mockClear();
+    const harness = createSlackSystemEventTestHarness({ reactionMode: "own" });
+    const resolveChannelName = vi.fn(harness.ctx.resolveChannelName);
+    const resolveUserName = vi.fn(harness.ctx.resolveUserName);
+    harness.ctx.resolveChannelName = resolveChannelName;
+    harness.ctx.resolveUserName = resolveUserName;
+    registerSlackReactionEvents({ ctx: harness.ctx });
+    const handler = requireReactionHandler(
+      harness.getHandler("reaction_added") as ReactionHandler | null,
+      "added",
+    );
+
+    await handler({
+      event: {
+        ...buildReactionEvent({ user: "U777", channel: "D123" }),
+        item_user: "U_OTHER",
+      },
+      body: {},
+    });
+
+    expect(resolveChannelName).not.toHaveBeenCalled();
+    expect(resolveUserName).not.toHaveBeenCalled();
+    expect(reactionQueueMock).not.toHaveBeenCalled();
   });
 
   it("passes sender context when resolving reaction session keys", async () => {

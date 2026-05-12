@@ -327,7 +327,7 @@ describe("plugin-sdk root alias", () => {
       expectedTryNative: false,
     },
     {
-      name: "prefers source loading on Windows even when compat resolves to dist",
+      name: "prefers native loading on Windows when compat resolves to dist",
       options: {
         distExists: true,
         env: { NODE_ENV: "production" },
@@ -336,7 +336,7 @@ describe("plugin-sdk root alias", () => {
           slowHelper: (): string => "loaded",
         },
       },
-      expectedTryNative: false,
+      expectedTryNative: true,
     },
   ])("$name", ({ options, expectedTryNative }) => {
     const lazyModule = loadRootAliasWithStubs(options);

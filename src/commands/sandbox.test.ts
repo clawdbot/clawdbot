@@ -152,7 +152,7 @@ describe("sandboxListCommand", () => {
 
       await sandboxListCommand({ browser: false, json: true }, runtime as never);
 
-      const loggedJson = runtime.log.mock.calls[0][0];
+      const loggedJson = runtime.log.mock.calls.at(0)?.[0];
       const parsed = JSON.parse(loggedJson);
 
       expect(parsed).toStrictEqual({

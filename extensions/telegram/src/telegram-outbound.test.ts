@@ -14,6 +14,7 @@ describe("telegramPlugin outbound", () => {
     expect(telegramOutbound.chunkerMode).toBe("markdown");
     expect(telegramOutbound.chunkedTextFormatting).toEqual({ parseMode: "HTML" });
     expect(telegramOutbound.textChunkLimit).toBe(4000);
+    expect(telegramOutbound.sanitizeText).toBeUndefined();
     expect(telegramOutbound.pollMaxOptions).toBe(10);
   });
 

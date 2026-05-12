@@ -6,7 +6,7 @@ import {
 
 describe("bundled channel persisted-auth metadata", () => {
   it("lists shipped persisted-auth metadata channels", () => {
-    expect(listBundledChannelIdsWithPersistedAuthState()).toContain("whatsapp");
+    expect(listBundledChannelIdsWithPersistedAuthState()).toEqual(["matrix", "whatsapp"]);
   });
 
   it("does not report auth state for channels without bundled metadata", () => {

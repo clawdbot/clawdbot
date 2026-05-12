@@ -36,6 +36,14 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: mocks.runtime,
 }));
 
+function commandCall(mock: ReturnType<typeof vi.fn>): [typeof runtime, Record<string, unknown>] {
+  const call = mock.mock.calls[0] as [typeof runtime, Record<string, unknown>] | undefined;
+  if (!call) {
+    throw new Error("expected command call");
+  }
+  return call;
+}
+
 describe("registerMaintenanceCommands doctor action", () => {
   async function runMaintenanceCli(args: string[]) {
     const program = new Command();
@@ -53,10 +61,7 @@ describe("registerMaintenanceCommands doctor action", () => {
     await runMaintenanceCli(["doctor", "--non-interactive", "--yes"]);
 
     expect(doctorCommand).toHaveBeenCalledTimes(1);
-    const [runtimeArg, options] = doctorCommand.mock.calls.at(0)! as unknown as [
-      typeof runtime,
-      Record<string, unknown>,
-    ];
+    const [runtimeArg, options] = commandCall(doctorCommand);
     expect(runtimeArg).toBe(runtime);
     expect(options.nonInteractive).toBe(true);
     expect(options.yes).toBe(true);
@@ -79,10 +84,7 @@ describe("registerMaintenanceCommands doctor action", () => {
     await runMaintenanceCli(["doctor", "--fix"]);
 
     expect(doctorCommand).toHaveBeenCalledTimes(1);
-    const [runtimeArg, options] = doctorCommand.mock.calls.at(0)! as unknown as [
-      typeof runtime,
-      Record<string, unknown>,
-    ];
+    const [runtimeArg, options] = commandCall(doctorCommand);
     expect(runtimeArg).toBe(runtime);
     expect(options.repair).toBe(true);
   });
@@ -93,10 +95,7 @@ describe("registerMaintenanceCommands doctor action", () => {
     await runMaintenanceCli(["dashboard", "--no-open"]);
 
     expect(dashboardCommand).toHaveBeenCalledTimes(1);
-    const [runtimeArg, options] = dashboardCommand.mock.calls.at(0)! as unknown as [
-      typeof runtime,
-      Record<string, unknown>,
-    ];
+    const [runtimeArg, options] = commandCall(dashboardCommand);
     expect(runtimeArg).toBe(runtime);
     expect(options.noOpen).toBe(true);
   });
@@ -114,10 +113,7 @@ describe("registerMaintenanceCommands doctor action", () => {
     ]);
 
     expect(resetCommand).toHaveBeenCalledTimes(1);
-    const [runtimeArg, options] = resetCommand.mock.calls.at(0)! as unknown as [
-      typeof runtime,
-      Record<string, unknown>,
-    ];
+    const [runtimeArg, options] = commandCall(resetCommand);
     expect(runtimeArg).toBe(runtime);
     expect(options.scope).toBe("full");
     expect(options.yes).toBe(true);
@@ -141,10 +137,7 @@ describe("registerMaintenanceCommands doctor action", () => {
     ]);
 
     expect(uninstallCommand).toHaveBeenCalledTimes(1);
-    const [runtimeArg, options] = uninstallCommand.mock.calls.at(0)! as unknown as [
-      typeof runtime,
-      Record<string, unknown>,
-    ];
+    const [runtimeArg, options] = commandCall(uninstallCommand);
     expect(runtimeArg).toBe(runtime);
     expect(options.service).toBe(true);
     expect(options.state).toBe(true);

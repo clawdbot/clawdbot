@@ -187,7 +187,7 @@ describe("loadToolsCatalog", () => {
     await loadToolsCatalog(state, "main");
 
     expect(state.toolsCatalogResult).toBeNull();
-    expect(state.toolsCatalogError).toContain("gateway unavailable");
+    expect(state.toolsCatalogError).toBe("Error: gateway unavailable");
     expect(state.toolsCatalogLoading).toBe(false);
   });
 
@@ -261,7 +261,7 @@ describe("loadToolsEffective", () => {
 
     expect(state.toolsEffectiveResult).toBeNull();
     expect(state.toolsEffectiveResultKey).toBeNull();
-    expect(state.toolsEffectiveError).toContain("gateway unavailable");
+    expect(state.toolsEffectiveError).toBe("Error: gateway unavailable");
     expect(state.toolsEffectiveLoading).toBe(false);
   });
 

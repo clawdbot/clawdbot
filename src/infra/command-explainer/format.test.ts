@@ -66,7 +66,7 @@ describe("formatCommandSpans", () => {
   it("anchors command spans to executable tokens after env assignments", async () => {
     const explanation = await explainShellCommand("FOO=1 python -c 'print(1)'");
 
-    expect(formatCommandSpans(explanation)).toContainEqual({ startIndex: 6, endIndex: 12 });
+    expect(formatCommandSpans(explanation)).toEqual([{ startIndex: 6, endIndex: 12 }]);
   });
 
   it("includes nested executable spans from shell wrapper payloads", async () => {
@@ -77,9 +77,7 @@ describe("formatCommandSpans", () => {
     const commandTexts = formatCommandSpans(explanation).map((commandSpan) =>
       explanation.source.slice(commandSpan.startIndex, commandSpan.endIndex),
     );
-    expect(commandTexts).toContain("sh");
-    expect(commandTexts).toContain("echo");
-    expect(commandTexts).toContain("node");
+    expect(commandTexts).toEqual(["sh", "echo", "node"]);
   });
 
   it("omits command spans for unsupported shell wrapper languages", async () => {

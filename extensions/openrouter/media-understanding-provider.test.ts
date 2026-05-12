@@ -90,7 +90,7 @@ describe("openrouter media understanding provider", () => {
         },
       }),
     );
-    const headers = postJsonRequestMock.mock.calls[0]?.[0]?.headers as Headers;
+    const headers = postJsonRequestMock.mock.calls.at(0)?.[0]?.headers as Headers;
     expect(headers.get("authorization")).toBe("Bearer sk-openrouter");
     expect(headers.get("http-referer")).toBe("https://openclaw.ai");
     expect(headers.get("x-openrouter-title")).toBe("OpenClaw");

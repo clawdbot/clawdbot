@@ -22,8 +22,16 @@ vi.mock("../send.js", () => ({
 import { setMatrixRuntime } from "../../runtime.js";
 import { deliverMatrixReplies } from "./replies.js";
 
+function sendCall(index: number) {
+  const call = sendMessageMatrixMock.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`Expected send call at index ${index}`);
+  }
+  return call;
+}
+
 function sendOptions(index: number): Record<string, unknown> {
-  const options = sendMessageMatrixMock.mock.calls[index]?.[2];
+  const options = sendCall(index)[2];
   if (!options || typeof options !== "object") {
     throw new Error(`Expected send options at call ${index}`);
   }
@@ -127,13 +135,13 @@ describe("deliverMatrixReplies", () => {
     });
 
     expect(sendMessageMatrixMock).toHaveBeenCalledTimes(3);
-    expect(sendMessageMatrixMock.mock.calls[0]?.[0]).toBe("room:2");
-    expect(sendMessageMatrixMock.mock.calls[0]?.[1]).toBe("caption");
+    expect(sendCall(0)[0]).toBe("room:2");
+    expect(sendCall(0)[1]).toBe("caption");
     expect(sendOptions(0).mediaUrl).toBe("https://example.com/a.jpg");
     expect(sendOptions(0).mediaLocalRoots).toEqual(["/tmp/openclaw-matrix-test"]);
     expect(sendOptions(0).replyToId).toBe("reply-media");
-    expect(sendMessageMatrixMock.mock.calls[1]?.[0]).toBe("room:2");
-    expect(sendMessageMatrixMock.mock.calls[1]?.[1]).toBe("");
+    expect(sendCall(1)[0]).toBe("room:2");
+    expect(sendCall(1)[1]).toBe("");
     expect(sendOptions(1).mediaUrl).toBe("https://example.com/b.jpg");
     expect(sendOptions(1).mediaLocalRoots).toEqual(["/tmp/openclaw-matrix-test"]);
     expect(sendOptions(1).replyToId).toBe("reply-media");
@@ -183,8 +191,8 @@ describe("deliverMatrixReplies", () => {
     });
 
     expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageMatrixMock.mock.calls[0]?.[0]).toBe("room:5");
-    expect(sendMessageMatrixMock.mock.calls[0]?.[1]).toBe("Visible answer");
+    expect(sendCall(0)[0]).toBe("room:5");
+    expect(sendCall(0)[1]).toBe("Visible answer");
     expect(sendOptions(0).cfg).toBe(cfg);
   });
 
@@ -221,8 +229,8 @@ describe("deliverMatrixReplies", () => {
       accountId: "ops",
       tableMode: "code",
     });
-    expect(sendMessageMatrixMock.mock.calls[0]?.[0]).toBe("room:4");
-    expect(sendMessageMatrixMock.mock.calls[0]?.[1]).toBe("hello");
+    expect(sendCall(0)[0]).toBe("room:4");
+    expect(sendCall(0)[1]).toBe("hello");
     expect(sendOptions(0).cfg).toBe(explicitCfg);
     expect(sendOptions(0).accountId).toBe("ops");
     expect(sendOptions(0).replyToId).toBe("reply-1");
@@ -241,8 +249,8 @@ describe("deliverMatrixReplies", () => {
       replyToMode: "off",
     });
 
-    expect(sendMessageMatrixMock.mock.calls[0]?.[0]).toBe("room:6");
-    expect(sendMessageMatrixMock.mock.calls[0]?.[1]).toBe("caption");
+    expect(sendCall(0)[0]).toBe("room:6");
+    expect(sendCall(0)[1]).toBe("caption");
     expect(sendOptions(0).mediaUrl).toBe("https://example.com/a.jpg");
   });
 });

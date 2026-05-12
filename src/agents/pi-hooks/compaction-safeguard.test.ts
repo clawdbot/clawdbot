@@ -201,6 +201,32 @@ function expectCompactionResult(result: {
   return result.compaction;
 }
 
+function mockCallArg(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  callIndex = 0,
+  argIndex = 0,
+): unknown {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected mock call ${callIndex + 1}`);
+  }
+  return call[argIndex];
+}
+
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected record");
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireArray(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error("expected array");
+  }
+  return value;
+}
+
 describe("compaction-safeguard tool failures", () => {
   it("formats tool failures with meta and summary", () => {
     const messages: AgentMessage[] = [
@@ -1308,7 +1334,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(result.cancel).not.toBe(true);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
-    const droppedCall = mockSummarizeInStages.mock.calls.at(0)?.[0];
+    const droppedCall = requireRecord(mockCallArg(mockSummarizeInStages));
     expect(droppedCall?.customInstructions).toContain(
       "Produce a compact, factual summary with these exact section headings:",
     );
@@ -1351,7 +1377,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     await compactionHandler(event, mockContext);
 
-    const call = mockSummarizeInStages.mock.calls.at(0)?.[0];
+    const call = requireRecord(mockCallArg(mockSummarizeInStages));
     expect(call?.reserveTokens).toBe(128_000);
   });
 
@@ -1817,10 +1843,11 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(result.cancel).not.toBe(true);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
-    const call = mockSummarizeInStages.mock.calls.at(0)?.[0];
+    const call = requireRecord(mockCallArg(mockSummarizeInStages));
     expect(call?.previousSummary).toBeUndefined();
-    expect(JSON.stringify(call?.messages[0])).toContain("<previous-compaction-summary>");
-    expect(JSON.stringify(call?.messages[0])).toContain("Old duplicated section");
+    const messages = requireArray(call.messages);
+    expect(JSON.stringify(messages[0])).toContain("<previous-compaction-summary>");
+    expect(JSON.stringify(messages[0])).toContain("Old duplicated section");
   });
 
   it("passes compaction instructions to providers and preserves suffix context", async () => {
@@ -1880,14 +1907,14 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const compaction = expectCompactionResult(result);
     expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
     expect(mockSummarizeInStages).not.toHaveBeenCalled();
-    const providerInput = providerSummarize.mock.calls.at(0)?.[0];
+    const providerInput = requireRecord(mockCallArg(providerSummarize));
     expect(providerInput?.previousSummary).toBe("previous provider summary");
     expect(providerInput?.customInstructions).toContain("Keep milestone names.");
     expect(providerInput?.summarizationInstructions).toEqual({
       identifierPolicy: "custom",
       identifierInstructions: "Preserve ticket IDs exactly.",
     });
-    const providerMessages = providerSummarize.mock.calls.at(0)?.[0]?.messages ?? [];
+    const providerMessages = providerInput.messages ?? [];
     expect(JSON.stringify(providerMessages)).not.toContain("openclaw.runtime-context");
     expect(JSON.stringify(providerMessages)).not.toContain("secret runtime context");
     expect(compaction.summary).toContain("provider summary body");

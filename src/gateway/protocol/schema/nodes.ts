@@ -56,6 +56,7 @@ export const NodePairRequestParamsSchema = Type.Object(
     modelIdentifier: Type.Optional(NonEmptyString),
     caps: Type.Optional(Type.Array(NonEmptyString)),
     commands: Type.Optional(Type.Array(NonEmptyString)),
+    permissions: Type.Optional(Type.Record(NonEmptyString, Type.Boolean())),
     remoteIp: Type.Optional(NonEmptyString),
     silent: Type.Optional(Type.Boolean()),
   },

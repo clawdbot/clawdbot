@@ -3,6 +3,7 @@ import { isCommandFlagEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import { handleBashChatCommand } from "./bash-command.js";
+import { requireGatewayClientScope } from "./command-gates.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { parseInlineDirectives } from "./directive-handling.parse.js";
@@ -458,6 +459,76 @@ describe("command gating", () => {
     expect(replaceConfigFileMock.mock.calls.length).toBe(previousWriteCount);
   });
 
+  it("enforces gateway client permissions when the command channel is external", () => {
+    const result = requireGatewayClientScope(
+      {
+        ctx: {
+          Provider: "internal",
+          OriginatingChannel: "telegram",
+          GatewayClientScopes: ["operator.write"],
+        },
+        command: {
+          channel: "telegram",
+        },
+      } as unknown as HandleCommandsParams,
+      {
+        label: "/config write",
+        allowedScopes: ["operator.admin"],
+        missingText: "/config set|unset requires operator.admin for gateway clients.",
+      },
+    );
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("requires operator.admin");
+    expect(isInternalMessageChannelMock).not.toHaveBeenCalled();
+  });
+
+  it("enforces gateway client permissions when the scope list is empty", () => {
+    const result = requireGatewayClientScope(
+      {
+        ctx: {
+          Provider: "internal",
+          OriginatingChannel: "telegram",
+          GatewayClientScopes: [],
+        },
+        command: {
+          channel: "telegram",
+        },
+      } as unknown as HandleCommandsParams,
+      {
+        label: "/config write",
+        allowedScopes: ["operator.admin"],
+        missingText: "/config set|unset requires operator.admin for gateway clients.",
+      },
+    );
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("requires operator.admin");
+    expect(isInternalMessageChannelMock).not.toHaveBeenCalled();
+  });
+
+  it("does not require gateway client permissions when scopes are absent", () => {
+    const result = requireGatewayClientScope(
+      {
+        ctx: {
+          Provider: "telegram",
+          OriginatingChannel: "telegram",
+        },
+        command: {
+          channel: "telegram",
+        },
+      } as unknown as HandleCommandsParams,
+      {
+        label: "/config write",
+        allowedScopes: ["operator.admin"],
+        missingText: "/config set|unset requires operator.admin for gateway clients.",
+      },
+    );
+
+    expect(result).toBeNull();
+    expect(isInternalMessageChannelMock).not.toHaveBeenCalled();
+  });
+
   it("enforces gateway client permissions for /config commands", async () => {
     const baseCfg = { commands: { config: true, text: true } } as OpenClawConfig;
 
@@ -469,7 +540,6 @@ describe("command gating", () => {
     blockedParams.command.channelId = "webchat";
     blockedParams.command.surface = "webchat";
     blockedParams.command.senderIsOwner = true;
-    isInternalMessageChannelMock.mockReturnValueOnce(true);
     const blockedResult = await handleConfigCommand(blockedParams, true);
     expect(blockedResult?.shouldContinue).toBe(false);
     expect(blockedResult?.reply?.text).toContain("requires operator.admin");
@@ -485,7 +555,7 @@ describe("command gating", () => {
     showParams.command.channel = "webchat";
     showParams.command.channelId = "webchat";
     showParams.command.surface = "webchat";
-    isInternalMessageChannelMock.mockReturnValueOnce(true);
+    showParams.command.senderIsOwner = true;
     const showResult = await handleConfigCommand(showParams, true);
     expect(showResult?.shouldContinue).toBe(false);
     expect(showResult?.reply?.text).toContain("Config messages.ackReaction");
@@ -502,13 +572,13 @@ describe("command gating", () => {
     setParams.command.channelId = "webchat";
     setParams.command.surface = "webchat";
     setParams.command.senderIsOwner = true;
-    isInternalMessageChannelMock.mockReturnValueOnce(true);
     const setResult = await handleConfigCommand(setParams, true);
     expect(setResult?.shouldContinue).toBe(false);
     expect(setResult?.reply?.text).toContain("Config updated");
     expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
-    expect(replaceConfigFileMock).toHaveBeenCalledWith(
-      expect.objectContaining({ afterWrite: { mode: "auto" } }),
-    );
+    expect(replaceConfigFileMock).toHaveBeenCalledWith({
+      nextConfig: {},
+      afterWrite: { mode: "auto" },
+    });
   });
 });

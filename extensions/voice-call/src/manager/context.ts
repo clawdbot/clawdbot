@@ -31,9 +31,17 @@ type CallManagerTransientState = {
   initialMessageInFlight: Set<CallId>;
 };
 
+export type StreamSessionIssuer = (request: {
+  providerName: "twilio" | "telnyx";
+  callId: CallId;
+  from?: string;
+  to?: string;
+  direction: "inbound" | "outbound";
+}) => { token: string; streamUrl: string } | undefined;
+
 type CallManagerHooks = {
-  /** Optional runtime hook invoked after an event transitions a call into answered state. */
   onCallAnswered?: (call: CallRecord) => void;
+  streamSessionIssuer?: StreamSessionIssuer;
 };
 
 export type CallManagerContext = CallManagerRuntimeState &

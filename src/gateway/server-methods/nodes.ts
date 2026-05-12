@@ -667,6 +667,19 @@ export const nodeHandlers: GatewayRequestHandlers = {
         remoteIp: p.remoteIp,
         silent: p.silent,
       });
+      const resolvedAt = Date.now();
+      for (const superseded of result.superseded ?? []) {
+        context.broadcast(
+          "node.pair.resolved",
+          {
+            requestId: superseded.requestId,
+            nodeId: superseded.nodeId,
+            decision: "rejected",
+            ts: resolvedAt,
+          },
+          { dropIfSlow: true },
+        );
+      }
       if (result.status === "pending" && result.created) {
         context.broadcast("node.pair.requested", result.request, {
           dropIfSlow: true,

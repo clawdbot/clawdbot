@@ -458,10 +458,12 @@ describe("chat compaction divider", () => {
       onOpenSessionCheckpoints,
     });
 
-    expect(container.textContent).toContain("Compacted history");
-    expect(container.textContent).toContain("Earlier turns are preserved");
+    expect(container.querySelector(".chat-divider__label")?.textContent).toBe("Compacted history");
+    expect(container.querySelector(".chat-divider__description")?.textContent?.trim()).toBe(
+      "Earlier turns are preserved in a compaction checkpoint. Open session checkpoints to branch or restore that pre-compaction view.",
+    );
     const button = container.querySelector<HTMLButtonElement>(".chat-divider__action");
-    expect(button?.textContent).toContain("Open checkpoints");
+    expect(button?.textContent?.trim()).toBe("Open checkpoints");
 
     expect(button).toBeInstanceOf(HTMLButtonElement);
     button!.click();
@@ -499,7 +501,9 @@ describe("chat loading skeleton", () => {
     });
 
     expect(container.querySelector(".chat-loading-skeleton")).toBeNull();
-    expect(container.textContent).toContain("Already loaded answer");
+    expect(container.querySelector(".chat-group")?.textContent?.trim()).toBe(
+      "Already loaded answer",
+    );
   });
 
   it("keeps active stream content visible without the skeleton during a background reload", () => {
@@ -510,7 +514,7 @@ describe("chat loading skeleton", () => {
     });
 
     expect(container.querySelector(".chat-loading-skeleton")).toBeNull();
-    expect(container.textContent).toContain("Partial streamed answer");
+    expect(container.querySelector(".chat-stream")?.textContent).toBe("Partial streamed answer");
   });
 
   it("keeps the reading indicator visible without the skeleton before stream text arrives", () => {
@@ -588,9 +592,6 @@ describe("chat voice controls", () => {
       "marin",
       "cedar",
     ]);
-    expect(voiceOptions).not.toContain("nova");
-    expect(voiceOptions).not.toContain("onyx");
-    expect(voiceOptions).not.toContain("fable");
     expect(reasoningOptions).toEqual(["", "minimal", "low", "medium", "high"]);
     if (model === null) {
       throw new Error("expected Talk model input");
@@ -604,12 +605,16 @@ describe("chat voice controls", () => {
   it("renders composer and Talk labels from the active locale", async () => {
     await i18n.setLocale("zh-CN");
     const container = renderChatView();
+    const startTalkLabel = t("chat.composer.startTalk");
 
-    requireElement(
+    const talkButton = requireElement(
       container,
-      `[aria-label="${t("chat.composer.startTalk")}"]`,
+      `[aria-label="${startTalkLabel}"]`,
       "localized Start Talk button",
     );
+    expect(talkButton.getAttribute("title")).toBe(startTalkLabel);
+    expect(talkButton.textContent?.trim()).toBe("");
+    expect(container.querySelector('[aria-label="Start Talk"]')).toBeNull();
     requireElement(
       container,
       `[aria-label="${t("chat.composer.attachFile")}"]`,
@@ -618,7 +623,6 @@ describe("chat voice controls", () => {
     expect(container.querySelector("textarea")?.getAttribute("placeholder")).toBe(
       t("chat.composer.placeholder", { name: "Val" }),
     );
-    expect(container.textContent).not.toContain("Start Talk");
   });
 
   it("lets users dismiss Talk start errors", () => {
@@ -630,7 +634,7 @@ describe("chat voice controls", () => {
       onDismissError,
     });
 
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+    expect(container.querySelector('[role="alert"] .callout__content')?.textContent).toBe(
       'Realtime voice provider "openai" is not configured',
     );
 
@@ -718,7 +722,14 @@ describe("chat slash menu accessibility", () => {
     if (!announcementText) {
       throw new Error("Expected command navigation to update the live announcement");
     }
-    expect(announcementText).toContain(activeOption?.textContent?.trim().split(/\s+/u)[0]);
+    const expectedAnnouncement = [
+      activeOption?.querySelector(".slash-menu-name")?.textContent?.trim(),
+      activeOption?.querySelector(".slash-menu-args")?.textContent?.trim(),
+      activeOption?.querySelector(".slash-menu-desc")?.textContent?.trim(),
+    ]
+      .filter(Boolean)
+      .join(" ");
+    expect(announcementText).toBe(expectedAnnouncement);
   });
 
   it("wires fixed argument suggestions with command-and-argument option ids", () => {
@@ -802,7 +813,7 @@ describe("chat attachment picker", () => {
     expect(getChatAttachmentDataUrl(nextAttachments[0])).toMatch(/^data:application\/pdf;base64,/);
     const preview = renderChatView({ attachments: nextAttachments });
     expect(preview.querySelectorAll(".chat-attachment-thumb--file")).toHaveLength(1);
-    expect(preview.textContent).toContain("brief.pdf");
+    expect(preview.querySelector(".chat-attachment-file__name")?.textContent).toBe("brief.pdf");
   });
 
   it("filters video file attachments", () => {
@@ -899,7 +910,7 @@ describe("chat welcome", () => {
 
     const avatar = container.querySelector<HTMLElement>(".agent-chat__avatar");
     expect(avatar?.tagName).toBe("DIV");
-    expect(avatar?.textContent).toContain("VC");
+    expect(avatar?.textContent?.trim()).toBe("VC");
     expect(avatar?.getAttribute("aria-label")).toBe("Val");
 
     container = renderWelcome({
@@ -924,9 +935,12 @@ describe("chat welcome", () => {
     await i18n.setLocale("zh-CN");
     const container = renderWelcome({ assistantAvatar: "VC", assistantAvatarUrl: null });
 
-    expect(container.textContent).toContain(t("chat.welcome.ready"));
-    expect(container.textContent).toContain(t("chat.welcome.suggestions.whatCanYouDo"));
-    expect(container.textContent).not.toContain("Ready to chat");
+    expect(container.querySelector(".agent-chat__badge")?.textContent?.trim()).toBe(
+      t("chat.welcome.ready"),
+    );
+    expect(container.querySelector(".agent-chat__suggestion")?.textContent?.trim()).toBe(
+      t("chat.welcome.suggestions.whatCanYouDo"),
+    );
   });
 });
 
@@ -989,22 +1003,13 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    requireElement(
-      container,
-      `[aria-label="${t("chat.selectors.session")}"]`,
-      "localized session selector",
-    );
-    requireElement(
-      container,
-      `[aria-label="${t("chat.selectors.model")}"]`,
-      "localized model selector",
-    );
-    requireElement(
-      container,
-      `[aria-label="${t("chat.selectors.thinkingLevel")}"]`,
-      "localized thinking level selector",
-    );
-    expect(container.innerHTML).not.toContain("Chat session");
+    expect(
+      [...container.querySelectorAll("select")].map((select) => select.getAttribute("aria-label")),
+    ).toEqual([
+      t("chat.selectors.session"),
+      t("chat.selectors.model"),
+      t("chat.selectors.thinkingLevel"),
+    ]);
   });
 
   it("falls back to the selected agent's main session when no sessions exist yet", () => {
@@ -1187,16 +1192,17 @@ describe("chat session controls", () => {
     const thinkingSelect = container.querySelector<HTMLSelectElement>(
       'select[data-chat-thinking-select="true"]',
     );
-    const options = [...(thinkingSelect?.options ?? [])].map((option) => option.value);
 
-    expect(options).toContain("adaptive");
-    expect(options).toContain("xhigh");
-    expect(options).toContain("max");
+    expect([...(thinkingSelect?.options ?? [])].map((option) => option.value)).toEqual([
+      "",
+      "off",
+      "adaptive",
+      "xhigh",
+      "max",
+    ]);
     expect(
-      [...(thinkingSelect?.options ?? [])]
-        .find((option) => option.value === "max")
-        ?.textContent?.trim(),
-    ).toBe("Override: maximum");
+      [...(thinkingSelect?.options ?? [])].map((option) => option.textContent?.trim()),
+    ).toEqual(["Off", "Off", "Override: adaptive", "Override: xhigh", "Override: maximum"]);
   });
 
   it("labels chat thinking default from the active session row", () => {

@@ -19,7 +19,12 @@ describe("logging.maxFileBytes config", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.map((issue) => issue.path)).toContain("logging.maxFileBytes");
+      expect(res.issues).toEqual([
+        {
+          path: "logging.maxFileBytes",
+          message: "Too small: expected number to be >0",
+        },
+      ]);
     }
   });
 });

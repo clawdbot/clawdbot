@@ -310,7 +310,7 @@ describe("POST /sessions/:sessionKey/kill", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, killed: false });
     expect(killControlledSubagentRunMock).toHaveBeenCalledTimes(1);
-    const killCall = killControlledSubagentRunMock.mock.calls[0]?.[0] as
+    const killCall = killControlledSubagentRunMock.mock.calls.at(0)?.[0] as
       | {
           cfg?: unknown;
           controller?: { controllerSessionKey?: string };

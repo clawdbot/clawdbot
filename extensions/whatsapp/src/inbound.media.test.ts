@@ -153,7 +153,7 @@ async function waitForMessage(onMessage: ReturnType<typeof vi.fn>) {
     interval: 1,
     timeout: 250,
   });
-  return onMessage.mock.calls[0][0];
+  return onMessage.mock.calls.at(0)?.[0];
 }
 
 function requireMediaPath(value: unknown): string {

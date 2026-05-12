@@ -201,6 +201,10 @@ Set `stream: true` to receive Server-Sent Events (SSE):
 - `tool_choice`: `"auto"`, `"none"`
 - `messages[*].role: "tool"` follow-up turns
 - `messages[*].tool_call_id` for binding tool results back to a prior tool call
+- `max_completion_tokens`: number; per-call cap for total completion tokens (reasoning tokens included). Current OpenAI Chat Completions field name; preferred when both `max_completion_tokens` and `max_tokens` are sent.
+- `max_tokens`: number; legacy alias accepted for backwards compatibility. Ignored when `max_completion_tokens` is also present.
+
+When either field is set, the value is forwarded to the upstream provider via the agent stream-param channel. The actual wire field name sent to the upstream provider is chosen by the provider transport: `max_completion_tokens` for OpenAI-family endpoints, and `max_tokens` for providers that only accept the legacy name (such as Mistral and Chutes).
 
 ### Unsupported variants
 

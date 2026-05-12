@@ -2,6 +2,8 @@
 
 FROM debian:bookworm-slim@sha256:f9c6a2fd2ddbc23e336b6257a5245e31f996953ef06cd13a59fa0a1df2d5c252
 
+LABEL org.openclaw.sandbox-browser.contract="2026-05-12-cdp-relay-auth"
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN --mount=type=cache,id=openclaw-sandbox-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
@@ -19,7 +21,6 @@ RUN --mount=type=cache,id=openclaw-sandbox-bookworm-apt-cache,target=/var/cache/
     jq \
     novnc \
     python3 \
-    socat \
     websockify \
     x11vnc \
     xvfb

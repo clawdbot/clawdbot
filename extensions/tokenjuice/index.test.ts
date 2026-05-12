@@ -48,7 +48,7 @@ describe("tokenjuice bundled plugin", () => {
 
     expect(createTokenjuiceOpenClawEmbeddedExtension).toHaveBeenCalledTimes(1);
     expect(tokenjuiceFactory).toHaveBeenCalledTimes(1);
-    const registration = registerAgentToolResultMiddleware.mock.calls[0];
+    const registration = registerAgentToolResultMiddleware.mock.calls.at(0);
     expect(typeof registration?.[0]).toBe("function");
     expect(registration?.[1]).toEqual({ runtimes: ["pi", "codex"] });
   });

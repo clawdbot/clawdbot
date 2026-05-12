@@ -8,6 +8,7 @@ import {
   AgentRuntimePolicySchema,
   AgentModelSchema,
   MemorySearchSchema,
+  AgentRunRetriesConfigSchema,
 } from "./zod-schema.agent-runtime.js";
 import {
   BlockStreamingChunkSchema,
@@ -218,6 +219,7 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    runRetries: AgentRunRetriesConfigSchema.optional(),
     embeddedPi: z
       .object({
         projectSettingsPolicy: z

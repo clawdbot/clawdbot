@@ -577,7 +577,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
         isKnownFromMeMessageId: undefined,
       });
 
-      expect(decision).toMatchObject({ kind: "reaction" });
+      expect(decision.kind).toBe("reaction");
       if (decision.kind !== "reaction") {
         throw new Error("expected reaction decision");
       }
@@ -685,7 +685,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
 
 describe("resolveIMessageReactionContext", () => {
   it("detects legacy tapback text without treating normal prose as a reaction", () => {
-    expect(resolveIMessageReactionContext({}, "Loved “Hello”")).toMatchObject({
+    expect(resolveIMessageReactionContext({}, "Loved “Hello”")).toStrictEqual({
       action: "added",
       emoji: "❤️",
       targetText: "Hello",
@@ -699,7 +699,12 @@ describe("resolveIMessageReactionContext", () => {
         { is_tapback: true, reaction_emoji: "👍", reacted_to_guid: "target" },
         "",
       ),
-    ).toMatchObject({ action: "added", emoji: "👍", targetGuid: "target" });
+    ).toStrictEqual({
+      action: "added",
+      emoji: "👍",
+      targetGuid: "target",
+      targetGuids: ["target"],
+    });
     expect(
       resolveIMessageReactionContext(
         {
@@ -709,14 +714,20 @@ describe("resolveIMessageReactionContext", () => {
         },
         "Loved “tapback proof”",
       ),
-    ).toMatchObject({
+    ).toStrictEqual({
       action: "added",
       emoji: "❤️",
       targetGuid: "321D6826-1013-4DF0-B53C-6F6241EF2EF6",
+      targetGuids: [
+        "321D6826-1013-4DF0-B53C-6F6241EF2EF6",
+        "p:0/321D6826-1013-4DF0-B53C-6F6241EF2EF6",
+      ],
     });
-    expect(resolveIMessageReactionContext({ associated_message_type: 2001 }, "")).toMatchObject({
+    expect(resolveIMessageReactionContext({ associated_message_type: 2001 }, "")).toStrictEqual({
       action: "added",
       emoji: "reaction",
+      targetGuid: undefined,
+      targetGuids: [],
     });
     expect(resolveIMessageReactionContext({ associated_message_type: 1 }, "ok")).toBeNull();
   });

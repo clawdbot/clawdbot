@@ -49,7 +49,7 @@ describe("memory-wiki plugin", () => {
       "wiki_get",
     ]);
     expect(registerCli).toHaveBeenCalledTimes(1);
-    expect(registerCli.mock.calls[0]?.[1]).toStrictEqual({
+    expect(registerCli.mock.calls.at(0)?.[1]).toStrictEqual({
       descriptors: [
         {
           name: "wiki",

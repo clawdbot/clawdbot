@@ -584,11 +584,16 @@ describe("updatePluginsAfterCoreUpdate (invalid config end-to-end)", () => {
     expect(result.status).toBe("error");
     expect(result.reason).toBe("invalid-config");
     expect(result.changed).toBe(false);
-    expect(result.warnings).toEqual([
-      expect.objectContaining({
+    expect(result.warnings).toStrictEqual([
+      {
         reason: "invalid-config",
-        guidance: expect.arrayContaining([expect.stringContaining("openclaw doctor")]),
-      }),
+        message:
+          "Plugin post-update convergence skipped because the config is invalid; refusing to restart the gateway with an unverified plugin set.",
+        guidance: [
+          "Run `openclaw doctor` to inspect the config validation errors.",
+          "Once the config parses, rerun `openclaw update`.",
+        ],
+      },
     ]);
   });
 });
@@ -603,19 +608,19 @@ describe("buildInvalidConfigPostCoreUpdateResult", () => {
 
   it("surfaces actionable repair guidance in both the structural warnings and the message string", () => {
     const built = buildInvalidConfigPostCoreUpdateResult();
-    expect(built.guidance).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("openclaw doctor"),
-        expect.stringContaining("openclaw update"),
-      ]),
-    );
-    expect(built.result.warnings).toEqual([
+    expect(built.guidance).toStrictEqual([
+      "Run `openclaw doctor` to inspect the config validation errors.",
+      "Once the config parses, rerun `openclaw update`.",
+    ]);
+    expect(built.result.warnings).toStrictEqual([
       {
         reason: "invalid-config",
         message: built.message,
         guidance: built.guidance,
       },
     ]);
-    expect(built.message).toMatch(/refusing to restart/);
+    expect(built.message).toBe(
+      "Plugin post-update convergence skipped because the config is invalid; refusing to restart the gateway with an unverified plugin set.",
+    );
   });
 });

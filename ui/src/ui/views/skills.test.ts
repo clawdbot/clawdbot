@@ -177,15 +177,16 @@ describe("renderSkills", () => {
     );
     await Promise.resolve();
 
-    let text = normalizeText(container);
-    expect(text).toContain("GitHub");
-    expect(text).toContain("GitHub integration for OpenClaw");
-    expect(text).toContain("v1.2.3");
-
     const resultItem = container.querySelector<HTMLElement>(".list-item");
     const installButton = container.querySelector<HTMLButtonElement>(".list-item .btn.btn--sm");
     expect(resultItem).toBeInstanceOf(HTMLElement);
     expect(installButton).toBeInstanceOf(HTMLButtonElement);
+    expect(resultItem?.querySelector(".list-title")?.textContent?.trim()).toBe("GitHub");
+    expect(resultItem?.querySelector(".list-sub")?.textContent?.trim()).toBe(
+      "GitHub integration for OpenClaw",
+    );
+    expect(resultItem?.querySelector(".list-meta .muted")?.textContent?.trim()).toBe("v1.2.3");
+    expect(installButton?.textContent?.trim()).toBe("Install");
     resultItem!.click();
     installButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
@@ -232,13 +233,12 @@ describe("renderSkills", () => {
     await Promise.resolve();
 
     expect(showModal).toHaveBeenCalledTimes(1);
-    text = normalizeText(container);
-    expect(text).toContain("rate limited");
-    expect(text).toContain("Installed github");
-    expect(text).toContain("By OpenClaw (@openclaw)");
-    expect(text).toContain("Latest: v1.2.3");
-    expect(text).toContain("Platforms: macos, linux");
-    expect(text).toContain("Added search support");
+    expect(
+      Array.from(container.querySelectorAll(".callout")).map((node) => normalizeText(node)),
+    ).toEqual(["rate limited", "Installed github"]);
+    expect(normalizeText(container.querySelector(".md-preview-dialog__body")!)).toBe(
+      "GitHub integration for OpenClaw By OpenClaw (@openclaw) Latest: v1.2.3 Added search support Platforms: macos, linux Install GitHub",
+    );
 
     const detailInstallButton = container.querySelector<HTMLButtonElement>(
       ".md-preview-dialog__body .btn.primary",

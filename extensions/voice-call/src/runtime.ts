@@ -457,11 +457,16 @@ export async function createVoiceCallRuntime(params: {
       );
     }
 
-    if (publicUrl && provider.name === "twilio") {
-      (provider as TwilioProvider).setPublicUrl(publicUrl);
+    if (publicUrl) {
+      provider.setPublicUrl?.(publicUrl);
     }
     if (publicUrl && realtimeProvider) {
       webhookServer.getRealtimeHandler()?.setPublicUrl(publicUrl);
+    }
+
+    const realtimeHandler = webhookServer.getRealtimeHandler();
+    if (realtimeHandler) {
+      manager.streamSessionIssuer = (request) => realtimeHandler.issueStreamSession(request);
     }
 
     if (provider.name === "twilio" && config.streaming?.enabled) {

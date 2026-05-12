@@ -84,8 +84,8 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
 
     expect(params.replySpy).toHaveBeenCalledTimes(1);
     return {
-      ctx: params.replySpy.mock.calls[0]?.[0],
-      opts: params.replySpy.mock.calls[0]?.[1],
+      ctx: params.replySpy.mock.calls.at(0)?.[0],
+      opts: params.replySpy.mock.calls.at(0)?.[1],
       replySpy: params.replySpy,
     };
   }
@@ -167,7 +167,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
       });
 
       expect(result.replySpy).toHaveBeenCalledTimes(1);
-      const [ctx, opts, passedConfig] = result.replySpy.mock.calls[0] ?? [];
+      const [ctx, opts, passedConfig] = result.replySpy.mock.calls.at(0) ?? [];
       if (!ctx || typeof ctx !== "object") {
         throw new Error("expected heartbeat reply context");
       }

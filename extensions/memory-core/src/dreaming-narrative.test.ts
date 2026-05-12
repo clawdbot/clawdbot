@@ -751,8 +751,12 @@ describe("generateAndAppendDreamNarrative", () => {
       limit: 5,
     });
     expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
-    expect(subagent.deleteSession.mock.calls[0]?.[0]).toEqual({ sessionKey: expectedSessionKey });
-    expect(subagent.deleteSession.mock.calls[1]?.[0]).toEqual({ sessionKey: retrySessionKey });
+    expect(mockObjectArg(subagent.deleteSession, "delete session")).toEqual({
+      sessionKey: expectedSessionKey,
+    });
+    expect(mockObjectArg(subagent.deleteSession, "delete session", 1)).toEqual({
+      sessionKey: retrySessionKey,
+    });
     expectLogIncludes(logger.warn, "unknown model");
   });
 
@@ -1038,15 +1042,19 @@ describe("generateAndAppendDreamNarrative", () => {
       logger,
     });
 
-    const firstSessionKey = subagent.run.mock.calls[0]?.[0]?.sessionKey;
-    const secondSessionKey = subagent.run.mock.calls[1]?.[0]?.sessionKey;
+    const firstSessionKey = mockObjectArg(subagent.run, "subagent run").sessionKey;
+    const secondSessionKey = mockObjectArg(subagent.run, "subagent run", 1).sessionKey;
     expect(firstSessionKey).toBeTypeOf("string");
     expect(secondSessionKey).toBeTypeOf("string");
     expect(firstSessionKey).not.toBe(secondSessionKey);
     expect(firstSessionKey).toContain("dreaming-narrative-light-");
     expect(secondSessionKey).toContain("dreaming-narrative-light-");
-    expect(subagent.deleteSession.mock.calls[0]?.[0]?.sessionKey).toBe(firstSessionKey);
-    expect(subagent.deleteSession.mock.calls[1]?.[0]?.sessionKey).toBe(secondSessionKey);
+    expect(mockObjectArg(subagent.deleteSession, "delete session").sessionKey).toBe(
+      firstSessionKey,
+    );
+    expect(mockObjectArg(subagent.deleteSession, "delete session", 1).sessionKey).toBe(
+      secondSessionKey,
+    );
   });
 });
 

@@ -195,22 +195,20 @@ function buildPluginSdkAliasMap(useDist) {
 }
 
 function getModuleLoader(tryNative) {
-  const effectiveTryNative = process.platform === "win32" ? false : tryNative;
-
-  if (moduleLoaders.has(effectiveTryNative)) {
-    return moduleLoaders.get(effectiveTryNative);
+  if (moduleLoaders.has(tryNative)) {
+    return moduleLoaders.get(tryNative);
   }
 
   const { createJiti } = require("jiti");
   const moduleLoader = createJiti(__filename, {
-    alias: buildPluginSdkAliasMap(effectiveTryNative),
+    alias: buildPluginSdkAliasMap(tryNative),
     interopDefault: true,
     // Prefer Node's native sync ESM loader for built dist/plugin-sdk/*.js files
     // so local plugins do not create a second transpiled OpenClaw core graph.
-    tryNative: effectiveTryNative,
+    tryNative,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
   });
-  moduleLoaders.set(effectiveTryNative, moduleLoader);
+  moduleLoaders.set(tryNative, moduleLoader);
   return moduleLoader;
 }
 

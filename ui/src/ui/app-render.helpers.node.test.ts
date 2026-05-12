@@ -531,11 +531,7 @@ describe("resolveSessionOptionGroups", () => {
       ],
     });
 
-    expect(labels).toContain("Subagent: cron-config-check");
-    expect(labels).not.toContain(sessionKey);
-    expect(labels).not.toContain(
-      "subagent:4f2146de-887b-4176-9abe-91140082959b · webchat:g-agent-main-subagent-4f2146de-887b-4176-9abe-91140082959b",
-    );
+    expect(labels).toEqual(["Subagent: cron-config-check"]);
   });
 
   it("does not synthesize active grouped sessions without a listed row", () => {
@@ -547,7 +543,7 @@ describe("resolveSessionOptionGroups", () => {
         sessionKey,
         sessions: [row({ key: sessionKey })],
       }),
-    ).toContain("subagent:4f2146de-887b-4176-9abe-91140082959b");
+    ).toEqual(["subagent:4f2146de-887b-4176-9abe-91140082959b"]);
   });
 
   it("keeps the active agent main session visible when no row exists yet", () => {
@@ -569,13 +565,10 @@ describe("resolveSessionOptionGroups", () => {
       ],
     });
 
-    expect(labels).toContain(
+    expect(labels).toEqual([
       "Subagent: cron-config-check · subagent:4f2146de-887b-4176-9abe-91140082959b",
-    );
-    expect(labels).toContain(
       "Subagent: cron-config-check · subagent:6fb8b84b-c31f-410f-b7df-1553c82e43c9",
-    );
-    expect(labels).not.toContain("Subagent: cron-config-check");
+    ]);
   });
 
   it("filters the chat session options to the active agent", () => {
@@ -600,9 +593,7 @@ describe("resolveSessionOptionGroups", () => {
       ],
     });
 
-    expect(labels).toContain("main");
-    expect(labels).toContain("Deep Chat (alpha) / main");
-    expect(labels).not.toContain("Coding (beta) / main");
+    expect(labels).toEqual(["main", "Deep Chat (alpha) / main"]);
   });
 
   it("shows sessions for the selected agent after switching agent scope", () => {
@@ -660,8 +651,7 @@ describe("resolveSessionOptionGroups", () => {
       ],
     });
 
-    expect(labels).toContain("Spock");
-    expect(labels).toContain("└─ PLC Coder");
+    expect(labels).toEqual(["Spock", "└─ PLC Coder"]);
   });
 
   it("uses raw key fallback for subagent without label when nested", () => {
@@ -675,8 +665,7 @@ describe("resolveSessionOptionGroups", () => {
       ],
     });
 
-    expect(labels).toContain("Spock");
-    expect(labels).toContain("└─ f4ac7ef1-1234-5678-9abc-def012345678");
+    expect(labels).toEqual(["Spock", "└─ f4ac7ef1-1234-5678-9abc-def012345678"]);
   });
 
   it("preserves sibling row order when nesting subagent sessions", () => {

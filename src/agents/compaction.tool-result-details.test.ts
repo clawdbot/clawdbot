@@ -77,13 +77,31 @@ describe("compaction toolResult details stripping", () => {
     const chunk = (
       piCodingAgentMocks.generateSummary.mock.calls as unknown as Array<[AgentMessage[]]>
     )[0]?.[0];
-    expect(chunk).toMatchObject([
+    expect(chunk).toStrictEqual([
       {
         role: "assistant",
         content: [
           { type: "toolCall", id: "call_1", name: "browser", arguments: { action: "tabs" } },
         ],
+        api: "openai-responses",
+        model: "gpt-5.4",
+        provider: "openai",
+        stopReason: "toolUse",
         timestamp: 1,
+        usage: {
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: {
+            cacheRead: 0,
+            cacheWrite: 0,
+            input: 0,
+            output: 0,
+            total: 0,
+          },
+          input: 0,
+          output: 0,
+          totalTokens: 0,
+        },
       },
       {
         role: "toolResult",

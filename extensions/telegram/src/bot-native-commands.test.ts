@@ -85,7 +85,7 @@ function collectCallbackData(replyMarkup: TelegramInlineKeyboardReplyMarkup | un
 }
 
 function firstCall(mock: { mock: { calls: Array<Array<unknown>> } }) {
-  const call = mock.mock.calls[0];
+  const call = mock.mock.calls.at(0);
   if (!call) {
     throw new Error("expected first mock call");
   }
@@ -309,9 +309,8 @@ describe("registerTelegramNativeCommands", () => {
     }
     await handler(createPrivateCommandContext());
 
-    const replyMarkup = sendMessage.mock.calls[0]?.[2]?.reply_markup as
-      | TelegramInlineKeyboardReplyMarkup
-      | undefined;
+    const replyMarkup = (firstCall(sendMessage)[2] as { reply_markup?: unknown } | undefined)
+      ?.reply_markup as TelegramInlineKeyboardReplyMarkup | undefined;
     const callbackData = collectCallbackData(replyMarkup);
 
     expect(callbackData).toEqual([
@@ -371,11 +370,11 @@ describe("registerTelegramNativeCommands", () => {
       },
     });
 
-    expect(sendMessage.mock.calls[0]?.[0]).toBe(-1001234567890);
-    expect(sendMessage.mock.calls[0]?.[1]).toBe("Command not found.");
+    const sendMessageCall = firstCall(sendMessage);
+    expect(sendMessageCall[0]).toBe(-1001234567890);
+    expect(sendMessageCall[1]).toBe("Command not found.");
     expect(
-      (sendMessage.mock.calls[0]?.[2] as { message_thread_id?: number } | undefined)
-        ?.message_thread_id,
+      (sendMessageCall[2] as { message_thread_id?: number } | undefined)?.message_thread_id,
     ).toBe(77);
   });
 
@@ -420,9 +419,10 @@ describe("registerTelegramNativeCommands", () => {
       }),
     );
 
-    expect(sendMessage.mock.calls[0]?.[0]).toBe(100);
-    expect(String(sendMessage.mock.calls[0]?.[1])).toContain("Running this command now");
-    expect(sendMessage.mock.calls[0]?.[2]).toBeUndefined();
+    const sendMessageCall = firstCall(sendMessage);
+    expect(sendMessageCall[0]).toBe(100);
+    expect(String(sendMessageCall[1])).toContain("Running this command now");
+    expect(sendMessageCall[2]).toBeUndefined();
     const editCall = firstCall(
       editMessageTelegram as unknown as { mock: { calls: Array<Array<unknown>> } },
     );

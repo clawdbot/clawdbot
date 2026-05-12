@@ -67,7 +67,7 @@ describe("CodexNativeSubagentTaskMirror", () => {
         progressSummary: "Codex native subagent started.",
       }),
     );
-    expect(vi.mocked(runtime.createRunningTaskRun).mock.calls[0]?.[0]).not.toHaveProperty(
+    expect(vi.mocked(runtime.createRunningTaskRun).mock.calls.at(0)?.[0]).not.toHaveProperty(
       "childSessionKey",
     );
     expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
@@ -251,7 +251,7 @@ describe("CodexNativeSubagentTaskMirror", () => {
         deliveryStatus: "not_applicable",
       }),
     );
-    expect(vi.mocked(runtime.createRunningTaskRun).mock.calls[0]?.[0]).not.toHaveProperty(
+    expect(vi.mocked(runtime.createRunningTaskRun).mock.calls.at(0)?.[0]).not.toHaveProperty(
       "childSessionKey",
     );
     expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith(

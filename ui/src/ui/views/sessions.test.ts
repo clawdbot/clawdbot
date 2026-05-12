@@ -72,6 +72,35 @@ function buildProps(result: SessionsListResult): SessionsProps {
   };
 }
 
+function readSessionDetailStats(container: ParentNode): Map<string, string> {
+  return new Map(
+    Array.from(container.querySelectorAll(".session-detail-stat")).map((stat) => [
+      stat.querySelector(".session-detail-stat__label")?.textContent?.trim() ?? "",
+      stat.querySelector(".session-detail-stat__value")?.textContent?.trim() ?? "",
+    ]),
+  );
+}
+
+function sessionTableHeaders(container: HTMLElement): Array<string | undefined> {
+  return Array.from(container.querySelectorAll("thead th")).map((cell) => cell.textContent?.trim());
+}
+
+const SESSION_TABLE_HEADERS = [
+  "",
+  "Key",
+  "Label",
+  "Kind",
+  "Status",
+  "Runtime",
+  "Updated",
+  "Tokens",
+  "Compaction",
+  "Thinking",
+  "Fast",
+  "Verbose",
+  "Reasoning",
+];
+
 describe("sessions view", () => {
   it("renders an explicit archived-session toggle", async () => {
     const container = document.createElement("div");
@@ -130,7 +159,7 @@ describe("sessions view", () => {
       ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=showArchived]")
       ?.closest("label");
 
-    expect(activeField?.textContent).toContain("Updated within");
+    expect(activeField?.querySelector(".session-filter-label")?.textContent).toBe("Updated within");
     expect(activeField?.getAttribute("data-tooltip")).toBe(
       "Loads sessions updated in the last 120 minutes.",
     );
@@ -169,11 +198,18 @@ describe("sessions view", () => {
     expect(toggleGroup?.getAttribute("aria-label")).toBe("Session source filters");
     expect(toggleGroup?.querySelectorAll(".session-filter-check")).toHaveLength(3);
     expect(
-      toggleGroup
-        ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=includeGlobal]")
-        ?.closest("label")
-        ?.classList.contains("session-filter-check--active"),
-    ).toBe(true);
+      Array.from(toggleGroup?.querySelectorAll(".session-filter-check") ?? []).map((toggle) => [
+        toggle.querySelector("input")?.getAttribute("name"),
+        [...toggle.classList],
+      ]),
+    ).toEqual([
+      [
+        "includeGlobal",
+        ["session-filter-check", "session-filter-toggle", "session-filter-check--active"],
+      ],
+      ["includeUnknown", ["session-filter-check", "session-filter-toggle"]],
+      ["showArchived", ["session-filter-check", "session-filter-toggle", "session-archive-toggle"]],
+    ]);
     expect(toggleGroup?.querySelector(".session-filter-check__box")).toBeNull();
   });
 
@@ -369,7 +405,7 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     const keyCell = container.querySelector(".session-key-cell");
-    expect(keyCell?.textContent).toContain("📊 Data Expert (dingtalk)");
+    expect(keyCell?.textContent?.trim()).toBe("📊 Data Expert (dingtalk)");
     expect(keyCell?.getAttribute("title")).toBe("📊 Data Expert (dingtalk)");
   });
 
@@ -390,7 +426,7 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     const keyCell = container.querySelector(".session-key-cell");
-    expect(keyCell?.textContent).toContain("agent:unknown-agent:telegram:abc123");
+    expect(keyCell?.textContent?.trim()).toBe("agent:unknown-agent:telegram:abc123");
     expect(keyCell?.getAttribute("title")).toBe("agent:unknown-agent:telegram:abc123");
   });
 
@@ -446,14 +482,19 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    expect(
-      Array.from(container.querySelectorAll("thead th")).map((cell) => cell.textContent?.trim()),
-    ).toContain("Status");
+    expect(sessionTableHeaders(container)).toEqual(SESSION_TABLE_HEADERS);
     const badges = Array.from(container.querySelectorAll(".session-status-badge"));
     expect(badges.map((badge) => badge.textContent?.trim())).toEqual(["Live", "Idle", "Failed"]);
-    expect(badges[0]?.classList.contains("session-status-badge--live")).toBe(true);
-    expect(badges[0]?.getAttribute("aria-label")).toBe("Status: Live");
-    expect(badges[2]?.classList.contains("session-status-badge--failed")).toBe(true);
+    expect(badges.map((badge) => [...badge.classList])).toEqual([
+      ["session-status-badge", "session-status-badge--live"],
+      ["session-status-badge", "session-status-badge--idle"],
+      ["session-status-badge", "session-status-badge--failed"],
+    ]);
+    expect(badges.map((badge) => badge.getAttribute("aria-label"))).toEqual([
+      "Status: Live",
+      "Status: Idle",
+      "Status: Failed",
+    ]);
   });
 
   it("renders and filters the session runtime", async () => {
@@ -482,13 +523,15 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    expect(
-      Array.from(container.querySelectorAll("thead th")).map((cell) => cell.textContent?.trim()),
-    ).toContain("Runtime");
+    expect(sessionTableHeaders(container)).toEqual(SESSION_TABLE_HEADERS);
     expect(container.querySelector(".session-runtime-cell")?.textContent?.trim()).toBe(
       "claude-cli (fallback none)",
     );
-    expect(container.textContent).not.toContain("agent:main:pi");
+    const rows = container.querySelectorAll("tbody tr.session-data-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.querySelector(".session-key-cell")?.textContent?.trim()).toBe(
+      "agent:main:claude",
+    );
   });
 
   it("keeps raw keys for inherited identity object properties", async () => {
@@ -508,8 +551,7 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     const text = container.querySelector(".session-key-cell")?.textContent ?? "";
-    expect(text).toContain("agent:constructor:telegram:abc123");
-    expect(text).not.toContain("Object (telegram)");
+    expect(text.trim()).toBe("agent:constructor:telegram:abc123");
   });
 
   it("expands checkpoint details from row activation when checkpoints exist", async () => {
@@ -571,10 +613,11 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const compactionCell = container.querySelector("tbody .session-compaction-col");
-    expect(compactionCell?.textContent).toContain("1 Checkpoint");
-    expect(compactionCell?.textContent).not.toContain("manual");
     const trigger = container.querySelector<HTMLButtonElement>(".session-compaction-trigger");
+    expect(trigger?.querySelector(".session-compaction-count")?.textContent?.trim()).toBe(
+      "1 Checkpoint",
+    );
+    expect(trigger?.textContent?.trim()).toBe("1 Checkpoint");
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector(".session-checkpoint-toggle")).toBeNull();
 
@@ -629,13 +672,36 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     const details = container.querySelector(".session-details-panel");
-    expect(details?.textContent).toContain("Session details");
-    expect(details?.textContent).toContain("gpt-5.5");
-    expect(details?.textContent).toContain("openai");
-    expect(details?.textContent).toContain("2m 5s");
-    expect(details?.textContent).toContain("Compaction history");
-    expect(details?.textContent).toContain("123,456 to 38,920 tokens");
-    expect(details?.textContent).not.toContain("->");
+    expect(details?.querySelector(".session-details-panel__eyebrow")?.textContent?.trim()).toBe(
+      "Session details",
+    );
+    expect(details?.querySelector(".session-details-panel__title")?.textContent?.trim()).toBe(
+      "agent:main:main",
+    );
+    expect(
+      Array.from(details?.querySelectorAll(".session-details-panel__badges > *") ?? []).map(
+        (badge) => badge.textContent?.trim(),
+      ),
+    ).toEqual(["Live", "direct"]);
+
+    const stats = readSessionDetailStats(details ?? container);
+    expect(stats.get("Status")).toBe("running");
+    expect(stats.get("Model")).toBe("gpt-5.5");
+    expect(stats.get("Provider")).toBe("openai");
+    expect(stats.get("Runtime")).toBe("2m 5s");
+    expect(stats.get("Tokens")).toBe("123456 / 200000");
+    expect(stats.get("Compaction")).toBe("1 Checkpoint");
+
+    const compactionSection = details?.querySelector(".session-details-section");
+    expect(
+      compactionSection?.querySelector(".session-details-panel__eyebrow")?.textContent?.trim(),
+    ).toBe("Compaction history");
+    expect(
+      compactionSection?.querySelector(".session-details-section__title")?.textContent?.trim(),
+    ).toBe("1 Checkpoint");
+    expect(
+      compactionSection?.querySelector(".session-checkpoint-card__delta")?.textContent?.trim(),
+    ).toBe("123,456 to 38,920 tokens");
   });
 
   it("does not expand checkpoint details when the row has none or a nested control was used", async () => {
@@ -714,10 +780,11 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    expect(container.querySelector(".session-key-cell")?.textContent).toContain(
+    const rows = container.querySelectorAll("tbody tr.session-data-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.querySelector(".session-key-cell")?.textContent?.trim()).toBe(
       "Data Expert (dingtalk)",
     );
-    expect(container.textContent).not.toContain("code-agent");
   });
 
   it("keeps session selects stable and deselects only the current page", async () => {
@@ -745,11 +812,20 @@ describe("sessions view", () => {
     const reasoning = selects[3] as HTMLSelectElement | undefined;
     expect(fast?.value).toBe("on");
     expect(verbose?.value).toBe("full");
-    expect(Array.from(verbose?.options ?? []).map((option) => option.value)).toContain("full");
+    expect(Array.from(verbose?.options ?? []).map((option) => option.value)).toEqual([
+      "",
+      "off",
+      "on",
+      "full",
+    ]);
     expect(reasoning?.value).toBe("custom-mode");
-    expect(Array.from(reasoning?.options ?? []).map((option) => option.value)).toContain(
+    expect(Array.from(reasoning?.options ?? []).map((option) => option.value)).toEqual([
+      "",
+      "off",
+      "on",
+      "stream",
       "custom-mode",
-    );
+    ]);
 
     const onSelectPage = vi.fn();
     const onDeselectPage = vi.fn();
@@ -810,13 +886,16 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    expect(container.textContent).toContain("No sessions match your filters.");
-    const showAll = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Show all",
+    const emptyState = container.querySelector(".data-table-empty-state");
+    expect(emptyState?.getAttribute("role")).toBe("status");
+    expect(emptyState?.firstElementChild?.textContent?.trim()).toBe(
+      "No sessions match your filters.",
     );
-    if (!showAll) {
+    const showAll = emptyState?.querySelector<HTMLButtonElement>("button");
+    if (!(showAll instanceof HTMLButtonElement)) {
       throw new Error("Expected filtered empty state to render a Show all button");
     }
+    expect(showAll.textContent?.trim()).toBe("Show all");
     showAll.click();
     expect(onClearFilters).toHaveBeenCalledTimes(1);
   });
@@ -836,7 +915,8 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    expect(container.textContent).toContain("No sessions found.");
-    expect(container.textContent).not.toContain("Show all");
+    const emptyCell = container.querySelector(".data-table-empty-cell");
+    expect(emptyCell?.textContent?.trim()).toBe("No sessions found.");
+    expect(emptyCell?.querySelector("button")).toBeNull();
   });
 });

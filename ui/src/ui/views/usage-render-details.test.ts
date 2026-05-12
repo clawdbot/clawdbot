@@ -121,10 +121,9 @@ describe("computeFilteredUsage", () => {
 });
 
 describe("chart bar sizing", () => {
-  it("bar width ratio and max are reasonable", () => {
-    expect(CHART_BAR_WIDTH_RATIO).toBeGreaterThan(0);
-    expect(CHART_BAR_WIDTH_RATIO).toBeLessThan(1);
-    expect(CHART_MAX_BAR_WIDTH).toBeGreaterThan(0);
+  it("keeps the chart bar sizing constants stable", () => {
+    expect(CHART_BAR_WIDTH_RATIO).toBe(0.75);
+    expect(CHART_MAX_BAR_WIDTH).toBe(8);
   });
 
   it("bars fit within chart width for typical point counts", () => {

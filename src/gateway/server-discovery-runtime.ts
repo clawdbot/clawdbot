@@ -169,7 +169,7 @@ export async function startGatewayDiscovery(params: {
           gatewayTlsFingerprintSha256: params.gatewayTls?.fingerprintSha256,
           tailnetDns,
           sshPort,
-          cliPath: resolveBonjourCliPath(),
+          cliPath,
         });
         params.logDiscovery.info(
           `wide-area DNS-SD ${result.changed ? "updated" : "unchanged"} (${wideAreaDomain} → ${result.zonePath})`,

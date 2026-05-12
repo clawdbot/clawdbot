@@ -352,12 +352,24 @@ describe("createStatusReactionController", () => {
     void controller.setThinking();
     await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
 
-    expectSetEmojiCall(calls, DEFAULT_EMOJIS.thinking);
-    expect(calls).not.toContainEqual({ method: "remove", emoji: "👀" });
+    expect(calls).toEqual([
+      { method: "set", emoji: "👀" },
+      { method: "set", emoji: DEFAULT_EMOJIS.stallSoft },
+      { method: "set", emoji: DEFAULT_EMOJIS.stallHard },
+      { method: "set", emoji: DEFAULT_EMOJIS.thinking },
+    ]);
 
     await controller.clear();
-    expect(calls).toContainEqual({ method: "remove", emoji: "👀" });
-    expect(calls).toContainEqual({ method: "remove", emoji: DEFAULT_EMOJIS.thinking });
+    expect(calls).toEqual([
+      { method: "set", emoji: "👀" },
+      { method: "set", emoji: DEFAULT_EMOJIS.stallSoft },
+      { method: "set", emoji: DEFAULT_EMOJIS.stallHard },
+      { method: "set", emoji: DEFAULT_EMOJIS.thinking },
+      { method: "remove", emoji: "👀" },
+      { method: "remove", emoji: DEFAULT_EMOJIS.stallSoft },
+      { method: "remove", emoji: DEFAULT_EMOJIS.stallHard },
+      { method: "remove", emoji: DEFAULT_EMOJIS.thinking },
+    ]);
   });
 
   it("should remove tracked non-terminal emojis when setting done", async () => {
@@ -406,8 +418,10 @@ describe("createStatusReactionController", () => {
     void controller.setThinking();
     await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
 
-    expect(countCallsForMethodAndEmoji(calls, "set", DEFAULT_EMOJIS.thinking)).toBe(1);
-    expect(calls).not.toContainEqual({ method: "remove", emoji: DEFAULT_EMOJIS.thinking });
+    expect(calls).toEqual([
+      { method: "set", emoji: DEFAULT_EMOJIS.thinking },
+      { method: "set", emoji: "🔎" },
+    ]);
   });
 
   it("should only call setReaction when adapter lacks removeReaction", async () => {

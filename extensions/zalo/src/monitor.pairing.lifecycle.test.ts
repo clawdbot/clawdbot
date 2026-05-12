@@ -84,7 +84,7 @@ describe("Zalo pairing lifecycle", () => {
         meta: { name: "Unauthorized User" },
       });
       expect(sendMessageMock).toHaveBeenCalledTimes(1);
-      const [sendToken, sendPayload, sendOptions] = sendMessageMock.mock.calls[0] as [
+      const [sendToken, sendPayload, sendOptions] = sendMessageMock.mock.calls.at(0) as [
         string,
         { chat_id?: string; text?: string },
         unknown,

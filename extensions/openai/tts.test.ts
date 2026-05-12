@@ -43,6 +43,22 @@ const officialEndpointValidationCases = [
   },
 ];
 
+function firstFetchCall(fetchMock: ReturnType<typeof vi.fn>): unknown[] {
+  const call = fetchMock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected fetch call");
+  }
+  return call;
+}
+
+function firstFetchInit(fetchMock: ReturnType<typeof vi.fn>): RequestInit {
+  const init = firstFetchCall(fetchMock).at(1);
+  if (!init || typeof init !== "object") {
+    throw new Error("expected fetch init");
+  }
+  return init as RequestInit;
+}
+
 describe("openai tts", () => {
   const proxyReset = installDebugProxyTestResetHooks();
   const originalFetch = globalThis.fetch;
@@ -148,7 +164,8 @@ describe("openai tts", () => {
         timeoutMs: 5_000,
       });
 
-      const [url, init] = fetchMock.mock.calls[0] ?? [];
+      const url = firstFetchCall(fetchMock).at(0);
+      const init = firstFetchInit(fetchMock);
       const headers = init?.headers as Record<string, string> | undefined;
       expect(url).toBe("https://api.openai.com/v1/audio/speech");
       expect(headers?.originator).toBe("openclaw");
@@ -174,7 +191,7 @@ describe("openai tts", () => {
         timeoutMs: 5_000,
       });
 
-      const [, init] = fetchMock.mock.calls[0] ?? [];
+      const init = firstFetchInit(fetchMock);
       if (typeof init?.body !== "string") {
         throw new Error("expected JSON request body");
       }
@@ -206,7 +223,7 @@ describe("openai tts", () => {
         timeoutMs: 5_000,
       });
 
-      const [, init] = fetchMock.mock.calls[0] ?? [];
+      const init = firstFetchInit(fetchMock);
       if (typeof init?.body !== "string") {
         throw new Error("expected JSON request body");
       }
@@ -241,7 +258,7 @@ describe("openai tts", () => {
         timeoutMs: 5_000,
       });
 
-      const [, init] = fetchMock.mock.calls[0] ?? [];
+      const init = firstFetchInit(fetchMock);
       if (typeof init?.body !== "string") {
         throw new Error("expected JSON request body");
       }

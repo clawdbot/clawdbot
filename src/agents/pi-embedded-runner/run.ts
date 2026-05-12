@@ -894,7 +894,11 @@ export async function runEmbeddedPiAgent(
 
       const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
-      const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
+      const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(
+        profileCandidates.length,
+        params.config,
+        sessionAgentId,
+      );
       let overflowCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;
       let bootstrapPromptWarningSignaturesSeen =

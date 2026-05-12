@@ -73,7 +73,7 @@ describe("qwen video generation provider", () => {
     });
 
     expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
-    expectPostJsonRequest(postJsonRequestMock.mock.calls[0]?.[0], {
+    expectPostJsonRequest(postJsonRequestMock.mock.calls.at(0)?.[0], {
       url: "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
       body: {
         model: "wan2.6-r2v-flash",
@@ -135,7 +135,7 @@ describe("qwen video generation provider", () => {
     });
 
     expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
-    expectPostJsonRequest(postJsonRequestMock.mock.calls[0]?.[0], {
+    expectPostJsonRequest(postJsonRequestMock.mock.calls.at(0)?.[0], {
       url: "https://coding-intl.dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
       body: {
         model: "wan2.6-t2v",

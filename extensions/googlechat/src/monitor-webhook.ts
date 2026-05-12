@@ -1,5 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeWebhookPath,
+  resolveRequestClientIp,
+  type FixedWindowRateLimiter,
+} from "openclaw/plugin-sdk/webhook-ingress";
 import type { WebhookInFlightLimiter } from "openclaw/plugin-sdk/webhook-request-guards";
 import { readJsonWebhookBodyOrReject } from "openclaw/plugin-sdk/webhook-request-guards";
 import {
@@ -183,16 +188,29 @@ export function warnAppPrincipalMisconfiguration(params: {
 
 export function createGoogleChatWebhookRequestHandler(params: {
   webhookTargets: Map<string, WebhookTarget[]>;
+  webhookRateLimiter: FixedWindowRateLimiter;
   webhookInFlightLimiter: WebhookInFlightLimiter;
   processEvent: (event: GoogleChatEvent, target: WebhookTarget) => Promise<void>;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
+    const path = normalizeWebhookPath(new URL(req.url ?? "/", "http://localhost").pathname);
+    // Shared-path registrations use the same gateway proxy settings in normal runtime setup.
+    const config = params.webhookTargets.get(path)?.[0]?.config;
+    const clientIp =
+      resolveRequestClientIp(
+        req,
+        config?.gateway?.trustedProxies,
+        config?.gateway?.allowRealIpFallback === true,
+      ) ?? "unknown";
+
     return await withResolvedWebhookRequestPipeline({
       req,
       res,
       targetsByPath: params.webhookTargets,
       allowMethods: ["POST"],
       requireJsonContentType: true,
+      rateLimiter: params.webhookRateLimiter,
+      rateLimitKey: `${path}:${clientIp}`,
       inFlightLimiter: params.webhookInFlightLimiter,
       handle: async ({ targets }) => {
         const headerBearer = extractBearerToken(req.headers.authorization);

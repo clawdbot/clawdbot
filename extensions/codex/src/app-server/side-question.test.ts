@@ -107,6 +107,14 @@ function createFakeClient(): FakeClient {
   return client;
 }
 
+function mockCall(mock: ReturnType<typeof vi.fn>, index = 0): unknown[] {
+  const call = mock.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  return call;
+}
+
 function threadResult(threadId: string) {
   return {
     thread: {
@@ -252,7 +260,7 @@ describe("runCodexAppServerSideQuestion", () => {
     const result = await runCodexAppServerSideQuestion(sideParams());
 
     expect(result).toEqual({ text: "Side answer." });
-    const forkCall = client.request.mock.calls[0];
+    const forkCall = mockCall(client.request);
     expect(forkCall?.[0]).toBe("thread/fork");
     const forkParams = forkCall?.[1] as Record<string, unknown> | undefined;
     expect(Object.keys(forkParams ?? {}).toSorted()).toEqual([
@@ -285,7 +293,7 @@ describe("runCodexAppServerSideQuestion", () => {
     );
     expect(forkCall?.[2]).toEqual({ timeoutMs: 60_000, signal: undefined });
 
-    const injectCall = client.request.mock.calls[1];
+    const injectCall = mockCall(client.request, 1);
     expect(injectCall?.[0]).toBe("thread/inject_items");
     const injectParams = injectCall?.[1] as
       | { threadId?: string; items?: Array<{ type?: string; role?: string; content?: unknown }> }
@@ -335,7 +343,7 @@ describe("runCodexAppServerSideQuestion", () => {
     ]);
     expect(client.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
 
-    const [toolOptions] = createOpenClawCodingToolsMock.mock.calls[0] ?? [];
+    const [toolOptions] = mockCall(createOpenClawCodingToolsMock);
     expect(toolOptions).toHaveProperty("agentDir", "/tmp/agent");
     expect(toolOptions).toHaveProperty("workspaceDir", "/tmp/workspace");
     expect(toolOptions).toHaveProperty("sessionId", "session-1");
@@ -382,8 +390,7 @@ describe("runCodexAppServerSideQuestion", () => {
     const result = await runCodexAppServerSideQuestion(sideParams());
 
     expect(result).toEqual({ text: "Tool answer." });
-    const [toolCallId, toolArguments, toolSignal, toolOptions] =
-      toolExecuteMock.mock.calls[0] ?? [];
+    const [toolCallId, toolArguments, toolSignal, toolOptions] = mockCall(toolExecuteMock);
     expect(toolExecuteMock).toHaveBeenCalledTimes(1);
     expect(toolCallId).toBe("tool-1");
     expect(toolArguments).toEqual({ topic: "AGENTS.md" });

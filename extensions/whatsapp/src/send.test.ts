@@ -298,7 +298,7 @@ describe("web outbound", () => {
     });
 
     expect(hoisted.runFfmpeg).toHaveBeenCalledTimes(1);
-    const ffmpegArgs = hoisted.runFfmpeg.mock.calls[0]?.[0] as string[] | undefined;
+    const ffmpegArgs = hoisted.runFfmpeg.mock.calls.at(0)?.[0] as string[] | undefined;
     expect(ffmpegArgs?.slice(0, 5)).toEqual(["-hide_banner", "-loglevel", "error", "-y", "-i"]);
     expect(ffmpegArgs?.[5]).toContain(`/input.${media.name}`);
     expect(ffmpegArgs?.slice(6, -1)).toEqual([

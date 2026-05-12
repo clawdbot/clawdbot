@@ -1,3 +1,4 @@
+import { redactCdpUrl } from "../cdp.helpers.js";
 import { snapshotAria } from "../cdp.js";
 import { getChromeMcpPid } from "../chrome-mcp.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
@@ -163,7 +164,7 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
       ? getChromeMcpPid(profileCtx.profile.name)
       : (profileState?.running?.pid ?? null),
     cdpPort: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpPort,
-    cdpUrl: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpUrl,
+    cdpUrl: capabilities.usesChromeMcp ? null : (redactCdpUrl(profileCtx.profile.cdpUrl) ?? null),
     chosenBrowser: profileState?.running?.exe.kind ?? null,
     detectedBrowser,
     detectedExecutablePath,

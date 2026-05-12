@@ -103,7 +103,7 @@ describe("zalouser monitor pairing account scoping", () => {
 
     expect(readAllowFromStore).toHaveBeenCalledOnce();
     const allowStoreParams = requireRecord(
-      readAllowFromStore.mock.calls[0]?.[0],
+      readAllowFromStore.mock.calls.at(0)?.[0],
       "allow store params",
     );
     expect(allowStoreParams.channel).toBe("zalouser");
@@ -111,7 +111,7 @@ describe("zalouser monitor pairing account scoping", () => {
 
     expect(upsertPairingRequest).toHaveBeenCalledOnce();
     const pairingRequest = requireRecord(
-      upsertPairingRequest.mock.calls[0]?.[0],
+      upsertPairingRequest.mock.calls.at(0)?.[0],
       "pairing request params",
     );
     expect(pairingRequest.channel).toBe("zalouser");

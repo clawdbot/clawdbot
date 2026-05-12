@@ -159,13 +159,38 @@ function makeRuntime() {
   };
 }
 
+function firstMockArg(mockFn: ReturnType<typeof vi.fn>, label: string): unknown {
+  const call = mockFn.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`Expected ${label} call`);
+  }
+  return call.at(0);
+}
+
+function runtimeLogText(runtime: ReturnType<typeof makeRuntime>): string {
+  const value = firstMockArg(runtime.log, "runtime.log");
+  if (typeof value !== "string") {
+    throw new Error("Expected runtime.log text");
+  }
+  return value;
+}
+
+function runtimeErrorText(runtime: ReturnType<typeof makeRuntime>): string {
+  const value = firstMockArg(runtime.error, "runtime.error");
+  if (typeof value !== "string") {
+    throw new Error("Expected runtime.error text");
+  }
+  return value;
+}
+
 function expectModelRegistryUnavailable(
   runtime: ReturnType<typeof makeRuntime>,
   expectedDetail: string,
 ) {
   expect(runtime.error).toHaveBeenCalledTimes(1);
-  expect(runtime.error.mock.calls[0]?.[0]).toContain("Model registry unavailable:");
-  expect(runtime.error.mock.calls[0]?.[0]).toContain(expectedDetail);
+  const errorText = runtimeErrorText(runtime);
+  expect(errorText).toContain("Model registry unavailable:");
+  expect(errorText).toContain(expectedDetail);
   expect(runtime.log).not.toHaveBeenCalled();
   expect(process.exitCode).toBe(1);
 }
@@ -312,7 +337,7 @@ describe("models list/status", () => {
 
   function parseJsonLog(runtime: ReturnType<typeof makeRuntime>) {
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    return JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
+    return JSON.parse(runtimeLogText(runtime));
   }
 
   async function expectZaiProviderFilter(provider: string) {
@@ -397,7 +422,7 @@ describe("models list/status", () => {
     await modelsListCommand({ plain: true }, runtime);
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    expect(runtime.log.mock.calls[0]?.[0]).toBe("zai/glm-4.7");
+    expect(runtimeLogText(runtime)).toBe("zai/glm-4.7");
   });
 
   it("models list plain keeps canonical OpenRouter native ids", async () => {
@@ -420,7 +445,7 @@ describe("models list/status", () => {
     await modelsListCommand({ plain: true }, runtime);
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    expect(runtime.log.mock.calls[0]?.[0]).toBe("openrouter/hunter-alpha");
+    expect(runtimeLogText(runtime)).toBe("openrouter/hunter-alpha");
   });
 
   it.each(["z.ai", "Z.AI", "z-ai"] as const)(

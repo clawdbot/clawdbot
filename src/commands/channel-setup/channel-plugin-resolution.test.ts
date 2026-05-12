@@ -111,7 +111,7 @@ describe("resolveInstallableChannelPlugin", () => {
     expect(result.plugin?.id).toBe("telegram");
     expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
     const snapshotRequest =
-      mocks.loadChannelSetupPluginRegistrySnapshotForChannel.mock.calls[0]?.[0];
+      mocks.loadChannelSetupPluginRegistrySnapshotForChannel.mock.calls.at(0)?.[0];
     expect(snapshotRequest?.channel).toBe("telegram");
     expect(snapshotRequest?.pluginId).toBe("telegram");
     expect(snapshotRequest?.workspaceDir).toBe("/tmp/workspace");
@@ -149,7 +149,7 @@ describe("resolveInstallableChannelPlugin", () => {
     expect(result.plugin?.id).toBe("telegram");
     expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
     const snapshotRequest =
-      mocks.loadChannelSetupPluginRegistrySnapshotForChannel.mock.calls[0]?.[0];
+      mocks.loadChannelSetupPluginRegistrySnapshotForChannel.mock.calls.at(0)?.[0];
     expect(snapshotRequest?.channel).toBe("telegram");
     expect(snapshotRequest?.pluginId).toBe("evil-telegram-shadow");
     expect(snapshotRequest?.workspaceDir).toBe("/tmp/workspace");
@@ -237,7 +237,7 @@ describe("resolveInstallableChannelPlugin", () => {
     });
 
     expect(mocks.ensureChannelSetupPluginInstalled).toHaveBeenCalledTimes(1);
-    const installRequest = mocks.ensureChannelSetupPluginInstalled.mock.calls[0]?.[0];
+    const installRequest = mocks.ensureChannelSetupPluginInstalled.mock.calls.at(0)?.[0];
     expect(installRequest?.entry).toBe(catalogEntry);
     expect(result.pluginInstalled).toBe(true);
   });

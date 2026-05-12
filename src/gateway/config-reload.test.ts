@@ -634,7 +634,7 @@ type ReloaderHarness = ReturnType<typeof createReloaderHarness>;
 
 function getOnlyRestartCall(harness: ReloaderHarness): [GatewayReloadPlan, OpenClawConfig] {
   expect(harness.onRestart).toHaveBeenCalledTimes(1);
-  const call = harness.onRestart.mock.calls[0];
+  const call = harness.onRestart.mock.calls.at(0);
   if (!call) {
     throw new Error("expected one restart call");
   }
@@ -643,7 +643,7 @@ function getOnlyRestartCall(harness: ReloaderHarness): [GatewayReloadPlan, OpenC
 
 function getOnlyHotReloadCall(harness: ReloaderHarness): [GatewayReloadPlan, OpenClawConfig] {
   expect(harness.onHotReload).toHaveBeenCalledTimes(1);
-  const call = harness.onHotReload.mock.calls[0];
+  const call = harness.onHotReload.mock.calls.at(0);
   if (!call) {
     throw new Error("expected one hot reload call");
   }
@@ -958,7 +958,7 @@ describe("startGatewayConfigReloader", () => {
 
     expect(readSnapshot).toHaveBeenCalledTimes(1);
     expect(harness.onHotReload).toHaveBeenCalledTimes(1);
-    const [promotedSnapshot, promotionReason] = promoteSnapshot.mock.calls[0] ?? [];
+    const [promotedSnapshot, promotionReason] = promoteSnapshot.mock.calls.at(0) ?? [];
     expect(promotedSnapshot?.hash).toBe("internal-1");
     expect(promotionReason).toBe("in-process-write");
 
@@ -997,7 +997,7 @@ describe("startGatewayConfigReloader", () => {
     expect(harness.log.info).toHaveBeenCalledWith(
       "config reload skipped by writer intent (caller handles follow-up)",
     );
-    const [promotedSnapshot, promotionReason] = promoteSnapshot.mock.calls[0] ?? [];
+    const [promotedSnapshot, promotionReason] = promoteSnapshot.mock.calls.at(0) ?? [];
     expect(promotedSnapshot?.hash).toBe("internal-none");
     expect(promotionReason).toBe("in-process-write");
 

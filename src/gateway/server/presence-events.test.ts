@@ -18,7 +18,7 @@ describe("broadcastPresenceSnapshot", () => {
     expect(getHealthVersion).toHaveBeenCalledTimes(1);
     expect(broadcast).toHaveBeenCalledTimes(1);
 
-    const [event, payload, opts] = broadcast.mock.calls[0] as [
+    const [event, payload, opts] = broadcast.mock.calls.at(0) as [
       string,
       unknown,
       { dropIfSlow?: boolean; stateVersion?: { presence?: number; health?: number } } | undefined,

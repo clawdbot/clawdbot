@@ -66,6 +66,21 @@ describe("resolveApprovalOverGateway", () => {
     });
   });
 
+  it("routes explicit plugin resolution through plugin.approval.resolve", async () => {
+    await resolveApprovalOverGateway({
+      cfg: {} as never,
+      approvalId: "approval-1",
+      decision: "allow-once",
+      resolveMethod: "plugin",
+    });
+
+    expect(hoisted.clientRequest).toHaveBeenCalledTimes(1);
+    expect(hoisted.clientRequest).toHaveBeenCalledWith("plugin.approval.resolve", {
+      id: "approval-1",
+      decision: "allow-once",
+    });
+  });
+
   it("falls back to plugin.approval.resolve only for not-found exec approvals when enabled", async () => {
     const notFoundError = Object.assign(new Error("unknown or expired approval id"), {
       gatewayCode: "APPROVAL_NOT_FOUND",

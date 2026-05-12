@@ -8,9 +8,12 @@ describe("btw inline message", () => {
       text: "323",
     });
 
-    const rendered = message.render(80).join("\n");
-    expect(rendered).toContain("BTW: what is 17 * 19?");
-    expect(rendered).toContain("323");
-    expect(rendered).toContain("Press Enter or Esc to dismiss");
+    expect(message.render(80)).toEqual([
+      "",
+      " BTW: what is 17 * 19?                                                          ",
+      "",
+      "323                                                                             ",
+      " Press Enter or Esc to dismiss                                                  ",
+    ]);
   });
 });

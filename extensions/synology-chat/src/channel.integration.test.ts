@@ -87,7 +87,7 @@ describe("Synology channel wiring integration", () => {
     );
     expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1);
 
-    const firstCall = registerPluginHttpRouteMock.mock.calls[0];
+    const firstCall = registerPluginHttpRouteMock.mock.calls.at(0);
     if (!firstCall) {
       throw new Error("Expected registerPluginHttpRoute to be called");
     }

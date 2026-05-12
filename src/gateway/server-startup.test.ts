@@ -38,7 +38,7 @@ let shouldSkipStartupModelPrewarm: typeof import("./server-startup-post-attach.j
 
 function expectModelsJsonPrewarmCall(cfg: OpenClawConfig) {
   expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
-  const [calledConfig, agentDir, options] = ensureOpenClawModelsJsonMock.mock.calls[0] ?? [];
+  const [calledConfig, agentDir, options] = ensureOpenClawModelsJsonMock.mock.calls.at(0) ?? [];
   expect(calledConfig).toBe(cfg);
   expect(agentDir).toBe("/tmp/agent");
   expect(options).toEqual({

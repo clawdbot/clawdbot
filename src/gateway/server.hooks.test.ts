@@ -89,6 +89,25 @@ async function waitForCronIsolatedRuns(count: number, timeoutMs = 2_000): Promis
     .toBe(count);
 }
 
+type HookCronRunCall = {
+  sessionKey?: string;
+  job?: {
+    agentId?: string;
+    payload?: {
+      externalContentSource?: string;
+      model?: string;
+    };
+  };
+};
+
+function cronRunCall(index = 0): HookCronRunCall {
+  const call = cronIsolatedRun.mock.calls.at(index)?.[0];
+  if (!call || typeof call !== "object") {
+    throw new Error(`expected cron isolated run call ${index + 1}`);
+  }
+  return call as HookCronRunCall;
+}
+
 async function postAgentHookWithIdempotency(
   port: number,
   idempotencyKey: string,
@@ -133,9 +152,7 @@ async function expectHookAgentSessionRouting(params: {
   expect(resAgent.status).toBe(200);
   await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
 
-  const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-    | { sessionKey?: string; job?: { agentId?: string } }
-    | undefined;
+  const routedCall = cronRunCall();
   expect(routedCall?.job?.agentId).toBe("hooks");
   expect(routedCall?.sessionKey).toBe(params.expectedSessionKey);
   drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
@@ -180,9 +197,7 @@ describe("gateway server hooks", () => {
       expect(resAgent.status).toBe(200);
       const agentEvents = await waitForSystemEvent();
       expect(agentEvents.some((event) => event.includes("Hook Email: done"))).toBe(true);
-      const firstCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        job?: { payload?: { externalContentSource?: string } };
-      };
+      const firstCall = cronRunCall();
       expect(firstCall?.job?.payload?.externalContentSource).toBe("webhook");
       drainSystemEvents(resolveMainKey());
 
@@ -194,9 +209,7 @@ describe("gateway server hooks", () => {
       });
       expect(resAgentModel.status).toBe(200);
       await waitForSystemEvent();
-      const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        job?: { payload?: { model?: string } };
-      };
+      const call = cronRunCall();
       expect(call?.job?.payload?.model).toBe("openai/gpt-4.1-mini");
       drainSystemEvents(resolveMainKey());
 
@@ -208,9 +221,7 @@ describe("gateway server hooks", () => {
       });
       expect(resAgentWithId.status).toBe(200);
       await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
-      const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        job?: { agentId?: string };
-      };
+      const routedCall = cronRunCall();
       expect(routedCall?.job?.agentId).toBe("hooks");
       drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
 
@@ -222,9 +233,7 @@ describe("gateway server hooks", () => {
       });
       expect(resAgentUnknown.status).toBe(200);
       await waitForSystemEvent();
-      const fallbackCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        job?: { agentId?: string };
-      };
+      const fallbackCall = cronRunCall();
       expect(fallbackCall?.job?.agentId).toBe("main");
       drainSystemEvents(resolveMainKey());
 
@@ -297,10 +306,7 @@ describe("gateway server hooks", () => {
         .poll(() => cronIsolatedRun.mock.calls.length, { timeout: 2_000, interval: 10 })
         .toBe(1);
 
-      const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        sessionKey?: string;
-        job?: { payload?: { externalContentSource?: string } };
-      };
+      const call = cronRunCall();
       expect(call?.sessionKey).toBe("main");
       expect(call?.job?.payload?.externalContentSource).toBe("gmail");
       drainSystemEvents(resolveMainKey());
@@ -490,9 +496,7 @@ describe("gateway server hooks", () => {
       });
       expect(defaultRoute.status).toBe(200);
       await waitForSystemEvent();
-      const defaultCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string }
-        | undefined;
+      const defaultCall = cronRunCall();
       expect(defaultCall?.sessionKey).toBe("hook:ingress");
       drainSystemEvents(resolveMainKey());
 
@@ -508,9 +512,7 @@ describe("gateway server hooks", () => {
       });
       expect(mappedOk.status).toBe(200);
       await waitForSystemEvent();
-      const mappedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string }
-        | undefined;
+      const mappedCall = cronRunCall();
       expect(mappedCall?.sessionKey).toBe("hook:mapped:42");
       drainSystemEvents(resolveMainKey());
 
@@ -562,9 +564,7 @@ describe("gateway server hooks", () => {
       });
       expect(staticMapped.status).toBe(200);
       await waitForSystemEvent();
-      const staticCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string }
-        | undefined;
+      const staticCall = cronRunCall();
       expect(staticCall?.sessionKey).toBe("hook:gmail:fixed");
       drainSystemEvents(resolveMainKey());
     });
@@ -812,9 +812,7 @@ describe("gateway server hooks", () => {
       const resNoAgent = await postHook(port, "/hooks/agent", { message: "No explicit agent" });
       expect(resNoAgent.status).toBe(200);
       await waitForSystemEvent();
-      const noAgentCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        job?: { agentId?: string };
-      };
+      const noAgentCall = cronRunCall();
       expect(noAgentCall?.job?.agentId).toBeUndefined();
       drainSystemEvents(resolveMainKey());
 
@@ -825,9 +823,7 @@ describe("gateway server hooks", () => {
       });
       expect(resAllowed.status).toBe(200);
       await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
-      const allowedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        job?: { agentId?: string };
-      };
+      const allowedCall = cronRunCall();
       expect(allowedCall?.job?.agentId).toBe("hooks");
       drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
 

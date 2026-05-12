@@ -123,6 +123,28 @@ describe("cdp helpers", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("sends URL credentials as an auth header for guarded CDP fetches", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: {
+        ok: true,
+        status: 200,
+      },
+      release,
+    });
+
+    await expect(
+      fetchOk("http://openclaw:relay-token@127.0.0.1:9222/json/version", 250),
+    ).resolves.toBeUndefined();
+
+    const request = requireGuardedFetchRequest();
+    expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
+    expect(request?.init?.headers).toEqual({
+      Authorization: "Basic b3BlbmNsYXc6cmVsYXktdG9rZW4=",
+    });
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves hostname allowlist while allowing exact loopback CDP fetches", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValueOnce({

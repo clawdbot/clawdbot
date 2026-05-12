@@ -211,7 +211,7 @@ describe("runReplyAgent media path normalization", () => {
     }
     expect(result.mediaUrl).toBe("/tmp/outbound-media/generated.png");
     expect(result.mediaUrls).toEqual(["/tmp/outbound-media/generated.png"]);
-    const outboundAttachmentCall = resolveOutboundAttachmentFromUrlMock.mock.calls[0];
+    const outboundAttachmentCall = resolveOutboundAttachmentFromUrlMock.mock.calls.at(0);
     expect(outboundAttachmentCall?.[0]).toBe(path.join("/tmp/workspace", "out", "generated.png"));
     expect(outboundAttachmentCall?.[1]).toBe(5 * 1024 * 1024);
     const outboundAttachmentOptions = outboundAttachmentCall?.[2] as

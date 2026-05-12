@@ -1005,6 +1005,31 @@ describe("exec approval handlers", () => {
     expectRecordFields(mockCallArg(respond, 0, 2), { message: "command is required" });
   });
 
+  it("rejects approval requests when the command display would be truncated", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        command: `printf visible # ${"A".repeat(18 * 1024)}\nprintf hidden`,
+        host: "gateway",
+        nodeId: undefined,
+        systemRunPlan: undefined,
+      },
+    });
+
+    expect(mockCallArg(respond)).toBe(false);
+    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
+    expectRecordFields(mockCallArg(respond, 0, 2), {
+      message: "command exceeds exec approval display limit",
+    });
+    expectRecordFields((mockCallArg(respond, 0, 2) as { details?: unknown }).details, {
+      reason: "EXEC_APPROVAL_COMMAND_DISPLAY_LIMIT",
+    });
+    expect(broadcasts).toEqual([]);
+  });
+
   it("returns pending approval details for exec.approval.get", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
 
@@ -1525,9 +1550,7 @@ describe("exec approval handlers", () => {
       },
     });
     const { request } = getRequestedExecApprovalPayload(broadcasts);
-    expect(request["commandAnalysis"]).toEqual(
-      expect.objectContaining({ commandCount: 1, nestedCommandCount: 0 }),
-    );
+    expectRecordFields(request["commandAnalysis"], { commandCount: 1, nestedCommandCount: 0 });
     expect(request["commandSpans"]).toBeUndefined();
   });
 
@@ -1549,9 +1572,7 @@ describe("exec approval handlers", () => {
       },
     });
     const { request } = getRequestedExecApprovalPayload(broadcasts);
-    expect(request["commandAnalysis"]).toEqual(
-      expect.objectContaining({ commandCount: 1, nestedCommandCount: 0 }),
-    );
+    expectRecordFields(request["commandAnalysis"], { commandCount: 1, nestedCommandCount: 0 });
     expect(request["commandSpans"]).toBeUndefined();
   });
 

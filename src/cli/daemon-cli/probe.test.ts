@@ -189,18 +189,26 @@ describe("probeGatewayStatus", () => {
       requireRpc: true,
     });
 
-    expect(probeGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        preauthHandshakeTimeoutMs: 30_000,
-        timeoutMs: 30_000,
-      }),
-    );
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config,
-        timeoutMs: 30_000,
-      }),
-    );
+    expect(probeGatewayMock).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:19191",
+      auth: {
+        token: "temp-token",
+        password: undefined,
+      },
+      tlsFingerprint: undefined,
+      preauthHandshakeTimeoutMs: 30_000,
+      timeoutMs: 30_000,
+      includeDetails: false,
+    });
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      password: undefined,
+      tlsFingerprint: undefined,
+      config,
+      method: "status",
+      timeoutMs: 30_000,
+    });
   });
 
   it("falls back to read-only when the status RPC succeeds but the auth probe is inconclusive", async () => {

@@ -1013,8 +1013,8 @@ describe("resolveCommandAuthorization", () => {
           commandAuthorized: true,
         });
         expect(warn).toHaveBeenCalledTimes(1);
-        expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("Error");
-        expect(String(warn.mock.calls[0]?.[0] ?? "")).not.toContain("SECRET-TOKEN-123");
+        expect(String(warn.mock.calls.at(0)?.[0] ?? "")).toContain("Error");
+        expect(String(warn.mock.calls.at(0)?.[0] ?? "")).not.toContain("SECRET-TOKEN-123");
       } finally {
         warn.mockRestore();
       }

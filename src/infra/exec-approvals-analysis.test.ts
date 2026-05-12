@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { evaluateShellAllowlist, normalizeSafeBins } from "./exec-approvals-allowlist.js";
+import {
+  evaluateExecAllowlist,
+  evaluateShellAllowlist,
+  normalizeSafeBins,
+} from "./exec-approvals-allowlist.js";
 import {
   analyzeArgvCommand,
   analyzeShellCommand,
@@ -216,6 +220,7 @@ describe("exec approvals shell analysis", () => {
     it("still rejects unquoted metacharacters on Windows", () => {
       const cases = [
         "ping 127.0.0.1 -n 1 & whoami",
+        "node allowed.js; unlisted.exe",
         "echo hello | clip",
         "node tool.js > output.txt",
         "for /f %i in (file.txt) do echo %i",
@@ -707,6 +712,240 @@ describe("exec approvals shell analysis", () => {
       });
       expect(result.analysisOk).toBe(false);
       expect(result.allowlistSatisfied).toBe(false);
+    });
+
+    it("does not satisfy bare wrapper allowlist entries for inline cmd payloads", () => {
+      const dir = makeTempDir();
+      const cmdPath = path.join(dir, "cmd.exe");
+      fs.writeFileSync(cmdPath, "");
+      fs.chmodSync(cmdPath, 0o755);
+      try {
+        const result = evaluateShellAllowlist({
+          command: "cmd.exe -c echo sample",
+          allowlist: [{ pattern: cmdPath }],
+          safeBins: new Set(),
+          cwd: dir,
+          env: makePathEnv(dir),
+          platform: "win32",
+        });
+        expect(result.analysisOk).toBe(true);
+        expect(result.allowlistSatisfied).toBe(false);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(result.segmentSatisfiedBy).toEqual([null]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("evaluates inline cmd payloads against the inner executable", () => {
+      const dir = makeTempDir();
+      const cmdPath = path.join(dir, "cmd.exe");
+      const nodePath = path.join(dir, "node.exe");
+      for (const file of [cmdPath, nodePath]) {
+        fs.writeFileSync(file, "");
+        fs.chmodSync(file, 0o755);
+      }
+      try {
+        const result = evaluateShellAllowlist({
+          command: "cmd.exe -c node.exe app.js",
+          allowlist: [{ pattern: nodePath }],
+          safeBins: new Set(),
+          cwd: dir,
+          env: makePathEnv(dir),
+          platform: "win32",
+        });
+        expect(result.analysisOk).toBe(true);
+        expect(result.allowlistSatisfied).toBe(true);
+        expect(result.allowlistMatches.map((entry) => entry.pattern)).toEqual([nodePath]);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects Windows inline cmd payloads with PowerShell command separators", () => {
+      const dir = makeTempDir();
+      const cmdPath = path.join(dir, "cmd.exe");
+      const allowedPath = path.join(dir, "allowed.exe");
+      for (const file of [cmdPath, allowedPath]) {
+        fs.writeFileSync(file, "");
+        fs.chmodSync(file, 0o755);
+      }
+      try {
+        const env = makePathEnv(dir);
+        const analysis = analyzeArgvCommand({
+          argv: ["cmd.exe", "/c", "pwsh", "-Command", "allowed.exe;", "unlisted.exe"],
+          cwd: dir,
+          env,
+        });
+        expect(analysis.ok).toBe(true);
+        const result = evaluateExecAllowlist({
+          analysis,
+          allowlist: [{ pattern: allowedPath }],
+          safeBins: new Set(),
+          cwd: dir,
+          env,
+          platform: "win32",
+        });
+        expect(result.allowlistSatisfied).toBe(false);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(result.segmentSatisfiedBy).toEqual([null]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects PowerShell inline argv payloads with trailing command tokens", () => {
+      const dir = makeTempDir();
+      const allowedPath = path.join(dir, "allowed.exe");
+      fs.writeFileSync(allowedPath, "");
+      fs.chmodSync(allowedPath, 0o755);
+      try {
+        const env = makePathEnv(dir);
+        const analysis = analyzeArgvCommand({
+          argv: ["pwsh", "-Command", "allowed.exe", ";", "unlisted.exe"],
+          cwd: dir,
+          env,
+        });
+        expect(analysis.ok).toBe(true);
+        const result = evaluateExecAllowlist({
+          analysis,
+          allowlist: [{ pattern: allowedPath }],
+          safeBins: new Set(),
+          cwd: dir,
+          env,
+          platform: "win32",
+        });
+        expect(result.allowlistSatisfied).toBe(false);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(result.segmentSatisfiedBy).toEqual([null]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      {
+        name: "extra script argument",
+        scriptArgs: ["-ExtraArg"],
+        argPattern: "^\x00\x00$",
+        expected: false,
+      },
+      {
+        name: "empty script argument",
+        scriptArgs: [""],
+        argPattern: "^\x00\x00$",
+        expected: false,
+      },
+      {
+        name: "empty script argument after dispatch unwrap",
+        wrapperPrefix: ["env"],
+        scriptArgs: [""],
+        argPattern: "^\x00\x00$",
+        expected: false,
+      },
+      {
+        name: "semicolon data argument",
+        scriptArgs: ["literal;data"],
+        argPattern: "^literal;data\x00$",
+        expected: true,
+      },
+    ])(
+      "preserves PowerShell file argv for $name",
+      ({ wrapperPrefix = [], scriptArgs, argPattern, expected }) => {
+        const dir = makeTempDir();
+        const pwshPath = path.join(dir, "pwsh");
+        const scriptPath = path.join(dir, "script.ps1");
+        for (const file of [pwshPath, scriptPath]) {
+          fs.writeFileSync(file, "");
+          fs.chmodSync(file, 0o755);
+        }
+        try {
+          const env = makePathEnv(dir);
+          const analysis = analyzeArgvCommand({
+            argv: [...wrapperPrefix, "pwsh", "-File", scriptPath, ...scriptArgs],
+            cwd: dir,
+            env,
+          });
+          expect(analysis.ok).toBe(true);
+          const result = evaluateExecAllowlist({
+            analysis,
+            allowlist: [{ pattern: scriptPath, argPattern }],
+            safeBins: new Set(),
+            cwd: dir,
+            env,
+            platform: "win32",
+          });
+          expect(result.allowlistSatisfied).toBe(expected);
+          if (!expected) {
+            expect(result.segmentAllowlistEntries).toEqual([null]);
+            expect(result.segmentSatisfiedBy).toEqual([null]);
+          }
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it.each([
+      { name: "slash encoded-command alias", argv: ["pwsh", "/ec", "ZQBjAGgAbwA="] },
+      { name: "encoded-command prefix abbreviation", argv: ["pwsh", "-en", "ZQBjAGgAbwA="] },
+      {
+        name: "error action alias before command",
+        argv: ["pwsh", "-ea", "stop", "-Command", "inline_payload"],
+      },
+      {
+        name: "execution policy alias before command",
+        argv: ["pwsh", "-ep", "Bypass", "-Command", "inline_payload"],
+      },
+      {
+        name: "custom pipe name before encoded-command alias",
+        argv: ["pwsh", "-cus", "pipe-name", "-ec", "ZQBjAGgAbwA="],
+      },
+      {
+        name: "token alias before command",
+        argv: ["pwsh", "-to", "token-value", "-Command", "inline_payload"],
+      },
+      {
+        name: "utc timestamp alias before command",
+        argv: ["pwsh", "-utc", "1234", "-Command", "inline_payload"],
+      },
+      {
+        name: "encoded arguments prefix before command",
+        argv: ["pwsh", "-encodeda", "YQByAGcA", "-Command", "inline_payload"],
+      },
+      {
+        name: "command with args full form",
+        argv: ["pwsh", "-CommandWithArgs", "inline_payload"],
+      },
+      {
+        name: "unrecognized shell wrapper argv",
+        argv: ["pwsh", "-UnrecognizedCommandForm", "inline_payload"],
+      },
+    ])("does not satisfy bare wrapper allowlist entries for PowerShell $name", ({ argv }) => {
+      const dir = makeTempDir();
+      const pwshPath = path.join(dir, "pwsh");
+      fs.writeFileSync(pwshPath, "");
+      fs.chmodSync(pwshPath, 0o755);
+      try {
+        const env = makePathEnv(dir);
+        const analysis = analyzeArgvCommand({ argv, cwd: dir, env });
+        expect(analysis.ok).toBe(true);
+        const result = evaluateExecAllowlist({
+          analysis,
+          allowlist: [{ pattern: pwshPath }],
+          safeBins: new Set(),
+          cwd: dir,
+          env,
+          platform: "win32",
+        });
+        expect(result.allowlistSatisfied).toBe(false);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(result.segmentSatisfiedBy).toEqual([null]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it("satisfies allowlist when bare * wildcard is present", () => {

@@ -210,7 +210,7 @@ describeBrowserLayout("sessions responsive browser layout", () => {
     });
 
     expect(metrics.bodyOverflow).toBeLessThanOrEqual(1);
-    expect(metrics.compactionText).toContain("1 Checkpoint");
+    expect(metrics.compactionText).toBe("1 Checkpoint");
     expect(metrics.statusText).toBe("Live");
     expect(metrics.runtimeText).toBe("claude-cli (fallback none)");
     expect(metrics.keyWhiteSpace).toBe("nowrap");

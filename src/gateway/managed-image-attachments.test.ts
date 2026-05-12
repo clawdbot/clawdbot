@@ -667,8 +667,8 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(blocks).toHaveLength(1);
     expect(requireBlock(blocks).type).toBe("image");
     expect(onPrepareError).toHaveBeenCalledTimes(1);
-    expect(onPrepareError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
-    expect(onPrepareError.mock.calls[0]?.[0]?.message).toMatch(
+    expect(onPrepareError.mock.calls.at(0)?.[0]).toBeInstanceOf(Error);
+    expect(onPrepareError.mock.calls.at(0)?.[0]?.message).toMatch(
       /Managed image attachment .* could not be prepared/i,
     );
   });

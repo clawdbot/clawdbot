@@ -55,8 +55,14 @@ describe("resolveLoginFailureFeedback", () => {
 
     expect(feedback?.kind).toBe("auth-required");
     expect(feedback?.title).toBe("Auth required");
-    expect(feedback?.steps.join(" ")).toContain("openclaw dashboard --no-open");
-    expect(feedback?.steps.join(" ")).toContain("openclaw doctor --generate-gateway-token");
+    expect(feedback?.summary).toBe(
+      "The Gateway is reachable, but it needs a matching token or password before this browser can connect.",
+    );
+    expect(feedback?.steps).toEqual([
+      "Paste the token from openclaw dashboard --no-open or enter the configured password.",
+      "If no token is configured, run openclaw doctor --generate-gateway-token on the gateway host.",
+      "Click Connect again after updating the credential.",
+    ]);
   });
 
   it("explains rejected stale credentials", () => {
@@ -69,8 +75,14 @@ describe("resolveLoginFailureFeedback", () => {
     });
 
     expect(feedback?.kind).toBe("auth-failed");
-    expect(feedback?.summary).toContain("stale token");
-    expect(feedback?.steps.join(" ")).toContain("token mode");
+    expect(feedback?.summary).toBe(
+      "The supplied credential was rejected. The most common cause is a stale token or a token copied from another Gateway URL.",
+    );
+    expect(feedback?.steps).toEqual([
+      "Run openclaw dashboard --no-open and open the fresh URL or paste its token.",
+      "Replace stale token/password values; do not reuse a token from another Gateway URL.",
+      "Use one matching auth mode at a time: gateway token for token mode, password for password mode.",
+    ]);
   });
 
   it("explains auth rate limits without encouraging retries", () => {
@@ -84,7 +96,11 @@ describe("resolveLoginFailureFeedback", () => {
 
     expect(feedback?.kind).toBe("auth-rate-limited");
     expect(feedback?.title).toBe("Too many failed attempts");
-    expect(feedback?.steps[0]).toContain("Stop retrying");
+    expect(feedback?.steps).toEqual([
+      "Stop retrying from this tab for a moment.",
+      "Wait for the auth limiter to cool down, then reconnect with the corrected credential.",
+      "If this is a shared host, check other clients for repeated bad retries.",
+    ]);
   });
 
   it("preserves pairing request ids in the approval command", () => {
@@ -98,7 +114,14 @@ describe("resolveLoginFailureFeedback", () => {
 
     expect(feedback?.kind).toBe("pairing-required");
     expect(feedback?.title).toBe("Scope upgrade pending");
-    expect(feedback?.steps.join(" ")).toContain("openclaw devices approve req-123");
+    expect(feedback?.summary).toBe(
+      "This browser is already known, but the requested access changed and needs a fresh approval.",
+    );
+    expect(feedback?.steps).toEqual([
+      "Run openclaw devices list on the Gateway host.",
+      "Approve this request: openclaw devices approve req-123.",
+      "Reconnect after the approval completes.",
+    ]);
   });
 
   it("explains insecure HTTP device identity failures", () => {
@@ -111,8 +134,11 @@ describe("resolveLoginFailureFeedback", () => {
     });
 
     expect(feedback?.kind).toBe("insecure-context");
-    expect(feedback?.steps.join(" ")).toContain("Tailscale Serve");
-    expect(feedback?.steps.join(" ")).toContain("gateway.controlUi.allowInsecureAuth");
+    expect(feedback?.steps).toEqual([
+      "Use HTTPS/Tailscale Serve, or open http://127.0.0.1:18789 on the Gateway host.",
+      "For local token-only compatibility, set gateway.controlUi.allowInsecureAuth: true.",
+      "Avoid disabling device auth for remote HTTP access.",
+    ]);
   });
 
   it("explains browser WebSocket security failures as insecure context", () => {
@@ -126,10 +152,14 @@ describe("resolveLoginFailureFeedback", () => {
     });
 
     expect(feedback?.kind).toBe("insecure-context");
-    expect(feedback?.rawError).toContain("Use wss://");
-    expect(feedback?.rawError).toContain("http://127.0.0.1:18789");
-    expect(feedback?.steps.join(" ")).toContain("Tailscale Serve");
-    expect(feedback?.steps.join(" ")).toContain("gateway.controlUi.allowInsecureAuth");
+    expect(feedback?.rawError).toBe(
+      "Browser refused the Gateway WebSocket for security reasons. Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789.",
+    );
+    expect(feedback?.steps).toEqual([
+      "Use HTTPS/Tailscale Serve, or open http://127.0.0.1:18789 on the Gateway host.",
+      "For local token-only compatibility, set gateway.controlUi.allowInsecureAuth: true.",
+      "Avoid disabling device auth for remote HTTP access.",
+    ]);
   });
 
   it("keeps generic browser WebSocket constructor failures on the network path", () => {
@@ -142,7 +172,11 @@ describe("resolveLoginFailureFeedback", () => {
     });
 
     expect(feedback?.kind).toBe("network");
-    expect(feedback?.steps.join(" ")).toContain("WebSocket URL");
+    expect(feedback?.steps).toEqual([
+      "Confirm the Gateway is running with openclaw status or openclaw gateway run.",
+      "Check the WebSocket URL and use wss:// when the Gateway is behind HTTPS/Tailscale Serve.",
+      "Reopen the dashboard with openclaw dashboard --no-open to recopy the current URL and auth details.",
+    ]);
   });
 
   it("explains browser origin rejections", () => {
@@ -155,7 +189,11 @@ describe("resolveLoginFailureFeedback", () => {
     });
 
     expect(feedback?.kind).toBe("origin-not-allowed");
-    expect(feedback?.steps.join(" ")).toContain("gateway.controlUi.allowedOrigins");
+    expect(feedback?.steps).toEqual([
+      "Add this browser origin to gateway.controlUi.allowedOrigins.",
+      "Use full origins such as http://localhost:5173, not wildcard patterns.",
+      "Restart or reload the Gateway after changing allowed origins.",
+    ]);
   });
 
   it("explains protocol mismatch without requiring a gateway protocol change", () => {
@@ -168,8 +206,14 @@ describe("resolveLoginFailureFeedback", () => {
     });
 
     expect(feedback?.kind).toBe("protocol-mismatch");
-    expect(feedback?.summary).toContain("supported connection protocol");
-    expect(feedback?.steps.join(" ")).toContain("openclaw dashboard");
+    expect(feedback?.summary).toBe(
+      "The served Control UI and the running Gateway do not agree on the supported connection protocol.",
+    );
+    expect(feedback?.steps).toEqual([
+      "Reopen the served dashboard with openclaw dashboard so the UI and Gateway come from the same install.",
+      "If using pnpm ui:dev, rebuild or restart the dev UI against the current checkout.",
+      "Restart the Gateway after updating OpenClaw so it serves the current protocol.",
+    ]);
   });
 
   it("falls back to connection diagnostics for generic close errors", () => {
@@ -182,8 +226,11 @@ describe("resolveLoginFailureFeedback", () => {
     });
 
     expect(feedback?.kind).toBe("network");
-    expect(feedback?.steps.join(" ")).toContain("WebSocket URL");
-    expect(feedback?.steps.join(" ")).toContain("wss://");
+    expect(feedback?.steps).toEqual([
+      "Confirm the Gateway is running with openclaw status or openclaw gateway run.",
+      "Check the WebSocket URL and use wss:// when the Gateway is behind HTTPS/Tailscale Serve.",
+      "Reopen the dashboard with openclaw dashboard --no-open to recopy the current URL and auth details.",
+    ]);
   });
 
   it("redacts credential-shaped values from displayed raw errors", () => {
@@ -196,10 +243,9 @@ describe("resolveLoginFailureFeedback", () => {
       hasPassword: false,
     });
 
-    expect(feedback?.rawError).not.toContain("secret-token");
-    expect(feedback?.rawError).not.toContain("secret-bearer");
-    expect(feedback?.rawError).not.toContain("inline-secret");
-    expect(feedback?.rawError).toContain("[redacted");
+    expect(feedback?.rawError).toBe(
+      "failed ws://host/openclaw#[redacted-credential] Authorization: Bearer [redacted] token=[redacted]",
+    );
   });
 });
 
@@ -223,9 +269,30 @@ describe("renderLoginGate", () => {
 
     const alert = container.querySelector<HTMLElement>('[role="alert"]');
     expect(alert?.dataset.kind).toBe("protocol-mismatch");
-    expect(alert?.textContent).toContain("Protocol mismatch");
-    expect(alert?.textContent).toContain("openclaw dashboard");
-    expect(alert?.querySelector("details")?.textContent).toContain("protocol mismatch");
-    expect(alert?.querySelector("a")?.getAttribute("href")).toContain("docs.openclaw.ai");
+    expect(alert?.querySelector(".login-gate__failure-title")?.textContent?.trim()).toBe(
+      "Protocol mismatch",
+    );
+    expect(alert?.querySelector(".login-gate__failure-summary")?.textContent?.trim()).toBe(
+      "The served Control UI and the running Gateway do not agree on the supported connection protocol.",
+    );
+    expect(
+      Array.from(alert?.querySelectorAll(".login-gate__failure-steps li") ?? []).map((step) =>
+        step.textContent?.trim(),
+      ),
+    ).toEqual([
+      "Reopen the served dashboard with openclaw dashboard so the UI and Gateway come from the same install.",
+      "If using pnpm ui:dev, rebuild or restart the dev UI against the current checkout.",
+      "Restart the Gateway after updating OpenClaw so it serves the current protocol.",
+    ]);
+    expect(alert?.querySelector("details summary")?.textContent?.trim()).toBe("Raw error");
+    expect(alert?.querySelector(".login-gate__failure-raw")?.textContent?.trim()).toBe(
+      "protocol mismatch",
+    );
+
+    const docsLink = alert?.querySelector<HTMLAnchorElement>(".login-gate__failure-docs");
+    expect(docsLink?.textContent?.trim()).toBe("Control UI auth docs");
+    expect(docsLink?.getAttribute("href")).toBe(
+      "https://docs.openclaw.ai/web/control-ui#debuggingtesting-dev-server--remote-gateway",
+    );
   });
 });

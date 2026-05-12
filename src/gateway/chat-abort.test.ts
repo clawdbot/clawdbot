@@ -105,7 +105,7 @@ describe("abortChatRunById", () => {
     expect(ops.agentRunSeq.has("client-run-1")).toBe(false);
 
     expect(ops.broadcast).toHaveBeenCalledTimes(1);
-    const payload = ops.broadcast.mock.calls[0]?.[1] as ChatAbortPayload;
+    const payload = ops.broadcast.mock.calls.at(0)?.[1] as ChatAbortPayload;
     expect(payload).toEqual({
       runId,
       sessionKey,
@@ -130,7 +130,7 @@ describe("abortChatRunById", () => {
     const result = abortChatRunById(ops, { runId, sessionKey });
 
     expect(result).toEqual({ aborted: true });
-    const payload = ops.broadcast.mock.calls[0]?.[1] as Record<string, unknown>;
+    const payload = ops.broadcast.mock.calls.at(0)?.[1] as Record<string, unknown>;
     expect(payload.message).toBeUndefined();
   });
 
@@ -151,7 +151,7 @@ describe("abortChatRunById", () => {
     const result = abortChatRunById(ops, { runId, sessionKey });
 
     expect(result).toEqual({ aborted: true });
-    const payload = ops.broadcast.mock.calls[0]?.[1] as ChatAbortPayload;
+    const payload = ops.broadcast.mock.calls.at(0)?.[1] as ChatAbortPayload;
     expect(payload).toEqual({
       runId,
       sessionKey,

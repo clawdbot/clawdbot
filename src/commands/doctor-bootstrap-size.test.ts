@@ -52,7 +52,7 @@ describe("noteBootstrapFileSize", () => {
     });
     await noteBootstrapFileSize({} as OpenClawConfig);
     expect(note).toHaveBeenCalledTimes(1);
-    const [message, title] = note.mock.calls[0] ?? [];
+    const [message, title] = note.mock.calls.at(0) ?? [];
     expect(title).toBe("Bootstrap file size");
     expect(message).toBe(
       [

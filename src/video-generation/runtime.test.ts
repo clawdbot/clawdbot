@@ -454,10 +454,14 @@ describe("video-generation runtime", () => {
     });
     expect(seenCapabilityLookupTimeoutMs).toBe(5_000);
     expect(seenSupportedDurationHint).toEqual([5]);
-    expect(result.ignoredOverrides).toContainEqual({ key: "audio", value: true });
-    expect(result.normalization?.durationSeconds?.requested).toBe(6);
-    expect(result.normalization?.durationSeconds?.applied).toBe(5);
-    expect(result.normalization?.durationSeconds?.supportedValues).toEqual([5]);
+    expect(result.ignoredOverrides).toEqual([{ key: "audio", value: true }]);
+    expect(result.normalization).toEqual({
+      durationSeconds: {
+        requested: 6,
+        applied: 5,
+        supportedValues: [5],
+      },
+    });
   });
 
   it("skips providers that cannot satisfy reference audio inputs and falls back", async () => {

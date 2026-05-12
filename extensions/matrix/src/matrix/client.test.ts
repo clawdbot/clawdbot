@@ -63,25 +63,27 @@ function expectAuthFields(auth: unknown, fields: Record<string, unknown>) {
   expectRecordFields(requireRecord(auth, "Matrix auth"), fields);
 }
 
+function mockCall(mock: ReturnType<typeof vi.fn>, index = 0): unknown[] {
+  const call = mock.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`missing mock call ${index}`);
+  }
+  return call;
+}
+
 function expectSavedCredentials(
   mock: ReturnType<typeof vi.fn>,
   fields: Record<string, unknown>,
   accountId: string,
 ) {
-  const call = mock.mock.calls[0] as unknown[] | undefined;
-  if (!call) {
-    throw new Error("missing save credentials call");
-  }
+  const call = mockCall(mock);
   expectRecordFields(requireRecord(call[0], "Matrix credentials"), fields);
   requireRecord(call[1], "Matrix credential save options");
   expect(call[2]).toBe(accountId);
 }
 
 function expectMatrixLoginCall(fields: Record<string, unknown>) {
-  const call = matrixDoRequestMock.mock.calls[0] as unknown[] | undefined;
-  if (!call) {
-    throw new Error("missing Matrix login call");
-  }
+  const call = mockCall(matrixDoRequestMock);
   expect(call[0]).toBe("POST");
   expect(call[1]).toBe("/_matrix/client/v3/login");
   expect(call[2]).toBeUndefined();
@@ -575,7 +577,7 @@ describe("resolveMatrixAuth", () => {
       "default",
     );
     const repairMeta = requireRecord(
-      repairCurrentTokenStorageMetaDeviceIdMock.mock.calls[0]?.[0],
+      mockCall(repairCurrentTokenStorageMetaDeviceIdMock).at(0),
       "repair metadata",
     );
     expectRecordFields(repairMeta, {
@@ -725,7 +727,7 @@ describe("resolveMatrixAuth", () => {
     });
 
     expectRecordFields(
-      requireRecord(resolveConfiguredSecretInputStringMock.mock.calls[0]?.[0], "secret request"),
+      requireRecord(mockCall(resolveConfiguredSecretInputStringMock).at(0), "secret request"),
       {
         config: cfg,
         value: { source: "file", provider: "matrix-file", id: "value" },

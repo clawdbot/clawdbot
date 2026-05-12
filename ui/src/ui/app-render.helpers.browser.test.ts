@@ -163,7 +163,7 @@ describe("chat header controls (browser)", () => {
 
     expect(buttons).toHaveLength(4);
     const cronButton = requireButton(buttons.at(-1), "cron sessions");
-    expect(cronButton.classList.contains("active")).toBe(true);
+    expect([...cronButton.classList]).toEqual(["btn", "btn--sm", "btn--icon", "active"]);
     expect(cronButton.getAttribute("aria-pressed")).toBe("true");
     expect(cronButton.getAttribute("title")).toBe(t("chat.showCronSessionsHidden", { count: "1" }));
 
@@ -233,12 +233,12 @@ describe("chat header controls (browser)", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(toggle.getAttribute("aria-controls")).toBe("chat-mobile-controls-dropdown");
     expect(dropdown.id).toBe("chat-mobile-controls-dropdown");
-    expect(dropdown.classList.contains("open")).toBe(false);
+    expect([...dropdown.classList]).toEqual(["chat-controls-dropdown"]);
 
     toggle.click();
 
     expect(setChatMobileControlsOpen).toHaveBeenCalledWith(true, { trigger: toggle });
-    expect(dropdown.classList.contains("open")).toBe(false);
+    expect([...dropdown.classList]).toEqual(["chat-controls-dropdown"]);
 
     render(
       renderChatMobileToggle(
@@ -260,6 +260,6 @@ describe("chat header controls (browser)", () => {
       "open mobile controls dropdown",
     );
     expect(openToggle.getAttribute("aria-expanded")).toBe("true");
-    expect(openDropdown.classList.contains("open")).toBe(true);
+    expect([...openDropdown.classList]).toEqual(["chat-controls-dropdown", "open"]);
   });
 });

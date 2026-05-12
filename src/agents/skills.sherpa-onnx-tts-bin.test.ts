@@ -16,8 +16,8 @@ describe("skills/sherpa-onnx-tts bin script", () => {
     });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Missing runtime/model directory.");
-    expect(result.stderr).toContain("Usage: sherpa-onnx-tts");
-    expect(result.stderr).not.toContain("require is not defined in ES module scope");
+    expect(result.stderr).toBe(
+      'Missing runtime/model directory.\n\nUsage: sherpa-onnx-tts [--runtime-dir <dir>] [--model-dir <dir>] [--model-file <file>] [--tokens-file <file>] [--data-dir <dir>] [--output <file>] "text"\n\nRequired env (or flags):\n  SHERPA_ONNX_RUNTIME_DIR\n  SHERPA_ONNX_MODEL_DIR\n',
+    );
   });
 });

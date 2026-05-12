@@ -116,7 +116,7 @@ describe("root memory repair", () => {
     expect(canonical).toContain("# Legacy");
     await expectPathMissing(path.join(tmpDir, "memory.md"));
     expect(note).toHaveBeenCalledTimes(1);
-    const repairMessage = String(note.mock.calls[0]?.[0] ?? "");
+    const repairMessage = String(note.mock.calls.at(0)?.[0] ?? "");
     const repairLines = repairMessage.split("\n");
     expect(repairLines[0]).toBe("Workspace memory root merged:");
     expect(repairLines).toContain(`- canonical: ${path.join(tmpDir, "MEMORY.md")}`);
@@ -124,6 +124,6 @@ describe("root memory repair", () => {
       `- merged legacy content from: ${path.join(tmpDir, "memory.md")}`,
     );
     expect(repairLines).toContain(`- removed legacy file: ${path.join(tmpDir, "memory.md")}`);
-    expect(note.mock.calls[0]?.[1]).toBe("Doctor changes");
+    expect(note.mock.calls.at(0)?.[1]).toBe("Doctor changes");
   });
 });

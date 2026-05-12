@@ -37,6 +37,18 @@ function createWsClient(): MockWsClient {
   };
 }
 
+function firstRuntimeError(runtime: { error: ReturnType<typeof vi.fn> }): string {
+  return String(runtime.error.mock.calls.at(0)?.at(0) ?? "");
+}
+
+function firstWsCallbacks(): { onError?: (err: Error) => void } {
+  const callbacks = createFeishuWSClientMock.mock.calls.at(0)?.at(1);
+  if (!callbacks || typeof callbacks !== "object") {
+    throw new Error("expected Feishu websocket callbacks");
+  }
+  return callbacks as { onError?: (err: Error) => void };
+}
+
 afterEach(() => {
   vi.useRealTimers();
   stopFeishuMonitorState();
@@ -131,7 +143,7 @@ describe("feishu websocket cleanup", () => {
     expect(createFeishuWSClientMock).toHaveBeenCalledTimes(2);
     expect(recoveredClient.close).toHaveBeenCalledTimes(1);
     expect(runtime.error).toHaveBeenCalledTimes(1);
-    const errorMessage = String(runtime.error.mock.calls[0]?.[0] ?? "");
+    const errorMessage = firstRuntimeError(runtime);
     expect(errorMessage).toContain("WebSocket start failed, retrying in 1000ms");
     expect(errorMessage).not.toContain("\n");
     expect(errorMessage).not.toContain("token_abc");
@@ -171,10 +183,7 @@ describe("feishu websocket cleanup", () => {
       expect(wsClients.get(accountId)).toBe(exhaustedClient);
     });
 
-    const callbacks = createFeishuWSClientMock.mock.calls[0]?.[1] as
-      | { onError?: (err: Error) => void }
-      | undefined;
-    callbacks?.onError?.(
+    firstWsCallbacks().onError?.(
       new Error("WebSocket reconnect exhausted after 3 attempts\nBearer token_abc"),
     );
 
@@ -199,7 +208,7 @@ describe("feishu websocket cleanup", () => {
     expect(recoveredClient.close).toHaveBeenCalledTimes(1);
     expect(botOpenIds.has(accountId)).toBe(false);
     expect(botNames.has(accountId)).toBe(false);
-    const errorMessage = String(runtime.error.mock.calls[0]?.[0] ?? "");
+    const errorMessage = firstRuntimeError(runtime);
     expect(errorMessage).toContain("WebSocket connection ended, recreating client in 1000ms");
     expect(errorMessage).toContain("Bearer [redacted]");
     expect(errorMessage).not.toContain("\n");
@@ -232,17 +241,14 @@ describe("feishu websocket cleanup", () => {
       expect(wsClients.get(accountId)).toBe(wsClient);
     });
 
-    const callbacks = createFeishuWSClientMock.mock.calls[0]?.[1] as
-      | { onError?: (err: Error) => void }
-      | undefined;
-    callbacks?.onError?.(new Error("temporary callback failure\nBearer token_abc"));
+    firstWsCallbacks().onError?.(new Error("temporary callback failure\nBearer token_abc"));
 
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(createFeishuWSClientMock).toHaveBeenCalledTimes(1);
     expect(wsClient.close).not.toHaveBeenCalled();
     expect(wsClients.get(accountId)).toBe(wsClient);
-    const errorMessage = String(runtime.error.mock.calls[0]?.[0] ?? "");
+    const errorMessage = firstRuntimeError(runtime);
     expect(errorMessage).toContain("WebSocket SDK reported recoverable error");
     expect(errorMessage).toContain("Bearer [redacted]");
     expect(errorMessage).not.toContain("\n");
@@ -281,10 +287,7 @@ describe("feishu websocket cleanup", () => {
       expect(exhaustedClient.start).toHaveBeenCalledTimes(1);
     });
 
-    const callbacks = createFeishuWSClientMock.mock.calls[0]?.[1] as
-      | { onError?: (err: Error) => void }
-      | undefined;
-    callbacks?.onError?.(new Error("WebSocket reconnect exhausted after 3 attempts"));
+    firstWsCallbacks().onError?.(new Error("WebSocket reconnect exhausted after 3 attempts"));
 
     await vi.waitFor(() => {
       expect(exhaustedClient.close).toHaveBeenCalledTimes(1);
@@ -328,7 +331,7 @@ describe("feishu websocket cleanup", () => {
     abortController.abort();
     await monitorPromise;
 
-    const errorMessage = String(runtime.error.mock.calls[0]?.[0] ?? "");
+    const errorMessage = firstRuntimeError(runtime);
     expect(errorMessage).toContain("error closing WebSocket client");
     expect(errorMessage).toContain("access_token=[redacted]");
     expect(errorMessage).not.toContain("\n");

@@ -166,7 +166,7 @@ describe("custom theme import helpers", () => {
     expect(imported.light.bg).toBe("oklch(0.98 0.01 120)");
     expect(imported.dark.bg).toBe("oklch(0.12 0.04 265)");
     expect(imported.light["font-body"]).toBe("Inter, system-ui, sans-serif");
-    expect(imported.dark["accent-hover"]).toContain("color-mix");
+    expect(imported.dark["accent-hover"]).toBe("color-mix(in srgb, var(--accent) 82%, white 18%)");
   });
 
   it("fetches tweakcn themes with bounded no-redirect requests", async () => {
@@ -181,7 +181,7 @@ describe("custom theme import helpers", () => {
     expect(imported.label).toBe("Light Green");
     const fetchMock = vi.mocked(fetchImpl);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [fetchUrl, fetchOptions] = fetchMock.mock.calls[0] as [
+    const [fetchUrl, fetchOptions] = fetchMock.mock.calls.at(0) as [
       string,
       { headers?: unknown; redirect?: unknown; signal?: unknown },
     ];
@@ -286,11 +286,16 @@ describe("custom theme import helpers", () => {
 
   it("builds stable CSS blocks for custom dark and light themes", () => {
     const css = buildCustomThemeStyles(createImportedTheme());
+    const selectorAndBackgroundLines = css
+      .split("\n")
+      .filter((line) => line.startsWith(":root") || line.trim().startsWith("--bg:"));
 
-    expect(css).toContain(':root[data-theme="custom"]');
-    expect(css).toContain(':root[data-theme="custom-light"]');
-    expect(css).toContain("--bg: oklch(0.12 0.04 265);");
-    expect(css).toContain("--bg: oklch(0.98 0.01 120);");
+    expect(selectorAndBackgroundLines).toEqual([
+      ':root[data-theme="custom"] {',
+      "  --bg: oklch(0.12 0.04 265);",
+      ':root[data-theme="custom-light"] {',
+      "  --bg: oklch(0.98 0.01 120);",
+    ]);
   });
 
   it("throws when stored custom theme tokens are missing", () => {
@@ -323,10 +328,12 @@ describe("custom theme import helpers", () => {
     } as unknown as Document;
     vi.stubGlobal("document", documentStub);
 
-    syncCustomThemeStyleTag(createImportedTheme());
+    const theme = createImportedTheme();
+    syncCustomThemeStyleTag(theme);
 
     expect(appendChild).toHaveBeenCalledWith(style);
-    expect(style.textContent).toContain(':root[data-theme="custom"]');
+    expect(style.id).toBe("openclaw-custom-theme");
+    expect(style.textContent).toBe(buildCustomThemeStyles(theme));
 
     vi.stubGlobal("document", {
       head: documentStub.head,

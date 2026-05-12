@@ -186,6 +186,14 @@ function userMessage(text: string, timestamp: number) {
   };
 }
 
+function mockCall(mock: unknown, label: string, index = 0): unknown[] {
+  const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.at(index);
+  if (!call) {
+    throw new Error(`Expected ${label} call ${index + 1}`);
+  }
+  return call;
+}
+
 function createAppServerHarness(
   requestImpl: (method: string, params: unknown) => Promise<unknown>,
   options: {
@@ -681,6 +689,47 @@ describe("runCodexAppServerAttempt", () => {
     for (const toolName of ["tool_search_code", "tool_search", "tool_describe", "tool_call"]) {
       expect(dynamicToolNames).not.toContain(toolName);
     }
+  });
+
+  it("passes auth profiles into Codex dynamic tool construction", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const authProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:api-key-backup": {
+          provider: "openai",
+          type: "api_key",
+          key: "not-a-real-key",
+        },
+      },
+    } satisfies EmbeddedRunAttemptParams["authProfileStore"];
+    params.disableTools = false;
+    params.authProfileStore = authProfileStore;
+
+    const factoryOptions: unknown[] = [];
+    __testing.setOpenClawCodingToolsFactoryForTests((options) => {
+      factoryOptions.push(options);
+      return [];
+    });
+
+    await __testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey: params.sessionKey!,
+      sandbox: null as never,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(factoryOptions).toHaveLength(1);
+    expect(factoryOptions[0]).toMatchObject({
+      authProfileStore,
+    });
   });
 
   it("normalizes Codex dynamic toolsAllow entries before filtering", () => {
@@ -2104,7 +2153,7 @@ describe("runCodexAppServerAttempt", () => {
     await run;
 
     expect(beforePromptBuild).toHaveBeenCalledOnce();
-    const [hookInput, hookContext] = beforePromptBuild.mock.calls[0] as unknown as [
+    const [hookInput, hookContext] = mockCall(beforePromptBuild, "before_prompt_build") as [
       { messages?: Array<{ role?: string }>; prompt?: string },
       { runId?: string; sessionId?: string },
     ];
@@ -2209,7 +2258,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(llmInput).toHaveBeenCalled();
     await new Promise<void>((resolve) => setImmediate(resolve));
 
-    const [llmInputPayload, llmInputContext] = llmInput.mock.calls[0] as unknown as [
+    const [llmInputPayload, llmInputContext] = mockCall(llmInput, "llm_input") as [
       {
         historyMessages?: Array<{ role?: string }>;
         imagesCount?: number;
@@ -2289,7 +2338,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(globalEndEvent?.runId).toBe("run-1");
     expect(globalEndEvent?.sessionKey).toBe("agent:main:session-1");
 
-    const [llmOutputPayload, llmOutputContext] = llmOutput.mock.calls[0] as unknown as [
+    const [llmOutputPayload, llmOutputContext] = mockCall(llmOutput, "llm_output") as [
       {
         assistantTexts?: string[];
         harnessId?: string;
@@ -2312,7 +2361,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(llmOutputPayload.lastAssistant?.role).toBe("assistant");
     expect(llmOutputContext.runId).toBe("run-1");
     expect(llmOutputContext.sessionId).toBe("session-1");
-    const [agentEndPayload, agentEndContext] = agentEnd.mock.calls[0] as unknown as [
+    const [agentEndPayload, agentEndContext] = mockCall(agentEnd, "agent_end") as [
       { messages?: Array<{ role?: string }>; success?: boolean },
       { runId?: string; sessionId?: string },
     ];
@@ -2916,7 +2965,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(typeof errorEvent?.data.endedAt).toBe("number");
     expect(errorEvent?.data.error).toBe("codex exploded");
     expect(agentEvents.some((event) => event.stream === "assistant")).toBe(false);
-    const [agentEndPayload, agentEndContext] = agentEnd.mock.calls[0] as unknown as [
+    const [agentEndPayload, agentEndContext] = mockCall(agentEnd, "agent_end") as [
       { error?: string; success?: boolean },
       { runId?: string; sessionId?: string },
     ];
@@ -2957,7 +3006,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(llmInput).toHaveBeenCalledTimes(1);
     expect(llmOutput).toHaveBeenCalledTimes(1);
     expect(agentEnd).toHaveBeenCalledTimes(1);
-    const [llmOutputPayload] = llmOutput.mock.calls[0] as unknown as [
+    const [llmOutputPayload] = mockCall(llmOutput, "llm_output") as [
       {
         assistantTexts?: string[];
         harnessId?: string;
@@ -2976,7 +3025,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(llmOutputPayload.harnessId).toBe("codex");
     expect(llmOutputPayload.runId).toBe("run-1");
     expect(llmOutputPayload.sessionId).toBe("session-1");
-    const [agentEndPayload] = agentEnd.mock.calls[0] as unknown as [
+    const [agentEndPayload] = mockCall(agentEnd, "agent_end") as [
       { error?: string; messages?: Array<{ role?: string }>; success?: boolean },
       unknown,
     ];
@@ -3003,7 +3052,7 @@ describe("runCodexAppServerAttempt", () => {
     const result = await run;
     expect(result.aborted).toBe(true);
     expect(agentEnd).toHaveBeenCalledTimes(1);
-    const [agentEndPayload] = agentEnd.mock.calls[0] as unknown as [{ success?: boolean }, unknown];
+    const [agentEndPayload] = mockCall(agentEnd, "agent_end") as [{ success?: boolean }, unknown];
     expect(agentEndPayload.success).toBe(false);
   });
 
@@ -3648,7 +3697,7 @@ describe("runCodexAppServerAttempt", () => {
       content: { approve: true },
       _meta: null,
     });
-    const [bridgeCall] = bridgeSpy.mock.calls[0] as unknown as [
+    const [bridgeCall] = mockCall(bridgeSpy, "elicitation bridge") as [
       { threadId?: string; turnId?: string },
     ];
     expect(bridgeCall.threadId).toBe("thread-1");
@@ -3829,7 +3878,7 @@ describe("runCodexAppServerAttempt", () => {
       content: null,
       _meta: null,
     });
-    const [bridgeCall] = bridgeSpy.mock.calls[0] as unknown as [
+    const [bridgeCall] = mockCall(bridgeSpy, "elicitation bridge") as [
       {
         pluginAppPolicyContext?: {
           apps?: Record<string, { mcpServerNames?: string[]; pluginName?: string }>;

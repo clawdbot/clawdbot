@@ -87,6 +87,7 @@ function makeHandler(
     config,
     {
       processEvent: vi.fn(),
+      getCall: vi.fn(),
       getCallByProviderCallId: vi.fn(),
       ...deps?.manager,
     } as unknown as CallManager,
@@ -122,6 +123,21 @@ const startRealtimeServer = async (
 
   return await startUpgradeWsServer({
     urlPath: match[1],
+    onUpgrade: (request, socket, head) => {
+      handler.handleWebSocketUpgrade(request, socket, head);
+    },
+  });
+};
+
+const startStreamSessionServer = async (
+  handler: RealtimeCallHandler,
+  streamUrl: string,
+): Promise<{
+  url: string;
+  close: () => Promise<void>;
+}> => {
+  return await startUpgradeWsServer({
+    urlPath: new URL(streamUrl).pathname,
     onUpgrade: (request, socket, head) => {
       handler.handleWebSocketUpgrade(request, socket, head);
     },
@@ -247,6 +263,130 @@ describe("RealtimeCallHandler path routing", () => {
           ws.close();
         }
       }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("joins Telnyx realtime streams to the token-bound call", async () => {
+    const processEvent = vi.fn();
+    const getCall = vi.fn(
+      (): CallRecord => ({
+        callId: "call-1",
+        providerCallId: "v3:call-1",
+        provider: "telnyx",
+        direction: "inbound",
+        state: "answered",
+        from: "+15550001234",
+        to: "+15550009999",
+        startedAt: Date.now(),
+        transcript: [],
+        processedEventIds: [],
+        metadata: { initialMessage: "hello" },
+      }),
+    );
+    const createBridge = vi.fn(() => makeBridge());
+    const handler = makeHandler(undefined, {
+      manager: {
+        processEvent,
+        getCall,
+      },
+      provider: {
+        name: "telnyx",
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    handler.setPublicUrl("https://public.example/voice/webhook");
+    const session = handler.issueStreamSession({
+      providerName: "telnyx",
+      callId: "call-1",
+      from: "+15550001234",
+      to: "+15550009999",
+      direction: "inbound",
+    });
+    const server = await startStreamSessionServer(handler, session.streamUrl);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            stream_id: "stream-1",
+            start: { call_control_id: "v3:call-1" },
+          }),
+        );
+        await waitForRealtimeTest(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+
+        const eventTypes = processEvent.mock.calls.map(
+          ([event]) => (event as NormalizedEvent).type,
+        );
+        expect(eventTypes).toEqual(["call.answered"]);
+        expect((processEvent.mock.calls[0]?.[0] as NormalizedEvent | undefined)?.callId).toBe(
+          "call-1",
+        );
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects Telnyx stream starts that do not match the token-bound call", async () => {
+    const processEvent = vi.fn();
+    const getCall = vi.fn(
+      (): CallRecord => ({
+        callId: "call-1",
+        providerCallId: "v3:call-1",
+        provider: "telnyx",
+        direction: "inbound",
+        state: "answered",
+        from: "+15550001234",
+        to: "+15550009999",
+        startedAt: Date.now(),
+        transcript: [],
+        processedEventIds: [],
+        metadata: {},
+      }),
+    );
+    const createBridge = vi.fn(() => makeBridge());
+    const handler = makeHandler(undefined, {
+      manager: {
+        processEvent,
+        getCall,
+      },
+      provider: {
+        name: "telnyx",
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    handler.setPublicUrl("https://public.example/voice/webhook");
+    const session = handler.issueStreamSession({
+      providerName: "telnyx",
+      callId: "call-1",
+      direction: "inbound",
+    });
+    const server = await startStreamSessionServer(handler, session.streamUrl);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          stream_id: "stream-1",
+          start: { call_control_id: "v3:other" },
+        }),
+      );
+      const close = await waitForClose(ws);
+
+      expect(close.code).toBe(1008);
+      expect(createBridge).not.toHaveBeenCalled();
+      expect(processEvent).not.toHaveBeenCalled();
     } finally {
       await server.close();
     }

@@ -73,6 +73,8 @@ type OpenAiChatCompletionRequest = {
   tool_choice?: unknown;
   messages?: unknown;
   user?: unknown;
+  max_tokens?: unknown;
+  max_completion_tokens?: unknown;
 };
 
 const DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES = 20 * 1024 * 1024;
@@ -132,6 +134,7 @@ function buildAgentCommandInput(params: {
   messageChannel: string;
   senderIsOwner: boolean;
   abortSignal?: AbortSignal;
+  streamParams?: { maxTokens?: number };
 }) {
   return {
     message: params.prompt.message,
@@ -147,6 +150,7 @@ function buildAgentCommandInput(params: {
     senderIsOwner: params.senderIsOwner,
     allowModelOverride: true as const,
     abortSignal: params.abortSignal,
+    streamParams: params.streamParams,
   };
 }
 
@@ -813,6 +817,13 @@ export async function handleOpenAiHttpRequest(
   const streamIncludeUsage = stream && resolveIncludeUsageForStreaming(payload);
   const model = typeof payload.model === "string" ? payload.model : "openclaw";
   const user = typeof payload.user === "string" ? payload.user : undefined;
+  const maxTokens =
+    typeof payload.max_completion_tokens === "number"
+      ? payload.max_completion_tokens
+      : typeof payload.max_tokens === "number"
+        ? payload.max_tokens
+        : undefined;
+  const streamParams = maxTokens !== undefined ? { maxTokens } : undefined;
 
   const { agentId, sessionKey, messageChannel } = resolveGatewayRequestContext({
     req,
@@ -897,6 +908,7 @@ export async function handleOpenAiHttpRequest(
     messageChannel,
     abortSignal: abortController.signal,
     senderIsOwner,
+    streamParams,
   });
 
   if (!stream) {

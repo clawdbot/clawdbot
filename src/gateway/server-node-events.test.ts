@@ -192,13 +192,21 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
   }
 }
 
+function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0) {
+  return mock.mock.calls.at(index);
+}
+
+function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0) {
+  return mockCall(mock, index)?.at(argIndex);
+}
+
 function expectPresencePersistCall(
   mock: ReturnType<typeof vi.fn>,
   deviceId: string,
   reason: string,
 ): void {
   expect(mock).toHaveBeenCalledTimes(1);
-  const [actualDeviceId, metadata] = mock.mock.calls[0] ?? [];
+  const [actualDeviceId, metadata] = mockCall(mock) ?? [];
   expect(actualDeviceId).toBe(deviceId);
   expectFields(metadata, { lastSeenReason: reason });
   const lastSeenAtMs = (metadata as { lastSeenAtMs?: unknown } | undefined)?.lastSeenAtMs;
@@ -610,7 +618,7 @@ describe("voice transcript events", () => {
     });
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    const [opts] = agentCommandMock.mock.calls[0] ?? [];
+    const opts = mockCallArg(agentCommandMock);
     expectFields(opts, {
       message: "check provenance",
       deliver: false,
@@ -625,7 +633,7 @@ describe("voice transcript events", () => {
     expect(typeof optsRecord.runId).toBe("string");
     expect(optsRecord.runId).not.toBe(optsRecord.sessionId);
     expect(addChatRun).toHaveBeenCalledTimes(1);
-    const [runId, runMetadata] = addChatRun.mock.calls[0] ?? [];
+    const [runId, runMetadata] = mockCall(addChatRun) ?? [];
     expect(runId).toBe(optsRecord.runId);
     const clientRunId = (runMetadata as { clientRunId?: unknown } | undefined)?.clientRunId;
     expect(typeof clientRunId).toBe("string");
@@ -649,7 +657,7 @@ describe("voice transcript events", () => {
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0]?.[0])).toContain("voice session-store update failed");
+    expect(String(mockCallArg(warn))).toContain("voice session-store update failed");
   });
 
   it("preserves existing session metadata when touching the store for voice transcripts", async () => {
@@ -928,7 +936,7 @@ describe("agent request events", () => {
     });
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    const [opts] = agentCommandMock.mock.calls[0] ?? [];
+    const opts = mockCallArg(agentCommandMock);
     expectFields(opts, {
       message: "summarize this",
       sessionKey: "agent:main:main",
@@ -937,9 +945,7 @@ describe("agent request events", () => {
       to: undefined,
     });
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0]?.[0])).toContain(
-      "agent delivery disabled node=node-route-miss",
-    );
+    expect(String(mockCallArg(warn))).toContain("agent delivery disabled node=node-route-miss");
   });
 
   it("reuses the current session route when delivery target is omitted", async () => {
@@ -963,7 +969,7 @@ describe("agent request events", () => {
     });
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    const [opts] = agentCommandMock.mock.calls[0] ?? [];
+    const opts = mockCallArg(agentCommandMock);
     expectFields(opts, {
       message: "route on session",
       sessionKey: "agent:main:main",
@@ -971,7 +977,8 @@ describe("agent request events", () => {
       channel: "telegram",
       to: "123",
     });
-    expect(opts.runId).toBe(opts.sessionId);
+    const optsRecord = opts as Record<string, unknown>;
+    expect(optsRecord.runId).toBe(optsRecord.sessionId);
   });
 
   it("passes supportsInlineImages false for text-only node-session models", async () => {
@@ -1009,7 +1016,7 @@ describe("agent request events", () => {
     });
 
     expect(parseMessageWithAttachmentsMock).toHaveBeenCalledTimes(1);
-    const parseCall = parseMessageWithAttachmentsMock.mock.calls[0];
+    const parseCall = mockCall(parseMessageWithAttachmentsMock);
     expect(parseCall?.[0]).toBe("describe");
     expect(Array.isArray(parseCall?.[1])).toBe(true);
     expectFields(parseCall?.[2], { supportsInlineImages: false });

@@ -77,6 +77,6 @@ describe("trySlashCommand", () => {
     expect(result).toBe("handled");
     expect(writes).toHaveLength(1);
     expect(qqbot?.streaming).toBe(true);
-    expect(vi.mocked(sendText).mock.calls[0]?.[1]).toContain("已开启");
+    expect(vi.mocked(sendText).mock.calls.at(0)?.[1]).toContain("已开启");
   });
 });

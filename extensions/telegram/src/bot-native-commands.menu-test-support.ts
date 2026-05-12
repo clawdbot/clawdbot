@@ -57,7 +57,7 @@ export async function waitForRegisteredCommands(
   await vi.waitFor(() => {
     expect(setMyCommands).toHaveBeenCalled();
   });
-  return setMyCommands.mock.calls[0]?.[0] as RegisteredCommand[];
+  return setMyCommands.mock.calls.at(0)?.[0] as RegisteredCommand[];
 }
 
 export function resetNativeCommandMenuMocks() {

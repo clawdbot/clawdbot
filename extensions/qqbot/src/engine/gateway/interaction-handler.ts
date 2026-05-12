@@ -5,12 +5,14 @@
  *
  * 1. **Config query**  (type=2001) — reads config, ACKs with `claw_cfg`.
  * 2. **Config update** (type=2002) — writes config, ACKs with updated snapshot.
- * 3. **Approval button** (other)   — ACKs, resolves approval via PlatformAdapter.
+ * 3. **Approval button** (other)   — ACKs, resolves authorized approval actions.
  *
  * Config query/update require `runtime.config`. When unavailable, those
  * branches fall through to a bare ACK (backward-compatible).
  */
 
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { authorizeQQBotApprovalAction } from "../../exec-approvals.js";
 import { resolveQQBotEffectivePolicies } from "../access/resolve-policy.js";
 import { getPlatformAdapter } from "../adapter/index.js";
 import { parseApprovalButtonData } from "../approval/index.js";
@@ -151,6 +153,7 @@ export function createInteractionHandler(
   account: GatewayAccount,
   runtime: GatewayPluginRuntime,
   log?: EngineLogger,
+  options?: { getActiveCfg?: () => OpenClawConfig },
 ): (event: InteractionEvent) => void {
   return (event) => {
     const creds = accountToCreds(account);
@@ -174,32 +177,154 @@ export function createInteractionHandler(
     }
 
     // ---- Approval button / other ----
-    void acknowledgeInteraction(creds, event.id).catch((err) => {
-      log?.error(`Interaction ACK failed: ${err instanceof Error ? err.message : String(err)}`);
-    });
-
     const parsed = parseApprovalButtonData(event.data?.resolved?.button_data ?? "");
     if (!parsed) {
+      void acknowledgeInteraction(creds, event.id).catch((err) => {
+        log?.error(`Interaction ACK failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
       return;
     }
 
-    const adapter = getPlatformAdapter();
-    if (!adapter.resolveApproval) {
-      log?.error("resolveApproval not available on PlatformAdapter");
-      return;
-    }
-
-    void adapter.resolveApproval(parsed.approvalId, parsed.decision).then((ok) => {
-      if (ok) {
-        log?.info(`Approval resolved: id=${parsed.approvalId}, decision=${parsed.decision}`);
-      } else {
-        log?.error(`Approval resolve failed: id=${parsed.approvalId}`);
-      }
+    void handleApprovalButtonInteraction({
+      accountId: account.accountId,
+      creds,
+      event,
+      getActiveCfg: options?.getActiveCfg ?? runtime.config?.current,
+      log,
+      parsed,
     });
   };
 }
 
 // ============ Helpers ============
+
+async function handleApprovalButtonInteraction(params: {
+  accountId: string;
+  creds: { appId: string; clientSecret: string };
+  event: InteractionEvent;
+  getActiveCfg?: () => OpenClawConfig | Record<string, unknown>;
+  log?: EngineLogger;
+  parsed: { approvalId: string; decision: "allow-once" | "allow-always" | "deny" };
+}): Promise<void> {
+  if (!params.getActiveCfg) {
+    await acknowledgeApprovalInteraction(params.creds, params.event, params.log, {
+      content: "Approval is unavailable.",
+    });
+    params.log?.error("Approval button rejected: active config is unavailable");
+    return;
+  }
+
+  let cfg: OpenClawConfig;
+  try {
+    cfg = params.getActiveCfg() as OpenClawConfig;
+  } catch (err) {
+    await acknowledgeApprovalInteraction(params.creds, params.event, params.log, {
+      content: "Approval is unavailable.",
+    });
+    params.log?.error(
+      `Approval button rejected: active config failed to load: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    return;
+  }
+
+  const authorization = authorizeApprovalButtonActor({
+    cfg,
+    accountId: params.accountId,
+    event: params.event,
+    approvalKind: resolveApprovalKind(params.parsed.approvalId),
+  });
+  if (!authorization.authorized) {
+    await acknowledgeApprovalInteraction(params.creds, params.event, params.log, {
+      content: authorization.reason ?? "You are not authorized to approve this request.",
+    });
+    params.log?.info(`Approval button rejected: id=${params.parsed.approvalId}`);
+    return;
+  }
+
+  await acknowledgeApprovalInteraction(params.creds, params.event, params.log);
+
+  const adapter = getPlatformAdapter();
+  if (!adapter.resolveApproval) {
+    params.log?.error("resolveApproval not available on PlatformAdapter");
+    return;
+  }
+
+  try {
+    const ok = await adapter.resolveApproval(params.parsed.approvalId, params.parsed.decision);
+    if (ok) {
+      params.log?.info(
+        `Approval resolved: id=${params.parsed.approvalId}, decision=${params.parsed.decision}`,
+      );
+    } else {
+      params.log?.error(`Approval resolve failed: id=${params.parsed.approvalId}`);
+    }
+  } catch (err) {
+    params.log?.error(
+      `Approval resolve failed: id=${params.parsed.approvalId}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}
+
+async function acknowledgeApprovalInteraction(
+  creds: { appId: string; clientSecret: string },
+  event: InteractionEvent,
+  log: EngineLogger | undefined,
+  data?: Record<string, unknown>,
+): Promise<void> {
+  try {
+    await acknowledgeInteraction(creds, event.id, 0, data);
+  } catch (err) {
+    log?.error(`Interaction ACK failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function authorizeApprovalButtonActor(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  event: InteractionEvent;
+  approvalKind: "exec" | "plugin";
+}): { authorized: boolean; reason?: string } {
+  const senderIds = resolveApprovalActorSenderIds(params.event);
+  if (senderIds.length === 0) {
+    return authorizeQQBotApprovalAction({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      senderId: null,
+      approvalKind: params.approvalKind,
+    });
+  }
+
+  let denial: { authorized: boolean; reason?: string } | undefined;
+  for (const senderId of senderIds) {
+    const result = authorizeQQBotApprovalAction({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      senderId,
+      approvalKind: params.approvalKind,
+    });
+    if (result.authorized) {
+      return result;
+    }
+    denial ??= result;
+  }
+  return denial ?? { authorized: false, reason: "You are not authorized to approve this request." };
+}
+
+function resolveApprovalActorSenderIds(event: InteractionEvent): string[] {
+  const ids = [event.group_member_openid, event.user_openid].flatMap((value) => {
+    const normalized = typeof value === "string" ? value.trim() : "";
+    return normalized ? [normalized] : [];
+  });
+  return Array.from(new Set(ids));
+}
+
+function resolveApprovalKind(approvalId: string): "exec" | "plugin" {
+  return approvalId.toLowerCase().startsWith("plugin:") ? "plugin" : "exec";
+}
 
 /** Execute an async handler, ACK with the result, and handle errors. */
 async function handleWithAck(

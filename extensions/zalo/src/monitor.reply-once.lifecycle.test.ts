@@ -112,7 +112,7 @@ describe("Zalo reply-once lifecycle", () => {
       expect(recordArgs?.ctx?.To).toBe("zalo:dm-chat-1");
       expect(recordArgs?.ctx?.MessageSid).toContain("zalo-replay-");
       expect(sendMessageMock).toHaveBeenCalledTimes(1);
-      const [sendToken, sendPayload, sendOptions] = sendMessageMock.mock.calls[0] as [
+      const [sendToken, sendPayload, sendOptions] = sendMessageMock.mock.calls.at(0) as [
         string,
         { chat_id?: string; text?: string },
         unknown,

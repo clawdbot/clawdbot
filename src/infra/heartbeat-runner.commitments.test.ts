@@ -369,7 +369,7 @@ describe("runHeartbeatOnce commitments", () => {
       runner.stop();
 
       expect(runOnce).toHaveBeenCalledTimes(1);
-      const runOptions = runOnce.mock.calls[0]?.[0] as
+      const runOptions = runOnce.mock.calls.at(0)?.[0] as
         | { agentId?: string; heartbeat?: { target?: string }; sessionKey?: string }
         | undefined;
       expect(runOptions?.agentId).toBe("main");

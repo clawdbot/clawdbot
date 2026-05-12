@@ -48,7 +48,7 @@ function createDeferred<T>() {
 type GatewayEventClientParams = { onEvent?: (evt: { event: string; payload: unknown }) => void };
 
 function lastGatewayEventClientParams(): GatewayEventClientParams | undefined {
-  return mockCreateOperatorApprovalsGatewayClient.mock.calls[0]?.[0] as
+  return mockCreateOperatorApprovalsGatewayClient.mock.calls.at(0)?.[0] as
     | GatewayEventClientParams
     | undefined;
 }
@@ -100,7 +100,7 @@ function mockReplayLists(params: {
 
 function expectStartGatewayClientCall(preauthHandshakeTimeoutMs?: number) {
   expect(mockStartGatewayClientWhenEventLoopReady).toHaveBeenCalledTimes(1);
-  const [client, options] = mockStartGatewayClientWhenEventLoopReady.mock.calls[0] ?? [];
+  const [client, options] = mockStartGatewayClientWhenEventLoopReady.mock.calls.at(0) ?? [];
   expect(typeof (client as { start?: unknown } | undefined)?.start).toBe("function");
   expect(options).toEqual({
     clientOptions: { preauthHandshakeTimeoutMs },
@@ -112,7 +112,7 @@ function expectFinalizedExpired(
   params: { id: string; entries: Array<{ id: string }> },
 ) {
   expect(finalizedExpired).toHaveBeenCalledTimes(1);
-  const payload = finalizedExpired.mock.calls[0]?.[0] as
+  const payload = finalizedExpired.mock.calls.at(0)?.[0] as
     | { request?: { id?: string }; entries?: Array<{ id: string }> }
     | undefined;
   expect(payload?.request?.id).toBe(params.id);
@@ -124,7 +124,7 @@ function expectFinalizedResolved(
   params: { id: string; decision: string; entries: Array<{ id: string }> },
 ) {
   expect(finalizedResolved).toHaveBeenCalledTimes(1);
-  const payload = finalizedResolved.mock.calls[0]?.[0] as
+  const payload = finalizedResolved.mock.calls.at(0)?.[0] as
     | {
         request?: { id?: string };
         resolved?: { id?: string; decision?: string };

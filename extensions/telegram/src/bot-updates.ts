@@ -11,6 +11,7 @@ export type MediaGroupEntry = {
     msg: Message;
     ctx: TelegramContext;
   }>;
+  promptContextMinTimestampMs?: number;
   timer: ReturnType<typeof setTimeout>;
 };
 

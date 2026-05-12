@@ -80,7 +80,7 @@ describe("sendFailureNotificationAnnounce", () => {
       sessionKey: "cron:job-1:failure",
     });
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    const [deliveryRequest] = mocks.deliverOutboundPayloads.mock.calls[0] as [
+    const [deliveryRequest] = mocks.deliverOutboundPayloads.mock.calls.at(0) as [
       {
         abortSignal?: unknown;
         accountId?: string;
@@ -171,7 +171,7 @@ describe("sendFailureNotificationAnnounce", () => {
     ).resolves.toBeUndefined();
 
     expect(mocks.warn).toHaveBeenCalledTimes(1);
-    const [warnMeta, warnMessage] = mocks.warn.mock.calls[0] as [
+    const [warnMeta, warnMessage] = mocks.warn.mock.calls.at(0) as [
       { channel?: string; err?: string; to?: string },
       string,
     ];

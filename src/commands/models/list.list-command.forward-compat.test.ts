@@ -123,6 +123,11 @@ function expectRowKeys(rows: Array<{ key: string }>, keys: string[]) {
   expect(rows.map((row) => row.key)).toEqual(keys);
 }
 
+function expectFirstRegistryConfig() {
+  const [cfg] = mocks.loadModelRegistry.mock.calls[0] ?? [];
+  expect(cfg).toBe(mocks.resolvedConfig);
+}
+
 function expectRowFields(
   rows: Array<{ key: string } & Record<string, unknown>>,
   key: string,
@@ -914,7 +919,7 @@ describe("modelsListCommand forward-compat", () => {
 
       await modelsListCommand({ all: true, provider: "openai", json: true }, runtime as never);
 
-      expect(mocks.loadModelRegistry.mock.calls[0]?.[0]).toBe(mocks.resolvedConfig);
+      expectFirstRegistryConfig();
       expect(modelRegistryOptions().providerFilter).toBe("openai");
       expect(modelRegistryOptions().normalizeModels).toBe(true);
       expectRowKeys(lastPrintedRows<{ key: string }>(), ["openai/gpt-5.4", "openai/gpt-5.5-pro"]);
@@ -976,7 +981,7 @@ describe("modelsListCommand forward-compat", () => {
 
       await modelsListCommand({ all: true, json: true }, runtime as never);
 
-      expect(mocks.loadModelRegistry.mock.calls[0]?.[0]).toBe(mocks.resolvedConfig);
+      expectFirstRegistryConfig();
       expect(modelRegistryOptions().providerFilter).toBeUndefined();
       expect(modelRegistryOptions().normalizeModels).toBe(false);
       expect(mocks.loadProviderCatalogModelsForList).not.toHaveBeenCalled();
@@ -1006,7 +1011,7 @@ describe("modelsListCommand forward-compat", () => {
         runtime as never,
       );
 
-      expect(mocks.loadModelRegistry.mock.calls[0]?.[0]).toBe(mocks.resolvedConfig);
+      expectFirstRegistryConfig();
       expect(modelRegistryOptions().providerFilter).toBe("openai-codex");
       expect(modelRegistryOptions().normalizeModels).toBe(true);
       expect(mocks.loadProviderCatalogModelsForList).toHaveBeenNthCalledWith(1, {
@@ -1064,7 +1069,7 @@ describe("modelsListCommand forward-compat", () => {
 
       await modelsListCommand({ all: true, provider: "anthropic", json: true }, runtime as never);
 
-      expect(mocks.loadModelRegistry.mock.calls[0]?.[0]).toBe(mocks.resolvedConfig);
+      expectFirstRegistryConfig();
       expect(modelRegistryOptions().providerFilter).toBe("anthropic");
       expect(modelRegistryOptions().normalizeModels).toBe(false);
       expect(modelRegistryOptions().loadAvailability).toBe(false);

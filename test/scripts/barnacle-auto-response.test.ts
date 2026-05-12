@@ -780,7 +780,7 @@ describe("barnacle-auto-response", () => {
         },
       });
 
-      expect(calls.removeLabel).toContainEqual(expectedRemoveLabel(123, PROOF_SUFFICIENT_LABEL));
+      expect(calls.removeLabel).toEqual([expectedRemoveLabel(123, PROOF_SUFFICIENT_LABEL)]);
     },
   );
 
@@ -807,7 +807,7 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.removeLabel).not.toContainEqual(expectedRemoveLabel(123, PROOF_SUFFICIENT_LABEL));
+    expect(calls.removeLabel).toEqual([]);
   });
 
   it("actions manually applied candidate labels", async () => {

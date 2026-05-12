@@ -56,6 +56,53 @@ async function sendEmptyModelList(harness: ReturnType<typeof createClientHarness
   harness.send({ id: modelList.id, result: { data: [] } });
 }
 
+function firstMockArg(mock: unknown, label: string): unknown {
+  const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.at(0);
+  if (!call) {
+    throw new Error(`Expected ${label} first call`);
+  }
+  return call[0];
+}
+
+function bridgeStartOptionsCall() {
+  return firstMockArg(mocks.bridgeCodexAppServerStartOptions, "bridge start options") as {
+    agentDir?: string;
+    authProfileId?: string;
+    config?: unknown;
+    startOptions: { command?: string; commandSource?: string };
+  };
+}
+
+function applyAuthProfileCall() {
+  return firstMockArg(mocks.applyCodexAppServerAuthProfile, "apply auth profile") as {
+    agentDir?: string;
+    authProfileId?: string;
+    config?: unknown;
+  };
+}
+
+function resolveAuthProfileCall() {
+  return firstMockArg(mocks.resolveCodexAppServerAuthProfileIdForAgent, "resolve auth profile") as {
+    agentDir?: string;
+    authProfileId?: string;
+    config?: unknown;
+  };
+}
+
+function managedStartOptionsCall() {
+  return firstMockArg(mocks.resolveManagedCodexAppServerStartOptions, "managed start options") as {
+    command?: string;
+    commandSource?: string;
+  };
+}
+
+function clientStartCall(startSpy: unknown) {
+  return firstMockArg(startSpy, "CodexAppServerClient.start") as {
+    command?: string;
+    commandSource?: string;
+  };
+}
+
 describe("shared Codex app-server client", () => {
   beforeAll(async () => {
     ({ listCodexAppServerModels } = await import("./models.js"));
@@ -145,9 +192,9 @@ describe("shared Codex app-server client", () => {
     await sendEmptyModelList(harness);
 
     await expect(listPromise).resolves.toEqual({ models: [] });
-    const [bridgeCall] = mocks.bridgeCodexAppServerStartOptions.mock.calls[0] ?? [];
+    const bridgeCall = bridgeStartOptionsCall();
     expect(bridgeCall?.authProfileId).toBe("openai-codex:work");
-    const [applyCall] = mocks.applyCodexAppServerAuthProfile.mock.calls[0] ?? [];
+    const applyCall = applyAuthProfileCall();
     expect(applyCall?.authProfileId).toBe("openai-codex:work");
   });
 
@@ -165,16 +212,16 @@ describe("shared Codex app-server client", () => {
     await sendEmptyModelList(harness);
 
     await expect(listPromise).resolves.toEqual({ models: [] });
-    const [resolveCall] = mocks.resolveCodexAppServerAuthProfileIdForAgent.mock.calls[0] ?? [];
+    const resolveCall = resolveAuthProfileCall();
     expect(resolveCall).toStrictEqual({
       authProfileId: undefined,
       agentDir: "/tmp/openclaw-agent",
       config,
     });
-    const [bridgeCall] = mocks.bridgeCodexAppServerStartOptions.mock.calls[0] ?? [];
+    const bridgeCall = bridgeStartOptionsCall();
     expect(bridgeCall?.authProfileId).toBe("openai-codex:work");
     expect(bridgeCall?.config).toBe(config);
-    const [applyCall] = mocks.applyCodexAppServerAuthProfile.mock.calls[0] ?? [];
+    const applyCall = applyAuthProfileCall();
     expect(applyCall?.authProfileId).toBe("openai-codex:work");
     expect(applyCall?.config).toBe(config);
   });
@@ -192,10 +239,10 @@ describe("shared Codex app-server client", () => {
     await sendEmptyModelList(harness);
 
     await expect(listPromise).resolves.toEqual({ models: [] });
-    const [bridgeCall] = mocks.bridgeCodexAppServerStartOptions.mock.calls[0] ?? [];
+    const bridgeCall = bridgeStartOptionsCall();
     expect(bridgeCall?.agentDir).toBe("/tmp/openclaw-agent-nova");
     expect(bridgeCall?.authProfileId).toBe("openai-codex:work");
-    const [applyCall] = mocks.applyCodexAppServerAuthProfile.mock.calls[0] ?? [];
+    const applyCall = applyAuthProfileCall();
     expect(applyCall?.agentDir).toBe("/tmp/openclaw-agent-nova");
     expect(applyCall?.authProfileId).toBe("openai-codex:work");
   });
@@ -214,13 +261,13 @@ describe("shared Codex app-server client", () => {
     await sendEmptyModelList(harness);
 
     await expect(listPromise).resolves.toEqual({ models: [] });
-    const [managedCall] = mocks.resolveManagedCodexAppServerStartOptions.mock.calls[0] ?? [];
+    const managedCall = managedStartOptionsCall();
     expect(managedCall?.command).toBe("codex");
     expect(managedCall?.commandSource).toBe("managed");
-    const [bridgeCall] = mocks.bridgeCodexAppServerStartOptions.mock.calls[0] ?? [];
+    const bridgeCall = bridgeStartOptionsCall();
     expect(bridgeCall?.startOptions.command).toBe("/cache/openclaw/codex");
     expect(bridgeCall?.startOptions.commandSource).toBe("resolved-managed");
-    const [startCall] = startSpy.mock.calls[0] ?? [];
+    const startCall = clientStartCall(startSpy);
     expect(startCall?.command).toBe("/cache/openclaw/codex");
     expect(startCall?.commandSource).toBe("resolved-managed");
   });

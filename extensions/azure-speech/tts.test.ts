@@ -71,7 +71,7 @@ describe("azure speech tts", () => {
 
     expect(result).toEqual(Buffer.from("mp3"));
     expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls.at(0) as [string, RequestInit];
     expect(url).toBe("https://eastus.tts.speech.microsoft.com/cognitiveservices/v1");
     expect(init.method).toBe("POST");
     const headers = new Headers(init.headers);
@@ -109,7 +109,7 @@ describe("azure speech tts", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls.at(0) as [string, RequestInit];
     expect(url).toBe("https://custom.example.com/cognitiveservices/voices/list");
     expect(new Headers(init.headers).get("Ocp-Apim-Subscription-Key")).toBe("speech-key");
     expect(init.signal).toBeInstanceOf(AbortSignal);

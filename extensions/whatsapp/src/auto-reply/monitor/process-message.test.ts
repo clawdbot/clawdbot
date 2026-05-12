@@ -214,6 +214,17 @@ function callProcessMessage(overrides: { cfg?: unknown } = {}) {
   });
 }
 
+function mockCallArg(mockFn: ReturnType<typeof vi.fn>, label: string, callIndex = 0, argIndex = 0) {
+  const call = mockFn.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`Expected ${label} call ${callIndex}`);
+  }
+  if (!(argIndex in call)) {
+    throw new Error(`Expected ${label} call ${callIndex} argument ${argIndex}`);
+  }
+  return call[argIndex];
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -244,7 +255,13 @@ describe("processMessage group system prompt wiring", () => {
 
     await callProcessMessage();
 
-    expect(buildContextMock.mock.calls[0][0].groupSystemPrompt).toBe("from config");
+    expect(
+      (
+        mockCallArg(buildContextMock, "buildWhatsAppInboundContext") as {
+          groupSystemPrompt?: string;
+        }
+      ).groupSystemPrompt,
+    ).toBe("from config");
   });
 
   it("fires message_received hooks with canonical WhatsApp correlation fields", async () => {
@@ -324,7 +341,10 @@ describe("processMessage group system prompt wiring", () => {
       },
     );
     expect(internalReceived).toHaveBeenCalledTimes(1);
-    const [internalEvent] = internalReceived.mock.calls[0] ?? [];
+    const internalEvent = mockCallArg(internalReceived, "internal message received") as Record<
+      string,
+      unknown
+    >;
     expect(internalEvent.timestamp).toBeInstanceOf(Date);
     expect({ ...internalEvent, timestamp: undefined }).toEqual({
       type: "message",
@@ -382,7 +402,9 @@ describe("processMessage group system prompt wiring", () => {
     await callProcessMessage();
 
     expect(trackBackgroundTaskMock).toHaveBeenCalledTimes(1);
-    expect(trackBackgroundTaskMock.mock.calls[0]?.[0]).toBeInstanceOf(Set);
-    expect(trackBackgroundTaskMock.mock.calls[0]?.[1]).toBeInstanceOf(Promise);
+    expect(mockCallArg(trackBackgroundTaskMock, "trackBackgroundTask")).toBeInstanceOf(Set);
+    expect(mockCallArg(trackBackgroundTaskMock, "trackBackgroundTask", 0, 1)).toBeInstanceOf(
+      Promise,
+    );
   });
 });

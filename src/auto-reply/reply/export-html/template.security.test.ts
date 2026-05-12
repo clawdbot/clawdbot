@@ -414,10 +414,90 @@ describe("export html security hardening", () => {
     requireElement(messages.querySelector(`img[src="${dataImage}"]`), "data markdown image missing");
   });
 
+  it("flattens unsafe markdown links while preserving safe links", async () => {
+    const session: SessionData = {
+      header: { id: "session-5", timestamp: now() },
+      entries: [
+        {
+          id: "1",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "user",
+            content: [
+              "[script](javascript:alert(1))",
+              "[encoded](java&#x73;cript&colon;alert(2))",
+              "[split](java&Tab;script&colon;alert(3))",
+              "[zero-width](java&#x200b;script&colon;alert(4))",
+              "[surrogate](java&#xd800;script&colon;alert(5))",
+              '[safe](https://example.com/report "report")',
+            ].join("\n"),
+          },
+        },
+        {
+          id: "2",
+          parentId: "1",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: "[data](data:text/html;base64,PGgxPnBvYzwvaDE+) [mail](mailto:test@example.com)",
+              },
+            ],
+          },
+        },
+        {
+          id: "3",
+          parentId: "2",
+          timestamp: now(),
+          type: "branch_summary",
+          summary: "[relative](./notes.md)",
+        },
+        {
+          id: "4",
+          parentId: "3",
+          timestamp: now(),
+          type: "custom_message",
+          customType: "x",
+          display: true,
+          content: "[hash](#entry-1)",
+        },
+      ],
+      leafId: "4",
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = await renderTemplate(session);
+    const messages = requireElement(document.getElementById("messages"), "messages root missing");
+    const hrefs = Array.from(messages.querySelectorAll("a"), (link) => link.getAttribute("href"));
+
+    expect(hrefs).toEqual([
+      "https://example.com/report",
+      "mailto:test@example.com",
+      "./notes.md",
+      "#entry-1",
+    ]);
+    expect(messages.querySelector("a")?.getAttribute("title")).toBe("report");
+    expect(messages.textContent).toContain("script");
+    expect(messages.textContent).toContain("encoded");
+    expect(messages.textContent).toContain("split");
+    expect(messages.textContent).toContain("zero-width");
+    expect(messages.textContent).toContain("surrogate");
+    expect(messages.textContent).toContain("data");
+    expect(hrefs.some((href) => href?.startsWith("javascript:") || href?.startsWith("data:"))).toBe(
+      false,
+    );
+  });
+
   it("escapes markdown data-image attributes", async () => {
     const dataImage = "data:image/png;base64,AAAA";
     const session: SessionData = {
-      header: { id: "session-5", timestamp: now() },
+      header: { id: "session-6", timestamp: now() },
       entries: [
         {
           id: "1",

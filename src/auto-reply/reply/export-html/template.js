@@ -1732,6 +1732,73 @@
     return `<img src="${escapeHtmlAttr(href)}" alt="${escapeHtmlAttr(label)}">`;
   }
 
+  const SAFE_MARKDOWN_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:", "ftp:"]);
+
+  function decodeMarkdownHrefCodePoint(value, radix) {
+    const codePoint = Number.parseInt(value, radix);
+    if (
+      !Number.isFinite(codePoint) ||
+      codePoint < 0 ||
+      codePoint > 0x10ffff ||
+      (codePoint >= 0xd800 && codePoint <= 0xdfff)
+    ) {
+      return "";
+    }
+    return String.fromCodePoint(codePoint);
+  }
+
+  function decodeMarkdownHrefEntities(text) {
+    return text.replace(
+      /&(?:#(\d+)|#x([\da-f]+)|(colon|tab|newline));/gi,
+      (_match, decimal, hex, named) => {
+        if (decimal) {
+          return decodeMarkdownHrefCodePoint(decimal, 10);
+        }
+        if (hex) {
+          return decodeMarkdownHrefCodePoint(hex, 16);
+        }
+        if (named?.toLowerCase() === "tab") {
+          return "\t";
+        }
+        if (named?.toLowerCase() === "newline") {
+          return "\n";
+        }
+        return ":";
+      },
+    );
+  }
+
+  function getMarkdownHrefProtocol(href) {
+    const normalized = decodeMarkdownHrefEntities(href)
+      .replace(/[\u0000-\u001f\u007f\u200b-\u200f\u2028\u2029\ufeff\s]+/g, "")
+      .trim();
+    const match = /^([a-z][a-z0-9+.-]*):/i.exec(normalized);
+    return match ? `${match[1].toLowerCase()}:` : null;
+  }
+
+  function isSafeMarkdownLinkHref(href) {
+    const trimmed = typeof href === "string" ? href.trim() : "";
+    if (!trimmed) {
+      return true;
+    }
+    const protocol = getMarkdownHrefProtocol(trimmed);
+    return protocol === null || SAFE_MARKDOWN_LINK_PROTOCOLS.has(protocol);
+  }
+
+  function renderMarkdownLink(token) {
+    const text = this.parser.parseInline(token.tokens);
+    const href = typeof token?.href === "string" ? token.href.trim() : "";
+    if (!isSafeMarkdownLinkHref(href)) {
+      return text;
+    }
+
+    let html = `<a href="${escapeHtmlAttr(href)}"`;
+    if (typeof token?.title === "string" && token.title) {
+      html += ` title="${escapeHtmlAttr(token.title)}"`;
+    }
+    return `${html}>${text}</a>`;
+  }
+
   // Configure marked with syntax highlighting and HTML escaping for text
   marked.use({
     breaks: true,
@@ -1772,6 +1839,9 @@
       },
       image(token) {
         return renderMarkdownImage(token);
+      },
+      link(token) {
+        return renderMarkdownLink.call(this, token);
       },
     },
   });

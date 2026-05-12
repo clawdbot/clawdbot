@@ -1,22 +1,39 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  RealtimeAudioPacer,
   RealtimeMulawSpeechStartDetector,
-  RealtimeTwilioAudioPacer,
   calculateMulawRms,
+  type RealtimeAudioSerializer,
 } from "./realtime-audio-pacer.js";
 
-describe("RealtimeTwilioAudioPacer", () => {
+function createTwilioSerializer(streamSid: string): RealtimeAudioSerializer {
+  return {
+    media: (payload) => JSON.stringify({ event: "media", streamSid, media: { payload } }),
+    clear: () => JSON.stringify({ event: "clear", streamSid }),
+    mark: (name) => JSON.stringify({ event: "mark", streamSid, mark: { name } }),
+  };
+}
+
+function createTelnyxSerializer(): RealtimeAudioSerializer {
+  return {
+    media: (payload) => JSON.stringify({ event: "media", media: { payload } }),
+    clear: () => JSON.stringify({ event: "clear" }),
+    mark: (name) => JSON.stringify({ event: "mark", mark: { name } }),
+  };
+}
+
+describe("RealtimeAudioPacer", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("paces realtime audio as 20ms telephony frames before marks", async () => {
+  it("paces realtime audio as 20ms telephony frames before marks (Twilio shape)", async () => {
     vi.useFakeTimers();
     const sent: unknown[] = [];
-    const pacer = new RealtimeTwilioAudioPacer({
-      streamSid: "MZ-test",
-      sendJson: (message) => {
-        sent.push(message);
+    const pacer = new RealtimeAudioPacer({
+      serializer: createTwilioSerializer("MZ-test"),
+      send: (message) => {
+        sent.push(JSON.parse(message));
         return true;
       },
     });
@@ -43,13 +60,13 @@ describe("RealtimeTwilioAudioPacer", () => {
     });
   });
 
-  it("clears queued audio immediately", async () => {
+  it("clears queued audio immediately (Twilio shape)", async () => {
     vi.useFakeTimers();
     const sent: unknown[] = [];
-    const pacer = new RealtimeTwilioAudioPacer({
-      streamSid: "MZ-test",
-      sendJson: (message) => {
-        sent.push(message);
+    const pacer = new RealtimeAudioPacer({
+      serializer: createTwilioSerializer("MZ-test"),
+      send: (message) => {
+        sent.push(JSON.parse(message));
         return true;
       },
     });
@@ -66,12 +83,12 @@ describe("RealtimeTwilioAudioPacer", () => {
     vi.useFakeTimers();
     const sent: unknown[] = [];
     const onBackpressure = vi.fn();
-    const pacer = new RealtimeTwilioAudioPacer({
-      streamSid: "MZ-test",
+    const pacer = new RealtimeAudioPacer({
+      serializer: createTwilioSerializer("MZ-test"),
       maxQueuedAudioBytes: 320,
       onBackpressure,
-      sendJson: (message) => {
-        sent.push(message);
+      send: (message) => {
+        sent.push(JSON.parse(message));
         return true;
       },
     });
@@ -82,6 +99,27 @@ describe("RealtimeTwilioAudioPacer", () => {
 
     expect(onBackpressure).toHaveBeenCalledOnce();
     expect(sent).toStrictEqual([]);
+  });
+
+  it("paces audio in Telnyx envelope shape (no streamSid)", async () => {
+    vi.useFakeTimers();
+    const sent: unknown[] = [];
+    const pacer = new RealtimeAudioPacer({
+      serializer: createTelnyxSerializer(),
+      send: (message) => {
+        sent.push(JSON.parse(message));
+        return true;
+      },
+    });
+
+    pacer.sendAudio(Buffer.alloc(160, 0x7f));
+    pacer.clearAudio();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(sent).toEqual([
+      { event: "media", media: { payload: Buffer.alloc(160, 0x7f).toString("base64") } },
+      { event: "clear" },
+    ]);
   });
 });
 

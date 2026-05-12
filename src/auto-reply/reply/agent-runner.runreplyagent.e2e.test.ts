@@ -723,7 +723,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     expect(typing.startTypingOnText).toHaveBeenCalledWith("chunk");
     expect(onBlockReply).toHaveBeenCalled();
-    const [blockPayload, blockOpts] = onBlockReply.mock.calls[0] ?? [];
+    const [blockPayload, blockOpts] = onBlockReply.mock.calls.at(0) ?? [];
     const blockPayloadRecord = requireRecord(blockPayload, "block payload");
     expect(blockPayloadRecord.text).toBe("chunk");
     expect(blockPayloadRecord.audioAsVoice).toBe(false);
@@ -928,6 +928,420 @@ describe("runReplyAgent typing (heartbeat)", () => {
         testCase.name,
       ).toHaveLength(1);
       expect(phases, testCase.name).toContain("fallback_step");
+    }
+  });
+
+  it("surfaces a configured backend failure when fallback produces no visible reply", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("openai-codex", "gpt-5.5"),
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          attempts: [
+            {
+              provider: "lmstudio",
+              model: "gemma-4-e4b-it",
+              error: "Connection error.",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          MessageSid: "1503645939964055592",
+        },
+      });
+      const res = await run();
+      const payload = Array.isArray(res) ? res[0] : res;
+
+      expect(payload?.isError).toBe(true);
+      expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
+      expect(payload?.text).toContain("Fallback used openai-codex/gpt-5.5");
+      expect(payload?.text).toContain("no visible reply");
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("surfaces a configured backend failure when fallback returns no payloads", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("openai-codex", "gpt-5.5"),
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          attempts: [
+            {
+              provider: "lmstudio",
+              model: "gemma-4-e4b-it",
+              error: "Connection error.",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          MessageSid: "1503645939964055592",
+        },
+      });
+      const res = await run();
+      const payload = Array.isArray(res) ? res[0] : res;
+
+      expect(payload?.isError).toBe(true);
+      expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
+      expect(payload?.text).toContain("Fallback used openai-codex/gpt-5.5");
+      expect(payload?.text).toContain("no visible reply");
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("surfaces a persisted configured backend failure when the active fallback is silent", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "lmstudio",
+      modelOverrideFallbackOriginModel: "gemma-4-e4b-it",
+    };
+    const sessionStore = { main: sessionEntry };
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        provider: "openai-codex",
+        model: "gpt-5.5",
+      },
+      sessionEntry,
+      sessionStore,
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        MessageSid: "1503677587568722061",
+      },
+    });
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
+    expect(payload?.text).toContain("Fallback used openai-codex/gpt-5.5");
+    expect(payload?.text).toContain("no visible reply");
+  });
+
+  it("does not surface fallback silence when fallback already replied through a messaging tool", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "already sent" }],
+      messagingToolSentTexts: ["already sent"],
+      messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("openai-codex", "gpt-5.5"),
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          attempts: [
+            {
+              provider: "lmstudio",
+              model: "gemma-4-e4b-it",
+              error: "Connection error.",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+          messageProvider: "discord",
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:C1",
+          AccountId: "primary",
+          MessageSid: "1503645939964055592",
+        },
+      });
+
+      await expect(run()).resolves.toBeUndefined();
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("does not treat whitespace-only messaging evidence as fallback delivery", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      messagingToolSentTexts: ["  "],
+      messagingToolSentMediaUrls: ["\t"],
+      messagingToolSentTargets: [
+        { tool: "message", provider: "discord", to: "channel:C1", text: "  " },
+      ],
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("openai-codex", "gpt-5.5"),
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          attempts: [
+            {
+              provider: "lmstudio",
+              model: "gemma-4-e4b-it",
+              error: "Connection error.",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+          messageProvider: "discord",
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:C1",
+          AccountId: "primary",
+          MessageSid: "1503645939964055592",
+        },
+      });
+      const res = await run();
+      const payload = Array.isArray(res) ? res[0] : res;
+
+      expect(payload?.isError).toBe(true);
+      expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
+      expect(payload?.text).toContain("Fallback used openai-codex/gpt-5.5");
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("does not surface fallback silence when fallback already completed a cron side effect", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      successfulCronAdds: 1,
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("openai-codex", "gpt-5.5"),
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          attempts: [
+            {
+              provider: "lmstudio",
+              model: "gemma-4-e4b-it",
+              error: "Connection error.",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+          messageProvider: "discord",
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:C1",
+          AccountId: "primary",
+          MessageSid: "1503645939964055592",
+        },
+      });
+
+      await expect(run()).resolves.toBeUndefined();
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("does not surface fallback silence when fallback committed target-only messaging delivery", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("openai-codex", "gpt-5.5"),
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          attempts: [
+            {
+              provider: "lmstudio",
+              model: "gemma-4-e4b-it",
+              error: "Connection error.",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+          messageProvider: "discord",
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:C1",
+          AccountId: "primary",
+          MessageSid: "1503645939964055592",
+        },
+      });
+
+      await expect(run()).resolves.toBeUndefined();
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("does not surface fallback silence when fallback already delivered an approval prompt", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      didSendDeterministicApprovalPrompt: true,
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("openai-codex", "gpt-5.5"),
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          attempts: [
+            {
+              provider: "lmstudio",
+              model: "gemma-4-e4b-it",
+              error: "Connection error.",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          MessageSid: "1503645939964055592",
+        },
+      });
+
+      await expect(run()).resolves.toBeUndefined();
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("preserves intentional fallback silence when the turn permits silent replies", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("openai-codex", "gpt-5.5"),
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          attempts: [
+            {
+              provider: "lmstudio",
+              model: "gemma-4-e4b-it",
+              error: "Connection error.",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+          allowEmptyAssistantReplyAsSilent: true,
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:C1",
+          ChatType: "channel",
+          WasMentioned: false,
+          MessageSid: "1503645939964055592",
+        },
+      });
+
+      await expect(run()).resolves.toBeUndefined();
+    } finally {
+      fallbackSpy.mockRestore();
     }
   });
 

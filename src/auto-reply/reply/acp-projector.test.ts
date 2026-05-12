@@ -649,12 +649,13 @@ describe("createAcpReplyProjector", () => {
     });
     await projector.flush(true);
 
-    expect(deliveries).toHaveLength(2);
-    expect(deliveries).toContainEqual({ kind: "block", text: "hello" });
-    expect(deliveries).toContainEqual({
-      kind: "tool",
-      text: prefixSystemMessage("output truncated"),
-    });
+    expect(deliveries).toEqual([
+      { kind: "block", text: "hello" },
+      {
+        kind: "tool",
+        text: prefixSystemMessage("output truncated"),
+      },
+    ]);
   });
 
   it("supports tagVisibility overrides for tool updates", async () => {

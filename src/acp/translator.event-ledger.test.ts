@@ -184,11 +184,11 @@ describe("ACP translator event ledger replay", () => {
       "session_info_update",
       "available_commands_update",
     ]);
-    expect(replayedUpdates).toContainEqual({
+    expect(replayedUpdates[2]).toEqual({
       sessionUpdate: "user_message_chunk",
       content: { type: "text", text: "Question" },
     });
-    expect(replayedUpdates).toContainEqual({
+    expect(replayedUpdates[5]).toEqual({
       sessionUpdate: "agent_message_chunk",
       content: { type: "text", text: "Answer" },
     });

@@ -133,7 +133,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
-    const preparedReplyParams = vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
+    const preparedReplyParams = vi.mocked(runPreparedReplyMock).mock.calls.at(0)?.[0];
     if (!preparedReplyParams) {
       throw new Error("expected prepared reply params");
     }
@@ -443,7 +443,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
-    const directiveParams = mocks.resolveReplyDirectives.mock.calls[0]?.[0] as
+    const directiveParams = mocks.resolveReplyDirectives.mock.calls.at(0)?.[0] as
       | { sessionKey?: string; workspaceDir?: string }
       | undefined;
     if (!directiveParams) {

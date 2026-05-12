@@ -63,6 +63,14 @@ function createApi() {
   return { api, registerCli, registerGatewayMethod, registerService, registerTool };
 }
 
+function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`expected mock call ${index}`);
+  }
+  return call[argIndex];
+}
+
 function registerBrowserAutoEnableProbe(): BrowserAutoEnableProbe {
   const probes: BrowserAutoEnableProbe[] = [];
   setupPlugin.register(
@@ -103,7 +111,7 @@ describe("browser plugin", () => {
     const { api, registerTool } = createApi();
     registerBrowserPlugin(api);
 
-    const factory = registerTool.mock.calls[0]?.[0];
+    const factory = mockCallArg(registerTool);
     if (typeof factory !== "function") {
       throw new Error("expected browser plugin to register a tool factory");
     }
@@ -134,9 +142,9 @@ describe("browser plugin", () => {
     registerBrowserPlugin(api);
 
     expect(registerCli).toHaveBeenCalledTimes(1);
-    const registrar = registerCli.mock.calls[0]?.[0];
+    const registrar = mockCallArg(registerCli) as (params: { program: never }) => unknown;
     expect(typeof registrar).toBe("function");
-    expect(registerCli.mock.calls[0]?.[1]).toEqual({
+    expect(mockCallArg(registerCli, 0, 1)).toEqual({
       commands: ["browser"],
       descriptors: [
         {
@@ -155,10 +163,12 @@ describe("browser plugin", () => {
     registerBrowserPlugin(api);
 
     expect(registerGatewayMethod).toHaveBeenCalledTimes(1);
-    expect(registerGatewayMethod.mock.calls[0]?.[0]).toBe("browser.request");
-    const handler = registerGatewayMethod.mock.calls[0]?.[1];
+    expect(mockCallArg(registerGatewayMethod)).toBe("browser.request");
+    const handler = mockCallArg(registerGatewayMethod, 0, 1) as (request: {
+      method: string;
+    }) => unknown;
     expect(typeof handler).toBe("function");
-    expect(registerGatewayMethod.mock.calls[0]?.[2]).toEqual({
+    expect(mockCallArg(registerGatewayMethod, 0, 2)).toEqual({
       scope: "operator.admin",
     });
     await handler({ method: "browser.request" });
@@ -179,7 +189,11 @@ describe("browser plugin", () => {
     const { api, registerService } = createApi();
     registerBrowserPlugin(api);
 
-    const service = registerService.mock.calls[0]?.[0];
+    const service = mockCallArg(registerService) as {
+      id: string;
+      start: (...args: unknown[]) => unknown;
+      stop: (...args: unknown[]) => unknown;
+    };
     expect(service?.id).toBe("browser-control");
     expect(typeof service?.start).toBe("function");
     expect(typeof service?.stop).toBe("function");

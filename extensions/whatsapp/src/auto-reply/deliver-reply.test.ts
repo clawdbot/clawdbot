@@ -122,7 +122,7 @@ function mockFirstReplyFailureWithWrappedError(msg: WebInboundMsg, message: stri
 }
 
 function expectFirstSendMediaPayload(msg: WebInboundMsg) {
-  const payload = vi.mocked(msg.sendMedia).mock.calls[0]?.[0];
+  const payload = mockCallArg(msg.sendMedia, 0, 0, "sendMedia");
   if (!payload) {
     throw new Error("expected first WhatsApp sendMedia payload");
   }
@@ -141,11 +141,15 @@ function mockCallArg(mock: unknown, callIndex: number, argIndex: number, label: 
   if (!Array.isArray(calls)) {
     throw new Error(`expected ${label} mock calls`);
   }
-  const call = calls[callIndex];
+  const call = calls.at(callIndex);
   if (!call) {
     throw new Error(`expected ${label} call ${callIndex + 1}`);
   }
   return call[argIndex];
+}
+
+function replyText(msg: WebInboundMsg, callIndex = 0): string {
+  return String(mockCallArg(msg.reply, callIndex, 0, "reply"));
 }
 
 function findLoggerContext(mock: unknown, message: string, label: string) {
@@ -301,7 +305,7 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.reply).toHaveBeenCalledTimes(1);
-    const sentText = vi.mocked(msg.reply).mock.calls[0]?.[0];
+    const sentText = replyText(msg);
     expect(sentText).not.toContain("function_calls");
     expect(sentText).not.toContain("invoke");
     expect(sentText).toContain("Before");
@@ -331,7 +335,7 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.reply).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(msg.reply).mock.calls[0]?.[0]).toBe("Before\n\nAfter\n");
+    expect(replyText(msg)).toBe("Before\n\nAfter\n");
   });
 
   it("strips legacy uppercase TOOL_CALL text before WhatsApp text delivery", async () => {
@@ -353,7 +357,7 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.reply).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(msg.reply).mock.calls[0]?.[0]).toBe("Before\n\nAfter");
+    expect(replyText(msg)).toBe("Before\n\nAfter");
   });
 
   it("keeps quote threading on every text chunk for a threaded reply", async () => {
@@ -558,12 +562,8 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.reply).toHaveBeenCalledTimes(1);
-    expect(
-      String((msg.reply as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0]),
-    ).toContain("⚠️ Media failed");
-    expect(
-      String((msg.reply as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0]),
-    ).not.toContain("boom");
+    expect(replyText(msg)).toContain("⚠️ Media failed");
+    expect(replyText(msg)).not.toContain("boom");
     const warnContext = findLoggerContext(
       replyLogger.warn,
       "failed to send web media reply",
@@ -626,12 +626,8 @@ describe("deliverWebReply", () => {
     expect(secondPayload.mimetype).toBe("application/pdf");
     expect(mockCallArg(msg.sendMedia, 1, 1, "sendMedia")).toBeUndefined();
     expect(msg.reply).toHaveBeenCalledTimes(1);
-    expect(
-      String((msg.reply as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0]),
-    ).toContain("⚠️ Media failed");
-    expect(
-      String((msg.reply as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0]),
-    ).not.toContain("boom");
+    expect(replyText(msg)).toContain("⚠️ Media failed");
+    expect(replyText(msg)).not.toContain("boom");
   });
 
   it("sanitizes XML tool-call blocks for outbound sendPayload delivery", async () => {
@@ -651,7 +647,7 @@ describe("deliverWebReply", () => {
     });
 
     expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-    const sentText = sendWhatsApp.mock.calls[0]?.[1];
+    const sentText = mockCallArg(sendWhatsApp, 0, 1, "sendWhatsApp");
     expect(sentText).not.toContain("function_calls");
     expect(sentText).not.toContain("invoke");
     expect(sentText).toContain("Before");

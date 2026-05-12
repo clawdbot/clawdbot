@@ -156,8 +156,20 @@ describe("realtime voice agent consult runtime", () => {
     expect(call.thinkLevel).toBe("high");
     expect(call.fastMode).toBe(true);
     expect(call.timeoutMs).toBe(10_000);
-    expect(call.prompt).toContain("Caller: Can you check this?");
-    expect(call.extraSystemPrompt).toContain("delegated requests");
+    expect(call.prompt).toBe(
+      [
+        "Live voice request from the caller during a live phone call.",
+        "Act as the configured OpenClaw agent on behalf of this user. Use available tools when the request asks you to do work.",
+        "When finished, return only the concise result the realtime voice agent should speak back.",
+        "Do not include markdown, tool logs, or private reasoning. Include citations only when the spoken answer needs them.",
+        "Recent voice transcript for context:\nCaller: Can you check this?",
+        "Additional realtime context:\nCaller asked about PR #123.",
+        "User request:\nWhat should I say?",
+      ].join("\n\n"),
+    );
+    expect(call.extraSystemPrompt).toBe(
+      "You are the configured OpenClaw agent receiving delegated requests from a live voice bridge. Act on behalf of the user, use available tools when appropriate, and return a brief speakable result.",
+    );
   });
 
   it("scopes sandbox resolution to the configured consult agent", async () => {

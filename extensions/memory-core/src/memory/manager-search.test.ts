@@ -411,7 +411,7 @@ describe("searchKeyword FTS MATCH fallback", () => {
       });
 
       expect(warnSpy).toHaveBeenCalledTimes(1);
-      const [warning] = warnSpy.mock.calls[0] ?? [];
+      const [warning] = warnSpy.mock.calls.at(0) ?? [];
       expect(typeof warning).toBe("string");
       expect(
         (warning as string | undefined)?.startsWith(

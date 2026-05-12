@@ -323,7 +323,7 @@ describe("createTelegramDraftStream", () => {
     await stream.flush();
 
     expect(onSupersededPreview).toHaveBeenCalledTimes(1);
-    const [supersededPreview] = onSupersededPreview.mock.calls[0] ?? [];
+    const [supersededPreview] = onSupersededPreview.mock.calls.at(0) ?? [];
     expect(supersededPreview).toEqual({
       messageId: 17,
       textSnapshot: "Message A partial",
@@ -443,7 +443,7 @@ describe("createTelegramDraftStream", () => {
     await stream.flush();
 
     expect(onSupersededPreview).toHaveBeenCalledTimes(1);
-    const [supersededPreview] = onSupersededPreview.mock.calls[0] ?? [];
+    const [supersededPreview] = onSupersededPreview.mock.calls.at(0) ?? [];
     expect(supersededPreview).toEqual({
       messageId: 17,
       textSnapshot: "Hello world",

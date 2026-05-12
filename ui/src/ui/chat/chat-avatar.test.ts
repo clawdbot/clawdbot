@@ -55,7 +55,7 @@ describe("renderChatAvatar", () => {
 
     const textAvatar = renderAvatar(["assistant", { avatar: "VC", name: "Val" }]);
     expect(textAvatar?.tagName).toBe("DIV");
-    expect(textAvatar?.textContent).toContain("VC");
+    expect(textAvatar?.textContent?.trim()).toBe("VC");
     expect(textAvatar?.getAttribute("aria-label")).toBe("Val");
   });
 
@@ -78,6 +78,6 @@ describe("renderChatAvatar", () => {
 
     const textAvatar = renderAvatar(["user", undefined, { name: "Buns", avatar: "AB" }]);
     expect(textAvatar?.tagName).toBe("DIV");
-    expect(textAvatar?.textContent).toContain("AB");
+    expect(textAvatar?.textContent?.trim()).toBe("AB");
   });
 });

@@ -106,7 +106,7 @@ describe("postJsonWithRetry", () => {
     }
 
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain("memory batch failed: 503 backend down");
+    expect((error as Error).message).toBe("memory batch failed: 503 backend down");
     expect((error as { status?: unknown }).status).toBe(503);
   });
 });

@@ -57,7 +57,7 @@ describe("models/shared", () => {
     }));
 
     expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
-    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
+    const [replaceParams] = mocks.replaceConfigFile.mock.calls.at(0) ?? [];
     expect(replaceParams?.nextConfig.update).toEqual({ channel: "beta" });
     expect(replaceParams?.baseHash).toBe("config-1");
   });

@@ -47,8 +47,10 @@ describe("tool-card extraction", () => {
     expect(cards[0]?.id).toBe("msg:1:call-1");
     expect(cards[0]?.name).toBe("browser.open");
     expect(cards[0]?.outputText).toBe("Opened page");
-    expect(cards[0]?.inputText).toContain('"url": "https://example.com"');
-    expect(cards[0]?.inputText).toContain('"retry": 0');
+    expect(cards[0]?.inputText).toBe(`{
+  "url": "https://example.com",
+  "retry": 0
+}`);
   });
 
   it("preserves string args verbatim and keeps empty-output cards", () => {
@@ -89,8 +91,10 @@ describe("tool-card extraction", () => {
     );
 
     expect(cards).toHaveLength(1);
-    expect(cards[0]?.inputText).toContain('"deck": "Example Deck"');
-    expect(cards[0]?.inputText).toContain('"mode": "preview"');
+    expect(cards[0]?.inputText).toBe(`{
+  "deck": "Example Deck",
+  "mode": "preview"
+}`);
   });
 
   it("pairs interleaved nameless tool results in content order", () => {
@@ -176,11 +180,17 @@ describe("tool-card extraction", () => {
     );
 
     const sidebar = buildToolCardSidebarContent(card);
-    expect(sidebar).toContain("## Deck Manage");
-    expect(sidebar).toContain("### Tool input");
-    expect(sidebar).toContain("with Example Deck");
-    expect(sidebar).toContain("### Tool output");
-    expect(sidebar).toContain("No output");
+    expect(sidebar).toBe(`## Deck Manage
+
+**Tool:** \`deck_manage\`
+
+### Tool input
+\`\`\`text
+with Example Deck
+\`\`\`
+
+### Tool output
+*No output — tool completed successfully.*`);
   });
 
   it("extracts canvas handle payloads into canvas previews", () => {
