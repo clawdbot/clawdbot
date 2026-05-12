@@ -1,10 +1,11 @@
 ---
+doc-schema-version: 1
 summary: "Overview of automation mechanisms: tasks, cron, hooks, standing orders, and Task Flow"
 read_when:
   - Deciding how to automate work with OpenClaw
   - Choosing between heartbeat, cron, commitments, hooks, and standing orders
   - Looking for the right automation entry point
-title: "Automation and tasks"
+title: "Automation"
 ---
 
 OpenClaw runs work in the background through tasks, scheduled jobs, inferred

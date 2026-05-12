@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1.7
-
 # Opt-in plugin dependencies at build time (space- or comma-separated directory names).
 # Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,matrix" .
 #

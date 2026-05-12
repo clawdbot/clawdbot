@@ -221,11 +221,14 @@ describe("bootstrap prompt warnings", () => {
     };
     expect(signature.bootstrapMaxChars).toBe(120);
     expect(signature.bootstrapTotalMaxChars).toBe(200);
-    expect(signature.files).toHaveLength(1);
-    expect(signature.files?.[0]?.path).toBe("/tmp/AGENTS.md");
-    expect(signature.files?.[0]?.rawChars).toBe(150);
-    expect(signature.files?.[0]?.injectedChars).toBe(100);
-    expect(signature.files?.[0]?.causes).toStrictEqual(["per-file-limit"]);
+    expect(signature.files).toStrictEqual([
+      {
+        causes: ["per-file-limit"],
+        injectedChars: 100,
+        path: "/tmp/AGENTS.md",
+        rawChars: 150,
+      },
+    ]);
     expect(first.lines.join("\n")).toContain("AGENTS.md");
 
     const second = buildBootstrapPromptWarning({
@@ -385,7 +388,10 @@ describe("bootstrap prompt warnings", () => {
       previousSignature: signature,
     });
     expect(always.warningShown).toBe(true);
-    expect(always.lines.length).toBeGreaterThan(0);
+    expect(always.lines).toStrictEqual([
+      "AGENTS.md: 150 raw -> 100 injected (~33% removed; max/file).",
+      "If unintentional, raise agents.defaults.bootstrapMaxChars and/or agents.defaults.bootstrapTotalMaxChars.",
+    ]);
   });
 
   it("uses file path in signature to avoid collisions for duplicate names", () => {
@@ -449,7 +455,7 @@ describe("bootstrap prompt warnings", () => {
     expect(meta.warningMode).toBe("once");
     expect(meta.warningShown).toBe(true);
     expect(meta.truncatedFiles).toBe(1);
-    expect(meta.nearLimitFiles).toBeGreaterThanOrEqual(1);
+    expect(meta.nearLimitFiles).toBe(1);
     expect(meta.promptWarningSignature).toBe(warning.signature);
     expect(meta.warningSignaturesSeen).toEqual([warning.signature]);
   });

@@ -90,15 +90,13 @@ describe("gateway cli backend live helpers", () => {
 
     expect(client.start).toBeTypeOf("function");
     expect(client.stopAndWait).toBeTypeOf("function");
-    expect(gatewayClientState.lastOptions).toMatchObject({
-      url: "ws://127.0.0.1:18789",
-      token: "gateway-token",
-      clientName: GATEWAY_CLIENT_NAMES.TEST,
-      clientDisplayName: "vitest-live",
-      clientVersion: "dev",
-      mode: GATEWAY_CLIENT_MODES.TEST,
-      connectChallengeTimeoutMs: 45_000,
-    });
+    expect(gatewayClientState.lastOptions?.url).toBe("ws://127.0.0.1:18789");
+    expect(gatewayClientState.lastOptions?.token).toBe("gateway-token");
+    expect(gatewayClientState.lastOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.TEST);
+    expect(gatewayClientState.lastOptions?.clientDisplayName).toBe("vitest-live");
+    expect(gatewayClientState.lastOptions?.clientVersion).toBe("dev");
+    expect(gatewayClientState.lastOptions?.mode).toBe(GATEWAY_CLIENT_MODES.TEST);
+    expect(gatewayClientState.lastOptions?.connectChallengeTimeoutMs).toBe(45_000);
     expect(gatewayClientState.lastOptions).not.toHaveProperty("requestTimeoutMs");
   });
 

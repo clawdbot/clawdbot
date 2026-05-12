@@ -13,7 +13,7 @@ import type {
 } from "./service/state.js";
 import type { CronJob } from "./types.js";
 
-type CronWakeResult = { ok: true } | { ok: false };
+type CronWakeResult = { ok: true } | { ok: false; reason?: "unwakeable-session-key" };
 
 export type CronServiceRunResult = CronRunResult | { ok: true; ran: false; reason: "invalid-spec" };
 
@@ -29,6 +29,7 @@ export interface CronServiceContract {
   run(id: string, mode?: CronRunMode): Promise<CronServiceRunResult>;
   enqueueRun(id: string, mode?: CronRunMode): Promise<CronServiceRunResult>;
   getJob(id: string): CronJob | undefined;
+  readJob(id: string): Promise<CronJob | undefined>;
   getDefaultAgentId(): string | undefined;
-  wake(opts: { mode: CronWakeMode; text: string }): CronWakeResult;
+  wake(opts: { mode: CronWakeMode; text: string; sessionKey?: string }): CronWakeResult;
 }

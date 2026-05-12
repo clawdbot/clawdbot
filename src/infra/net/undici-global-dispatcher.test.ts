@@ -203,14 +203,10 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
     const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
     expect(next).toBeInstanceOf(EnvHttpProxyAgent);
-    expect(next.options).toEqual(
-      expect.objectContaining({
-        httpProxy: "socks5://proxy.test:1080",
-        httpsProxy: "socks5://proxy.test:1080",
-        bodyTimeout: DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
-        headersTimeout: DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
-      }),
-    );
+    expect(next.options?.httpProxy).toBe("socks5://proxy.test:1080");
+    expect(next.options?.httpsProxy).toBe("socks5://proxy.test:1080");
+    expect(next.options?.bodyTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
+    expect(next.options?.headersTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
   });
 
   it("records timeout bridge but does not override unsupported custom proxy dispatcher types", () => {

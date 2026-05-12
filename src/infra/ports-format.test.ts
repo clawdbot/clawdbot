@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { formatCliCommand } from "../cli/command-format.js";
 import {
   buildPortHints,
   classifyPortListener,
@@ -8,6 +9,10 @@ import {
   isExpectedGatewayListeners,
   isSingleExpectedGatewayListener,
 } from "./ports-format.js";
+
+const gatewayAlreadyRunningHint = `Gateway already running locally. Stop it (${formatCliCommand("openclaw gateway stop")}) or use a different port.`;
+const multipleListenersHint =
+  "Multiple listeners detected; ensure only one gateway/tunnel per port unless intentionally running isolated profiles.";
 
 describe("ports-format", () => {
   it.each([
@@ -30,10 +35,10 @@ describe("ports-format", () => {
         18789,
       ),
     ).toEqual([
-      expect.stringContaining("Gateway already running locally."),
+      gatewayAlreadyRunningHint,
       "SSH tunnel already bound to this port. Close the tunnel or use a different local port in -L.",
       "Another process is listening on this port.",
-      expect.stringContaining("Multiple listeners detected"),
+      multipleListenersHint,
     ]);
     expect(buildPortHints([], 18789)).toStrictEqual([]);
   });
@@ -72,10 +77,7 @@ describe("ports-format", () => {
         ],
         18789,
       ),
-    ).toEqual([
-      expect.stringContaining("Gateway already running locally."),
-      expect.stringContaining("Multiple listeners detected"),
-    ]);
+    ).toEqual([gatewayAlreadyRunningHint, multipleListenersHint]);
   });
 
   it.each([

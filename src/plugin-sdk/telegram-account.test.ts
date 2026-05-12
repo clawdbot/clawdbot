@@ -36,11 +36,7 @@ describe("telegram account plugin-sdk compatibility facade", () => {
       cfg,
       accountId: "default",
     });
-    expect(account).toEqual(
-      expect.objectContaining({
-        accountId: "default",
-        token: "token",
-      }),
-    );
+    expect(account.accountId).toBe("default");
+    expect(account.token).toBe("token");
   });
 });

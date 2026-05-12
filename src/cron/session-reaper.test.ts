@@ -45,6 +45,11 @@ describe("isCronRunSessionKey", () => {
     expect(isCronRunSessionKey("agent:debugger:cron:249ecf82:run:1102aabb")).toBe(true);
   });
 
+  it("matches cron run descendant session keys", () => {
+    expect(isCronRunSessionKey("agent:main:cron:abc-123:run:def-456:subagent:worker")).toBe(true);
+    expect(isCronRunSessionKey("agent:main:cron:abc-123:run:def-456:thread:reply")).toBe(true);
+  });
+
   it("does not match base cron session keys", () => {
     expect(isCronRunSessionKey("agent:main:cron:abc-123")).toBe(false);
   });
@@ -81,9 +86,17 @@ describe("sweepCronRunSessions", () => {
         sessionId: "old-run",
         updatedAt: now - 25 * 3_600_000, // 25h ago — expired
       },
+      "agent:main:cron:job1:run:old-run:subagent:worker": {
+        sessionId: "old-run-child",
+        updatedAt: now - 25 * 3_600_000, // expired cron-run descendant
+      },
       "agent:main:cron:job1:run:recent-run": {
         sessionId: "recent-run",
         updatedAt: now - 1 * 3_600_000, // 1h ago — not expired
+      },
+      "agent:main:cron:job1:run:recent-run:thread:reply": {
+        sessionId: "recent-run-thread",
+        updatedAt: now - 1 * 3_600_000, // active cron-run descendant
       },
       "agent:main:telegram:dm:123": {
         sessionId: "regular-session",
@@ -100,16 +113,26 @@ describe("sweepCronRunSessions", () => {
     });
 
     expect(result.swept).toBe(true);
-    expect(result.pruned).toBe(1);
+    expect(result.pruned).toBe(2);
 
     const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
-    expect(updated["agent:main:cron:job1"]).toMatchObject({ sessionId: "base-session" });
-    expect(updated["agent:main:cron:job1:run:old-run"]).toBeUndefined();
-    expect(updated["agent:main:cron:job1:run:recent-run"]).toMatchObject({
-      sessionId: "recent-run",
-    });
-    expect(updated["agent:main:telegram:dm:123"]).toMatchObject({
-      sessionId: "regular-session",
+    expect(updated).toEqual({
+      "agent:main:cron:job1": {
+        sessionId: "base-session",
+        updatedAt: now,
+      },
+      "agent:main:cron:job1:run:recent-run": {
+        sessionId: "recent-run",
+        updatedAt: now - 1 * 3_600_000,
+      },
+      "agent:main:cron:job1:run:recent-run:thread:reply": {
+        sessionId: "recent-run-thread",
+        updatedAt: now - 1 * 3_600_000,
+      },
+      "agent:main:telegram:dm:123": {
+        sessionId: "regular-session",
+        updatedAt: now - 100 * 3_600_000,
+      },
     });
   });
 

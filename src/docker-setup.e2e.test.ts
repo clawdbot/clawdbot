@@ -503,8 +503,8 @@ describe("scripts/docker/setup.sh", () => {
       const forceRecreateLine = log
         .split("\n")
         .find((line) => line.includes("up -d --force-recreate openclaw-gateway"));
-      expect(forceRecreateLine).toEqual(
-        expect.stringContaining("up -d --force-recreate openclaw-gateway"),
+      expect(forceRecreateLine).toBe(
+        `compose compose -f ${join(activeSandbox.rootDir, "docker-compose.yml")} up -d --force-recreate openclaw-gateway`,
       );
       expect(forceRecreateLine).not.toContain("docker-compose.sandbox.yml");
       await expectMissingPath(join(activeSandbox.rootDir, "docker-compose.sandbox.yml"));

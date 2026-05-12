@@ -27,7 +27,6 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 function expectBudgetResult(
   result: Awaited<ReturnType<typeof enforceSessionDiskBudget>>,
 ): asserts result is NonNullable<Awaited<ReturnType<typeof enforceSessionDiskBudget>>> {
-  expect(result).not.toBeNull();
   if (result === null) {
     throw new Error("expected disk budget enforcement result");
   }

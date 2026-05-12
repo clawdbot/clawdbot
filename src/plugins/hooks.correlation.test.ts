@@ -78,9 +78,7 @@ describe("hook correlation fields", () => {
 
       await expect(run).resolves.toBeUndefined();
       expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "[hooks] agent_end handler from plugin-a failed: timed out after 5ms",
-        ),
+        "[hooks] agent_end handler from plugin-a failed: timed out after 5ms",
       );
     } finally {
       vi.useRealTimers();

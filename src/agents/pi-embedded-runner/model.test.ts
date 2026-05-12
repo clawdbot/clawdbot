@@ -253,7 +253,9 @@ function expectResolvedModel(result: ResolveModelForTestResult) {
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -1419,7 +1421,9 @@ describe("resolveModel", () => {
       contextWindow: 262144,
       maxTokens: 65536,
     });
-    expect(resolvedModel.compat).toMatchObject({ supportsTools: false });
+    expect((resolvedModel.compat as { supportsTools?: boolean } | undefined)?.supportsTools).toBe(
+      false,
+    );
   });
 
   it("falls back to text-only when OpenRouter API cache is empty", () => {

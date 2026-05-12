@@ -23,19 +23,16 @@ async function createTgz(params: { entries: Record<string, string>; root: string
 
 describe("WhatsApp QA live runtime", () => {
   it("parses credential payloads and normalizes phone numbers", () => {
-    expect(
-      __testing.parseWhatsAppQaCredentialPayload({
-        driverPhoneE164: "15550000001",
-        sutPhoneE164: "+15550000002",
-        driverAuthArchiveBase64: "driver",
-        sutAuthArchiveBase64: "sut",
-      }),
-    ).toMatchObject({
-      driverPhoneE164: "+15550000001",
+    const payload = __testing.parseWhatsAppQaCredentialPayload({
+      driverPhoneE164: "15550000001",
       sutPhoneE164: "+15550000002",
       driverAuthArchiveBase64: "driver",
       sutAuthArchiveBase64: "sut",
     });
+    expect(payload.driverPhoneE164).toBe("+15550000001");
+    expect(payload.sutPhoneE164).toBe("+15550000002");
+    expect(payload.driverAuthArchiveBase64).toBe("driver");
+    expect(payload.sutAuthArchiveBase64).toBe("sut");
   });
 
   it("rejects credential payloads that reuse the same phone", () => {
@@ -128,10 +125,8 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("registers the WhatsApp canary and pairing scenarios", () => {
-    expect(__testing.findScenarios(["whatsapp-canary", "whatsapp-pairing-block"])).toMatchObject([
-      { id: "whatsapp-canary" },
-      { id: "whatsapp-pairing-block" },
-    ]);
+    const scenarios = __testing.findScenarios(["whatsapp-canary", "whatsapp-pairing-block"]);
+    expect(scenarios.map(({ id }) => id)).toEqual(["whatsapp-canary", "whatsapp-pairing-block"]);
   });
 
   it("uses automatic visible replies for WhatsApp group mention gating", () => {
@@ -157,26 +152,20 @@ describe("WhatsApp QA live runtime", () => {
   it("fails explicitly requested group scenarios when group credentials are missing", () => {
     const [scenario] = __testing.findScenarios(["whatsapp-mention-gating"]);
 
-    expect(
-      __testing.createMissingGroupJidScenarioResult({
-        explicitScenarioSelection: false,
-        scenario,
-      }),
-    ).toMatchObject({
-      id: "whatsapp-mention-gating",
-      status: "skip",
+    const implicitResult = __testing.createMissingGroupJidScenarioResult({
+      explicitScenarioSelection: false,
+      scenario,
     });
+    expect(implicitResult.id).toBe("whatsapp-mention-gating");
+    expect(implicitResult.status).toBe("skip");
 
-    expect(
-      __testing.createMissingGroupJidScenarioResult({
-        explicitScenarioSelection: true,
-        scenario,
-      }),
-    ).toMatchObject({
-      id: "whatsapp-mention-gating",
-      status: "fail",
-      details: expect.stringContaining("requested scenario requires groupJid"),
+    const explicitResult = __testing.createMissingGroupJidScenarioResult({
+      explicitScenarioSelection: true,
+      scenario,
     });
+    expect(explicitResult.id).toBe("whatsapp-mention-gating");
+    expect(explicitResult.status).toBe("fail");
+    expect(explicitResult.details).toContain("requested scenario requires groupJid");
   });
 
   it("attributes pre-scenario setup failures to the selected scenario", () => {

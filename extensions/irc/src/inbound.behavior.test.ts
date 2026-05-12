@@ -123,16 +123,23 @@ describe("irc inbound behavior", () => {
     expect(sendReply).toHaveBeenCalledTimes(1);
     expect(sendReply).toHaveBeenCalledWith(
       "alice",
-      expect.stringContaining("OpenClaw: access not configured."),
+      [
+        "OpenClaw: access not configured.",
+        "",
+        "Your IRC id: alice!ident@example.com",
+        "Pairing code:",
+        "```",
+        "CODE",
+        "```",
+        "",
+        "Ask the bot owner to approve with:",
+        "openclaw pairing approve irc CODE",
+        "```",
+        "openclaw pairing approve irc CODE",
+        "```",
+      ].join("\n"),
       undefined,
     );
-    expect(sendReply).toHaveBeenCalledWith(
-      "alice",
-      expect.stringContaining("Your IRC id: alice!ident@example.com"),
-      undefined,
-    );
-    const replyMessages = sendReply.mock.calls.map((call) => call[1]);
-    expect(replyMessages.some((message) => message.includes("CODE"))).toBe(true);
   });
 
   it("drops unauthorized group control commands before dispatch", async () => {
@@ -189,7 +196,7 @@ describe("irc inbound behavior", () => {
 
     const assembledRequest = (
       coreRuntime.channel.turn.runAssembled as unknown as { mock: { calls: unknown[][] } }
-    ).mock.calls[0]?.[0] as { replyPipeline?: unknown } | undefined;
+    ).mock.calls.at(0)?.[0] as { replyPipeline?: unknown } | undefined;
     expect(assembledRequest?.replyPipeline).toEqual({});
   });
 });

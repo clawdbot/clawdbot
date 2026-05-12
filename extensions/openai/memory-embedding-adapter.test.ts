@@ -60,19 +60,23 @@ describe("OpenAI memory embedding adapter", () => {
       debug: () => {},
     });
 
-    expect(mocks.runOpenAiEmbeddingBatches).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requests: [
-          expect.objectContaining({
-            body: {
-              model: "text-embedding-3-small",
-              input: "doc one",
-              dimensions: 512,
-              input_type: "document",
-            },
-          }),
-        ],
-      }),
-    );
+    const batchCalls = mocks.runOpenAiEmbeddingBatches.mock.calls as unknown as Array<
+      [
+        {
+          requests: Array<{
+            body: Record<string, unknown>;
+          }>;
+        },
+      ]
+    >;
+    const [batchOptions] = batchCalls[0] ?? [];
+    expect(batchOptions?.requests).toHaveLength(1);
+    const request = batchOptions?.requests[0];
+    expect(request?.body).toEqual({
+      model: "text-embedding-3-small",
+      input: "doc one",
+      dimensions: 512,
+      input_type: "document",
+    });
   });
 });

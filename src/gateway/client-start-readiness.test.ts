@@ -16,7 +16,9 @@ describe("startGatewayClientWhenEventLoopReady", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(client.start).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    await expect(promise).resolves.toMatchObject({ ready: true });
+    const readiness = await promise;
+    expect(readiness.ready).toBe(true);
+    expect(readiness.aborted).toBe(false);
 
     expect(client.start).toHaveBeenCalledTimes(1);
   });
@@ -32,7 +34,9 @@ describe("startGatewayClientWhenEventLoopReady", () => {
     });
     controller.abort();
 
-    await expect(promise).resolves.toMatchObject({ ready: false, aborted: true });
+    const readiness = await promise;
+    expect(readiness.ready).toBe(false);
+    expect(readiness.aborted).toBe(true);
     expect(client.start).not.toHaveBeenCalled();
   });
 });

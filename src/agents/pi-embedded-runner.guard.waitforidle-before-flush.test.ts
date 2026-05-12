@@ -100,7 +100,7 @@ describe("flushPendingToolResultsAfterIdle", () => {
     );
   });
 
-  it("clears pending without synthetic flush when timeout cleanup is requested", async () => {
+  it("flushes pending on cleanup timeout instead of leaving orphaned tool calls", async () => {
     const sm = guardSessionManager(SessionManager.inMemory());
     const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
     vi.useFakeTimers();
@@ -112,19 +112,21 @@ describe("flushPendingToolResultsAfterIdle", () => {
       agent,
       sessionManager: sm,
       timeoutMs: 30,
-      clearPendingOnTimeout: true,
     });
     await vi.advanceTimersByTimeAsync(30);
     await flushPromise;
 
-    expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant"]);
+    const messages = getMessages(sm);
+    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult"]);
+    expect((messages[1] as { toolCallId?: string }).toolCallId).toBe("call_orphan_2");
+    expect((messages[1] as { isError?: boolean }).isError).toBe(true);
 
     appendMessage({
       role: "user",
       content: "still there?",
       timestamp: Date.now(),
     } as AgentMessage);
-    expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant", "user"]);
+    expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant", "toolResult", "user"]);
   });
 
   it("clears timeout handle when waitForIdle resolves first", async () => {
@@ -142,7 +144,7 @@ describe("flushPendingToolResultsAfterIdle", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("immediately clears pending tool results without waiting when timeoutMs is 0 or less", async () => {
+  it("immediately flushes pending tool results without waiting when timeoutMs is 0 or less", async () => {
     const sm = guardSessionManager(SessionManager.inMemory());
     const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
 
@@ -158,14 +160,13 @@ describe("flushPendingToolResultsAfterIdle", () => {
       agent,
       sessionManager: sm,
       timeoutMs: 0,
-      clearPendingOnTimeout: true,
     });
 
     // Verify waitForIdle was completely bypassed
     expect(waitForIdleSpy).not.toHaveBeenCalled();
 
-    // The pending tool result should be cleared immediately.
-    expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant"]);
+    // The pending tool result should be flushed immediately.
+    expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant", "toolResult"]);
 
     // Test negative timeout as well
     appendMessage(assistantToolCall("call_orphan_negative"));
@@ -173,11 +174,15 @@ describe("flushPendingToolResultsAfterIdle", () => {
       agent,
       sessionManager: sm,
       timeoutMs: -100,
-      clearPendingOnTimeout: true,
     });
 
     // Verify waitForIdle was still bypassed
     expect(waitForIdleSpy).not.toHaveBeenCalled();
-    expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant", "assistant"]);
+    expect(getMessages(sm).map((m) => m.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "assistant",
+      "toolResult",
+    ]);
   });
 });

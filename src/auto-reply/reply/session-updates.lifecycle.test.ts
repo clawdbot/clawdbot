@@ -83,28 +83,20 @@ describe("session-updates lifecycle hooks", () => {
     const [endEvent, endContext] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
     const [startEvent, startContext] = hookRunnerMocks.runSessionStart.mock.calls[0] ?? [];
 
-    expect(endEvent).toMatchObject({
-      sessionId: "s1",
-      sessionKey,
-      reason: "compaction",
-      transcriptArchived: false,
-    });
+    expect(endEvent?.sessionId).toBe("s1");
+    expect(endEvent?.sessionKey).toBe(sessionKey);
+    expect(endEvent?.reason).toBe("compaction");
+    expect(endEvent?.transcriptArchived).toBe(false);
     expect(endEvent?.sessionFile).toBe(await fs.realpath(transcriptPath));
-    expect(endContext).toMatchObject({
-      sessionId: "s1",
-      sessionKey,
-      agentId: "main",
-    });
+    expect(endContext?.sessionId).toBe("s1");
+    expect(endContext?.sessionKey).toBe(sessionKey);
+    expect(endContext?.agentId).toBe("main");
     expect(endEvent?.nextSessionId).toBe(startEvent?.sessionId);
-    expect(startEvent).toMatchObject({
-      sessionId: "s2",
-      sessionKey,
-      resumedFrom: "s1",
-    });
-    expect(startContext).toMatchObject({
-      sessionId: "s2",
-      sessionKey,
-      agentId: "main",
-    });
+    expect(startEvent?.sessionId).toBe("s2");
+    expect(startEvent?.sessionKey).toBe(sessionKey);
+    expect(startEvent?.resumedFrom).toBe("s1");
+    expect(startContext?.sessionId).toBe("s2");
+    expect(startContext?.sessionKey).toBe(sessionKey);
+    expect(startContext?.agentId).toBe("main");
   });
 });

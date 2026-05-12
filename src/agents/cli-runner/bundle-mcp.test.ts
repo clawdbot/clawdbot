@@ -6,6 +6,7 @@ import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import {
   cliBundleMcpHarness,
   prepareBundleProbeCliConfig,
+  requireMcpConfigPath,
   setupCliBundleMcpTestHarness,
 } from "./bundle-mcp.test-support.js";
 
@@ -28,12 +29,9 @@ describe("prepareCliBundleMcpConfig", () => {
       config: { plugins: { enabled: false } },
     });
 
-    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
-    expect(configFlagIndex).toBeGreaterThanOrEqual(0);
     expect(prepared.backend.args).toContain("--strict-mcp-config");
-    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
-    expect(typeof generatedConfigPath).toBe("string");
-    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
       mcpServers?: Record<string, unknown>;
     };
     expect(raw.mcpServers).toStrictEqual({});
@@ -44,12 +42,9 @@ describe("prepareCliBundleMcpConfig", () => {
   it("injects a merged --mcp-config overlay for bundle-MCP-enabled backends", async () => {
     const prepared = await prepareBundleProbeCliConfig();
 
-    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
-    expect(configFlagIndex).toBeGreaterThanOrEqual(0);
     expect(prepared.backend.args).toContain("--strict-mcp-config");
-    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
-    expect(typeof generatedConfigPath).toBe("string");
-    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
       mcpServers?: Record<string, { args?: string[] }>;
     };
     expect(raw.mcpServers?.bundleProbe?.args).toEqual([
@@ -108,9 +103,8 @@ describe("prepareCliBundleMcpConfig", () => {
       },
     });
 
-    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
-    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
-    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
       mcpServers?: Record<string, { args?: string[] }>;
     };
     expect(raw.mcpServers?.workspaceProbe?.args).toEqual([await fs.realpath(serverPath)]);
@@ -133,9 +127,8 @@ describe("prepareCliBundleMcpConfig", () => {
       },
     });
 
-    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
-    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
-    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
       mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }>;
     };
     expect(Object.keys(raw.mcpServers ?? {}).toSorted()).toEqual(["bundleProbe", "openclaw"]);

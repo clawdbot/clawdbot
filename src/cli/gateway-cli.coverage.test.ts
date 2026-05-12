@@ -132,6 +132,7 @@ describe("gateway-cli coverage", () => {
     defaultRuntime.writeStdout.mockClear();
     defaultRuntime.writeJson.mockClear();
     defaultRuntime.exit.mockClear();
+    startGatewayServer.mockClear();
     inspectPortUsage.mockClear();
     formatPortDiagnostics.mockClear();
   });
@@ -166,15 +167,15 @@ describe("gateway-cli coverage", () => {
       "--json",
     ]);
 
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "diagnostics.stability",
-        params: {
-          limit: 5,
-          type: "payload.large",
-        },
-      }),
-    );
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    const stabilityCall = callGateway.mock.calls.at(0)?.[0] as
+      | { method?: string; params?: unknown }
+      | undefined;
+    expect(stabilityCall?.method).toBe("diagnostics.stability");
+    expect(stabilityCall?.params).toEqual({
+      limit: 5,
+      type: "payload.large",
+    });
   });
 
   it("prints the latest stability bundle without calling Gateway", async () => {
@@ -266,12 +267,11 @@ describe("gateway-cli coverage", () => {
       );
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(callGateway).toHaveBeenCalledWith(
-        expect.objectContaining({
-          method: "health",
-          timeoutMs: 3000,
-        }),
-      );
+      const healthCall = callGateway.mock.calls.at(0)?.[0] as
+        | { method?: string; timeoutMs?: number }
+        | undefined;
+      expect(healthCall?.method).toBe("health");
+      expect(healthCall?.timeoutMs).toBe(3000);
       expect(fs.existsSync(outputPath)).toBe(true);
       const output = runtimeLogs.join("\n");
       expect(output).toContain('"path"');
@@ -388,7 +388,7 @@ describe("gateway-cli coverage", () => {
           runGatewayCommand(["gateway", "--token", "test-token", "--allow-unconfigured"]),
         ).rejects.toThrow("__exit__:0");
 
-        expect(startGatewayServer).toHaveBeenCalled();
+        expect(startGatewayServer).toHaveBeenCalledTimes(1);
         expect(runtimeErrors.join("\n")).toContain("Gateway failed to start:");
         expect(runtimeErrors.join("\n")).toContain("gateway stop");
       },
@@ -430,7 +430,10 @@ describe("gateway-cli coverage", () => {
       startGatewayServer.mockRejectedValueOnce(new Error("nope"));
       await expectGatewayExit(["gateway", "--token", "test-token", "--allow-unconfigured"]);
 
-      expect(startGatewayServer).toHaveBeenCalledWith(19001, expect.anything());
+      expect(startGatewayServer).toHaveBeenCalledTimes(1);
+      const startCall = startGatewayServer.mock.calls.at(0);
+      expect(startCall?.[0]).toBe(19001);
+      expect(typeof startCall?.[1]).toBe("object");
     });
   });
 });

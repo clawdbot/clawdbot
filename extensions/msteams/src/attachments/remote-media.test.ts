@@ -32,6 +32,14 @@ function jsonResponse(body: BodyInit, init?: ResponseInit): Response {
   return new Response(body, init);
 }
 
+function requireFirstFetchUrl(mock: ReturnType<typeof vi.fn>): unknown {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected direct fetch call");
+  }
+  return call[0];
+}
+
 describe("downloadAndStoreMSTeamsRemoteMedia", () => {
   beforeEach(() => {
     runtimeFetchRemoteMediaMock.mockReset();
@@ -57,7 +65,7 @@ describe("downloadAndStoreMSTeamsRemoteMedia", () => {
       });
 
       expect(fetchImpl).toHaveBeenCalledTimes(1);
-      const [calledUrl] = fetchImpl.mock.calls[0] ?? [];
+      const calledUrl = requireFirstFetchUrl(fetchImpl);
       expect(calledUrl).toBe("https://graph.microsoft.com/v1.0/shares/abc/driveItem/content");
       expect(runtimeFetchRemoteMediaMock).not.toHaveBeenCalled();
       expect(result.path).toBe("/tmp/saved.png");

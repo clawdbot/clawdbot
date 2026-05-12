@@ -45,6 +45,26 @@ function makeParamsWithToolsAllow(toolsAllow: string[]) {
   };
 }
 
+function requireEmbeddedAgentCall(): {
+  senderIsOwner?: boolean;
+  jobId?: string;
+  ownerOnlyToolAllowlist?: string[];
+  toolsAllow?: string[];
+} {
+  const call = runEmbeddedPiAgentMock.mock.calls.at(0)?.[0] as
+    | {
+        senderIsOwner?: boolean;
+        jobId?: string;
+        ownerOnlyToolAllowlist?: string[];
+        toolsAllow?: string[];
+      }
+    | undefined;
+  if (!call) {
+    throw new Error("Expected embedded PI agent call for owner auth");
+  }
+  return call;
+}
+
 describe("runCronIsolatedAgentTurn owner auth", () => {
   let previousFastTestEnv: string | undefined;
 
@@ -80,8 +100,7 @@ describe("runCronIsolatedAgentTurn owner auth", () => {
       await runCronIsolatedAgentTurn(makeParams());
 
       expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-      const senderIsOwner = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.senderIsOwner;
-      expect(senderIsOwner).toBe(false);
+      expect(requireEmbeddedAgentCall().senderIsOwner).toBe(false);
     },
   );
 
@@ -92,11 +111,11 @@ describe("runCronIsolatedAgentTurn owner auth", () => {
       await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["cron"]));
 
       expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-      const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
-      expect(call?.senderIsOwner).toBe(false);
-      expect(call?.jobId).toBe("owner-auth");
-      expect(call?.ownerOnlyToolAllowlist).toEqual(["cron"]);
-      expect(call?.toolsAllow).toEqual(["cron"]);
+      const call = requireEmbeddedAgentCall();
+      expect(call.senderIsOwner).toBe(false);
+      expect(call.jobId).toBe("owner-auth");
+      expect(call.ownerOnlyToolAllowlist).toEqual(["cron"]);
+      expect(call.toolsAllow).toEqual(["cron"]);
     },
   );
 
@@ -107,11 +126,11 @@ describe("runCronIsolatedAgentTurn owner auth", () => {
       await runCronIsolatedAgentTurn(makeParamsWithToolsAllow([" CRON "]));
 
       expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-      const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
-      expect(call?.senderIsOwner).toBe(false);
-      expect(call?.jobId).toBe("owner-auth");
-      expect(call?.ownerOnlyToolAllowlist).toEqual(["cron"]);
-      expect(call?.toolsAllow).toEqual([" CRON "]);
+      const call = requireEmbeddedAgentCall();
+      expect(call.senderIsOwner).toBe(false);
+      expect(call.jobId).toBe("owner-auth");
+      expect(call.ownerOnlyToolAllowlist).toEqual(["cron"]);
+      expect(call.toolsAllow).toEqual([" CRON "]);
     },
   );
 
@@ -122,10 +141,10 @@ describe("runCronIsolatedAgentTurn owner auth", () => {
       await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["maniple__check_idle_workers"]));
 
       expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-      const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
-      expect(call?.senderIsOwner).toBe(false);
-      expect(call?.ownerOnlyToolAllowlist).toBeUndefined();
-      expect(call?.toolsAllow).toEqual(["maniple__check_idle_workers"]);
+      const call = requireEmbeddedAgentCall();
+      expect(call.senderIsOwner).toBe(false);
+      expect(call.ownerOnlyToolAllowlist).toBeUndefined();
+      expect(call.toolsAllow).toEqual(["maniple__check_idle_workers"]);
     },
   );
 });

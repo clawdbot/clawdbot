@@ -20,6 +20,9 @@ export type IMessagePayload = {
   reply_to_sender?: string | null;
   created_at?: string | null;
   is_reaction?: boolean | null;
+  is_tapback?: boolean | null;
+  associated_message_guid?: string | null;
+  associated_message_type?: number | null;
   reaction_type?: string | null;
   reaction_emoji?: string | null;
   is_reaction_add?: boolean | null;

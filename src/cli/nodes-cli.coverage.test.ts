@@ -112,11 +112,13 @@ describe("nodes-cli coverage", () => {
 
   it("does not register the removed run wrapper", async () => {
     await withSuppressedStderr(async () => {
-      await expect(
-        sharedProgram.parseAsync(["nodes", "run", "--node", "mac-1"], { from: "user" }),
-      ).rejects.toMatchObject({
-        code: "commander.unknownCommand",
-      });
+      let error: { code?: unknown } | undefined;
+      try {
+        await sharedProgram.parseAsync(["nodes", "run", "--node", "mac-1"], { from: "user" });
+      } catch (err) {
+        error = err as { code?: unknown };
+      }
+      expect(error?.code).toBe("commander.unknownCommand");
     });
   });
 

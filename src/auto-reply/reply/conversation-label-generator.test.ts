@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const completeSimple = vi.hoisted(() => vi.fn());
 const getRuntimeAuthForModel = vi.hoisted(() => vi.fn());
@@ -39,6 +39,14 @@ vi.mock("../../plugins/runtime/runtime-model-auth.runtime.js", () => ({
 
 import { generateConversationLabel } from "./conversation-label-generator.js";
 
+function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 describe("generateConversationLabel", () => {
   beforeEach(() => {
     completeSimple.mockReset();
@@ -61,6 +69,10 @@ describe("generateConversationLabel", () => {
     completeSimple.mockResolvedValue({
       content: [{ type: "text", text: "Topic label" }],
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("uses routed agentDir for model and auth resolution", async () => {
@@ -94,31 +106,32 @@ describe("generateConversationLabel", () => {
   });
 
   it("passes the label prompt as systemPrompt and the user text as message content", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_710_000_000_000);
+
     await generateConversationLabel({
       userMessage: "Need help with invoices",
       prompt: "Generate a label",
       cfg: {},
     });
 
-    expect(completeSimple).toHaveBeenCalledWith(
-      { provider: "openai" },
-      {
-        systemPrompt: "Generate a label",
-        messages: [
-          {
-            role: "user",
-            content: "Need help with invoices",
-            timestamp: expect.any(Number),
-          },
-        ],
-      },
-      expect.objectContaining({
-        apiKey: "resolved-key",
-        maxTokens: 100,
-        temperature: 0.3,
-        signal: expect.any(AbortSignal),
-      }),
-    );
+    expect(completeSimple).toHaveBeenCalledOnce();
+    const call = requireFirstMockCall(completeSimple, "simple completion");
+    expect(call[0]).toStrictEqual({ provider: "openai" });
+    expect(call[1]).toStrictEqual({
+      systemPrompt: "Generate a label",
+      messages: [
+        {
+          role: "user",
+          content: "Need help with invoices",
+          timestamp: 1_710_000_000_000,
+        },
+      ],
+    });
+    expect(call[2].apiKey).toBe("resolved-key");
+    expect(call[2].maxTokens).toBe(100);
+    expect(call[2].temperature).toBe(0.3);
+    expect(call[2].signal).toBeInstanceOf(AbortSignal);
   });
 
   it("omits temperature for Codex Responses simple completions", async () => {
@@ -135,9 +148,12 @@ describe("generateConversationLabel", () => {
       cfg: {},
     });
 
-    expect(completeSimple.mock.calls[0]?.[2]).toEqual(
-      expect.not.objectContaining({ temperature: expect.anything() }),
-    );
+    expect(completeSimple).toHaveBeenCalledOnce();
+    const options = requireFirstMockCall(completeSimple, "simple completion")[2];
+    if (!options) {
+      throw new Error("expected simple completion options");
+    }
+    expect(Object.hasOwn(options, "temperature")).toBe(false);
   });
 
   it("logs completion errors instead of treating them as empty labels", async () => {

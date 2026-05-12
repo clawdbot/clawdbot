@@ -107,6 +107,7 @@ For coordinated change sets that genuinely need more than 20 PRs, join the **#cl
 
 - Test locally with your OpenClaw instance
 - External PRs must include a filled **Real behavior proof** section in the PR body. Show the real setup you tested, the exact command or steps you ran after the patch, after-fix evidence, the observed result, and anything you did not test. Screenshots, recordings, terminal screenshots, console output, copied live output, linked artifacts, and redacted runtime logs all count. Unit tests, mocks, snapshots, lint, typechecks, and CI are useful but do not satisfy this requirement by themselves. Maintainers may apply `proof: override` only when the proof gate should not apply.
+- Do not edit `CHANGELOG.md` in contributor PRs. Maintainers or ClawSweeper add the changelog entry when landing user-facing changes.
 - Run tests: `pnpm build && pnpm check && pnpm test`
 - For iterative local commits, `scripts/committer --fast "message" <files...>` passes `FAST_COMMIT=1` through to the pre-commit hook so it skips the repo-wide `pnpm check`. Only use it when you've already run equivalent targeted validation for the touched surface.
 - For extension/plugin changes, run the fast local lane first:

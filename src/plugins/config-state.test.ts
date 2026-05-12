@@ -7,6 +7,8 @@ import {
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "./config-state.js";
+import * as discovery from "./discovery.js";
+import * as manifest from "./manifest.js";
 
 function normalizeVoiceCallEntry(entry: Record<string, unknown>) {
   return normalizePluginsConfig({
@@ -186,15 +188,11 @@ describe("normalizePluginsConfig", () => {
     expect(result.entries.minimax?.enabled).toBe(false);
   });
 
-  it("normalizes unknown plugin ids without loading discovery", async () => {
-    vi.resetModules();
-    const discovery = await import("./discovery.js");
+  it("normalizes unknown plugin ids without consulting discovery", async () => {
     const discoverPlugins = vi.spyOn(discovery, "discoverOpenClawPlugins");
-    const { normalizePluginsConfig: normalizeFreshPluginsConfig } =
-      await import("./config-state.js");
     discoverPlugins.mockClear();
 
-    const result = normalizeFreshPluginsConfig({
+    const result = normalizePluginsConfig({
       allow: ["unknown-plugin-one", "unknown-plugin-two"],
       deny: ["unknown-plugin-three"],
       entries: {
@@ -210,10 +208,7 @@ describe("normalizePluginsConfig", () => {
     expect(discoverPlugins).not.toHaveBeenCalled();
   });
 
-  it("does not load discovery or manifests for alias lookup", async () => {
-    vi.resetModules();
-    const discovery = await import("./discovery.js");
-    const manifest = await import("./manifest.js");
+  it("does not consult discovery or manifests for alias lookup", async () => {
     const discoverPlugins = vi.spyOn(discovery, "discoverOpenClawPlugins").mockReturnValue({
       candidates: [
         {
@@ -245,12 +240,10 @@ describe("normalizePluginsConfig", () => {
         providers: ["anthropic"],
       },
     });
-    const { normalizePluginsConfig: normalizeFreshPluginsConfig } =
-      await import("./config-state.js");
     discoverPlugins.mockClear();
     loadManifest.mockClear();
 
-    const result = normalizeFreshPluginsConfig({
+    const result = normalizePluginsConfig({
       deny: ["anthropic"],
     });
 

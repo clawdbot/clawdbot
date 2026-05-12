@@ -136,9 +136,7 @@ describe("gateway cli backend connect", () => {
         const health = await client.request("health", undefined, {
           timeoutMs: 1_000,
         });
-        expect(health).toMatchObject({
-          ok: true,
-        });
+        expect(health.ok).toBe(true);
         expect(server.requests).toEqual(["connect", "health"]);
       } finally {
         await client?.stopAndWait({ timeoutMs: 1_000 }).catch(() => {});

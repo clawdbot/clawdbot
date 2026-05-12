@@ -141,12 +141,9 @@ describe("createDirectRoomTracker", () => {
       }),
     ).resolves.toBe(true);
 
-    expect(client.setAccountData).toHaveBeenCalledWith(
-      EventType.Direct,
-      expect.objectContaining({
-        "@alice:example.org": ["!room:example.org"],
-      }),
-    );
+    expect(client.setAccountData).toHaveBeenCalledWith(EventType.Direct, {
+      "@alice:example.org": ["!room:example.org"],
+    });
   });
 
   it("does not promote strict unmapped rooms when the per-room fallback gate vetoes it", async () => {

@@ -401,6 +401,43 @@ describe("config view", () => {
     expect(content.scrollLeft).toBe(0);
   });
 
+  it("does not normalize off-scope schema sections for scoped config tabs", () => {
+    const offScopeSchema = { type: "object" } as Record<string, unknown>;
+    Object.defineProperty(offScopeSchema, "properties", {
+      get() {
+        throw new Error("off-scope schema was normalized");
+      },
+    });
+
+    const { container } = renderConfigView({
+      activeSection: "channels",
+      navRootLabel: "Communication",
+      includeSections: ["channels"],
+      schema: {
+        type: "object",
+        properties: {
+          channels: {
+            type: "object",
+            properties: {
+              telegram: { type: "string", title: "Telegram" },
+            },
+          },
+          models: offScopeSchema,
+        },
+      },
+      formValue: {
+        channels: { telegram: "enabled" },
+        models: {},
+      },
+      originalValue: {
+        channels: { telegram: "enabled" },
+        models: {},
+      },
+    });
+
+    expect(normalizedText(container)).toContain("Telegram");
+  });
+
   it("renders and wires the search field controls", () => {
     const container = document.createElement("div");
     const onSearchChange = vi.fn();

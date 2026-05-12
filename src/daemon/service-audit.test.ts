@@ -283,7 +283,8 @@ describe("auditGatewayServiceConfig", () => {
     const issue = audit.issues.find(
       (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPortMismatch,
     );
-    expect(issue).toMatchObject({
+    expect(issue).toStrictEqual({
+      code: SERVICE_AUDIT_CODES.gatewayPortMismatch,
       message: "Gateway service port does not match current gateway config.",
       detail: "18789 -> 18888",
       level: "recommended",
@@ -497,9 +498,12 @@ describe("checkTokenDrift", () => {
 
   it("detects drift when config has token but service has different token", () => {
     const result = checkTokenDrift({ serviceToken: "old-token", configToken: "new-token" });
-    expect(result).toMatchObject({
+    expect(result).toStrictEqual({
       code: SERVICE_AUDIT_CODES.gatewayTokenDrift,
-      message: expect.stringContaining("differs from service token"),
+      message:
+        "Config token differs from service token. The daemon will use the old token after restart.",
+      detail: "Run `openclaw gateway install --force` to sync the token.",
+      level: "recommended",
     });
   });
 

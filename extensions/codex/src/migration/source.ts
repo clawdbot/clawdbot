@@ -146,6 +146,7 @@ async function discoverInstalledCuratedPlugins(codexHome: string): Promise<{
       method: "plugin/list",
       requestParams: { cwds: [] } satisfies v2.PluginListParams,
       timeoutMs: 60_000,
+      isolated: true,
       startOptions: {
         transport: "stdio",
         command: "codex",

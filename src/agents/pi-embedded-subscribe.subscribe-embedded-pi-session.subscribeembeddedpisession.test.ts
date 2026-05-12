@@ -126,7 +126,6 @@ describe("subscribeEmbeddedPiSession", () => {
     expected: { text: string; mediaUrls?: string[] },
   ): void {
     const payload = findBlockReplyPayload(onBlockReply, expected.text);
-    expect(payload).toBeDefined();
     if (!payload) {
       throw new Error(`Expected block reply text: ${expected.text}`);
     }
@@ -145,7 +144,9 @@ describe("subscribeEmbeddedPiSession", () => {
         item.livenessState === expected.livenessState &&
         item.replayInvalid === expected.replayInvalid,
     );
-    expect(payload).toBeDefined();
+    if (!payload) {
+      throw new Error(`Expected lifecycle payload for phase ${expected.phase}`);
+    }
   }
 
   it("captures usage from completions timings on done events", () => {
@@ -248,7 +249,7 @@ describe("subscribeEmbeddedPiSession", () => {
       await flushBlockReplyCallbacks();
 
       expect(onBlockReply).toHaveBeenCalledTimes(1);
-      expect(onBlockReply.mock.calls[0][0].text).toBe("Final answer");
+      expect(onBlockReply.mock.calls.at(0)?.[0].text).toBe("Final answer");
 
       const streamTexts = onReasoningStream.mock.calls
         .map((call) => call[0]?.text)
@@ -337,7 +338,7 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalled();
+      expect(onToolResult).toHaveBeenCalledTimes(2);
     });
     const payload = onToolResult.mock.calls.at(-1)?.[0] as
       | { text?: string; mediaUrls?: string[] }
@@ -379,7 +380,7 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalled();
+      expect(onToolResult).toHaveBeenCalledTimes(2);
     });
     const toolPayload = onToolResult.mock.calls.at(-1)?.[0] as
       | { text?: string; mediaUrls?: string[] }
@@ -437,7 +438,7 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalled();
+      expect(onToolResult).toHaveBeenCalledTimes(2);
     });
 
     emit({ type: "message_start", message: { role: "assistant" } });
@@ -491,7 +492,7 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalled();
+      expect(onToolResult).toHaveBeenCalledTimes(2);
     });
 
     emit({ type: "message_start", message: { role: "assistant" } });
@@ -734,16 +735,14 @@ describe("subscribeEmbeddedPiSession", () => {
       });
       await flushBlockReplyCallbacks();
 
-      expect(onBlockReply.mock.calls.length).toBeGreaterThan(0);
       const payloadTexts = onBlockReply.mock.calls
         .map((call) => call[0]?.text)
         .filter((value): value is string => typeof value === "string");
+      expect(payloadTexts).toEqual(["Final answer"]);
       for (const text of payloadTexts) {
         expect(text).not.toContain("Reasoning");
         expect(text).not.toContain(open);
       }
-      const combined = payloadTexts.join(" ").replace(/\s+/g, " ").trim();
-      expect(combined).toBe("Final answer");
     },
   );
 
@@ -1057,8 +1056,10 @@ describe("subscribeEmbeddedPiSession", () => {
     // Look for lifecycle:error event
     const lifecycleError = findLifecycleErrorAgentEvent(onAgentEvent.mock.calls);
 
-    expect(lifecycleError).toBeDefined();
-    const error = (lifecycleError?.data as { error?: unknown } | undefined)?.error;
+    if (!lifecycleError) {
+      throw new Error("Expected lifecycle error event");
+    }
+    const error = (lifecycleError.data as { error?: unknown } | undefined)?.error;
     expect(typeof error).toBe("string");
     expect(error).toContain("API rate limit reached");
   });

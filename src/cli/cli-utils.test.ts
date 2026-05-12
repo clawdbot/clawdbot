@@ -17,7 +17,7 @@ describe("waitForever", () => {
     try {
       const promise = waitForever();
       expect(setIntervalSpy).toHaveBeenCalledTimes(1);
-      const [callback, delay] = setIntervalSpy.mock.calls[0] ?? [];
+      const [callback, delay] = setIntervalSpy.mock.calls.at(0) ?? [];
       expect(typeof callback).toBe("function");
       expect(delay).toBe(1_000_000);
       expect(unref).toHaveBeenCalledTimes(1);

@@ -93,10 +93,8 @@ describe("gateway HTTP request trace scope", () => {
         .split("\n")
         .map((line) => JSON.parse(line) as Record<string, unknown>)
         .find((record) => record.message === "handled request trace");
-      expect(traceRecord).toMatchObject({
-        traceId: activeTraceInHandler?.traceId,
-        spanId: activeTraceInHandler?.spanId,
-      });
+      expect(traceRecord?.traceId).toBe(activeTraceInHandler?.traceId);
+      expect(traceRecord?.spanId).toBe(activeTraceInHandler?.spanId);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

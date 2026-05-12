@@ -9,7 +9,7 @@ sidebarTitle: "Background tasks"
 ---
 
 <Note>
-Looking for scheduling? See [Automation and tasks](/automation) for choosing the right mechanism. This page is the activity ledger for background work, not the scheduler.
+Looking for scheduling? See [Automation](/automation) for choosing the right mechanism. This page is the activity ledger for background work, not the scheduler.
 </Note>
 
 Background tasks track work that runs **outside your main conversation session**: ACP runs, subagent spawns, isolated cron job executions, and CLI-initiated operations.
@@ -367,7 +367,7 @@ A sweeper runs every **60 seconds** and handles four things:
 
 ## Related
 
-- [Automation & Tasks](/automation) - all automation mechanisms at a glance
+- [Automation](/automation) - all automation mechanisms at a glance
 - [CLI: Tasks](/cli/tasks) - CLI command reference
 - [Heartbeat](/gateway/heartbeat) - periodic main-session turns
 - [Scheduled Tasks](/automation/cron-jobs) - scheduling background work

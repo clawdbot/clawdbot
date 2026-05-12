@@ -4,7 +4,11 @@ import { describe, expect, it } from "vitest";
 import { writeClaudeBundleManifest } from "../../plugins/bundle-mcp.test-support.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
-import { cliBundleMcpHarness, setupCliBundleMcpTestHarness } from "./bundle-mcp.test-support.js";
+import {
+  cliBundleMcpHarness,
+  requireMcpConfigPath,
+  setupCliBundleMcpTestHarness,
+} from "./bundle-mcp.test-support.js";
 
 setupCliBundleMcpTestHarness();
 
@@ -36,10 +40,8 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
       },
     });
 
-    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
-    expect(configFlagIndex).toBeGreaterThanOrEqual(0);
-    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
-    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
       mcpServers?: Record<string, { type?: string; url?: string }>;
     };
     expect(raw.mcpServers?.omi?.type).toBe("sse");
@@ -79,10 +81,8 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
       },
     });
 
-    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
-    expect(configFlagIndex).toBeGreaterThanOrEqual(0);
-    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
-    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
       mcpServers?: Record<string, { type?: string; transport?: string; url?: string }>;
     };
 
@@ -123,9 +123,8 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
       },
     });
 
-    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
-    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
-    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
       mcpServers?: Record<string, { type?: string; transport?: string }>;
     };
 
@@ -170,10 +169,8 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
       },
     });
 
-    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
-    expect(configFlagIndex).toBeGreaterThanOrEqual(0);
-    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
-    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
       mcpServers?: Record<string, { url?: string }>;
     };
     expect(raw.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
@@ -243,10 +240,8 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
         },
       });
 
-      const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
-      expect(configFlagIndex).toBeGreaterThanOrEqual(0);
-      const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
-      const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+      const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+      const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
         mcpServers?: Record<
           string,
           {

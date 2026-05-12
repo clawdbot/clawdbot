@@ -812,7 +812,9 @@ describe("monitorMatrixProvider", () => {
     await startMonitorAndAbortAfterStartup();
 
     const textLimitCall = hoisted.resolveTextChunkLimit.mock.calls[0];
-    expect(textLimitCall?.[0]).toBeDefined();
+    if (textLimitCall?.[0] === undefined) {
+      throw new Error("Expected Matrix text chunk limit config argument");
+    }
     expect(textLimitCall?.[1]).toBe("matrix");
     expect(textLimitCall?.[2]).toBe("default");
   });

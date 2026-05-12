@@ -49,8 +49,6 @@ describe("handleSlackAction", () => {
   }
 
   function requireRecord(value: unknown, label: string): Record<string, unknown> {
-    expect(typeof value).toBe("object");
-    expect(value).not.toBeNull();
     if (typeof value !== "object" || value === null) {
       throw new Error(`${label} was not an object`);
     }
@@ -65,6 +63,39 @@ describe("handleSlackAction", () => {
     return value;
   }
 
+  function requireMockCall(
+    source: { mock: { calls: unknown[][] } },
+    label: string,
+    index = 0,
+  ): unknown[] {
+    const call = source.mock.calls[index];
+    if (!call) {
+      throw new Error(`missing ${label} call ${index + 1}`);
+    }
+    return call;
+  }
+
+  function requireMockArg(
+    source: { mock: { calls: unknown[][] } },
+    label: string,
+    callIndex: number,
+    argIndex: number,
+  ): unknown {
+    return requireMockCall(source, label, callIndex)[argIndex];
+  }
+
+  function requireRecordArg(
+    source: { mock: { calls: unknown[][] } },
+    label: string,
+    callIndex: number,
+    argIndex: number,
+  ): Record<string, unknown> {
+    return requireRecord(
+      requireMockArg(source, label, callIndex, argIndex),
+      `${label} call ${callIndex + 1} argument ${argIndex + 1}`,
+    );
+  }
+
   function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
     for (const [key, value] of Object.entries(fields)) {
       expect(record[key]).toEqual(value);
@@ -73,7 +104,6 @@ describe("handleSlackAction", () => {
 
   function requireSlackSendCall(index: number) {
     const call = sendSlackMessage.mock.calls[index] as unknown[] | undefined;
-    expect(call).toBeDefined();
     if (!call) {
       throw new Error(`missing Slack send call ${index + 1}`);
     }
@@ -122,15 +152,15 @@ describe("handleSlackAction", () => {
     readSlackMessages.mockClear();
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
     await handleSlackAction({ action: "readMessages", channelId: "C1" }, cfg);
-    const opts = readSlackMessages.mock.calls[0]?.[1] as { token?: string } | undefined;
-    return opts?.token;
+    const token = requireRecordArg(readSlackMessages, "readSlackMessages", 0, 1).token;
+    return typeof token === "string" ? token : undefined;
   }
 
   async function resolveSendToken(cfg: OpenClawConfig): Promise<string | undefined> {
     sendSlackMessage.mockClear();
     await handleSlackAction({ action: "sendMessage", to: "channel:C1", content: "Hello" }, cfg);
-    const opts = sendSlackMessage.mock.calls[0]?.[2] as { token?: string } | undefined;
-    return opts?.token;
+    const token = requireRecordArg(sendSlackMessage, "sendSlackMessage", 0, 2).token;
+    return typeof token === "string" ? token : undefined;
   }
 
   beforeEach(() => {
@@ -282,8 +312,8 @@ describe("handleSlackAction", () => {
       },
       slackConfig(),
     );
-    expect(downloadSlackFile.mock.calls[0]?.[0]).toBe("F123");
-    expect(requireRecord(downloadSlackFile.mock.calls[0]?.[1], "download options").maxBytes).toBe(
+    expect(requireMockArg(downloadSlackFile, "downloadSlackFile", 0, 0)).toBe("F123");
+    expect(requireRecordArg(downloadSlackFile, "downloadSlackFile", 0, 1).maxBytes).toBe(
       20 * 1024 * 1024,
     );
     expect(requireDetails(result).ok).toBe(false);
@@ -302,8 +332,8 @@ describe("handleSlackAction", () => {
       slackConfig(),
     );
 
-    expect(downloadSlackFile.mock.calls[0]?.[0]).toBe("F123");
-    expectRecordFields(requireRecord(downloadSlackFile.mock.calls[0]?.[1], "download options"), {
+    expect(requireMockArg(downloadSlackFile, "downloadSlackFile", 0, 0)).toBe("F123");
+    expectRecordFields(requireRecordArg(downloadSlackFile, "downloadSlackFile", 0, 1), {
       channelId: "C1",
       threadId: "123.456",
     });
@@ -346,8 +376,7 @@ describe("handleSlackAction", () => {
   it("forwards resolved botToken to action functions instead of relying on config re-read", async () => {
     downloadSlackFile.mockResolvedValueOnce(null);
     await handleSlackAction({ action: "downloadFile", fileId: "F123" }, slackConfig());
-    const opts = downloadSlackFile.mock.calls[0]?.[1] as { token?: string } | undefined;
-    expect(opts?.token).toBe("tok");
+    expect(requireRecordArg(downloadSlackFile, "downloadSlackFile", 0, 1).token).toBe("tok");
   });
 
   it("keeps resolved userToken for downloadFile reads when configured", async () => {
@@ -363,8 +392,7 @@ describe("handleSlackAction", () => {
         },
       }),
     );
-    const opts = downloadSlackFile.mock.calls[0]?.[1] as { token?: string } | undefined;
-    expect(opts?.token).toBe("xoxp-user");
+    expect(requireRecordArg(downloadSlackFile, "downloadSlackFile", 0, 1).token).toBe("xoxp-user");
   });
 
   it.each([
@@ -494,13 +522,17 @@ describe("handleSlackAction", () => {
       mediaUrl: "https://example.com/file.png",
       threadTs: undefined,
     });
-    expect(sendSlackMessage.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
+    expect(requireRecordArg(sendSlackMessage, "sendSlackMessage", 0, 2)).not.toHaveProperty(
+      "blocks",
+    );
     expectSlackSendCall(1, "channel:C123", "hello", {
       cfg,
       blocks: [{ type: "divider" }],
       threadTs: undefined,
     });
-    expect(sendSlackMessage.mock.calls[1]?.[2]).not.toHaveProperty("mediaUrl");
+    expect(requireRecordArg(sendSlackMessage, "sendSlackMessage", 1, 2)).not.toHaveProperty(
+      "mediaUrl",
+    );
     expect(result.details).toEqual({
       ok: true,
       result: { channelId: "C123" },
@@ -530,10 +562,11 @@ describe("handleSlackAction", () => {
       },
       cfg,
     );
-    expect(editSlackMessage.mock.calls[0]?.[0]).toBe("C123");
-    expect(editSlackMessage.mock.calls[0]?.[1]).toBe("123.456");
-    expect(editSlackMessage.mock.calls[0]?.[2]).toBe("");
-    expectRecordFields(requireRecord(editSlackMessage.mock.calls[0]?.[3], "edit options"), {
+    const editCall = requireMockCall(editSlackMessage, "editSlackMessage");
+    expect(editCall[0]).toBe("C123");
+    expect(editCall[1]).toBe("123.456");
+    expect(editCall[2]).toBe("");
+    expectRecordFields(requireRecordArg(editSlackMessage, "editSlackMessage", 0, 3), {
       cfg,
       blocks: expectedBlocks,
     });
@@ -750,8 +783,8 @@ describe("handleSlackAction", () => {
       cfg,
     );
 
-    expect(readSlackMessages.mock.calls[0]?.[0]).toBe("C1");
-    expectRecordFields(requireRecord(readSlackMessages.mock.calls[0]?.[1], "read options"), {
+    expect(requireMockArg(readSlackMessages, "readSlackMessages", 0, 0)).toBe("C1");
+    expectRecordFields(requireRecordArg(readSlackMessages, "readSlackMessages", 0, 1), {
       cfg,
       threadId: "1712345678.123456",
       limit: undefined,
@@ -774,8 +807,8 @@ describe("handleSlackAction", () => {
       cfg,
     );
 
-    expect(readSlackMessages.mock.calls[0]?.[0]).toBe("C1");
-    expectRecordFields(requireRecord(readSlackMessages.mock.calls[0]?.[1], "read options"), {
+    expect(requireMockArg(readSlackMessages, "readSlackMessages", 0, 0)).toBe("C1");
+    expectRecordFields(requireRecordArg(readSlackMessages, "readSlackMessages", 0, 1), {
       cfg,
       threadId: "1712345678.123456",
       messageId: "1712345678.654321",

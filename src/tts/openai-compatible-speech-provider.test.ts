@@ -20,11 +20,15 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
 }));
 
 function requireFirstMockArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  const arg = mock.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
-  if (!arg) {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("missing first mock call");
+  }
+  const [arg] = call;
+  if (!arg || typeof arg !== "object") {
     throw new Error("missing first mock argument");
   }
-  return arg;
+  return arg as Record<string, unknown>;
 }
 
 describe("createOpenAiCompatibleSpeechProvider", () => {

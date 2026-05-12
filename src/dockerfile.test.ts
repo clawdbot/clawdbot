@@ -7,6 +7,7 @@ import YAML from "yaml";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
+const dockerSetupDockerfilePaths = ["Dockerfile", "scripts/docker/sandbox/Dockerfile"] as const;
 const pnpmWorkspacePath = join(repoRoot, "pnpm-workspace.yaml");
 
 function collapseDockerContinuations(dockerfile: string): string {
@@ -14,6 +15,13 @@ function collapseDockerContinuations(dockerfile: string): string {
 }
 
 describe("Dockerfile", () => {
+  it("does not force an external Dockerfile frontend pull", async () => {
+    for (const path of dockerSetupDockerfilePaths) {
+      const dockerfile = await readFile(join(repoRoot, path), "utf8");
+      expect(dockerfile, path).not.toMatch(/^#\s*syntax=/m);
+    }
+  });
+
   it("uses full bookworm for build stages and slim bookworm for runtime", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain(
@@ -207,6 +215,9 @@ describe("Dockerfile", () => {
     expect(dockerfile).not.toContain("pnpm_config_frozen_lockfile=false");
     expect(dockerfile).toContain(finalWorkspaceCopy);
     expect(dockerfile.indexOf(pruneProd)).toBeLessThan(dockerfile.indexOf(finalWorkspaceCopy));
+    expect(dockerfile).toContain(
+      "COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .",
+    );
     expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
     );

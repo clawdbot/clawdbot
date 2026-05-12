@@ -238,9 +238,12 @@ describe("FS tools with workspaceOnly=false", () => {
       content: "new note",
     });
     expect(hasToolError(result)).toBe(false);
-    expect(result.content).toContainEqual({
-      type: "text",
-      text: "Appended content to memory/2026-03-07.md.",
+    expect(result).toStrictEqual({
+      content: [{ type: "text", text: "Appended content to memory/2026-03-07.md." }],
+      details: {
+        path: "memory/2026-03-07.md",
+        appendOnly: true,
+      },
     });
     await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed\nnew note");
   });

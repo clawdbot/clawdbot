@@ -95,14 +95,12 @@ describe("msteams channel message adapter", () => {
         text: "hello",
         accountId: "default",
       });
-      expect(mocks.sendText).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          cfg,
-          to: "conversation:abc",
-          text: "hello",
-          accountId: "default",
-        }),
-      );
+      expect(mocks.sendText).toHaveBeenLastCalledWith({
+        cfg,
+        to: "conversation:abc",
+        text: "hello",
+        accountId: "default",
+      });
       expect(result.receipt.platformMessageIds).toEqual(["msg-1"]);
       expect(result.receipt.parts[0]?.kind).toBe("text");
     };
@@ -117,15 +115,14 @@ describe("msteams channel message adapter", () => {
         mediaLocalRoots: ["/tmp"],
         accountId: "default",
       });
-      expect(mocks.sendMedia).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          cfg,
-          to: "conversation:abc",
-          text: "photo",
-          mediaUrl: "file:///tmp/photo.png",
-          mediaLocalRoots: ["/tmp"],
-        }),
-      );
+      expect(mocks.sendMedia).toHaveBeenLastCalledWith({
+        cfg,
+        to: "conversation:abc",
+        text: "photo",
+        mediaUrl: "file:///tmp/photo.png",
+        mediaLocalRoots: ["/tmp"],
+        accountId: "default",
+      });
       expect(result.receipt.platformMessageIds).toEqual(["msg-media-1"]);
       expect(result.receipt.parts[0]?.kind).toBe("media");
     };

@@ -295,7 +295,7 @@ describe("zalouser channel policies", () => {
       emoji: "👍",
       remove: false,
     });
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       content: [{ type: "text", text: "Reacted 👍 on 111" }],
       details: {
         messageId: "111",

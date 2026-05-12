@@ -317,19 +317,17 @@ describe("control UI routing", () => {
     toggle.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await app.updateComplete;
 
-    expect(request).not.toHaveBeenCalledWith("config.patch", expect.anything());
+    expect(request.mock.calls.some((call) => call[0] === "config.patch")).toBe(false);
     const confirmRestart = expectButtonWithText(app, "Confirm Restart");
     confirmRestart.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
 
     await nextFrame();
     await app.updateComplete;
 
-    expect(request).toHaveBeenCalledWith(
-      "config.patch",
-      expect.objectContaining({
-        baseHash: "hash-1",
-      }),
-    );
+    const patchCall = request.mock.calls.find((call) => call[0] === "config.patch") as
+      | [string, { baseHash?: string }]
+      | undefined;
+    expect(patchCall?.[1].baseHash).toBe("hash-1");
   });
 
   it("renders the refreshed top navigation shell", async () => {
@@ -392,7 +390,7 @@ describe("control UI routing", () => {
     expect(topShell.firstElementChild).toBe(toggle);
     expect(topShell.querySelector(".topbar-nav-toggle")).toBe(toggle);
     expectElement(actions, ".topbar-search", HTMLElement);
-    expect(toggle.getAttribute("aria-label")).toEqual(expect.stringMatching(/\S/u));
+    expect(toggle.getAttribute("aria-label")).toBe("Expand sidebar");
 
     const nav = expectElement(app, ".shell-nav", HTMLElement);
 

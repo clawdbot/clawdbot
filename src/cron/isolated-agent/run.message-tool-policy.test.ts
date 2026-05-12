@@ -147,6 +147,14 @@ function expectEmbeddedRunFields(expected: Record<string, unknown>): Record<stri
   );
 }
 
+function expectEmbeddedRunPrompt(): string {
+  const prompt = expectEmbeddedRunFields({}).prompt;
+  if (typeof prompt !== "string") {
+    throw new Error("expected embedded run prompt to be a string");
+  }
+  return prompt;
+}
+
 function expectDispatchFields(expected: Record<string, unknown>): Record<string, unknown> {
   return expectRecordFields(
     getMockCallArg(dispatchCronDeliveryMock, 0, 0, "cron delivery dispatch"),
@@ -175,8 +183,10 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     resolveCronDeliveryPlanMock.mockReturnValue(plan);
     await runCronIsolatedAgentTurn(makeParams());
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(true);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.forceMessageTool).toBe(false);
+    expectEmbeddedRunFields({
+      disableMessageTool: true,
+      forceMessageTool: false,
+    });
   }
 
   async function expectMessageToolEnabledForPlan(plan: {
@@ -189,8 +199,10 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     resolveCronDeliveryPlanMock.mockReturnValue(plan);
     await runCronIsolatedAgentTurn(makeParams());
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(false);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.forceMessageTool).toBe(true);
+    expectEmbeddedRunFields({
+      disableMessageTool: false,
+      forceMessageTool: true,
+    });
   }
 
   async function runModeNoneDeliveryCase(params: {
@@ -352,12 +364,12 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
 
     expect(resolveDeliveryTargetMock).not.toHaveBeenCalled();
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expectEmbeddedRunFields({
+    const embeddedRun = expectEmbeddedRunFields({
       disableMessageTool: false,
       forceMessageTool: true,
     });
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.messageChannel).toBeUndefined();
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.messageTo).toBeUndefined();
+    expect(embeddedRun.messageChannel).toBeUndefined();
+    expect(embeddedRun.messageTo).toBeUndefined();
   });
 
   it('suppresses automatic exec completion notifications when delivery.mode is "none"', async () => {
@@ -474,12 +486,12 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
 
     expect(resolveDeliveryTargetMock).not.toHaveBeenCalled();
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expectEmbeddedRunFields({
+    const embeddedRun = expectEmbeddedRunFields({
       disableMessageTool: false,
       forceMessageTool: true,
     });
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.messageChannel).toBeUndefined();
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.messageTo).toBeUndefined();
+    expect(embeddedRun.messageChannel).toBeUndefined();
+    expect(embeddedRun.messageTo).toBeUndefined();
   });
 
   it("resolves implicit last-target context for delivery.mode none with only accountId", async () => {
@@ -561,7 +573,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.execOverrides).toBeUndefined();
+    expect(expectEmbeddedRunFields({}).execOverrides).toBeUndefined();
   });
 
   it("keeps automatic exec completion notifications when webhook delivery is active", async () => {
@@ -581,7 +593,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.execOverrides).toBeUndefined();
+    expect(expectEmbeddedRunFields({}).execOverrides).toBeUndefined();
   });
 
   it("disables the message tool when webhook delivery is active", async () => {
@@ -602,7 +614,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     await runCronIsolatedAgentTurn(makeParams());
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(false);
+    expectEmbeddedRunFields({ disableMessageTool: false });
   });
 
   it("skips cron delivery when output is heartbeat-only", async () => {
@@ -883,7 +895,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     await runCronIsolatedAgentTurn(makeParams());
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const prompt: string = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
+    const prompt = expectEmbeddedRunPrompt();
     expect(prompt).toContain("Use the message tool");
     expect(prompt).toContain("will be delivered automatically");
     expect(prompt).not.toContain("note who/where");
@@ -907,7 +919,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     });
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const prompt: string = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
+    const prompt = expectEmbeddedRunPrompt();
     expect(prompt).not.toContain("Use the message tool");
     expect(prompt).toContain("Return your response as plain text");
   });
@@ -919,7 +931,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     await runCronIsolatedAgentTurn(makeParams());
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const prompt: string = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
+    const prompt = expectEmbeddedRunPrompt();
     expect(prompt).not.toContain("Return your response as plain text");
     expect(prompt).not.toContain("it will be delivered automatically");
   });
@@ -939,7 +951,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     await runCronIsolatedAgentTurn(makeParams());
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const prompt: string = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
+    const prompt = expectEmbeddedRunPrompt();
     expect(prompt).not.toMatch(/\bsummary\b/i);
   });
 });

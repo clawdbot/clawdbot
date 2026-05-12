@@ -308,6 +308,8 @@ async function requestGatewayDiagnosticsExportApproval(
       cwd: params.workspaceDir,
       agentId,
       sessionKey: params.sessionKey,
+      mainKey: params.cfg.session?.mainKey,
+      sessionScope: params.cfg.session?.scope,
       messageProvider: options.privateApprovalTarget?.channel ?? params.command.channel,
       currentChannelId: options.privateApprovalTarget?.to ?? readCommandDeliveryTarget(params),
       currentThreadTs: options.privateApprovalTarget

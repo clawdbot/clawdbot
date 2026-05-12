@@ -14,6 +14,14 @@ vi.mock("./channel-ops.js", () => ({
   scryUrbitPath: vi.fn().mockResolvedValue({}),
 }));
 
+function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`Expected ${label} call`);
+  }
+  return call;
+}
+
 describe("UrbitSSEClient", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -43,7 +51,12 @@ describe("UrbitSSEClient", () => {
       });
 
       expect(mockUrbitFetch).toHaveBeenCalledTimes(1);
-      const callArgs = mockUrbitFetch.mock.calls[0][0];
+      const callArgs = requireFirstMockCall(mockUrbitFetch.mock.calls, "urbit fetch")[0] as
+        | Parameters<typeof urbitFetch>[0]
+        | undefined;
+      if (!callArgs) {
+        throw new Error("Expected urbit fetch arguments");
+      }
       expect(callArgs.path).toContain("/~/channel/");
       expect(callArgs.init?.method).toBe("PUT");
 

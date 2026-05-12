@@ -168,8 +168,8 @@ describe("doctor stale plugin config helpers", () => {
     });
 
     expect(warnings).toEqual([
-      expect.stringContaining('plugins.allow: stale plugin reference "acpx"'),
-      expect.stringContaining('Run "openclaw doctor --fix"'),
+      '- plugins.allow: stale plugin reference "acpx" was found.',
+      '- Run "openclaw doctor --fix" to remove stale plugin ids and dangling channel references.',
     ]);
   });
 

@@ -35,6 +35,10 @@ installer has its own `--verbose` flag, but that flag is not part of
 the beta tag is missing or older than the latest stable release. Use `--tag beta`
 if you want the raw npm beta dist-tag for a one-off package update.
 
+For managed plugins, beta-channel fallback is a warning: the core update can
+still succeed while a plugin uses its recorded default/latest release because no
+plugin beta is available.
+
 See [Development channels](/install/development-channels) for channel semantics.
 
 ## Switch between npm and git installs

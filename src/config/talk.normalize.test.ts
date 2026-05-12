@@ -147,10 +147,8 @@ describe("talk normalization", () => {
       },
     });
 
-    expect(payload?.realtime).toMatchObject({
-      provider: "openai",
-      instructions: "Speak with crisp diction.",
-    });
+    expect(payload?.realtime?.provider).toBe("openai");
+    expect(payload?.realtime?.instructions).toBe("Speak with crisp diction.");
   });
 
   it("does not report an active provider when the configured speech provider cannot resolve", () => {

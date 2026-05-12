@@ -223,7 +223,9 @@ describe("embedded attempt context injection", () => {
       modelId: "gpt-test",
     });
 
-    const assembleInput = assemble.mock.calls[0]?.[0] as { messages?: AgentMessage[] } | undefined;
+    const assembleInput = assemble.mock.calls.at(0)?.[0] as
+      | { messages?: AgentMessage[] }
+      | undefined;
     const projectedMessages = assembleInput?.messages?.map((message) => ({
       role: message.role,
       content: (message as { content?: unknown }).content,

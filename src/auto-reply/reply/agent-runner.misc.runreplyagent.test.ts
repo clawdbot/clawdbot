@@ -16,6 +16,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
+import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
@@ -175,6 +176,7 @@ function expectReplyText(result: unknown, text: string): void {
 beforeEach(() => {
   clearRuntimeConfigSnapshot();
   resetDiagnosticEventsForTest();
+  resetSystemEventsForTest();
   embeddedRunTesting.resetActiveEmbeddedRuns();
   replyRunRegistryTesting.resetReplyRunRegistry();
   runEmbeddedPiAgentMock.mockClear();
@@ -209,6 +211,7 @@ beforeEach(() => {
 afterEach(() => {
   clearRuntimeConfigSnapshot();
   resetDiagnosticEventsForTest();
+  resetSystemEventsForTest();
   vi.useRealTimers();
   clearMemoryPluginState();
   replyRunRegistryTesting.resetReplyRunRegistry();
@@ -276,6 +279,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     agentMeta: Record<string, unknown>;
     collectDiagnostics?: boolean;
     tmpPrefix: string;
+    workspaceDir?: string;
   }) {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), params.tmpPrefix));
     const storePath = path.join(tmp, "sessions.json");
@@ -304,6 +308,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
       storePath,
       sessionEntry,
+      workspaceDir: params.workspaceDir,
     });
 
     try {
@@ -486,6 +491,44 @@ describe("runReplyAgent auto-compaction token update", () => {
       },
       "usage diagnostic context",
     );
+  });
+
+  it("reads post-compaction context from the queued workspace instead of process cwd", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-post-compaction-workspace-"),
+    );
+    const cwdDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-post-compaction-cwd-"));
+    await fs.writeFile(
+      path.join(workspaceDir, "AGENTS.md"),
+      [
+        "## Session Startup",
+        "Read the queued workspace startup file.",
+        "",
+        "## Red Lines",
+        "Never use the process cwd for this refresh.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+    try {
+      const { sessionKey } = await runBaseReplyWithAgentMeta({
+        tmpPrefix: "openclaw-post-compaction-workspace-root-",
+        workspaceDir,
+        agentMeta: {
+          compactionCount: 1,
+          lastCallUsage: { input: 10_000, output: 500, total: 10_500 },
+        },
+      });
+
+      await vi.waitFor(() => {
+        const events = peekSystemEvents(sessionKey);
+        expect(events[0]).toContain("Post-compaction context refresh");
+        expect(events[0]).toContain("Read the queued workspace startup file.");
+      });
+    } finally {
+      cwdSpy.mockRestore();
+    }
   });
 });
 
@@ -2591,7 +2634,7 @@ describe("runReplyAgent transient HTTP retry", () => {
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
     expect(runtimeErrorMock).toHaveBeenCalledWith(
-      expect.stringContaining("Transient HTTP provider error before reply"),
+      'Transient HTTP provider error before reply (521 <!DOCTYPE html><html lang="en-US"><head><title>Web server is down</title></head><body>Cloudflare</body></html>). Retrying once in 2500ms.',
     );
 
     const payload = Array.isArray(result) ? result[0] : result;

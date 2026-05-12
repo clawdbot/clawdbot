@@ -81,14 +81,15 @@ describe("plugin-sdk qa-runner-runtime", () => {
     const module = await import("./qa-runner-runtime.js");
 
     expect(module.loadQaRunnerBundledPluginTestApi("matrix")).toBe(testApi);
-    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
-      dirName: "matrix",
-      artifactBasename: "test-api.js",
-      env: expect.objectContaining({
-        OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(sourceRoot, "extensions"),
-      }),
-    });
+    const testApiCall = loadBundledPluginPublicSurfaceModuleSync.mock.calls.at(0)?.[0] as
+      | { artifactBasename?: string; dirName?: string; env?: NodeJS.ProcessEnv }
+      | undefined;
+    expect(testApiCall?.dirName).toBe("matrix");
+    expect(testApiCall?.artifactBasename).toBe("test-api.js");
+    expect(testApiCall?.env?.OPENCLAW_ENABLE_PRIVATE_QA_CLI).toBe("1");
+    expect(testApiCall?.env?.OPENCLAW_BUNDLED_PLUGINS_DIR).toBe(
+      path.join(sourceRoot, "extensions"),
+    );
   });
 
   it("reports the qa runtime as unavailable when the qa-lab surface is missing", async () => {
@@ -201,20 +202,23 @@ describe("plugin-sdk qa-runner-runtime", () => {
         },
       },
     ]);
-    expect(loadPluginManifestRegistry).toHaveBeenCalledWith({
-      env: expect.objectContaining({
-        OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(sourceRoot, "extensions"),
-      }),
-    });
-    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
-      dirName: "qa-matrix",
-      artifactBasename: "runtime-api.js",
-      env: expect.objectContaining({
-        OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(sourceRoot, "extensions"),
-      }),
-    });
+    const manifestCall = loadPluginManifestRegistry.mock.calls.at(0)?.[0] as
+      | { env?: NodeJS.ProcessEnv }
+      | undefined;
+    expect(manifestCall?.env?.OPENCLAW_ENABLE_PRIVATE_QA_CLI).toBe("1");
+    expect(manifestCall?.env?.OPENCLAW_BUNDLED_PLUGINS_DIR).toBe(
+      path.join(sourceRoot, "extensions"),
+    );
+
+    const publicSurfaceCall = loadBundledPluginPublicSurfaceModuleSync.mock.calls.at(0)?.[0] as
+      | { dirName?: string; artifactBasename?: string; env?: NodeJS.ProcessEnv }
+      | undefined;
+    expect(publicSurfaceCall?.dirName).toBe("qa-matrix");
+    expect(publicSurfaceCall?.artifactBasename).toBe("runtime-api.js");
+    expect(publicSurfaceCall?.env?.OPENCLAW_ENABLE_PRIVATE_QA_CLI).toBe("1");
+    expect(publicSurfaceCall?.env?.OPENCLAW_BUNDLED_PLUGINS_DIR).toBe(
+      path.join(sourceRoot, "extensions"),
+    );
   });
 
   it("fails fast when two plugins declare the same qa runner command", async () => {

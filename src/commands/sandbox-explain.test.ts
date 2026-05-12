@@ -41,10 +41,17 @@ describe("sandbox explain command", () => {
     expect(parsed).toHaveProperty("docsUrl", "https://docs.openclaw.ai/sandbox");
     expect(parsed).toHaveProperty("sandbox.mode", "all");
     expect(parsed).toHaveProperty("sandbox.tools.sources.allow.source");
-    expect(Array.isArray(parsed.fixIt)).toBe(true);
-    expect(parsed.fixIt).toContain("agents.defaults.sandbox.mode=off");
-    expect(parsed.fixIt).toContain("tools.sandbox.tools.alsoAllow");
-    expect(parsed.fixIt).toContain("tools.sandbox.tools.deny");
+    expect(parsed.fixIt).toEqual([
+      "agents.defaults.sandbox.mode=off",
+      "agents.list[].sandbox.mode=off",
+      "tools.sandbox.tools.allow",
+      "tools.sandbox.tools.alsoAllow",
+      "tools.sandbox.tools.deny",
+      "agents.list[].tools.sandbox.tools.allow",
+      "agents.list[].tools.sandbox.tools.alsoAllow",
+      "agents.list[].tools.sandbox.tools.deny",
+      "tools.elevated.enabled",
+    ]);
   });
 
   it("shows effective sandbox alsoAllow grants and default-deny removals", async () => {
@@ -84,9 +91,7 @@ describe("sandbox explain command", () => {
     } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
 
     const parsed = JSON.parse(logs.join(""));
-    expect(parsed.sandbox.tools.allow).toContain("browser");
-    expect(parsed.sandbox.tools.allow).toContain("message");
-    expect(parsed.sandbox.tools.allow).toContain("tts");
+    expect(parsed.sandbox.tools.allow).toEqual(["browser", "message", "tts", "image"]);
     expect(parsed.sandbox.tools.deny).not.toContain("browser");
     expect(parsed.sandbox.tools.sources.allow).toEqual({
       source: "agent",

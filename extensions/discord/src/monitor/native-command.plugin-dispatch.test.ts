@@ -214,14 +214,25 @@ function expectFields(record: Record<string, unknown>, expected: Record<string, 
   }
 }
 
+function firstMockCall(mock: MockCalls, label: string): unknown[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
+function firstMockArg(mock: MockCalls, label: string) {
+  return firstMockCall(mock, label)[0];
+}
+
 function expectSingleCallFirstArg(
   mock: MockCalls,
   expected: Record<string, unknown>,
   label = "mock first argument",
 ): Record<string, unknown> {
   expect(mock.mock.calls).toHaveLength(1);
-  const [firstArg] = mock.mock.calls[0] ?? [];
-  const record = requireRecord(firstArg, label);
+  const record = requireRecord(firstMockArg(mock, label), label);
   expectFields(record, expected);
   return record;
 }
@@ -373,7 +384,9 @@ async function expectBoundStatusCommandDirectReply(params: {
 
   expect(dispatchSpy).not.toHaveBeenCalled();
   expect(statusSpy).toHaveBeenCalledTimes(1);
-  const statusCall = statusSpy.mock.calls[0]?.[0] as { sessionKey?: string };
+  const statusCall = firstMockArg(statusSpy, "resolveDirectStatusReplyForSession") as {
+    sessionKey?: string;
+  };
   expect(statusCall.sessionKey).toMatch(params.expectedPattern);
 }
 
@@ -1101,7 +1114,9 @@ describe("Discord native plugin command dispatch", () => {
 
     expect(dispatchSpy).not.toHaveBeenCalled();
     expect(statusSpy).toHaveBeenCalledTimes(1);
-    const statusCall = statusSpy.mock.calls[0]?.[0] as { sessionKey?: string };
+    const statusCall = firstMockArg(statusSpy, "resolveDirectStatusReplyForSession") as {
+      sessionKey?: string;
+    };
     expect(statusCall.sessionKey).toBe("agent:qwen:discord:channel:1478836151241412759");
   });
 
@@ -1182,7 +1197,7 @@ describe("Discord native plugin command dispatch", () => {
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    const dispatchCall = dispatchSpy.mock.calls[0]?.[0] as {
+    const dispatchCall = firstMockArg(dispatchSpy, "dispatchReplyWithDispatcher") as {
       ctx?: { SessionKey?: string; CommandTargetSessionKey?: string };
     };
     expect(dispatchCall.ctx?.SessionKey).toMatch(/^agent:codex:acp:binding:discord:default:/);

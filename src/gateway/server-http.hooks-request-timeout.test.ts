@@ -19,8 +19,10 @@ vi.mock("./hooks.js", async () => {
 
 function expectRetryAfterHeader(setHeader: ReturnType<typeof vi.fn>): void {
   const retryAfterCall = setHeader.mock.calls.find(([name]) => name === "Retry-After");
-  expect(retryAfterCall).toBeDefined();
-  const retryAfterValue = retryAfterCall?.[1];
+  if (!retryAfterCall) {
+    throw new Error("Expected Retry-After header call");
+  }
+  const retryAfterValue = retryAfterCall[1];
   expect(typeof retryAfterValue).toBe("string");
   expect(Number.parseInt(String(retryAfterValue), 10)).toBeGreaterThan(0);
 }

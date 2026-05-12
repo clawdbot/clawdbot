@@ -93,6 +93,107 @@ describe("createOpenClawCodingTools read behavior", () => {
     }
   });
 
+  it("returns empty content for explicit offsets beyond EOF", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-offset-eof-"));
+    await fs.writeFile(path.join(tmpDir, "notes.txt"), "one\ntwo\nthree", "utf8");
+    try {
+      const readTool = createSandboxedReadTool({
+        root: tmpDir,
+        bridge: createHostSandboxFsBridge(tmpDir),
+      });
+      const result = await readTool.execute("read-offset-limit", {
+        path: "notes.txt",
+        offset: 99,
+        limit: 10,
+      });
+
+      expect(extractToolText(result)).toBe("");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns empty content for adaptive offsets beyond EOF", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-offset-adaptive-"));
+    await fs.writeFile(path.join(tmpDir, "notes.txt"), "one\ntwo\nthree\n", "utf8");
+    try {
+      const readTool = createSandboxedReadTool({
+        root: tmpDir,
+        bridge: createHostSandboxFsBridge(tmpDir),
+      });
+      const result = await readTool.execute("read-offset-adaptive", {
+        path: "notes.txt",
+        offset: 99,
+      });
+
+      expect(extractToolText(result)).toBe("");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns already-read adaptive content when pagination reaches EOF", async () => {
+    const readResult: AgentToolResult<unknown> = {
+      content: [
+        {
+          type: "text",
+          text: "one\n\n[1 more lines in file. Use offset=2 to continue.]",
+        },
+      ],
+      details: {
+        truncation: {
+          truncated: true,
+          outputLines: 1,
+          firstLineExceedsLimit: false,
+        },
+      },
+    };
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(readResult)
+      .mockRejectedValueOnce(new Error("Offset 2 is beyond end of file (1 lines total)"));
+    const readTool = createOpenClawReadTool({
+      name: "read",
+      label: "read",
+      description: "test read",
+      parameters: Type.Object({
+        path: Type.String(),
+        offset: Type.Optional(Type.Number()),
+      }),
+      execute,
+    });
+
+    const result = await readTool.execute("read-offset-paging-eof", {
+      path: "notes.txt",
+      offset: 1,
+    });
+
+    expect(extractToolText(result)).toBe("one");
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps unrelated read failures loud", async () => {
+    const readTool = createOpenClawReadTool({
+      name: "read",
+      label: "read",
+      description: "test read",
+      parameters: Type.Object({
+        path: Type.String(),
+        offset: Type.Optional(Type.Number()),
+      }),
+      execute: vi.fn(async () => {
+        throw new Error("read failed");
+      }),
+    });
+
+    await expect(
+      readTool.execute("read-unrelated-error", {
+        path: "notes.txt",
+        offset: 99,
+      }),
+    ).rejects.toThrow("read failed");
+  });
+
   it("strips truncation.content details from read results while preserving other fields", async () => {
     const readResult: AgentToolResult<unknown> = {
       content: [{ type: "text" as const, text: "line-0001" }],

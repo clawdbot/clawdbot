@@ -518,6 +518,35 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
   });
 
+  it("defaults native Codex plugin destructive policy to enabled", () => {
+    const policy = resolveCodexPluginsPolicy({
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          slack: {
+            marketplaceName: "openai-curated",
+            pluginName: "slack",
+          },
+        },
+      },
+    });
+
+    expect(policy).toEqual({
+      configured: true,
+      enabled: true,
+      allowDestructiveActions: true,
+      pluginPolicies: [
+        {
+          configKey: "slack",
+          marketplaceName: "openai-curated",
+          pluginName: "slack",
+          enabled: true,
+          allowDestructiveActions: true,
+        },
+      ],
+    });
+  });
+
   it("rejects non-curated native plugin identities", () => {
     const config = readCodexPluginConfig({
       codexPlugins: {

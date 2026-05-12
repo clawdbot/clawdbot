@@ -42,8 +42,10 @@ function statusCalls(setStatus: ReturnType<typeof vi.fn>): Record<string, unknow
 
 function lastStatus(setStatus: ReturnType<typeof vi.fn>): Record<string, unknown> {
   const status = statusCalls(setStatus).at(-1);
-  expect(status).toBeDefined();
-  return status ?? {};
+  if (!status) {
+    throw new Error("Expected monitor status");
+  }
+  return status;
 }
 
 function expectLastStatusFields(

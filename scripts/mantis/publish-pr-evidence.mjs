@@ -156,11 +156,21 @@ function renderPairTable({ pair, rawBase }) {
   if (!left || !right) {
     return "";
   }
-  const width = Math.min(Number(left.width ?? right.width ?? 420) || 420, 720);
   return [
-    `| ${left.label} | ${right.label} |`,
-    "| --- | --- |",
-    `| <img src="${artifactUrl(rawBase, left)}" width="${width}" alt="${left.alt ?? left.label}"> | <img src="${artifactUrl(rawBase, right)}" width="${width}" alt="${right.alt ?? right.label}"> |`,
+    '<table width="100%">',
+    "  <thead>",
+    "    <tr>",
+    `      <th width="50%">${left.label}</th>`,
+    `      <th width="50%">${right.label}</th>`,
+    "    </tr>",
+    "  </thead>",
+    "  <tbody>",
+    "    <tr>",
+    `      <td width="50%" align="center"><img src="${artifactUrl(rawBase, left)}" width="100%" alt="${left.alt ?? left.label}"></td>`,
+    `      <td width="50%" align="center"><img src="${artifactUrl(rawBase, right)}" width="100%" alt="${right.alt ?? right.label}"></td>`,
+    "    </tr>",
+    "  </tbody>",
+    "</table>",
     "",
   ].join("\n");
 }

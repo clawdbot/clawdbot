@@ -10,7 +10,19 @@ function createHarness(params: {
   return createSlackOutboundPayloadHarness(params);
 }
 
-function sendOptions(call: unknown[] | undefined): {
+type MockWithCalls = {
+  mock: { calls: unknown[][] };
+};
+
+function sendCall(sendMock: MockWithCalls, index: number): unknown[] {
+  const call = sendMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected Slack send call ${index}`);
+  }
+  return call;
+}
+
+function sendOptions(call: unknown[]): {
   blocks?: Array<{
     block_id?: string;
     elements?: Array<{ action_id?: string }>;
@@ -19,7 +31,9 @@ function sendOptions(call: unknown[] | undefined): {
   mediaUrl?: string;
 } {
   const options = call?.[2];
-  expect(options).toBeDefined();
+  if (!options) {
+    throw new Error("Expected Slack send options");
+  }
   return options as {
     blocks?: Array<{
       block_id?: string;
@@ -42,9 +56,9 @@ describe("slackOutbound sendPayload", () => {
     const result = await run();
 
     expect(sendMock).toHaveBeenCalledTimes(1);
-    const call = sendMock.mock.calls[0];
-    expect(call?.[0]).toBe(to);
-    expect(call?.[1]).toBe("Fallback summary");
+    const call = sendCall(sendMock, 0);
+    expect(call[0]).toBe(to);
+    expect(call[1]).toBe("Fallback summary");
     expect(sendOptions(call).blocks).toEqual([{ type: "divider" }]);
     expect(result.channel).toBe("slack");
     expect(result.messageId).toBe("sl-1");
@@ -70,14 +84,14 @@ describe("slackOutbound sendPayload", () => {
     const result = await run();
 
     expect(sendMock).toHaveBeenCalledTimes(2);
-    const mediaCall = sendMock.mock.calls[0];
-    expect(mediaCall?.[0]).toBe(to);
-    expect(mediaCall?.[1]).toBe("");
+    const mediaCall = sendCall(sendMock, 0);
+    expect(mediaCall[0]).toBe(to);
+    expect(mediaCall[1]).toBe("");
     expect(sendOptions(mediaCall).mediaUrl).toBe("https://example.com/image.png");
-    expect(mediaCall?.[2]).not.toHaveProperty("blocks");
-    const controlsCall = sendMock.mock.calls[1];
-    expect(controlsCall?.[0]).toBe(to);
-    expect(controlsCall?.[1]).toBe("Approval required");
+    expect(mediaCall[2]).not.toHaveProperty("blocks");
+    const controlsCall = sendCall(sendMock, 1);
+    expect(controlsCall[0]).toBe(to);
+    expect(controlsCall[1]).toBe("Approval required");
     expect(sendOptions(controlsCall).blocks?.[0]?.type).toBe("actions");
     expect(result.channel).toBe("slack");
     expect(result.messageId).toBe("sl-controls");
@@ -139,9 +153,9 @@ describe("slackOutbound sendPayload", () => {
     await run();
 
     expect(sendMock).toHaveBeenCalledTimes(1);
-    const call = sendMock.mock.calls[0];
-    expect(call?.[0]).toBe(to);
-    expect(call?.[1]).toBe("Deploy?");
+    const call = sendCall(sendMock, 0);
+    expect(call[0]).toBe(to);
+    expect(call[1]).toBe("Deploy?");
     const blocks = sendOptions(call).blocks;
     expect(blocks?.[0]?.block_id).toBe("openclaw_reply_buttons_1");
     expect(blocks?.[1]?.block_id).toBe("openclaw_reply_buttons_2");

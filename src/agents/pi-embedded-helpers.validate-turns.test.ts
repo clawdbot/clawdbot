@@ -102,11 +102,18 @@ describe("validateGeminiTurns", () => {
 
     const result = validateGeminiTurns(msgs);
 
-    expect(result).toHaveLength(3);
-    expect(result[0]).toEqual({ role: "user", content: "Hello" });
-    expect(result[1].role).toBe("assistant");
-    expect((result[1] as { content?: unknown[] }).content).toHaveLength(2);
-    expect(result[2]).toEqual({ role: "user", content: "How are you?" });
+    expect(result).toEqual([
+      { role: "user", content: "Hello" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Part 1" },
+          { type: "text", text: "Part 2" },
+        ],
+        stopReason: "end_turn",
+      },
+      { role: "user", content: "How are you?" },
+    ]);
   });
 
   it("should preserve metadata from later message when merging", () => {
@@ -126,11 +133,17 @@ describe("validateGeminiTurns", () => {
 
     const result = validateGeminiTurns(msgs);
 
-    expect(result).toHaveLength(1);
-    const merged = result[0] as Extract<AgentMessage, { role: "assistant" }>;
-    expect(merged.usage).toEqual({ input: 10, output: 10 });
-    expect(merged.stopReason).toBe("end_turn");
-    expect(merged.content).toHaveLength(2);
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Part 1" },
+          { type: "text", text: "Part 2" },
+        ],
+        usage: { input: 10, output: 10 },
+        stopReason: "end_turn",
+      },
+    ]);
   });
 
   it("should handle toolResult messages without merging", () => {
@@ -158,12 +171,26 @@ describe("validateGeminiTurns", () => {
 
     const result = validateGeminiTurns(msgs);
 
-    // Should merge the consecutive assistants
-    expect(result[0].role).toBe("user");
-    expect(result[1].role).toBe("assistant");
-    expect(result[2].role).toBe("toolResult");
-    expect(result[3].role).toBe("assistant");
-    expect(result[4].role).toBe("user");
+    expect(result).toEqual([
+      { role: "user", content: "Use tool" },
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "tool-1", name: "test", input: {} }],
+      },
+      {
+        role: "toolResult",
+        toolUseId: "tool-1",
+        content: [{ type: "text", text: "Found data" }],
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Here's the answer" },
+          { type: "text", text: "Extra thoughts" },
+        ],
+      },
+      { role: "user", content: "Request 2" },
+    ]);
   });
 });
 
@@ -197,14 +224,16 @@ describe("validateAnthropicTurns", () => {
 
     const result = validateAnthropicTurns(msgs);
 
-    expect(result).toHaveLength(1);
-    expect(result[0].role).toBe("user");
-    const content = (result[0] as { content: unknown[] }).content;
-    expect(content).toHaveLength(2);
-    expect(content[0]).toEqual({ type: "text", text: "First message" });
-    expect(content[1]).toEqual({ type: "text", text: "Second message" });
-    // Should take timestamp from the newer message
-    expect((result[0] as { timestamp?: number }).timestamp).toBe(2000);
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "First message" },
+          { type: "text", text: "Second message" },
+        ],
+        timestamp: 2000,
+      },
+    ]);
   });
 
   it("should merge three consecutive user messages", () => {
@@ -216,9 +245,16 @@ describe("validateAnthropicTurns", () => {
 
     const result = validateAnthropicTurns(msgs);
 
-    expect(result).toHaveLength(1);
-    const content = (result[0] as { content: unknown[] }).content;
-    expect(content).toHaveLength(3);
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "One" },
+          { type: "text", text: "Two" },
+          { type: "text", text: "Three" },
+        ],
+      },
+    ]);
   });
 
   it("keeps newest metadata when merging consecutive users", () => {
@@ -295,8 +331,7 @@ describe("validateAnthropicTurns", () => {
 
     const result = validateAnthropicTurns(msgs);
 
-    // validateAnthropicTurns only merges user messages, not assistant
-    expect(result).toHaveLength(3);
+    expect(result).toEqual(msgs);
   });
 
   it("should handle mixed scenario with steering messages", () => {
@@ -318,13 +353,22 @@ describe("validateAnthropicTurns", () => {
 
     const result = validateAnthropicTurns(msgs);
 
-    // The two consecutive user messages at the end should be merged
-    expect(result).toHaveLength(3);
-    expect(result[0].role).toBe("user");
-    expect(result[1].role).toBe("assistant");
-    expect(result[2].role).toBe("user");
-    const lastContent = (result[2] as { content: unknown[] }).content;
-    expect(lastContent).toHaveLength(2);
+    expect(result).toEqual([
+      { role: "user", content: [{ type: "text", text: "Original question" }] },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "Overloaded",
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Steering: try again" },
+          { type: "text", text: "Another follow-up" },
+        ],
+      },
+    ]);
   });
 });
 

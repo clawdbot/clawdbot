@@ -25,7 +25,7 @@ describe("AgentRuntimePlan tool diagnostics legacy fallback", () => {
     });
 
     expect(mocks.logProviderToolSchemaDiagnostics).toHaveBeenCalledTimes(1);
-    expect(mocks.logProviderToolSchemaDiagnostics.mock.calls[0]?.[0]).toEqual({
+    expect(mocks.logProviderToolSchemaDiagnostics.mock.calls.at(0)?.[0]).toEqual({
       tools,
       provider: "openai",
       config: undefined,

@@ -38,6 +38,9 @@ vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliR
 const { registerBrowserStateCommands } = await import("./browser-cli-state.js");
 
 describe("browser state option collisions", () => {
+  const ansiPattern = new RegExp(String.raw`\u001b\[[0-9;]*m`, "g");
+  const stripAnsi = (value: string) => value.replace(ansiPattern, "");
+
   const createStateProgram = ({ withGatewayUrl = false } = {}) => {
     const { program, browser, parentOpts } = createBrowserProgramShared({ withGatewayUrl });
     registerBrowserStateCommands(browser, parentOpts);
@@ -60,6 +63,13 @@ describe("browser state option collisions", () => {
   const runBrowserCommandAndGetRequest = async (argv: string[]) => {
     await runBrowserCommand(argv);
     return getLastRequest();
+  };
+
+  const expectErrorMessage = (expected: string) => {
+    const calls = getBrowserCliRuntime().error.mock.calls;
+    const lastCall = calls.at(-1);
+    expect(lastCall).toHaveLength(1);
+    expect(stripAnsi(String(lastCall?.[0]))).toBe(expected);
   };
 
   beforeEach(() => {
@@ -142,9 +152,7 @@ describe("browser state option collisions", () => {
     await runBrowserCommand(["set", "offline", "maybe"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(getBrowserCliRuntime().error).toHaveBeenCalledWith(
-      expect.stringContaining("Expected on|off"),
-    );
+    expectErrorMessage("Expected on|off");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
 
@@ -152,9 +160,7 @@ describe("browser state option collisions", () => {
     await runBrowserCommand(["set", "media", "sepia"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(getBrowserCliRuntime().error).toHaveBeenCalledWith(
-      expect.stringContaining("Expected dark|light|none"),
-    );
+    expectErrorMessage("Expected dark|light|none");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
 
@@ -162,8 +168,8 @@ describe("browser state option collisions", () => {
     await runBrowserCommand(["set", "headers"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(getBrowserCliRuntime().error).toHaveBeenCalledWith(
-      expect.stringContaining("Missing headers JSON"),
+    expectErrorMessage(
+      "Error: Missing headers JSON (pass --headers-json or positional JSON argument)",
     );
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
@@ -172,9 +178,7 @@ describe("browser state option collisions", () => {
     await runBrowserCommand(["set", "headers", "--json", "[]"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(getBrowserCliRuntime().error).toHaveBeenCalledWith(
-      expect.stringContaining("Headers JSON must be a JSON object"),
-    );
+    expectErrorMessage("Error: Headers JSON must be a JSON object");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
 });

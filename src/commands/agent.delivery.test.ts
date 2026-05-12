@@ -326,12 +326,9 @@ describe("deliverAgentCommandResult", () => {
     });
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    const line = String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]);
-    expect(line).toContain("[agent:nested]");
-    expect(line).toContain("session=agent:main:main");
-    expect(line).toContain("run=run-announce");
-    expect(line).toContain("channel=webchat");
-    expect(line).toContain("ANNOUNCE_SKIP");
+    expect((runtime.log as ReturnType<typeof vi.fn>).mock.calls).toEqual([
+      ["[agent:nested] session=agent:main:main run=run-announce channel=webchat ANNOUNCE_SKIP"],
+    ]);
   });
 
   it("prefixes per-session nested lanes with the same nested log context (#67502)", async () => {
@@ -351,10 +348,11 @@ describe("deliverAgentCommandResult", () => {
     });
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    const line = String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]);
-    expect(line).toContain("[agent:nested]");
-    expect(line).toContain("session=agent:ebao-next:quietchat:channel:1");
-    expect(line).toContain("ANNOUNCE_SKIP");
+    expect((runtime.log as ReturnType<typeof vi.fn>).mock.calls).toEqual([
+      [
+        "[agent:nested] session=agent:ebao-next:quietchat:channel:1 run=run-announce channel=webchat ANNOUNCE_SKIP",
+      ],
+    ]);
   });
 
   it("preserves audioAsVoice in JSON output envelopes", async () => {

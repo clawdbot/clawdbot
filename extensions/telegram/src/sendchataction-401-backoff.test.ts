@@ -95,7 +95,11 @@ describe("createTelegramSendChatActionHandler", () => {
 
     // Second call should mention backoff in logs
     await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("401");
-    expect(logger).toHaveBeenCalledWith(expect.stringContaining("backoff"));
+    expect(logger.mock.calls).toEqual([
+      ["sendChatAction 401 error (1/5). Retrying with exponential backoff."],
+      ["sendChatAction backoff: waiting 1000ms before retry (failure 1/5)"],
+      ["sendChatAction 401 error (2/5). Retrying with exponential backoff."],
+    ]);
   });
 
   it("suspends after maxConsecutive401 failures", async () => {
@@ -112,7 +116,9 @@ describe("createTelegramSendChatActionHandler", () => {
     await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("401");
 
     expect(handler.isSuspended()).toBe(true);
-    expect(logger).toHaveBeenCalledWith(expect.stringContaining("CRITICAL"));
+    expect(logger.mock.calls.at(-1)).toEqual([
+      "CRITICAL: sendChatAction suspended after 3 consecutive 401 errors. Bot token is likely invalid. Telegram may DELETE the bot if requests continue. Replace the token and restart: openclaw channels restart telegram",
+    ]);
 
     // Subsequent calls are silently skipped
     await handler.sendChatAction(123, "typing");
@@ -141,7 +147,9 @@ describe("createTelegramSendChatActionHandler", () => {
     await handler.sendChatAction(123, "typing");
 
     expect(handler.isSuspended()).toBe(false);
-    expect(logger).toHaveBeenCalledWith(expect.stringContaining("recovered"));
+    expect(logger.mock.calls.at(-1)).toEqual([
+      "sendChatAction recovered after 2 consecutive 401 failures",
+    ]);
   });
 
   it("does not count non-401 errors toward suspension", async () => {

@@ -96,10 +96,8 @@ describe("pw-ai", () => {
       targetId: "T1",
     });
 
-    expect(res.refs).toMatchObject({
-      e1: { role: "button", name: "OK" },
-      e2: { role: "link", name: "Docs" },
-    });
+    expect(res.refs.e1).toEqual({ role: "button", name: "OK" });
+    expect(res.refs.e2).toEqual({ role: "link", name: "Docs" });
 
     await clickViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -142,10 +140,8 @@ describe("pw-ai", () => {
 
     expect(res.snapshot).toContain("[ref=1]");
     expect(res.snapshot).toContain("[ref=2]");
-    expect(res.refs).toMatchObject({
-      1: { role: "button", name: "OK" },
-      2: { role: "link", name: "Docs" },
-    });
+    expect(res.refs["1"]).toEqual({ role: "button", name: "OK" });
+    expect(res.refs["2"]).toEqual({ role: "link", name: "Docs" });
 
     await clickViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",

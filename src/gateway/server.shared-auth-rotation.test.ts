@@ -143,7 +143,7 @@ describe("gateway shared auth rotation", () => {
       const res = await sendSharedTokenRotationPatch(ws);
 
       expect(res.ok).toBe(true);
-      await expect(closed).resolves.toMatchObject({
+      await expect(closed).resolves.toEqual({
         code: 4001,
         reason: "gateway auth changed",
       });

@@ -56,7 +56,7 @@ describe("captureSubagentCompletionReply", () => {
     const result = await pending;
 
     expect(result).toBeUndefined();
-    expect(readSubagentOutput).toHaveBeenCalled();
+    expect(readSubagentOutput).toHaveBeenCalledTimes(8);
     vi.useRealTimers();
   });
 

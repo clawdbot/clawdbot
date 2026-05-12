@@ -162,6 +162,19 @@ async function refreshOAuthCredential(
   return result?.newCredentials ?? null;
 }
 
+export async function refreshOAuthCredentialForRuntime(params: {
+  credential: OAuthCredential;
+}): Promise<OAuthCredential | null> {
+  const refreshed = await refreshOAuthCredential(params.credential);
+  return refreshed
+    ? {
+        ...params.credential,
+        ...refreshed,
+        type: "oauth",
+      }
+    : null;
+}
+
 const oauthManager = createOAuthManager({
   buildApiKey: buildOAuthApiKey,
   refreshCredential: refreshOAuthCredential,

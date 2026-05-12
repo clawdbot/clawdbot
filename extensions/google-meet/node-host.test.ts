@@ -128,11 +128,10 @@ describe("google-meet node host bridge sessions", () => {
         ),
       );
 
-      expect(status.bridge).toMatchObject({
-        bridgeId: start.bridgeId,
-        closed: false,
-        clearCount: 1,
-      });
+      expect(status.bridge.bridgeId).toBe(start.bridgeId);
+      expect(status.bridge.closed).toBe(false);
+      expect(status.bridge.clearCount).toBe(1);
+      expect(typeof status.bridge.createdAt).toBe("string");
 
       const audio = Buffer.from([1, 2, 3]);
       await handleGoogleMeetNodeHostCommand(
@@ -196,12 +195,11 @@ describe("google-meet node host bridge sessions", () => {
       );
 
       expect(activeList.bridges).toHaveLength(1);
-      expect(activeList.bridges[0]).toMatchObject({
-        bridgeId: start.bridgeId,
-        closed: false,
-        mode: "realtime",
-        url: "https://meet.google.com/abc-defg-hij?authuser=1",
-      });
+      expect(activeList.bridges[0]?.bridgeId).toBe(start.bridgeId);
+      expect(activeList.bridges[0]?.closed).toBe(false);
+      expect(activeList.bridges[0]?.mode).toBe("realtime");
+      expect(activeList.bridges[0]?.url).toBe("https://meet.google.com/abc-defg-hij?authuser=1");
+      expect(typeof activeList.bridges[0]?.createdAt).toBe("string");
 
       children[1]?.emit("exit", 0, null);
 

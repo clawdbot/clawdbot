@@ -234,7 +234,7 @@ describe("subagent-announce-queue", () => {
     parentBusy = false;
     await vi.advanceTimersByTimeAsync(250);
     expect(send).toHaveBeenCalledTimes(1);
-    expect(send.mock.calls[0]?.[0]?.prompt).toBe("child completed");
+    expect(send.mock.calls.at(0)?.[0]?.prompt).toBe("child completed");
   });
 
   it("preserves an existing defer hook when the same queue is reused without one", async () => {
@@ -328,7 +328,7 @@ describe("subagent-announce-queue", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     expect(send).toHaveBeenCalledTimes(1);
-    expect(send.mock.calls[0]?.[0]?.prompt).toBe("child completed after stale busy state");
+    expect(send.mock.calls.at(0)?.[0]?.prompt).toBe("child completed after stale busy state");
   });
 
   it("uses debounce floor for retries when debounce exceeds backoff", async () => {

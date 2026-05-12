@@ -23,7 +23,7 @@ Requires OpenClaw 2026.4.25 or above. Run `openclaw --version` to check. Upgrade
   ```bash
   openclaw channels login --channel feishu
   ```
-  Scan the QR code with your Feishu/Lark mobile app to create a Feishu/Lark bot automatically.
+  Choose manual setup to paste an App ID and App Secret from Feishu Open Platform, or choose QR setup to create a bot automatically. If the domestic Feishu mobile app does not react to the QR code, rerun setup and choose manual setup.
   </Step>
   
   <Step title="After setup completes, restart the gateway to apply the changes">
@@ -210,6 +210,13 @@ Feishu/Lark does not support native slash-command menus, so send these as plain 
 4. Ensure all required permission scopes are granted
 5. Ensure the gateway is running: `openclaw gateway status`
 6. Check logs: `openclaw logs --follow`
+
+### QR setup does not react in the Feishu mobile app
+
+1. Rerun setup: `openclaw channels login --channel feishu`
+2. Choose manual setup
+3. In Feishu Open Platform, create a self-built app and copy its App ID and App Secret
+4. Paste those credentials into the setup wizard
 
 ### App Secret leaked
 

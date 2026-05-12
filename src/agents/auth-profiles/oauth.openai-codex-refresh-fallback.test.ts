@@ -89,11 +89,11 @@ function expectPersistedOpenAICodexProfileWithoutInlineTokens(
   credential: AuthProfileStore["profiles"][string],
   metadata: Record<string, unknown> = {},
 ): void {
-  expect(credential).toMatchObject({
-    type: "oauth",
-    provider: "openai-codex",
-    ...metadata,
-  });
+  expect(credential?.type).toBe("oauth");
+  expect(credential?.provider).toBe("openai-codex");
+  for (const [key, value] of Object.entries(metadata)) {
+    expect(credential?.[key as keyof typeof credential]).toBe(value);
+  }
   expect(credential).not.toHaveProperty("access");
   expect(credential).not.toHaveProperty("refresh");
   expect(credential).not.toHaveProperty("idToken");
@@ -305,12 +305,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     });
     expect(JSON.stringify(persisted)).not.toContain("rotated-cli-access-token");
     expect(JSON.stringify(persisted)).not.toContain("rotated-cli-refresh-token");
-    expect(persisted.profiles[profileId]).not.toEqual(
-      expect.objectContaining({
-        provider: "openai-codex",
-        access: "expired-access-token",
-      }),
-    );
+    expect(persisted.profiles[profileId]).not.toHaveProperty("access");
   });
 
   it("ignores mismatched fresh Codex CLI credentials when canonical local auth is bound to another account", async () => {
@@ -368,13 +363,10 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     });
     expect(JSON.stringify(persisted)).not.toContain("fresh-local-access-token");
     expect(JSON.stringify(persisted)).not.toContain("fresh-local-refresh-token");
-    expect(persisted.profiles[profileId]).not.toEqual(
-      expect.objectContaining({
-        access: "fresh-cli-access-token",
-        refresh: "fresh-cli-refresh-token",
-        accountId: "acct-external",
-      }),
-    );
+    const persistedProfile = requireOAuthProfile(persisted, profileId);
+    expect(persistedProfile.accountId).toBe("acct-local");
+    expect(persistedProfile).not.toHaveProperty("access");
+    expect(persistedProfile).not.toHaveProperty("refresh");
   });
 
   it("keeps the canonical refresh token when imported Codex CLI state is expired", async () => {
@@ -433,11 +425,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     expectPersistedOpenAICodexProfileWithoutInlineTokens(persisted.profiles[profileId]);
     expect(JSON.stringify(persisted)).not.toContain("fresh-access-token");
     expect(JSON.stringify(persisted)).not.toContain("fresh-refresh-token");
-    expect(persisted.profiles[profileId]).not.toEqual(
-      expect.objectContaining({
-        refresh: "fresh-cli-refresh-token",
-      }),
-    );
+    expect(persisted.profiles[profileId]).not.toHaveProperty("refresh");
   });
 
   it("adopts fresher stored credentials after refresh_token_reused", async () => {

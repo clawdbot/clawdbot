@@ -104,6 +104,13 @@ function pumpMicrophone(samples: Float32Array): void {
   });
 }
 
+function requestCallsFor(
+  client: RealtimeTalkTransportContext["client"],
+  method: string,
+): Array<Parameters<RealtimeTalkTransportContext["client"]["request"]>> {
+  return vi.mocked(client.request).mock.calls.filter((call) => call[0] === method);
+}
+
 describe("GatewayRelayRealtimeTalkTransport", () => {
   beforeEach(() => {
     listeners.clear();
@@ -209,11 +216,11 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     });
     pumpMicrophone(new Float32Array(4096));
 
-    expect(client.request).not.toHaveBeenCalledWith("talk.session.cancelOutput", expect.anything());
-    expect(client.request).toHaveBeenCalledWith(
-      "talk.session.appendAudio",
-      expect.objectContaining({ sessionId: "relay-1" }),
-    );
+    expect(requestCallsFor(client, "talk.session.cancelOutput")).toHaveLength(0);
+    const appendCall = vi
+      .mocked(client.request)
+      .mock.calls.find((call) => call[0] === "talk.session.appendAudio");
+    expect((appendCall?.[1] as { sessionId?: string } | undefined)?.sessionId).toBe("relay-1");
     transport.stop();
   });
 
@@ -334,7 +341,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       },
     });
     pumpMicrophone(speech);
-    expect(client.request).not.toHaveBeenCalledWith("talk.session.cancelOutput", expect.anything());
+    expect(requestCallsFor(client, "talk.session.cancelOutput")).toHaveLength(0);
 
     pumpMicrophone(speech);
     pumpMicrophone(speech);
@@ -380,15 +387,14 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         args: { question: "status?" },
       },
     });
-    await vi.waitFor(() =>
-      expect(client.request).toHaveBeenCalledWith(
-        "talk.client.toolCall",
-        expect.objectContaining({
-          callId: "call-1",
-          relaySessionId: "relay-1",
-        }),
-      ),
-    );
+    await vi.waitFor(() => {
+      const toolCall = vi
+        .mocked(client.request)
+        .mock.calls.find((call) => call[0] === "talk.client.toolCall");
+      const params = toolCall?.[1] as { callId?: string; relaySessionId?: string } | undefined;
+      expect(params?.callId).toBe("call-1");
+      expect(params?.relaySessionId).toBe("relay-1");
+    });
 
     emitGatewayFrame({
       event: "chat",
@@ -436,9 +442,23 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         args: { question: "status?" },
       },
     });
-    await vi.waitFor(() =>
-      expect(client.request).toHaveBeenCalledWith("talk.client.toolCall", expect.anything()),
-    );
+    await vi.waitFor(() => {
+      const toolCall = requestCallsFor(client, "talk.client.toolCall")[0];
+      const params = toolCall?.[1] as
+        | {
+            args?: unknown;
+            callId?: string;
+            name?: string;
+            relaySessionId?: string;
+            sessionKey?: string;
+          }
+        | undefined;
+      expect(params?.sessionKey).toBe("main");
+      expect(params?.callId).toBe("call-1");
+      expect(params?.name).toBe(REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME);
+      expect(params?.args).toEqual({ question: "status?" });
+      expect(params?.relaySessionId).toBe("relay-1");
+    });
 
     transport.stop();
     await vi.waitFor(() =>
@@ -451,7 +471,6 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       event: "chat",
       payload: { runId: "run-1", state: "final", message: { text: "late answer" } },
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(
       vi
         .mocked(client.request)

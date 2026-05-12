@@ -1,9 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  resolveProviderModelPickerEntries,
-  type ProviderModelPickerEntry,
-} from "../plugins/provider-wizard.js";
-import { resolvePluginProviders } from "../plugins/providers.runtime.js";
+import * as providerWizard from "../plugins/provider-wizard.js";
+import type { ProviderModelPickerEntry } from "../plugins/provider-wizard.js";
+import * as providersRuntime from "../plugins/providers.runtime.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { FlowContribution } from "./types.js";
@@ -25,12 +23,13 @@ function resolveProviderDocsById(params?: {
   env?: NodeJS.ProcessEnv;
 }): Map<string, string> {
   return new Map(
-    resolvePluginProviders({
-      config: params?.config,
-      workspaceDir: params?.workspaceDir,
-      env: params?.env,
-      mode: "setup",
-    })
+    providersRuntime
+      .resolvePluginProviders({
+        config: params?.config,
+        workspaceDir: params?.workspaceDir,
+        env: params?.env,
+        mode: "setup",
+      })
       .filter((provider): provider is ProviderPlugin & { docsPath: string } =>
         Boolean(normalizeOptionalString(provider.docsPath)),
       )
@@ -55,7 +54,7 @@ export function resolveProviderModelPickerFlowContributions(params?: {
 }): ProviderModelPickerFlowContribution[] {
   const docsByProvider = resolveProviderDocsById(params ?? {});
   return sortFlowContributionsByLabel(
-    resolveProviderModelPickerEntries(params ?? {}).map((entry) => {
+    providerWizard.resolveProviderModelPickerEntries(params ?? {}).map((entry) => {
       const providerId = entry.value.startsWith("provider-plugin:")
         ? entry.value.slice("provider-plugin:".length).split(":")[0]
         : entry.value;

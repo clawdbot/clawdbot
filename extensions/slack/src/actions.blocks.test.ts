@@ -5,6 +5,20 @@ installSlackBlockTestMocks();
 const { editSlackMessage } = await import("./actions.js");
 const SLACK_TEXT_LIMIT = 8000;
 
+function readFirstChatUpdatePayload(client: ReturnType<typeof createSlackEditTestClient>): {
+  text?: string;
+} {
+  const [call] = client.chat.update.mock.calls;
+  if (!call) {
+    throw new Error("expected Slack chat.update call");
+  }
+  const [payload] = call;
+  if (!payload || typeof payload !== "object") {
+    throw new Error("expected Slack chat.update payload");
+  }
+  return payload as { text?: string };
+}
+
 describe("editSlackMessage blocks", () => {
   it("updates with valid blocks", async () => {
     const client = createSlackEditTestClient();
@@ -116,7 +130,7 @@ describe("editSlackMessage blocks", () => {
       text: `${longContextText} ${longContextText} ${"a".repeat(SLACK_TEXT_LIMIT - longContextText.length * 2 - 3)}…`,
       blocks,
     });
-    expect(client.chat.update.mock.calls[0]?.[0].text).toHaveLength(SLACK_TEXT_LIMIT);
+    expect(readFirstChatUpdatePayload(client).text).toHaveLength(SLACK_TEXT_LIMIT);
   });
 
   it("rejects empty blocks arrays", async () => {

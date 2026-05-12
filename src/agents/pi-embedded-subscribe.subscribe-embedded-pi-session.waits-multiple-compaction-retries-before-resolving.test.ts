@@ -144,8 +144,8 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
-    const payload = onToolResult.mock.calls[0][0];
-    expect(payload.text).toContain("/tmp/a.txt");
+    const payload = onToolResult.mock.calls.at(0)?.[0];
+    expect(payload?.text).toContain("/tmp/a.txt");
 
     toolHarness.emit({
       type: "tool_execution_end",
@@ -177,10 +177,10 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
-    const payload = onToolResult.mock.calls[0][0];
-    expect(payload.text).toContain("🌐");
-    expect(payload.text).toContain("Browser");
-    expect(payload.text).toContain("https://example.com");
+    const payload = onToolResult.mock.calls.at(0)?.[0];
+    expect(payload?.text).toContain("🌐");
+    expect(payload?.text).toContain("Browser");
+    expect(payload?.text).toContain("https://example.com");
   });
 
   it("emits exec output in full verbose mode and includes PTY indicator", async () => {
@@ -202,9 +202,9 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
-    const summary = onToolResult.mock.calls[0][0];
-    expect(summary.text).toContain("Exec");
-    expect(summary.text).toContain("pty");
+    const summary = onToolResult.mock.calls.at(0)?.[0];
+    expect(summary?.text).toContain("pty");
+    expect(summary?.text).toContain("claude");
 
     toolHarness.emit({
       type: "tool_execution_end",
@@ -217,9 +217,9 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onToolResult).toHaveBeenCalledTimes(2);
-    const output = onToolResult.mock.calls[1][0];
-    expect(output.text).toContain("hello");
-    expect(output.text).toContain("```txt");
+    const output = onToolResult.mock.calls.at(1)?.[0];
+    expect(output?.text).toContain("hello");
+    expect(output?.text).toContain("```txt");
 
     toolHarness.emit({
       type: "tool_execution_end",
@@ -232,7 +232,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onToolResult).toHaveBeenCalledTimes(3);
-    const readOutput = onToolResult.mock.calls[2][0];
-    expect(readOutput.text).toContain("file data");
+    const readOutput = onToolResult.mock.calls.at(2)?.[0];
+    expect(readOutput?.text).toContain("file data");
   });
 });

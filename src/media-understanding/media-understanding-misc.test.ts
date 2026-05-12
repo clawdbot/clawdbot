@@ -55,6 +55,14 @@ describe("media understanding attachments SSRF", () => {
     vi.restoreAllMocks();
   });
 
+  function requireFirstOpenCall(openSpy: ReturnType<typeof vi.spyOn>): unknown[] {
+    const [call] = openSpy.mock.calls;
+    if (!call) {
+      throw new Error("expected fs.open call");
+    }
+    return call;
+  }
+
   it("blocks private IP URLs before fetching", async () => {
     const fetchSpy = vi.fn();
     globalThis.fetch = withFetchPreconnect(fetchSpy);
@@ -212,7 +220,7 @@ describe("media understanding attachments SSRF", () => {
         await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
 
         expect(openSpy).toHaveBeenCalled();
-        const [openedPath, openedFlags] = openSpy.mock.calls[0] ?? [];
+        const [openedPath, openedFlags] = requireFirstOpenCall(openSpy);
         expect(await fs.realpath(String(openedPath)).catch(() => String(openedPath))).toBe(
           canonicalAttachmentPath,
         );

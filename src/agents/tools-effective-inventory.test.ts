@@ -402,7 +402,7 @@ describe("resolveEffectiveToolInventory", () => {
     });
 
     expect(createToolsMock).toHaveBeenCalledTimes(1);
-    const createToolsOptions = createToolsMock.mock.calls[0]?.[0];
+    const createToolsOptions = createToolsMock.mock.calls.at(0)?.[0];
     expect(createToolsOptions?.allowGatewaySubagentBinding).toBe(true);
     expect(createToolsOptions?.modelCompat).toEqual({
       supportsTools: true,

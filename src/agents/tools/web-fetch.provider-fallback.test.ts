@@ -208,7 +208,7 @@ describe("web_fetch provider fallback normalization", () => {
     expect(details.wrappedLength).toBeGreaterThan(200);
     expect(details.wrappedLength).toBeLessThanOrEqual(640);
     expect(details.externalContent?.provider).toBe("firecrawl");
-    const definitionInput = resolveWebFetchDefinitionMock.mock.calls[0]?.[0] as
+    const definitionInput = resolveWebFetchDefinitionMock.mock.calls.at(0)?.[0] as
       | {
           config?: OpenClawConfig;
           runtimeWebFetch?: { selectedProvider?: string };

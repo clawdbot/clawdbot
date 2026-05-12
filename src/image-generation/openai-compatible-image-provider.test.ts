@@ -61,7 +61,11 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
 }));
 
 function requireFirstRequestHeaders(mock: ReturnType<typeof vi.fn>): Headers {
-  const [request] = (mock.mock.calls[0] ?? []) as [{ headers?: Headers }?];
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected request call");
+  }
+  const [request] = call as [{ headers?: Headers }];
   if (!request) {
     throw new Error("expected request call");
   }

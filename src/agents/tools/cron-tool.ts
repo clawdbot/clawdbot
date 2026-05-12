@@ -29,7 +29,17 @@ import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-h
 // We spell out job/patch properties so that LLMs know what fields to send.
 // Nested unions are avoided; runtime validation happens in normalizeCronJob*.
 
-const CRON_ACTIONS = ["status", "list", "add", "update", "remove", "run", "runs", "wake"] as const;
+const CRON_ACTIONS = [
+  "status",
+  "list",
+  "get",
+  "add",
+  "update",
+  "remove",
+  "run",
+  "runs",
+  "wake",
+] as const;
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron"] as const;
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
@@ -315,7 +325,6 @@ export const CronToolSchema = Type.Object(
 type CronToolOptions = {
   agentSessionKey?: string;
   currentDeliveryContext?: DeliveryContext;
-  /** Restrict this cron tool instance to removing only this active cron job. */
   selfRemoveOnlyJobId?: string;
 };
 
@@ -350,7 +359,7 @@ function readCronJobIdParam(params: Record<string, unknown>) {
   return readStringParam(params, "jobId") ?? readStringParam(params, "id");
 }
 
-const CRON_SELF_REMOVE_SCOPE_ERROR = "Cron tool is restricted to removing the current cron job.";
+const CRON_SELF_REMOVE_SCOPE_ERROR = "Cron tool is restricted to the current cron job.";
 
 function readCronSelfRemoveOnlyJobId(opts: CronToolOptions | undefined) {
   return opts?.selfRemoveOnlyJobId?.trim() || undefined;
@@ -369,7 +378,7 @@ function assertCronSelfRemoveScope(
   if (!selfRemoveOnlyJobId || isCronSelfIntrospectionAction(action)) {
     return;
   }
-  if (action === "remove" || action === "runs") {
+  if (action === "get" || action === "remove" || action === "runs") {
     const id = readCronJobIdParam(params);
     if (id && id === selfRemoveOnlyJobId) {
       return;
@@ -623,13 +632,14 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
     name: "cron",
     ownerOnly: isOpenClawOwnerOnlyCoreToolName("cron"),
     displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
-    description: `Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.
+    description: `Manage Gateway cron jobs (status/list/get/add/update/remove/run/runs) and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.
 
 Main-session cron jobs enqueue system events for heartbeat handling. Isolated cron jobs create background task runs that appear in \`openclaw tasks\`.
 
 ACTIONS:
 - status: Check cron scheduler status
 - list: List jobs (use includeDisabled:true to include disabled; agentId filters by agent, auto-filled from session)
+- get: Get one job by id (requires jobId)
 - add: Create job (requires job object, see schema below)
 - update: Modify job (requires jobId + patch object)
 - remove: Delete job (requires jobId)
@@ -692,7 +702,7 @@ CRITICAL CONSTRAINTS:
 Default: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.
 
 RESTRICTED CRON RUNS:
-- Some isolated cron runs receive a narrow cron grant for self-cleanup. In that mode, read-only status and list are for self-introspection only, runs (job run history) is allowed for the current job only, and mutation actions remain limited to removing the current cron job.
+- Some isolated cron runs receive a narrow cron grant for self-cleanup. In that mode, read-only status and list are for self-introspection only, get/runs are allowed for the current job only, and mutation actions remain limited to removing the current cron job.
 
 WAKE MODES (for wake action):
 - "next-heartbeat" (default): Wake on next heartbeat
@@ -755,6 +765,13 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           return jsonResult(
             selfRemoveOnlyJobId ? filterCronListResultToJobId(result, selfRemoveOnlyJobId) : result,
           );
+        }
+        case "get": {
+          const id = readCronJobIdParam(params);
+          if (!id) {
+            throw new Error("jobId required (id accepted for backward compatibility)");
+          }
+          return jsonResult(await callGateway("cron.get", gatewayOpts, { id }));
         }
         case "add": {
           // Flat-params recovery: non-frontier models (e.g. Grok) sometimes flatten

@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { fireAndForgetBoundedHook, fireAndForgetHook } from "./fire-and-forget.js";
 
 function requireFirstLog(logger: ReturnType<typeof vi.fn>): string {
-  const message = logger.mock.calls[0]?.[0];
+  const [call] = logger.mock.calls;
+  if (!call) {
+    throw new Error("expected log call");
+  }
+  const [message] = call;
   if (typeof message !== "string") {
     throw new Error("expected string log message");
   }
@@ -67,12 +71,14 @@ describe("fireAndForgetBoundedHook", () => {
       { maxConcurrency: 1, maxQueue: 1, timeoutMs: 10_000 },
     );
 
-    await Promise.resolve();
-    expect(starts).toEqual(["first"]);
+    await vi.waitFor(() => {
+      expect(starts).toEqual(["first"]);
+    });
     expect(logger).toHaveBeenCalledWith("hook failed: queue full; dropping hook");
 
     resolveFirst?.();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(starts).toEqual(["first", "second"]);
+    await vi.waitFor(() => {
+      expect(starts).toEqual(["first", "second"]);
+    });
   });
 });

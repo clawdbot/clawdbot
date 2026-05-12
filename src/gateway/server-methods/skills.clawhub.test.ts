@@ -81,12 +81,13 @@ describe("skills gateway handlers (clawhub)", () => {
     });
     expect(ok).toBe(true);
     expect(error).toBeUndefined();
-    expect(response).toMatchObject({
-      ok: true,
-      message: "Installed calendar@1.2.3",
-      slug: "calendar",
-      version: "1.2.3",
-    });
+    const result = response as
+      | { ok?: boolean; message?: string; slug?: string; version?: string }
+      | undefined;
+    expect(result?.ok).toBe(true);
+    expect(result?.message).toBe("Installed calendar@1.2.3");
+    expect(result?.slug).toBe("calendar");
+    expect(result?.version).toBe("1.2.3");
   });
 
   it("forwards dangerous override for local skill installs", async () => {
@@ -129,10 +130,9 @@ describe("skills gateway handlers (clawhub)", () => {
     });
     expect(ok).toBe(true);
     expect(error).toBeUndefined();
-    expect(response).toMatchObject({
-      ok: true,
-      message: "Installed",
-    });
+    const result = response as { ok?: boolean; message?: string } | undefined;
+    expect(result?.ok).toBe(true);
+    expect(result?.message).toBe("Installed");
   });
 
   it("updates ClawHub skills through skills.update", async () => {
@@ -172,20 +172,23 @@ describe("skills gateway handlers (clawhub)", () => {
     });
     expect(ok).toBe(true);
     expect(error).toBeUndefined();
-    expect(response).toMatchObject({
-      ok: true,
-      skillKey: "calendar",
-      config: {
-        source: "clawhub",
-        results: [
-          {
-            ok: true,
-            slug: "calendar",
-            version: "1.2.3",
-          },
-        ],
-      },
-    });
+    const result = response as
+      | {
+          ok?: boolean;
+          skillKey?: string;
+          config?: {
+            source?: string;
+            results?: Array<{ ok?: boolean; slug?: string; version?: string }>;
+          };
+        }
+      | undefined;
+    expect(result?.ok).toBe(true);
+    expect(result?.skillKey).toBe("calendar");
+    expect(result?.config?.source).toBe("clawhub");
+    expect(result?.config?.results).toHaveLength(1);
+    expect(result?.config?.results?.[0]?.ok).toBe(true);
+    expect(result?.config?.results?.[0]?.slug).toBe("calendar");
+    expect(result?.config?.results?.[0]?.version).toBe("1.2.3");
   });
 
   it("rejects ClawHub skills.update requests without slug or all", async () => {

@@ -344,7 +344,7 @@ describe("web_fetch extraction fallbacks", () => {
 
     await tool?.execute?.("call", { url: "https://example.com/proxy" });
 
-    const requestInit = mockFetch.mock.calls[0]?.[1] as
+    const requestInit = mockFetch.mock.calls.at(0)?.[1] as
       | (RequestInit & { dispatcher?: unknown })
       | undefined;
     const dispatcher = requestInit?.dispatcher;
@@ -372,7 +372,7 @@ describe("web_fetch extraction fallbacks", () => {
 
     await tool?.execute?.("call", { url: "https://example.com/proxy" });
 
-    const requestInit = mockFetch.mock.calls[0]?.[1] as
+    const requestInit = mockFetch.mock.calls.at(0)?.[1] as
       | (RequestInit & { dispatcher?: unknown })
       | undefined;
     const dispatcher = requestInit?.dispatcher;

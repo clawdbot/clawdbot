@@ -4692,6 +4692,8 @@ describe("google-meet plugin", () => {
       },
     };
     let pullCount = 0;
+    let idlePullStarted = false;
+    let releaseIdlePull: (() => void) | undefined;
     const fullConfig = { models: { providers: {} } } as never;
     const sessionStore: Record<string, unknown> = {};
     const runtime = {
@@ -4702,9 +4704,14 @@ describe("google-meet plugin", () => {
             if (pullCount === 1) {
               return { bridgeId: "bridge-1", base64: Buffer.from([9, 8, 7]).toString("base64") };
             }
-            await new Promise((resolve) => setTimeout(resolve, 10));
+            idlePullStarted = true;
+            await new Promise<void>((resolve) => {
+              releaseIdlePull = resolve;
+            });
             return { bridgeId: "bridge-1" };
           }
+          releaseIdlePull?.();
+          releaseIdlePull = undefined;
           return { ok: true };
         }),
       },
@@ -4848,6 +4855,9 @@ describe("google-meet plugin", () => {
     }
     expect(talkEvents[0]?.sessionId).toBe("google-meet:meet-1:bridge-1:node-realtime");
 
+    await vi.waitFor(() => {
+      expect(idlePullStarted).toBe(true);
+    });
     await handle.stop();
 
     expect(bridge.close).toHaveBeenCalled();
@@ -4882,6 +4892,8 @@ describe("google-meet plugin", () => {
       createBridge: () => bridge,
     };
     let pullCount = 0;
+    let idlePullStarted = false;
+    let releaseIdlePull: (() => void) | undefined;
     const runtime = {
       nodes: {
         invoke: vi.fn(async ({ params }: { params?: { action?: string } }) => {
@@ -4893,9 +4905,14 @@ describe("google-meet plugin", () => {
             if (pullCount === 2) {
               return { bridgeId: "bridge-1", base64: Buffer.from([5, 4, 3]).toString("base64") };
             }
-            await new Promise((resolve) => setTimeout(resolve, 10));
+            idlePullStarted = true;
+            await new Promise<void>((resolve) => {
+              releaseIdlePull = resolve;
+            });
             return { bridgeId: "bridge-1" };
           }
+          releaseIdlePull?.();
+          releaseIdlePull = undefined;
           return { ok: true };
         }),
       },
@@ -4923,6 +4940,9 @@ describe("google-meet plugin", () => {
     expect(health.lastInputBytes).toBe(3);
     expect(health.consecutiveInputErrors).toBe(0);
 
+    await vi.waitFor(() => {
+      expect(idlePullStarted).toBe(true);
+    });
     await handle.stop();
   });
 

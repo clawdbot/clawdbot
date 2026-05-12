@@ -64,7 +64,11 @@ const mediaMetadataPlugins = vi.hoisted(() => [
       },
       opencode: { capabilities: ["image"], defaultModels: { image: "gpt-5-nano" } },
       "opencode-go": { capabilities: ["image"], defaultModels: { image: "kimi-k2.6" } },
-      openrouter: { capabilities: ["image"], defaultModels: { image: "auto" } },
+      openrouter: {
+        capabilities: ["image", "audio"],
+        defaultModels: { image: "auto", audio: "openai/whisper-large-v3-turbo" },
+        autoPriority: { audio: 35 },
+      },
       qwen: { capabilities: ["video"], autoPriority: { video: 20 } },
       xai: { capabilities: ["audio"], autoPriority: { audio: 25 } },
       zai: { capabilities: ["image"], autoPriority: { image: 60 } },
@@ -111,6 +115,9 @@ describe("resolveDefaultMediaModel", () => {
     expect(resolveDefaultMediaModel({ providerId: "openai-codex", capability: "audio" })).toBe(
       "gpt-4o-transcribe",
     );
+    expect(resolveDefaultMediaModel({ providerId: "openrouter", capability: "audio" })).toBe(
+      "openai/whisper-large-v3-turbo",
+    );
   });
 
   it("resolves bundled image defaults beyond the historical core set", () => {
@@ -141,6 +148,7 @@ describe("resolveAutoMediaKeyProviders", () => {
       "openai",
       "openai-codex",
       "xai",
+      "openrouter",
       "google",
       "mistral",
     ]);

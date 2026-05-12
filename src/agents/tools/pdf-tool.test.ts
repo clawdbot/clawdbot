@@ -82,12 +82,29 @@ function withDefaultModel(primary: string): OpenClawConfig {
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
   const record = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);
   }
+}
+
+function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} to be called`);
+  }
+  return call;
+}
+
+function firstCompletionContext(): { systemPrompt?: string } | undefined {
+  const [, context] = firstMockCall(completeMock, "complete") as [
+    unknown,
+    { systemPrompt?: string } | undefined,
+  ];
+  return context;
 }
 
 async function stubPdfToolInfra(
@@ -332,7 +349,7 @@ describe("createPdfTool", () => {
           pdf: `media://inbound/${mediaId}`,
         });
 
-        const [loadRef, loadOptions] = loadSpy.mock.calls[0] ?? [];
+        const [loadRef, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
         expect(loadRef).toBe(`media://inbound/${mediaId}`);
         expectFields(loadOptions, { localRoots: [] });
         expect(result.content).toEqual([{ type: "text", text: "native summary" }]);
@@ -368,7 +385,7 @@ describe("createPdfTool", () => {
         pdf: "http://198.18.0.153/doc.pdf",
       });
 
-      const [loadRef, loadOptions] = loadSpy.mock.calls[0] ?? [];
+      const [loadRef, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
       expect(loadRef).toBe("http://198.18.0.153/doc.pdf");
       expectFields(loadOptions, {
         ssrfPolicy: { allowRfc2544BenchmarkRange: true },
@@ -399,7 +416,7 @@ describe("createPdfTool", () => {
           pdf: mediaPath,
         });
 
-        const [loadRef, loadOptions] = loadSpy.mock.calls[0] ?? [];
+        const [loadRef, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
         expect(loadRef).toBe(mediaPath);
         expect(loadOptions).toBeTypeOf("object");
       });
@@ -423,8 +440,10 @@ describe("createPdfTool", () => {
       });
 
       const ensureModelsJsonMock = vi.mocked(modelsConfig.ensureOpenClawModelsJson);
-      const [modelsConfigArg, modelsAgentDir, modelsOptions] =
-        ensureModelsJsonMock.mock.calls[0] ?? [];
+      const [modelsConfigArg, modelsAgentDir, modelsOptions] = firstMockCall(
+        ensureModelsJsonMock,
+        "ensureOpenClawModelsJson",
+      );
       expectFields(
         (modelsConfigArg as { agents?: { defaults?: unknown } } | undefined)?.agents?.defaults,
         {
@@ -485,8 +504,7 @@ describe("createPdfTool", () => {
         native: false,
         model: OPENAI_PDF_MODEL,
       });
-      const [, context] = completeMock.mock.calls[0] ?? [];
-      expect(context?.systemPrompt).toBeUndefined();
+      expect(firstCompletionContext()?.systemPrompt).toBeUndefined();
     });
   });
 
@@ -523,8 +541,7 @@ describe("createPdfTool", () => {
         model: CODEX_PDF_MODEL,
       });
       expect(completeMock).toHaveBeenCalledTimes(1);
-      const [, context] = completeMock.mock.calls[0] ?? [];
-      expect(context?.systemPrompt).toContain("Analyze the provided PDF content");
+      expect(firstCompletionContext()?.systemPrompt).toContain("Analyze the provided PDF content");
     });
   });
 
@@ -561,8 +578,7 @@ describe("createPdfTool", () => {
         model: CODEX_PDF_MODEL,
       });
       expect(completeMock).toHaveBeenCalledTimes(1);
-      const [, context] = completeMock.mock.calls[0] ?? [];
-      expect(context?.systemPrompt).toContain("Analyze the provided PDF content");
+      expect(firstCompletionContext()?.systemPrompt).toContain("Analyze the provided PDF content");
     });
   });
 

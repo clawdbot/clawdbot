@@ -150,6 +150,19 @@ Use these on debugging runs before inventing ad hoc logging:
   providers and prints `set len=N secret=true` style summaries. On
   `blacksmith-testbox`, env forwarding is unsupported; put secrets in the
   Testbox workflow instead.
+- `--env-from-profile <file>` plus `--allow-env NAME`: loads simple
+  `export NAME=value` / `NAME=value` lines from a local profile without
+  executing it, then forwards only allowlisted names. `--allow-env` is
+  repeatable and comma-separated. Profile values override ambient allowlisted
+  env values for that run.
+- `--script <file>` / `--script-stdin`: upload a local script into
+  `.crabbox/scripts/` and execute it on the remote box. Shebang scripts execute
+  directly; scripts without a shebang run through `bash`. Arguments after `--`
+  become script args.
+- `--fresh-pr owner/repo#123|URL|number`: skip dirty local sync and create a
+  fresh remote checkout of the GitHub PR. Bare numbers use the current repo's
+  GitHub origin. Add `--apply-local-patch` only when the current local
+  `git diff --binary HEAD` should be applied on top of that PR checkout.
 - `--capture-stdout <path>` / `--capture-stderr <path>`: write remote streams to
   local files and keep binary/noisy output out of retained logs. Parent
   directories must already exist. These are direct-provider only.
@@ -165,9 +178,10 @@ Live-provider debug template for direct AWS/Hetzner leases:
 
 ```sh
 mkdir -p .crabbox/logs
-CRABBOX_ENV_ALLOW=OPENAI_API_KEY,OPENAI_BASE_URL \
-  pnpm crabbox:run -- --provider aws \
+pnpm crabbox:run -- --provider aws \
   --preflight \
+  --env-from-profile ~/.profile \
+  --allow-env OPENAI_API_KEY,OPENAI_BASE_URL \
   --timing-json \
   --capture-stdout .crabbox/logs/live-provider.stdout.log \
   --capture-stderr .crabbox/logs/live-provider.stderr.log \
@@ -177,8 +191,9 @@ CRABBOX_ENV_ALLOW=OPENAI_API_KEY,OPENAI_BASE_URL \
 ```
 
 Do not pass `--capture-*`, `--download`, `--checksum`, `--force-sync-large`, or
-`--sync-only` to delegated providers. Crabbox rejects them because the provider
-owns sync or command transport.
+`--sync-only` to delegated providers. Also do not pass `--script*` or
+`--fresh-pr` there. Crabbox rejects these because the provider owns sync or
+command transport.
 
 ## Efficient Bug E2E Verification
 
@@ -221,6 +236,11 @@ Efficient flow:
 Keep it efficient:
 
 - Reuse existing E2E scripts and helper assertions before writing ad hoc shell.
+- Use `--script <file>` or `--script-stdin` for multi-line E2E commands instead
+  of quote-heavy `--shell` strings on direct SSH providers.
+- Use `--fresh-pr <pr>` when validating an upstream PR in isolation from the
+  local dirty tree. Add `--apply-local-patch` only when testing a local fixup on
+  top of that PR.
 - Use one-shot Crabbox for a single proof; use a reusable Testbox only when
   several commands must share built images, installed packages, or live state.
 - Prefer `OPENCLAW_CURRENT_PACKAGE_TGZ` with Docker/package lanes when testing a
@@ -230,6 +250,31 @@ Keep it efficient:
   never print secret values.
 - Include `--timing-json` on broad or flaky runs when command duration or sync
   behavior matters.
+
+Before/after PR proof on delegated Testbox:
+
+- For PRs that should prove "broken before, fixed after", compare base and PR
+  on the same Testbox when practical. Fetch both refs, create detached temp
+  worktrees under `/tmp`, install in each, then run the same harness twice.
+- Do not checkout base/PR refs in the synced repo root. Delegated Testbox sync
+  may leave the root dirty with local files; `git checkout` can abort or mix
+  proof state.
+- Temp harness files under `/tmp` do not resolve repo packages by default. Put
+  the harness inside the worktree, or in ESM use
+  `createRequire(path.join(process.cwd(), "package.json"))` before requiring
+  workspace deps such as `@lydell/node-pty`.
+- For full-screen TUI/CLI bugs, a PTY harness is stronger than helper-only
+  assertions. Use a real PTY, wait for visible lifecycle markers, send input,
+  then send control keys and assert process exit/stuck behavior.
+- When validating a rebased local branch before push, remember delegated sync
+  usually validates synced file content on a detached dirty checkout, not a
+  remote commit object. Record the local head SHA, changed files, Testbox id,
+  and final success markers; after pushing, ensure the pushed SHA has the same
+  file content.
+- If GitHub CI is still queued but the exact changed content passed Testbox
+  `pnpm check:changed`, `pnpm check:test-types`, and the real E2E proof, it is
+  reasonable to merge once required checks allow it. Note any still-running
+  unrelated shards in the proof comment instead of waiting forever.
 
 Interactive CLI/onboarding:
 
@@ -327,7 +372,9 @@ Common Crabbox-only failures:
 - Slug/claim confusion: use the raw `tbx_...` id, or run one-shot without
   `--id`.
 - Sync/timing bug: add `--debug --timing-json`; capture the final JSON and the
-  printed Actions URL.
+  printed Actions URL. Large sync warnings now include top source directories
+  by file count and a hint to update `.crabboxignore` / `sync.exclude`; inspect
+  those before reaching for `--force-sync-large`.
 - Cleanup uncertainty: run `blacksmith testbox list` and stop only boxes you
   created.
 - Testbox queued/capacity pressure: do not convert a broad changed gate or full

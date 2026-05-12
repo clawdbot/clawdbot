@@ -22,19 +22,12 @@ function createFeishuToolRuntime(): PluginRuntime {
 }
 
 async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<"pending">((resolve) => {
-        timer = setTimeout(() => resolve("pending"), 0);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  return await Promise.race([
+    promise,
+    new Promise<"pending">((resolve) => {
+      setImmediate(() => resolve("pending"));
+    }),
+  ]);
 }
 
 function createDriveToolApi(params: {
@@ -59,8 +52,10 @@ function mockCallArg<T>(
   _type?: (value: unknown) => value is T,
 ): T {
   const call = mock.mock.calls[callIndex];
-  expect(call).toBeDefined();
-  return call?.[argIndex] as T;
+  if (!call) {
+    throw new Error(`Expected mock call at index ${callIndex}`);
+  }
+  return call[argIndex] as T;
 }
 
 type FeishuDriveRequest = {
@@ -640,7 +635,9 @@ describe("registerFeishuDriveTools", () => {
       client?: unknown;
       deliveryContext?: { channel?: string; threadId?: string; to?: string };
     }>(cleanupAmbientCommentTypingReactionMock, 0, 0);
-    expect(cleanupRequest.client).toBeDefined();
+    if (!cleanupRequest.client) {
+      throw new Error("Expected cleanup request client");
+    }
     expect(cleanupRequest.deliveryContext).toEqual({
       channel: "feishu",
       to: "comment:docx:doc_1:c1",
@@ -714,7 +711,9 @@ describe("registerFeishuDriveTools", () => {
       client?: unknown;
       deliveryContext?: { channel?: string; threadId?: string; to?: string };
     }>(cleanupAmbientCommentTypingReactionMock, 0, 0);
-    expect(cleanupRequest.client).toBeDefined();
+    if (!cleanupRequest.client) {
+      throw new Error("Expected cleanup request client");
+    }
     expect(cleanupRequest.deliveryContext).toEqual({
       channel: "feishu",
       to: "comment:docx:doc_1:c1",

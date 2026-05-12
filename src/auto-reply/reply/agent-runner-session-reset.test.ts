@@ -13,7 +13,13 @@ const refreshQueuedFollowupSessionMock = vi.fn();
 const errorMock = vi.fn();
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  let accessError: NodeJS.ErrnoException | undefined;
+  try {
+    await fs.access(targetPath);
+  } catch (error) {
+    accessError = error as NodeJS.ErrnoException;
+  }
+  expect(accessError?.code).toBe("ENOENT");
 }
 
 describe("resetReplyRunSession", () => {

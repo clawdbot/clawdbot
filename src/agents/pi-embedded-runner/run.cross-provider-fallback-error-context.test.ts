@@ -81,7 +81,7 @@ async function expectDeepseekFallbackError(
 ) {
   await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
   await expect(promise).rejects.toThrow(`deepseek/deepseek-chat: ${DEEPSEEK_ERROR_MESSAGE}`);
-  expect(mockedIsRateLimitAssistantError).toHaveBeenCalled();
+  expect(mockedIsRateLimitAssistantError).toHaveBeenCalledTimes(1);
   const rateLimitCalls = mockedIsRateLimitAssistantError.mock.calls as unknown[][];
   expectDeepseekAssistant(rateLimitCalls.at(-1)?.[0]);
   expectDeepseekAssistant(getLastFormattedAssistant());

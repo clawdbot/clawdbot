@@ -88,7 +88,8 @@ describe("sessions.send completed subagent follow-up status", () => {
     });
 
     const broadcastToConnIds = vi.fn();
-    const respond = vi.fn() as unknown as RespondFn;
+    const respondMock = vi.fn();
+    const respond = respondMock as unknown as RespondFn;
     const context = {
       chatAbortControllers: new Map(),
       broadcastToConnIds,
@@ -109,16 +110,15 @@ describe("sessions.send completed subagent follow-up status", () => {
       isWebchatConnect: () => false,
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        runId: "run-new",
-        status: "started",
-        messageSeq: 1,
-      }),
-      undefined,
-      undefined,
-    );
+    const call = respondMock.mock.calls[0] as
+      | [boolean, { runId?: string; status?: string; messageSeq?: number }, unknown?, unknown?]
+      | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]?.runId).toBe("run-new");
+    expect(call?.[1]?.status).toBe("started");
+    expect(call?.[1]?.messageSeq).toBe(1);
+    expect(call?.[2]).toBeUndefined();
+    expect(call?.[3]).toBeUndefined();
     expectSubagentFollowupReactivation({
       replaceSubagentRunAfterSteerMock,
       broadcastToConnIds,

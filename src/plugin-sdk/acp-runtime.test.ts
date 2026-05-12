@@ -50,6 +50,15 @@ const ctx = {
   markIdle: vi.fn(),
 };
 
+function expectDispatchPayloadFields(expected: Record<string, unknown>): void {
+  expect(dispatchMock).toHaveBeenCalledTimes(1);
+  const [payload] = dispatchMock.mock.calls.at(0) ?? [];
+  expect(payload).toBeTypeOf("object");
+  for (const [key, value] of Object.entries(expected)) {
+    expect((payload as Record<string, unknown>)[key]).toBe(value);
+  }
+}
+
 describe("tryDispatchAcpReplyHook", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -97,14 +106,12 @@ describe("tryDispatchAcpReplyHook", () => {
       queuedFinal: true,
       counts: { tool: 1, block: 2, final: 3 },
     });
-    expect(dispatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: event.ctx,
-        cfg: ctx.cfg,
-        dispatcher: ctx.dispatcher,
-        bypassForCommand: true,
-      }),
-    );
+    expectDispatchPayloadFields({
+      ctx: event.ctx,
+      cfg: ctx.cfg,
+      dispatcher: ctx.dispatcher,
+      bypassForCommand: true,
+    });
   });
 
   it("returns unhandled when ACP dispatcher declines the turn", async () => {
@@ -141,14 +148,11 @@ describe("tryDispatchAcpReplyHook", () => {
     // Non-tail, non-command ACP turns under deny must still flow through ACP
     // runtime so session/tool state stays consistent — delivery suppression is
     // handled inside the ACP delivery path via suppressUserDelivery.
-    expect(dispatchMock).toHaveBeenCalledOnce();
-    expect(dispatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        suppressUserDelivery: true,
-        suppressReplyLifecycle: true,
-        bypassForCommand: false,
-      }),
-    );
+    expectDispatchPayloadFields({
+      suppressUserDelivery: true,
+      suppressReplyLifecycle: true,
+      bypassForCommand: false,
+    });
     expect(result).toEqual({
       handled: true,
       queuedFinal: false,
@@ -204,10 +208,8 @@ describe("tryDispatchAcpReplyHook", () => {
     );
 
     expect(result).toBeUndefined();
-    expect(dispatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bypassForCommand: true,
-      }),
-    );
+    expectDispatchPayloadFields({
+      bypassForCommand: true,
+    });
   });
 });

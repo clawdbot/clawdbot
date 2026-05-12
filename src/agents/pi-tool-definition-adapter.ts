@@ -377,12 +377,15 @@ export function toClientToolDefinitions(
           }
           throw err;
         }
-        // Return a pending result - the client will execute this tool
-        return jsonResult({
-          status: "pending",
-          tool: func.name,
-          message: "Tool execution delegated to client",
-        });
+        // Return a terminal pending result; the client will execute the tool.
+        return {
+          ...jsonResult({
+            status: "pending",
+            tool: func.name,
+            message: "Tool execution delegated to client",
+          }),
+          terminate: true,
+        };
       },
     } satisfies ToolDefinition;
   });

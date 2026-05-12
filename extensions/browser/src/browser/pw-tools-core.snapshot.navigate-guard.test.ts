@@ -51,10 +51,11 @@ describe("pw-tools-core.snapshot navigate guard", () => {
 
   it("navigates valid network URLs with clamped timeout", async () => {
     const goto = vi.fn(async () => {});
-    setPwToolsCoreCurrentPage({
+    const page = {
       goto,
       url: vi.fn(() => "https://example.com"),
-    });
+    };
+    setPwToolsCoreCurrentPage(page);
 
     const result = await mod.navigateViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -66,7 +67,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     expect(goto).toHaveBeenCalledWith("https://example.com", { timeout: 1000 });
     expect(getPwToolsCoreSessionMocks().gotoPageWithNavigationGuard).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18792",
-      page: expect.anything(),
+      page,
       ssrfPolicy: { allowPrivateNetwork: true },
       targetId: undefined,
       timeoutMs: 1000,
@@ -74,7 +75,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     });
     expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18792",
-      page: expect.anything(),
+      page,
       response: null,
       ssrfPolicy: { allowPrivateNetwork: true },
       targetId: undefined,
@@ -125,10 +126,11 @@ describe("pw-tools-core.snapshot navigate guard", () => {
         }),
       }),
     }));
-    setPwToolsCoreCurrentPage({
+    const page = {
       goto,
       url: vi.fn(() => "https://93.184.216.34/final"),
-    });
+    };
+    setPwToolsCoreCurrentPage(page);
     getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely.mockRejectedValueOnce(
       new SsrFBlockedError("Blocked hostname or private/internal/special-use IP address"),
     );
@@ -152,7 +154,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     expect(getPwToolsCoreSessionMocks().closeBlockedNavigationTarget).toHaveBeenCalledTimes(1);
     expect(getPwToolsCoreSessionMocks().closeBlockedNavigationTarget).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18792",
-      page: expect.anything(),
+      page,
       targetId: undefined,
     });
   });

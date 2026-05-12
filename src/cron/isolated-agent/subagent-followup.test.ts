@@ -289,12 +289,14 @@ describe("waitForDescendantSubagentSummary", () => {
 
     expect(result).toBe("Morning briefing complete!");
     // agent.wait should have been called with the active run's ID
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "agent.wait",
-        params: expect.objectContaining({ runId: "run-abc" }),
-      }),
-    );
+    const gatewayCalls = (
+      callGateway as unknown as {
+        mock: { calls: Array<[{ method?: string; params?: { runId?: string } }]> };
+      }
+    ).mock.calls;
+    const waitCall = gatewayCalls.find(([request]) => request.method === "agent.wait")?.[0];
+    expect(waitCall?.method).toBe("agent.wait");
+    expect(waitCall?.params?.runId).toBe("run-abc");
   });
 
   it("returns undefined when descendants finish but only interim text remains after grace period", async () => {

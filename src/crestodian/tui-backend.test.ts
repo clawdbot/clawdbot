@@ -55,13 +55,21 @@ describe("runCrestodianTui", () => {
     );
 
     expect(runTuiCalls).toBe(1);
-    expect(runTuiOptions).toMatchObject({
-      local: true,
-      session: "agent:crestodian:main",
-      historyLimit: 200,
-      config: {},
-      title: "openclaw crestodian",
-    });
-    expect(runTuiOptions).toMatchObject({ backend: expect.any(Object) });
+    const options = runTuiOptions as {
+      local?: boolean;
+      session?: string;
+      historyLimit?: number;
+      config?: unknown;
+      title?: string;
+      backend?: unknown;
+    };
+    expect(options.local).toBe(true);
+    expect(options.session).toBe("agent:crestodian:main");
+    expect(options.historyLimit).toBe(200);
+    expect(options.config).toEqual({});
+    expect(options.title).toBe("openclaw crestodian");
+    if (!options.backend || typeof options.backend !== "object") {
+      throw new Error("expected crestodian TUI backend");
+    }
   });
 });

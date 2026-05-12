@@ -169,13 +169,11 @@ describeLive("buildOpenAIProvider live", () => {
         model: resolved,
       });
 
-      expect(normalized).toMatchObject({
-        provider: "openai",
-        id: liveCase.modelId,
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        reasoning: liveCase.reasoning,
-      });
+      expect(normalized?.provider).toBe("openai");
+      expect(normalized?.id).toBe(liveCase.modelId);
+      expect(normalized?.api).toBe("openai-responses");
+      expect(normalized?.baseUrl).toBe("https://api.openai.com/v1");
+      expect(normalized?.reasoning).toEqual(liveCase.reasoning);
 
       const client = new OpenAI({
         apiKey: OPENAI_API_KEY,

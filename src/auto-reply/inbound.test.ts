@@ -557,7 +557,7 @@ describe("createInboundDebouncer", () => {
 
     try {
       await expect(debouncer.enqueue({ key: "a", id: "1" })).resolves.toBeUndefined();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise<void>((resolve) => setImmediate(resolve));
       expect(unhandled).toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);

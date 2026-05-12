@@ -26,8 +26,6 @@ vi.mock("../../globals.js", () => ({
 }));
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`expected ${label} to be an object`);
   }
@@ -36,7 +34,6 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 
 function gatewayRequest(callIndex = 0) {
   const call = callGatewayMock.mock.calls[callIndex] as unknown[] | undefined;
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error(`expected gateway call ${callIndex}`);
   }

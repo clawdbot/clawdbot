@@ -86,6 +86,18 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function firstMockArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  return requireRecord(arg, `${label} input`);
+}
+
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
     expect(record[key]).toEqual(value);
@@ -134,7 +146,7 @@ describe("session binding service", () => {
 
     expect(result.conversation.channel).toBe("demo-binding");
     expect(result.conversation.accountId).toBe("default");
-    const bindInput = requireRecord(bind.mock.calls[0]?.[0], "bind input");
+    const bindInput = firstMockArg(bind, "bind");
     expect(bindInput.placement).toBe("current");
     expectConversationFields(bindInput.conversation, {
       channel: "demo-binding",

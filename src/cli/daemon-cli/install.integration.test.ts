@@ -156,10 +156,9 @@ describe("runDaemonInstall integration", () => {
     const updated = await readJson(configPath);
     const gateway = (updated.gateway ?? {}) as { auth?: { token?: string } };
     const persistedToken = gateway.auth?.token;
-    expect(typeof persistedToken).toBe("string");
-    expect((persistedToken ?? "").length).toBeGreaterThan(0);
+    expect(persistedToken).toEqual(expect.stringMatching(/^[0-9a-f]{48}$/));
 
-    const installEnv = serviceMock.install.mock.calls[0]?.[0]?.environment;
+    const installEnv = serviceMock.install.mock.calls.at(0)?.[0]?.environment;
     expect(installEnv?.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
   });
 });

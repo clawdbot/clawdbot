@@ -84,7 +84,7 @@ allowBuilds:
 packageExtensions:
   "@earendil-works/pi-coding-agent":
     dependencies:
-      strip-ansi: ^7.2.0
+      strip-ansi: 7.2.0
 
 peerDependencyRules:
   allowedVersions:

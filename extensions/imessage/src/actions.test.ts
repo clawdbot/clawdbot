@@ -14,6 +14,8 @@ const runtimeMock = vi.hoisted(() => ({
   sendAttachment: vi.fn(),
 }));
 
+const rememberIMessageReplyCacheMock = vi.hoisted(() => vi.fn());
+
 const loggerMock = vi.hoisted(() => ({
   warn: vi.fn(),
   info: vi.fn(),
@@ -46,6 +48,16 @@ vi.mock("./actions.runtime.js", () => ({
   imessageActionsRuntime: runtimeMock,
 }));
 
+vi.mock("./monitor-reply-cache.js", async () => {
+  const actual = await vi.importActual<typeof import("./monitor-reply-cache.js")>(
+    "./monitor-reply-cache.js",
+  );
+  return {
+    ...actual,
+    rememberIMessageReplyCache: rememberIMessageReplyCacheMock,
+  };
+});
+
 const { imessageMessageActions } = await import("./actions.js");
 
 function cfg(actions?: Record<string, boolean | undefined>): OpenClawConfig {
@@ -77,6 +89,7 @@ describe("imessage message actions", () => {
     runtimeMock.sendReaction.mockReset();
     runtimeMock.sendRichMessage.mockReset();
     runtimeMock.sendAttachment.mockReset();
+    rememberIMessageReplyCacheMock.mockReset();
     probeMock.getCachedIMessagePrivateApiStatus.mockReset();
     probeMock.probeIMessagePrivateApi.mockReset();
     loggerMock.warn.mockReset();
@@ -190,7 +203,7 @@ describe("imessage message actions", () => {
     ).rejects.toThrow(/imsg private API bridge/);
 
     expect(loggerMock.warn).toHaveBeenCalledTimes(1);
-    const warnArg = String(loggerMock.warn.mock.calls[0][0]);
+    const warnArg = String(loggerMock.warn.mock.calls.at(0)?.[0]);
     expect(warnArg).toMatch(/iMessage react blocked: private API bridge unavailable/);
     expect(warnArg).toMatch(/imsg launch/);
     expect(runtimeMock.sendReaction).not.toHaveBeenCalled();
@@ -371,6 +384,13 @@ describe("imessage message actions", () => {
         },
       ],
     ]);
+    expect(rememberIMessageReplyCacheMock).toHaveBeenCalledWith({
+      accountId: "default",
+      messageId: "reply-guid",
+      chatGuid: "iMessage;+;resolved-ident",
+      timestamp: expect.any(Number),
+      isFromMe: true,
+    });
   });
 
   describe("reply with attachment (openclaw/imsg#114 plumbing)", () => {

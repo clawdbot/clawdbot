@@ -135,6 +135,14 @@ async function waitForRealtimeTest(
   await vi.waitFor(callback, { interval: 1, ...options });
 }
 
+function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 describe("RealtimeCallHandler path routing", () => {
   it("uses the request host and stream path in TwiML", () => {
     const handler = makeHandler();
@@ -224,7 +232,9 @@ describe("RealtimeCallHandler path routing", () => {
           expect(createBridge).toHaveBeenCalled();
         });
         callbacks?.onReady?.();
-        const event = processEvent.mock.calls[0]?.[0] as NormalizedEvent | undefined;
+        const event = requireFirstMockCall(processEvent.mock.calls, "processed event")[0] as
+          | NormalizedEvent
+          | undefined;
         expect(event?.type).toBe("call.initiated");
         if (event?.type !== "call.initiated") {
           throw new Error("expected outbound realtime stream to emit call.initiated");
@@ -416,7 +426,6 @@ describe("RealtimeCallHandler path routing", () => {
         await waitForRealtimeTest(() => {
           const events = processEvent.mock.calls.map(([event]) => event as NormalizedEvent);
           const ended = events.find((event) => event.type === "call.ended");
-          expect(ended).toBeDefined();
           if (ended?.type !== "call.ended") {
             throw new Error("expected realtime stop to emit call.ended");
           }
@@ -704,12 +713,14 @@ describe("RealtimeCallHandler path routing", () => {
           const workingCall = submitToolResult.mock.calls.find(
             ([callId]) => callId === "consult-call",
           );
-          expect(workingCall).toBeDefined();
-          const payload = workingCall?.[1] as Record<string, unknown> | undefined;
+          if (!workingCall) {
+            throw new Error("expected consult-call tool result");
+          }
+          const payload = workingCall[1] as Record<string, unknown> | undefined;
           expect(payload?.status).toBe("working");
           expect(payload?.tool).toBe("openclaw_agent_consult");
           expect(typeof payload?.message).toBe("string");
-          expect(workingCall?.[2]).toEqual({ willContinue: true });
+          expect(workingCall[2]).toEqual({ willContinue: true });
         });
         expect(submitToolResult).toHaveBeenCalledTimes(1);
 
@@ -815,7 +826,7 @@ describe("RealtimeCallHandler path routing", () => {
         await waitForRealtimeTest(() => {
           expect(consult).toHaveBeenCalledTimes(1);
         });
-        const [args, callId, context] = consult.mock.calls[0] ?? [];
+        const [args, callId, context] = requireFirstMockCall(consult.mock.calls, "consult");
         expect(args).toEqual({
           question: "Create a smoke test file for me.",
           context:
@@ -824,9 +835,10 @@ describe("RealtimeCallHandler path routing", () => {
         expect(callId).toBe("call-1");
         expect(context).toEqual({});
         await waitForRealtimeTest(() => {
-          expect(sendUserMessage).toHaveBeenCalledWith(
-            expect.stringContaining("I created the smoke test file."),
-          );
+          expect(sendUserMessage).toHaveBeenCalledTimes(1);
+          expect(requireFirstMockCall(sendUserMessage.mock.calls, "user message")).toEqual([
+            "Internal OpenClaw consult result is ready.\nDo not call tools for this internal result.\nSpeak the following answer to the caller now, briefly and naturally:\nI created the smoke test file.",
+          ]);
         });
       } finally {
         vi.useRealTimers();
@@ -986,7 +998,7 @@ describe("RealtimeCallHandler path routing", () => {
           },
           { timeout: 2_000 },
         );
-        const [args, callId, context] = consult.mock.calls[0] ?? [];
+        const [args, callId, context] = requireFirstMockCall(consult.mock.calls, "consult");
         const consultArgs = args as { question?: string; context?: string } | undefined;
         expect(consultArgs?.question).toBe("Send a Discord message.");
         expect(consultArgs?.context).toBe(

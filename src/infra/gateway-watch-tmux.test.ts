@@ -18,16 +18,19 @@ const createOutput = () => {
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
 function spawnCall(mock: unknown, callIndex: number) {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
   const call = calls.at(callIndex);
-  expect(call, `spawn call ${callIndex + 1}`).toBeDefined();
-  return call as Array<unknown>;
+  if (!call) {
+    throw new Error(`Expected spawn call ${callIndex + 1}`);
+  }
+  return call;
 }
 
 function expectSpawn(mock: unknown, callIndex: number, command: string, args: Array<unknown>) {

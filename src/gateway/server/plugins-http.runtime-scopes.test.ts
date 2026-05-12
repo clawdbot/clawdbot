@@ -8,7 +8,7 @@ import {
 } from "../../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
-import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
+import { authorizeOperatorScopesForMethod, CLI_DEFAULT_OPERATOR_SCOPES } from "../method-scopes.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
 import { createTestRegistry } from "./__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./plugins-http.js";
@@ -122,7 +122,9 @@ describe("plugin HTTP route runtime scopes", () => {
     expect(res.statusCode).toBe(500);
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
     expect(end).toHaveBeenCalledWith("Internal Server Error");
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("missing scope: operator.write"));
+    expect(log.warn).toHaveBeenCalledWith(
+      "plugin http route failed (route): Error: missing scope: operator.write",
+    );
   });
 
   it("preserves write-capable runtime helpers on gateway-auth routes", async () => {
@@ -148,7 +150,7 @@ describe("plugin HTTP route runtime scopes", () => {
     expect(handled).toBe(false);
     expect(res.statusCode).toBe(200);
     expect(log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("blocked without caller scope context"),
+      "plugin http route blocked without caller scope context (/secure-hook)",
     );
   });
 
@@ -164,7 +166,9 @@ describe("plugin HTTP route runtime scopes", () => {
     expect(res.statusCode).toBe(500);
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
     expect(end).toHaveBeenCalledWith("Internal Server Error");
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("missing scope: operator.write"));
+    expect(log.warn).toHaveBeenCalledWith(
+      "plugin http route failed (route): Error: missing scope: operator.write",
+    );
   });
 
   it("restores trusted-operator defaults for routes opting into trusted surface", async () => {
@@ -204,9 +208,7 @@ describe("plugin HTTP route runtime scopes", () => {
     expect(handled).toBe(true);
     expect(response.res.statusCode).toBe(200);
     expect(log.warn).not.toHaveBeenCalled();
-    expect(observedScopes).toEqual(
-      expect.arrayContaining(["operator.admin", "operator.read", "operator.write"]),
-    );
+    expect(observedScopes).toEqual(CLI_DEFAULT_OPERATOR_SCOPES);
   });
 
   it("scopes runtime privileges per matched route for exact/prefix overlap", async () => {
@@ -269,9 +271,7 @@ describe("plugin HTTP route runtime scopes", () => {
       scopes: ["operator.write"],
     });
     expect(observed[1]?.route).toBe("prefix");
-    expect(observed[1]?.scopes).toEqual(
-      expect.arrayContaining(["operator.admin", "operator.read", "operator.write"]),
-    );
+    expect(observed[1]?.scopes).toEqual(CLI_DEFAULT_OPERATOR_SCOPES);
   });
 
   it.each([

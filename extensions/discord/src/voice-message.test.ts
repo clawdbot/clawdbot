@@ -63,7 +63,11 @@ describe("ensureOggOpus", () => {
   }
 
   function readSingleCommandArgs(mock: typeof runFfprobeMock | typeof runFfmpegMock): string[] {
-    const args = mock.mock.calls[0]?.[0];
+    const [call] = mock.mock.calls;
+    if (!call) {
+      throw new Error("missing command call");
+    }
+    const [args] = call;
     if (!Array.isArray(args) || !args.every((arg): arg is string => typeof arg === "string")) {
       throw new Error("missing command args");
     }

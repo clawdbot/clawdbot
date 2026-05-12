@@ -125,18 +125,30 @@ describe("gateway restart deferral preflight", () => {
         },
       );
 
-      expect(logReload.warn).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "restart blocked by active background task run(s): taskId=task-nightly",
-        ),
-      );
-      expect(logReload.warn).toHaveBeenCalledWith(expect.stringContaining("runId=run-nightly"));
+      expect(logReload.warn.mock.calls).toEqual([
+        [
+          "config change requires gateway restart (gateway.port) — deferring until 1 background task run(s) complete",
+        ],
+        [
+          "restart blocked by active background task run(s): taskId=task-nightly runId=run-nightly status=running runtime=cron label=nightly sync title=refresh all accounts",
+        ],
+      ]);
 
       await vi.advanceTimersByTimeAsync(1_000);
       await Promise.resolve();
 
       expect(signalSpy).toHaveBeenCalledTimes(1);
-      expect(logReload.warn).toHaveBeenCalledWith(expect.stringContaining("; forcing restart"));
+      expect(logReload.warn.mock.calls).toEqual([
+        [
+          "config change requires gateway restart (gateway.port) — deferring until 1 background task run(s) complete",
+        ],
+        [
+          "restart blocked by active background task run(s): taskId=task-nightly runId=run-nightly status=running runtime=cron label=nightly sync title=refresh all accounts",
+        ],
+        [
+          "restart timeout after 1000ms with 1 background task run(s) still active (taskId=task-nightly runId=run-nightly status=running runtime=cron label=nightly sync title=refresh all accounts); forcing restart",
+        ],
+      ]);
     } finally {
       hoisted.activeTaskCount.value = 0;
       vi.useRealTimers();
@@ -233,16 +245,16 @@ describe("gateway plugin hot reload handlers", () => {
       }
     }
 
-    expect(reloadPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nextConfig: {
-          plugins: {
-            enabled: false,
-          },
-        },
-        changedPaths: ["plugins.enabled"],
-      }),
-    );
+    const [reloadParams] = reloadPlugins.mock.calls.at(-1) ?? [];
+    const reloadParamsRecord = reloadParams as
+      | { nextConfig?: unknown; changedPaths?: unknown }
+      | undefined;
+    expect(reloadParamsRecord?.nextConfig).toEqual({
+      plugins: {
+        enabled: false,
+      },
+    });
+    expect(reloadParamsRecord?.changedPaths).toEqual(["plugins.enabled"]);
     expect(stopChannel).toHaveBeenCalledWith("discord");
     expect(startChannel).not.toHaveBeenCalled();
     expect(events).toEqual(["reload:start", "stop", "registry:replace"]);

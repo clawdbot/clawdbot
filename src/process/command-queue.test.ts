@@ -48,6 +48,18 @@ function createDeferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
+function mockCallArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  label: string,
+  argIndex: number,
+): unknown {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call[argIndex];
+}
+
 function enqueueBlockedMainTask<T = void>(
   onRelease?: () => Promise<T> | T,
 ): {
@@ -153,7 +165,7 @@ describe("command queue", () => {
     const task = enqueueCommand(async () => {});
 
     expect(diagnosticMocks.logLaneEnqueue).toHaveBeenCalledTimes(1);
-    expect(diagnosticMocks.logLaneEnqueue.mock.calls[0]?.[1]).toBe(1);
+    expect(mockCallArg(diagnosticMocks.logLaneEnqueue, "logLaneEnqueue", 1)).toBe(1);
 
     await task;
   });

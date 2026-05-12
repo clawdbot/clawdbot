@@ -44,7 +44,7 @@ export type CodexPluginThreadConfigProvider = {
   build: () => Promise<CodexPluginThreadConfig>;
 };
 
-const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
+export const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   "features.code_mode": true,
   "features.code_mode_only": true,
 };
@@ -348,7 +348,7 @@ export function buildThreadResumeParams(
   };
 }
 
-function buildCodexRuntimeThreadConfig(config: JsonObject | undefined): JsonObject {
+export function buildCodexRuntimeThreadConfig(config: JsonObject | undefined): JsonObject {
   return (
     mergeCodexThreadConfigs(config, CODEX_CODE_MODE_THREAD_CONFIG) ?? {
       ...CODEX_CODE_MODE_THREAD_CONFIG,
@@ -528,7 +528,7 @@ function buildUserInput(
   ];
 }
 
-function resolveCodexAppServerModelProvider(params: {
+export function resolveCodexAppServerModelProvider(params: {
   provider: string;
   authProfileId?: string;
   authProfileStore?: CodexAppServerAuthProfileLookup["authProfileStore"];

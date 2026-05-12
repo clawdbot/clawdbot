@@ -24,7 +24,7 @@ describe("renderTable", () => {
     });
 
     expect(out).toContain("Dashboard");
-    expect(out).toMatch(/│ Dashboard\s+│/);
+    expect(out).toMatch(/[│|] Dashboard\s+[│|]/);
   });
 
   it("expands flex columns to fill available width", () => {
@@ -86,7 +86,7 @@ describe("renderTable", () => {
     const lines = out.split("\n").filter((line) => line.includes("a"));
     for (const line of lines) {
       const resetIndex = line.lastIndexOf(reset);
-      const lastSep = line.lastIndexOf("│");
+      const lastSep = Math.max(line.lastIndexOf("│"), line.lastIndexOf("|"));
       expect(resetIndex).toBeGreaterThan(-1);
       expect(lastSep).toBeGreaterThan(resetIndex);
     }
@@ -278,5 +278,13 @@ describe("wrapNoteMessage", () => {
     expect(resolveNoteColumns(1)).toBe(80);
     expect(resolveNoteColumns(79)).toBe(80);
     expect(resolveNoteColumns(120)).toBe(120);
+  });
+
+  it("coerces nullish and non-string note messages before wrapping", () => {
+    expect(wrapNoteMessage(undefined, { maxWidth: 20, columns: 80 })).toBe("");
+    expect(wrapNoteMessage(null, { maxWidth: 20, columns: 80 })).toBe("");
+    expect(wrapNoteMessage(12345, { maxWidth: 20, columns: 80 })).toBe("12345");
+    expect(wrapNoteMessage(new Error("boom"), { maxWidth: 20, columns: 80 })).toBe("Error: boom");
+    expect(wrapNoteMessage({ message: "boom" }, { maxWidth: 20, columns: 80 })).toBe("");
   });
 });

@@ -80,7 +80,17 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 function requireSendOptions(
   mockedSend: ReturnType<typeof vi.mocked<(typeof import("./send.js"))["sendMessageZalouser"]>>,
 ): Record<string, unknown> {
-  return requireRecord(mockedSend.mock.calls[0]?.[2], "Zalouser send options");
+  return requireRecord(requireSendCall(mockedSend)[2], "Zalouser send options");
+}
+
+function requireSendCall(
+  mockedSend: ReturnType<typeof vi.mocked<(typeof import("./send.js"))["sendMessageZalouser"]>>,
+): unknown[] {
+  const [call] = mockedSend.mock.calls as unknown[][];
+  if (!call) {
+    throw new Error("expected Zalouser send call");
+  }
+  return call;
 }
 
 describe("zalouserPlugin outbound sendPayload", () => {
@@ -109,8 +119,9 @@ describe("zalouserPlugin outbound sendPayload", () => {
     });
 
     expect(mockedSend).toHaveBeenCalledOnce();
-    expect(mockedSend.mock.calls[0]?.[0]).toBe("1471383327500481391");
-    expect(mockedSend.mock.calls[0]?.[1]).toBe("hello group");
+    const sendCall = requireSendCall(mockedSend);
+    expect(sendCall[0]).toBe("1471383327500481391");
+    expect(sendCall[1]).toBe("hello group");
     const options = requireSendOptions(mockedSend);
     expect(options.isGroup).toBe(true);
     expect(options.textMode).toBe("markdown");
@@ -128,8 +139,9 @@ describe("zalouserPlugin outbound sendPayload", () => {
     });
 
     expect(mockedSend).toHaveBeenCalledOnce();
-    expect(mockedSend.mock.calls[0]?.[0]).toBe("987654321");
-    expect(mockedSend.mock.calls[0]?.[1]).toBe("hello");
+    const sendCall = requireSendCall(mockedSend);
+    expect(sendCall[0]).toBe("987654321");
+    expect(sendCall[1]).toBe("hello");
     const options = requireSendOptions(mockedSend);
     expect(options.isGroup).toBe(false);
     expect(options.textMode).toBe("markdown");
@@ -147,8 +159,9 @@ describe("zalouserPlugin outbound sendPayload", () => {
     });
 
     expect(mockedSend).toHaveBeenCalledOnce();
-    expect(mockedSend.mock.calls[0]?.[0]).toBe("g-1471383327500481391");
-    expect(mockedSend.mock.calls[0]?.[1]).toBe("hello native group");
+    const sendCall = requireSendCall(mockedSend);
+    expect(sendCall[0]).toBe("g-1471383327500481391");
+    expect(sendCall[1]).toBe("hello native group");
     const options = requireSendOptions(mockedSend);
     expect(options.isGroup).toBe(true);
     expect(options.textMode).toBe("markdown");
@@ -167,8 +180,9 @@ describe("zalouserPlugin outbound sendPayload", () => {
     });
 
     expect(mockedSend).toHaveBeenCalledTimes(1);
-    expect(mockedSend.mock.calls[0]?.[0]).toBe("987654321");
-    expect(mockedSend.mock.calls[0]?.[1]).toBe(text);
+    const sendCall = requireSendCall(mockedSend);
+    expect(sendCall[0]).toBe("987654321");
+    expect(sendCall[1]).toBe(text);
     const options = requireSendOptions(mockedSend);
     expect(options.isGroup).toBe(false);
     expect(options.textMode).toBe("markdown");

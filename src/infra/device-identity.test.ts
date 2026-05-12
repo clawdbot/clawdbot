@@ -92,13 +92,17 @@ describe("device identity crypto helpers", () => {
           signDevicePayload(loaded.privateKeyPem, "hello"),
         ),
       ).toBe(true);
-      expect(stored).toMatchObject({
-        version: 1,
-        deviceId: SWIFT_RAW_DEVICE_ID,
-        publicKeyPem: expect.stringContaining("BEGIN PUBLIC KEY"),
-        privateKeyPem: expect.stringContaining("BEGIN PRIVATE KEY"),
-        createdAtMs: 1_700_000_000_000,
-      });
+      expect(stored.version).toBe(1);
+      expect(stored.deviceId).toBe(SWIFT_RAW_DEVICE_ID);
+      expect(typeof stored.publicKeyPem).toBe("string");
+      expect(typeof stored.privateKeyPem).toBe("string");
+      const publicKeyPem = stored.publicKeyPem as string;
+      const privateKeyPem = stored.privateKeyPem as string;
+      expect(publicKeyPem.startsWith("-----BEGIN PUBLIC KEY-----\n")).toBe(true);
+      expect(publicKeyPem.endsWith("-----END PUBLIC KEY-----\n")).toBe(true);
+      expect(privateKeyPem.startsWith("-----BEGIN PRIVATE KEY-----\n")).toBe(true);
+      expect(privateKeyPem.endsWith("-----END PRIVATE KEY-----\n")).toBe(true);
+      expect(stored.createdAtMs).toBe(1_700_000_000_000);
       expect(stored).not.toHaveProperty("publicKey");
       expect(stored).not.toHaveProperty("privateKey");
     });

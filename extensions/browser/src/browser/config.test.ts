@@ -706,15 +706,22 @@ describe("browser config", () => {
       },
     });
     const profile = resolveProfile(resolved, "chrome-live");
-    expect(profile).toMatchObject({
+    expect(profile).toStrictEqual({
+      name: "chrome-live",
       driver: "existing-session",
       attachOnly: true,
       cdpPort: 0,
       cdpUrl: "",
+      cdpHost: "",
       cdpIsLoopback: true,
       color: "#00AA00",
+      executablePath: undefined,
+      headless: false,
+      headlessSource: "default",
+      mcpArgs: undefined,
+      mcpCommand: undefined,
+      userDataDir: undefined,
     });
-    expect(profile?.userDataDir).toBeUndefined();
   });
 
   it("expands tilde-prefixed userDataDir for existing-session profiles", () => {

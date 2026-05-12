@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { VERSION } from "../version.js";
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
@@ -24,8 +25,8 @@ describe("transcribeOpenAiCompatibleAudio", () => {
 
     const headers = new Headers(getRequest().init?.headers);
     expect(headers.get("originator")).toBe("openclaw");
-    expect(headers.get("version")).toEqual(expect.stringMatching(/\S/u));
-    expect(headers.get("user-agent")).toMatch(/^openclaw\//);
+    expect(headers.get("version")).toBe(VERSION);
+    expect(headers.get("user-agent")).toBe(`openclaw/${VERSION}`);
   });
 
   it("does not add hidden attribution headers on custom OpenAI-compatible hosts", async () => {

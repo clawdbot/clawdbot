@@ -71,7 +71,6 @@ describe("applyPluginNodeInvokePolicy", () => {
       params: { path: "/tmp/x" },
     });
 
-    expect(result).not.toBeNull();
     if (result === null) {
       throw new Error("expected plugin policy failure");
     }

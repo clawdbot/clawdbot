@@ -55,6 +55,34 @@ function resetClassicMocks(): void {
   vi.clearAllMocks();
 }
 
+function readMockCall(mock: ReturnType<typeof vi.fn>, callIndex: number): unknown[] {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected mock call #${callIndex + 1}`);
+  }
+  return call;
+}
+
+function readMockCallArg(mock: ReturnType<typeof vi.fn>, callIndex: number, argIndex: number) {
+  const call = readMockCall(mock, callIndex);
+  if (argIndex >= call.length) {
+    throw new Error(`expected mock call #${callIndex + 1} argument #${argIndex + 1}`);
+  }
+  return call[argIndex];
+}
+
+function readRecordArg(
+  mock: ReturnType<typeof vi.fn>,
+  callIndex: number,
+  argIndex: number,
+): Record<string, unknown> {
+  const arg = readMockCallArg(mock, callIndex, argIndex);
+  if (!arg || typeof arg !== "object") {
+    throw new Error(`expected mock call #${callIndex + 1} object argument #${argIndex + 1}`);
+  }
+  return arg as Record<string, unknown>;
+}
+
 describe("sendDiscordComponentMessage", () => {
   let registerMock: ReturnType<typeof vi.mocked<typeof registerDiscordComponentEntries>>;
 
@@ -95,8 +123,10 @@ describe("sendDiscordComponentMessage", () => {
     );
 
     expect(registerMock).toHaveBeenCalledTimes(1);
-    const args = registerMock.mock.calls[0]?.[0];
-    expect(args?.entries[0]?.sessionKey).toBe("agent:main:discord:channel:dm-1");
+    const args = readRecordArg(registerMock, 0, 0);
+    expect((args.entries as Array<{ sessionKey?: string }>)[0]?.sessionKey).toBe(
+      "agent:main:discord:channel:dm-1",
+    );
   });
 
   it("edits component messages and refreshes component registry entries", async () => {
@@ -124,15 +154,20 @@ describe("sendDiscordComponentMessage", () => {
     );
 
     expect(patchMock).toHaveBeenCalledTimes(1);
-    const [patchUrl, patchRequest] = patchMock.mock.calls[0] ?? [];
+    const [patchUrl, patchRequest] = readMockCall(patchMock, 0) as [
+      string,
+      { body?: { flags?: unknown; components?: unknown[] } },
+    ];
     expect(patchUrl).toContain("/channels/chan-1/messages/msg1");
     expect(patchRequest?.body?.flags).toBe(MessageFlags.IsComponentsV2);
     expect(Array.isArray(patchRequest?.body?.components)).toBe(true);
     expect(patchRequest?.body?.components).toHaveLength(1);
     expect(registerMock).toHaveBeenCalledTimes(1);
-    const args = registerMock.mock.calls[0]?.[0];
-    expect(args?.messageId).toBe("msg1");
-    expect(args?.entries[0]?.sessionKey).toBe("agent:main:discord:channel:chan-1");
+    const args = readRecordArg(registerMock, 0, 0);
+    expect(args.messageId).toBe("msg1");
+    expect((args.entries as Array<{ sessionKey?: string }>)[0]?.sessionKey).toBe(
+      "agent:main:discord:channel:chan-1",
+    );
   });
 
   it("registers a prebuilt component message against an edited message id", () => {
@@ -175,7 +210,7 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
     );
 
     expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageDiscordMock.mock.calls[0]).toEqual([
+    expect(readMockCall(sendMessageDiscordMock, 0)).toEqual([
       "channel:chan-1",
       "report",
       {
@@ -227,12 +262,16 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
     expect(sendMessageDiscordMock).not.toHaveBeenCalled();
     expect(postMock).toHaveBeenCalledTimes(1);
     expect(registerMock).toHaveBeenCalledTimes(1);
-    const registration = registerMock.mock.calls[0]?.[0];
-    expect(registration?.messageId).toBe("msg1");
-    expect(registration?.modals).toHaveLength(1);
-    expect(registration?.modals[0]?.title).toBe("Feedback");
-    expect(registration?.modals[0]?.fields).toHaveLength(1);
-    expect(registration?.modals[0]?.fields[0]?.label).toBe("Notes");
+    const registration = readRecordArg(registerMock, 0, 0);
+    const modals = registration.modals as Array<{
+      title?: string;
+      fields?: Array<{ label?: string }>;
+    }>;
+    expect(registration.messageId).toBe("msg1");
+    expect(modals).toHaveLength(1);
+    expect(modals[0]?.title).toBe("Feedback");
+    expect(modals[0]?.fields).toHaveLength(1);
+    expect(modals[0]?.fields?.[0]?.label).toBe("Notes");
   });
 
   it("keeps spoiler file blocks on the component path", async () => {

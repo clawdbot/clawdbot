@@ -20,8 +20,9 @@ import {
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
 function expectObject(value: unknown) {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected object");
+  }
 }
 
 test("sessions.delete rejects main and aborts active runs", async () => {
@@ -368,9 +369,9 @@ test("sessions.delete returns unavailable when active run does not stop", async 
   >;
   expect(store["agent:main:discord:group:dev"]?.sessionId).toBe("sess-active");
   const filesAfterDeleteAttempt = await fs.readdir(dir);
-  expect(filesAfterDeleteAttempt).not.toContainEqual(
-    expect.stringMatching(/^sess-active\.jsonl\.deleted\./),
-  );
+  expect(
+    filesAfterDeleteAttempt.filter((fileName) => fileName.startsWith("sess-active.jsonl.deleted.")),
+  ).toEqual([]);
 
   ws.close();
 });

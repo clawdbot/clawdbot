@@ -41,7 +41,6 @@ describe("config doc baseline integration", () => {
     entryPath: string,
   ): ConfigDocBaselineEntry {
     const entry = byPath.get(entryPath);
-    expect(entry).toBeDefined();
     if (!entry) {
       throw new Error(`expected config doc baseline entry for ${entryPath}`);
     }

@@ -7,7 +7,6 @@ import {
 } from "./inline-eval.js";
 
 function expectInlineEvalDescription(hit: InterpreterInlineEvalHit | null, expected: string) {
-  expect(hit).not.toBeNull();
   if (hit === null) {
     throw new Error(`Expected inline eval hit for ${expected}`);
   }

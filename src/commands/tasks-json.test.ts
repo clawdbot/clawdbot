@@ -21,7 +21,11 @@ function createRuntime(): RuntimeEnv {
 }
 
 function readJsonLog(runtime: RuntimeEnv): unknown {
-  return JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]));
+  const [call] = vi.mocked(runtime.log).mock.calls;
+  if (!call) {
+    throw new Error("expected runtime log call");
+  }
+  return JSON.parse(String(call[0]));
 }
 
 async function withTaskJsonStateDir(run: () => Promise<void>): Promise<void> {
@@ -56,7 +60,7 @@ describe("tasks JSON commands", () => {
 
   it("lists task records with runtime and status filters", async () => {
     await withTaskJsonStateDir(async () => {
-      createTaskRecord({
+      const cliTask = createTaskRecord({
         runtime: "cli",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -76,19 +80,12 @@ describe("tasks JSON commands", () => {
       const runtime = createRuntime();
       await tasksListJsonCommand({ json: true, runtime: "cli", status: "running" }, runtime);
 
-      const payload = readJsonLog(runtime) as {
-        count: number;
-        runtime: string | null;
-        status: string | null;
-        tasks: Array<{ runtime: string; status: string; runId: string }>;
-      };
-      expect(payload.count).toBe(1);
-      expect(payload.runtime).toBe("cli");
-      expect(payload.status).toBe("running");
-      expect(payload.tasks).toHaveLength(1);
-      expect(payload.tasks[0]?.runtime).toBe("cli");
-      expect(payload.tasks[0]?.status).toBe("running");
-      expect(payload.tasks[0]?.runId).toBe("run-cli");
+      expect(readJsonLog(runtime)).toStrictEqual({
+        count: 1,
+        runtime: "cli",
+        status: "running",
+        tasks: [JSON.parse(JSON.stringify(cliTask))],
+      });
     });
   });
 
@@ -126,31 +123,57 @@ describe("tasks JSON commands", () => {
       const runtime = createRuntime();
       await tasksAuditJsonCommand({ json: true, limit: 1 }, runtime);
 
-      const payload = readJsonLog(runtime) as {
-        count: number;
-        filteredCount: number;
-        displayed: number;
-        filters: { limit: number | null };
+      expect(readJsonLog(runtime)).toStrictEqual({
+        count: 5,
+        filteredCount: 5,
+        displayed: 1,
+        filters: {
+          severity: null,
+          code: null,
+          limit: 1,
+        },
         summary: {
-          byCode: Record<string, number>;
-          taskFlows: { byCode: Record<string, number> };
-          combined: { total: number; errors: number; warnings: number };
-        };
-        findings: Array<{ kind: string; code: string; token?: string }>;
-      };
-      expect(payload.count).toBe(5);
-      expect(payload.filteredCount).toBe(5);
-      expect(payload.displayed).toBe(1);
-      expect(payload.filters.limit).toBe(1);
-      expect(payload.summary.byCode.stale_running).toBe(1);
-      expect(payload.summary.taskFlows.byCode.stale_running).toBe(1);
-      expect(payload.summary.taskFlows.byCode.stale_waiting).toBe(1);
-      expect(payload.summary.taskFlows.byCode.missing_linked_tasks).toBe(2);
-      expect(payload.summary.combined).toEqual({ total: 5, errors: 3, warnings: 2 });
-      expect(payload.findings).toHaveLength(1);
-      expect(payload.findings[0]?.kind).toBe("task_flow");
-      expect(payload.findings[0]?.code).toBe("stale_running");
-      expect(payload.findings[0]?.token).toBe(runningFlow.flowId);
+          total: 1,
+          warnings: 0,
+          errors: 1,
+          byCode: {
+            stale_queued: 0,
+            stale_running: 1,
+            lost: 0,
+            delivery_failed: 0,
+            missing_cleanup: 0,
+            inconsistent_timestamps: 0,
+          },
+          taskFlows: {
+            total: 4,
+            warnings: 2,
+            errors: 2,
+            byCode: {
+              restore_failed: 0,
+              stale_running: 1,
+              stale_waiting: 1,
+              stale_blocked: 0,
+              cancel_stuck: 0,
+              missing_linked_tasks: 2,
+              blocked_task_missing: 0,
+              inconsistent_timestamps: 0,
+            },
+          },
+          combined: { total: 5, errors: 3, warnings: 2 },
+        },
+        findings: [
+          {
+            kind: "task_flow",
+            severity: "error",
+            code: "stale_running",
+            detail: "running TaskFlow has not advanced recently",
+            ageMs: 45 * 60_000,
+            status: "running",
+            token: runningFlow.flowId,
+            flow: JSON.parse(JSON.stringify(runningFlow)),
+          },
+        ],
+      });
     });
   });
 });

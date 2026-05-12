@@ -72,19 +72,33 @@ async function writeWorkspacePlugin(params: {
 }
 
 async function readCounterWithRetry(filePath: string): Promise<number> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    try {
-      const raw = await fs.readFile(filePath, "utf8");
-      const parsed = Number.parseInt(raw.trim(), 10);
-      if (Number.isFinite(parsed)) {
-        return parsed;
-      }
-    } catch {
-      // Wait briefly for gateway startup to finish plugin registration.
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+  let counter: number | undefined;
+  try {
+    await expect
+      .poll(
+        async () => {
+          try {
+            const raw = await fs.readFile(filePath, "utf8");
+            const parsed = Number.parseInt(raw.trim(), 10);
+            if (Number.isFinite(parsed)) {
+              counter = parsed;
+              return true;
+            }
+          } catch {
+            // Wait briefly for gateway startup to finish plugin registration.
+          }
+          return false;
+        },
+        { timeout: 1_000, interval: 50 },
+      )
+      .toBe(true);
+  } catch {
+    throw new Error(`timed out waiting for counter file: ${filePath}`);
   }
-  throw new Error(`timed out waiting for counter file: ${filePath}`);
+  if (counter === undefined) {
+    throw new Error(`timed out waiting for counter file: ${filePath}`);
+  }
+  return counter;
 }
 
 async function setupGatewayTempHome(params: { prefix: string; minimalGateway?: boolean }) {

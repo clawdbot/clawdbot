@@ -59,7 +59,6 @@ function findSession(
     (candidate): candidate is Record<string, unknown> =>
       isRecord(candidate) && candidate.key === sessionKey,
   );
-  expect(session, sessionKey).toBeDefined();
   if (!session) {
     throw new Error(`Missing session ${sessionKey}`);
   }

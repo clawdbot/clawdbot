@@ -62,7 +62,11 @@ const createWritableStreamMock = () => {
 };
 
 function requireFirstWrite(write: ReturnType<typeof vi.fn>): string {
-  const value = write.mock.calls[0]?.[0];
+  const [call] = write.mock.calls;
+  if (!call) {
+    throw new Error("expected systemd status write");
+  }
+  const [value] = call;
   if (value === undefined) {
     throw new Error("expected systemd status write");
   }
@@ -1195,7 +1199,13 @@ describe("systemd service install and uninstall", () => {
       const { write, stdout } = createWritableStreamMock();
       await uninstallSystemdService({ env, stdout });
 
-      await expect(fs.access(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
+      let accessError: NodeJS.ErrnoException | undefined;
+      try {
+        await fs.access(unitPath);
+      } catch (error) {
+        accessError = error as NodeJS.ErrnoException;
+      }
+      expect(accessError?.code).toBe("ENOENT");
       expect(requireFirstWrite(write)).toContain("Removed systemd service");
       expect(execFileMock).toHaveBeenCalledTimes(2);
     });

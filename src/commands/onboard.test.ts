@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { onboardCommand, setupWizardCommand } from "./onboard.js";
 
@@ -66,10 +67,10 @@ describe("setupWizardCommand", () => {
       runtime,
     );
 
+    expect(runtime.error).toHaveBeenCalledOnce();
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining('Invalid --secret-input-mode. Use "plaintext" or "ref", or run '),
+      `Invalid --secret-input-mode. Use "plaintext" or "ref", or run ${formatCliCommand("openclaw onboard")} for the interactive setup.`,
     );
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("onboard"));
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
@@ -161,12 +162,10 @@ describe("setupWizardCommand", () => {
       runtime,
     );
 
+    expect(runtime.error).toHaveBeenCalledOnce();
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Invalid --reset-scope. Use "config", "config+creds+sessions", or "full".',
-      ),
+      `Invalid --reset-scope. Use "config", "config+creds+sessions", or "full". Run ${formatCliCommand("openclaw onboard --reset --reset-scope config")} for a config-only reset.`,
     );
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("config-only reset"));
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.handleReset).not.toHaveBeenCalled();
     expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();

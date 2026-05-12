@@ -88,11 +88,11 @@ describe("Matrix IndexedDB persistence", () => {
 
     const restored = await restoreIdbFromDisk(snapshotPath);
     expect(restored).toBe(false);
-    expect(warnSpy).toHaveBeenCalledWith(
-      "IdbPersistence",
-      expect.stringContaining(`Failed to restore IndexedDB snapshot from ${snapshotPath}:`),
-      expect.any(Error),
-    );
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const [scope, message, error] = warnSpy.mock.calls.at(0) ?? [];
+    expect(scope).toBe("IdbPersistence");
+    expect(message).toBe(`Failed to restore IndexedDB snapshot from ${snapshotPath}:`);
+    expect(error).toBeInstanceOf(Error);
   });
 
   it("returns false for empty snapshot payloads without restoring databases", async () => {

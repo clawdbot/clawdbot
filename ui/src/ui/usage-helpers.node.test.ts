@@ -36,10 +36,7 @@ describe("usage-helpers", () => {
   it("warns on unknown keys and invalid numbers", () => {
     const session = { key: "a", usage: { totalTokens: 10, totalCost: 0 } };
     const res = filterSessionsByQuery([session], "wat:1 minTokens:wat");
-    expect(res.warnings).toEqual([
-      expect.stringContaining("Unknown filter"),
-      expect.stringContaining("Invalid number"),
-    ]);
+    expect(res.warnings).toEqual(["Unknown filter: wat", "Invalid number for minTokens"]);
   });
 
   it("parses tool summaries from compact session logs", () => {

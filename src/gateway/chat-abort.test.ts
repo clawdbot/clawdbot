@@ -1,10 +1,27 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   abortChatRunById,
   isChatStopCommandText,
   type ChatAbortOps,
   type ChatAbortControllerEntry,
 } from "./chat-abort.js";
+
+type ChatAbortPayload = {
+  runId: string;
+  sessionKey: string;
+  seq: number;
+  state: "aborted";
+  stopReason?: string;
+  message?: {
+    role: "assistant";
+    content: Array<{ type: "text"; text: string }>;
+    timestamp: number;
+  };
+};
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function createActiveEntry(sessionKey: string): ChatAbortControllerEntry {
   const now = Date.now();
@@ -64,6 +81,9 @@ describe("isChatStopCommandText", () => {
 
 describe("abortChatRunById", () => {
   it("broadcasts aborted payload with partial message when buffered text exists", () => {
+    const now = new Date("2026-01-02T03:04:05.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
     const runId = "run-1";
     const sessionKey = "main";
     const entry = createActiveEntry(sessionKey);
@@ -85,23 +105,19 @@ describe("abortChatRunById", () => {
     expect(ops.agentRunSeq.has("client-run-1")).toBe(false);
 
     expect(ops.broadcast).toHaveBeenCalledTimes(1);
-    const payload = ops.broadcast.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(payload).toEqual(
-      expect.objectContaining({
-        runId,
-        sessionKey,
-        seq: 3,
-        state: "aborted",
-        stopReason: "user",
-      }),
-    );
-    expect(payload.message).toEqual(
-      expect.objectContaining({
+    const payload = ops.broadcast.mock.calls[0]?.[1] as ChatAbortPayload;
+    expect(payload).toEqual({
+      runId,
+      sessionKey,
+      seq: 3,
+      state: "aborted",
+      stopReason: "user",
+      message: {
         role: "assistant",
         content: [{ type: "text", text: "  Partial reply  " }],
-      }),
-    );
-    expect((payload.message as { timestamp?: unknown }).timestamp).toBeGreaterThan(0);
+        timestamp: now.getTime(),
+      },
+    });
     expect(ops.nodeSendToSession).toHaveBeenCalledWith(sessionKey, "chat", payload);
   });
 
@@ -119,6 +135,9 @@ describe("abortChatRunById", () => {
   });
 
   it("preserves partial message even when abort listeners clear buffers synchronously", () => {
+    const now = new Date("2026-01-02T03:04:05.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
     const runId = "run-1";
     const sessionKey = "main";
     const entry = createActiveEntry(sessionKey);
@@ -132,12 +151,18 @@ describe("abortChatRunById", () => {
     const result = abortChatRunById(ops, { runId, sessionKey });
 
     expect(result).toEqual({ aborted: true });
-    const payload = ops.broadcast.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(payload.message).toEqual(
-      expect.objectContaining({
+    const payload = ops.broadcast.mock.calls[0]?.[1] as ChatAbortPayload;
+    expect(payload).toEqual({
+      runId,
+      sessionKey,
+      seq: 1,
+      state: "aborted",
+      stopReason: undefined,
+      message: {
         role: "assistant",
         content: [{ type: "text", text: "streamed text" }],
-      }),
-    );
+        timestamp: now.getTime(),
+      },
+    });
   });
 });

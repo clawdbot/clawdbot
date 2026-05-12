@@ -40,6 +40,10 @@ export function createCodexAppServerAgentHarness(options?: {
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
       return runCodexAppServerAttempt(params, { pluginConfig: options?.pluginConfig });
     },
+    runSideQuestion: async (params) => {
+      const { runCodexAppServerSideQuestion } = await import("./src/app-server/side-question.js");
+      return runCodexAppServerSideQuestion(params, { pluginConfig: options?.pluginConfig });
+    },
     compact: async (params) => {
       const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
       return maybeCompactCodexAppServerSession(params, { pluginConfig: options?.pluginConfig });

@@ -21,7 +21,11 @@ describe("subscribeEmbeddedPiSession", () => {
     emitAssistantTextDeltaAndEnd({ emit, text });
 
     expect(onBlockReply).toHaveBeenCalledTimes(3);
-    expect(onBlockReply.mock.calls[1][0].text).toBe("  ```js\n  const x = 1;\n  ```");
+    expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([
+      "Intro",
+      "  ```js\n  const x = 1;\n  ```",
+      "Outro",
+    ]);
   });
   it("accepts longer fence markers for close", () => {
     const onBlockReply = vi.fn();
@@ -38,13 +42,6 @@ describe("subscribeEmbeddedPiSession", () => {
     emitAssistantTextDeltaAndEnd({ emit, text });
 
     const payloadTexts = extractTextPayloads(onBlockReply.mock.calls);
-    expect(payloadTexts.length).toBeGreaterThan(0);
-    const combined = payloadTexts.join(" ").replace(/\s+/g, " ").trim();
-    expect(combined).toContain("````md");
-    expect(combined).toContain("line1");
-    expect(combined).toContain("line2");
-    expect(combined).toContain("````");
-    expect(combined).toContain("Intro");
-    expect(combined).toContain("Outro");
+    expect(payloadTexts).toEqual(["Intro", "````md\nline1\nline2\n````", "Outro"]);
   });
 });

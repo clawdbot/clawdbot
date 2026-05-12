@@ -1,4 +1,4 @@
-import type { ChatSendOptions } from "./app-chat.ts";
+import type { ChatAbortOptions, ChatSendOptions } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
@@ -492,7 +492,7 @@ export type AppViewState = {
     handleSendChat: (messageOverride?: string, opts?: ChatSendOptions) => Promise<void>;
     toggleRealtimeTalk: () => Promise<void>;
     steerQueuedChatMessage: (id: string) => Promise<void>;
-    handleAbortChat: () => Promise<void>;
+    handleAbortChat: (opts?: ChatAbortOptions) => Promise<void>;
     removeQueuedMessage: (id: string) => void;
     handleChatScroll: (event: Event) => void;
     resetToolStream: () => void;

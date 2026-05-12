@@ -108,7 +108,8 @@ export function resolveExternalCliAuthScopeFromConfig(
     }
   }
 
-  for (const agent of cfg.agents?.list ?? []) {
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  for (const agent of agents) {
     addProviderScopeFromModelConfig(providerIds, agent.model);
     addProviderScopeFromModelConfig(providerIds, agent.subagents?.model);
     addExternalCliRuntimeScopeFromModelMap(providerIds, agent.models);

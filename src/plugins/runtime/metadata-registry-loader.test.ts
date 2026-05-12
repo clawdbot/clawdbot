@@ -27,7 +27,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
 
 function getOnlyLoadOpenClawPluginsOptions(): PluginLoadOptions {
   expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
-  const options = loadOpenClawPluginsMock.mock.calls[0]?.[0];
+  const options = loadOpenClawPluginsMock.mock.calls.at(0)?.[0];
   if (!options || typeof options !== "object") {
     throw new Error("expected loadOpenClawPlugins to receive plugin load options");
   }

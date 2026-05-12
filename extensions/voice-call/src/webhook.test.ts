@@ -144,6 +144,14 @@ function requireBoundRequestUrl(server: VoiceCallWebhookServer, baseUrl: string)
   return requestUrl;
 }
 
+function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 function expectWebhookUrl(url: string, expectedPath: string) {
   const parsed = new URL(url);
   expect(parsed.pathname).toBe(expectedPath);
@@ -220,10 +228,12 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
       expect(mocks.getRealtimeTranscriptionProvider).not.toHaveBeenCalled();
       expect(mocks.listRealtimeTranscriptionProviders).toHaveBeenCalledWith(null);
       const mediaStreamHandler = server.getMediaStreamHandler();
-      expect(mediaStreamHandler).not.toBeNull();
-      expect(mediaStreamHandler?.handleUpgrade).toBeTypeOf("function");
-      expect(mediaStreamHandler?.sendAudio).toBeTypeOf("function");
-      expect(mediaStreamHandler?.closeAll).toBeTypeOf("function");
+      if (!mediaStreamHandler) {
+        throw new Error("expected media stream handler");
+      }
+      expect(mediaStreamHandler.handleUpgrade).toBeTypeOf("function");
+      expect(mediaStreamHandler.sendAudio).toBeTypeOf("function");
+      expect(mediaStreamHandler.closeAll).toBeTypeOf("function");
     } finally {
       await server.stop();
     }
@@ -969,7 +979,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
 
       expect(response.status).toBe(200);
       expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
-      const parseOptions = parseWebhookEvent.mock.calls[0]?.[1];
+      const parseOptions = requireFirstMockCall(parseWebhookEvent.mock.calls, "webhook parse")[1];
       if (!parseOptions) {
         throw new Error("webhook server did not pass verified parse options");
       }
@@ -977,7 +987,9 @@ describe("VoiceCallWebhookServer replay handling", () => {
         verifiedRequestKey: "verified:req:123",
       });
       expect(processEvent).toHaveBeenCalledTimes(1);
-      const firstEvent = processEvent.mock.calls[0]?.[0];
+      const firstEvent = requireFirstMockCall(processEvent.mock.calls, "processed event")[0] as
+        | NormalizedEvent
+        | undefined;
       if (!firstEvent) {
         throw new Error("webhook server did not forward the parsed event");
       }
@@ -1475,8 +1487,10 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       expect(clearTtsQueue).toHaveBeenCalledTimes(2);
       expect(handleInboundResponse).toHaveBeenCalledTimes(1);
       expect(processEvent).toHaveBeenCalledTimes(1);
-      const [calledCallId, calledTranscript] = (handleInboundResponse.mock.calls[0] ??
-        []) as unknown as [string | undefined, string | undefined];
+      const [calledCallId, calledTranscript] = requireFirstMockCall(
+        handleInboundResponse.mock.calls,
+        "inbound response",
+      ) as [string | undefined, string | undefined];
       expect(calledCallId).toBe(call.callId);
       expect(calledTranscript).toBe("hello after greeting");
     } finally {
@@ -1532,7 +1546,9 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       media.config.onTranscript?.("CA-inbound", "hello");
       expect(clearTtsQueue).toHaveBeenCalledTimes(2);
       expect(processEvent).toHaveBeenCalledTimes(1);
-      const event = processEvent.mock.calls[0]?.[0] as NormalizedEvent | undefined;
+      const event = requireFirstMockCall(processEvent.mock.calls, "inbound processed event")[0] as
+        | NormalizedEvent
+        | undefined;
       expect(event?.type).toBe("call.speech");
       if (event?.type !== "call.speech") {
         throw new Error("expected media transcript callback to emit a speech event");

@@ -40,12 +40,20 @@ type MockWithCalls = {
   mock: { calls: unknown[][] };
 };
 
+function argAt(mock: MockWithCalls, callIndex: number, argIndex: number): unknown {
+  const call = mock.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`expected call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
 function objectArgAt(
   mock: MockWithCalls,
   callIndex: number,
   argIndex: number,
 ): Record<string, unknown> {
-  const value = mock.mock.calls[callIndex]?.[argIndex];
+  const value = argAt(mock, callIndex, argIndex);
   if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`expected call ${callIndex} argument ${argIndex} to be an object`);
   }
@@ -86,7 +94,7 @@ describe("resolveDiscordRestFetch", () => {
     const proxyOptions = objectArgAt(proxyAgentSpy, 0, 0);
     expect(proxyOptions.uri).toBe("http://127.0.0.1:8080");
     expect(proxyOptions.allowH2).toBe(false);
-    expect(undiciFetchMock.mock.calls[0]?.[0]).toBe(
+    expect(argAt(undiciFetchMock, 0, 0)).toBe(
       "https://discord.com/api/v10/oauth2/applications/@me",
     );
     const fetchOptions = objectArgAt(undiciFetchMock, 0, 1);
@@ -121,7 +129,7 @@ describe("resolveDiscordRestFetch", () => {
 
     expect(fetcher).toBe(fetch);
     expect(proxyAgentSpy).not.toHaveBeenCalled();
-    expect(String(runtime.error.mock.calls[0]?.[0])).toContain("loopback host");
+    expect(String(argAt(runtime.error, 0, 0))).toContain("loopback host");
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
@@ -157,7 +165,7 @@ describe("resolveDiscordRestFetch", () => {
     const agentOptions = objectArgAt(agentSpy, 0, 0);
     expect(agentOptions.allowH2).toBe(false);
     expect(typeof recordField(agentOptions.connect, "connect").lookup).toBe("function");
-    expect(undiciFetchMock.mock.calls[0]?.[0]).toBe(
+    expect(argAt(undiciFetchMock, 0, 0)).toBe(
       "https://discord.com/api/v10/oauth2/applications/@me",
     );
     const fetchOptions = objectArgAt(undiciFetchMock, 0, 1);

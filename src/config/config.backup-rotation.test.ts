@@ -19,7 +19,13 @@ async function expectRegularFile(filePath: string): Promise<void> {
 }
 
 async function expectPathMissing(filePath: string): Promise<void> {
-  await expect(fs.stat(filePath)).rejects.toMatchObject({ code: "ENOENT" });
+  let error: { code?: unknown } | undefined;
+  try {
+    await fs.stat(filePath);
+  } catch (err) {
+    error = err as { code?: unknown };
+  }
+  expect(error?.code).toBe("ENOENT");
 }
 
 describe("config backup rotation", () => {

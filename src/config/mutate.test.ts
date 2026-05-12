@@ -300,29 +300,33 @@ describe("config mutate helpers", () => {
     }
 
     expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
-    expect(notifications).toMatchObject([
-      {
-        configPath,
-        persistedHash: "hash-include-refreshed",
-        sourceConfig: {
-          plugins: {
-            entries: {
-              old: { enabled: true },
-              demo: { enabled: true },
-            },
-          },
+    expect(notifications).toHaveLength(1);
+    const [notification] = notifications as Array<{
+      configPath?: string;
+      persistedHash?: string;
+      sourceConfig?: unknown;
+      runtimeConfig?: unknown;
+      afterWrite?: unknown;
+    }>;
+    expect(notification?.configPath).toBe(configPath);
+    expect(notification?.persistedHash).toBe("hash-include-refreshed");
+    expect(notification?.sourceConfig).toEqual({
+      plugins: {
+        entries: {
+          old: { enabled: true },
+          demo: { enabled: true },
         },
-        runtimeConfig: {
-          plugins: {
-            entries: {
-              old: { enabled: true },
-              demo: { enabled: true },
-            },
-          },
-        },
-        afterWrite: { mode: "restart", reason: "test include refresh" },
       },
-    ]);
+    });
+    expect(notification?.runtimeConfig).toEqual({
+      plugins: {
+        entries: {
+          old: { enabled: true },
+          demo: { enabled: true },
+        },
+      },
+    });
+    expect(notification?.afterWrite).toEqual({ mode: "restart", reason: "test include refresh" });
     await expect(fs.readFile(configPath, "utf-8")).resolves.toContain(
       '"$include": "./config/plugins.json5"',
     );

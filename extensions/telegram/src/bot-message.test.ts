@@ -198,7 +198,9 @@ describe("telegram bot message processor", () => {
       "Something went wrong while processing your request. Please try again.",
       { message_thread_id: 456 },
     );
-    expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("dispatch exploded"));
+    expect(runtimeError).toHaveBeenCalledWith(
+      "telegram message processing failed: Error: dispatch exploded",
+    );
   });
 
   it("omits message_thread_id for General-topic fallback replies", async () => {
@@ -236,6 +238,8 @@ describe("telegram bot message processor", () => {
       "Something went wrong while processing your request. Please try again.",
       undefined,
     );
-    expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("dispatch exploded"));
+    expect(runtimeError).toHaveBeenCalledWith(
+      "telegram message processing failed: Error: dispatch exploded",
+    );
   });
 });

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/canvas-plugin",
-  "version": "2026.5.10-beta.1",
+  "version": "2026.5.12-beta.1",
   "private": true,
   "description": "OpenClaw Canvas plugin",
   "type": "module",
@@ -9,11 +9,11 @@
   },
   "dependencies": {
     "@a2ui/lit": "0.9.3",
-    "@lit/context": "^1.1.6",
-    "chokidar": "^5.0.0",
-    "lit": "^3.3.2",
+    "@lit/context": "1.1.6",
+    "chokidar": "5.0.0",
+    "lit": "3.3.2",
     "typebox": "1.1.38",
-    "ws": "^8.20.0"
+    "ws": "8.20.0"
   },
   "openclaw": {
     "extensions": [

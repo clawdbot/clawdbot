@@ -351,6 +351,8 @@ export const CronListParamsSchema = Type.Object(
 
 export const CronStatusParamsSchema = Type.Object({}, { additionalProperties: false });
 
+export const CronGetParamsSchema = cronIdOrJobIdParams({});
+
 export const CronAddParamsSchema = Type.Object(
   {
     name: NonEmptyString,

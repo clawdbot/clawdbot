@@ -286,7 +286,8 @@ describe("diagnostics-prometheus service", () => {
       },
     });
 
-    listeners[0]?.(
+    expect(listeners).toHaveLength(1);
+    listeners[0](
       {
         ...baseEvent(),
         type: "model.usage",
@@ -297,13 +298,15 @@ describe("diagnostics-prometheus service", () => {
       trusted,
     );
 
-    expect(emitted).toContainEqual({
-      type: "telemetry.exporter",
-      exporter: "diagnostics-prometheus",
-      signal: "metrics",
-      status: "started",
-      reason: "configured",
-    });
+    expect(emitted).toStrictEqual([
+      {
+        type: "telemetry.exporter",
+        exporter: "diagnostics-prometheus",
+        signal: "metrics",
+        status: "started",
+        reason: "configured",
+      },
+    ]);
     expect(exporter.render()).toContain(
       'openclaw_model_tokens_total{agent="unknown",channel="unknown",model="gpt-5.4",provider="openai",token_type="input"} 12',
     );

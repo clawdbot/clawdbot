@@ -613,7 +613,6 @@ describe("qa-lab server", () => {
       await lab.stop();
     });
 
-    await sleep(25);
     await expectFileMissing(markerPath);
 
     const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);

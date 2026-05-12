@@ -63,14 +63,16 @@ function mockObjectArg(mock: unknown, index = -1): Record<string, unknown> {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
   const call = index < 0 ? calls.at(index) : calls[index];
   const [arg] = call ?? [];
-  expect(arg).toBeTypeOf("object");
-  expect(arg).not.toBeNull();
+  if (!arg || typeof arg !== "object") {
+    throw new Error(`expected mock object argument ${index}`);
+  }
   return arg as Record<string, unknown>;
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
   const record = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);
@@ -191,7 +193,7 @@ describe("litellm image generation provider", () => {
     });
 
     expect(mockObjectArg(postJsonRequestMock).url).toBe("http://localhost:4000/images/edits");
-    const call = postJsonRequestMock.mock.calls[0][0] as { body: { images: unknown[] } };
+    const call = postJsonRequestMock.mock.calls.at(0)?.[0] as { body: { images: unknown[] } };
     expect(call.body.images).toHaveLength(1);
   });
 

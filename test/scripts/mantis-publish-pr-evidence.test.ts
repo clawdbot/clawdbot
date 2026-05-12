@@ -92,9 +92,11 @@ describe("scripts/mantis/publish-pr-evidence", () => {
 
     expect(body).toContain("<!-- mantis-discord-status-reactions -->");
     expect(body).toContain("Summary: Mantis reran the scenario.");
-    expect(body).toContain("| Baseline queued-only | Candidate queued -> thinking -> done |");
+    expect(body).toContain('<table width="100%">');
+    expect(body).toContain('<th width="50%">Baseline queued-only</th>');
+    expect(body).toContain('<th width="50%">Candidate queued -> thinking -> done</th>');
     expect(body).toContain(
-      '<img src="https://raw.githubusercontent.com/openclaw/openclaw/qa-artifacts/mantis/discord/pr-1/run-1/baseline.png"',
+      '<td width="50%" align="center"><img src="https://raw.githubusercontent.com/openclaw/openclaw/qa-artifacts/mantis/discord/pr-1/run-1/baseline.png" width="100%"',
     );
     expect(body).toContain(
       "[Baseline change MP4](https://raw.githubusercontent.com/openclaw/openclaw/qa-artifacts/mantis/discord/pr-1/run-1/baseline-change.mp4)",

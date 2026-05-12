@@ -26,7 +26,8 @@ describe("web_search signal plumbing", () => {
     await tool?.execute("call-search", { query: "openclaw" }, controller.signal);
 
     expect(mocks.runWebSearch).toHaveBeenCalledTimes(1);
-    expect(mocks.runWebSearch.mock.calls[0]?.[0]?.args).toEqual({ query: "openclaw" });
-    expect(mocks.runWebSearch.mock.calls[0]?.[0]?.signal).toBe(controller.signal);
+    const params = mocks.runWebSearch.mock.calls.at(0)?.[0];
+    expect(params?.args).toEqual({ query: "openclaw" });
+    expect(params?.signal).toBe(controller.signal);
   });
 });

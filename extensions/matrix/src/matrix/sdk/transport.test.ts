@@ -158,8 +158,9 @@ describe("performMatrixRequest", () => {
     expect(result.text).toBe('{"ok":true}');
     expect(ambientFetchCalls).toBe(0);
     expect(runtimeFetch).toHaveBeenCalledTimes(1);
-    const dispatcher = (runtimeFetch.mock.calls[0]?.[1] as RequestInit & { dispatcher?: unknown })
-      ?.dispatcher;
+    const dispatcher = (
+      runtimeFetch.mock.calls.at(0)?.[1] as RequestInit & { dispatcher?: unknown }
+    )?.dispatcher;
     expect((dispatcher as { constructor?: { name?: string } } | undefined)?.constructor?.name).toBe(
       "MockAgent",
     );

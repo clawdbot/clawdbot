@@ -371,6 +371,15 @@ describe("runPreparedReply media-only handling", () => {
     expect(directContextParams?.sessionCtx?.Provider).toBe("telegram");
     expect(directContextParams?.sessionCtx?.ChatType).toBe("direct");
     expect(directContextParams?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(buildInboundUserContextPrefix).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ChatType: "direct",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram-direct-test-id",
+      }),
+      expect.anything(),
+      { sourceReplyDeliveryMode: "message_tool_only" },
+    );
   });
 
   it.each(["direct", "dm"] as const)(

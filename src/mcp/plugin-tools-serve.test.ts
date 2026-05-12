@@ -58,8 +58,16 @@ afterEach(() => {
   resetGlobalHookRunner();
 });
 
+function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 function requireToolPolicyParams(mock: ReturnType<typeof vi.fn>) {
-  const params = mock.mock.calls[0]?.[0] as
+  const params = requireFirstMockCall(mock.mock.calls, "plugin tool policy")[0] as
     | { toolAllowlist?: string[]; toolDenylist?: string[] }
     | undefined;
   if (!params) {
@@ -149,14 +157,15 @@ describe("plugin tools MCP server", () => {
       name: "memory_recall",
       arguments: { query: "remember this" },
     });
-    expect(execute).toHaveBeenCalledWith(
-      expect.stringMatching(/^mcp-\d+$/),
-      {
-        query: "remember this",
-      },
-      undefined,
-      undefined,
-    );
+    expect(execute).toHaveBeenCalledTimes(1);
+    const executeCall = requireFirstMockCall(execute.mock.calls, "plugin tool execute");
+    const requestId = executeCall[0];
+    expect(typeof requestId).toBe("string");
+    expect((requestId as string).startsWith("mcp-")).toBe(true);
+    expect(Number.isSafeInteger(Number((requestId as string).slice("mcp-".length)))).toBe(true);
+    expect(executeCall[1]).toEqual({ query: "remember this" });
+    expect(executeCall[2]).toBeUndefined();
+    expect(executeCall[3]).toBeUndefined();
     expect(result.content).toEqual([{ type: "text", text: "Stored." }]);
   });
 

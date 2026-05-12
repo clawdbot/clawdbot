@@ -22,19 +22,13 @@ function requireFirstCallArg(mock: ReturnType<typeof vi.fn>): {
     to?: string;
   };
 } {
-  const arg = mock.mock.calls[0]?.[0] as
-    | {
-        sessionKey?: string;
-        ctx?: MsgContext;
-        createIfMissing?: boolean;
-        deliveryContext?: {
-          channel?: string;
-          to?: string;
-        };
-      }
-    | undefined;
-  if (!arg) {
+  const [call] = mock.mock.calls;
+  if (!call) {
     throw new Error("Expected mock call argument");
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error("Expected mock call argument to be an object");
   }
   return arg;
 }

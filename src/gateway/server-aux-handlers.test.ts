@@ -343,17 +343,13 @@ describe("gateway aux handlers", () => {
     const rollbackLogs = logChannelsInfo.mock.calls
       .map(([msg]) => String(msg))
       .filter((msg) => msg.startsWith("rolling back "));
-    expect(rollbackLogs).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("rolling back slack channel"),
-        expect.stringContaining("rolling back zalo channel"),
-      ]),
-    );
+    expect(rollbackLogs.toSorted((a, b) => a.localeCompare(b))).toEqual([
+      "rolling back slack channel after secrets reload failure",
+      "rolling back zalo channel after secrets reload failure",
+    ]);
     // startChannel was invoked for zalo on rollback even though the original
     // stopChannel(zalo) rejected.
-    expect(startChannel.mock.calls.map(([ch]) => ch)).toEqual(
-      expect.arrayContaining(["slack", "zalo"]),
-    );
+    expect(startChannel.mock.calls.map(([ch]) => ch)).toEqual(["slack", "slack", "zalo"]);
     expect(respond.mock.calls).toHaveLength(1);
     expect(respond.mock.calls[0][0]).toBe(false);
   });
@@ -454,14 +450,16 @@ describe("gateway aux handlers", () => {
 
     expect(stopChannel).not.toHaveBeenCalled();
     expect(startChannel).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message: "secrets.reload failed",
-      }),
-    );
+    expect(respond.mock.calls).toEqual([
+      [
+        false,
+        undefined,
+        {
+          code: "UNAVAILABLE",
+          message: "secrets.reload failed",
+        },
+      ],
+    ]);
     expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(
       asConfig({
         channels: {

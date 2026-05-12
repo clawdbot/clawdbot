@@ -172,7 +172,7 @@ describe("group runtime loading", () => {
     ).toBe(false);
   });
 
-  it("loads the group runtime only when requireMention resolution needs it", async () => {
+  it("resolves requireMention through runtime and Discord fallback paths", async () => {
     vi.resetModules();
     const groupsRuntimeLoads = vi.fn();
     vi.doMock("./groups.runtime.js", () => {
@@ -208,17 +208,7 @@ describe("group runtime loading", () => {
         },
       }),
     ).resolves.toBe(false);
-    expect(groupsRuntimeLoads).toHaveBeenCalled();
-    vi.doUnmock("./groups.runtime.js");
-  });
-
-  it("honors Discord guild channel requireMention fallback when runtime plugin is unavailable", async () => {
-    vi.resetModules();
-    vi.doMock("./groups.runtime.js", () => ({
-      getChannelPlugin: () => undefined,
-      normalizeChannelId: (channelId?: string) => channelId?.trim().toLowerCase(),
-    }));
-    const isolatedGroups = await import("./groups.js");
+    expect(groupsRuntimeLoads).toHaveBeenCalledTimes(1);
 
     await expect(
       isolatedGroups.resolveGroupRequireMention({
@@ -250,16 +240,6 @@ describe("group runtime loading", () => {
         },
       }),
     ).resolves.toBe(false);
-    vi.doUnmock("./groups.runtime.js");
-  });
-
-  it("honors account-scoped Discord guild requireMention fallback", async () => {
-    vi.resetModules();
-    vi.doMock("./groups.runtime.js", () => ({
-      getChannelPlugin: () => undefined,
-      normalizeChannelId: (channelId?: string) => channelId?.trim().toLowerCase(),
-    }));
-    const isolatedGroups = await import("./groups.js");
 
     await expect(
       isolatedGroups.resolveGroupRequireMention({
@@ -294,6 +274,7 @@ describe("group runtime loading", () => {
         },
       }),
     ).resolves.toBe(false);
+    expect(groupsRuntimeLoads).toHaveBeenCalledTimes(1);
     vi.doUnmock("./groups.runtime.js");
   });
 });

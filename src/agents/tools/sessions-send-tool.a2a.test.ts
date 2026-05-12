@@ -187,11 +187,11 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       waitRunId: "run-delayed",
     });
 
-    const waitInput = vi.mocked(waitForAgentRun).mock.calls[0]?.[0] as
+    const waitInput = vi.mocked(waitForAgentRun).mock.calls.at(0)?.[0] as
       | { runId?: string }
       | undefined;
     expect(waitInput?.runId).toBe("run-delayed");
-    const snapshotInput = vi.mocked(readLatestAssistantReplySnapshot).mock.calls[0]?.[0] as
+    const snapshotInput = vi.mocked(readLatestAssistantReplySnapshot).mock.calls.at(0)?.[0] as
       | { sessionKey?: string }
       | undefined;
     expect(snapshotInput?.sessionKey).toBe("agent:main:discord:group:dev");
@@ -213,7 +213,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
         roundOneReply: "Worker completed successfully",
       });
 
-      const stepInput = vi.mocked(runAgentStep).mock.calls[0]?.[0] as
+      const stepInput = vi.mocked(runAgentStep).mock.calls.at(0)?.[0] as
         | { message?: string; transcriptMessage?: string }
         | undefined;
       expect(stepInput?.message).toBe("Agent-to-agent announce step.");

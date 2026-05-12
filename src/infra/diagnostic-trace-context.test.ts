@@ -180,8 +180,12 @@ describe("diagnostic-trace-context", () => {
       });
     });
 
-    expect(createDiagnosticTraceContextFromActiveScope({ spanId: CHILD_SPAN_ID })).toEqual({
-      traceId: expect.stringMatching(/^[0-9a-f]{32}$/),
+    const fallbackScoped = createDiagnosticTraceContextFromActiveScope({ spanId: CHILD_SPAN_ID });
+    expect(typeof fallbackScoped.traceId).toBe("string");
+    expect(fallbackScoped.traceId).toHaveLength(32);
+    expect(/^[0-9a-f]+$/.test(fallbackScoped.traceId)).toBe(true);
+    expect(fallbackScoped).toEqual({
+      traceId: fallbackScoped.traceId,
       spanId: CHILD_SPAN_ID,
       traceFlags: "01",
     });

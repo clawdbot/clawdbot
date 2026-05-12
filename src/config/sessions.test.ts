@@ -105,7 +105,13 @@ describe("sessions", () => {
   }
 
   async function expectPathMissing(targetPath: string): Promise<void> {
-    await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+    let error: { code?: unknown } | undefined;
+    try {
+      await fs.stat(targetPath);
+    } catch (err) {
+      error = err as { code?: unknown };
+    }
+    expect(error?.code).toBe("ENOENT");
   }
 
   const deriveSessionKeyCases = [
@@ -493,7 +499,8 @@ describe("sessions", () => {
       sessionKey,
       update: async () => null,
     });
-    expect(result).toEqual(expect.objectContaining({ sessionId: "sess-1", thinkingLevel: "low" }));
+    expect(result?.sessionId).toBe("sess-1");
+    expect(result?.thinkingLevel).toBe("low");
 
     const store = loadSessionStore(storePath);
     expect(store[sessionKey]?.thinkingLevel).toBe("low");

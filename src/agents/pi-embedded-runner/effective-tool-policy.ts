@@ -6,6 +6,7 @@ import {
   resolveTrustedGroupId,
   resolveSubagentToolPolicyForSession,
 } from "../pi-tools.policy.js";
+import { resolveSenderToolPolicy } from "../sender-tool-policy.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -106,6 +107,15 @@ export function applyFinalEffectiveToolPolicy(
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
   });
+  const senderPolicy = resolveSenderToolPolicy({
+    config: params.config,
+    agentId,
+    messageProvider: params.messageProvider,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
   const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
@@ -154,6 +164,7 @@ export function applyFinalEffectiveToolPolicy(
       agentPolicy,
       agentProviderPolicy,
       groupPolicy,
+      senderPolicy,
       agentId,
     }),
     { policy: params.sandboxToolPolicy, label: "sandbox tools.allow" },

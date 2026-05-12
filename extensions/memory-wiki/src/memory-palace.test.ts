@@ -57,35 +57,37 @@ describe("listMemoryWikiPalace", () => {
 
     const result = await listMemoryWikiPalace(config);
 
-    expect(result).toMatchObject({
-      totalItems: 2,
-      totalClaims: 3,
-      totalQuestions: 1,
-      totalContradictions: 1,
-    });
-    expect(result.clusters[0]).toMatchObject({
-      key: "synthesis",
-      label: "Syntheses",
-      itemCount: 1,
-      claimCount: 2,
-      questionCount: 1,
-      contradictionCount: 1,
-    });
-    expect(result.clusters[0]?.items[0]).toMatchObject({
-      title: "Travel system",
-      claims: [
-        "Mariano prefers direct receipts from airlines when possible.",
-        "Travel admin friction keeps showing up across chats.",
-      ],
-      questions: ["Should flight receipts be standardized into one process?"],
-      contradictions: ["Old BA receipts guidance may now be stale."],
-      snippet: "This synthesis rolls up recurring travel admin patterns from imported chats.",
-    });
-    expect(result.clusters[1]).toMatchObject({
-      key: "entity",
-      label: "Entities",
-      itemCount: 1,
-      claimCount: 1,
-    });
+    expect(result.totalItems).toBe(2);
+    expect(result.totalClaims).toBe(3);
+    expect(result.totalQuestions).toBe(1);
+    expect(result.totalContradictions).toBe(1);
+
+    const synthesisCluster = result.clusters[0];
+    expect(synthesisCluster?.key).toBe("synthesis");
+    expect(synthesisCluster?.label).toBe("Syntheses");
+    expect(synthesisCluster?.itemCount).toBe(1);
+    expect(synthesisCluster?.claimCount).toBe(2);
+    expect(synthesisCluster?.questionCount).toBe(1);
+    expect(synthesisCluster?.contradictionCount).toBe(1);
+
+    const synthesisItem = synthesisCluster?.items[0];
+    expect(synthesisItem?.title).toBe("Travel system");
+    expect(synthesisItem?.claims).toEqual([
+      "Mariano prefers direct receipts from airlines when possible.",
+      "Travel admin friction keeps showing up across chats.",
+    ]);
+    expect(synthesisItem?.questions).toEqual([
+      "Should flight receipts be standardized into one process?",
+    ]);
+    expect(synthesisItem?.contradictions).toEqual(["Old BA receipts guidance may now be stale."]);
+    expect(synthesisItem?.snippet).toBe(
+      "This synthesis rolls up recurring travel admin patterns from imported chats.",
+    );
+
+    const entityCluster = result.clusters[1];
+    expect(entityCluster?.key).toBe("entity");
+    expect(entityCluster?.label).toBe("Entities");
+    expect(entityCluster?.itemCount).toBe(1);
+    expect(entityCluster?.claimCount).toBe(1);
   });
 });

@@ -81,7 +81,9 @@ const longChildCompletionOutput = [
 ].join("\n");
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -938,7 +940,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       path: "direct",
       error: "UNAVAILABLE: gateway lost final output",
     });
-    expect(callGateway).toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledTimes(4);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -1065,7 +1067,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       path: "direct",
       error: "completion agent did not produce a visible reply",
     });
-    expect(callGateway).toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -1144,7 +1146,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: true,
       path: "direct",
     });
-    expect(callGateway).toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -1402,7 +1404,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: true,
       path: "direct",
     });
-    expect(callGateway).toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -1441,7 +1443,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       path: "direct",
       error: "completion agent did not produce a visible reply",
     });
-    expect(callGateway).toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 

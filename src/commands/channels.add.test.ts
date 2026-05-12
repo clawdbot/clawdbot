@@ -124,15 +124,21 @@ function listConfiguredAccountIds(
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
 function mockArg(source: MockCallSource, callIndex: number, argIndex: number, label: string) {
   const call = source.mock.calls[callIndex];
-  expect(call, label).toBeDefined();
-  return call?.[argIndex];
+  if (!call) {
+    throw new Error(`Expected mock call: ${label}`);
+  }
+  if (argIndex >= call.length) {
+    throw new Error(`Expected mock call argument ${argIndex}: ${label}`);
+  }
+  return call[argIndex];
 }
 
 function writtenConfig(index = 0) {
@@ -745,9 +751,7 @@ describe("channelsAddCommand", () => {
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
     expect(writtenChannel("telegram").enabled).toBe(true);
     expect(writtenChannel("telegram").botToken).toBe("123456:token");
-    expect(runtime.error).not.toHaveBeenCalledWith(
-      expect.stringContaining("Channel telegram does not support non-interactive add"),
-    );
+    expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
@@ -790,9 +794,7 @@ describe("channelsAddCommand", () => {
     expect(getBundledChannelSetupPlugin).toHaveBeenCalledWith("telegram");
     expect(writtenChannel("telegram").enabled).toBe(true);
     expect(writtenChannel("telegram").botToken).toBe("123456:token");
-    expect(runtime.error).not.toHaveBeenCalledWith(
-      expect.stringContaining("Channel telegram does not support non-interactive add"),
-    );
+    expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 

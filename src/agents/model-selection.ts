@@ -17,7 +17,10 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
-export { resolveThinkingDefault } from "./model-thinking-default.js";
+export {
+  resolveThinkingDefault,
+  resolveThinkingDefaultWithRuntimeCatalog,
+} from "./model-thinking-default.js";
 import {
   type ModelRef,
   findNormalizedProviderKey,

@@ -53,8 +53,7 @@ describe("OpenAI thinking contract", () => {
 
       await agent.prompt("hello");
 
-      expect(capturedOptions).toHaveLength(1);
-      expect(capturedOptions[0]?.reasoning).toBe(expectedReasoning);
+      expect(capturedOptions.map(({ reasoning }) => reasoning)).toStrictEqual([expectedReasoning]);
     },
   );
 
@@ -72,8 +71,7 @@ describe("OpenAI thinking contract", () => {
 
       await agent.prompt("hello");
 
-      expect(capturedOptions).toHaveLength(1);
-      expect(capturedOptions[0]?.reasoning).toBeUndefined();
+      expect(capturedOptions.map(({ reasoning }) => reasoning)).toStrictEqual([undefined]);
     },
   );
 

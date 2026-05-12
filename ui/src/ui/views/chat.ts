@@ -926,9 +926,9 @@ export function renderChat(props: ChatProps) {
 
   const placeholder = props.connected
     ? hasAttachments
-      ? "Add a message or paste more images..."
-      : `Message ${props.assistantName || "agent"} (Enter to send)`
-    : "Connect to the gateway to start chatting...";
+      ? t("chat.composer.placeholderWithAttachments")
+      : t("chat.composer.placeholder", { name: props.assistantName || "agent" })
+    : t("chat.composer.placeholderDisconnected");
 
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const splitRatio = props.splitRatio ?? 0.6;
@@ -1411,8 +1411,8 @@ export function renderChat(props: ChatProps) {
               @click=${() => {
                 document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
               }}
-              title="Attach file"
-              aria-label="Attach file"
+              title=${t("chat.composer.attachFile")}
+              aria-label=${t("chat.composer.attachFile")}
               ?disabled=${!props.connected}
             >
               ${icons.paperclip}
@@ -1425,8 +1425,12 @@ export function renderChat(props: ChatProps) {
                       ? "agent-chat__input-btn--talk"
                       : ""}"
                     @click=${props.onToggleRealtimeTalk}
-                    title=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
-                    aria-label=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
+                    title=${props.realtimeTalkActive
+                      ? t("chat.composer.stopTalk")
+                      : t("chat.composer.startTalk")}
+                    aria-label=${props.realtimeTalkActive
+                      ? t("chat.composer.stopTalk")
+                      : t("chat.composer.startTalk")}
                     ?disabled=${!props.connected}
                   >
                     ${props.realtimeTalkActive ? icons.volume2 : icons.radio}

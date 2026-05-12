@@ -7,6 +7,7 @@ import {
 const DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY = 1000;
 const DEFAULT_DIAGNOSTIC_STABILITY_LIMIT = 50;
 export const MAX_DIAGNOSTIC_STABILITY_LIMIT = DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY;
+const LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 
 const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 
@@ -170,6 +171,15 @@ function assignReasonCode(
   }
 }
 
+function resolveDiagnosticLivenessRecordLevel(
+  event: Extract<DiagnosticEventPayload, { type: "diagnostic.liveness.warning" }>,
+): "warning" | "info" {
+  const hasBlockingWork = event.waiting > 0 || event.queued > 0;
+  const hasSustainedEventLoopDelay =
+    (event.eventLoopDelayP99Ms ?? 0) >= LIVENESS_EVENT_LOOP_DELAY_WARN_MS;
+  return hasBlockingWork || (event.active > 0 && hasSustainedEventLoopDelay) ? "warning" : "info";
+}
+
 function isRecord(
   record: DiagnosticStabilityEventRecord | undefined,
 ): record is DiagnosticStabilityEventRecord {
@@ -317,7 +327,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.queued = event.queued;
       break;
     case "diagnostic.liveness.warning":
-      record.level = event.active > 0 || event.waiting > 0 || event.queued > 0 ? "warning" : "info";
+      record.level = resolveDiagnosticLivenessRecordLevel(event);
       record.durationMs = event.intervalMs;
       record.count = event.reasons.length;
       assignReasonCode(record, event.reasons[0]);

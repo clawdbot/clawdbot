@@ -222,13 +222,11 @@ describe("bundled channel entry shape guards", () => {
       );
 
       const plugin = bundled.requireBundledChannelPlugin("alpha");
-      expect(plugin.meta).toMatchObject({
-        id: "alpha",
-        label: "Alpha",
-        selectionLabel: "Use Alpha",
-        docsPath: "/channels/alpha",
-        blurb: "Alpha channel metadata.",
-      });
+      expect(plugin.meta.id).toBe("alpha");
+      expect(plugin.meta.label).toBe("Alpha");
+      expect(plugin.meta.selectionLabel).toBe("Use Alpha");
+      expect(plugin.meta.docsPath).toBe("/channels/alpha");
+      expect(plugin.meta.blurb).toBe("Alpha channel metadata.");
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(tempRoot, { recursive: true, force: true });

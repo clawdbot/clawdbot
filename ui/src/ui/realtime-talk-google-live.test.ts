@@ -21,6 +21,11 @@ type MockWebSocketEventType = "close" | "error" | "message" | "open";
 const wsInstances: MockGoogleLiveWebSocket[] = [];
 const createdSources: MockAudioBufferSource[] = [];
 
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 class MockGoogleLiveWebSocket {
   static OPEN = 1;
 
@@ -166,6 +171,18 @@ function latestWebSocket(): MockGoogleLiveWebSocket {
   return ws;
 }
 
+function requireFirstTalkEvent(onTalkEvent: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const [call] = onTalkEvent.mock.calls;
+  if (!call) {
+    throw new Error("expected talk event");
+  }
+  const [event] = call;
+  if (!event || typeof event !== "object" || Array.isArray(event)) {
+    throw new Error("expected talk event record");
+  }
+  return event as Record<string, unknown>;
+}
+
 describe("GoogleLiveRealtimeTalkTransport", () => {
   beforeEach(() => {
     wsInstances.length = 0;
@@ -196,10 +213,10 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
 
     expect(ws.binaryType).toBe("arraybuffer");
     await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith("listening"));
-    const readyEvent = onTalkEvent.mock.calls[0]?.[0];
-    expect(readyEvent?.type).toBe("session.ready");
-    expect(readyEvent?.sessionId).toBe("main:google:provider-websocket");
-    expect(readyEvent?.transport).toBe("provider-websocket");
+    const readyEvent = requireFirstTalkEvent(onTalkEvent);
+    expect(readyEvent.type).toBe("session.ready");
+    expect(readyEvent.sessionId).toBe("main:google:provider-websocket");
+    expect(readyEvent.transport).toBe("provider-websocket");
   });
 
   it("decodes Blob setup messages", async () => {
@@ -296,7 +313,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     ws.emitOpen();
     ws.emitMessage(new Blob([JSON.stringify({ setupComplete: {} })]));
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushMicrotasks();
     expect(ws.sent).toStrictEqual([]);
     expect(onStatus).not.toHaveBeenCalled();
   });
@@ -345,8 +362,9 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       listener({ event: "chat", payload: { runId, state: "final", message: { text: "done" } } });
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(client.request).toHaveBeenCalledWith("chat.abort", { sessionKey: "main", runId });
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("chat.abort", { sessionKey: "main", runId });
+    });
     expect(onStatus).not.toHaveBeenCalledWith("listening");
   });
 });

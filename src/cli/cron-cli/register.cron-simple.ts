@@ -112,6 +112,21 @@ export function registerCronSimpleCommands(cron: Command) {
 
   addGatewayClientOptions(
     cron
+      .command("get")
+      .description("Get a cron job as JSON")
+      .argument("<id>", "Job id")
+      .action(async (id, opts) => {
+        try {
+          const res = await callGatewayFromCli("cron.get", opts, { id: String(id) });
+          printCronJson(res);
+        } catch (err) {
+          handleCronCliError(err);
+        }
+      }),
+  );
+
+  addGatewayClientOptions(
+    cron
       .command("show")
       .description("Show a cron job")
       .argument("<id>", "Job id or exact name")

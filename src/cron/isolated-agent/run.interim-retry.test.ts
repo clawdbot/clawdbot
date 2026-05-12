@@ -18,6 +18,30 @@ import {
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
+function requireEmbeddedAgentCall(index: number): { prompt?: string } {
+  const call = runEmbeddedPiAgentMock.mock.calls.at(index)?.[0] as { prompt?: string } | undefined;
+  if (!call) {
+    throw new Error(`Expected embedded PI agent call ${index}`);
+  }
+  return call;
+}
+
+function requireDeliveryRequest(): {
+  skipHeartbeatDelivery?: boolean;
+  deliveryPayloads?: unknown;
+} {
+  const request = dispatchCronDeliveryMock.mock.calls.at(0)?.[0] as
+    | {
+        skipHeartbeatDelivery?: boolean;
+        deliveryPayloads?: unknown;
+      }
+    | undefined;
+  if (!request) {
+    throw new Error("Expected cron delivery request");
+  }
+  return request;
+}
+
 describe("runCronIsolatedAgentTurn — interim ack retry", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
@@ -61,7 +85,7 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
 
     mockRunCronFallbackPassthrough();
     await runTurnAndExpectOk(2, 2);
-    expect(runEmbeddedPiAgentMock.mock.calls[1]?.[0]?.prompt).toContain(
+    expect(requireEmbeddedAgentCall(1).prompt).toContain(
       "previous response was only an acknowledgement",
     );
   });
@@ -132,12 +156,11 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("SYSTEM_RUN_DENIED: approval required");
-    expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        skipHeartbeatDelivery: false,
-        deliveryPayloads: [{ text: "SYSTEM_RUN_DENIED: approval required", isError: true }],
-      }),
-    );
+    const deliveryRequest = requireDeliveryRequest();
+    expect(deliveryRequest.skipHeartbeatDelivery).toBe(false);
+    expect(deliveryRequest.deliveryPayloads).toEqual([
+      { text: "SYSTEM_RUN_DENIED: approval required", isError: true },
+    ]);
   });
 
   it("does not retry when descendants were spawned in this run even if they already settled", async () => {

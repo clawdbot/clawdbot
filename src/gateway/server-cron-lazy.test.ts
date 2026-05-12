@@ -43,6 +43,17 @@ describe("createLazyGatewayCronState", () => {
     expect(cron.status).toHaveBeenCalledTimes(1);
   });
 
+  it("loads the cron service for direct job reads", async () => {
+    const cron = createCronService();
+    hoisted.setState(createCronState(cron));
+
+    const lazy = createLazyGatewayCronState(createParams());
+    await lazy.cron.readJob("demo");
+
+    expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
+    expect(cron.readJob).toHaveBeenCalledWith("demo");
+  });
+
   it("starts the loaded cron service once", async () => {
     const cron = createCronService();
     hoisted.setState(createCronState(cron));
@@ -140,6 +151,7 @@ function createCronService(): CronServiceContract {
     run: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
     enqueueRun: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
     getJob: vi.fn(() => undefined),
+    readJob: vi.fn(async () => undefined),
     getDefaultAgentId: vi.fn(() => "default"),
     wake: vi.fn(() => ({ ok: true })),
   };

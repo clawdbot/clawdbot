@@ -668,10 +668,8 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.task).toBe("resume prior work");
     const spawnContext = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 1, "spawnSubagentDirect");
     expect(spawnContext.agentSessionKey).toBe("agent:main:main");
-    expect(hoisted.spawnSubagentDirectMock.mock.calls[0]?.[0]).not.toHaveProperty(
-      "resumeSessionId",
-    );
-    expect(hoisted.spawnSubagentDirectMock.mock.calls[0]?.[0]).not.toHaveProperty("streamTo");
+    expect(spawnArgs).not.toHaveProperty("resumeSessionId");
+    expect(spawnArgs).not.toHaveProperty("streamTo");
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
@@ -717,10 +715,8 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
     const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
     expect(spawnArgs.task).toBe("analyze file");
-    expect(hoisted.spawnSubagentDirectMock.mock.calls[0]?.[0]).not.toHaveProperty(
-      "resumeSessionId",
-    );
-    expect(hoisted.spawnSubagentDirectMock.mock.calls[0]?.[0]).not.toHaveProperty("streamTo");
+    expect(spawnArgs).not.toHaveProperty("resumeSessionId");
+    expect(spawnArgs).not.toHaveProperty("streamTo");
   });
 
   it('treats model="default" as no explicit model override', async () => {

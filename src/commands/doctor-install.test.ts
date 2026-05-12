@@ -40,7 +40,10 @@ describe("noteSourceInstallIssues", () => {
       noteSourceInstallIssues(root);
 
       expect(note).toHaveBeenCalledWith(
-        expect.stringContaining("node_modules was not installed by pnpm"),
+        [
+          "- node_modules was not installed by pnpm (missing node_modules/.pnpm). Run: pnpm install so bundled plugins can load package-local dependencies.",
+          "- tsx binary is missing for source runs. Run: pnpm install.",
+        ].join("\n"),
         "Install",
       );
     });

@@ -14,15 +14,18 @@ describe("summarizeMatrixRawEvent", () => {
       },
     });
 
-    expect(summary).toMatchObject({
+    expect(summary).toEqual({
       eventId: "$image",
+      sender: "@gum:matrix.example.org",
+      body: undefined,
       msgtype: "m.image",
       attachment: {
         kind: "image",
         filename: "photo.jpg",
       },
+      timestamp: 123,
+      relatesTo: undefined,
     });
-    expect(summary.body).toBeUndefined();
   });
 
   it("preserves captions while marking media summaries", () => {
@@ -38,13 +41,18 @@ describe("summarizeMatrixRawEvent", () => {
       },
     });
 
-    expect(summary).toMatchObject({
+    expect(summary).toEqual({
+      eventId: "$image",
+      sender: "@gum:matrix.example.org",
       body: "can you see this?",
+      msgtype: "m.image",
       attachment: {
         kind: "image",
         caption: "can you see this?",
         filename: "photo.jpg",
       },
+      timestamp: 123,
+      relatesTo: undefined,
     });
   });
 
@@ -60,12 +68,17 @@ describe("summarizeMatrixRawEvent", () => {
       },
     });
 
-    expect(summary).toMatchObject({
+    expect(summary).toEqual({
+      eventId: "$image",
+      sender: "@gum:matrix.example.org",
       body: "see image.png",
+      msgtype: "m.image",
       attachment: {
         kind: "image",
         caption: "see image.png",
       },
+      timestamp: 123,
+      relatesTo: undefined,
     });
   });
 

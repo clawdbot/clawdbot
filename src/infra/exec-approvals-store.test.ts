@@ -88,9 +88,9 @@ function listExecApprovalTempFiles(homeDir: string): string[] {
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
-  expect(value).toBeTruthy();
-  expect(typeof value).toBe("object");
-  expect(Array.isArray(value)).toBe(false);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
   return value as Record<string, unknown>;
 }
 

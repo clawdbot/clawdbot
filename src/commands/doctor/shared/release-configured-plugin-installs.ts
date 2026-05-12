@@ -6,16 +6,15 @@ import { collectConfiguredModelRefs } from "../../../config/model-refs.js";
 import { detectPluginAutoEnableCandidates } from "../../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../../../config/version.js";
-import { isTruthyEnvValue } from "../../../infra/env.js";
 import { getOfficialExternalPluginCatalogEntry } from "../../../plugins/official-external-plugin-catalog.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search-install-catalog.js";
 import { VERSION } from "../../../version.js";
 import { repairMissingPluginInstallsForIds } from "./missing-configured-plugin-install.js";
 import { asObjectRecord } from "./object.js";
+import { isUpdatePackageSwapInProgress } from "./update-phase.js";
 
 export const CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION = "2026.5.2-beta.1";
-const UPDATE_IN_PROGRESS_ENV = "OPENCLAW_UPDATE_IN_PROGRESS";
 
 const AGENT_HARNESS_RUNTIME_PLUGIN_IDS: Readonly<Record<string, string>> = {
   // Codex can be selected as a harness for OpenAI models without a plugin entry.
@@ -327,7 +326,7 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
   touchedConfig: boolean;
 }> {
   const env = params.env ?? process.env;
-  const updateInProgress = isTruthyEnvValue(env[UPDATE_IN_PROGRESS_ENV]);
+  const updateInProgress = isUpdatePackageSwapInProgress(env);
   const configured = collectReleaseConfiguredPluginIds({ cfg: params.cfg, env });
   const shouldRunReleaseStep = shouldRunConfiguredPluginInstallReleaseStep({
     currentVersion: params.currentVersion,

@@ -250,7 +250,7 @@ describe("channel-streaming", () => {
     expect(
       formatChannelProgressDraftText({
         entry: { streaming: { progress: { label: "Shelling" } } },
-        lines: ["x".repeat(80)],
+        lines: ["x".repeat(160)],
         formatLine: (line) => `\`${line}\``,
       }),
     ).toBe(`Shelling\n• \`${"x".repeat(71)}…\``);
@@ -279,20 +279,20 @@ describe("channel-streaming", () => {
   });
 
   it("formats progress draft lines with shared tool display labels", () => {
-    expect(
-      buildChannelProgressDraftLine({
-        event: "tool",
-        name: "write",
-        args: { path: "/tmp/demo/index.html" },
-      }),
-    ).toMatchObject({
-      kind: "tool",
-      icon: "✍️",
-      label: "Write",
-      detail: "to /tmp/demo/index.html",
-      text: "✍️ Write: to /tmp/demo/index.html",
-      toolName: "write",
+    const progressLine = buildChannelProgressDraftLine({
+      event: "tool",
+      name: "write",
+      args: { path: "/tmp/demo/index.html" },
     });
+    if (!progressLine) {
+      throw new Error("expected tool progress draft line");
+    }
+    expect(progressLine.kind).toBe("tool");
+    expect(progressLine.icon).toBe("✍️");
+    expect(progressLine.label).toBe("Write");
+    expect(progressLine.detail).toBe("to /tmp/demo/index.html");
+    expect(progressLine.text).toBe("✍️ Write: to /tmp/demo/index.html");
+    expect(progressLine.toolName).toBe("write");
     expect(
       formatChannelProgressDraftLine({
         event: "tool",

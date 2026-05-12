@@ -20,7 +20,11 @@ describe("doctor include warning", () => {
     });
 
     expect(noteSpy).toHaveBeenCalledWith(
-      expect.stringContaining("$include paths must stay under:"),
+      [
+        "- $include paths must stay under: /tmp/openclaw-config",
+        '- Move shared include files under that directory and update to relative paths like "./shared/common.json".',
+        "- Error: Include path escapes config directory: /etc/passwd",
+      ].join("\n"),
       "Doctor warnings",
     );
   });

@@ -39,7 +39,6 @@ describe("compileMemoryWikiVault", () => {
 
   function expectDigestPage<T extends { path: string }>(pages: T[], pagePath: string): T {
     const page = pages.find((candidate) => candidate.path === pagePath);
-    expect(page).toBeDefined();
     if (!page) {
       throw new Error(`Expected digest page ${pagePath}`);
     }
@@ -48,7 +47,6 @@ describe("compileMemoryWikiVault", () => {
 
   function expectDigestCluster<T extends { key: string }>(clusters: T[], key: string): T {
     const cluster = clusters.find((candidate) => candidate.key === key);
-    expect(cluster).toBeDefined();
     if (!cluster) {
       throw new Error(`Expected digest contradiction cluster ${key}`);
     }

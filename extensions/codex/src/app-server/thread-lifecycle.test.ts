@@ -132,7 +132,7 @@ describe("Codex app-server model provider selection", () => {
       },
     );
 
-    expect(request).toMatchObject({ modelProvider: "openai" });
+    expect(request.modelProvider).toBe("openai");
   });
 
   it("keeps public OpenAI modelProvider when no native Codex auth profile is selected", () => {
@@ -143,7 +143,7 @@ describe("Codex app-server model provider selection", () => {
       developerInstructions: "test instructions",
     });
 
-    expect(request).toMatchObject({ modelProvider: "openai" });
+    expect(request.modelProvider).toBe("openai");
   });
 });
 

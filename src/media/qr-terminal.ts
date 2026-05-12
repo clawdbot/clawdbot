@@ -6,7 +6,7 @@ export async function renderQrTerminal(
 ): Promise<string> {
   const qrCode = await loadQrCodeRuntime();
   return await qrCode.toString(normalizeQrText(input), {
-    small: opts.small ?? true,
+    small: opts.small ?? false,
     type: "terminal",
   });
 }

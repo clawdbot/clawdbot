@@ -94,7 +94,7 @@ function expectSingleBlockReplyText(params: {
   text: string;
 }) {
   expect(params.onBlockReply).toHaveBeenCalledTimes(1);
-  expect(params.onBlockReply.mock.calls[0]?.[0]?.text).toBe(params.text);
+  expect(params.onBlockReply.mock.calls.at(0)?.[0]?.text).toBe(params.text);
   expect(params.subscription.assistantTexts).toEqual([params.text]);
 }
 
@@ -110,8 +110,8 @@ describe("subscribeEmbeddedPiSession", () => {
     await vi.waitFor(() => {
       expect(onBlockReply).toHaveBeenCalledTimes(1);
     });
-    const payload = onBlockReply.mock.calls[0][0];
-    expect(payload.text).toBe("Hello block");
+    const payload = onBlockReply.mock.calls.at(0)?.[0];
+    expect(payload?.text).toBe("Hello block");
     expect(subscription.assistantTexts).toEqual(["Hello block"]);
 
     const assistantMessage = {
@@ -147,7 +147,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await vi.waitFor(() => {
       expect(onBlockReply).toHaveBeenCalledTimes(1);
     });
-    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Final visible reply.");
+    expect(onBlockReply.mock.calls.at(0)?.[0]?.text).toBe("Final visible reply.");
     expect(subscription.assistantTexts).toEqual(["Final visible reply."]);
   });
 
@@ -198,7 +198,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Legacy answer");
+    expect(onBlockReply.mock.calls.at(0)?.[0]?.text).toBe("Legacy answer");
     expect(subscription.assistantTexts).toEqual(["Legacy answer"]);
 
     emit({
@@ -260,7 +260,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Hello world");
+    expect(onBlockReply.mock.calls.at(0)?.[0]?.text).toBe("Hello world");
     expect(subscription.assistantTexts).toEqual(["Hello world"]);
   });
 
@@ -286,7 +286,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Done.");
+    expect(onBlockReply.mock.calls.at(0)?.[0]?.text).toBe("Done.");
     expect(subscription.assistantTexts).toEqual(["Done."]);
   });
 

@@ -1,7 +1,7 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
+import * as capabilityProviderRuntime from "../plugins/capability-provider-runtime.js";
 import type { VideoGenerationProviderPlugin } from "../plugins/types.js";
 
 const BUILTIN_VIDEO_GENERATION_PROVIDERS: readonly VideoGenerationProviderPlugin[] = [];
@@ -22,7 +22,7 @@ function isSafeVideoGenerationProviderId(id: string | undefined): id is string {
 function resolvePluginVideoGenerationProviders(
   cfg?: OpenClawConfig,
 ): VideoGenerationProviderPlugin[] {
-  return resolvePluginCapabilityProviders({
+  return capabilityProviderRuntime.resolvePluginCapabilityProviders({
     key: "videoGenerationProviders",
     cfg,
   });

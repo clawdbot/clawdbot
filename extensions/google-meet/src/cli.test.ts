@@ -43,8 +43,9 @@ function captureStdout() {
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
   const record = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);
@@ -54,8 +55,9 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 function firstRecord(value: unknown): Record<string, unknown> {
   expect(Array.isArray(value)).toBe(true);
   const [record] = value as unknown[];
-  expect(record).toBeTypeOf("object");
-  expect(record).not.toBeNull();
+  if (!record || typeof record !== "object") {
+    throw new Error("expected first record");
+  }
   return record as Record<string, unknown>;
 }
 

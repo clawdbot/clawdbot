@@ -542,7 +542,7 @@ exit 0
         stdio: "ignore",
         windowsHide: true,
       });
-      expect(mockChild.unref).toHaveBeenCalled();
+      expect(mockChild.unref).toHaveBeenCalledTimes(1);
     });
 
     it("uses cmd.exe on Windows", async () => {
@@ -558,7 +558,7 @@ exit 0
         stdio: "ignore",
         windowsHide: true,
       });
-      expect(mockChild.unref).toHaveBeenCalled();
+      expect(mockChild.unref).toHaveBeenCalledTimes(1);
     });
 
     it("quotes cmd.exe /c paths with metacharacters on Windows", async () => {

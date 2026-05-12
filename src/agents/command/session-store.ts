@@ -83,6 +83,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
 
   const usage = result.meta.agentMeta?.usage;
   const promptTokens = result.meta.agentMeta?.promptTokens;
+  const lastCallUsage = result.meta.agentMeta?.lastCallUsage;
   const compactionTokensAfter =
     typeof result.meta.agentMeta?.compactionTokensAfter === "number" &&
     Number.isFinite(result.meta.agentMeta.compactionTokensAfter) &&
@@ -177,7 +178,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
     const { estimateUsageCost, resolveModelCostConfig } = await getUsageFormatModule();
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
-    const usageForContext = isCliProvider(providerUsed, cfg) ? undefined : usage;
+    const usageForContext = isCliProvider(providerUsed, cfg)
+      ? promptTokens
+        ? undefined
+        : lastCallUsage
+      : usage;
     const totalTokens = deriveSessionTotalTokens({
       usage: promptTokens ? undefined : usageForContext,
       contextTokens,

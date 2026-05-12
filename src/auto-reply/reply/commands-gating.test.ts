@@ -506,6 +506,9 @@ describe("command gating", () => {
     const setResult = await handleConfigCommand(setParams, true);
     expect(setResult?.shouldContinue).toBe(false);
     expect(setResult?.reply?.text).toContain("Config updated");
-    expect(replaceConfigFileMock).toHaveBeenCalled();
+    expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
+    expect(replaceConfigFileMock).toHaveBeenCalledWith(
+      expect.objectContaining({ afterWrite: { mode: "auto" } }),
+    );
   });
 });

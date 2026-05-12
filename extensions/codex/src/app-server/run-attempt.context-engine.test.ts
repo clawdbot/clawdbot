@@ -314,6 +314,65 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(openSpy).not.toHaveBeenCalled();
   });
 
+  it("uses the runtime token budget for large Codex context-engine projections", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const longContext = `large LCM context start ${"x".repeat(30_000)} LARGE_CONTEXT_END`;
+    const contextEngine = createContextEngine({
+      assemble: vi.fn(async () => ({
+        messages: [assistantMessage(longContext, 10)],
+        estimatedTokens: 10_000,
+        systemPromptAddition: "context-engine system",
+      })),
+    });
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.contextTokenBudget = 80_000;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    const inputText = getRequestInputText(harness);
+    expect(inputText.length).toBeGreaterThan(30_000);
+    expect(inputText).toContain("LARGE_CONTEXT_END");
+    expect(inputText).not.toContain("[truncated ");
+
+    await harness.completeTurn();
+    await run;
+  });
+
+  it("uses configured compaction reserve when sizing Codex context-engine projections", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const longContext = `configured reserve context start ${"x".repeat(30_000)} CONFIG_END`;
+    const contextEngine = createContextEngine({
+      assemble: vi.fn(async () => ({
+        messages: [assistantMessage(longContext, 10)],
+        estimatedTokens: 10_000,
+        systemPromptAddition: "context-engine system",
+      })),
+    });
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.contextTokenBudget = 80_000;
+    params.config = {
+      agents: { defaults: { compaction: { reserveTokens: 60_000, reserveTokensFloor: 0 } } },
+    } as EmbeddedRunAttemptParams["config"];
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    const inputText = getRequestInputText(harness);
+    expect(inputText).toContain("configured reserve context start");
+    expect(inputText).toContain("[truncated ");
+    expect(inputText).not.toContain("CONFIG_END");
+
+    await harness.completeTurn();
+    await run;
+  });
+
   it("keeps current-turn context at the front of the Codex context-engine prompt", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

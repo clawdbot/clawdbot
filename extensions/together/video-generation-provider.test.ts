@@ -22,6 +22,14 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function requireFirstPostJsonRequest(label: string): Record<string, unknown> {
+  const [call] = postJsonRequestMock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return requireRecord(call[0], label);
+}
+
 describe("together video generation provider", () => {
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildTogetherVideoGenerationProvider());
@@ -59,7 +67,7 @@ describe("together video generation provider", () => {
     });
 
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const request = requireRecord(postJsonRequestMock.mock.calls[0]?.[0], "Together request");
+    const request = requireFirstPostJsonRequest("Together request");
     expect(request.url).toBe("https://api.together.xyz/v1/videos");
     const body = requireRecord(request.body, "Together request body");
     expect(body.model).toBe("Wan-AI/Wan2.2-T2V-A14B");

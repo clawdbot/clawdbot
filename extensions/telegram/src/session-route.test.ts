@@ -9,11 +9,9 @@ describe("telegram session route", () => {
       target: "12345:topic:99",
     });
 
-    expect(route).toMatchObject({
-      sessionKey: "agent:main:main:thread:99",
-      baseSessionKey: "agent:main:main",
-      threadId: 99,
-    });
+    expect(route?.sessionKey).toBe("agent:main:main:thread:99");
+    expect(route?.baseSessionKey).toBe("agent:main:main");
+    expect(route?.threadId).toBe(99);
   });
 
   it("recovers direct topic thread routes from currentSessionKey when the DM scope is isolated", async () => {
@@ -24,11 +22,9 @@ describe("telegram session route", () => {
       currentSessionKey: "agent:main:telegram:direct:12345:thread:12345:99",
     });
 
-    expect(route).toMatchObject({
-      sessionKey: "agent:main:telegram:direct:12345:thread:12345:99",
-      baseSessionKey: "agent:main:telegram:direct:12345",
-      threadId: "12345:99",
-    });
+    expect(route?.sessionKey).toBe("agent:main:telegram:direct:12345:thread:12345:99");
+    expect(route?.baseSessionKey).toBe("agent:main:telegram:direct:12345");
+    expect(route?.threadId).toBe("12345:99");
   });
 
   it('does not recover currentSessionKey threads for shared dmScope "main" DMs', async () => {
@@ -39,10 +35,8 @@ describe("telegram session route", () => {
       currentSessionKey: "agent:main:main:thread:12345:99",
     });
 
-    expect(route).toMatchObject({
-      sessionKey: "agent:main:main",
-      baseSessionKey: "agent:main:main",
-    });
+    expect(route?.sessionKey).toBe("agent:main:main");
+    expect(route?.baseSessionKey).toBe("agent:main:main");
     expect(route?.threadId).toBeUndefined();
   });
 
@@ -53,10 +47,8 @@ describe("telegram session route", () => {
       target: "-100:topic:99",
     });
 
-    expect(route).toMatchObject({
-      sessionKey: "agent:main:telegram:group:-100:topic:99",
-      baseSessionKey: "agent:main:telegram:group:-100:topic:99",
-      threadId: 99,
-    });
+    expect(route?.sessionKey).toBe("agent:main:telegram:group:-100:topic:99");
+    expect(route?.baseSessionKey).toBe("agent:main:telegram:group:-100:topic:99");
+    expect(route?.threadId).toBe(99);
   });
 });

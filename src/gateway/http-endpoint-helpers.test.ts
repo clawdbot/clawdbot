@@ -107,6 +107,7 @@ describe("handleGatewayPostJsonEndpoint", () => {
     const mockedSendMissingScopeForbidden = vi.mocked(sendMissingScopeForbidden);
     mockedSendMissingScopeForbidden.mockClear();
     vi.mocked(readJsonBodyOrError).mockClear();
+    const res = {} as unknown as ServerResponse;
 
     const result = await handleGatewayPostJsonEndpoint(
       {
@@ -114,7 +115,7 @@ describe("handleGatewayPostJsonEndpoint", () => {
         method: "POST",
         headers: { host: "localhost" },
       } as unknown as IncomingMessage,
-      {} as unknown as ServerResponse,
+      res,
       {
         pathname: "/v1/ok",
         auth: {} as unknown as ResolvedGatewayAuth,
@@ -127,10 +128,7 @@ describe("handleGatewayPostJsonEndpoint", () => {
     expect(vi.mocked(authorizeOperatorScopesForMethod)).toHaveBeenCalledWith("chat.send", [
       "operator.approvals",
     ]);
-    expect(mockedSendMissingScopeForbidden).toHaveBeenCalledWith(
-      expect.anything(),
-      "operator.write",
-    );
+    expect(mockedSendMissingScopeForbidden).toHaveBeenCalledWith(res, "operator.write");
     expect(vi.mocked(readJsonBodyOrError)).not.toHaveBeenCalled();
   });
 
@@ -159,13 +157,11 @@ describe("handleGatewayPostJsonEndpoint", () => {
       },
     );
 
-    expect(resolveOperatorScopes).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        authMethod: "token",
-        trustDeclaredOperatorScopes: false,
-      }),
-    );
+    const [, requestAuth] = (resolveOperatorScopes.mock.calls[0] as unknown as
+      | [IncomingMessage, { authMethod?: string; trustDeclaredOperatorScopes: boolean }]
+      | undefined) ?? [undefined, undefined];
+    expect(requestAuth?.authMethod).toBe("token");
+    expect(requestAuth?.trustDeclaredOperatorScopes).toBe(false);
     expect(result).toEqual({
       body: { ok: true },
       requestAuth: { authMethod: "token", trustDeclaredOperatorScopes: false },

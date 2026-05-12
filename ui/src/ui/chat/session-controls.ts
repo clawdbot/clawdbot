@@ -1,5 +1,7 @@
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { t } from "../../i18n/index.ts";
+import { CHAT_SESSIONS_ACTIVE_MINUTES, CHAT_SESSIONS_REFRESH_LIMIT } from "../app-chat.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import { createChatModelOverride } from "../chat-model-ref.ts";
 import {
@@ -11,6 +13,7 @@ import { loadSessions } from "../controllers/sessions.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import {
   buildAgentMainSessionKey,
+  isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../session-key.ts";
@@ -56,7 +59,7 @@ export function renderChatSessionSelect(
       <label class="field chat-controls__session chat-controls__session-picker">
         <select
           data-chat-session-select="true"
-          aria-label="Chat session"
+          aria-label=${t("chat.selectors.session")}
           .value=${state.sessionKey}
           title=${selectedSessionLabel}
           ?disabled=${!state.connected || sessionGroups.length === 0}
@@ -111,7 +114,7 @@ function renderChatAgentSelect(
     <label class="field chat-controls__session chat-controls__agent">
       <select
         data-chat-agent-filter="true"
-        aria-label="Filter sessions by agent"
+        aria-label=${t("chat.selectors.agentFilter")}
         title=${selectedLabel}
         .value=${activeAgentId}
         ?disabled=${!state.connected}
@@ -138,8 +141,8 @@ function renderChatAgentSelect(
 
 async function refreshSessionOptions(state: AppViewState) {
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
-    activeMinutes: 0,
-    limit: 0,
+    activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+    limit: CHAT_SESSIONS_REFRESH_LIMIT,
     includeGlobal: true,
     includeUnknown: true,
     showArchived: state.sessionsShowArchived,
@@ -175,7 +178,7 @@ function renderChatModelSelect(state: AppViewState) {
     <label class="field chat-controls__session chat-controls__model">
       <select
         data-chat-model-select="true"
-        aria-label="Chat model"
+        aria-label=${t("chat.selectors.model")}
         title=${selectedLabel}
         ?disabled=${disabled}
         @change=${async (e: Event) => {
@@ -318,7 +321,7 @@ export function renderChatThinkingSelect(state: AppViewState) {
       <select
         class="chat-controls__thinking-select-full"
         data-chat-thinking-select="true"
-        aria-label="Chat thinking level"
+        aria-label=${t("chat.selectors.thinkingLevel")}
         title=${selectedLabel}
         ?disabled=${disabled}
         @change=${onChange}
@@ -562,6 +565,7 @@ type SessionOptionEntry = {
   label: string;
   scopeLabel: string;
   title: string;
+  parentKey?: string;
 };
 
 export type SessionOptionGroup = {
@@ -672,7 +676,7 @@ export function resolveSessionOptionGroups(
     return created;
   };
 
-  const addOption = (key: string) => {
+  const addOption = (key: string, parentKey?: string, isChild?: boolean) => {
     if (!key || seenKeys.has(key)) {
       return;
     }
@@ -686,12 +690,16 @@ export function resolveSessionOptionGroups(
         )
       : ensureGroup("other", "Other Sessions");
     const scopeLabel = normalizeOptionalString(parsed?.rest) ?? key;
-    const label = resolveSessionScopedOptionLabel(key, row, parsed?.rest);
+    let label = resolveSessionScopedOptionLabel(key, row, parsed?.rest);
+    if (isChild) {
+      label = `└─ ${label.replace(/^Subagent:\s*/i, "")}`;
+    }
     group.options.push({
       key,
       label,
       scopeLabel,
       title: key,
+      ...(parentKey ? { parentKey } : {}),
     });
   };
 
@@ -708,12 +716,47 @@ export function resolveSessionOptionGroups(
     if (hideCron && row.key !== sessionKey && isCronSessionKey(row.key)) {
       continue;
     }
-    addOption(row.key);
+    const isSubagent = isSubagentSessionKey(row.key) || !!row.spawnedBy;
+    if (isSubagent && row.spawnedBy && byKey.has(row.spawnedBy)) {
+      addOption(row.key, row.spawnedBy, true);
+    } else {
+      addOption(row.key);
+    }
   }
   if (byKey.has(sessionKey)) {
     addOption(sessionKey);
   } else if (isAgentMainSessionKey(sessionKey)) {
     addOption(sessionKey);
+  }
+
+  for (const group of groups.values()) {
+    const options = group.options;
+    const optionKeys = new Set(options.map((option) => option.key));
+    const childrenByParent = new Map<string, SessionOptionEntry[]>();
+    for (const option of options) {
+      if (option.parentKey && optionKeys.has(option.parentKey)) {
+        const siblings = childrenByParent.get(option.parentKey);
+        if (siblings) {
+          siblings.push(option);
+        } else {
+          childrenByParent.set(option.parentKey, [option]);
+        }
+      }
+    }
+    if (childrenByParent.size > 0) {
+      const reordered: SessionOptionEntry[] = [];
+      for (const option of options) {
+        if (option.parentKey && optionKeys.has(option.parentKey)) {
+          continue;
+        }
+        reordered.push(option);
+        const children = childrenByParent.get(option.key);
+        if (children) {
+          reordered.push(...children);
+        }
+      }
+      options.splice(0, options.length, ...reordered);
+    }
   }
 
   for (const group of groups.values()) {

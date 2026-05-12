@@ -241,17 +241,30 @@ describe("renderApp assistant avatar routing", () => {
     expect(shell?.style.getPropertyValue("--chat-message-max-width")).toBe("min(1280px, 82%)");
   });
 
-  it("passes tools.exec.security to Quick Settings", () => {
-    renderApp(
-      createState({
-        configForm: {
-          tools: { exec: { security: "full" } },
-          agents: { defaults: { exec: { security: "deny" } } },
-        },
-      }),
-    );
+  it("passes security quick setting fields to Quick Settings", () => {
+    const state = createState({
+      configForm: {
+        browser: { enabled: false },
+        tools: { profile: "messaging", exec: { security: "full" } },
+        agents: { defaults: { exec: { security: "deny" } } },
+      },
+    });
+
+    renderApp(state);
 
     expect(quickSettingsProps.current?.security.execPolicy).toBe("full");
+    expect(quickSettingsProps.current?.security.browserEnabled).toBe(false);
+    expect(quickSettingsProps.current?.security.toolProfile).toBe("messaging");
+
+    quickSettingsProps.current?.onBrowserEnabledToggle?.(true);
+    quickSettingsProps.current?.onToolProfileChange?.("full");
+
+    expect(state.configForm?.browser).toEqual({ enabled: true });
+    const tools = state.configForm?.tools as
+      | { profile?: string; exec?: { security?: string } }
+      | undefined;
+    expect(tools?.profile).toBe("full");
+    expect(tools?.exec?.security).toBe("full");
   });
 
   it("renders stale cron state containing a job without a payload", () => {

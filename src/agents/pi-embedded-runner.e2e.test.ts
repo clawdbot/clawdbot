@@ -320,8 +320,9 @@ describe("runEmbeddedPiAgent", () => {
       enqueue: immediateEnqueue,
     });
 
-    const resolveModelCall = (resolveModelAsyncMock as unknown as { mock: { calls: unknown[][] } })
-      .mock.calls[0];
+    const resolveModelCall = (
+      resolveModelAsyncMock as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls.at(0);
     expect(resolveModelCall?.[0]).toBe("openrouter");
     expect(resolveModelCall?.[1]).toBe("openrouter/auto");
     expect(resolveModelCall?.[2]).toBe(agentDir);
@@ -369,7 +370,7 @@ describe("runEmbeddedPiAgent", () => {
       sessionId: "resume-123",
       agentId: undefined,
     });
-    const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as { sessionKey?: string };
+    const firstCall = runEmbeddedAttemptMock.mock.calls.at(0)?.[0] as { sessionKey?: string };
     expect(firstCall.sessionKey).toBe("agent:test:resolved");
   });
 
@@ -410,7 +411,7 @@ describe("runEmbeddedPiAgent", () => {
       sessionId: "resume-124",
       agentId: undefined,
     });
-    const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as { sessionKey?: string };
+    const firstCall = runEmbeddedAttemptMock.mock.calls.at(0)?.[0] as { sessionKey?: string };
     expect(firstCall.sessionKey).toBeUndefined();
   });
 
@@ -705,6 +706,6 @@ describe("runEmbeddedPiAgent", () => {
     const result = await runWithOrphanedSingleUserMessage("orphaned user", nextSessionKey());
 
     expect(result.meta.error).toBeUndefined();
-    expect(result.payloads?.length ?? 0).toBeGreaterThan(0);
+    expect(result.payloads?.[0]?.text).toBe("ok");
   });
 });

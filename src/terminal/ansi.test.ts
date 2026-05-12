@@ -7,6 +7,7 @@ describe("terminal ansi helpers", () => {
     expect(stripAnsi("\u001B[2K\u001B[1Ared")).toBe("red");
     expect(stripAnsi("\u001B]8;;https://openclaw.ai\u001B\\link\u001B]8;;\u001B\\")).toBe("link");
     expect(stripAnsi("\u001B]8;;https://openclaw.ai\u0007link\u001B]8;;\u0007")).toBe("link");
+    expect(stripAnsi("copy\u001B]52;c;YWJj\u0007safe")).toBe("copysafe");
   });
 
   it("sanitizes control characters for log-safe interpolation", () => {

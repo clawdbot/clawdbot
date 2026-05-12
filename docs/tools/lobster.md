@@ -360,6 +360,6 @@ One public example: a "second brain" CLI + Lobster pipelines that manage three M
 
 ## Related
 
-- [Automation & Tasks](/automation) - scheduling Lobster workflows
+- [Automation](/automation) - scheduling Lobster workflows
 - [Automation Overview](/automation) - all automation mechanisms
 - [Tools Overview](/tools) - all available agent tools

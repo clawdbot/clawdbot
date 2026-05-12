@@ -80,6 +80,16 @@ function createDispatchSpy() {
   return dispatchSpy;
 }
 
+function firstDispatchReplyCall(): Parameters<
+  typeof dispatcherModule.dispatchReplyWithDispatcher
+>[0] {
+  const firstCall = vi.mocked(dispatcherModule.dispatchReplyWithDispatcher).mock.calls.at(0);
+  if (!firstCall) {
+    throw new Error("expected dispatchReplyWithDispatcher call");
+  }
+  return firstCall[0];
+}
+
 async function runGuildSlashCommand(params?: {
   userId?: string;
   mutateConfig?: (cfg: OpenClawConfig) => void;
@@ -458,8 +468,10 @@ describe("Discord native slash commands with commands.allowFrom", () => {
       },
     });
 
-    const dispatchCall = vi.mocked(dispatcherModule.dispatchReplyWithDispatcher).mock.calls[0]?.[0];
-    await dispatchCall?.dispatcherOptions.deliver({ text: longReply }, { kind: "final" });
+    await firstDispatchReplyCall().dispatcherOptions.deliver(
+      { text: longReply },
+      { kind: "final" },
+    );
 
     expect(interaction.followUp).toHaveBeenCalledWith({ content: longReply, ephemeral: true });
     expect(interaction.reply).not.toHaveBeenCalled();

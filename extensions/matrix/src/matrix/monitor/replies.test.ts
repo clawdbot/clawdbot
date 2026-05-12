@@ -24,7 +24,9 @@ import { deliverMatrixReplies } from "./replies.js";
 
 function sendOptions(index: number): Record<string, unknown> {
   const options = sendMessageMatrixMock.mock.calls[index]?.[2];
-  expect(options).toBeDefined();
+  if (!options || typeof options !== "object") {
+    throw new Error(`Expected send options at call ${index}`);
+  }
   return options as Record<string, unknown>;
 }
 

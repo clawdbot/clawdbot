@@ -4315,7 +4315,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(tailDispatchEvent?.sendPolicy).toBe("deny");
     expect(tailDispatchEvent?.suppressUserDelivery).toBe(true);
     expect(tailDispatchEvent?.suppressReplyLifecycle).toBe(true);
-    expect(tailDispatchCall?.[1]).toBeDefined();
+    if (tailDispatchCall?.[1] === undefined) {
+      throw new Error("Expected tail dispatch metadata");
+    }
   });
 
   it("suppresses final reply delivery when sendPolicy is deny", async () => {
@@ -4656,7 +4658,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(replyDispatchEvent?.suppressReplyLifecycle).toBe(false);
     expect(replyDispatchEvent?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(replyDispatchEvent?.sendPolicy).toBe("allow");
-    expect(replyDispatchCall?.[1]).toBeDefined();
+    if (replyDispatchCall?.[1] === undefined) {
+      throw new Error("Expected reply dispatch metadata");
+    }
   });
 
   it("preserves hook-blocked metadata when source delivery is message-tool-only", async () => {

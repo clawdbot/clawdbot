@@ -417,9 +417,40 @@ function optionalString(source: JsonObject, key: string) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function childProcessBaseEnv() {
+  const keys = [
+    "CI",
+    "COREPACK_HOME",
+    "FORCE_COLOR",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "NODE_OPTIONS",
+    "OPENCLAW_BUILD_PRIVATE_QA",
+    "OPENCLAW_ENABLE_PRIVATE_QA_CLI",
+    "PATH",
+    "PNPM_HOME",
+    "SHELL",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "USER",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+  ];
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of keys) {
+    const value = process.env[key];
+    if (value) {
+      env[key] = value;
+    }
+  }
+  return env;
+}
+
 function mockServerEnv(params: { mockPort: number; mockResponseText: string; requestLog: string }) {
   return {
-    ...process.env,
+    ...childProcessBaseEnv(),
     MOCK_PORT: String(params.mockPort),
     MOCK_REQUEST_LOG: params.requestLog,
     SUCCESS_MARKER: params.mockResponseText,
@@ -428,7 +459,7 @@ function mockServerEnv(params: { mockPort: number; mockResponseText: string; req
 
 function gatewayEnv(params: { configPath: string; stateDir: string; sutToken: string }) {
   return {
-    ...process.env,
+    ...childProcessBaseEnv(),
     OPENAI_API_KEY: "sk-openclaw-e2e-mock",
     OPENCLAW_CONFIG_PATH: params.configPath,
     OPENCLAW_STATE_DIR: params.stateDir,

@@ -40,12 +40,11 @@ describe("telegram inbound media", () => {
             runtimeError: ReturnType<typeof vi.fn>;
           }) => {
             expect(params.runtimeError).not.toHaveBeenCalled();
-            expect(params.fetchSpy).toHaveBeenCalledWith(
-              expect.objectContaining({
-                url: "https://api.telegram.org/file/bottok/photos/1.jpg",
-                filePathHint: "photos/1.jpg",
-              }),
-            );
+            const downloadRequest = params.fetchSpy.mock.calls.at(-1)?.[0] as
+              | { filePathHint?: string; url?: string }
+              | undefined;
+            expect(downloadRequest?.url).toBe("https://api.telegram.org/file/bottok/photos/1.jpg");
+            expect(downloadRequest?.filePathHint).toBe("photos/1.jpg");
             expect(params.replySpy).toHaveBeenCalledTimes(1);
             const payload = params.replySpy.mock.calls[0][0];
             expect(payload.Body).toContain("<media:image>");
@@ -162,10 +161,9 @@ describe("telegram inbound media", () => {
     });
 
     expect(runtimeError).not.toHaveBeenCalled();
-    expect(proxyFetch).toHaveBeenCalledWith(
-      "https://api.telegram.org/file/bottok/photos/2.jpg",
-      expect.objectContaining({ redirect: "manual" }),
-    );
+    const proxyCall = proxyFetch.mock.calls.at(-1);
+    expect(proxyCall?.[0]).toBe("https://api.telegram.org/file/bottok/photos/2.jpg");
+    expect((proxyCall?.[1] as RequestInit | undefined)?.redirect).toBe("manual");
 
     globalFetchSpy.mockRestore();
   });
@@ -294,17 +292,13 @@ describe("telegram media groups", () => {
         );
 
         expect(runtimeError).not.toHaveBeenCalled();
-        expect(fetchSpy).toHaveBeenNthCalledWith(
-          1,
-          expect.objectContaining({
-            url: "http://127.0.0.1:8081/custom-bot-api/file/bottok/photos/photo1.jpg",
-          }),
+        const firstDownloadRequest = fetchSpy.mock.calls[0]?.[0] as { url?: string } | undefined;
+        const secondDownloadRequest = fetchSpy.mock.calls[1]?.[0] as { url?: string } | undefined;
+        expect(firstDownloadRequest?.url).toBe(
+          "http://127.0.0.1:8081/custom-bot-api/file/bottok/photos/photo1.jpg",
         );
-        expect(fetchSpy).toHaveBeenNthCalledWith(
-          2,
-          expect.objectContaining({
-            url: "http://127.0.0.1:8081/custom-bot-api/file/bottok/photos/photo2.jpg",
-          }),
+        expect(secondDownloadRequest?.url).toBe(
+          "http://127.0.0.1:8081/custom-bot-api/file/bottok/photos/photo2.jpg",
         );
       } finally {
         telegramBotDepsForTest.getRuntimeConfig = originalLoadConfig;

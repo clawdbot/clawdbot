@@ -65,6 +65,14 @@ async function safeInteractionCall<T>(_label: string, fn: () => Promise<T>): Pro
   return await fn();
 }
 
+function firstDispatchCall(dispatchSpy: { mock: { calls: unknown[][] } }) {
+  const firstCall = dispatchSpy.mock.calls.at(0);
+  if (!firstCall) {
+    throw new Error("expected Discord command interaction dispatch");
+  }
+  return firstCall[0] as Parameters<DispatchDiscordCommandInteraction>[0];
+}
+
 describe("discord command argument fallback", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -90,7 +98,7 @@ describe("discord command argument fallback", () => {
     } satisfies CommandArgData);
 
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    const dispatchCall = dispatchSpy.mock.calls[0]?.[0];
+    const dispatchCall = firstDispatchCall(dispatchSpy);
     expect(dispatchCall?.prompt).toBe("/think high");
     expect(dispatchCall?.responseEphemeral).toBe(false);
     expect(dispatchCall?.accountId).toBe("default");

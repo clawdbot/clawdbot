@@ -88,14 +88,17 @@ describe("models-config merge helpers", () => {
       } as ProviderConfig,
     );
 
-    const model = merged.models?.[0];
-    expect(merged.models).toHaveLength(1);
-    expect(model?.id).toBe("gpt-5.4");
-    expect(model?.input).toEqual(["text"]);
-    expect(model?.reasoning).toBe(false);
-    expect(model?.cost).toEqual({ input: 123, output: 456, cacheRead: 0, cacheWrite: 0 });
-    expect(model?.contextWindow).toBe(2_000_000);
-    expect(model?.maxTokens).toBe(200_000);
+    expect(merged.models).toEqual([
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        input: ["text"],
+        reasoning: false,
+        cost: { input: 123, output: 456, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 2_000_000,
+        maxTokens: 200_000,
+      },
+    ]);
   });
 
   it("preserves explicit input modality overrides when implicit metadata has the same model id", () => {
@@ -127,10 +130,16 @@ describe("models-config merge helpers", () => {
       } as ProviderConfig,
     );
 
-    const model = merged.models?.[0];
-    expect(model?.id).toBe("qwen3-vl:latest");
-    expect(model?.input).toEqual(["text", "image"]);
-    expect(model?.reasoning).toBe(true);
+    expect(merged.models).toEqual([
+      {
+        id: "qwen3-vl:latest",
+        name: "Qwen3 VL",
+        input: ["text", "image"],
+        reasoning: true,
+        contextWindow: 128_000,
+        maxTokens: 8192,
+      },
+    ]);
   });
 
   it("merges explicit providers onto trimmed keys", () => {

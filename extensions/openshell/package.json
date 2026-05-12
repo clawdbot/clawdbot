@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/openshell-sandbox",
-  "version": "2026.5.10-beta.1",
+  "version": "2026.5.12-beta.1",
   "private": true,
   "description": "OpenClaw OpenShell sandbox backend",
   "type": "module",
   "dependencies": {
     "openshell": "0.1.0",
-    "zod": "^4.4.3"
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

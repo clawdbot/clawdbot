@@ -285,10 +285,20 @@ describe("googlechatPlugin outbound sendMedia", () => {
         },
       },
     });
-    expect(proofs).toContainEqual({ capability: "text", status: "verified" });
-    expect(proofs).toContainEqual({ capability: "media", status: "verified" });
-    expect(proofs).toContainEqual({ capability: "thread", status: "verified" });
-    expect(proofs).toContainEqual({ capability: "messageSendingHooks", status: "verified" });
+    expect(proofs).toStrictEqual([
+      { capability: "text", status: "verified" },
+      { capability: "media", status: "verified" },
+      { capability: "payload", status: "not_declared" },
+      { capability: "silent", status: "not_declared" },
+      { capability: "replyTo", status: "not_declared" },
+      { capability: "thread", status: "verified" },
+      { capability: "nativeQuote", status: "not_declared" },
+      { capability: "messageSendingHooks", status: "verified" },
+      { capability: "batch", status: "not_declared" },
+      { capability: "reconcileUnknownSend", status: "not_declared" },
+      { capability: "afterSendSuccess", status: "not_declared" },
+      { capability: "afterCommit", status: "not_declared" },
+    ]);
   });
 
   it("chunks outbound text without requiring Google Chat runtime initialization", () => {
@@ -703,8 +713,10 @@ describe("googlechat directory", () => {
       limit: undefined,
       runtime: runtimeEnv,
     });
-    expect(peers).toContainEqual({ kind: "user", id: "users/alice" });
-    expect(peers).toContainEqual({ kind: "user", id: "bob" });
+    expect(peers).toStrictEqual([
+      { kind: "user", id: "users/alice" },
+      { kind: "user", id: "bob" },
+    ]);
 
     const groups = await directory.listGroups({
       cfg,
@@ -713,8 +725,10 @@ describe("googlechat directory", () => {
       limit: undefined,
       runtime: runtimeEnv,
     });
-    expect(groups).toContainEqual({ kind: "group", id: "spaces/AAA" });
-    expect(groups).toContainEqual({ kind: "group", id: "spaces/BBB" });
+    expect(groups).toStrictEqual([
+      { kind: "group", id: "spaces/AAA" },
+      { kind: "group", id: "spaces/BBB" },
+    ]);
   });
 
   it("normalizes spaced provider-prefixed dm allowlist entries", async () => {
@@ -736,8 +750,10 @@ describe("googlechat directory", () => {
       limit: undefined,
       runtime: runtimeEnv,
     });
-    expect(peers).toContainEqual({ kind: "user", id: "users/alice" });
-    expect(peers).toContainEqual({ kind: "user", id: "users/bob@example.com" });
+    expect(peers).toStrictEqual([
+      { kind: "user", id: "users/alice" },
+      { kind: "user", id: "users/bob@example.com" },
+    ]);
   });
 });
 

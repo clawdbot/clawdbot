@@ -27,6 +27,25 @@ vi.mock("./cdp.js", () => ({
   formatAriaSnapshot,
 }));
 
+type ScopedCdpClientOptions = {
+  cdpUrl?: unknown;
+  fn?: unknown;
+  page?: unknown;
+  targetId?: unknown;
+};
+
+function requireScopedCdpClientOptions(): ScopedCdpClientOptions {
+  const [call] = withPageScopedCdpClient.mock.calls;
+  if (!call) {
+    throw new Error("expected scoped CDP client call");
+  }
+  const [options] = call;
+  if (!options || typeof options !== "object") {
+    throw new Error("expected scoped CDP client options");
+  }
+  return options as ScopedCdpClientOptions;
+}
+
 describe("pw-tools-core aria snapshot storage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -53,11 +72,11 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(getPageForTargetId).toHaveBeenCalledTimes(1);
     expect(ensurePageState).toHaveBeenCalledWith(page);
     expect(withPageScopedCdpClient).toHaveBeenCalledTimes(1);
-    const scopedClientOptions = withPageScopedCdpClient.mock.calls[0]?.[0];
-    expect(scopedClientOptions?.cdpUrl).toBe("http://127.0.0.1:9222");
-    expect(scopedClientOptions?.page).toBe(page);
-    expect(scopedClientOptions?.targetId).toBe("tab-1");
-    expect(typeof scopedClientOptions?.fn).toBe("function");
+    const scopedClientOptions = requireScopedCdpClientOptions();
+    expect(scopedClientOptions.cdpUrl).toBe("http://127.0.0.1:9222");
+    expect(scopedClientOptions.page).toBe(page);
+    expect(scopedClientOptions.targetId).toBe("tab-1");
+    expect(typeof scopedClientOptions.fn).toBe("function");
     expect(markBackendDomRefsOnPage).toHaveBeenCalledWith({
       page,
       refs: [{ ref: "ax1", backendDOMNodeId: 42 }],

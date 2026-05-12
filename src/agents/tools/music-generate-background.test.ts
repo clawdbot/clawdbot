@@ -22,10 +22,9 @@ const {
 } = await import("./music-generate-background.js");
 
 function getDeliveredInternalEvents(): Array<Record<string, unknown>> {
-  const params = announceDeliveryMocks.deliverSubagentAnnouncement.mock.calls[0]?.[0] as
+  const params = announceDeliveryMocks.deliverSubagentAnnouncement.mock.calls.at(0)?.[0] as
     | { internalEvents?: unknown }
     | undefined;
-  expect(params?.internalEvents).toBeTruthy();
   if (!Array.isArray(params?.internalEvents)) {
     throw new Error("Expected delivered internal events");
   }
@@ -36,7 +35,9 @@ function expectReplyInstructionContains(text: string) {
   const event = getDeliveredInternalEvents().find(
     (item) => typeof item.replyInstruction === "string" && item.replyInstruction.includes(text),
   );
-  expect(event).toBeDefined();
+  if (!event) {
+    throw new Error(`Expected reply instruction containing ${text}`);
+  }
 }
 
 describe("music generate background helpers", () => {
@@ -63,7 +64,6 @@ describe("music generate background helpers", () => {
       providerId: "google",
     });
 
-    expect(handle).not.toBeNull();
     if (!handle) {
       throw new Error("Expected music generation task handle");
     }
@@ -112,7 +112,7 @@ describe("music generate background helpers", () => {
     });
 
     expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
-    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalled();
+    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
 
   it("warns channel completion agents that normal final replies are private", async () => {

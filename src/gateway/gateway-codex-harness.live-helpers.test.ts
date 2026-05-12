@@ -61,6 +61,34 @@ describe("gateway codex harness live helpers", () => {
     expect(isExpectedCodexStatusCommandText(text)).toBe(true);
   });
 
+  it("accepts workspace-only healthy status prose emitted by current codex", () => {
+    const text =
+      "Working normally. Current workspace: `/tmp/openclaw-live-codex-harness/workspace/dev`.";
+
+    expect(
+      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts terse idle-ready status prose emitted by current codex", () => {
+    const text = "Idle and ready.";
+
+    expect(
+      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts terse ready status prose emitted by current codex", () => {
+    const text = "Ready.";
+
+    expect(
+      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
   it("accepts running-session status prose emitted by current codex", () => {
     const text =
       "Session is running on `codex/gpt-5.5` with low reasoning, direct execution, and about `24k/272k` context used. Cache hit is `99%`; no compactions so far.";

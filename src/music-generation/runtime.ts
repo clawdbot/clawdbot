@@ -1,4 +1,5 @@
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
+import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -40,6 +41,9 @@ export async function generateMusic(
   const getProvider = deps.getProvider ?? getMusicGenerationProvider;
   const listProviders = deps.listProviders ?? listMusicGenerationProviders;
   const logger = deps.log ?? log;
+  const timeoutMs =
+    params.timeoutMs ??
+    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.musicGenerationModel);
   const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
     modelConfig: params.cfg.agents?.defaults?.musicGenerationModel,
@@ -99,7 +103,7 @@ export async function generateMusic(
         durationSeconds: sanitized.durationSeconds,
         format: sanitized.format,
         inputImages: params.inputImages,
-        ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       });
       if (!Array.isArray(result.tracks) || result.tracks.length === 0) {
         throw new Error("Music generation provider returned no tracks.");

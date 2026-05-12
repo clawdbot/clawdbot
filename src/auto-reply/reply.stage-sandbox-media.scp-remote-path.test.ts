@@ -75,6 +75,14 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   expect((statError as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
 }
 
+function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 describe("stageSandboxMedia scp remote paths", () => {
   it("rejects remote attachment filenames with shell metacharacters before spawning scp", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
@@ -117,7 +125,8 @@ describe("stageSandboxMedia scp remote paths", () => {
         workspaceDir,
       });
 
-      expect(childProcessMocks.spawn.mock.calls[0]?.[0]).toBe("scp");
+      const [command] = requireFirstMockCall(childProcessMocks.spawn, "scp spawn");
+      expect(command).toBe("scp");
       const remoteCacheRoot = join(CONFIG_DIR, "media", "remote-cache");
       const expectedSafeDir = join(remoteCacheRoot, slugifySessionKey(sessionKey));
       try {

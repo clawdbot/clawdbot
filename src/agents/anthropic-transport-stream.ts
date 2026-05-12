@@ -108,6 +108,8 @@ type MutableAssistantOutput = {
   errorMessage?: string;
 };
 
+const EMPTY_ANTHROPIC_MESSAGES_FALLBACK_TEXT = ".";
+
 function isClaudeOpus47Model(modelId: string): boolean {
   return modelId.includes("opus-4-7") || modelId.includes("opus-4.7");
 }
@@ -423,6 +425,12 @@ function convertAnthropicMessages(
     }
   }
   return params;
+}
+
+function ensureNonEmptyAnthropicMessages(messages: Array<Record<string, unknown>>) {
+  return messages.length > 0
+    ? messages
+    : [{ role: "user", content: EMPTY_ANTHROPIC_MESSAGES_FALLBACK_TEXT }];
 }
 
 function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
@@ -754,7 +762,9 @@ function buildAnthropicParams(
   });
   const params: Record<string, unknown> = {
     model: model.id,
-    messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
+    messages: ensureNonEmptyAnthropicMessages(
+      convertAnthropicMessages(context.messages, model, isOAuthToken),
+    ),
     max_tokens: maxTokens,
     stream: true,
   };

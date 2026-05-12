@@ -654,10 +654,27 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
   });
 
   it("lists priority refs as provider/id pairs", () => {
-    expect(listPrioritizedHighSignalLiveModelRefs()).toContainEqual({
-      provider: "openai",
-      id: "gpt-5.2",
-    });
+    expect(listPrioritizedHighSignalLiveModelRefs()).toStrictEqual([
+      { provider: "anthropic", id: "claude-opus-4-7" },
+      { provider: "anthropic", id: "claude-opus-4-6" },
+      { provider: "anthropic", id: "claude-sonnet-4-6" },
+      { provider: "google", id: "gemini-3.1-pro-preview" },
+      { provider: "google", id: "gemini-3-flash-preview" },
+      { provider: "deepseek", id: "deepseek-v4-flash" },
+      { provider: "deepseek", id: "deepseek-v4-pro" },
+      { provider: "minimax", id: "minimax-m2.7" },
+      { provider: "openai", id: "gpt-5.2" },
+      { provider: "openai-codex", id: "gpt-5.2" },
+      { provider: "openrouter", id: "openai/gpt-5.2-chat" },
+      { provider: "openrouter", id: "minimax/minimax-m2.7" },
+      { provider: "opencode-go", id: "glm-5" },
+      { provider: "openrouter", id: "ai21/jamba-large-1.7" },
+      { provider: "xai", id: "grok-4.3" },
+      { provider: "zai", id: "glm-5.1" },
+      { provider: "fireworks", id: "accounts/fireworks/models/glm-5" },
+      { provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" },
+      { provider: "minimax-portal", id: "minimax-m2.7" },
+    ]);
   });
 });
 

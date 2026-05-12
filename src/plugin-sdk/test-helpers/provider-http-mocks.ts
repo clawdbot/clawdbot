@@ -1,4 +1,4 @@
-import { afterEach, vi } from "vitest";
+import { afterEach, vi, type Mock } from "vitest";
 import type {
   pollProviderOperationJson,
   resolveProviderHttpRequestConfig,
@@ -12,6 +12,32 @@ type PollProviderOperationJsonParams = Parameters<typeof pollProviderOperationJs
 type SanitizeConfiguredModelProviderRequestParams = Parameters<
   typeof sanitizeConfiguredModelProviderRequest
 >[0];
+
+type ResolveProviderHttpRequestConfigResult = {
+  baseUrl: string;
+  allowPrivateNetwork: boolean;
+  headers: Headers;
+  dispatcherPolicy: undefined;
+};
+
+type AnyMock = Mock<(...args: unknown[]) => unknown>;
+
+interface ProviderHttpMocks {
+  resolveApiKeyForProviderMock: Mock<() => Promise<{ apiKey: string }>>;
+  postJsonRequestMock: AnyMock;
+  fetchWithTimeoutMock: AnyMock;
+  pollProviderOperationJsonMock: AnyMock;
+  assertOkOrThrowHttpErrorMock: Mock<(response: Response, label: string) => Promise<void>>;
+  assertOkOrThrowProviderErrorMock: Mock<(response: Response, label: string) => Promise<void>>;
+  sanitizeConfiguredModelProviderRequestMock: Mock<
+    (
+      request: SanitizeConfiguredModelProviderRequestParams,
+    ) => SanitizeConfiguredModelProviderRequestParams
+  >;
+  resolveProviderHttpRequestConfigMock: Mock<
+    (params: ResolveProviderHttpRequestConfigParams) => ResolveProviderHttpRequestConfigResult
+  >;
+}
 
 const providerHttpMocks = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "provider-key" })),
@@ -85,7 +111,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   waitProviderOperationPollInterval: async () => {},
 }));
 
-export function getProviderHttpMocks() {
+export function getProviderHttpMocks(): ProviderHttpMocks {
   return providerHttpMocks;
 }
 

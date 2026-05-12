@@ -51,40 +51,48 @@ describe("extractToolPayload", () => {
 
 describe("parseStandalonePlainTextToolCallBlocks", () => {
   it("parses bracketed local-model tool blocks", () => {
-    const blocks = parseStandalonePlainTextToolCallBlocks(
-      ["[read]", '{"path":"/tmp/file.txt","line_start":1}', "[END_TOOL_REQUEST]"].join("\n"),
+    const raw = ["[read]", '{"path":"/tmp/file.txt","line_start":1}', "[END_TOOL_REQUEST]"].join(
+      "\n",
     );
+    const blocks = parseStandalonePlainTextToolCallBlocks(raw);
 
-    expect(blocks).toMatchObject([
+    expect(blocks).toEqual([
       {
         name: "read",
         arguments: { path: "/tmp/file.txt", line_start: 1 },
+        start: 0,
+        end: raw.length,
+        raw,
       },
     ]);
   });
 
   it("parses Harmony commentary tool calls", () => {
-    const blocks = parseStandalonePlainTextToolCallBlocks(
-      'commentary to=read code {"path":"/path/to/file","line_start":1,"line_end":400}',
-    );
+    const raw = 'commentary to=read code {"path":"/path/to/file","line_start":1,"line_end":400}';
+    const blocks = parseStandalonePlainTextToolCallBlocks(raw);
 
-    expect(blocks).toMatchObject([
+    expect(blocks).toEqual([
       {
         name: "read",
         arguments: { path: "/path/to/file", line_start: 1, line_end: 400 },
+        start: 0,
+        end: raw.length,
+        raw,
       },
     ]);
   });
 
   it("parses Harmony marker-wrapped tool calls", () => {
-    const blocks = parseStandalonePlainTextToolCallBlocks(
-      '<|channel|>commentary to=read code<|message|>{"path":"/tmp/file.txt"}<|call|>',
-    );
+    const raw = '<|channel|>commentary to=read code<|message|>{"path":"/tmp/file.txt"}<|call|>';
+    const blocks = parseStandalonePlainTextToolCallBlocks(raw);
 
-    expect(blocks).toMatchObject([
+    expect(blocks).toEqual([
       {
         name: "read",
         arguments: { path: "/tmp/file.txt" },
+        start: 0,
+        end: raw.length,
+        raw,
       },
     ]);
   });

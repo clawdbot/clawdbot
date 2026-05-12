@@ -24,18 +24,18 @@ Inputs are provided as environment variables:
 - `BASELINE_SHA`
 - `CANDIDATE_REF`
 - `CANDIDATE_SHA`
+- `MANTIS_CANDIDATE_TRUST`
 - `MANTIS_OUTPUT_DIR`
 - `MANTIS_INSTRUCTIONS`
 - `CRABBOX_PROVIDER`
+- `OPENCLAW_TELEGRAM_USER_PROOF_CMD`
 - optional `CRABBOX_LEASE_ID`
 
 Required workflow:
 
 1. Read `.agents/skills/telegram-crabbox-e2e-proof/SKILL.md`.
 2. Inspect the PR with `gh pr view "$MANTIS_PR_NUMBER"` and
-   `gh pr diff "$MANTIS_PR_NUMBER"` when `MANTIS_PR_NUMBER` is set. If the run
-   came from workflow dispatch without a PR number, inspect
-   `BASELINE_SHA..CANDIDATE_SHA`.
+   `gh pr diff "$MANTIS_PR_NUMBER"`.
 3. Decide what Telegram message, mock model response, command, callback, button,
    media, or sequence best proves the PR. Use `MANTIS_INSTRUCTIONS` as extra
    maintainer guidance, not as a replacement for reading the PR.
@@ -43,12 +43,22 @@ Required workflow:
    `.artifacts/qa-e2e/mantis/telegram-desktop-proof-worktrees/baseline` and
    `.artifacts/qa-e2e/mantis/telegram-desktop-proof-worktrees/candidate`, then
    install and build each worktree with the repo's normal `pnpm` commands.
+   If `MANTIS_CANDIDATE_TRUST` is `fork-pr-head`, treat the
+   candidate worktree as untrusted fork code: do not pass GitHub, OpenAI,
+   Crabbox, Convex, or other workflow secrets into candidate install, build, or
+   runtime commands. The candidate SUT may receive only the proof runner's
+   short-lived Telegram bot token, generated local config/state paths, and mock
+   model key needed for this isolated proof.
 5. In each worktree, run the real-user Telegram Crabbox proof flow from the
-   skill. Use `$OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT`, the workflow-provided
-   `crabbox` binary, and the workflow-provided local `ffmpeg`/`ffprobe`; do
-   not generate, install, or patch replacement proof tooling during the run.
-   Use the same proof idea for baseline and candidate. You may iterate and rerun
-   if the visual result is not convincing.
+   skill with `$OPENCLAW_TELEGRAM_USER_PROOF_CMD`; do not run
+   `pnpm qa:telegram-user:crabbox` directly. The proof command comes from the
+   trusted workflow checkout while the current directory controls which
+   baseline or candidate OpenClaw build is tested. Use
+   `$OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT`, the workflow-provided `crabbox`
+   binary, and the workflow-provided local `ffmpeg`/`ffprobe`; do not generate,
+   install, or patch replacement proof tooling during the run. Use the same
+   proof idea for baseline and candidate. You may iterate and rerun if the
+   visual result is not convincing.
 6. Open Telegram Desktop directly to the newest relevant message with the
    runner `view` command before finishing each recording. Keep the chat scrolled
    to the bottom so new proof messages appear in-frame.

@@ -17,9 +17,9 @@ describe("collectMissingDefaultAccountBindingWarnings", () => {
     };
 
     const warnings = collectMissingDefaultAccountBindingWarnings(cfg);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("channels.telegram");
-    expect(warnings[0]).toContain("alerts, work");
+    expect(warnings).toStrictEqual([
+      '- channels.telegram: accounts.default is missing and no valid account-scoped binding exists for configured accounts (alerts, work). Channel-only bindings (no accountId) match only default. Add bindings[].match.accountId for one of these accounts (or "*"), or add channels.telegram.accounts.default.',
+    ]);
   });
 
   it("does not warn when an explicit account binding exists", () => {
@@ -51,9 +51,9 @@ describe("collectMissingDefaultAccountBindingWarnings", () => {
     };
 
     const warnings = collectMissingDefaultAccountBindingWarnings(cfg);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("subset");
-    expect(warnings[0]).toContain("Uncovered accounts: work");
+    expect(warnings).toStrictEqual([
+      '- channels.telegram: accounts.default is missing and account bindings only cover a subset of configured accounts. Uncovered accounts: work. Add bindings[].match.accountId for uncovered accounts (or "*"), or add channels.telegram.accounts.default.',
+    ]);
   });
 
   it("does not warn when wildcard account binding exists", () => {

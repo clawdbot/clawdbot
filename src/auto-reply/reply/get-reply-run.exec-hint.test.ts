@@ -146,17 +146,15 @@ describe("resolvePromptSessionContextForSystemEvent", () => {
     });
 
     expect(result).not.toBe(sessionCtx);
-    expect(result).toMatchObject({
-      Provider: "discord",
-      Surface: "discord",
-      ChatType: "channel",
-      GroupChannel: "#ops",
-      GroupSpace: "Ops Guild",
-      OriginatingChannel: "discord",
-      OriginatingTo: "channel-1",
-      AccountId: "acct-1",
-      MessageThreadId: "thread-1",
-    });
+    expect(result.Provider).toBe("discord");
+    expect(result.Surface).toBe("discord");
+    expect(result.ChatType).toBe("channel");
+    expect(result.GroupChannel).toBe("#ops");
+    expect(result.GroupSpace).toBe("Ops Guild");
+    expect(result.OriginatingChannel).toBe("discord");
+    expect(result.OriginatingTo).toBe("channel-1");
+    expect(result.AccountId).toBe("acct-1");
+    expect(result.MessageThreadId).toBe("thread-1");
   });
 
   it("keeps normal user turns on their live chat metadata", () => {

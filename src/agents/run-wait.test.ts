@@ -57,10 +57,9 @@ function expectAgentWaitRequest(
 
   const paramTimeoutMs = expectNumber(request.params?.timeoutMs, `${runId} param timeoutMs`);
   const requestTimeoutMs = expectNumber(request.timeoutMs, `${runId} request timeoutMs`);
-  expect(requestTimeoutMs).toBeGreaterThan(0);
+  expect(requestTimeoutMs).toBe(paramTimeoutMs + 2_000);
   expect(requestTimeoutMs).toBeLessThanOrEqual(maxParamTimeoutMs + 2_000);
-  expect(paramTimeoutMs).toBe(requestTimeoutMs - 2_000);
-  expect(paramTimeoutMs).toBeGreaterThan(0);
+  expect(paramTimeoutMs).toBeGreaterThanOrEqual(1);
   expect(paramTimeoutMs).toBeLessThanOrEqual(maxParamTimeoutMs);
 }
 
@@ -219,6 +218,22 @@ describe("waitForAgentRun", () => {
     const result = await waitForAgentRun({ runId: "run-pending", timeoutMs: 500 });
 
     expect(result).toEqual({ status: "pending" });
+  });
+
+  it("normalizes wait timeouts before sending agent.wait", async () => {
+    callGatewayMock.mockResolvedValue({ status: "ok" });
+
+    const result = await waitForAgentRun({ runId: "run-clamped", timeoutMs: 0.8 });
+
+    expect(result).toEqual({ status: "ok" });
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "agent.wait",
+      params: {
+        runId: "run-clamped",
+        timeoutMs: 1,
+      },
+      timeoutMs: 2_001,
+    });
   });
 
   it("preserves timing metadata from agent.wait", async () => {

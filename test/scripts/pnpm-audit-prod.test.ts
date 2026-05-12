@@ -166,6 +166,57 @@ snapshots:
     ]);
   });
 
+  it("suppresses the overbroad Mistral malware advisory for the pre-compromise locked version", () => {
+    const versionsByPackage = new Map([["@mistralai/mistralai", new Set(["2.2.1"])]]);
+    const findings = filterFindingsBySeverity(
+      {
+        "@mistralai/mistralai": [
+          {
+            id: "1118204",
+            severity: "critical",
+            title: "Malware in @mistralai/mistralai",
+            vulnerable_versions: ">=0",
+            url: "https://github.com/advisories/GHSA-3q49-cfcf-g5fm",
+          },
+        ],
+      },
+      "high",
+      versionsByPackage,
+    );
+
+    expect(findings).toEqual([]);
+  });
+
+  it("keeps the Mistral malware advisory blocking for compromised resolved versions", () => {
+    const versionsByPackage = new Map([["@mistralai/mistralai", new Set(["2.2.4"])]]);
+    const findings = filterFindingsBySeverity(
+      {
+        "@mistralai/mistralai": [
+          {
+            id: "1118204",
+            severity: "critical",
+            title: "Malware in @mistralai/mistralai",
+            vulnerable_versions: ">=0",
+            url: "https://github.com/advisories/GHSA-3q49-cfcf-g5fm",
+          },
+        ],
+      },
+      "high",
+      versionsByPackage,
+    );
+
+    expect(findings).toEqual([
+      {
+        id: "1118204",
+        packageName: "@mistralai/mistralai",
+        severity: "critical",
+        title: "Malware in @mistralai/mistralai",
+        url: "https://github.com/advisories/GHSA-3q49-cfcf-g5fm",
+        vulnerableVersions: ">=0",
+      },
+    ]);
+  });
+
   it("returns a failing exit code when bulk advisories include high severity findings", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-audit-prod-"));
     await writeFile(

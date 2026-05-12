@@ -87,6 +87,15 @@ function stubJsonFetchOk() {
   return fetchMock;
 }
 
+function requireFetchInit(fetchMock: ReturnType<typeof stubJsonFetchOk>) {
+  const [call] = fetchMock.mock.calls;
+  if (!call) {
+    throw new Error("expected browser fetch call");
+  }
+  const [, init] = call;
+  return init;
+}
+
 async function expectThrownBrowserFetchError(
   request: () => Promise<unknown>,
   params: {
@@ -150,7 +159,7 @@ describe("fetchBrowserJson loopback auth", () => {
     const res = await fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/");
     expect(res.ok).toBe(true);
 
-    const init = fetchMock.mock.calls[0]?.[1];
+    const init = requireFetchInit(fetchMock);
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer loopback-token");
   });
@@ -160,7 +169,7 @@ describe("fetchBrowserJson loopback auth", () => {
 
     await fetchBrowserJson<{ ok: boolean }>("http://example.com/");
 
-    const init = fetchMock.mock.calls[0]?.[1];
+    const init = requireFetchInit(fetchMock);
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBeNull();
   });
@@ -174,7 +183,7 @@ describe("fetchBrowserJson loopback auth", () => {
       },
     });
 
-    const init = fetchMock.mock.calls[0]?.[1];
+    const init = requireFetchInit(fetchMock);
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer caller-token");
   });
@@ -184,7 +193,7 @@ describe("fetchBrowserJson loopback auth", () => {
 
     await fetchBrowserJson<{ ok: boolean }>("http://[::1]:18888/");
 
-    const init = fetchMock.mock.calls[0]?.[1];
+    const init = requireFetchInit(fetchMock);
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer loopback-token");
   });
@@ -194,7 +203,7 @@ describe("fetchBrowserJson loopback auth", () => {
 
     await fetchBrowserJson<{ ok: boolean }>("http://[::ffff:127.0.0.1]:18888/");
 
-    const init = fetchMock.mock.calls[0]?.[1];
+    const init = requireFetchInit(fetchMock);
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer loopback-token");
   });

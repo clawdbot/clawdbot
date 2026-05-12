@@ -304,7 +304,7 @@ describe("runDaemonRestart health checks", () => {
     await runDaemonRestart({ json: true, force: true });
 
     expect(callGatewayCli).not.toHaveBeenCalled();
-    expect(runServiceRestart).toHaveBeenCalled();
+    expect(runServiceRestart).toHaveBeenCalledTimes(1);
   });
 
   it("forwards --safe --skip-deferral as skipDeferral: true on the RPC", async () => {

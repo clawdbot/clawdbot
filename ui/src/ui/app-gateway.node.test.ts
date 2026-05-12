@@ -450,6 +450,23 @@ describe("connectGateway", () => {
     ]);
   });
 
+  it("clears pending session reload timers when the active client closes", () => {
+    vi.useFakeTimers();
+    try {
+      const { host, client } = connectHostGateway();
+      const pendingReload = vi.fn();
+      host.sessionsChangedReloadTimer = globalThis.setTimeout(pendingReload, 1_000);
+
+      client.emitClose({ code: 1005 });
+
+      expect(host.sessionsChangedReloadTimer).toBeNull();
+      vi.advanceTimersByTime(1_000);
+      expect(pendingReload).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves pending approval requests across reconnect", () => {
     const host = createHost();
     host.execApprovalQueue = [
@@ -841,12 +858,13 @@ describe("connectGateway", () => {
       },
     });
 
-    expect(host.chatSideResult).toMatchObject({
-      kind: "btw",
-      runId: "btw-run-1",
-      question: "what changed?",
-      text: "Only the UI layer is missing support.",
-    });
+    const sideResult = host.chatSideResult as
+      | { kind?: string; runId?: string; question?: string; text?: string }
+      | undefined;
+    expect(sideResult?.kind).toBe("btw");
+    expect(sideResult?.runId).toBe("btw-run-1");
+    expect(sideResult?.question).toBe("what changed?");
+    expect(sideResult?.text).toBe("Only the UI layer is missing support.");
     expect(host.chatSideResultTerminalRuns.has("btw-run-1")).toBe(true);
   });
 

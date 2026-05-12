@@ -191,9 +191,8 @@ describe("telegramMessageActions", () => {
           cfg: testCase.cfg,
         })?.actions ?? [];
       if (testCase.expectSticker) {
-        expect(actions, testCase.name).toEqual(
-          expect.arrayContaining(["sticker", "sticker-search"]),
-        );
+        expect(actions, testCase.name).toContain("sticker");
+        expect(actions, testCase.name).toContain("sticker-search");
       } else {
         expect(actions, testCase.name).not.toContain("sticker");
         expect(actions, testCase.name).not.toContain("sticker-search");

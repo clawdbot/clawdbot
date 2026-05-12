@@ -10,7 +10,7 @@ import {
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { OPENAI_API_KEY_LABEL, OPENAI_API_KEY_WIZARD_GROUP } from "./auth-choice-copy.js";
+import { OPENAI_ACCOUNT_WIZARD_GROUP, OPENAI_API_KEY_LABEL } from "./auth-choice-copy.js";
 import { isOpenAIApiBaseUrl } from "./base-url.js";
 import { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import {
@@ -233,7 +233,9 @@ export function buildOpenAIProvider(): ProviderPlugin {
         wizard: {
           choiceId: "openai-api-key",
           choiceLabel: OPENAI_API_KEY_LABEL,
-          ...OPENAI_API_KEY_WIZARD_GROUP,
+          choiceHint: "Use your OpenAI API key directly",
+          assistantPriority: 5,
+          ...OPENAI_ACCOUNT_WIZARD_GROUP,
         },
       }),
     ],

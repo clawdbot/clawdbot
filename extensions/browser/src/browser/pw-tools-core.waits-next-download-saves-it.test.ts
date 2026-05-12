@@ -73,6 +73,18 @@ describe("pw-tools-core", () => {
     }
   }
 
+  function requireSaveAsPath(saveAs: ReturnType<typeof vi.fn>): string {
+    const [call] = saveAs.mock.calls;
+    if (!call) {
+      throw new Error("expected download saveAs call");
+    }
+    const [savedPath] = call;
+    if (typeof savedPath !== "string") {
+      throw new Error("expected download saveAs path");
+    }
+    return savedPath;
+  }
+
   async function waitForImplicitDownloadOutput(params: {
     downloadUrl: string;
     suggestedFilename: string;
@@ -96,10 +108,7 @@ describe("pw-tools-core", () => {
     });
 
     const res = await p;
-    const outPath = (vi.mocked(saveAs).mock.calls as unknown as Array<[string]>)[0]?.[0];
-    if (typeof outPath !== "string") {
-      throw new Error("download save path was not captured");
-    }
+    const outPath = requireSaveAsPath(saveAs);
     return { res, outPath };
   }
 
@@ -145,18 +154,17 @@ describe("pw-tools-core", () => {
     targetPath: string;
     content: string;
   }) {
-    const savedPath = params.saveAs.mock.calls[0]?.[0];
-    expect(typeof savedPath).toBe("string");
+    const savedPath = requireSaveAsPath(params.saveAs);
     expect(savedPath).not.toBe(params.targetPath);
-    const savedParentName = path.basename(path.dirname(String(savedPath)));
+    const savedParentName = path.basename(path.dirname(savedPath));
     expect(
       savedParentName.includes("fs-safe-output") ||
         savedParentName === path.basename(path.dirname(params.targetPath)),
     ).toBe(true);
-    expect(path.basename(String(savedPath))).toContain(path.basename(params.targetPath));
-    expect(path.basename(String(savedPath))).toMatch(/\.part$/);
+    expect(path.basename(savedPath)).toContain(path.basename(params.targetPath));
+    expect(path.basename(savedPath)).toMatch(/\.part$/);
     expect(await fs.readFile(params.targetPath, "utf8")).toBe(params.content);
-    await expectPathMissing(String(savedPath));
+    await expectPathMissing(savedPath);
   }
 
   it("waits for the next download and atomically finalizes explicit output paths", async () => {

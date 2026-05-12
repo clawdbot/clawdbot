@@ -43,6 +43,9 @@ describe("parseIMessageNotification", () => {
         is_from_me: false,
         text: "",
         is_reaction: true,
+        is_tapback: true,
+        associated_message_guid: "p:0/target-guid",
+        associated_message_type: 2001,
         reaction_type: "like",
         reaction_emoji: "👍",
         is_reaction_add: true,
@@ -57,6 +60,9 @@ describe("parseIMessageNotification", () => {
     });
 
     expect(parsed?.is_reaction).toBe(true);
+    expect(parsed?.is_tapback).toBe(true);
+    expect(parsed?.associated_message_guid).toBe("p:0/target-guid");
+    expect(parsed?.associated_message_type).toBe(2001);
     expect(parsed?.reaction_emoji).toBe("👍");
     expect(parsed?.reacted_to_guid).toBe("target-guid");
   });

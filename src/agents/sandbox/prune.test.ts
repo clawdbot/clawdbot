@@ -132,7 +132,7 @@ describe("maybePruneSandboxes", () => {
   it("removes the registry entry after runtime removal succeeds", async () => {
     await maybePruneSandboxes(buildPruneConfig());
 
-    expect(backendMocks.removeRuntime).toHaveBeenCalled();
+    expect(backendMocks.removeRuntime).toHaveBeenCalledTimes(1);
     expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith("sandbox-1");
   });
 

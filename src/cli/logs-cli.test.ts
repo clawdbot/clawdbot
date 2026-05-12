@@ -423,15 +423,13 @@ describe("logs cli", () => {
         .split("\n")
         .filter((line) => line.length > 0)
         .map((line) => JSON.parse(line) as { type: string; message?: string });
-      const messages = noticeRecords
-        .filter((record) => record.type === "notice")
-        .map((record) => record.message ?? "");
-      expect(messages).toEqual(
-        expect.arrayContaining([expect.stringContaining("gateway disconnected")]),
-      );
-      expect(messages).toEqual(
-        expect.arrayContaining([expect.stringContaining("gateway reconnected")]),
-      );
+      expect(noticeRecords.filter((record) => record.type === "notice")).toEqual([
+        {
+          type: "notice",
+          message: "[logs] gateway disconnected, reconnecting in 0s...",
+        },
+        { type: "notice", message: "[logs] gateway reconnected" },
+      ]);
       expect(stdoutWrites.join("")).toContain('"type":"meta"');
       expect(exitSpy).toHaveBeenCalledWith(1);
     });

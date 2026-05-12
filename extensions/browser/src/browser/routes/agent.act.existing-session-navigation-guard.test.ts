@@ -118,10 +118,9 @@ describe("existing-session interaction navigation guard", () => {
       urls.length,
     );
     for (const [index, url] of urls.entries()) {
-      expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenNthCalledWith(
-        index + 1,
-        expect.objectContaining({ url }),
-      );
+      expect(
+        navigationGuardMocks.assertBrowserNavigationResultAllowed.mock.calls[index]?.[0]?.url,
+      ).toBe(url);
     }
   }
 
@@ -137,9 +136,10 @@ describe("existing-session interaction navigation guard", () => {
     expect(clickResponse.statusCode).toBe(200);
     expect(typeResponse.statusCode).toBe(200);
     expect(chromeMcpMocks.clickChromeMcpElement).toHaveBeenCalledOnce();
-    expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenCalledWith(
-      expect.objectContaining({ key: "Enter" }),
-    );
+    const keyPressCalls = chromeMcpMocks.pressChromeMcpKey.mock.calls as unknown as Array<
+      [{ key?: string }]
+    >;
+    expect(keyPressCalls[0]?.[0]?.key).toBe("Enter");
     expectNavigationProbeUrls(Array.from({ length: 6 }, () => "https://example.com"));
   });
 

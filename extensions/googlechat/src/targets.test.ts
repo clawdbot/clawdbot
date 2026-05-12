@@ -217,10 +217,12 @@ describe("sendGoogleChatMessage", () => {
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
     expect(String(url)).toContain("messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
-    expect(JSON.parse(String(init?.body))).toMatchObject({
-      text: "hello",
-      thread: { name: "spaces/AAA/threads/xyz" },
-    });
+    const body = JSON.parse(String(init?.body)) as {
+      text?: unknown;
+      thread?: { name?: unknown };
+    };
+    expect(body.text).toBe("hello");
+    expect(body.thread?.name).toBe("spaces/AAA/threads/xyz");
   });
 
   it("does not set messageReplyOption for non-thread sends", async () => {
@@ -274,12 +276,8 @@ describe("verifyGoogleChatRequest", () => {
     };
 
     expect(mocks.gaxiosCtor).toHaveBeenCalledOnce();
-    expect(googleAuthOptions).toMatchObject({
-      credentials: {
-        client_email: "bot@example.iam.gserviceaccount.com",
-        token_uri: "https://oauth2.googleapis.com/token",
-      },
-    });
+    expect(googleAuthOptions.credentials?.client_email).toBe("bot@example.iam.gserviceaccount.com");
+    expect(googleAuthOptions.credentials?.token_uri).toBe("https://oauth2.googleapis.com/token");
     expect(typeof googleAuthOptions.clientOptions?.transporter?.defaults?.fetchImplementation).toBe(
       "function",
     );

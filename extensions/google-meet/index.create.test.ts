@@ -100,22 +100,30 @@ async function runCreateMeetBrowserScript(params: { buttonText: string }) {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
 function mockCalls(mock: unknown, label: string): Array<Array<unknown>> {
   const mockState = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock;
-  expect(mockState, `${label}.mock`).toBeDefined();
-  expect(Array.isArray(mockState?.calls), `${label}.mock.calls`).toBe(true);
-  return mockState?.calls ?? [];
+  if (!mockState) {
+    throw new Error(`Expected ${label}.mock`);
+  }
+  const calls = mockState.calls;
+  if (!Array.isArray(calls)) {
+    throw new Error(`Expected ${label}.mock.calls`);
+  }
+  return calls;
 }
 
 function findMockCall(mock: unknown, label: string, predicate: (call: Array<unknown>) => boolean) {
   const call = mockCalls(mock, label).find(predicate);
-  expect(call, label).toBeDefined();
-  return call as Array<unknown>;
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call;
 }
 
 function responsePayload(respond: unknown): Record<string, unknown> {

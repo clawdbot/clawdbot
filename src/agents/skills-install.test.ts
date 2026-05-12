@@ -287,7 +287,7 @@ describe("installSkill code safety scanning", () => {
 
       expect(result.ok).toBe(true);
       expect(handler).toHaveBeenCalledTimes(1);
-      const payload = handler.mock.calls[0]?.[0] as
+      const payload = handler.mock.calls.at(0)?.[0] as
         | {
             targetName?: string;
             targetType?: string;
@@ -316,7 +316,7 @@ describe("installSkill code safety scanning", () => {
       expect(payload?.skill?.installId).toBe("deps");
       expect(payload?.skill?.installSpec?.kind).toBe("node");
       expect(payload?.skill?.installSpec?.package).toBe("example-package");
-      expect(handler.mock.calls[0]?.[1]).toEqual({
+      expect(handler.mock.calls.at(0)?.[1]).toEqual({
         origin: "openclaw-workspace",
         targetType: "skill",
         requestKind: "skill-install",

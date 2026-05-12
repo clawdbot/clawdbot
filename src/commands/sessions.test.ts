@@ -48,9 +48,9 @@ describe("sessionsCommand", () => {
     expect(logs.some((line) => line.includes("Tokens (ctx %"))).toBe(true);
 
     const row = logs.find((line) => line.includes("+15555550123")) ?? "";
-    expect(row).toContain("2.0k/32k (6%)");
-    expect(row).toContain("45m ago");
-    expect(row).toContain("pi:opus");
+    expect(row).toBe(
+      "direct +15555550123               45m ago   pi:opus        OpenAI Codex       2.0k/32k (6%)        id:abc123",
+    );
   });
 
   it("renders the agent runtime in the tabular view", async () => {
@@ -85,8 +85,9 @@ describe("sessionsCommand", () => {
     expect(logs.some((line) => line.includes("Runtime"))).toBe(true);
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
-    expect(row).toContain("claude-opus-4-7");
-    expect(row).toContain("Claude CLI");
+    expect(row).toBe(
+      "direct agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
+    );
   });
 
   it("renders configured CLI runtime when the session stores a canonical provider", async () => {
@@ -119,8 +120,9 @@ describe("sessionsCommand", () => {
     fs.rmSync(store);
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
-    expect(row).toContain("claude-opus-4-7");
-    expect(row).toContain("Claude CLI");
+    expect(row).toBe(
+      "direct agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
+    );
   });
 
   it("shows placeholder rows when tokens are missing", async () => {
@@ -138,9 +140,9 @@ describe("sessionsCommand", () => {
     fs.rmSync(store);
 
     const row = logs.find((line) => line.includes("quietchat:group:demo")) ?? "";
-    expect(row).toContain("unknown/32k (?%)");
-    expect(row).toContain("think:high");
-    expect(row).toContain("5m ago");
+    expect(row).toBe(
+      "group  quietchat:group:demo       5m ago    pi:opus        OpenAI Codex       unknown/32k (?%)     think:high id:xyz",
+    );
   });
 
   it("exports freshness metadata in JSON output", async () => {
@@ -316,7 +318,9 @@ describe("sessionsCommand", () => {
     const { runtime, errors } = makeRuntime();
 
     await expect(sessionsCommand({ store, active: "0" }, runtime)).rejects.toThrow("exit 1");
-    expect(errors[0]).toContain("--active must be a positive number of minutes");
+    expect(errors).toStrictEqual([
+      "--active must be a positive number of minutes, for example --active 30.",
+    ]);
 
     fs.rmSync(store);
   });
@@ -334,7 +338,9 @@ describe("sessionsCommand", () => {
     const { runtime, errors } = makeRuntime();
 
     await expect(sessionsCommand({ store, limit: "0" }, runtime)).rejects.toThrow("exit 1");
-    expect(errors[0]).toContain('--limit must be a positive integer or "all", for example');
+    expect(errors).toStrictEqual([
+      '--limit must be a positive integer or "all", for example --limit 25.',
+    ]);
 
     fs.rmSync(store);
   });

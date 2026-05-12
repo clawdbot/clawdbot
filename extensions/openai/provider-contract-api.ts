@@ -1,11 +1,11 @@
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  OPENAI_ACCOUNT_WIZARD_GROUP,
   OPENAI_API_KEY_LABEL,
   OPENAI_CODEX_DEVICE_PAIRING_HINT,
   OPENAI_CODEX_DEVICE_PAIRING_LABEL,
   OPENAI_CODEX_LOGIN_HINT,
   OPENAI_CODEX_LOGIN_LABEL,
-  OPENAI_API_KEY_WIZARD_GROUP,
   OPENAI_CODEX_WIZARD_GROUP,
 } from "./auth-choice-copy.js";
 
@@ -72,8 +72,9 @@ export function createOpenAIProvider(): ProviderPlugin {
         wizard: {
           choiceId: "openai-api-key",
           choiceLabel: OPENAI_API_KEY_LABEL,
-          assistantPriority: -40,
-          ...OPENAI_API_KEY_WIZARD_GROUP,
+          choiceHint: "Use your OpenAI API key directly",
+          assistantPriority: 5,
+          ...OPENAI_ACCOUNT_WIZARD_GROUP,
         },
       },
     ],

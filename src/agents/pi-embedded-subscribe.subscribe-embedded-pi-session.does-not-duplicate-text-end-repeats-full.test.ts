@@ -3,6 +3,7 @@ import {
   createTextEndBlockReplyHarness,
   emitAssistantTextDelta,
   emitAssistantTextEnd,
+  extractTextPayloads,
 } from "./pi-embedded-subscribe.e2e-harness.js";
 
 describe("subscribeEmbeddedPiSession", () => {
@@ -36,7 +37,9 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     const callsAfterDelta = onBlockReply.mock.calls.length;
-    expect(callsAfterDelta).toBeGreaterThan(0);
+    expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([
+      "First line\nSecond line\nThird line",
+    ]);
 
     emitAssistantTextEnd({ emit, content: fullText });
     await Promise.resolve();

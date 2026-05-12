@@ -313,8 +313,9 @@ function readProviderKey(config: OpenClawConfig, provider: ProviderUnderTest): u
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -332,10 +333,12 @@ function expectDiagnostic(
       candidate.code === fields.code &&
       (fields.path === undefined || candidate.path === fields.path),
   );
-  expect(diagnostic, `${fields.code}${fields.path ? ` ${fields.path}` : ""}`).toBeDefined();
+  if (!diagnostic) {
+    throw new Error(`Expected diagnostic ${fields.code}${fields.path ? ` ${fields.path}` : ""}`);
+  }
   if (fields.messageIncludes) {
-    expect(typeof diagnostic?.message).toBe("string");
-    expect(diagnostic?.message).toContain(fields.messageIncludes);
+    expect(typeof diagnostic.message).toBe("string");
+    expect(diagnostic.message).toContain(fields.messageIncludes);
   }
 }
 
@@ -344,7 +347,11 @@ function expectNoDiagnosticCode(value: unknown, code: string) {
 }
 
 function firstMockArg(source: { mock: { calls: Array<Array<unknown>> } }) {
-  return requireRecord(source.mock.calls[0]?.[0], "mock call options");
+  const call = source.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected mock call options");
+  }
+  return requireRecord(call[0], "mock call options");
 }
 
 describe("runtime web tools resolution", () => {

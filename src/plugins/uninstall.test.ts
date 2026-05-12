@@ -245,9 +245,11 @@ async function expectPathAccessState(pathToCheck: string, expected: "exists" | "
 }
 
 function expectNpmUninstallCommand(params: { packageName: string; npmRoot: string }) {
-  const command = runCommandWithTimeoutMock.mock.calls[0];
-  expect(command).toBeDefined();
-  expect(command?.[0]).toEqual([
+  const command = runCommandWithTimeoutMock.mock.calls.at(0);
+  if (!command) {
+    throw new Error("Expected npm uninstall command");
+  }
+  expect(command[0]).toEqual([
     "npm",
     "uninstall",
     "--loglevel=error",
@@ -257,7 +259,7 @@ function expectNpmUninstallCommand(params: { packageName: string; npmRoot: strin
     "--no-fund",
     params.packageName,
   ]);
-  const options = command?.[1] as {
+  const options = command[1] as {
     cwd?: string;
     timeoutMs?: number;
     env?: Record<string, string>;

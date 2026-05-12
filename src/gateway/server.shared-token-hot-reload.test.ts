@@ -69,7 +69,7 @@ describe("gateway shared token hot reload rotation", () => {
         (err: unknown) => (err instanceof Error ? err : new Error(String(err))),
       );
 
-      await expect(closed).resolves.toMatchObject({
+      await expect(closed).resolves.toEqual({
         code: 4001,
         reason: "gateway auth changed",
       });

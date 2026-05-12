@@ -62,7 +62,11 @@ describe("browser.request local timeout", () => {
     });
 
     expect(withTimeoutMock).toHaveBeenCalledTimes(1);
-    const [dispatchTask, timeoutMs, timeoutLabel] = withTimeoutMock.mock.calls[0];
+    const [call] = withTimeoutMock.mock.calls;
+    if (!call) {
+      throw new Error("expected withTimeout call");
+    }
+    const [dispatchTask, timeoutMs, timeoutLabel] = call;
     expect(dispatchTask).toBeTypeOf("function");
     expect(timeoutMs).toBe(4321);
     expect(timeoutLabel).toBe("browser request");

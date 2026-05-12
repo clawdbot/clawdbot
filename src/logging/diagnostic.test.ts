@@ -64,8 +64,6 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) 
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
   if (typeof value !== "object" || value === null) {
     throw new Error(`${label} was not an object`);
   }
@@ -94,7 +92,6 @@ function requireMatchingRecord(
     const record = item as Record<string, unknown>;
     return Object.entries(fields).every(([key, value]) => Object.is(record[key], value));
   });
-  expect(found).toBeDefined();
   if (!found) {
     throw new Error(`missing ${label}`);
   }
@@ -104,7 +101,6 @@ function requireMatchingRecord(
 function requireFirstMockCallArg(mock: unknown, label: string) {
   const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
   const call = calls?.[0];
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error(`missing ${label} call`);
   }
@@ -1116,7 +1112,7 @@ describe("stuck session diagnostics threshold", () => {
       getDiagnosticStabilitySnapshot({ limit: 10 }).events,
       {
         type: "diagnostic.liveness.warning",
-        level: "warning",
+        level: "info",
         active: 1,
         waiting: 0,
         queued: 0,

@@ -125,6 +125,7 @@ export function createChangedCheckPlan(result, options = {}) {
   add("guarded extension wildcard re-exports", ["lint:extensions:no-guarded-wildcard-reexports"]);
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
   add("duplicate scan target coverage", ["dup:check:coverage"]);
+  add("dependency pin guard", ["deps:pins:check"]);
 
   if (result.docsOnly) {
     return {

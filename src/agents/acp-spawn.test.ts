@@ -331,7 +331,9 @@ function expectRecordFields(
   record: unknown,
   expected: Record<string, unknown>,
 ): Record<string, unknown> {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -347,8 +349,10 @@ function gatewayRequests(): Array<{ method?: string; params?: Record<string, unk
 
 function gatewayRequest(method: string): { method?: string; params?: Record<string, unknown> } {
   const request = gatewayRequests().find((candidate) => candidate.method === method);
-  expect(request).toBeDefined();
-  return request as { method?: string; params?: Record<string, unknown> };
+  if (!request) {
+    throw new Error(`Expected gateway request for ${method}`);
+  }
+  return request;
 }
 
 function expectGatewayMethodNotCalled(method: string): void {
@@ -360,7 +364,7 @@ function expectSessionPatchFields(expected: Record<string, unknown>): void {
 }
 
 function expectInitializeSessionFields(expected: Record<string, unknown>): Record<string, unknown> {
-  return expectRecordFields(hoisted.initializeSessionMock.mock.calls[0]?.[0], expected);
+  return expectRecordFields(hoisted.initializeSessionMock.mock.calls.at(0)?.[0], expected);
 }
 
 function expectBindingCallFields(expected: {
@@ -1938,7 +1942,7 @@ describe("spawnAcpDirect", () => {
     expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
     if (expectTranscriptPersistence) {
-      expectRecordFields(hoisted.resolveSessionTranscriptFileMock.mock.calls[0]?.[0], {
+      expectRecordFields(hoisted.resolveSessionTranscriptFileMock.mock.calls.at(0)?.[0], {
         sessionId: "sess-123",
         storePath: "/tmp/codex-sessions.json",
         agentId: "codex",
@@ -2158,7 +2162,7 @@ describe("spawnAcpDirect", () => {
     expect(relayRuns).toContain(agentCall?.params?.idempotencyKey);
     expect(relayRuns).toContain(accepted.runId);
     const streamPathInput = expectRecordFields(
-      hoisted.resolveAcpSpawnStreamLogPathMock.mock.calls[0]?.[0],
+      hoisted.resolveAcpSpawnStreamLogPathMock.mock.calls.at(0)?.[0],
       {},
     );
     expect(streamPathInput.childSessionKey).toMatch(/^agent:codex:acp:/);

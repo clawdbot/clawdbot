@@ -166,18 +166,25 @@ beforeEach(() => {
 describe("installDownloadSpec extraction safety", () => {
   it("rejects targetDir escapes outside the per-skill tools root", async () => {
     const beforeFetchCalls = fetchWithSsrFGuardMock.mock.calls.length;
+    const entry = buildEntry("relative-traversal");
+    const toolsRoot = resolveSkillToolsRootDir(entry);
+    const escapedTargetDir = path.resolve(toolsRoot, "../outside");
 
-    const result = await installDownloadSkill({
-      name: "relative-traversal",
-      url: "https://example.invalid/good.zip",
-      archive: "zip",
-      targetDir: "../outside",
+    const result = await installDownloadSpec({
+      entry,
+      spec: buildDownloadSpec({
+        url: "https://example.invalid/good.zip",
+        archive: "zip",
+        targetDir: "../outside",
+      }),
+      timeoutMs: 30_000,
     });
 
     expect(result.ok).toBe(false);
     expect(result.stderr).toContain("Refusing to install outside the skill tools directory");
     expect(fetchWithSsrFGuardMock.mock.calls.length).toBe(beforeFetchCalls);
-    expect(stateDir.length).toBeGreaterThan(0);
+    await expect(fileExists(toolsRoot)).resolves.toBe(true);
+    await expect(fileExists(escapedTargetDir)).resolves.toBe(false);
   });
 
   it("allows relative targetDir inside the per-skill tools root", async () => {

@@ -316,10 +316,13 @@ function resolveExactConfiguredProviderRef(
   const provider = normalizeLowercaseStringOrEmpty(configuredProvider);
   return {
     provider,
-    model: normalizeStaticProviderModelId(provider, modelRaw.trim(), {
-      allowManifestNormalization: params.allowManifestNormalization,
-      manifestPlugins: params.manifestPlugins,
-    }),
+    model: normalizeConfiguredProviderCatalogModelId(
+      provider,
+      normalizeStaticProviderModelId(provider, modelRaw.trim(), {
+        allowManifestNormalization: params.allowManifestNormalization,
+        manifestPlugins: params.manifestPlugins,
+      }),
+    ),
   };
 }
 

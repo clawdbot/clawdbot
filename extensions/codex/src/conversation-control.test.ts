@@ -53,12 +53,11 @@ describe("codex conversation controls", () => {
       "Codex permissions set to default.",
     );
 
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-1",
-      serviceTier: "priority",
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-    });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.threadId).toBe("thread-1");
+    expect(binding?.serviceTier).toBe("priority");
+    expect(binding?.approvalPolicy).toBe("on-request");
+    expect(binding?.sandbox).toBe("workspace-write");
   });
 
   it("does not persist public OpenAI provider after model changes on native auth bindings", async () => {
@@ -95,11 +94,9 @@ describe("codex conversation controls", () => {
     const raw = await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8");
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(raw).not.toContain('"modelProvider": "openai"');
-    expect(binding).toMatchObject({
-      threadId: "thread-1",
-      authProfileId: "work",
-      model: "gpt-5.5",
-    });
+    expect(binding?.threadId).toBe("thread-1");
+    expect(binding?.authProfileId).toBe("work");
+    expect(binding?.model).toBe("gpt-5.5");
     expect(binding?.modelProvider).toBeUndefined();
   });
 

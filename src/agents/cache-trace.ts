@@ -8,6 +8,7 @@ import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
+import { stableStringify } from "./stable-stringify.js";
 import { buildAgentTraceBase } from "./trace-base.js";
 
 type CacheTraceStage =
@@ -105,57 +106,6 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
 
 function getWriter(filePath: string): CacheTraceWriter {
   return getQueuedFileWriter(writers, filePath);
-}
-
-function stableStringify(value: unknown, seen: WeakSet<object> = new WeakSet()): string {
-  if (value === null || value === undefined) {
-    return String(value);
-  }
-  if (typeof value === "number" && !Number.isFinite(value)) {
-    return JSON.stringify(String(value));
-  }
-  if (typeof value === "bigint") {
-    return JSON.stringify(value.toString());
-  }
-  if (typeof value !== "object") {
-    return JSON.stringify(value) ?? "null";
-  }
-  if (seen.has(value)) {
-    return JSON.stringify("[Circular]");
-  }
-  seen.add(value);
-  if (value instanceof Error) {
-    return stableStringify(
-      {
-        name: value.name,
-        message: value.message,
-        stack: value.stack,
-      },
-      seen,
-    );
-  }
-  if (value instanceof Uint8Array) {
-    return stableStringify(
-      {
-        type: "Uint8Array",
-        data: Buffer.from(value).toString("base64"),
-      },
-      seen,
-    );
-  }
-  if (Array.isArray(value)) {
-    const serializedEntries: string[] = [];
-    for (const entry of value) {
-      serializedEntries.push(stableStringify(entry, seen));
-    }
-    return `[${serializedEntries.join(",")}]`;
-  }
-  const record = value as Record<string, unknown>;
-  const serializedFields: string[] = [];
-  for (const key of Object.keys(record).toSorted()) {
-    serializedFields.push(`${JSON.stringify(key)}:${stableStringify(record[key], seen)}`);
-  }
-  return `{${serializedFields.join(",")}}`;
 }
 
 function digest(value: unknown): string {

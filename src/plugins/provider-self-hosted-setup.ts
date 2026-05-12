@@ -35,7 +35,17 @@ const log = createSubsystemLogger("plugins/self-hosted-provider-setup");
 type OpenAICompatModelsResponse = {
   data?: Array<{
     id?: string;
+    meta?: {
+      n_ctx_train?: unknown;
+    };
   }>;
+};
+
+type LlamaCppPropsResponse = {
+  default_generation_settings?: {
+    n_ctx?: unknown;
+  };
+  n_ctx?: unknown;
 };
 
 function isReasoningModelHeuristic(modelId: string): boolean {
@@ -57,6 +67,66 @@ function buildSelfHostedBaseUrlSsrFPolicy(baseUrl: string): SsrFPolicy | undefin
       hostnameAllowlist: [parsed.hostname],
       allowPrivateNetwork: true,
     };
+  } catch {
+    return undefined;
+  }
+}
+
+function readPositiveInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.trunc(value);
+}
+
+function resolveLlamaCppPropsUrl(baseUrl: string, modelId?: string): string {
+  const parsed = new URL(baseUrl);
+  const pathname = parsed.pathname.replace(/\/+$/, "");
+  const rootPathname = pathname.endsWith("/v1") ? pathname.slice(0, -3) || "/" : pathname;
+  parsed.pathname = `${rootPathname.replace(/\/+$/, "")}/props`;
+  parsed.search = "";
+  parsed.hash = "";
+  const normalizedModelId = normalizeOptionalString(modelId);
+  if (normalizedModelId) {
+    parsed.searchParams.set("model", normalizedModelId);
+    parsed.searchParams.set("autoload", "false");
+  }
+  return parsed.toString();
+}
+
+async function discoverLlamaCppRuntimeContextTokens(params: {
+  baseUrl: string;
+  apiKey?: string;
+  modelId?: string;
+}): Promise<number | undefined> {
+  let url: string;
+  try {
+    url = resolveLlamaCppPropsUrl(params.baseUrl, params.modelId);
+  } catch {
+    return undefined;
+  }
+  try {
+    const trimmedApiKey = normalizeOptionalString(params.apiKey);
+    const { response, release } = await fetchWithSsrFGuard({
+      url,
+      init: {
+        headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
+      },
+      policy: buildSelfHostedBaseUrlSsrFPolicy(params.baseUrl),
+      timeoutMs: 2500,
+    });
+    try {
+      if (!response.ok) {
+        return undefined;
+      }
+      const data = (await response.json()) as LlamaCppPropsResponse;
+      return (
+        readPositiveInteger(data.default_generation_settings?.n_ctx) ??
+        readPositiveInteger(data.n_ctx)
+      );
+    } finally {
+      await release();
+    }
   } catch {
     return undefined;
   }
@@ -100,21 +170,55 @@ export async function discoverOpenAICompatibleLocalModels(params: {
         return [];
       }
 
-      return models
-        .map((model) => ({ id: normalizeOptionalString(model.id) ?? "" }))
-        .filter((model) => Boolean(model.id))
-        .map((model) => {
-          const modelId = model.id;
-          return {
-            id: modelId,
-            name: modelId,
-            reasoning: isReasoningModelHeuristic(modelId),
-            input: ["text"],
-            cost: SELF_HOSTED_DEFAULT_COST,
-            contextWindow: params.contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
-            maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
-          } satisfies ModelDefinitionConfig;
-        });
+      const discoveredModels = models.flatMap((model) => {
+        const modelId = normalizeOptionalString(model.id);
+        if (!modelId) {
+          return [];
+        }
+        return [{ id: modelId, meta: model.meta }];
+      });
+      const runtimeContextTokensByModelId = new Map<string, number>();
+      if (params.contextWindow === undefined) {
+        const uniqueModelIds = [...new Set(discoveredModels.map((model) => model.id))];
+        const runtimeContextTokenResults = await Promise.all(
+          uniqueModelIds.map(
+            async (modelId) =>
+              [
+                modelId,
+                await discoverLlamaCppRuntimeContextTokens({
+                  baseUrl: trimmedBaseUrl,
+                  apiKey: params.apiKey,
+                  modelId: uniqueModelIds.length > 1 ? modelId : undefined,
+                }),
+              ] as const,
+          ),
+        );
+        for (const [modelId, runtimeContextTokens] of runtimeContextTokenResults) {
+          if (runtimeContextTokens) {
+            runtimeContextTokensByModelId.set(modelId, runtimeContextTokens);
+          }
+        }
+      }
+
+      return discoveredModels.map((model) => {
+        const modelConfig: ModelDefinitionConfig = {
+          id: model.id,
+          name: model.id,
+          reasoning: isReasoningModelHeuristic(model.id),
+          input: ["text"],
+          cost: SELF_HOSTED_DEFAULT_COST,
+          contextWindow:
+            params.contextWindow ??
+            readPositiveInteger(model.meta?.n_ctx_train) ??
+            SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
+        };
+        const runtimeContextTokens = runtimeContextTokensByModelId.get(model.id);
+        if (runtimeContextTokens) {
+          modelConfig.contextTokens = runtimeContextTokens;
+        }
+        return modelConfig;
+      });
     } finally {
       await release();
     }

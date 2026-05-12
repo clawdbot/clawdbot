@@ -354,7 +354,7 @@ describe("resolveDiscordAutoThreadContext", () => {
           peer: { kind: "channel", id: "thread" },
         }),
         ModelParentSessionKey: testCase.expectedModelParentSessionKey,
-        ...(testCase.parentInheritanceEnabled === true
+        ...(testCase.parentInheritanceEnabled
           ? { ParentSessionKey: testCase.expectedParentSessionKey }
           : {}),
       });

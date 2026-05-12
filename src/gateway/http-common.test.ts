@@ -46,8 +46,10 @@ function expectHeaderNotSet(setHeader: ReturnType<typeof vi.fn>, name: string): 
 
 function mockCallRecord(mock: ReturnType<typeof vi.fn>, index: number): unknown[] {
   const call = mock.mock.calls[index];
-  expect(call).toBeTruthy();
-  return call ?? [];
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  return call;
 }
 
 describe("setDefaultSecurityHeaders", () => {

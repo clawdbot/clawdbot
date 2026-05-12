@@ -1300,7 +1300,7 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const normalizedTurnSource = normalizeMessageChannel(turnSourceChannel);
     const turnSourceMessageChannel =
-      normalizedTurnSource && isGatewayMessageChannel(normalizedTurnSource)
+      normalizedTurnSource && isKnownGatewayChannel(normalizedTurnSource)
         ? normalizedTurnSource
         : undefined;
     const originMessageChannel =

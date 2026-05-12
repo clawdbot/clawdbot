@@ -12,27 +12,22 @@ afterEach(async () => {
 
 describe("qa-lab server capture helpers", () => {
   it("maps capture rows into QA-friendly fields", () => {
-    expect(
-      mapCaptureEventForQa({
-        flowId: "flow-1",
-        dataText: '{"hello":"world"}',
-        metaJson: JSON.stringify({
-          provider: "openai",
-          api: "responses",
-          model: "gpt-5.5",
-          captureOrigin: "shared-fetch",
-        }),
-      }),
-    ).toEqual(
-      expect.objectContaining({
-        flowId: "flow-1",
-        payloadPreview: '{"hello":"world"}',
+    const record = mapCaptureEventForQa({
+      flowId: "flow-1",
+      dataText: '{"hello":"world"}',
+      metaJson: JSON.stringify({
         provider: "openai",
         api: "responses",
         model: "gpt-5.5",
         captureOrigin: "shared-fetch",
       }),
-    );
+    }) as ReturnType<typeof mapCaptureEventForQa> & { flowId?: string };
+    expect(record.flowId).toBe("flow-1");
+    expect(record.payloadPreview).toBe('{"hello":"world"}');
+    expect(record.provider).toBe("openai");
+    expect(record.api).toBe("responses");
+    expect(record.model).toBe("gpt-5.5");
+    expect(record.captureOrigin).toBe("shared-fetch");
   });
 
   it("probes tcp reachability for reachable and unreachable targets", async () => {
@@ -56,15 +51,9 @@ describe("qa-lab server capture helpers", () => {
       throw new Error("expected tcp probe address");
     }
 
-    await expect(probeTcpReachability(`http://127.0.0.1:${address.port}`)).resolves.toEqual(
-      expect.objectContaining({
-        ok: true,
-      }),
-    );
-    await expect(probeTcpReachability("http://127.0.0.1:9", 50)).resolves.toEqual(
-      expect.objectContaining({
-        ok: false,
-      }),
-    );
+    const reachable = await probeTcpReachability(`http://127.0.0.1:${address.port}`);
+    expect(reachable.ok).toBe(true);
+    const unreachable = await probeTcpReachability("http://127.0.0.1:9", 50);
+    expect(unreachable.ok).toBe(false);
   });
 });

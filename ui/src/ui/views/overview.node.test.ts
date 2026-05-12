@@ -4,6 +4,7 @@ import { ConnectErrorDetailCodes } from "../../../../src/gateway/protocol/connec
 import {
   resolveAuthHintKind,
   resolvePairingHint,
+  shouldShowInsecureContextHint,
   shouldShowPairingHint,
 } from "./overview-hints.ts";
 
@@ -105,5 +106,27 @@ describe("resolveAuthHintKind", () => {
         hasPassword: false,
       }),
     ).toBe("failed");
+  });
+});
+
+describe("shouldShowInsecureContextHint", () => {
+  it("returns true for browser WebSocket security errors", () => {
+    expect(
+      shouldShowInsecureContextHint(
+        false,
+        "Browser refused the Gateway WebSocket for security reasons.",
+        "BROWSER_WEBSOCKET_SECURITY_ERROR",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not treat generic WebSocket constructor errors as insecure context", () => {
+    expect(
+      shouldShowInsecureContextHint(
+        false,
+        "Could not create the Gateway WebSocket: constructor failed",
+        "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR",
+      ),
+    ).toBe(false);
   });
 });

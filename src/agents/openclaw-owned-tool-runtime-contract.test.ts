@@ -93,10 +93,12 @@ async function waitForAfterToolCall(hooks: {
   afterToolCall: { mock: { calls: unknown[][] } };
 }): Promise<[Record<string, unknown>, Record<string, unknown>]> {
   await vi.waitFor(() => {
-    expect(hooks.afterToolCall.mock.calls.length).toBe(1);
+    expect(hooks.afterToolCall).toHaveBeenCalledTimes(1);
   });
-  const call = hooks.afterToolCall.mock.calls[0];
-  expect(call).toBeDefined();
+  const call = hooks.afterToolCall.mock.calls.at(0);
+  if (!call) {
+    throw new Error("Expected afterToolCall hook call");
+  }
   return call as [Record<string, unknown>, Record<string, unknown>];
 }
 

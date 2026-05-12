@@ -28,7 +28,7 @@ function expectIssueMessageIncludes(
   issue: ReturnType<typeof expectValidationIssue>,
   fragments: readonly string[],
 ) {
-  expect(issue.message).toEqual(expect.stringContaining(fragments[0] ?? ""));
+  expect(issue.message).toContain(fragments[0] ?? "");
   fragments.slice(1).forEach((fragment) => {
     expect(issue.message).toContain(fragment);
   });

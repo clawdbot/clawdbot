@@ -172,6 +172,17 @@ function sanitizeOpenAISdkSseResponse(
   });
 }
 
+function shouldSanitizeOpenAISdkSseResponse(model: Model<Api>): boolean {
+  if (model.provider !== "openai") {
+    return true;
+  }
+  try {
+    return new URL(model.baseUrl).hostname.toLowerCase() !== "api.openai.com";
+  } catch {
+    return true;
+  }
+}
+
 async function requestBodyHasStreamTrue(
   request: Request | undefined,
   init: RequestInit | undefined,
@@ -187,12 +198,7 @@ async function requestBodyHasStreamTrue(
   }
 
   let text: string | undefined;
-  if (request) {
-    text = await request
-      .clone()
-      .text()
-      .catch(() => undefined);
-  } else if (typeof init?.body === "string") {
+  if (typeof init?.body === "string") {
     text = init.body;
   }
   if (!text) {
@@ -534,7 +540,7 @@ export function buildGuardedModelFetch(
       result.refreshTimeout,
       localServiceLease,
     );
-    return options?.sanitizeSse === false
+    return options?.sanitizeSse === false || !shouldSanitizeOpenAISdkSseResponse(model)
       ? response
       : sanitizeOpenAISdkSseResponse(response, { synthesizeJsonAsSse });
   };

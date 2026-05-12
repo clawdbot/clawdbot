@@ -24,7 +24,9 @@ vi.mock("./channel-resolution.js", () => ({
 
 function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
   const call = mock.mock.calls[index];
-  expect(call).toBeDefined();
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
   return call[0];
 }
 

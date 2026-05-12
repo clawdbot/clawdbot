@@ -272,20 +272,17 @@ describe("resolveAllowAlwaysPatterns", () => {
       strictInlineEval: true,
     });
 
-    expect(entries).toEqual([
-      expect.objectContaining({
-        pattern: awk,
-        argPattern: expect.any(String),
-      }),
-    ]);
-    expect(
-      matchAllowlist(
-        entries,
-        resolution.execution ?? null,
-        [awk, "-F", ",", "-f", "script.awk", "data.csv"],
-        "win32",
-      ),
-    ).toEqual(expect.objectContaining({ pattern: awk, argPattern: expect.any(String) }));
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.pattern).toBe(awk);
+    expect(typeof entries[0]?.argPattern).toBe("string");
+    const matched = matchAllowlist(
+      entries,
+      resolution.execution ?? null,
+      [awk, "-F", ",", "-f", "script.awk", "data.csv"],
+      "win32",
+    );
+    expect(matched?.pattern).toBe(awk);
+    expect(typeof matched?.argPattern).toBe("string");
     expect(
       matchAllowlist(
         entries,

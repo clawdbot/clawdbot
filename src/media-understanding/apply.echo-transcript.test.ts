@@ -113,7 +113,7 @@ function disableImageUnderstanding(cfg: OpenClawConfig): void {
 
 function expectSingleEchoDeliveryCall() {
   expect(mockDeliverOutboundPayloads).toHaveBeenCalledOnce();
-  const firstCall = mockDeliverOutboundPayloads.mock.calls[0];
+  const firstCall = mockDeliverOutboundPayloads.mock.calls.at(0);
   if (!firstCall) {
     throw new Error("Expected echo transcript delivery call");
   }

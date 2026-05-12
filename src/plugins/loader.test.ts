@@ -526,7 +526,9 @@ function expectRegistryErrorDiagnostic(params: {
       entry.pluginId === params.pluginId &&
       entry.message === params.message,
   );
-  expect(diagnostic, params.message).toBeDefined();
+  if (!diagnostic) {
+    throw new Error(`Expected registry error diagnostic: ${params.message}`);
+  }
 }
 
 function expectDiagnosticContaining(params: {
@@ -541,7 +543,9 @@ function expectDiagnosticContaining(params: {
       (!params.pluginId || entry.pluginId === params.pluginId) &&
       entry.message.includes(params.message),
   );
-  expect(diagnostic, params.message).toBeDefined();
+  if (!diagnostic) {
+    throw new Error(`Expected diagnostic containing: ${params.message}`);
+  }
 }
 
 function expectNoDiagnosticContaining(params: {
@@ -2160,7 +2164,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
         entry.pluginId === "bad-harness" &&
         entry.message === 'agent harness "broken" registration missing required runtime methods',
     );
-    expect(diagnostic).toBeDefined();
+    if (!diagnostic) {
+      throw new Error("Expected bad-harness runtime methods diagnostic");
+    }
   });
 
   it("does not register internal hooks globally during non-activating loads", () => {
@@ -3994,6 +4000,45 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(loaded?.error).toContain("export.default:object keys=default");
   });
 
+  it.each([
+    {
+      id: "wrong-channel-entry",
+      kind: "bundled-channel-entry",
+      error: "bundled channel entry requires setup-runtime loader",
+    },
+    {
+      id: "wrong-channel-setup-entry",
+      kind: "bundled-channel-setup-entry",
+      error: "bundled channel setup entry requires setup-runtime loader",
+    },
+  ])("reports $kind loaded through the legacy plugin loader", ({ id, kind, error }) => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id,
+      filename: `${id}.cjs`,
+      body: `module.exports = { id: ${JSON.stringify(id)}, kind: ${JSON.stringify(kind)} };`,
+    });
+    const errors: string[] = [];
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: [id],
+      },
+      options: {
+        logger: createErrorLogger(errors),
+      },
+    });
+
+    const loaded = registry.plugins.find((entry) => entry.id === id);
+    expect(loaded?.status).toBe("error");
+    expect(loaded?.error).toBe(error);
+    expectRegistryErrorDiagnostic({ registry, pluginId: id, message: error });
+    expect(errors).toEqual([
+      `[plugins] ${id} ${error}; ensure plugin is loaded via bundled channel discovery, not legacy plugin loader`,
+    ]);
+  });
+
   it("handles single-plugin channel, context engine, and cli validation", () => {
     useNoBundledPlugins();
     const scenarios = [
@@ -5388,11 +5433,11 @@ module.exports = {
       },
     });
 
-    expect(
-      registry.channels.find((entry) => entry.plugin.id === "healthy-chat")?.plugin.meta,
-    ).toBeDefined();
     const healthyMeta = registry.channels.find((entry) => entry.plugin.id === "healthy-chat")
       ?.plugin.meta;
+    if (!healthyMeta) {
+      throw new Error("expected healthy chat plugin metadata");
+    }
     expect(healthyMeta?.label).toBe("Healthy Chat");
     expect(healthyMeta?.docsPath).toBe("/channels/healthy-chat");
     expect(registry.plugins.find((entry) => entry.id === "healthy-channel")?.status).toBe("loaded");

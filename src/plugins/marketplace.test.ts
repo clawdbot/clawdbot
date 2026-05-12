@@ -156,15 +156,17 @@ async function expectRemoteMarketplaceError(params: { manifest: unknown; expecte
 
 function installPluginInput(callIndex = 0): Record<string, unknown> {
   const input = installPluginFromPathMock.mock.calls[callIndex]?.[0];
-  expect(typeof input).toBe("object");
-  expect(input).not.toBeNull();
+  if (!input || typeof input !== "object") {
+    throw new Error(`expected install plugin input ${callIndex}`);
+  }
   return input as Record<string, unknown>;
 }
 
 function fetchGuardInput(callIndex = 0): Record<string, unknown> {
   const input = fetchWithSsrFGuardMock.mock.calls[callIndex]?.[0];
-  expect(typeof input).toBe("object");
-  expect(input).not.toBeNull();
+  if (!input || typeof input !== "object") {
+    throw new Error(`expected fetch guard input ${callIndex}`);
+  }
   return input as Record<string, unknown>;
 }
 
@@ -176,8 +178,9 @@ function expectMarketplaceInstallSuccess(
     marketplaceSource?: string;
   },
 ) {
-  expect(typeof result).toBe("object");
-  expect(result).not.toBeNull();
+  if (!result || typeof result !== "object") {
+    throw new Error("expected marketplace install result");
+  }
   const record = result as Record<string, unknown>;
   expect(record.ok).toBe(true);
   expect(record.pluginId).toBe(params.pluginId ?? "frontend-design");
@@ -191,7 +194,7 @@ function expectMarketplaceInstallSuccess(
 
 function expectRemoteCloneCommand() {
   expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
-  const [argv, options] = runCommandWithTimeoutMock.mock.calls[0] ?? [];
+  const [argv, options] = runCommandWithTimeoutMock.mock.calls.at(0) ?? [];
   expect(Array.isArray(argv)).toBe(true);
   expect((argv as unknown[]).slice(0, 5)).toEqual([
     "git",

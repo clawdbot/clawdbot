@@ -318,8 +318,10 @@ function mockCallArg<T>(
   _type?: (value: unknown) => value is T,
 ): T {
   const call = callIndex < 0 ? mock.mock.calls.at(callIndex) : mock.mock.calls[callIndex];
-  expect(call).toBeDefined();
-  return call?.[argIndex] as T;
+  if (!call) {
+    throw new Error(`Expected mock call at index ${callIndex}`);
+  }
+  return call[argIndex] as T;
 }
 
 function lastMockCallArg<T>(
@@ -362,14 +364,13 @@ function externalContentDetails(
         targetId?: unknown;
       }
     | undefined;
-  expect(details).toBeDefined();
   if (!details) {
     throw new Error("Expected browser tool result details");
   }
-  expect(details?.ok).toBe(true);
-  expect(details?.externalContent?.untrusted).toBe(true);
-  expect(details?.externalContent?.source).toBe("browser");
-  expect(details?.externalContent?.kind).toBe(kind);
+  expect(details.ok).toBe(true);
+  expect(details.externalContent?.untrusted).toBe(true);
+  expect(details.externalContent?.source).toBe("browser");
+  expect(details.externalContent?.kind).toBe(kind);
   return details;
 }
 

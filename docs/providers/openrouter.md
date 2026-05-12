@@ -133,6 +133,29 @@ OpenRouter can also be used as a TTS provider through its OpenAI-compatible
 If `messages.tts.providers.openrouter.apiKey` is omitted, TTS reuses
 `models.providers.openrouter.apiKey`, then `OPENROUTER_API_KEY`.
 
+## Speech-to-text (inbound audio)
+
+OpenRouter can transcribe inbound voice/audio attachments through the shared
+`tools.media.audio` path using its STT endpoint (`/audio/transcriptions`).
+This applies to any channel plugin that forwards inbound voice/audio into
+media understanding preflight.
+
+```json5
+{
+  tools: {
+    media: {
+      audio: {
+        enabled: true,
+        models: [{ provider: "openrouter", model: "openai/whisper-large-v3-turbo" }],
+      },
+    },
+  },
+}
+```
+
+OpenClaw sends OpenRouter STT requests as JSON with base64 audio under
+`input_audio` (OpenRouter STT contract), not as multipart OpenAI form uploads.
+
 ## Authentication and headers
 
 OpenRouter uses a Bearer token with your API key under the hood.

@@ -16,8 +16,9 @@ const baseParams = {
 };
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
   const record = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);
@@ -564,6 +565,26 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("keeps error payloads during silent turns", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      silentExpected: true,
+      payloads: [
+        { text: "normal maintenance reply" },
+        {
+          text: "⚠️ write failed: Memory flush writes are restricted to memory/2026-05-05.md; use that path only.",
+          isError: true,
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expectFields(replyPayloads[0], {
+      text: "⚠️ write failed: Memory flush writes are restricted to memory/2026-05-05.md; use that path only.",
+      isError: true,
+    });
   });
 
   it("keeps voice media payloads during silent turns", async () => {

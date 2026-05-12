@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { trackBackgroundTask } from "./last-route.js";
 
-const waitForAsyncCallbacks = async () => {
-  await Promise.resolve();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+const waitForTaskCleanup = async (task: Promise<unknown>) => {
+  await Promise.allSettled([task]);
+  await new Promise<void>((resolve) => setImmediate(resolve));
 };
 
 describe("trackBackgroundTask", () => {
@@ -32,7 +32,7 @@ describe("trackBackgroundTask", () => {
       throw new Error("Expected tracked task reject callback to be initialized");
     }
     rejectTask(new Error("boom"));
-    await waitForAsyncCallbacks();
+    await waitForTaskCleanup(task);
 
     expect(backgroundTasks.size).toBe(0);
     expect(unhandledRejections).toStrictEqual([]);

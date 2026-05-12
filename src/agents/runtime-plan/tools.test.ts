@@ -98,7 +98,7 @@ describe("AgentRuntimePlan tool policy helpers", () => {
 
     expect(normalized[0]?.parameters).toEqual(normalizedParameterFreeSchema());
     expect(mocks.normalizeProviderToolSchemas).toHaveBeenCalledTimes(1);
-    expect(mocks.normalizeProviderToolSchemas.mock.calls[0]?.[0]).toEqual({
+    expect(mocks.normalizeProviderToolSchemas.mock.calls.at(0)?.[0]).toEqual({
       tools: [createParameterFreeTool()],
       provider: "openai",
       config: undefined,

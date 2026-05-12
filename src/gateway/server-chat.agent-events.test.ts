@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
+import { formatChannelProgressDraftLine } from "../plugin-sdk/channel-streaming.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
 
@@ -156,8 +157,6 @@ describe("agent event handler", () => {
   }
 
   function requireRecord(value: unknown, label: string): Record<string, unknown> {
-    expect(typeof value).toBe("object");
-    expect(value).not.toBeNull();
     if (typeof value !== "object" || value === null) {
       throw new Error(`${label} was not an object`);
     }
@@ -186,7 +185,6 @@ describe("agent event handler", () => {
     label: string,
   ) {
     const call = mock.mock.calls[index];
-    expect(call).toBeDefined();
     if (!call) {
       throw new Error(`missing ${label} call ${index + 1}`);
     }
@@ -1021,6 +1019,60 @@ describe("agent event handler", () => {
       args: { command: "echo hi" },
     });
     expect(broadcastToConnIds.mock.calls[0]?.[2]).toEqual(new Set(["conn-run"]));
+    resetAgentRunContextForTest();
+  });
+
+  it("projects tool-search bridge calls like native channel verbose tool events", () => {
+    const { nodeSendToSession, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-1",
+    });
+
+    registerAgentRunContext("run-tool-search-node", {
+      sessionKey: "session-1",
+      verboseLevel: "on",
+    });
+
+    handler({
+      runId: "run-tool-search-node",
+      seq: 1,
+      stream: "tool",
+      ts: 1_234,
+      data: {
+        phase: "start",
+        name: "tool_search_code",
+        toolCallId: "tool-search-node-1",
+        args: {
+          code: 'return await openclaw.tools.call("openclaw:core:exec", { command: "echo hi" });',
+        },
+      },
+    });
+
+    const payload = nodeSendToSession.mock.calls[0]?.[2] as {
+      stream?: string;
+      data?: { name?: string; args?: Record<string, unknown> };
+    };
+    expect(payload.stream).toBe("tool");
+    expect(payload.data).toMatchObject({
+      phase: "start",
+      name: "exec",
+      bridgeToolName: "tool_search_code",
+      bridgeTargetToolName: "openclaw:core:exec",
+      bridgeVerb: "call",
+      args: { command: "echo hi" },
+    });
+    expect(
+      formatChannelProgressDraftLine({
+        event: "tool",
+        name: payload.data?.name,
+        args: payload.data?.args,
+      }),
+    ).toBe(
+      formatChannelProgressDraftLine({
+        event: "tool",
+        name: "exec",
+        args: { command: "echo hi" },
+      }),
+    );
     resetAgentRunContextForTest();
   });
 

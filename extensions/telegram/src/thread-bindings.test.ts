@@ -129,8 +129,8 @@ describe("telegram thread bindings", () => {
       enableSweeper: false,
     });
 
-    await expect(
-      getSessionBindingService().bind({
+    const error = await getSessionBindingService()
+      .bind({
         targetSessionKey: "agent:main:subagent:child-1",
         targetKind: "subagent",
         conversation: {
@@ -139,10 +139,12 @@ describe("telegram thread bindings", () => {
           conversationId: "77",
         },
         placement: "child",
-      }),
-    ).rejects.toMatchObject({
-      code: "BINDING_CREATE_FAILED",
-    });
+      })
+      .then(
+        () => undefined,
+        (bindError: unknown) => bindError,
+      );
+    expect((error as { code?: unknown } | undefined)?.code).toBe("BINDING_CREATE_FAILED");
   });
 
   it("rejects child placement when parentConversationId is also a bare topic ID", async () => {
@@ -152,8 +154,8 @@ describe("telegram thread bindings", () => {
       enableSweeper: false,
     });
 
-    await expect(
-      getSessionBindingService().bind({
+    const error = await getSessionBindingService()
+      .bind({
         targetSessionKey: "agent:main:acp:child-acp-1",
         targetKind: "session",
         conversation: {
@@ -163,10 +165,12 @@ describe("telegram thread bindings", () => {
           parentConversationId: "99",
         },
         placement: "child",
-      }),
-    ).rejects.toMatchObject({
-      code: "BINDING_CREATE_FAILED",
-    });
+      })
+      .then(
+        () => undefined,
+        (bindError: unknown) => bindError,
+      );
+    expect((error as { code?: unknown } | undefined)?.code).toBe("BINDING_CREATE_FAILED");
   });
 
   it("shares binding state across distinct module instances", async () => {

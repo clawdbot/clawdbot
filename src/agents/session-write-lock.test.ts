@@ -33,6 +33,17 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   throw new Error(`Expected path to be missing: ${targetPath}`);
 }
 
+function lockCleanupRecords(
+  locks: Array<{ lockPath: string; removed: boolean; stale: boolean; staleReasons: string[] }>,
+) {
+  return locks.map((entry) => ({
+    name: path.basename(entry.lockPath),
+    removed: entry.removed,
+    stale: entry.stale,
+    staleReasons: entry.staleReasons,
+  }));
+}
+
 async function expectCurrentPidOwnsLock(params: {
   sessionFile: string;
   timeoutMs: number;
@@ -310,7 +321,7 @@ describe("acquireSessionWriteLock", () => {
       });
 
       const released = await __testing.runLockWatchdogCheck(Date.now() + 1000);
-      expect(released).toBeGreaterThanOrEqual(1);
+      expect(released).toBe(1);
       await expectPathMissing(lockPath);
 
       const lockB = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
@@ -411,10 +422,39 @@ describe("acquireSessionWriteLock", () => {
       });
 
       expect(result.locks).toHaveLength(3);
-      expect(result.cleaned).toHaveLength(2);
-      expect(result.cleaned.map((entry) => path.basename(entry.lockPath)).toSorted()).toEqual([
-        "dead.jsonl.lock",
-        "old-live.jsonl.lock",
+      expect(lockCleanupRecords(result.locks)).toEqual([
+        {
+          name: "dead.jsonl.lock",
+          removed: true,
+          stale: true,
+          staleReasons: ["dead-pid", "too-old"],
+        },
+        {
+          name: "fresh-live.jsonl.lock",
+          removed: false,
+          stale: false,
+          staleReasons: [],
+        },
+        {
+          name: "old-live.jsonl.lock",
+          removed: true,
+          stale: true,
+          staleReasons: ["too-old"],
+        },
+      ]);
+      expect(lockCleanupRecords(result.cleaned)).toEqual([
+        {
+          name: "dead.jsonl.lock",
+          removed: true,
+          stale: true,
+          staleReasons: ["dead-pid", "too-old"],
+        },
+        {
+          name: "old-live.jsonl.lock",
+          removed: true,
+          stale: true,
+          staleReasons: ["too-old"],
+        },
       ]);
 
       await expectPathMissing(staleDeadLock);
@@ -451,11 +491,22 @@ describe("acquireSessionWriteLock", () => {
         readOwnerProcessArgs: () => ["python", "worker.py"],
       });
 
-      expect(result.locks).toHaveLength(1);
-      expect(result.cleaned.map((entry) => path.basename(entry.lockPath))).toEqual([
-        "false-live.jsonl.lock",
+      expect(lockCleanupRecords(result.locks)).toEqual([
+        {
+          name: "false-live.jsonl.lock",
+          removed: true,
+          stale: true,
+          staleReasons: ["non-openclaw-owner"],
+        },
       ]);
-      expect(result.cleaned[0]?.staleReasons).toContain("non-openclaw-owner");
+      expect(lockCleanupRecords(result.cleaned)).toEqual([
+        {
+          name: "false-live.jsonl.lock",
+          removed: true,
+          stale: true,
+          staleReasons: ["non-openclaw-owner"],
+        },
+      ]);
       await expect(fs.access(falseLiveLock)).rejects.toThrow();
     } finally {
       await fs.rm(root, { recursive: true, force: true });
@@ -488,10 +539,14 @@ describe("acquireSessionWriteLock", () => {
         readOwnerProcessArgs: () => ["node", "/srv/app/dist/index.js"],
       });
 
-      expect(result.cleaned.map((entry) => path.basename(entry.lockPath))).toEqual([
-        "false-live-generic-entry.jsonl.lock",
+      expect(lockCleanupRecords(result.cleaned)).toEqual([
+        {
+          name: "false-live-generic-entry.jsonl.lock",
+          removed: true,
+          stale: true,
+          staleReasons: ["non-openclaw-owner"],
+        },
       ]);
-      expect(result.cleaned[0]?.staleReasons).toContain("non-openclaw-owner");
       await expect(fs.access(falseLiveLock)).rejects.toThrow();
     } finally {
       await fs.rm(root, { recursive: true, force: true });
@@ -599,11 +654,22 @@ describe("acquireSessionWriteLock", () => {
         removeStale: true,
       });
 
-      expect(result.locks).toHaveLength(1);
-      expect(result.cleaned.map((entry) => path.basename(entry.lockPath))).toEqual([
-        "orphan-self.jsonl.lock",
+      expect(lockCleanupRecords(result.locks)).toEqual([
+        {
+          name: "orphan-self.jsonl.lock",
+          removed: true,
+          stale: true,
+          staleReasons: ["orphan-self-pid"],
+        },
       ]);
-      expect(result.cleaned[0]?.staleReasons).toContain("orphan-self-pid");
+      expect(lockCleanupRecords(result.cleaned)).toEqual([
+        {
+          name: "orphan-self.jsonl.lock",
+          removed: true,
+          stale: true,
+          staleReasons: ["orphan-self-pid"],
+        },
+      ]);
       await expectPathMissing(orphanSelfLock);
     } finally {
       await fs.rm(root, { recursive: true, force: true });

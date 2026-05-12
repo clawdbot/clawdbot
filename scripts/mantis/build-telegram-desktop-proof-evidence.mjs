@@ -121,7 +121,7 @@ function laneArtifactEntries() {
       lane,
       path: `${lane}/telegram-desktop-proof.gif`,
       targetPath: `${lane}/telegram-desktop-proof.gif`,
-      width: 520,
+      width: 420,
     },
     {
       kind: "motionClip",

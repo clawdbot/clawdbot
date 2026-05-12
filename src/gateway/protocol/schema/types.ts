@@ -190,6 +190,7 @@ export type SkillsUpdateParams = SchemaType<"SkillsUpdateParams">;
 export type CronJob = SchemaType<"CronJob">;
 export type CronListParams = SchemaType<"CronListParams">;
 export type CronStatusParams = SchemaType<"CronStatusParams">;
+export type CronGetParams = SchemaType<"CronGetParams">;
 export type CronAddParams = SchemaType<"CronAddParams">;
 export type CronUpdateParams = SchemaType<"CronUpdateParams">;
 export type CronRemoveParams = SchemaType<"CronRemoveParams">;

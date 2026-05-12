@@ -167,7 +167,9 @@ describe("agent delivery helpers", () => {
     },
   ])("builds delivery plan for %j", ({ params, expected }) => {
     const plan = expectDeliveryPlan(params);
-    expect(plan).toMatchObject(expected);
+    for (const [key, value] of Object.entries(expected)) {
+      expect((plan as Record<string, unknown>)[key]).toEqual(value);
+    }
   });
 
   it("resolves fallback targets when no explicit destination is provided", () => {

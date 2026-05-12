@@ -52,9 +52,21 @@ async function runMonitorWithMocks(opts: MonitorSignalProviderOptions) {
   });
 }
 
+function requireWaitForTransportReadyOptions(): Record<string, unknown> {
+  const [call] = waitForTransportReadyMock.mock.calls;
+  if (!call) {
+    throw new Error("expected waitForTransportReady call");
+  }
+  const [options] = call;
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new Error("expected waitForTransportReady options");
+  }
+  return options as Record<string, unknown>;
+}
+
 function expectWaitForTransportReadyTimeout(timeoutMs: number) {
   expect(waitForTransportReadyMock).toHaveBeenCalledTimes(1);
-  const options = waitForTransportReadyMock.mock.calls[0]?.[0] as { timeoutMs?: number };
+  const options = requireWaitForTransportReadyOptions();
   expect(options.timeoutMs).toBe(timeoutMs);
 }
 
@@ -71,10 +83,7 @@ describe("monitorSignalProvider autostart", () => {
     });
 
     expect(waitForTransportReadyMock).toHaveBeenCalledTimes(1);
-    const options = waitForTransportReadyMock.mock.calls[0]?.[0] as {
-      abortSignal?: unknown;
-      check?: unknown;
-    } & Record<string, unknown>;
+    const options = requireWaitForTransportReadyOptions();
     expect(options).toEqual({
       label: "signal daemon",
       timeoutMs: 30_000,

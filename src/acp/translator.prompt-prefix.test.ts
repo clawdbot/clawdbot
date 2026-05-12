@@ -28,8 +28,9 @@ describe("acp prompt cwd prefix", () => {
     const call = requestSpy.mock.calls[index];
     expect(call?.[0]).toBe("chat.send");
     expect(call?.[2]).toEqual({ timeoutMs: null });
-    expect(typeof call?.[1]).toBe("object");
-    expect(call?.[1]).not.toBeNull();
+    if (!call?.[1] || typeof call[1] !== "object") {
+      throw new Error(`expected chat.send payload ${index}`);
+    }
     return call?.[1] as Record<string, unknown>;
   }
 

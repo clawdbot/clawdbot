@@ -369,6 +369,7 @@ export async function runPreparedCliAgent(
           provider: params.provider,
           model: context.modelId,
           usage: resultParams.output.usage,
+          ...(resultParams.output.usage ? { lastCallUsage: resultParams.output.usage } : {}),
           ...(resultParams.effectiveCliSessionId
             ? {
                 cliSessionBinding: {

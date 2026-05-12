@@ -31,7 +31,9 @@ describe("thread binding manager state", () => {
     });
 
     const direct = getThreadBindingManager("work");
-    expect(direct).toBeDefined();
+    if (!direct) {
+      throw new Error("expected direct thread binding manager");
+    }
     expect(viaAlternateLoader.getThreadBindingManager("work")).toBe(direct);
   });
 });

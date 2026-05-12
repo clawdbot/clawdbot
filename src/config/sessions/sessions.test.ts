@@ -20,6 +20,19 @@ import { clearSessionStoreCacheForTest, loadSessionStore, updateSessionStore } f
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { mergeSessionEntry, mergeSessionEntryWithPolicy, type SessionEntry } from "./types.js";
 
+type WriteTextAtomicCall = Parameters<typeof jsonFiles.writeTextAtomic>;
+
+function requireWriteTextAtomicCall(
+  spy: { mock: { calls: WriteTextAtomicCall[] } },
+  callIndex = 0,
+): WriteTextAtomicCall {
+  const call = spy.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`expected writeTextAtomic call ${callIndex}`);
+  }
+  return call;
+}
+
 describe("session path safety", () => {
   it("rejects unsafe session IDs", () => {
     const unsafeSessionIds = [
@@ -346,7 +359,7 @@ describe("session store writer queue", () => {
     );
 
     expect(writeSpy).toHaveBeenCalledTimes(1);
-    const [writtenPath, writtenText, writeOptions] = writeSpy.mock.calls[0] ?? [];
+    const [writtenPath, writtenText, writeOptions] = requireWriteTextAtomicCall(writeSpy);
     expect(writtenPath).toBe(storePath);
     expect(writtenText).toBeTypeOf("string");
     expect(writeOptions?.durable).toBe(false);

@@ -144,10 +144,37 @@ describe("agents helpers", () => {
       },
     ]);
 
-    expect(result.added).toHaveLength(1);
-    expect(result.skipped).toHaveLength(1);
-    expect(result.conflicts).toHaveLength(1);
-    expect(result.config.bindings).toHaveLength(2);
+    expect(result.added).toStrictEqual([
+      {
+        agentId: "work",
+        match: { channel: "telegram" },
+      },
+    ]);
+    expect(result.skipped).toStrictEqual([
+      {
+        agentId: "main",
+        match: { channel: "whatsapp", accountId: "default" },
+      },
+    ]);
+    expect(result.conflicts).toStrictEqual([
+      {
+        binding: {
+          agentId: "work",
+          match: { channel: "whatsapp", accountId: "default" },
+        },
+        existingAgentId: "main",
+      },
+    ]);
+    expect(result.config.bindings).toStrictEqual([
+      {
+        agentId: "main",
+        match: { channel: "whatsapp", accountId: "default" },
+      },
+      {
+        agentId: "work",
+        match: { channel: "telegram" },
+      },
+    ]);
   });
 
   it("applyAgentBindings upgrades channel-only binding to account-specific binding for same agent", () => {
@@ -167,9 +194,14 @@ describe("agents helpers", () => {
       },
     ]);
 
-    expect(result.added).toHaveLength(0);
-    expect(result.updated).toHaveLength(1);
-    expect(result.conflicts).toHaveLength(0);
+    expect(result.added).toStrictEqual([]);
+    expect(result.updated).toStrictEqual([
+      {
+        agentId: "main",
+        match: { channel: "telegram", accountId: "work" },
+      },
+    ]);
+    expect(result.conflicts).toStrictEqual([]);
     expect(result.config.bindings).toEqual([
       {
         agentId: "main",
@@ -204,9 +236,36 @@ describe("agents helpers", () => {
       },
     ]);
 
-    expect(result.added).toHaveLength(1);
-    expect(result.conflicts).toHaveLength(0);
-    expect(result.config.bindings).toHaveLength(2);
+    expect(result.added).toStrictEqual([
+      {
+        agentId: "work",
+        match: {
+          channel: "discord",
+          accountId: "guild-a",
+          guildId: "123",
+        },
+      },
+    ]);
+    expect(result.conflicts).toStrictEqual([]);
+    expect(result.config.bindings).toStrictEqual([
+      {
+        agentId: "main",
+        match: {
+          channel: "discord",
+          accountId: "guild-a",
+          guildId: "123",
+          roles: ["111", "222"],
+        },
+      },
+      {
+        agentId: "work",
+        match: {
+          channel: "discord",
+          accountId: "guild-a",
+          guildId: "123",
+        },
+      },
+    ]);
   });
 
   it("applyAgentBindings keeps distinct bindings when persisted match fields contain pipes", () => {
@@ -232,10 +291,28 @@ describe("agents helpers", () => {
       },
     ]);
 
-    expect(result.added).toHaveLength(2);
-    expect(result.skipped).toHaveLength(0);
-    expect(result.conflicts).toHaveLength(0);
-    expect(result.config.bindings).toHaveLength(2);
+    expect(result.added).toStrictEqual([
+      {
+        agentId: "main",
+        match: {
+          channel: "discord",
+          peer: { kind: "direct", id: "a|b" },
+          accountId: "default",
+        },
+      },
+      {
+        agentId: "main",
+        match: {
+          channel: "discord",
+          peer: { kind: "direct", id: "a" },
+          guildId: "b",
+          accountId: "|default",
+        },
+      },
+    ]);
+    expect(result.skipped).toStrictEqual([]);
+    expect(result.conflicts).toStrictEqual([]);
+    expect(result.config.bindings).toStrictEqual(result.added);
   });
 
   it("removeAgentBindings does not remove role-based bindings when removing channel-level routes", () => {
@@ -272,8 +349,17 @@ describe("agents helpers", () => {
       },
     ]);
 
-    expect(result.removed).toHaveLength(1);
-    expect(result.conflicts).toHaveLength(0);
+    expect(result.removed).toStrictEqual([
+      {
+        agentId: "main",
+        match: {
+          channel: "discord",
+          accountId: "guild-a",
+          guildId: "123",
+        },
+      },
+    ]);
+    expect(result.conflicts).toStrictEqual([]);
     expect(result.config.bindings).toEqual([
       {
         agentId: "main",
@@ -307,8 +393,9 @@ describe("agents helpers", () => {
     const result = pruneAgentConfig(cfg, "work");
     expect(result.config.agents?.list?.map((agent) => agent.id)).not.toContain("work");
     expect(result.config.agents?.list?.map((agent) => agent.id)).toContain("home");
-    expect(result.config.bindings).toHaveLength(1);
-    expect(result.config.bindings?.[0]?.agentId).toBe("home");
+    expect(result.config.bindings).toStrictEqual([
+      { agentId: "home", match: { channel: "telegram" } },
+    ]);
     expect(result.config.tools?.agentToAgent?.allow).toEqual(["home"]);
     expect(result.removedBindings).toBe(1);
     expect(result.removedAllow).toBe(1);

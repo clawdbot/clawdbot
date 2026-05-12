@@ -208,9 +208,9 @@ function expectLoaderCallCount(count: number) {
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
-  expect(value).toBeTruthy();
-  expect(typeof value).toBe("object");
-  expect(Array.isArray(value)).toBe(false);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
   return value as Record<string, unknown>;
 }
 
@@ -219,8 +219,10 @@ function requireLastCallFirstArg(
   label: string,
 ): Record<string, unknown> {
   const call = mock.mock.calls.at(-1);
-  expect(call, `${label} should have been called`).toBeTruthy();
-  return requireRecord(call?.[0]);
+  if (!call) {
+    throw new Error(`${label} should have been called`);
+  }
+  return requireRecord(call[0]);
 }
 
 function requirePluginsConfig(params: Record<string, unknown>): Record<string, unknown> {

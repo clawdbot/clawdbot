@@ -18,6 +18,7 @@ import {
   resolveLocalAuthCliInvocation,
   resolveLocalAuthSpawnCwd,
   resolveLocalAuthSpawnOptions,
+  resolveTuiCtrlCAction,
   resolveTuiSessionKey,
   stopTuiSafely,
 } from "./tui.js";
@@ -264,6 +265,36 @@ describe("resolveCtrlCAction", () => {
   });
 });
 
+describe("resolveTuiCtrlCAction", () => {
+  it("exits immediately after a gateway disconnect", () => {
+    expect(
+      resolveTuiCtrlCAction({
+        hasInput: true,
+        now: 2000,
+        lastCtrlCAt: 0,
+        wasDisconnected: true,
+      }),
+    ).toEqual({
+      action: "exit",
+      nextLastCtrlCAt: 0,
+    });
+  });
+
+  it("forces exit when shutdown is already in progress", () => {
+    expect(
+      resolveTuiCtrlCAction({
+        hasInput: false,
+        now: 2000,
+        lastCtrlCAt: 1000,
+        exitRequested: true,
+      }),
+    ).toEqual({
+      action: "force-exit",
+      nextLastCtrlCAt: 1000,
+    });
+  });
+});
+
 describe("TUI shutdown safety", () => {
   it("drains terminal input before stopping the TUI", async () => {
     const calls: string[] = [];
@@ -280,6 +311,7 @@ describe("TUI shutdown safety", () => {
     });
 
     expect(drainInput).toHaveBeenCalledOnce();
+    expect(drainInput).toHaveBeenCalledWith(500, 100);
     expect(stop).toHaveBeenCalledOnce();
     expect(calls).toEqual(["drain", "stop"]);
   });

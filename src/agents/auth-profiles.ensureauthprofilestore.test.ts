@@ -819,15 +819,14 @@ describe("ensureAuthProfileStore", () => {
         profiles: Record<string, Record<string, unknown>>;
       };
       const persistedProfile = persisted.profiles["openai-codex:default"];
-      expect(persistedProfile).toMatchObject({
-        type: "oauth",
-        provider: "openai-codex",
-        oauthRef: {
-          source: "openclaw-credentials",
-          provider: "openai-codex",
-          id: expect.any(String),
-        },
-      });
+      expect(persistedProfile?.type).toBe("oauth");
+      expect(persistedProfile?.provider).toBe("openai-codex");
+      const oauthRef = persistedProfile?.oauthRef as
+        | { source?: string; provider?: string; id?: unknown }
+        | undefined;
+      expect(oauthRef?.source).toBe("openclaw-credentials");
+      expect(oauthRef?.provider).toBe("openai-codex");
+      expect(typeof oauthRef?.id).toBe("string");
       expect(persistedProfile).not.toHaveProperty("access");
       expect(persistedProfile).not.toHaveProperty("refresh");
       expect(persistedProfile).not.toHaveProperty("idToken");

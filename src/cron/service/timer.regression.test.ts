@@ -50,16 +50,19 @@ function requireTimestamp(value: number | undefined, label: string): number {
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
-  expect(value).toBeTruthy();
-  expect(typeof value).toBe("object");
-  expect(Array.isArray(value)).toBe(false);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
   return value as Record<string, unknown>;
 }
 
 function firstMockArg(mock: unknown): unknown {
   const calls = (mock as { mock: { calls: readonly (readonly unknown[])[] } }).mock.calls;
-  expect(calls[0]).toBeTruthy();
-  return calls[0]?.[0];
+  const call = calls[0];
+  if (!call) {
+    throw new Error("Expected mock to have at least one call");
+  }
+  return call[0];
 }
 
 describe("cron service timer regressions", () => {
@@ -114,7 +117,9 @@ describe("cron service timer regressions", () => {
     await onTimer(state);
 
     expect(timeoutSpy).toHaveBeenCalled();
-    expect(state.timer).toBeTruthy();
+    if (state.timer == null) {
+      throw new Error("Expected cron timer to be re-armed");
+    }
     const delays = timeoutSpy.mock.calls
       .map(([, delay]) => delay)
       .filter((d): d is number => typeof d === "number");
@@ -1151,12 +1156,14 @@ describe("cron service timer regressions", () => {
     const event = events.find(
       (candidate) => candidate.jobId === selfRemovingJob.id && candidate.action === "finished",
     );
-    expect(event).toBeTruthy();
-    expect(event?.action).toBe("finished");
-    expect(event?.status).toBe("ok");
-    expect(event?.summary).toBe(`finished ${selfRemovingJob.id}`);
-    expect(event?.delivered).toBe(true);
-    expect(event?.deliveryStatus).toBe("delivered");
+    if (!event) {
+      throw new Error(`Expected finished event for ${selfRemovingJob.id}`);
+    }
+    expect(event.action).toBe("finished");
+    expect(event.status).toBe("ok");
+    expect(event.summary).toBe(`finished ${selfRemovingJob.id}`);
+    expect(event.delivered).toBe(true);
+    expect(event.deliveryStatus).toBe("delivered");
   });
 
   it("keeps missing-job discard semantics for failed isolated outcomes", async () => {

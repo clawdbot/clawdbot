@@ -75,7 +75,7 @@ describe("createFailoverDecisionLogger", () => {
 
     logDecision("fallback_model");
 
-    const [message, details] = warnSpy.mock.calls[0] ?? [];
+    const [message, details] = warnSpy.mock.calls.at(0) ?? [];
     expect(message).toBe("embedded run failover decision");
     const observation = details as
       | {
@@ -115,10 +115,10 @@ describe("createFailoverDecisionLogger", () => {
     logDecision("surface_error");
 
     expect(
-      (warnSpy.mock.calls[0]?.[1] as { consoleMessage?: string } | undefined)?.consoleMessage,
+      (warnSpy.mock.calls.at(0)?.[1] as { consoleMessage?: string } | undefined)?.consoleMessage,
     ).toContain("from=openai/gpt-5.4");
     expect(
-      (warnSpy.mock.calls[0]?.[1] as { consoleMessage?: string } | undefined)?.consoleMessage,
+      (warnSpy.mock.calls.at(0)?.[1] as { consoleMessage?: string } | undefined)?.consoleMessage,
     ).not.toContain("to=openai/gpt-5.4");
   });
 });

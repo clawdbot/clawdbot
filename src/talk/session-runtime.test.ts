@@ -64,7 +64,7 @@ describe("realtime voice bridge session runtime", () => {
 
     expect(callbacks?.cfg).toEqual({ talk: { realtime: { provider: "test" } } });
     expect(sendAudio).toHaveBeenCalledWith(Buffer.from([1, 2]));
-    expect(clearAudio).toHaveBeenCalled();
+    expect(clearAudio).toHaveBeenCalledTimes(1);
     expect(sendMark).toHaveBeenCalledWith("mark-1");
   });
 
@@ -160,7 +160,7 @@ describe("realtime voice bridge session runtime", () => {
     callbacks?.onMark?.("mark-1");
 
     expect(sendMark).not.toHaveBeenCalled();
-    expect(bridge.acknowledgeMark).toHaveBeenCalled();
+    expect(bridge.acknowledgeMark).toHaveBeenCalledTimes(1);
   });
 
   it("can ignore provider marks", () => {

@@ -25,7 +25,7 @@ type QrCliOptions = {
 };
 
 function renderQrAscii(data: string): Promise<string> {
-  return renderQrTerminal(data, { small: true });
+  return renderQrTerminal(data);
 }
 function readDevicePairPublicUrlFromConfig(cfg: OpenClawConfig): string | undefined {
   const value = cfg.plugins?.entries?.["device-pair"]?.config?.["publicUrl"];

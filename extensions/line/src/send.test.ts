@@ -418,7 +418,7 @@ describe("LINE send helpers", () => {
     );
 
     expect(pushMessageMock).toHaveBeenCalledTimes(1);
-    const firstCall = pushMessageMock.mock.calls[0] as [
+    const firstCall = pushMessageMock.mock.calls.at(0) as [
       { messages: Array<{ quickReply?: { items: unknown[] } }> },
     ];
     expect(firstCall[0].messages[0].quickReply?.items).toHaveLength(13);

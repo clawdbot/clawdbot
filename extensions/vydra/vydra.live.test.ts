@@ -60,9 +60,7 @@ describe.skipIf(!LIVE || !VYDRA_API_KEY)("vydra live", () => {
     const { speechProviders } = await registerVydraPlugin();
     const provider = requireRegisteredProvider(speechProviders, "vydra");
     const voices = await provider.listVoices?.({});
-    expect(voices).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: "21m00Tcm4TlvDq8ikWAM" })]),
-    );
+    expect(voices?.some((voice) => voice.id === "21m00Tcm4TlvDq8ikWAM")).toBe(true);
 
     const result = await provider.synthesize({
       text: "OpenClaw integration test OK.",

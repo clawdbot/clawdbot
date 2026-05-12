@@ -80,6 +80,14 @@ function buildTokenProvider(): MSTeamsAccessTokenProvider {
   };
 }
 
+function firstMockCall(mock: ReturnType<typeof vi.fn>, label: string): unknown[] {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 async function resolvePublicHost(): Promise<{ address: string }> {
   return { address: "93.184.216.34" };
 }
@@ -311,7 +319,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
 
       expect(media).toBeUndefined();
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0]).toStrictEqual([
+      expect(firstMockCall(warn, "logger.warn")).toStrictEqual([
         "msteams botFramework attachmentInfo fetch failed",
         { error: "fetch failed | invalid onRequestStart method" },
       ]);
@@ -348,7 +356,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
 
       expect(media).toBeUndefined();
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0]).toStrictEqual([
+      expect(firstMockCall(warn, "logger.warn")).toStrictEqual([
         "msteams botFramework attachmentView fetch failed",
         { error: "fetch failed" },
       ]);
@@ -375,7 +383,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
 
       expect(media).toBeUndefined();
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0]).toStrictEqual([
+      expect(firstMockCall(warn, "logger.warn")).toStrictEqual([
         "msteams botFramework attachmentInfo non-ok",
         { status: 500 },
       ]);

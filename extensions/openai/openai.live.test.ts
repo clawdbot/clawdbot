@@ -234,12 +234,10 @@ describeLive("openai plugin live", () => {
       model: resolved,
     });
 
-    expect(normalized).toMatchObject({
-      provider: "openai",
-      id: LIVE_MODEL_ID,
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    });
+    expect(normalized?.provider).toBe("openai");
+    expect(normalized?.id).toBe(LIVE_MODEL_ID);
+    expect(normalized?.api).toBe("openai-responses");
+    expect(normalized?.baseUrl).toBe("https://api.openai.com/v1");
 
     const client = new OpenAI({
       apiKey: OPENAI_API_KEY,
@@ -265,7 +263,7 @@ describeLive("openai plugin live", () => {
     if (!voices) {
       throw new Error("openai speech provider did not return voices");
     }
-    expect(voices).toEqual(expect.arrayContaining([expect.objectContaining({ id: "alloy" })]));
+    expect(voices.some((voice) => voice.id === "alloy")).toBe(true);
 
     const cfg = createLiveConfig();
     const ttsConfig = createLiveTtsConfig();

@@ -55,6 +55,18 @@ function fakePage(): {
   return { page, handlers, mocks: { on, getByRole, frameLocator, locator } };
 }
 
+function firstSavePath(saveAs: MutableDownload["saveAs"]): string {
+  const [call] = saveAs.mock.calls;
+  if (!call) {
+    throw new Error("Expected saveAs call");
+  }
+  const [savedPath] = call;
+  if (typeof savedPath !== "string") {
+    throw new Error("Expected saved download path");
+  }
+  return savedPath;
+}
+
 describe("pw-session refLocator", () => {
   it("uses frameLocator for role refs when snapshot was scoped to a frame", () => {
     const { page, mocks } = fakePage();
@@ -166,13 +178,11 @@ describe("pw-session ensurePageState", () => {
     expect(path.dirname(managedPathB ?? "")).toBe(DEFAULT_DOWNLOAD_DIR);
     expect(path.basename(managedPathA ?? "")).toMatch(/-report\.pdf$/);
     expect(path.basename(managedPathB ?? "")).toMatch(/-report\.pdf$/);
-    expect(saveAsA.mock.calls[0]?.[0]).not.toBe(managedPathA);
-    expect(saveAsB.mock.calls[0]?.[0]).not.toBe(managedPathB);
-    for (const call of [saveAsA.mock.calls[0], saveAsB.mock.calls[0]]) {
-      const savedPath = call?.[0];
-      if (typeof savedPath !== "string") {
-        throw new Error("Expected saved download path");
-      }
+    const savedPathA = firstSavePath(saveAsA);
+    const savedPathB = firstSavePath(saveAsB);
+    expect(savedPathA).not.toBe(managedPathA);
+    expect(savedPathB).not.toBe(managedPathB);
+    for (const savedPath of [savedPathA, savedPathB]) {
       expect(savedPath.length).toBeGreaterThan(0);
       const savedParentName = path.basename(path.dirname(savedPath));
       expect(
@@ -249,14 +259,13 @@ describe("pw-session ensurePageState", () => {
     handlers.get("pageerror")?.[0]?.(new Error("boom"));
 
     expect(state.errors.at(-1)?.message).toBe("boom");
-    expect(state.requests.at(-1)).toMatchObject({
-      method: "GET",
-      url: "https://example.com/api",
-      resourceType: "xhr",
-      status: 500,
-      ok: false,
-      failureText: "net::ERR_FAILED",
-    });
+    const request = state.requests.at(-1);
+    expect(request?.method).toBe("GET");
+    expect(request?.url).toBe("https://example.com/api");
+    expect(request?.resourceType).toBe("xhr");
+    expect(request?.status).toBe(500);
+    expect(request?.ok).toBe(false);
+    expect(request?.failureText).toBe("net::ERR_FAILED");
   });
 
   it("drops state on page close", () => {

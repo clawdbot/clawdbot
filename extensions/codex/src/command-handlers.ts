@@ -15,6 +15,7 @@ import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
 } from "./app-server/session-binding.js";
+import { readCodexAccountAuthOverview } from "./command-account.js";
 import {
   buildHelp,
   formatAccount,
@@ -31,6 +32,7 @@ import {
   readCodexStatusProbes,
   requestOptions,
   safeCodexControlRequest,
+  type CodexControlRequestOptions,
   type SafeValue,
 } from "./command-rpc.js";
 import {
@@ -75,12 +77,14 @@ type CodexControlRequestFn = (
   pluginConfig: unknown,
   method: CodexControlMethod,
   requestParams: JsonValue | undefined,
+  options?: CodexControlRequestOptions,
 ) => Promise<JsonValue | undefined>;
 
 type SafeCodexControlRequestFn = (
   pluginConfig: unknown,
   method: CodexControlMethod,
   requestParams: JsonValue | undefined,
+  options?: CodexControlRequestOptions,
 ) => Promise<SafeValue<JsonValue | undefined>>;
 
 const defaultCodexCommandDeps: CodexCommandDeps = {
@@ -325,7 +329,19 @@ export async function handleCodexSubcommand(
     if (limits.ok) {
       rememberCodexRateLimits(limits.value);
     }
-    return { text: formatAccount(account, limits) };
+    return {
+      text: formatAccount(
+        account,
+        limits,
+        await readCodexAccountAuthOverview({
+          ctx,
+          pluginConfig: options.pluginConfig,
+          safeCodexControlRequest: deps.safeCodexControlRequest,
+          account,
+          limits,
+        }),
+      ),
+    };
   }
   return { text: `Unknown Codex command: ${formatCodexDisplayText(subcommand)}\n\n${buildHelp()}` };
 }

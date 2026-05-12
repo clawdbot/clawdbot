@@ -3,7 +3,7 @@ import {
   formatUpdateOneLiner,
   resolveUpdateAvailability,
 } from "../../commands/status.update.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { readSourceConfigBestEffort } from "../../config/config.js";
 import {
   normalizeUpdateChannel,
   resolveRegistryUpdateChannel,
@@ -39,10 +39,8 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   }
 
   const root = await resolveUpdateRoot();
-  const configSnapshot = await readConfigFileSnapshot();
-  const configChannel = configSnapshot.valid
-    ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
-    : null;
+  const config = await readSourceConfigBestEffort();
+  const configChannel = normalizeUpdateChannel(config.update?.channel);
 
   const update = await checkUpdateStatus({
     root,

@@ -47,14 +47,18 @@ function selectArg(index = 0): {
   options?: Array<{ value: unknown; label: string }>;
 } {
   const call = select.mock.calls[index];
-  expect(call).toBeDefined();
-  return call?.[0] as { message?: string; options?: Array<{ value: unknown; label: string }> };
+  if (!call) {
+    throw new Error(`Expected select call ${index}`);
+  }
+  return call[0] as { message?: string; options?: Array<{ value: unknown; label: string }> };
 }
 
 function confirmArg(index = 0): { message?: string } {
   const call = confirm.mock.calls[index];
-  expect(call).toBeDefined();
-  return call?.[0] as { message?: string };
+  if (!call) {
+    throw new Error(`Expected confirm call ${index}`);
+  }
+  return call[0] as { message?: string };
 }
 
 function expectOption(

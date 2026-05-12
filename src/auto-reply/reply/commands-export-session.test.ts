@@ -204,13 +204,10 @@ describe("buildExportSessionReply", () => {
     });
 
     expect(reply.text).toContain("✅ Session exported!");
-    expect(hoisted.resolveCommandsSystemPromptBundleMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionEntry: expect.objectContaining({
-          sessionId: "session-from-store",
-        }),
-      }),
-    );
+    const [[systemPromptBundleParams]] = hoisted.resolveCommandsSystemPromptBundleMock.mock
+      .calls as unknown as Array<[{ sessionEntry?: { sessionId?: string; updatedAt?: number } }]>;
+    expect(systemPromptBundleParams?.sessionEntry?.sessionId).toBe("session-from-store");
+    expect(systemPromptBundleParams?.sessionEntry?.updatedAt).toBe(2);
   });
 
   it("injects scripts and session data through the real export template", async () => {
@@ -255,7 +252,7 @@ describe("buildExportSessionReply", () => {
       "openclaw-session-session--2026-05-05T10-11-12-2.html",
     );
     expect(hoisted.writeFileMock.mock.calls[0]?.[0]).toBe(expectedBase);
-    expect(hoisted.writeFileMock.mock.calls[0]?.[2]).toMatchObject({
+    expect(hoisted.writeFileMock.mock.calls[0]?.[2]).toEqual({
       encoding: "utf-8",
       flag: "wx",
     });

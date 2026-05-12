@@ -577,6 +577,7 @@ export const ChannelsStatusParamsSchema = Type.Object(
   {
     probe: Type.Optional(Type.Boolean()),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    channel: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );

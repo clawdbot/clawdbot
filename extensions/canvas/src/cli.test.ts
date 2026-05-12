@@ -87,7 +87,7 @@ describe("canvas CLI", () => {
     expect(writtenFile.filePath).toMatch(/openclaw-canvas-snapshot-.*\.png$/);
     expect(writtenFile.base64).toBe("aGk=");
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    const mediaMessage = runtime.log.mock.calls[0]?.[0];
+    const mediaMessage = runtime.log.mock.calls.at(0)?.[0];
     expect(mediaMessage?.startsWith("MEDIA:")).toBe(true);
     expect(mediaMessage?.endsWith(".png")).toBe(true);
   });

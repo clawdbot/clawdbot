@@ -63,6 +63,24 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     };
   }
 
+  function expectTelegramSend(
+    sendTelegram: ReturnType<typeof vi.fn>,
+    params: { text: string; cfg: OpenClawConfig },
+  ) {
+    expect(sendTelegram).toHaveBeenCalledTimes(1);
+    expect(sendTelegram.mock.calls).toEqual([
+      [
+        TELEGRAM_GROUP,
+        params.text,
+        {
+          verbose: false,
+          cfg: params.cfg,
+          accountId: undefined,
+        },
+      ],
+    ]);
+  }
+
   async function runWithToolResponse(response: HeartbeatToolResponse) {
     return await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createConfig({ tmpDir, storePath });
@@ -79,7 +97,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
         deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
       });
 
-      return { result, sendTelegram, replySpy };
+      return { result, sendTelegram, replySpy, cfg };
     });
   }
 
@@ -154,7 +172,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
   });
 
   it("delivers notificationText when notify=true", async () => {
-    const { sendTelegram } = await runWithToolResponse({
+    const { sendTelegram, cfg } = await runWithToolResponse({
       outcome: "needs_attention",
       notify: true,
       summary: "Build is blocked.",
@@ -162,12 +180,10 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       priority: "high",
     });
 
-    expect(sendTelegram).toHaveBeenCalledTimes(1);
-    expect(sendTelegram).toHaveBeenCalledWith(
-      TELEGRAM_GROUP,
-      "Build is blocked on missing credentials.",
-      expect.any(Object),
-    );
+    expectTelegramSend(sendTelegram, {
+      text: "Build is blocked on missing credentials.",
+      cfg,
+    });
   });
 
   it("uses the heartbeat response tool prompt in message-tool mode", async () => {
@@ -215,12 +231,10 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       };
       expect(result.status).toBe("ran");
       expect(calledOpts.sourceReplyDeliveryMode).toBe("message_tool_only");
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sendTelegram).toHaveBeenCalledWith(
-        TELEGRAM_GROUP,
-        usageLimitMessage,
-        expect.any(Object),
-      );
+      expectTelegramSend(sendTelegram, {
+        text: usageLimitMessage,
+        cfg,
+      });
     });
   });
 

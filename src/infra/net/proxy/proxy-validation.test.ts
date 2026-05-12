@@ -199,7 +199,7 @@ describe("proxy validation", () => {
       targetUrl: DEFAULT_PROXY_VALIDATION_ALLOWED_URLS[0],
       timeoutMs: 5000,
     });
-    const deniedCall = fetchCheck.mock.calls[1]?.[0] as
+    const deniedCall = fetchCheck.mock.calls.at(1)?.[0] as
       | { proxyUrl?: unknown; targetUrl?: string; timeoutMs?: unknown }
       | undefined;
     expect(deniedCall?.proxyUrl).toBe("http://127.0.0.1:3128");

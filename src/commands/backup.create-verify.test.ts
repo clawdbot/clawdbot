@@ -32,6 +32,14 @@ function createRuntime(): RuntimeEnv {
   } satisfies RuntimeEnv;
 }
 
+function requireBackupVerifyCall(): [RuntimeEnv, Record<string, unknown>] {
+  const call = backupVerifyCommandMock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected backup verify command call");
+  }
+  return call as [RuntimeEnv, Record<string, unknown>];
+}
+
 describe("backupCreateCommand verify wrapper", () => {
   it("optionally verifies the archive after writing it", async () => {
     createBackupArchiveMock.mockResolvedValue({
@@ -57,7 +65,7 @@ describe("backupCreateCommand verify wrapper", () => {
 
     expect(result.verified).toBe(true);
     expect(backupVerifyCommandMock).toHaveBeenCalledOnce();
-    const [verifyRuntime, verifyOptions] = backupVerifyCommandMock.mock.calls[0] ?? [];
+    const [verifyRuntime, verifyOptions] = requireBackupVerifyCall();
     expect(verifyOptions).toStrictEqual({
       archive: "/tmp/openclaw-backup.tar.gz",
       json: false,

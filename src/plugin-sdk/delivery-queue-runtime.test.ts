@@ -46,11 +46,10 @@ describe("plugin-sdk delivery queue drainPendingDeliveries", () => {
       selectEntry: () => ({ match: false }),
     });
 
-    expect(mocks.coreDrainPendingDeliveries).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deliver: mocks.deliverOutboundPayloads,
-      }),
-    );
+    expect(mocks.coreDrainPendingDeliveries).toHaveBeenCalledTimes(1);
+    const [[{ deliver: lazyDeliver }]] = mocks.coreDrainPendingDeliveries.mock
+      .calls as unknown as Array<[{ deliver?: unknown }]>;
+    expect(lazyDeliver).toBe(mocks.deliverOutboundPayloads);
   });
 
   it("preserves an explicit deliver fn without loading the lazy runtime", async () => {
@@ -65,11 +64,10 @@ describe("plugin-sdk delivery queue drainPendingDeliveries", () => {
       selectEntry: () => ({ match: false }),
     });
 
-    expect(mocks.coreDrainPendingDeliveries).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deliver,
-      }),
-    );
+    expect(mocks.coreDrainPendingDeliveries).toHaveBeenCalledTimes(1);
+    const [[{ deliver: explicitDeliver }]] = mocks.coreDrainPendingDeliveries.mock
+      .calls as unknown as Array<[{ deliver?: unknown }]>;
+    expect(explicitDeliver).toBe(deliver);
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 });

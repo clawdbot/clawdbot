@@ -18,7 +18,11 @@ import { resolveIMessageAccount } from "./accounts.js";
 import { IMESSAGE_ACTION_NAMES, IMESSAGE_ACTIONS } from "./actions-contract.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import { describeIMessageMessageTool } from "./message-tool-api.js";
-import { findLatestIMessageEntryForChat, type IMessageChatContext } from "./monitor-reply-cache.js";
+import {
+  findLatestIMessageEntryForChat,
+  rememberIMessageReplyCache,
+  type IMessageChatContext,
+} from "./monitor-reply-cache.js";
 import { getCachedIMessagePrivateApiStatus } from "./probe.js";
 import { parseIMessageTarget, type IMessageTarget } from "./targets.js";
 
@@ -37,6 +41,24 @@ const SUPPORTED_ACTIONS = new Set<ChannelMessageActionName>([
 ]);
 function readMessageText(params: Record<string, unknown>): string | undefined {
   return readStringParam(params, "text") ?? readStringParam(params, "message");
+}
+
+function rememberOutboundBridgeMessage(params: {
+  accountId: string;
+  messageId?: string;
+  chatGuid: string;
+}): void {
+  const messageId = params.messageId?.trim();
+  if (!messageId || messageId === "ok" || messageId === "unknown") {
+    return;
+  }
+  rememberIMessageReplyCache({
+    accountId: params.accountId,
+    messageId,
+    chatGuid: params.chatGuid,
+    timestamp: Date.now(),
+    isFromMe: true,
+  });
 }
 
 /**
@@ -557,6 +579,11 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         attachment: attachment?.spec ?? undefined,
         options: { ...opts, chatGuid: resolvedChatGuid },
       });
+      rememberOutboundBridgeMessage({
+        accountId: account.accountId,
+        messageId: result.messageId,
+        chatGuid: resolvedChatGuid,
+      });
       return jsonResult({ ok: true, messageId: result.messageId, repliedTo: resolvedMessageId });
     }
 
@@ -575,6 +602,11 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         text,
         effectId,
         options: { ...opts, chatGuid: resolvedChatGuid },
+      });
+      rememberOutboundBridgeMessage({
+        accountId: account.accountId,
+        messageId: result.messageId,
+        chatGuid: resolvedChatGuid,
       });
       return jsonResult({ ok: true, messageId: result.messageId, effect: effectId });
     }
@@ -652,6 +684,11 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         filename,
         asVoice: asVoice ?? undefined,
         options: { ...opts, chatGuid: resolvedChatGuid },
+      });
+      rememberOutboundBridgeMessage({
+        accountId: account.accountId,
+        messageId: result.messageId,
+        chatGuid: resolvedChatGuid,
       });
       return jsonResult({ ok: true, messageId: result.messageId });
     }

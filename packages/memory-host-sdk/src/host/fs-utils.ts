@@ -1,7 +1,8 @@
 import { configureFsSafePython } from "@openclaw/fs-safe/config";
 export { root } from "@openclaw/fs-safe/root";
-export { isPathInside } from "@openclaw/fs-safe/path";
+export { isPathInside, isPathInsideWithRealpath } from "@openclaw/fs-safe/path";
 export {
+  assertNoSymlinkParents,
   readRegularFile,
   statRegularFile,
   type RegularFileStatResult,
@@ -17,12 +18,13 @@ if (!hasPythonModeOverride) {
 
 export function isFileMissingError(
   err: unknown,
-): err is NodeJS.ErrnoException & { code: "ENOENT" } {
+): err is NodeJS.ErrnoException & { code: "ENOENT" | "ENOTDIR" | "not-found" } {
   return Boolean(
     err &&
     typeof err === "object" &&
     "code" in err &&
     ((err as Partial<NodeJS.ErrnoException>).code === "ENOENT" ||
+      (err as Partial<NodeJS.ErrnoException>).code === "ENOTDIR" ||
       (err as { code?: unknown }).code === "not-found"),
   );
 }

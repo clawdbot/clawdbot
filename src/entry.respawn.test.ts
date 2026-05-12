@@ -13,11 +13,18 @@ import {
 type CliRespawnPlan = NonNullable<ReturnType<typeof buildCliRespawnPlan>>;
 
 function expectCliRespawnPlan(plan: ReturnType<typeof buildCliRespawnPlan>): CliRespawnPlan {
-  expect(plan).not.toBeNull();
   if (plan === null) {
     throw new Error("Expected CLI respawn plan");
   }
   return plan;
+}
+
+function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
 }
 
 describe("buildCliRespawnPlan", () => {
@@ -186,9 +193,12 @@ describe("runCliRespawnPlan", () => {
         env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
       },
     );
-    expect(attachChildProcessBridge.mock.calls[0]?.[0]).toBe(child);
-    const bridgeOptions = attachChildProcessBridge.mock.calls[0]?.[1];
-    expect(typeof bridgeOptions?.onSignal).toBe("function");
+    const [bridgeChild, bridgeOptions] = requireFirstMockCall(
+      attachChildProcessBridge,
+      "child process bridge attach",
+    );
+    expect(bridgeChild).toBe(child);
+    expect(bridgeOptions).toEqual(expect.objectContaining({ onSignal: expect.any(Function) }));
 
     child.emit("exit", 0, null);
 

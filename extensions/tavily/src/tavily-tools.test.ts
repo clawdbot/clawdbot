@@ -30,6 +30,14 @@ vi.mock("./tavily-client.js", () => ({
   runTavilyExtract,
 }));
 
+function requireFirstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call[0];
+}
+
 function fakeApi(): OpenClawPluginApi {
   return {
     config: {},
@@ -217,12 +225,18 @@ describe("tavily tools", () => {
     await searchTool.execute("search-call", { query: "openclaw" });
     await extractTool.execute("extract-call", { urls: ["https://example.com"] });
 
-    const searchParams = runTavilySearch.mock.calls[0]?.[0];
-    expect(searchParams?.cfg).toBe(runtimeConfig);
-    expect(searchParams?.query).toBe("openclaw");
-    const extractParams = runTavilyExtract.mock.calls[0]?.[0] as TavilyExtractParams | undefined;
-    expect(extractParams?.cfg).toBe(runtimeConfig);
-    expect(extractParams?.urls).toEqual(["https://example.com"]);
+    const searchParams = requireFirstMockArg(runTavilySearch, "Tavily search params") as Record<
+      string,
+      unknown
+    >;
+    expect(searchParams.cfg).toBe(runtimeConfig);
+    expect(searchParams.query).toBe("openclaw");
+    const extractParams = requireFirstMockArg(
+      runTavilyExtract,
+      "Tavily extract params",
+    ) as TavilyExtractParams;
+    expect(extractParams.cfg).toBe(runtimeConfig);
+    expect(extractParams.urls).toEqual(["https://example.com"]);
   });
 
   it("drops empty domain arrays and forwards query-scoped chunking", async () => {
@@ -260,11 +274,14 @@ describe("tavily tools", () => {
       chunks_per_source: 2,
     });
 
-    const extractParams = runTavilyExtract.mock.calls[0]?.[0] as TavilyExtractParams | undefined;
-    expect(extractParams?.cfg).toEqual({});
-    expect(extractParams?.urls).toEqual(["https://example.com"]);
-    expect(extractParams?.query).toBe("pricing");
-    expect(extractParams?.chunksPerSource).toBe(2);
+    const extractParams = requireFirstMockArg(
+      runTavilyExtract,
+      "Tavily extract params",
+    ) as TavilyExtractParams;
+    expect(extractParams.cfg).toEqual({});
+    expect(extractParams.urls).toEqual(["https://example.com"]);
+    expect(extractParams.query).toBe("pricing");
+    expect(extractParams.chunksPerSource).toBe(2);
   });
 
   it("rejects chunks_per_source without query", async () => {

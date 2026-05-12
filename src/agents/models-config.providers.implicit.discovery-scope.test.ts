@@ -87,9 +87,9 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       providerDiscoveryTimeoutMs: 1234,
     });
 
-    const [discoveryOptions] = mocks.resolveRuntimePluginDiscoveryProviders.mock.calls[0] ?? [];
+    const [discoveryOptions] = mocks.resolveRuntimePluginDiscoveryProviders.mock.calls.at(0) ?? [];
     expect(discoveryOptions?.onlyPluginIds).toEqual(["openai"]);
-    const [catalogOptions] = mocks.runProviderCatalog.mock.calls[0] ?? [];
+    const [catalogOptions] = mocks.runProviderCatalog.mock.calls.at(0) ?? [];
     expect(catalogOptions?.timeoutMs).toBe(1234);
   });
 
@@ -102,7 +102,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       providerDiscoveryEntriesOnly: true,
     });
 
-    const [discoveryOptions] = mocks.resolveRuntimePluginDiscoveryProviders.mock.calls[0] ?? [];
+    const [discoveryOptions] = mocks.resolveRuntimePluginDiscoveryProviders.mock.calls.at(0) ?? [];
     expect(discoveryOptions?.discoveryEntriesOnly).toBe(true);
   });
 });

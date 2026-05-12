@@ -83,7 +83,7 @@ describe("Canvas tool", () => {
     await tool.execute("tool-call-1", { action: "snapshot" });
 
     expect(mocks.imageResultFromFile).toHaveBeenCalledTimes(1);
-    const imageResultParams = mocks.imageResultFromFile.mock.calls[0]?.[0] as
+    const imageResultParams = mocks.imageResultFromFile.mock.calls.at(0)?.[0] as
       | {
           label?: string;
           path?: string;

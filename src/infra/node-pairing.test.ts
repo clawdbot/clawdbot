@@ -39,9 +39,9 @@ async function withNodePairingDir<T>(run: (baseDir: string) => Promise<T>): Prom
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
-  expect(value).toBeTruthy();
-  expect(typeof value).toBe("object");
-  expect(Array.isArray(value)).toBe(false);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
   return value as Record<string, unknown>;
 }
 
@@ -51,8 +51,10 @@ function findRecordByField<T extends Record<string, unknown>>(
   value: unknown,
 ): T {
   const record = records.find((entry) => entry[field] === value);
-  expect(record).toBeTruthy();
-  return record as T;
+  if (!record) {
+    throw new Error(`Expected record with ${field}=${String(value)}`);
+  }
+  return record;
 }
 
 describe("node pairing tokens", () => {

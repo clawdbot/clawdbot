@@ -742,7 +742,7 @@ describe("createFollowupRunner compaction", () => {
 
     await runner(queued);
 
-    expect(onBlockReply).toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
     const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(1);
@@ -794,7 +794,7 @@ describe("createFollowupRunner compaction", () => {
 
     await runner(queued);
 
-    expect(onBlockReply).toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
     const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(2);
@@ -1475,8 +1475,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     await runner(createQueuedRun({ originatingChannel: undefined, originatingTo: undefined }));
 
     expect(routeReplyMock).not.toHaveBeenCalled();
-    expect(typing.markRunComplete).toHaveBeenCalled();
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
+    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses JSON NO_REPLY followups without origin or dispatcher delivery", async () => {
@@ -1494,8 +1494,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     await runner(createQueuedRun({ originatingChannel: undefined, originatingTo: undefined }));
 
     expect(routeReplyMock).not.toHaveBeenCalled();
-    expect(typing.markRunComplete).toHaveBeenCalled();
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
+    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   });
 
   it("keeps NO_REPLY followups with media deliverable", async () => {
@@ -1556,7 +1556,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       } as FollowupRun,
     });
 
-    expect(routeReplyMock).toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expectBlockReplyText(onBlockReply, "hello world!");
   });
@@ -1602,8 +1602,8 @@ describe("createFollowupRunner typing cleanup", () => {
   }
 
   function expectTypingCleanup(typing: ReturnType<typeof createMockTypingController>) {
-    expect(typing.markRunComplete).toHaveBeenCalled();
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
+    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   }
 
   it("calls both markRunComplete and markDispatchIdle on NO_REPLY", async () => {
@@ -1649,7 +1649,7 @@ describe("createFollowupRunner typing cleanup", () => {
 
     await runner(baseQueuedRun());
 
-    expect(onBlockReply).toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
     expectTypingCleanup(typing);
   });
 });

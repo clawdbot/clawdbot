@@ -41,10 +41,11 @@ describe("matrix profile actions", () => {
   });
 
   it("trims profile fields and persists through the action client wrapper", async () => {
+    const actionClient = {
+      getUserId: vi.fn(async () => "@bot:example.org"),
+    };
     withResolvedActionClientMock.mockImplementation(async (_opts, run) => {
-      return await run({
-        getUserId: vi.fn(async () => "@bot:example.org"),
-      });
+      return await run(actionClient);
     });
 
     await updateMatrixOwnProfile({
@@ -54,24 +55,42 @@ describe("matrix profile actions", () => {
       avatarPath: "  /tmp/avatar.png  ",
     });
 
-    expect(withResolvedActionClientMock).toHaveBeenCalledWith(
-      {
-        accountId: "ops",
-        displayName: "  Ops Bot  ",
-        avatarUrl: "  mxc://example/avatar  ",
-        avatarPath: "  /tmp/avatar.png  ",
-      },
-      expect.any(Function),
-      "persist",
-    );
-    expect(syncMatrixOwnProfileMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: "@bot:example.org",
-        displayName: "Ops Bot",
-        avatarUrl: "mxc://example/avatar",
-        avatarPath: "/tmp/avatar.png",
-      }),
-    );
+    expect(withResolvedActionClientMock).toHaveBeenCalledTimes(1);
+    const [wrapperOpts, run, mode] = withResolvedActionClientMock.mock.calls[0] ?? [];
+    expect(wrapperOpts).toEqual({
+      accountId: "ops",
+      displayName: "  Ops Bot  ",
+      avatarUrl: "  mxc://example/avatar  ",
+      avatarPath: "  /tmp/avatar.png  ",
+    });
+    expect(typeof run).toBe("function");
+    expect(mode).toBe("persist");
+
+    expect(syncMatrixOwnProfileMock).toHaveBeenCalledTimes(1);
+    const syncCall = syncMatrixOwnProfileMock.mock.calls[0]?.[0] as
+      | {
+          client: unknown;
+          userId: string;
+          displayName: string;
+          avatarUrl: string;
+          avatarPath: string;
+          loadAvatarFromUrl: unknown;
+          loadAvatarFromPath: unknown;
+        }
+      | undefined;
+    if (!syncCall) {
+      throw new Error("syncMatrixOwnProfile was not called");
+    }
+    const { client, loadAvatarFromUrl, loadAvatarFromPath, ...profileFields } = syncCall;
+    expect(client).toBe(actionClient);
+    expect(typeof loadAvatarFromUrl).toBe("function");
+    expect(typeof loadAvatarFromPath).toBe("function");
+    expect(profileFields).toEqual({
+      userId: "@bot:example.org",
+      displayName: "Ops Bot",
+      avatarUrl: "mxc://example/avatar",
+      avatarPath: "/tmp/avatar.png",
+    });
   });
 
   it("bridges avatar loaders through Matrix runtime media helpers", async () => {

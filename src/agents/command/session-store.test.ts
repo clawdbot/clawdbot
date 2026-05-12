@@ -680,6 +680,68 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("persists CLI lastCallUsage as the context snapshot (totalTokens)", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-cli-last-call-usage";
+      const sessionId = "test-cli-last-call-usage-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        contextTokensOverride: 1_000_000,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "claude-cli",
+        defaultModel: "claude-opus-4-7",
+        result: {
+          meta: {
+            durationMs: 1,
+            executionTrace: { runner: "cli" },
+            agentMeta: {
+              sessionId,
+              provider: "claude-cli",
+              model: "claude-opus-4-7",
+              usage: {
+                input: 6,
+                output: 25,
+                cacheRead: 50_000,
+                cacheWrite: 0,
+              },
+              lastCallUsage: {
+                input: 6,
+                output: 25,
+                cacheRead: 50_000,
+                cacheWrite: 0,
+              },
+            },
+          },
+        },
+      });
+
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(50_006);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(loadSessionStore(storePath)[sessionKey]?.totalTokens).toBe(50_006);
+      expect(loadSessionStore(storePath)[sessionKey]?.totalTokensFresh).toBe(true);
+    });
+  });
+
   it("persists compaction tokensAfter when provider usage is unavailable", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;

@@ -126,6 +126,49 @@ describe("resolveConnectAuthDecision", () => {
     expect(decision.authResult.reason).toBe("device_token_mismatch");
   });
 
+  it("preserves explicit device-token scope mismatches", async () => {
+    const verifyDeviceToken = vi.fn<VerifyDeviceTokenFn>(async () => ({
+      ok: false,
+      reason: "scope-mismatch",
+    }));
+    const decision = await resolveConnectAuthDecision({
+      state: createBaseState({
+        deviceTokenCandidateSource: "explicit-device-token",
+      }),
+      hasDeviceIdentity: true,
+      deviceId: "dev-1",
+      publicKey: "pub-1",
+      role: "operator",
+      scopes: ["operator.admin"],
+      verifyBootstrapToken: async () => ({ ok: false, reason: "bootstrap_token_invalid" }),
+      verifyDeviceToken,
+    });
+    expect(decision.authOk).toBe(false);
+    expect(decision.authResult.reason).toBe("scope_mismatch");
+  });
+
+  it("preserves fallback device-token scope mismatches over shared-token mismatch", async () => {
+    const verifyDeviceToken = vi.fn<VerifyDeviceTokenFn>(async () => ({
+      ok: false,
+      reason: "scope-mismatch",
+    }));
+    const decision = await resolveConnectAuthDecision({
+      state: createBaseState({
+        authResult: { ok: false, reason: "token_mismatch" },
+        deviceTokenCandidateSource: "shared-token-fallback",
+      }),
+      hasDeviceIdentity: true,
+      deviceId: "dev-1",
+      publicKey: "pub-1",
+      role: "operator",
+      scopes: ["operator.admin"],
+      verifyBootstrapToken: async () => ({ ok: false, reason: "bootstrap_token_invalid" }),
+      verifyDeviceToken,
+    });
+    expect(decision.authOk).toBe(false);
+    expect(decision.authResult.reason).toBe("scope_mismatch");
+  });
+
   it("accepts valid device tokens and marks auth method as device-token", async () => {
     const rateLimiter = createRateLimiter();
     const verifyDeviceToken = vi.fn<VerifyDeviceTokenFn>(async () => ({ ok: true }));

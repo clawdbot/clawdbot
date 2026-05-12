@@ -119,13 +119,10 @@ describe("patched claude-agent-acp completion", () => {
     expect(resolved).toBe(false);
 
     query.push(makeIdleMessage());
-    await expect(promptPromise).resolves.toMatchObject({
-      stopReason: "end_turn",
-      usage: {
-        inputTokens: 1,
-        outputTokens: 1,
-      },
-    });
+    const result = await promptPromise;
+    expect(result.stopReason).toBe("end_turn");
+    expect(result.usage?.inputTokens).toBe(1);
+    expect(result.usage?.outputTokens).toBe(1);
   });
 
   it("does not resolve a prompt after a task-notification result goes idle", async () => {
@@ -182,12 +179,9 @@ describe("patched claude-agent-acp completion", () => {
     expect(resolved).toBe(false);
 
     query.push(makeIdleMessage());
-    await expect(promptPromise).resolves.toMatchObject({
-      stopReason: "end_turn",
-      usage: {
-        inputTokens: 2,
-        outputTokens: 2,
-      },
-    });
+    const result = await promptPromise;
+    expect(result.stopReason).toBe("end_turn");
+    expect(result.usage?.inputTokens).toBe(2);
+    expect(result.usage?.outputTokens).toBe(2);
   });
 });

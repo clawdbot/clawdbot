@@ -283,8 +283,6 @@ function createMockReplyOperation(): {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
   if (typeof value !== "object" || value === null) {
     throw new Error(`${label} was not an object`);
   }
@@ -299,7 +297,6 @@ function expectRecordFields(record: Record<string, unknown>, fields: Record<stri
 
 function requireMockCall(mock: unknown, index: number, label: string): unknown[] {
   const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.[index];
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error(`missing ${label} call ${index + 1}`);
   }
@@ -343,7 +340,6 @@ function requireMockCallArgWithFields(
       const record = value as Record<string, unknown>;
       return Object.entries(fields).every(([key, expected]) => record[key] === expected);
     });
-  expect(found).toBeDefined();
   if (!found) {
     throw new Error(`missing ${label}`);
   }

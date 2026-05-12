@@ -324,7 +324,7 @@ describe("runContextEngineMaintenance", () => {
       bytesFreed: 0,
       rewrittenEntries: 0,
     });
-    const maintainParams = requireRecord(maintain.mock.calls[0]?.[0], "maintain params");
+    const maintainParams = requireRecord(maintain.mock.calls.at(0)?.[0], "maintain params");
     expectRecordFields(maintainParams, {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
@@ -507,7 +507,7 @@ describe("runContextEngineMaintenance", () => {
         }
         releaseForeground();
         await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
-        const maintainParams = requireRecord(maintain.mock.calls[0]?.[0], "maintain params");
+        const maintainParams = requireRecord(maintain.mock.calls.at(0)?.[0], "maintain params");
         expectRecordFields(maintainParams, {
           sessionId: "session-1",
           sessionKey,
@@ -768,9 +768,11 @@ describe("runContextEngineMaintenance", () => {
           status: "cancelled",
           notifyPolicy: "silent",
         });
-        expect(tasks.map((task) => task.runId)).toContainEqual(
-          expect.stringMatching(/^turn-maint:/),
-        );
+        expect(
+          tasks.some(
+            (task) => typeof task.runId === "string" && task.runId.startsWith("turn-maint:"),
+          ),
+        ).toBe(true);
       } finally {
         vi.useRealTimers();
       }

@@ -40,6 +40,26 @@ vi.mock("./status.daemon.js", () => ({
   getNodeDaemonStatusSummary: mocks.getNodeDaemonStatusSummary,
 }));
 
+function requireProviderUsageCall(): {
+  timeoutMs?: number;
+  config?: unknown;
+  agentDir?: string;
+} {
+  const call = mocks.loadProviderUsageSummary.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected provider usage summary call");
+  }
+  const params = call.at(0);
+  if (!params || typeof params !== "object") {
+    throw new Error("expected provider usage summary params");
+  }
+  return params as {
+    timeoutMs?: number;
+    config?: unknown;
+    agentDir?: string;
+  };
+}
+
 describe("status-runtime-shared", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -107,16 +127,10 @@ describe("status-runtime-shared", () => {
       config: { gateway: {} },
     });
 
-    const usageCall = mocks.loadProviderUsageSummary.mock.calls[0]?.[0] as
-      | {
-          timeoutMs?: number;
-          config?: unknown;
-          agentDir?: string;
-        }
-      | undefined;
-    expect(usageCall?.timeoutMs).toBe(1234);
-    expect(usageCall?.config).toEqual({ gateway: {} });
-    expect(usageCall?.agentDir).toContain("main");
+    const usageCall = requireProviderUsageCall();
+    expect(usageCall.timeoutMs).toBe(1234);
+    expect(usageCall.config).toEqual({ gateway: {} });
+    expect(usageCall.agentDir).toContain("main");
   });
 
   it("resolves usage summaries with explicit agent scope", async () => {
@@ -231,16 +245,10 @@ describe("status-runtime-shared", () => {
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
     });
-    const usageCall = mocks.loadProviderUsageSummary.mock.calls[0]?.[0] as
-      | {
-          timeoutMs?: number;
-          config?: unknown;
-          agentDir?: string;
-        }
-      | undefined;
-    expect(usageCall?.timeoutMs).toBe(1234);
-    expect(usageCall?.config).toEqual({ gateway: {} });
-    expect(usageCall?.agentDir).toContain("main");
+    const usageCall = requireProviderUsageCall();
+    expect(usageCall.timeoutMs).toBe(1234);
+    expect(usageCall.config).toEqual({ gateway: {} });
+    expect(usageCall.agentDir).toContain("main");
     expect(mocks.callGateway).toHaveBeenNthCalledWith(1, {
       method: "health",
       params: { probe: true },

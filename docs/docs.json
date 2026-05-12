@@ -1050,7 +1050,7 @@
             "groups": [
               {
                 "group": "Overview",
-                "pages": ["channels/index"]
+                "pages": ["channels/index", "announcements/bluebubbles-imessage"]
               },
               {
                 "group": "Mainstream messaging",
@@ -1179,7 +1179,7 @@
             ]
           },
           {
-            "tab": "Tools & Plugins",
+            "tab": "Capabilities",
             "groups": [
               {
                 "group": "Overview",
@@ -1250,7 +1250,7 @@
                 ]
               },
               {
-                "group": "Automation and tasks",
+                "group": "Automation",
                 "pages": [
                   "automation/index",
                   "automation/cron-jobs",

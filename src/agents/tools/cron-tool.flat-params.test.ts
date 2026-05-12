@@ -16,6 +16,14 @@ describe("cron tool flat-params", () => {
     callGatewayToolMock.mockResolvedValue({ ok: true });
   });
 
+  function firstGatewayToolCall<TParams>(): [string, unknown, TParams] {
+    const call = callGatewayToolMock.mock.calls.at(0);
+    if (!call) {
+      throw new Error("expected callGatewayTool to be called");
+    }
+    return call as [string, unknown, TParams];
+  }
+
   it("preserves explicit top-level sessionKey during flat-params recovery", async () => {
     const tool = createCronTool(
       { agentSessionKey: "agent:main:discord:channel:ops" },
@@ -28,11 +36,7 @@ describe("cron tool flat-params", () => {
       message: "do stuff",
     });
 
-    const [method, _gatewayOpts, params] = callGatewayToolMock.mock.calls[0] as [
-      string,
-      unknown,
-      { sessionKey?: string },
-    ];
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{ sessionKey?: string }>();
     expect(method).toBe("cron.add");
     expect(params.sessionKey).toBe("agent:main:telegram:group:-100123:topic:99");
   });
@@ -49,14 +53,10 @@ describe("cron tool flat-params", () => {
       message: "send report",
     });
 
-    const [method, _gatewayOpts, params] = callGatewayToolMock.mock.calls[0] as [
-      string,
-      unknown,
-      {
-        schedule?: unknown;
-        payload?: unknown;
-      },
-    ];
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      schedule?: unknown;
+      payload?: unknown;
+    }>();
     expect(method).toBe("cron.add");
     expect(params.schedule).toEqual({
       kind: "cron",
@@ -81,13 +81,9 @@ describe("cron tool flat-params", () => {
       message: "send reminder",
     });
 
-    const [method, _gatewayOpts, params] = callGatewayToolMock.mock.calls[0] as [
-      string,
-      unknown,
-      {
-        schedule?: unknown;
-      },
-    ];
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      schedule?: unknown;
+    }>();
     expect(method).toBe("cron.add");
     expect(params.schedule).toEqual({
       kind: "cron",
@@ -107,14 +103,10 @@ describe("cron tool flat-params", () => {
       staggerMs: 30_000,
     });
 
-    const [method, _gatewayOpts, params] = callGatewayToolMock.mock.calls[0] as [
-      string,
-      unknown,
-      {
-        id?: string;
-        patch?: { schedule?: unknown };
-      },
-    ];
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      id?: string;
+      patch?: { schedule?: unknown };
+    }>();
     expect(method).toBe("cron.update");
     expect(params.id).toBe("job-123");
     expect(params.patch?.schedule).toEqual({

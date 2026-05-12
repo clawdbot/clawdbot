@@ -49,12 +49,25 @@ describe("cron main job passes heartbeat target=last", () => {
   function requireRunHeartbeatOnceCall(
     runHeartbeatOnce: ReturnType<typeof vi.fn<RunHeartbeatOnce>>,
   ) {
-    const callArgs = runHeartbeatOnce.mock.calls[0]?.[0];
+    const callArgs = runHeartbeatOnce.mock.calls.at(0)?.[0];
     const heartbeat = callArgs?.heartbeat;
     if (!callArgs || !heartbeat) {
       throw new Error("expected runHeartbeatOnce call with heartbeat config");
     }
     return { ...callArgs, heartbeat };
+  }
+
+  function requireRequestHeartbeatCall(requestHeartbeat: ReturnType<typeof vi.fn>) {
+    const callArgs = requestHeartbeat.mock.calls.at(0)?.[0];
+    if (!callArgs) {
+      throw new Error("expected requestHeartbeat call");
+    }
+    return callArgs as {
+      source?: string;
+      intent?: string;
+      reason?: string;
+      heartbeat?: unknown;
+    };
   }
 
   async function runSingleTick(cron: CronService) {
@@ -123,14 +136,11 @@ describe("cron main job passes heartbeat target=last", () => {
     await runSingleTick(cron);
 
     expect(runHeartbeatOnce).toHaveBeenCalled();
-    expect(requestHeartbeat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        source: "cron",
-        intent: "immediate",
-        reason: "cron:test-main-delivery-busy",
-        heartbeat: { target: "last" },
-      }),
-    );
+    const heartbeatRequest = requireRequestHeartbeatCall(requestHeartbeat);
+    expect(heartbeatRequest.source).toBe("cron");
+    expect(heartbeatRequest.intent).toBe("immediate");
+    expect(heartbeatRequest.reason).toBe("cron:test-main-delivery-busy");
+    expect(heartbeatRequest.heartbeat).toEqual({ target: "last" });
   });
 
   it("should preserve heartbeat.target=last for wakeMode=next-heartbeat main jobs", async () => {
@@ -158,14 +168,11 @@ describe("cron main job passes heartbeat target=last", () => {
     await runSingleTick(cron);
 
     expect(requestHeartbeat).toHaveBeenCalled();
-    expect(requestHeartbeat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        source: "cron",
-        intent: "event",
-        reason: "cron:test-next-heartbeat",
-        heartbeat: { target: "last" },
-      }),
-    );
+    const heartbeatRequest = requireRequestHeartbeatCall(requestHeartbeat);
+    expect(heartbeatRequest.source).toBe("cron");
+    expect(heartbeatRequest.intent).toBe("event");
+    expect(heartbeatRequest.reason).toBe("cron:test-next-heartbeat");
+    expect(heartbeatRequest.heartbeat).toEqual({ target: "last" });
     expect(runHeartbeatOnce).not.toHaveBeenCalled();
   });
 });

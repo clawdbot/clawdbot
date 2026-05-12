@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { readRemoteMediaResponse } from "./attachments.test-helpers.js";
 import { downloadMSTeamsGraphMedia } from "./attachments/graph.js";
-import { resolveRequestUrl } from "./attachments/shared.js";
+import { encodeGraphShareId, resolveRequestUrl } from "./attachments/shared.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
 const GRAPH_HOST = "graph.microsoft.com";
@@ -316,11 +316,12 @@ describe("msteams graph attachments", () => {
 
     expectAttachmentMediaLength(media.media, 0);
     const calledUrls = fetchMock.mock.calls.map((call) => call[0]);
+    const expectedSharesUrl = `${GRAPH_SHARES_URL_PREFIX}${encodeGraphShareId(DEFAULT_SHARE_REFERENCE_URL)}/driveItem/content`;
     expect(calledUrls).toEqual([
       DEFAULT_MESSAGE_URL,
-      expect.stringContaining(GRAPH_SHARES_URL_PREFIX),
+      expectedSharesUrl,
       `${DEFAULT_MESSAGE_URL}/hostedContents`,
-      expect.stringContaining(GRAPH_SHARES_URL_PREFIX),
+      expectedSharesUrl,
     ]);
     expect(calledUrls).not.toContain(escapedUrl);
   });

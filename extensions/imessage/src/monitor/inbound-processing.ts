@@ -30,7 +30,10 @@ import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/secur
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveIMessageConversationRoute } from "../conversation-route.js";
-import { rememberIMessageReplyCache } from "../monitor-reply-cache.js";
+import {
+  isKnownFromMeIMessageMessageId,
+  rememberIMessageReplyCache,
+} from "../monitor-reply-cache.js";
 import {
   formatIMessageChatTarget,
   isAllowedIMessageSender,
@@ -41,11 +44,117 @@ import { detectReflectedContent } from "./reflection-guard.js";
 import type { SelfChatCache } from "./self-chat-cache.js";
 import type { MonitorIMessageOpts, IMessagePayload } from "./types.js";
 
+type IMessageReactionNotificationMode = "off" | "own" | "all";
+
 type IMessageReplyContext = {
   id?: string;
   body: string;
   sender?: string;
 };
+
+type IMessageReactionContext = {
+  action: "added" | "removed";
+  emoji: string;
+  targetGuid?: string;
+  targetGuids?: string[];
+  targetText?: string;
+};
+
+const TAPBACK_TEXT_PATTERNS: Array<{
+  prefix: string;
+  action: "added" | "removed";
+  emoji: string;
+}> = [
+  { prefix: "loved", action: "added", emoji: "❤️" },
+  { prefix: "liked", action: "added", emoji: "👍" },
+  { prefix: "disliked", action: "added", emoji: "👎" },
+  { prefix: "laughed at", action: "added", emoji: "😂" },
+  { prefix: "emphasized", action: "added", emoji: "‼️" },
+  { prefix: "questioned", action: "added", emoji: "❓" },
+  { prefix: "removed a heart from", action: "removed", emoji: "❤️" },
+  { prefix: "removed a like from", action: "removed", emoji: "👍" },
+  { prefix: "removed a dislike from", action: "removed", emoji: "👎" },
+  { prefix: "removed a laugh from", action: "removed", emoji: "😂" },
+  { prefix: "removed an emphasis from", action: "removed", emoji: "‼️" },
+  { prefix: "removed a question from", action: "removed", emoji: "❓" },
+];
+
+function normalizeReactionValue(value: unknown): string | undefined {
+  return typeof value === "string"
+    ? value.trim().replace(/^p:\d+\//iu, "") || undefined
+    : undefined;
+}
+
+function resolveReactionTargetGuidCandidates(...values: unknown[]): string[] {
+  const candidates: string[] = [];
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const raw = value.trim();
+    if (!raw) {
+      continue;
+    }
+    const normalized = raw.replace(/^p:\d+\//iu, "");
+    for (const candidate of [normalized, raw]) {
+      if (candidate && !candidates.includes(candidate)) {
+        candidates.push(candidate);
+      }
+    }
+  }
+  return candidates;
+}
+
+function resolveTapbackTextContext(bodyText: string): IMessageReactionContext | null {
+  const lower = bodyText.toLowerCase();
+  for (const pattern of TAPBACK_TEXT_PATTERNS) {
+    if (!lower.startsWith(pattern.prefix)) {
+      continue;
+    }
+    const afterPrefix = bodyText.slice(pattern.prefix.length).trim();
+    if (!/^["\u201c]/u.test(afterPrefix)) {
+      continue;
+    }
+    return {
+      action: pattern.action,
+      emoji: pattern.emoji,
+      targetText: afterPrefix
+        .replace(/^["\u201c]/u, "")
+        .replace(/["\u201d]$/u, "")
+        .trim(),
+    };
+  }
+  return null;
+}
+
+export function resolveIMessageReactionContext(
+  message: IMessagePayload,
+  bodyText: string,
+): IMessageReactionContext | null {
+  const explicit =
+    message.is_reaction === true ||
+    message.is_tapback === true ||
+    (typeof message.associated_message_type === "number" &&
+      Number.isFinite(message.associated_message_type) &&
+      message.associated_message_type >= 2000 &&
+      message.associated_message_type < 4000);
+  if (explicit) {
+    const targetGuids = resolveReactionTargetGuidCandidates(
+      message.reacted_to_guid,
+      message.associated_message_guid,
+    );
+    return {
+      action: message.is_reaction_add === false ? "removed" : "added",
+      emoji:
+        normalizeReactionValue(message.reaction_emoji) ??
+        normalizeReactionValue(message.reaction_type) ??
+        "reaction",
+      targetGuid: targetGuids[0],
+      targetGuids,
+    };
+  }
+  return resolveTapbackTextContext(bodyText);
+}
 
 const normalizeNonEmpty = (value: string) => value.trim() || null;
 
@@ -186,6 +295,27 @@ function hasIMessageEchoMatch(params: {
   return false;
 }
 
+function isKnownFromMeIMessageReactionTarget(params: {
+  messageId: string;
+  accountId: string;
+  chatId?: number;
+  chatGuid?: string;
+  chatIdentifier?: string;
+  isKnownFromMeMessageId?: typeof isKnownFromMeIMessageMessageId;
+}): boolean {
+  const { messageId, accountId, chatId, chatGuid, chatIdentifier } = params;
+  const ctx = {
+    accountId,
+    chatId,
+    chatGuid,
+    chatIdentifier,
+  };
+  if (params.isKnownFromMeMessageId) {
+    return params.isKnownFromMeMessageId(messageId, ctx);
+  }
+  return isKnownFromMeIMessageMessageId(messageId, ctx);
+}
+
 /**
  * Per-group `systemPrompt` resolution. Mirrors `resolveWhatsAppGroupSystemPrompt`
  * in `extensions/whatsapp/src/system-prompt.ts`:
@@ -233,9 +363,24 @@ type IMessageInboundDispatchDecision = {
   groupSystemPrompt?: string;
 };
 
+type IMessageInboundReactionDecision = {
+  kind: "reaction";
+  isGroup: boolean;
+  chatId?: number;
+  chatGuid?: string;
+  chatIdentifier?: string;
+  sender: string;
+  senderNormalized: string;
+  route: ReturnType<typeof resolveAgentRoute>;
+  reaction: IMessageReactionContext;
+  text: string;
+  contextKey: string;
+};
+
 type IMessageInboundDecision =
   | { kind: "drop"; reason: string }
   | { kind: "pairing"; senderId: string }
+  | IMessageInboundReactionDecision
   | IMessageInboundDispatchDecision;
 
 export async function resolveIMessageInboundDecision(params: {
@@ -260,6 +405,8 @@ export async function resolveIMessageInboundDecision(params: {
     ) => boolean;
   };
   selfChatCache?: SelfChatCache;
+  reactionNotifications?: IMessageReactionNotificationMode;
+  isKnownFromMeMessageId?: typeof isKnownFromMeIMessageMessageId;
   logVerbose?: (msg: string) => void;
 }): Promise<IMessageInboundDecision> {
   const senderRaw = params.message.sender ?? "";
@@ -275,6 +422,7 @@ export async function resolveIMessageInboundDecision(params: {
   const createdAt = params.message.created_at ? Date.parse(params.message.created_at) : undefined;
   const messageText = params.messageText.trim();
   const bodyText = params.bodyText.trim();
+  const reactionContext = resolveIMessageReactionContext(params.message, bodyText || messageText);
 
   const groupIdCandidate = chatId !== undefined ? String(chatId) : undefined;
   const groupListPolicy = groupIdCandidate
@@ -445,6 +593,71 @@ export async function resolveIMessageInboundDecision(params: {
     sender,
     chatId,
   });
+  if (reactionContext) {
+    const notificationMode = params.reactionNotifications ?? "own";
+    if (notificationMode === "off") {
+      return { kind: "drop", reason: "reaction notifications disabled" };
+    }
+    const targetGuid = reactionContext.targetGuid;
+    const targetGuids = reactionContext.targetGuids ?? (targetGuid ? [targetGuid] : []);
+    const targetIsOwn = Boolean(
+      targetGuid &&
+      ((params.echoCache &&
+        hasIMessageEchoMatch({
+          echoCache: params.echoCache,
+          scope: buildIMessageEchoScope({
+            accountId: params.accountId,
+            isGroup,
+            chatId,
+            chatGuid,
+            chatIdentifier,
+            sender,
+          }),
+          messageIds: targetGuids,
+        })) ||
+        targetGuids.some((messageId) =>
+          isKnownFromMeIMessageReactionTarget({
+            messageId,
+            accountId: params.accountId,
+            chatId,
+            chatGuid,
+            chatIdentifier,
+            isKnownFromMeMessageId: params.isKnownFromMeMessageId,
+          }),
+        )),
+    );
+    if (notificationMode === "own" && !targetIsOwn) {
+      return { kind: "drop", reason: "reaction target not sent by agent" };
+    }
+    const target = targetGuid
+      ? `msg ${targetGuid}`
+      : reactionContext.targetText
+        ? `message "${truncateUtf16Safe(reactionContext.targetText, 80)}"`
+        : "a message";
+    const text = `iMessage reaction ${reactionContext.action}: ${reactionContext.emoji} by ${senderNormalized} on ${target}`;
+    const reactionKey = [
+      "imessage",
+      "reaction",
+      reactionContext.action,
+      chatId ?? chatGuid ?? chatIdentifier ?? senderNormalized,
+      targetGuid ?? reactionContext.targetText ?? "unknown",
+      senderNormalized,
+      reactionContext.emoji,
+    ].join(":");
+    return {
+      kind: "reaction",
+      isGroup,
+      chatId,
+      chatGuid,
+      chatIdentifier,
+      sender,
+      senderNormalized,
+      route,
+      reaction: reactionContext,
+      text,
+      contextKey: reactionKey,
+    };
+  }
   const mentionRegexes = buildMentionRegexes(params.cfg, route.agentId);
   if (!bodyText) {
     return { kind: "drop", reason: "empty body" };

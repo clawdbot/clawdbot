@@ -72,6 +72,17 @@ function guardedFetchResult(params: GuardedFetchParams, response: Response) {
   };
 }
 
+function requireFirstMockCall<TArgs extends unknown[]>(
+  mock: { mock: { calls: TArgs[] } },
+  label: string,
+): TArgs {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call;
+}
+
 function mockGraphMediaFetch(options: {
   messageId: string;
   messageResponse?: unknown;
@@ -254,10 +265,10 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
       maxBytes: 10 * 1024 * 1024,
     });
 
-    const fetchParams = vi.mocked(safeFetchWithPolicy).mock.calls[0]?.[0];
-    if (!fetchParams) {
-      throw new Error("Expected safeFetchWithPolicy call");
-    }
+    const [fetchParams] = requireFirstMockCall(
+      vi.mocked(safeFetchWithPolicy),
+      "safeFetchWithPolicy call",
+    );
     expect(fetchParams.requestInit?.headers).toBeInstanceOf(Headers);
     const requestInit = fetchParams.requestInit;
     const headers = requestInit?.headers as Headers;
@@ -357,9 +368,9 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
     });
 
     expect(result.media).toHaveLength(0);
-    const warnCall = logger.warn.mock.calls[0];
-    expect(warnCall?.[0]).toBe("msteams graph message fetch failed");
-    expect((warnCall?.[1] as { error?: unknown } | undefined)?.error).toBe("network boom");
+    const [message, context] = requireFirstMockCall(logger.warn, "message fetch warning");
+    expect(message).toBe("msteams graph message fetch failed");
+    expect((context as { error?: unknown }).error).toBe("network boom");
   });
 
   it("logs a debug event when the message fetch returns non-ok", async () => {
@@ -383,9 +394,9 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
 
     expect(result.media).toHaveLength(0);
     expect(result.attachmentStatus).toBe(403);
-    const debugCall = log.debug.mock.calls[0];
-    expect(debugCall?.[0]).toBe("graph media message fetch not ok");
-    expect((debugCall?.[1] as { status?: unknown } | undefined)?.status).toBe(403);
+    const [message, context] = requireFirstMockCall(log.debug, "message fetch debug event");
+    expect(message).toBe("graph media message fetch not ok");
+    expect((context as { status?: unknown }).status).toBe(403);
   });
 
   it("logs a debug event when token acquisition fails", async () => {
@@ -406,8 +417,8 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
     });
 
     expect(result.tokenError).toBe(true);
-    const warnCall = logger.warn.mock.calls[0];
-    expect(warnCall?.[0]).toBe("msteams graph token acquisition failed");
-    expect((warnCall?.[1] as { error?: unknown } | undefined)?.error).toBe("token expired");
+    const [message, context] = requireFirstMockCall(logger.warn, "token acquisition warning");
+    expect(message).toBe("msteams graph token acquisition failed");
+    expect((context as { error?: unknown }).error).toBe("token expired");
   });
 });

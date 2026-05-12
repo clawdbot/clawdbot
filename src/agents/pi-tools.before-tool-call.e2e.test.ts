@@ -15,7 +15,7 @@ import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
-import { CRITICAL_THRESHOLD, GLOBAL_CIRCUIT_BREAKER_THRESHOLD } from "./tool-loop-detection.js";
+import { CRITICAL_THRESHOLD } from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -209,8 +209,6 @@ describe("before_tool_call loop detection behavior", () => {
   }
 
   function requireRecord(value: unknown, label: string): Record<string, unknown> {
-    expect(typeof value).toBe("object");
-    expect(value).not.toBeNull();
     if (typeof value !== "object" || value === null) {
       throw new Error(`${label} was not an object`);
     }
@@ -277,28 +275,23 @@ describe("before_tool_call loop detection behavior", () => {
     }
   });
 
-  it("keeps generic repeated calls warn-only below global breaker", async () => {
+  it("keeps generic repeated calls unblocked below critical threshold", async () => {
     const { tool, params } = createGenericReadRepeatFixture();
 
-    for (let i = 0; i < CRITICAL_THRESHOLD + 5; i += 1) {
+    for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
       await expectUnblockedToolExecution(tool, `read-${i}`, params);
     }
   });
 
-  it("blocks generic repeated no-progress calls at global breaker threshold", async () => {
+  it("blocks generic repeated no-progress calls at critical threshold", async () => {
     const { tool, params } = createGenericReadRepeatFixture();
 
-    for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+    for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
       await expectUnblockedToolExecution(tool, `read-${i}`, params);
     }
 
-    const result = await tool.execute(
-      `read-${GLOBAL_CIRCUIT_BREAKER_THRESHOLD}`,
-      params,
-      undefined,
-      undefined,
-    );
-    expectToolLoopBlockedResult(result, "global circuit breaker");
+    const result = await tool.execute(`read-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
+    expectToolLoopBlockedResult(result, "identical outcomes");
   });
 
   it("does not carry loop history across run ids", async () => {
@@ -316,27 +309,27 @@ describe("before_tool_call loop detection behavior", () => {
       runId: "heartbeat-2",
     });
 
-    for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+    for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
       await expectUnblockedToolExecution(firstRunTool, `old-run-${i}`, params);
     }
 
     await expectUnblockedToolExecution(secondRunTool, "new-run-0", params);
   });
 
-  it("coalesces repeated generic warning events into threshold buckets", async () => {
-    await withToolLoopEvents(
-      async (emitted) => {
-        const { tool, params } = createGenericReadRepeatFixture();
+  it("escalates generic repeat diagnostics from warning to critical", async () => {
+    await withToolLoopEvents(async (emitted) => {
+      const { tool, params } = createGenericReadRepeatFixture();
 
-        for (let i = 0; i < 21; i += 1) {
-          await tool.execute(`read-bucket-${i}`, params, undefined, undefined);
-        }
+      for (let i = 0; i < 21; i += 1) {
+        await tool.execute(`read-bucket-${i}`, params, undefined, undefined);
+      }
 
-        const genericWarns = emitted.filter((evt) => evt.detector === "generic_repeat");
-        expect(genericWarns.map((evt) => evt.count)).toEqual([10, 20]);
-      },
-      (evt) => evt.level === "warning",
-    );
+      const genericEvents = emitted.filter((evt) => evt.detector === "generic_repeat");
+      expect(genericEvents.map((evt) => [evt.level, evt.count])).toEqual([
+        ["warning", 10],
+        ["critical", 20],
+      ]);
+    });
   });
 
   it("emits structured warning diagnostic events for ping-pong loops", async () => {
@@ -654,8 +647,6 @@ describe("before_tool_call requireApproval handling", () => {
   const mockCallGateway = vi.mocked(callGatewayTool);
 
   function requireRecord(value: unknown, label: string): Record<string, unknown> {
-    expect(typeof value).toBe("object");
-    expect(value).not.toBeNull();
     if (typeof value !== "object" || value === null) {
       throw new Error(`${label} was not an object`);
     }
@@ -666,7 +657,6 @@ describe("before_tool_call requireApproval handling", () => {
     index: number,
   ): [event: Record<string, unknown>, context: Record<string, unknown>] {
     const call = hookRunner.runBeforeToolCall.mock.calls[index] as unknown[] | undefined;
-    expect(call).toBeDefined();
     if (!call) {
       throw new Error(`missing before_tool_call hook call ${index + 1}`);
     }
@@ -1019,12 +1009,12 @@ describe("before_tool_call requireApproval handling", () => {
 
     expect(result.blocked).toBe(false);
     expect(mockCallGateway).toHaveBeenCalledTimes(2);
-    const requestCall = mockCallGateway.mock.calls[0];
+    const requestCall = mockCallGateway.mock.calls.at(0);
     expect(requestCall?.[0]).toBe("plugin.approval.request");
     requireRecord(requestCall?.[1], "approval request gateway client");
     expect(requireRecord(requestCall?.[2], "approval request params").twoPhase).toBe(true);
     expect(requestCall?.[3]).toEqual({ expectFinal: false });
-    const waitCall = mockCallGateway.mock.calls[1];
+    const waitCall = mockCallGateway.mock.calls.at(1);
     expect(waitCall?.[0]).toBe("plugin.approval.waitDecision");
     requireRecord(waitCall?.[1], "approval wait gateway client");
     expect(waitCall?.[2]).toEqual({ id: "server-id-1" });

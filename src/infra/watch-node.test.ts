@@ -124,11 +124,7 @@ describe("watch-node script", () => {
       });
 
       expect(createWatcher).toHaveBeenCalledTimes(1);
-      const firstWatcherCall = createWatcher.mock.calls[0];
-      if (firstWatcherCall === undefined) {
-        throw new Error("expected watcher setup call");
-      }
-      const [watchPaths, watchOptions] = firstWatcherCall as unknown as [
+      const [watchPaths, watchOptions] = requireMockCall(createWatcher, 0) as unknown as [
         string[],
         { ignoreInitial: boolean; ignored: (watchPath: string) => boolean },
       ];

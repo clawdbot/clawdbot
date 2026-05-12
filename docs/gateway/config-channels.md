@@ -588,7 +588,7 @@ When Mattermost native commands are enabled:
 
 OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required. This is the preferred path for new OpenClaw iMessage setups when the host can grant Messages database and Automation permissions.
 
-BlueBubbles support was removed. Migrate `channels.bluebubbles` configs to `channels.imessage`; OpenClaw supports iMessage through `imsg` only.
+BlueBubbles support was removed. `channels.bluebubbles` is not a supported runtime config surface on current OpenClaw. Migrate old configs to `channels.imessage`; use [BlueBubbles removal and the imsg iMessage path](/announcements/bluebubbles-imessage) for the short version and [Coming from BlueBubbles](/channels/imessage-from-bluebubbles) for the full translation table.
 
 If the Gateway is not running on the signed-in Messages Mac, keep `channels.imessage.enabled=true` and set `channels.imessage.cliPath` to an SSH wrapper that runs `imsg "$@"` on that Mac. The default local `imsg` path is macOS-only.
 
@@ -609,6 +609,17 @@ If the Gateway is not running on the signed-in Messages Mac, keep `channels.imes
       mediaMaxMb: 16,
       service: "auto",
       region: "US",
+      actions: {
+        reactions: true,
+        edit: true,
+        unsend: true,
+        reply: true,
+        sendWithEffect: true,
+        sendAttachment: true,
+      },
+      catchup: {
+        enabled: false,
+      },
     },
   },
 }
@@ -622,6 +633,10 @@ If the Gateway is not running on the signed-in Messages Mac, keep `channels.imes
 - `attachmentRoots` and `remoteAttachmentRoots` restrict inbound attachment paths (default: `/Users/*/Library/Messages/Attachments`).
 - SCP uses strict host-key checking, so ensure the relay host key already exists in `~/.ssh/known_hosts`.
 - `channels.imessage.configWrites`: allow or deny iMessage-initiated config writes.
+- `channels.imessage.actions.*`: enable private API actions that are also gated by `imsg status` / `openclaw channels status --probe`.
+- `channels.imessage.includeAttachments` is off by default; set it to `true` before expecting inbound media in agent turns.
+- `channels.imessage.catchup.enabled`: opt in to replaying inbound messages that arrived while the Gateway was down.
+- `channels.imessage.groups`: group registry and per-group settings. With `groupPolicy: "allowlist"`, configure either explicit `chat_id` keys or a `"*"` wildcard entry so group messages can pass the registry gate.
 - Top-level `bindings[]` entries with `type: "acp"` can bind iMessage conversations to persistent ACP sessions. Use a normalized handle or explicit chat target (`chat_id:*`, `chat_guid:*`, `chat_identifier:*`) in `match.peer.id`. Shared field semantics: [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
 
 <Accordion title="iMessage SSH wrapper example">

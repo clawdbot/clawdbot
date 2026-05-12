@@ -137,7 +137,7 @@ function requireMockCallParam(
   mock: ReturnType<typeof vi.fn>,
   label: string,
 ): Record<string, unknown> {
-  const first = mock.mock.calls[0]?.[0];
+  const first = mock.mock.calls.at(0)?.[0];
   if (!first || typeof first !== "object" || Array.isArray(first)) {
     throw new Error(`expected ${label}`);
   }
@@ -235,19 +235,43 @@ describe("loadModelCatalog", () => {
     mockPiDiscoveryModels(models);
 
     const first = await loadModelCatalog({ config: {} as OpenClawConfig });
-    expect(first).toContainEqual({ id: "existing", name: "Existing", provider: "ollama" });
+    expect(first).toStrictEqual([
+      {
+        id: "existing",
+        name: "Existing",
+        provider: "ollama",
+        contextWindow: undefined,
+        reasoning: undefined,
+        input: undefined,
+        compat: undefined,
+      },
+    ]);
 
     models.push({ id: "glm-5.1:cloud", name: "GLM 5.1 Cloud", provider: "ollama" });
     resetModelCatalogCacheForTest();
     mockPiDiscoveryModels(models);
 
     const second = await loadModelCatalog({ config: {} as OpenClawConfig });
-    expect(second).toContainEqual({ id: "existing", name: "Existing", provider: "ollama" });
-    expect(second).toContainEqual({
-      id: "glm-5.1:cloud",
-      name: "GLM 5.1 Cloud",
-      provider: "ollama",
-    });
+    expect(second).toStrictEqual([
+      {
+        id: "existing",
+        name: "Existing",
+        provider: "ollama",
+        contextWindow: undefined,
+        reasoning: undefined,
+        input: undefined,
+        compat: undefined,
+      },
+      {
+        id: "glm-5.1:cloud",
+        name: "GLM 5.1 Cloud",
+        provider: "ollama",
+        contextWindow: undefined,
+        reasoning: undefined,
+        input: undefined,
+        compat: undefined,
+      },
+    ]);
   });
 
   it("returns partial results on discovery errors", async () => {

@@ -6,7 +6,7 @@ import { requestHeartbeat as requestHeartbeatImpl } from "../../infra/heartbeat-
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system-events.js";
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
-import { scopedHeartbeatWakeOptions } from "../../routing/session-key.js";
+import { resolveEventSessionKey, scopedHeartbeatWakeOptions } from "../../routing/session-key.js";
 import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
 import {
   createCliJsonlStreamingParser,
@@ -640,13 +640,26 @@ export async function executePreparedCliRun(
                 "It may have been waiting for interactive input or an approval prompt.",
                 "For Claude Code, prefer --permission-mode bypassPermissions --print.",
               ].join(" ");
-              executeDeps.enqueueSystemEvent(stallNotice, { sessionKey: params.sessionKey });
+              const watchdogMainKey = params.config?.session?.mainKey;
+              const watchdogScope = params.config?.session?.scope;
+              executeDeps.enqueueSystemEvent(stallNotice, {
+                sessionKey: resolveEventSessionKey(
+                  params.sessionKey,
+                  watchdogMainKey,
+                  watchdogScope,
+                ),
+              });
               executeDeps.requestHeartbeat(
-                scopedHeartbeatWakeOptions(params.sessionKey, {
-                  source: "cli-watchdog",
-                  intent: "event",
-                  reason: "cli:watchdog:stall",
-                }),
+                scopedHeartbeatWakeOptions(
+                  params.sessionKey,
+                  {
+                    source: "cli-watchdog",
+                    intent: "event",
+                    reason: "cli:watchdog:stall",
+                  },
+                  watchdogMainKey,
+                  watchdogScope,
+                ),
               );
             }
             throw new FailoverError(timeoutReason, {

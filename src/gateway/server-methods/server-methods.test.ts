@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
@@ -42,7 +43,9 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -861,12 +864,13 @@ describe("exec approval handlers", () => {
     });
   }
 
-  function createExecApprovalFixture() {
+  function createExecApprovalFixture(opts?: { config?: OpenClawConfig }) {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const broadcasts: Array<{ event: string; payload: unknown }> = [];
     const respond = vi.fn();
     const context = {
+      getRuntimeConfig: () => opts?.config ?? {},
       broadcast: (event: string, payload: unknown) => {
         broadcasts.push({ event, payload });
       },
@@ -1476,7 +1480,9 @@ describe("exec approval handlers", () => {
   });
 
   it("preserves command analysis and normalizes command spans", async () => {
-    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture({
+      config: { tools: { exec: { commandHighlighting: true } } },
+    });
     await requestExecApproval({
       handlers,
       respond,
@@ -1503,8 +1509,56 @@ describe("exec approval handlers", () => {
     ]);
   });
 
-  it("drops command spans when command display sanitization changes offsets", async () => {
+  it("drops command spans by default", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "ls | python -c 'print(1)'",
+        commandSpans: [
+          { startIndex: 0, endIndex: 2 },
+          { startIndex: 5, endIndex: 11 },
+        ],
+      },
+    });
+    const { request } = getRequestedExecApprovalPayload(broadcasts);
+    expect(request["commandAnalysis"]).toEqual(
+      expect.objectContaining({ commandCount: 1, nestedCommandCount: 0 }),
+    );
+    expect(request["commandSpans"]).toBeUndefined();
+  });
+
+  it("drops command spans when command highlighting is disabled", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture({
+      config: { tools: { exec: { commandHighlighting: false } } },
+    });
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "ls | python -c 'print(1)'",
+        commandSpans: [
+          { startIndex: 0, endIndex: 2 },
+          { startIndex: 5, endIndex: 11 },
+        ],
+      },
+    });
+    const { request } = getRequestedExecApprovalPayload(broadcasts);
+    expect(request["commandAnalysis"]).toEqual(
+      expect.objectContaining({ commandCount: 1, nestedCommandCount: 0 }),
+    );
+    expect(request["commandSpans"]).toBeUndefined();
+  });
+
+  it("drops command spans when command display sanitization changes offsets", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture({
+      config: { tools: { exec: { commandHighlighting: true } } },
+    });
     await requestExecApproval({
       handlers,
       respond,
@@ -2303,13 +2357,23 @@ describe("gateway healthHandlers.health cache freshness", () => {
       isWebchatConnect: () => false,
     });
 
-    expect(mockCallArg(respond, 0, 1)).toMatchObject({
-      modelPricing: {
-        state: "degraded",
-        detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
-        sources: [{ source: "openrouter", state: "degraded", lastFailureAt: 123 }],
-      },
-    });
+    const payload = mockCallArg(respond, 0, 1) as
+      | {
+          modelPricing?: {
+            state?: string;
+            detail?: string;
+            sources?: Array<{ source?: string; state?: string; lastFailureAt?: number }>;
+          };
+        }
+      | undefined;
+    expect(payload?.modelPricing?.state).toBe("degraded");
+    expect(payload?.modelPricing?.detail).toBe(
+      "OpenRouter pricing fetch failed: TypeError: fetch failed",
+    );
+    expect(payload?.modelPricing?.sources).toHaveLength(1);
+    expect(payload?.modelPricing?.sources?.[0]?.source).toBe("openrouter");
+    expect(payload?.modelPricing?.sources?.[0]?.state).toBe("degraded");
+    expect(payload?.modelPricing?.sources?.[0]?.lastFailureAt).toBe(123);
     expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,

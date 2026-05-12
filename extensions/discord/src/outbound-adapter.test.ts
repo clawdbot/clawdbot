@@ -373,8 +373,7 @@ describe("discordOutbound", () => {
     });
 
     expect(
-      (hoisted.sendVoiceMessageDiscordMock.mock.calls[0]?.[2] as { replyTo?: unknown } | undefined)
-        ?.replyTo,
+      mockObjectArg(hoisted.sendVoiceMessageDiscordMock, "sendVoiceMessageDiscord", 0, 2).replyTo,
     ).toBe("reply-1");
     expect(
       hoisted.sendMessageDiscordMock.mock.calls.map(
@@ -399,8 +398,7 @@ describe("discordOutbound", () => {
     });
 
     expect(
-      (hoisted.sendVoiceMessageDiscordMock.mock.calls[0]?.[2] as { replyTo?: unknown } | undefined)
-        ?.replyTo,
+      mockObjectArg(hoisted.sendVoiceMessageDiscordMock, "sendVoiceMessageDiscord", 0, 2).replyTo,
     ).toBe("explicit-reply-1");
     expect(
       hoisted.sendMessageDiscordMock.mock.calls.map(
@@ -570,16 +568,12 @@ describe("discordOutbound", () => {
     });
 
     expect(
-      (
-        hoisted.sendDiscordComponentMessageMock.mock.calls[0]?.[2] as
-          | { replyTo?: unknown }
-          | undefined
-      )?.replyTo,
+      mockObjectArg(hoisted.sendDiscordComponentMessageMock, "sendDiscordComponentMessage", 0, 2)
+        .replyTo,
     ).toBe("reply-1");
-    expect(
-      (hoisted.sendMessageDiscordMock.mock.calls[0]?.[2] as { replyTo?: unknown } | undefined)
-        ?.replyTo,
-    ).toBe("reply-1");
+    expect(mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2).replyTo).toBe(
+      "reply-1",
+    );
   });
 
   it("sends prepared native Discord payload data through outbound delivery", async () => {
@@ -642,16 +636,12 @@ describe("discordOutbound", () => {
     });
 
     expect(
-      (
-        hoisted.sendDiscordComponentMessageMock.mock.calls[0]?.[2] as
-          | { replyTo?: unknown }
-          | undefined
-      )?.replyTo,
+      mockObjectArg(hoisted.sendDiscordComponentMessageMock, "sendDiscordComponentMessage", 0, 2)
+        .replyTo,
     ).toBe("explicit-reply-1");
-    expect(
-      (hoisted.sendMessageDiscordMock.mock.calls[0]?.[2] as { replyTo?: unknown } | undefined)
-        ?.replyTo,
-    ).toBe("explicit-reply-1");
+    expect(mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2).replyTo).toBe(
+      "explicit-reply-1",
+    );
   });
 
   it("uses explicit maxLinesPerMessage in its adapter chunker", () => {

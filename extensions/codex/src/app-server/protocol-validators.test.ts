@@ -38,7 +38,8 @@ describe("assertCodexThreadStartResponse", () => {
   it("accepts response with both id and sessionId", () => {
     const response = makeMinimalResponse();
     const result = assertCodexThreadStartResponse(response);
-    expect(result.thread).toMatchObject({ id: "thread-1", sessionId: "session-1" });
+    expect(result.thread.id).toBe("thread-1");
+    expect(result.thread.sessionId).toBe("session-1");
   });
 
   it("normalizes missing sessionId from id", () => {
@@ -46,14 +47,16 @@ describe("assertCodexThreadStartResponse", () => {
     // Remove the sessionId key entirely
     delete (response.thread as Record<string, unknown>).sessionId;
     const result = assertCodexThreadStartResponse(response);
-    expect(result.thread).toMatchObject({ id: "thread-1", sessionId: "thread-1" });
+    expect(result.thread.id).toBe("thread-1");
+    expect(result.thread.sessionId).toBe("thread-1");
   });
 
   it("normalizes missing id from sessionId", () => {
     const response = makeMinimalResponse({ id: undefined, sessionId: "session-1" });
     delete (response.thread as Record<string, unknown>).id;
     const result = assertCodexThreadStartResponse(response);
-    expect(result.thread).toMatchObject({ id: "session-1", sessionId: "session-1" });
+    expect(result.thread.id).toBe("session-1");
+    expect(result.thread.sessionId).toBe("session-1");
   });
 
   it("throws on invalid response", () => {
@@ -66,6 +69,7 @@ describe("assertCodexThreadResumeResponse", () => {
     const response = makeMinimalResponse({ sessionId: undefined });
     delete (response.thread as Record<string, unknown>).sessionId;
     const result = assertCodexThreadResumeResponse(response);
-    expect(result.thread).toMatchObject({ id: "thread-1", sessionId: "thread-1" });
+    expect(result.thread.id).toBe("thread-1");
+    expect(result.thread.sessionId).toBe("thread-1");
   });
 });

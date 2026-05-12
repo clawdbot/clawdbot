@@ -35,16 +35,19 @@ function asPluginModuleLoaderFactory(factory: unknown): PluginModuleLoaderFactor
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
 function callArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
   const call = calls.at(callIndex);
-  expect(call, label).toBeDefined();
-  return call?.[argIndex];
+  if (!call) {
+    throw new Error(`${label} call ${callIndex} was missing`);
+  }
+  return call[argIndex];
 }
 
 function expectJitiOptions(
@@ -393,8 +396,16 @@ describe("getCachedPluginModuleLoader", () => {
     })("/repo/extensions/demo-b/index.ts");
 
     const marker = Symbol.for("pathe:normalizedAlias");
-    const firstAlias = (createJiti.mock.calls[0]?.[1] as { alias?: Record<string, string> }).alias;
-    const secondAlias = (createJiti.mock.calls[1]?.[1] as { alias?: Record<string, string> }).alias;
+    const firstAlias = (
+      callArg(createJiti, 0, 1, "first jiti options") as {
+        alias?: Record<string, string>;
+      }
+    ).alias;
+    const secondAlias = (
+      callArg(createJiti, 1, 1, "second jiti options") as {
+        alias?: Record<string, string>;
+      }
+    ).alias;
 
     expect(createJiti).toHaveBeenCalledTimes(2);
     expect(cache.size).toBe(2);

@@ -38,13 +38,23 @@ function createGoogleModelProviderConfig(
   };
 }
 
+function requireFirstGeminiFetchCall(
+  mockFetch: ReturnType<typeof installGeminiFetch>,
+): [RequestInfo | URL | undefined, RequestInit | undefined] {
+  const [call] = mockFetch.mock.calls;
+  if (!call) {
+    throw new Error("expected Gemini web search fetch call");
+  }
+  return call as [RequestInfo | URL | undefined, RequestInit | undefined];
+}
+
 function getFetchHeaders(mockFetch: ReturnType<typeof installGeminiFetch>): Record<string, string> {
-  const init = mockFetch.mock.calls[0]?.[1] as { headers?: Record<string, string> } | undefined;
-  return init?.headers ?? {};
+  const [, init] = requireFirstGeminiFetchCall(mockFetch);
+  return (init?.headers as Record<string, string> | undefined) ?? {};
 }
 
 function getGeminiFetchUrl(mockFetch: ReturnType<typeof installGeminiFetch>): string | undefined {
-  const input = mockFetch.mock.calls[0]?.[0];
+  const [input] = requireFirstGeminiFetchCall(mockFetch);
   if (typeof input === "string") {
     return input;
   }
@@ -57,7 +67,8 @@ function getGeminiFetchUrl(mockFetch: ReturnType<typeof installGeminiFetch>): st
 function parseGeminiFetchBody(mockFetch: ReturnType<typeof installGeminiFetch>): {
   tools?: Array<{ google_search?: { timeRangeFilter?: unknown } }>;
 } {
-  const body = mockFetch.mock.calls[0]?.[1]?.body;
+  const [, init] = requireFirstGeminiFetchCall(mockFetch);
+  const body = init?.body;
   if (typeof body !== "string") {
     throw new Error("Expected Gemini fetch body string");
   }
@@ -179,7 +190,7 @@ describe("google web search provider", () => {
 
     await tool?.execute({ query: "OpenClaw docs" }, { signal: controller.signal });
 
-    const init = mockFetch.mock.calls[0]?.[1] as { signal?: AbortSignal } | undefined;
+    const [, init] = requireFirstGeminiFetchCall(mockFetch);
     expect(init?.signal?.aborted).toBe(true);
   });
 

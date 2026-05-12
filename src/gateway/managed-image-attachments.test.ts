@@ -393,7 +393,6 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(second.result.statusCode).toBe(200);
     expect(readSessionMessagesMock).toHaveBeenCalledTimes(1);
 
-    await new Promise((resolve) => setTimeout(resolve, 5));
     await fs.writeFile(sessionFile, '{"message":{}}\n{"message":{"content":"updated"}}\n', "utf-8");
 
     const third = await requestManagedImage({

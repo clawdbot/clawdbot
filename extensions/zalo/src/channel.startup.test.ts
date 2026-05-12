@@ -69,6 +69,15 @@ function buildAccount(): ResolvedZaloAccount {
   };
 }
 
+function requireMonitorArgs() {
+  const [call] = hoisted.monitorZaloProvider.mock.calls;
+  if (!call) {
+    throw new Error("expected Zalo monitor call");
+  }
+  const [monitorArgs] = call;
+  return monitorArgs;
+}
+
 describe("zaloPlugin gateway.startAccount", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -101,7 +110,7 @@ describe("zaloPlugin gateway.startAccount", () => {
     expectLifecyclePatch(patches, { accountId: "default" });
     expect(isSettled()).toBe(true);
     expect(hoisted.monitorZaloProvider).toHaveBeenCalledTimes(1);
-    const [monitorArgs] = hoisted.monitorZaloProvider.mock.calls[0] ?? [];
+    const monitorArgs = requireMonitorArgs();
     expect(monitorArgs).toStrictEqual({
       token: "test-token",
       account: buildAccount(),

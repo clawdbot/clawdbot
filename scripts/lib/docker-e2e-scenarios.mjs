@@ -128,7 +128,7 @@ const bundledPluginInstallUninstallLanes = Array.from(
 function livePluginToolLane() {
   return liveLane(
     "live-plugin-tool",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-plugin-tool",
+    "OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-plugin-tool",
     {
       cacheKey: "plugin-tool",
       e2eImageKind: "bare",
@@ -137,6 +137,22 @@ function livePluginToolLane() {
       stateScenario: "empty",
       timeoutMs: 20 * 60 * 1000,
       weight: 3,
+    },
+  );
+}
+
+function liveOpenAiChatToolsLane() {
+  return liveLane(
+    "openai-chat-tools",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-chat-tools",
+    {
+      e2eImageKind: "functional",
+      needsLiveImage: false,
+      provider: "openai",
+      resources: ["service"],
+      stateScenario: "empty",
+      timeoutMs: 10 * 60 * 1000,
+      weight: 2,
     },
   );
 }
@@ -539,6 +555,7 @@ const releasePathPackageInstallOpenAiLanes = [
       weight: 3,
     },
   ),
+  liveOpenAiChatToolsLane(),
   npmLane("codex-on-demand", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:codex-on-demand", {
     resources: ["service"],
     stateScenario: "empty",

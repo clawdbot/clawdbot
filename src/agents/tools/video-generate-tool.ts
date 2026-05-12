@@ -866,7 +866,7 @@ export function createVideoGenerateTool(options?: {
       });
       const audio = readBooleanToolParam(args, "audio");
       const watermark = readBooleanToolParam(args, "watermark");
-      const timeoutMs = readGenerationTimeoutMs(args);
+      const timeoutMs = readGenerationTimeoutMs(args) ?? videoGenerationModelConfig.timeoutMs;
       // providerOptions must be a plain object. Arrays are objects in JS, so
       // exclude them explicitly — a bogus call like `providerOptions: ["seed", 42]`
       // would otherwise be cast to `Record<string, unknown>` with numeric-string

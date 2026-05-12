@@ -42,7 +42,8 @@ function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): stri
     pathHint: "agents.defaults.heartbeat.directPolicy",
   });
 
-  for (const agent of cfg.agents?.list ?? []) {
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  for (const agent of agents) {
     maybeWarn({
       label: `Heartbeat agent "${agent.id}"`,
       heartbeat: agent.heartbeat,
@@ -149,7 +150,8 @@ function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
     scopeExecConfig: cfg.tools?.exec,
   });
 
-  for (const agent of cfg.agents?.list ?? []) {
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  for (const agent of agents) {
     maybeWarn({
       scopeLabel: `agents.list.${agent.id}.tools.exec`,
       scopeExecConfig: agent.tools?.exec,

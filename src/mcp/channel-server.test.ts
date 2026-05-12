@@ -74,6 +74,14 @@ async function flushMcpNotifications() {
   await Promise.resolve();
 }
 
+function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 function gatewayRequestError(retryable: boolean): Error {
   return Object.assign(new Error(retryable ? "gateway busy" : "auth failed"), {
     name: "GatewayClientRequestError",
@@ -383,7 +391,7 @@ describe("openclaw channel mcp server", () => {
       });
 
       expect(gatewayRequest).toHaveBeenCalledTimes(1);
-      const [method, payload] = gatewayRequest.mock.calls[0] ?? [];
+      const [method, payload] = requireFirstMockCall(gatewayRequest, "gateway request");
       expect(method).toBe("send");
       const sendPayload = payload as Record<string, unknown>;
       expect(sendPayload.to).toBe("-100123");

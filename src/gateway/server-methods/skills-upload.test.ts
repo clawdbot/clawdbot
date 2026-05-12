@@ -142,8 +142,10 @@ function expectError(result: CallResult, code: string, message: string): void {
 
 function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value: T) => T): T {
   const call = mock.mock.calls[0];
-  expect(call).toBeDefined();
-  return call?.[0] as T;
+  if (!call) {
+    throw new Error("Expected first mock call");
+  }
+  return call[0] as T;
 }
 
 async function makeSkillArchive(params: {
@@ -591,8 +593,7 @@ describe("skill upload gateway handlers", () => {
     await expect(
       fs.readFile(path.join(workspaceDir, "skills", "rollback-demo", "SKILL.md"), "utf8"),
     ).resolves.toContain("first version");
-    await expect(
-      fs.stat(path.join(stateDir, "tmp", "skill-uploads", forced.uploadId)),
-    ).resolves.toBeTruthy();
+    const uploadStat = await fs.stat(path.join(stateDir, "tmp", "skill-uploads", forced.uploadId));
+    expect(uploadStat.isDirectory()).toBe(true);
   });
 });

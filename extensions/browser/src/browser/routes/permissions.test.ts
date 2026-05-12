@@ -107,7 +107,7 @@ describe("browser permission routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).toMatchObject({
+    expect(response.body).toStrictEqual({
       ok: true,
       origin: "https://meet.google.com",
       grantedPermissions: ["audioCapture", "videoCapture"],
@@ -134,11 +134,12 @@ describe("browser permission routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).toMatchObject({
+    expect(response.body).toStrictEqual({
       ok: true,
       origin: "https://meet.google.com",
       grantedPermissions: ["audioCapture", "videoCapture", "speakerSelection"],
       unsupportedPermissions: [],
+      grantMethod: "cdp",
     });
     expect(profileCtx.ensureBrowserAvailable).toHaveBeenCalled();
     expect(cdpMocks.getChromeWebSocketUrl).toHaveBeenCalledWith("http://127.0.0.1:18800", 1234, {
@@ -166,10 +167,12 @@ describe("browser permission routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).toMatchObject({
+    expect(response.body).toStrictEqual({
       ok: true,
+      origin: "https://meet.google.com",
       grantedPermissions: ["audioCapture", "videoCapture"],
       unsupportedPermissions: ["speakerSelection"],
+      grantMethod: "cdp",
     });
     expect(cdpMocks.send).toHaveBeenNthCalledWith(2, "Browser.grantPermissions", {
       origin: "https://meet.google.com",

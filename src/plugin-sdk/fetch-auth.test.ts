@@ -144,9 +144,9 @@ describe("fetchWithBearerAuthScopeFallback", () => {
     expect(response.status).toBe(200);
     expect(fetchFn).toHaveBeenCalledTimes(2);
     expect(
-      Object.getOwnPropertySymbols(fetchFn.mock.calls[0]?.[1]?.headers as object),
+      Object.getOwnPropertySymbols(fetchFn.mock.calls.at(0)?.[1]?.headers as object),
     ).toStrictEqual([]);
-    expect(new Headers(fetchFn.mock.calls[1]?.[1]?.headers).get("authorization")).toBe(
+    expect(new Headers(fetchFn.mock.calls.at(1)?.[1]?.headers).get("authorization")).toBe(
       "Bearer token-1",
     );
     expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);

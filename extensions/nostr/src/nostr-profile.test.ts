@@ -203,14 +203,10 @@ describe("validateProfile", () => {
 
     const result = validateProfile(profile);
 
-    expect(result).toMatchObject({
-      valid: true,
-      profile: {
-        name: "validuser",
-        about: "A valid user",
-        picture: "https://example.com/pic.png",
-      },
-    });
+    expect(result.valid).toBe(true);
+    expect(result.profile?.name).toBe("validuser");
+    expect(result.profile?.about).toBe("A valid user");
+    expect(result.profile?.picture).toBe("https://example.com/pic.png");
     expect(result).not.toHaveProperty("errors");
   });
 

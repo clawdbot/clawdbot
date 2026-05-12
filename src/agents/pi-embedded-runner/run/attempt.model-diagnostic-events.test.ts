@@ -395,7 +395,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
       "model.call.started",
       "model.call.completed",
     ]);
-    const startedEvent = requireRecord(started.mock.calls[0]?.[0], "started hook event");
+    const startedEvent = requireRecord(started.mock.calls.at(0)?.[0], "started hook event");
     expect(startedEvent.runId).toBe("run-1");
     expect(startedEvent.callId).toBe("call-hook");
     expect(startedEvent.sessionKey).toBe("session-key");
@@ -404,20 +404,20 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(startedEvent.model).toBe("gpt-5.4");
     expect(startedEvent.api).toBe("openai-responses");
     expect(startedEvent.transport).toBe("http");
-    const startedCtx = requireRecord(started.mock.calls[0]?.[1], "started hook context");
+    const startedCtx = requireRecord(started.mock.calls.at(0)?.[1], "started hook context");
     expect(startedCtx.runId).toBe("run-1");
     expect(startedCtx.sessionKey).toBe("session-key");
     expect(startedCtx.sessionId).toBe("session-id");
     expect(startedCtx.modelProviderId).toBe("openai");
     expect(startedCtx.modelId).toBe("gpt-5.4");
-    const endedEvent = requireRecord(ended.mock.calls[0]?.[0], "ended hook event");
+    const endedEvent = requireRecord(ended.mock.calls.at(0)?.[0], "ended hook event");
     expect(endedEvent.runId).toBe("run-1");
     expect(endedEvent.callId).toBe("call-hook");
     expect(endedEvent.outcome).toBe("completed");
     expectNumberField(endedEvent, "durationMs");
     expectNumberField(endedEvent, "responseStreamBytes");
     expectNumberField(endedEvent, "timeToFirstByteMs");
-    const endedCtx = requireRecord(ended.mock.calls[0]?.[1], "ended hook context");
+    const endedCtx = requireRecord(ended.mock.calls.at(0)?.[1], "ended hook context");
     expect(endedCtx.runId).toBe("run-1");
     expect(Object.isFrozen(startedEvent)).toBe(true);
     expect(Object.isFrozen(startedCtx)).toBe(true);

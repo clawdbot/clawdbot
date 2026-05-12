@@ -141,9 +141,12 @@ describe("DiffArtifactStore", () => {
     vi.setSystemTime(new Date(now.getTime() + 2_000));
     await store.cleanupExpired();
 
-    await expect(fs.stat(path.dirname(standalone.filePath))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    const error = await fs.stat(path.dirname(standalone.filePath)).then(
+      () => undefined,
+      (statError: unknown) => statError,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
   });
 
   it("supports image path aliases for backward compatibility", async () => {

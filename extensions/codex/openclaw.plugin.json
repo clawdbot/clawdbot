@@ -101,7 +101,7 @@
           },
           "allow_destructive_actions": {
             "type": "boolean",
-            "default": false
+            "default": true
           },
           "plugins": {
             "type": "object",
@@ -272,7 +272,7 @@
     },
     "codexPlugins.allow_destructive_actions": {
       "label": "Allow Destructive Plugin Actions",
-      "help": "Default policy for plugin app write or destructive action elicitations. Defaults to false.",
+      "help": "Default policy for plugin app write or destructive action elicitations. Defaults to true.",
       "advanced": true
     },
     "codexPlugins.plugins": {

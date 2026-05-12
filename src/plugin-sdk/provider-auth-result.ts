@@ -1,5 +1,6 @@
 import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 
@@ -20,6 +21,7 @@ export function buildOauthProviderAuthResult(params: {
 }): ProviderAuthResult {
   const email = params.email ?? undefined;
   const displayName = params.displayName ?? undefined;
+  const defaultModel = normalizeAgentModelRefForConfig(params.defaultModel);
   const profileId = buildAuthProfileId({
     providerId: params.providerId,
     profilePrefix: params.profilePrefix,
@@ -45,12 +47,12 @@ export function buildOauthProviderAuthResult(params: {
         agents: {
           defaults: {
             models: {
-              [params.defaultModel]: {},
+              [defaultModel]: {},
             },
           },
         },
       } as Partial<OpenClawConfig>),
-    defaultModel: params.defaultModel,
+    defaultModel,
     notes: params.notes,
   };
 }

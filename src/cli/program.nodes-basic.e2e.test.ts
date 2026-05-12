@@ -140,7 +140,7 @@ describe("cli program (nodes basics)", () => {
 
     expectGatewayRequest("node.pair.list", {});
     expectGatewayRequest("node.list", {});
-    const json = runtime.writeJson.mock.calls[0]?.[0] as {
+    const json = runtime.writeJson.mock.calls.at(0)?.[0] as {
       pending?: unknown[];
       paired?: Array<Record<string, unknown>>;
     };

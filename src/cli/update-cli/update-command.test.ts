@@ -7,6 +7,7 @@ import {
   resolveGatewayInstallEntrypoint,
 } from "../../daemon/gateway-entrypoint.js";
 import {
+  buildInvalidConfigPostCoreUpdateResult,
   collectMissingPluginInstallPayloads,
   recoverInstalledLaunchAgentAfterUpdate,
   recoverLaunchAgentAndRecheckGatewayHealth,
@@ -15,6 +16,7 @@ import {
   shouldPrepareUpdatedInstallRestart,
   resolveUpdatedGatewayRestartPort,
   shouldUseLegacyProcessRestartAfterUpdate,
+  updatePluginsAfterCoreUpdate,
 } from "./update-command.js";
 
 describe("resolveGatewayInstallEntrypointCandidates", () => {
@@ -531,18 +533,17 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
     }));
     const waitForHealthy = vi.fn(async () => stillUnhealthy);
 
-    await expect(
-      recoverLaunchAgentAndRecheckGatewayHealth({
-        health: unhealthy,
-        service,
-        port: 18790,
-        expectedVersion: "2026.5.3",
-        deps: { recoverLaunchAgent, waitForHealthy },
-      }),
-    ).resolves.toMatchObject({
-      health: { healthy: false, waitOutcome: "timeout" },
-      launchAgentRecovery: { attempted: true, recovered: true },
+    const result = await recoverLaunchAgentAndRecheckGatewayHealth({
+      health: unhealthy,
+      service,
+      port: 18790,
+      expectedVersion: "2026.5.3",
+      deps: { recoverLaunchAgent, waitForHealthy },
     });
+    expect(result.health.healthy).toBe(false);
+    expect(result.health.waitOutcome).toBe("timeout");
+    expect(result.launchAgentRecovery?.attempted).toBe(true);
+    expect(result.launchAgentRecovery?.recovered).toBe(true);
   });
 });
 
@@ -557,5 +558,64 @@ describe("resolvePostCoreUpdateChildStdio", () => {
   it('returns "inherit" on non-Windows platforms', () => {
     expect(resolvePostCoreUpdateChildStdio("linux")).toBe("inherit");
     expect(resolvePostCoreUpdateChildStdio("darwin")).toBe("inherit");
+  });
+});
+
+describe("updatePluginsAfterCoreUpdate (invalid config end-to-end)", () => {
+  it("returns status:error (not skipped) when configSnapshot is invalid, so the pre-restart gate fires", async () => {
+    // The pre-restart gate in `updateCommand` is literally
+    //   if (postCorePluginUpdate?.status === "error") { exit(1) }
+    // so asserting that this function returns status:"error" on invalid
+    // config is sufficient to prove the gate fires end-to-end. We pass
+    // `json: true` to suppress logging side-effects without mocking.
+    const result = await updatePluginsAfterCoreUpdate({
+      root: "/tmp/openclaw-test",
+      channel: "stable",
+      configSnapshot: {
+        valid: false,
+        issues: [],
+        legacyIssues: [],
+      } as unknown as Awaited<
+        ReturnType<typeof import("../../config/io.js").readConfigFileSnapshot>
+      >,
+      opts: { json: true } as never,
+      timeoutMs: 1000,
+    });
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("invalid-config");
+    expect(result.changed).toBe(false);
+    expect(result.warnings).toEqual([
+      expect.objectContaining({
+        reason: "invalid-config",
+        guidance: expect.arrayContaining([expect.stringContaining("openclaw doctor")]),
+      }),
+    ]);
+  });
+});
+
+describe("buildInvalidConfigPostCoreUpdateResult", () => {
+  it("returns status:error so the existing pre-restart gate exits 1 instead of restarting on invalid config", () => {
+    const built = buildInvalidConfigPostCoreUpdateResult();
+    expect(built.result.status).toBe("error");
+    expect(built.result.reason).toBe("invalid-config");
+    expect(built.result.changed).toBe(false);
+  });
+
+  it("surfaces actionable repair guidance in both the structural warnings and the message string", () => {
+    const built = buildInvalidConfigPostCoreUpdateResult();
+    expect(built.guidance).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("openclaw doctor"),
+        expect.stringContaining("openclaw update"),
+      ]),
+    );
+    expect(built.result.warnings).toEqual([
+      {
+        reason: "invalid-config",
+        message: built.message,
+        guidance: built.guidance,
+      },
+    ]);
+    expect(built.message).toMatch(/refusing to restart/);
   });
 });

@@ -53,6 +53,14 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   throw new Error(`Expected path to be missing: ${targetPath}`);
 }
 
+function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 describe("managed npm root", () => {
   it("keeps existing plugin dependencies when adding another managed plugin", async () => {
     const npmRoot = await makeTempRoot();
@@ -416,7 +424,7 @@ describe("managed npm root", () => {
     const runCommand = vi.fn().mockResolvedValue(successfulSpawn);
     await expect(repairManagedNpmRootOpenClawPeer({ npmRoot, runCommand })).resolves.toBe(true);
     expect(runCommand).toHaveBeenCalledTimes(1);
-    const [repairArgs, repairOptions] = runCommand.mock.calls[0];
+    const [repairArgs, repairOptions] = requireFirstMockCall(runCommand, "repair command");
     expect(repairArgs).toEqual([
       "npm",
       "uninstall",

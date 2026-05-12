@@ -81,6 +81,14 @@ async function createRealtimeSttServer(params?: {
   return { baseUrl: `http://127.0.0.1:${port}/v1`, done, donePromise };
 }
 
+function requireFirstErrorArg(mock: ReturnType<typeof vi.fn>, label: string): Error {
+  const [call] = mock.mock.calls;
+  if (!call || !(call[0] instanceof Error)) {
+    throw new Error(`expected ${label}`);
+  }
+  return call[0];
+}
+
 describe("xai realtime transcription provider", () => {
   it("normalizes provider config for voice-call streaming", () => {
     const provider = buildXaiRealtimeTranscriptionProvider();
@@ -186,8 +194,7 @@ describe("xai realtime transcription provider", () => {
 
     await expect(session.connect()).rejects.toThrow("Streaming ASR unavailable");
     expect(session.isConnected()).toBe(false);
-    const error = onError.mock.calls[0]?.[0];
-    expect(error).toBeInstanceOf(Error);
+    const error = requireFirstErrorArg(onError, "xAI realtime setup error callback");
     expect(error.message).toBe("Streaming ASR unavailable");
   });
 

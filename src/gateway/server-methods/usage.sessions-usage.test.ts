@@ -290,11 +290,9 @@ describe("sessions.usage", () => {
           totals: { totalTokens: number; totalCost: number };
         };
         expect(result.sessions).toHaveLength(1);
-        expect(result.sessions[0]).toMatchObject({
-          key: storeKey,
-          scope: "family",
-          includedSessionIds: ["current", "old"],
-        });
+        expect(result.sessions[0]?.key).toBe(storeKey);
+        expect(result.sessions[0]?.scope).toBe("family");
+        expect(result.sessions[0]?.includedSessionIds).toEqual(["current", "old"]);
         expect(result.sessions[0]?.usage?.totalTokens).toBe(30);
         expect(result.sessions[0]?.usage?.totalCost).toBeCloseTo(0.03);
         expect(result.sessions[0]?.usage?.messageCounts?.total).toBe(2);
@@ -380,23 +378,29 @@ describe("sessions.usage", () => {
     const timeseriesRespond = await runSessionsUsageTimeseries({
       key: "agent:opus:../../etc/passwd",
     });
-    expect(timeseriesRespond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("Invalid session key"),
-      }),
-    );
+    expect(timeseriesRespond.mock.calls).toEqual([
+      [
+        false,
+        undefined,
+        {
+          code: "INVALID_REQUEST",
+          message: "Invalid session key: agent:opus:../../etc/passwd",
+        },
+      ],
+    ]);
 
     const logsRespond = await runSessionsUsageLogs({
       key: "agent:opus:../../etc/passwd",
     });
-    expect(logsRespond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("Invalid session key"),
-      }),
-    );
+    expect(logsRespond.mock.calls).toEqual([
+      [
+        false,
+        undefined,
+        {
+          code: "INVALID_REQUEST",
+          message: "Invalid session key: agent:opus:../../etc/passwd",
+        },
+      ],
+    ]);
   });
 });

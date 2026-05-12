@@ -18,9 +18,9 @@ describe("bundled taskflow skill frontmatter", () => {
       const frontmatter = parseFrontmatter(raw);
 
       expect(frontmatter.name, relativePath).toBeTypeOf("string");
-      expect(frontmatter.name.length, relativePath).toBeGreaterThan(0);
+      expect(frontmatter.name?.trim(), relativePath).not.toBe("");
       expect(frontmatter.description, relativePath).toBeTypeOf("string");
-      expect(frontmatter.description.length, relativePath).toBeGreaterThan(0);
+      expect(frontmatter.description?.trim(), relativePath).not.toBe("");
     }
   });
 });

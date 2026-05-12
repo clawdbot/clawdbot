@@ -1,4 +1,3 @@
-import { getActivePluginChannelRegistryFromState } from "../plugins/runtime-channel-state.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -6,50 +5,14 @@ import {
 import { normalizeChatChannelId, type ChatChannelId } from "./ids.js";
 import type { ChannelId } from "./plugins/channel-id.types.js";
 import type { ChannelMeta } from "./plugins/types.core.js";
+import {
+  findRegisteredChannelPluginEntry,
+  findRegisteredChannelPluginEntryById,
+  listRegisteredChannelPluginEntries,
+} from "./registry-lookup.js";
 export { getChatChannelMeta } from "./chat-meta.js";
 export { CHAT_CHANNEL_ORDER } from "./ids.js";
 export type { ChatChannelId } from "./ids.js";
-
-type RegisteredChannelPluginEntry = {
-  plugin: {
-    id?: string | null;
-    meta?: Pick<ChannelMeta, "aliases" | "markdownCapable"> | null;
-  };
-};
-
-function listRegisteredChannelPluginEntries(): RegisteredChannelPluginEntry[] {
-  const channelRegistry = getActivePluginChannelRegistryFromState();
-  if (channelRegistry && channelRegistry.channels && channelRegistry.channels.length > 0) {
-    return channelRegistry.channels;
-  }
-  return [];
-}
-
-function findRegisteredChannelPluginEntry(
-  normalizedKey: string,
-): RegisteredChannelPluginEntry | undefined {
-  return listRegisteredChannelPluginEntries().find((entry) => {
-    const id = normalizeOptionalLowercaseString(entry.plugin.id ?? "") ?? "";
-    if (id && id === normalizedKey) {
-      return true;
-    }
-    return (entry.plugin.meta?.aliases ?? []).some(
-      (alias) => normalizeOptionalLowercaseString(alias) === normalizedKey,
-    );
-  });
-}
-
-function findRegisteredChannelPluginEntryById(
-  id: string,
-): RegisteredChannelPluginEntry | undefined {
-  const normalizedId = normalizeOptionalLowercaseString(id);
-  if (!normalizedId) {
-    return undefined;
-  }
-  return listRegisteredChannelPluginEntries().find(
-    (entry) => normalizeOptionalLowercaseString(entry.plugin.id) === normalizedId,
-  );
-}
 export { normalizeChatChannelId };
 
 // Channel docking: prefer this helper in shared code. Importing from

@@ -761,7 +761,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
 
-    const secondCall = state.runWithModelFallbackMock.mock.calls[1]?.[0] as
+    const secondCall = state.runWithModelFallbackMock.mock.calls.at(1)?.[0] as
       | FallbackRunnerParams
       | undefined;
     expect(secondCall?.provider).toBe("openai");
@@ -873,7 +873,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       thinking: "xhigh",
     });
 
-    expect(state.loadManifestModelCatalogMock).toHaveBeenCalled();
+    expect(state.loadManifestModelCatalogMock).toHaveBeenCalledTimes(1);
     const thinkingArgs = requireRecord(
       mockCallArg(state.isThinkingLevelSupportedMock),
       "thinking args",
@@ -912,8 +912,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await runBasicAgentCommand();
 
     expect(state.trajectoryRecordEventMock).toHaveBeenCalledTimes(1);
-    expect(state.trajectoryRecordEventMock.mock.calls[0]?.[0]).toBe("model.fallback_step");
-    expectRecordFields(state.trajectoryRecordEventMock.mock.calls[0]?.[1], {
+    expect(state.trajectoryRecordEventMock.mock.calls.at(0)?.[0]).toBe("model.fallback_step");
+    expectRecordFields(state.trajectoryRecordEventMock.mock.calls.at(0)?.[1], {
       fallbackStepType: "fallback_step",
       fallbackStepFromModel: "ollama/llama3",
       fallbackStepToModel: "openai/gpt-5.4",
@@ -921,7 +921,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       fallbackStepChainPosition: 1,
       fallbackStepFinalOutcome: "next_fallback",
     });
-    expect(state.trajectoryFlushMock).toHaveBeenCalled();
+    expect(state.trajectoryFlushMock).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses duplicate user persistence only after the current turn has flushed", async () => {
@@ -1125,7 +1125,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     await runBasicAgentCommand();
 
-    const attemptParams = state.runAgentAttemptMock.mock.calls[0]?.[0] as
+    const attemptParams = state.runAgentAttemptMock.mock.calls.at(0)?.[0] as
       | { skillsSnapshot?: Record<string, unknown> }
       | undefined;
     expectRecordFields(attemptParams?.skillsSnapshot, {
@@ -1176,13 +1176,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       code: "empty_result",
     });
     expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(2);
-    expectRecordFields(state.runAgentAttemptMock.mock.calls[1]?.[0], {
+    expectRecordFields(state.runAgentAttemptMock.mock.calls.at(1)?.[0], {
       providerOverride: "openai",
       modelOverride: "gpt-5.4",
       isFallbackRetry: true,
     });
     const deliveryParams = requireRecord(
-      state.deliverAgentCommandResultMock.mock.calls[0]?.[0],
+      state.deliverAgentCommandResultMock.mock.calls.at(0)?.[0],
       "delivery params",
     );
     const result = requireRecord(deliveryParams.result, "delivery result");
@@ -1261,7 +1261,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
 
     expect(state.acpRunTurnMock).toHaveBeenCalledTimes(1);
-    const runTurnParams = state.acpRunTurnMock.mock.calls[0]?.[0] as { text?: string };
+    const runTurnParams = state.acpRunTurnMock.mock.calls.at(0)?.[0] as { text?: string };
     expect(runTurnParams.text).toContain("A background task completed.");
     expect(runTurnParams.text).toContain("inspect ACP delivery");
     expect(runTurnParams.text).toContain("child output");
@@ -1269,7 +1269,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(runTurnParams.text).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
 
     expect(state.persistAcpTurnTranscriptMock).toHaveBeenCalledTimes(1);
-    const transcriptParams = state.persistAcpTurnTranscriptMock.mock.calls[0]?.[0] as {
+    const transcriptParams = state.persistAcpTurnTranscriptMock.mock.calls.at(0)?.[0] as {
       body?: string;
       transcriptBody?: string;
     };

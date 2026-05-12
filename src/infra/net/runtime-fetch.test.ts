@@ -41,11 +41,15 @@ class MockProxyAgent {
 }
 
 function requireFetchInit(mock: ReturnType<typeof vi.fn>): RequestInit {
-  const init = mock.mock.calls[0]?.[1] as RequestInit | undefined;
-  if (!init) {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected runtime fetch call");
+  }
+  const init = call[1];
+  if (typeof init !== "object" || init === null || Array.isArray(init)) {
     throw new Error("expected runtime fetch init");
   }
-  return init;
+  return init as RequestInit;
 }
 
 afterEach(() => {
@@ -94,18 +98,10 @@ describe("fetchWithRuntimeDispatcher", () => {
       // BodyInit and RuntimeFormData live in separate type namespaces so a double cast is needed.
       const body = init?.body as unknown as RuntimeFormData;
       expect(body).toBeInstanceOf(RuntimeFormData);
-      expect(body.records).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            name: "model",
-            value: "gpt-4o-transcribe",
-          }),
-          expect.objectContaining({
-            name: "file",
-            filename: "clip.ogg",
-          }),
-        ]),
-      );
+      const modelRecord = body.records.find((record) => record.name === "model");
+      expect(modelRecord?.value).toBe("gpt-4o-transcribe");
+      const fileRecord = body.records.find((record) => record.name === "file");
+      expect(fileRecord?.filename).toBe("clip.ogg");
       return new Response("ok", { status: 200 });
     });
 

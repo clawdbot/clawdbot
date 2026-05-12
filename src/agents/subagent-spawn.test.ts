@@ -39,9 +39,9 @@ function createConfigOverride(overrides?: Record<string, unknown>) {
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
-  expect(value).toBeTruthy();
-  expect(typeof value).toBe("object");
-  expect(Array.isArray(value)).toBe(false);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
   return value as Record<string, unknown>;
 }
 
@@ -215,7 +215,7 @@ describe("spawnSubagentDirect seam flow", () => {
     const childSessionKey = result.childSessionKey as string;
     expect(hoisted.pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(3);
     expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(3);
-    const registerInput = requireRecord(hoisted.registerSubagentRunMock.mock.calls[0]?.[0]);
+    const registerInput = requireRecord(hoisted.registerSubagentRunMock.mock.calls.at(0)?.[0]);
     const requesterOrigin = requireRecord(registerInput.requesterOrigin);
     expect(registerInput.runId).toBe("run-1");
     expect(registerInput.childSessionKey).toBe(childSessionKey);
@@ -281,7 +281,7 @@ describe("spawnSubagentDirect seam flow", () => {
     );
 
     expect(result.status).toBe("accepted");
-    const registerInput = requireRecord(hoisted.registerSubagentRunMock.mock.calls[0]?.[0]);
+    const registerInput = requireRecord(hoisted.registerSubagentRunMock.mock.calls.at(0)?.[0]);
     const requesterOrigin = requireRecord(registerInput.requesterOrigin);
     expect(requesterOrigin.channel).toBe("discord");
     expect(requesterOrigin.accountId).toBe("acct-1");

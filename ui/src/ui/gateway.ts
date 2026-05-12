@@ -91,6 +91,7 @@ export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): 
     code === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH ||
     code === ConnectErrorDetailCodes.AUTH_RATE_LIMITED ||
     code === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH ||
+    code === ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH ||
     code === ConnectErrorDetailCodes.PAIRING_REQUIRED ||
     code === ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED ||
     code === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED
@@ -146,6 +147,7 @@ type SelectedConnectAuth = {
   authPassword?: string;
   resolvedDeviceToken?: string;
   storedToken?: string;
+  storedScopes?: string[];
   canFallbackToShared: boolean;
 };
 
@@ -246,6 +248,9 @@ export type GatewayRequestTiming = {
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
 const STARTUP_RETRY_CLOSE_CODE = 4013;
+const BROWSER_WEBSOCKET_CLOSE_CODE = 1006;
+const BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE = "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR";
+const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY_ERROR";
 
 function buildGatewayConnectAuth(
   selectedAuth: SelectedConnectAuth,
@@ -259,6 +264,77 @@ function buildGatewayConnectAuth(
     deviceToken: selectedAuth.authDeviceToken ?? selectedAuth.resolvedDeviceToken,
     password: selectedAuth.authPassword,
   };
+}
+
+function getErrorMessage(err: unknown): string {
+  return err instanceof Error && err.message ? err.message : String(err);
+}
+
+function getErrorName(err: unknown): string | undefined {
+  if (err instanceof Error && err.name) {
+    return err.name;
+  }
+  if (err && typeof err === "object" && "name" in err) {
+    const name = (err as { name?: unknown }).name;
+    return typeof name === "string" && name.trim() ? name : undefined;
+  }
+  return undefined;
+}
+
+function isBrowserWebSocketSecurityError(err: unknown): boolean {
+  const name = getErrorName(err)?.toLowerCase();
+  const message = getErrorMessage(err).toLowerCase();
+  return (
+    name === "securityerror" ||
+    message.includes("security error") ||
+    message.includes("mixed content") ||
+    message.includes("insecure websocket")
+  );
+}
+
+function formatBrowserWebSocketConstructorError(err: unknown, url: string): GatewayErrorInfo {
+  const securityError = isBrowserWebSocketSecurityError(err);
+  const browserMessage = getErrorMessage(err);
+  const isPlaintextWs = url.trim().toLowerCase().startsWith("ws://");
+  if (securityError) {
+    return {
+      code: BROWSER_WEBSOCKET_SECURITY_ERROR_CODE,
+      message:
+        "Browser refused the Gateway WebSocket for security reasons." +
+        (isPlaintextWs
+          ? " Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789."
+          : " Check the Gateway WebSocket URL and browser security policy."),
+      details: {
+        code: BROWSER_WEBSOCKET_SECURITY_ERROR_CODE,
+        browserErrorName: getErrorName(err),
+        browserMessage,
+      },
+    };
+  }
+  return {
+    code: BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE,
+    message: `Could not create the Gateway WebSocket: ${browserMessage}`,
+    details: {
+      code: BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE,
+      browserErrorName: getErrorName(err),
+      browserMessage,
+    },
+  };
+}
+
+function resolveControlUiConnectScopes(selectedAuth: SelectedConnectAuth): string[] {
+  const isUsingStoredDeviceToken =
+    Boolean(selectedAuth.storedToken) &&
+    (selectedAuth.resolvedDeviceToken === selectedAuth.storedToken ||
+      selectedAuth.authDeviceToken === selectedAuth.storedToken);
+  if (
+    isUsingStoredDeviceToken &&
+    selectedAuth.storedScopes &&
+    selectedAuth.storedScopes.length > 0
+  ) {
+    return [...selectedAuth.storedScopes];
+  }
+  return [...CONTROL_UI_OPERATOR_SCOPES];
 }
 
 async function buildGatewayConnectDevice(params: {
@@ -350,7 +426,26 @@ export class GatewayBrowserClient {
     if (this.closed) {
       return;
     }
-    const ws = new WebSocket(this.opts.url);
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(this.opts.url);
+    } catch (err) {
+      const error = formatBrowserWebSocketConstructorError(err, this.opts.url);
+      this.ws = null;
+      this.pendingConnectError = undefined;
+      this.pendingDeviceTokenRetry = false;
+      this.pendingStartupReconnectDelayMs = null;
+      this.flushPending(new Error(error.message));
+      this.opts.onClose?.({
+        code: BROWSER_WEBSOCKET_CLOSE_CODE,
+        reason:
+          error.code === BROWSER_WEBSOCKET_SECURITY_ERROR_CODE
+            ? "security error"
+            : "websocket error",
+        error,
+      });
+      return;
+    }
     const generation = ++this.connectGeneration;
     this.ws = ws;
     ws.addEventListener("open", () => this.queueConnect(ws, generation));
@@ -467,7 +562,6 @@ export class GatewayBrowserClient {
 
   private async buildConnectPlan(connectNonce: string | null): Promise<ConnectPlan> {
     const role = CONTROL_UI_OPERATOR_ROLE;
-    const scopes = [...CONTROL_UI_OPERATOR_SCOPES];
     const client = this.buildConnectClient();
     const explicitGatewayToken = this.opts.token?.trim() || undefined;
     const explicitPassword = this.opts.password?.trim() || undefined;
@@ -490,6 +584,7 @@ export class GatewayBrowserClient {
         deviceId: deviceIdentity.deviceId,
       });
     }
+    const scopes = resolveControlUiConnectScopes(selectedAuth);
 
     return {
       role,
@@ -715,6 +810,7 @@ export class GatewayBrowserClient {
       authPassword,
       resolvedDeviceToken,
       storedToken: storedToken ?? undefined,
+      storedScopes: storedEntry?.scopes ?? undefined,
       canFallbackToShared: Boolean(storedToken && explicitGatewayToken),
     };
   }

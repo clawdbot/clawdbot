@@ -175,7 +175,9 @@ function expectDiagnosticFields(
     }
     return true;
   });
-  expect(diagnostic, `diagnostic ${expected.messageIncludes ?? ""}`).toBeDefined();
+  if (!diagnostic) {
+    throw new Error(`Expected diagnostic ${expected.messageIncludes ?? ""}`);
+  }
 }
 
 function prepareLinkedManifestFixture(params: { id: string; mode: "symlink" | "hardlink" }): {

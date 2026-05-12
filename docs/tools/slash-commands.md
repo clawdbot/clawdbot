@@ -463,7 +463,9 @@ Examples:
 Unlike normal chat:
 
 - it uses the current session as background context,
-- it runs as a separate **tool-less** one-shot call,
+- in Codex harness sessions, it runs as an ephemeral Codex side thread with the
+  current Codex permissions and native tool surface,
+- in non-Codex sessions, it keeps the older direct one-shot side-call behavior,
 - it does not change future session context,
 - it is not written to transcript history,
 - it is delivered as a live side result instead of a normal assistant message.

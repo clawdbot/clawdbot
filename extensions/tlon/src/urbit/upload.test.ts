@@ -53,6 +53,18 @@ async function setupSuccessfulUpload(params?: {
   return { mockBlob };
 }
 
+function requireUploadParams(): { blob?: Blob; contentType?: string; fileName?: string } {
+  const [call] = mockUploadFile.mock.calls;
+  if (!call) {
+    throw new Error("expected Tlon uploadFile call");
+  }
+  const [uploadParams] = call;
+  if (!uploadParams || typeof uploadParams !== "object" || Array.isArray(uploadParams)) {
+    throw new Error("expected Tlon uploadFile params");
+  }
+  return uploadParams as { blob?: Blob; contentType?: string; fileName?: string };
+}
+
 describe("uploadImageFromUrl", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -67,11 +79,9 @@ describe("uploadImageFromUrl", () => {
 
     expect(result).toBe("https://memex.tlon.network/uploaded.png");
     expect(mockUploadFile).toHaveBeenCalledTimes(1);
-    const uploadParams = mockUploadFile.mock.calls[0]?.[0] as
-      | { blob?: Blob; contentType?: string }
-      | undefined;
-    expect(uploadParams?.blob).toBe(mockBlob);
-    expect(uploadParams?.contentType).toBe("image/png");
+    const uploadParams = requireUploadParams();
+    expect(uploadParams.blob).toBe(mockBlob);
+    expect(uploadParams.contentType).toBe("image/png");
   });
 
   it("returns original URL if fetch fails", async () => {
@@ -124,8 +134,7 @@ describe("uploadImageFromUrl", () => {
 
     await uploadImageFromUrl("https://example.com/path/to/my-image.jpg");
 
-    const uploadParams = mockUploadFile.mock.calls[0]?.[0] as { fileName?: string } | undefined;
-    expect(uploadParams?.fileName).toBe("my-image.jpg");
+    expect(requireUploadParams().fileName).toBe("my-image.jpg");
   });
 
   it("uses default filename when URL has no path", async () => {
@@ -141,7 +150,6 @@ describe("uploadImageFromUrl", () => {
 
     await uploadImageFromUrl("https://example.com/");
 
-    const uploadParams = mockUploadFile.mock.calls[0]?.[0] as { fileName?: string } | undefined;
-    expect(uploadParams?.fileName).toMatch(/^upload-\d+\.png$/);
+    expect(requireUploadParams().fileName).toMatch(/^upload-\d+\.png$/);
   });
 });

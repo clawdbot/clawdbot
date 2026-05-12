@@ -21,20 +21,18 @@ describe("buildQaSuiteSummaryJson", () => {
 
   it("records provider/model/mode so parity gates can verify labels", () => {
     const json = buildQaSuiteSummaryJson(baseParams);
-    expect(json.run).toMatchObject({
-      startedAt: "2026-04-11T00:00:00.000Z",
-      finishedAt: "2026-04-11T00:05:00.000Z",
-      providerMode: "mock-openai",
-      primaryModel: "openai/gpt-5.5",
-      primaryProvider: "openai",
-      primaryModelName: "gpt-5.5",
-      alternateModel: "openai/gpt-5.5-alt",
-      alternateProvider: "openai",
-      alternateModelName: "gpt-5.5-alt",
-      fastMode: true,
-      concurrency: 2,
-      scenarioIds: null,
-    });
+    expect(json.run.startedAt).toBe("2026-04-11T00:00:00.000Z");
+    expect(json.run.finishedAt).toBe("2026-04-11T00:05:00.000Z");
+    expect(json.run.providerMode).toBe("mock-openai");
+    expect(json.run.primaryModel).toBe("openai/gpt-5.5");
+    expect(json.run.primaryProvider).toBe("openai");
+    expect(json.run.primaryModelName).toBe("gpt-5.5");
+    expect(json.run.alternateModel).toBe("openai/gpt-5.5-alt");
+    expect(json.run.alternateProvider).toBe("openai");
+    expect(json.run.alternateModelName).toBe("gpt-5.5-alt");
+    expect(json.run.fastMode).toBe(true);
+    expect(json.run.concurrency).toBe(2);
+    expect(json.run.scenarioIds).toBeNull();
   });
 
   it("includes scenarioIds in run metadata when provided", () => {
@@ -63,14 +61,12 @@ describe("buildQaSuiteSummaryJson", () => {
       primaryModel: "anthropic/claude-opus-4-6",
       alternateModel: "anthropic/claude-sonnet-4-6",
     });
-    expect(json.run).toMatchObject({
-      primaryModel: "anthropic/claude-opus-4-6",
-      primaryProvider: "anthropic",
-      primaryModelName: "claude-opus-4-6",
-      alternateModel: "anthropic/claude-sonnet-4-6",
-      alternateProvider: "anthropic",
-      alternateModelName: "claude-sonnet-4-6",
-    });
+    expect(json.run.primaryModel).toBe("anthropic/claude-opus-4-6");
+    expect(json.run.primaryProvider).toBe("anthropic");
+    expect(json.run.primaryModelName).toBe("claude-opus-4-6");
+    expect(json.run.alternateModel).toBe("anthropic/claude-sonnet-4-6");
+    expect(json.run.alternateProvider).toBe("anthropic");
+    expect(json.run.alternateModelName).toBe("claude-sonnet-4-6");
   });
 
   it("leaves split fields null when a model ref is malformed", () => {
@@ -79,14 +75,12 @@ describe("buildQaSuiteSummaryJson", () => {
       primaryModel: "not-a-real-ref",
       alternateModel: "",
     });
-    expect(json.run).toMatchObject({
-      primaryModel: "not-a-real-ref",
-      primaryProvider: null,
-      primaryModelName: null,
-      alternateModel: "",
-      alternateProvider: null,
-      alternateModelName: null,
-    });
+    expect(json.run.primaryModel).toBe("not-a-real-ref");
+    expect(json.run.primaryProvider).toBeNull();
+    expect(json.run.primaryModelName).toBeNull();
+    expect(json.run.alternateModel).toBe("");
+    expect(json.run.alternateProvider).toBeNull();
+    expect(json.run.alternateModelName).toBeNull();
   });
 
   it("keeps scenarios and counts alongside the run metadata", () => {

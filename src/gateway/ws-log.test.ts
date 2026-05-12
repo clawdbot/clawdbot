@@ -89,31 +89,26 @@ describe("gateway ws log helpers", () => {
       },
     });
 
-    expect(summary).toMatchObject({
-      agent: "main",
-      run: "12345678…9abc",
-      session: "main",
-      stream: "assistant",
-      aseq: 2,
-      media: 2,
-    });
+    expect(summary.agent).toBe("main");
+    expect(summary.run).toBe("12345678…9abc");
+    expect(summary.session).toBe("main");
+    expect(summary.stream).toBe("assistant");
+    expect(summary.aseq).toBe(2);
+    expect(summary.media).toBe(2);
     expect(summary.text).toBeTypeOf("string");
     expect(summary.text).not.toContain("\n");
   });
 
   test("summarizeAgentEventForWsLog includes tool metadata", () => {
-    expect(
-      summarizeAgentEventForWsLog({
-        runId: "run-1",
-        stream: "tool",
-        data: { phase: "start", name: "fetch", toolCallId: "12345678-1234-1234-1234-123456789abc" },
-      }),
-    ).toMatchObject({
-      run: "run-1",
+    const summary = summarizeAgentEventForWsLog({
+      runId: "run-1",
       stream: "tool",
-      tool: "start:fetch",
-      call: "12345678…9abc",
+      data: { phase: "start", name: "fetch", toolCallId: "12345678-1234-1234-1234-123456789abc" },
     });
+    expect(summary.run).toBe("run-1");
+    expect(summary.stream).toBe("tool");
+    expect(summary.tool).toBe("start:fetch");
+    expect(summary.call).toBe("12345678…9abc");
   });
 
   test("summarizeAgentEventForWsLog includes lifecycle errors with compact previews", () => {
@@ -128,13 +123,11 @@ describe("gateway ws log helpers", () => {
       },
     });
 
-    expect(summary).toMatchObject({
-      agent: "main",
-      session: "thread-1",
-      stream: "lifecycle",
-      phase: "abort",
-      aborted: true,
-    });
+    expect(summary.agent).toBe("main");
+    expect(summary.session).toBe("thread-1");
+    expect(summary.stream).toBe("lifecycle");
+    expect(summary.phase).toBe("abort");
+    expect(summary.aborted).toBe(true);
     expect(summary.error).toBeTypeOf("string");
     expect((summary.error as string).length).toBeLessThanOrEqual(120);
   });

@@ -159,7 +159,9 @@ const invokeDoctorMemoryRemHarness = async (
 };
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -230,7 +232,9 @@ describe("doctor.memory.status", () => {
     await invokeDoctorMemoryStatus(respond, { params: { probe: true } });
 
     const managerInput = mockCallArg(getMemorySearchManager);
-    expect(managerInput.cfg).toBeDefined();
+    if (managerInput.cfg === undefined) {
+      throw new Error("Expected memory search manager config");
+    }
     expectRecordFields(managerInput, {
       agentId: "main",
       purpose: "status",

@@ -20,6 +20,20 @@ function mockReachableResponse(status = 200) {
   });
 }
 
+function requireFetchPreflightRequest(): {
+  url?: string;
+  timeoutMs?: number;
+  auditContext?: string;
+} {
+  const request = fetchWithSsrFGuardMock.mock.calls.at(0)?.[0] as
+    | { url?: string; timeoutMs?: number; auditContext?: string }
+    | undefined;
+  if (!request) {
+    throw new Error("Expected cron model preflight fetch request");
+  }
+  return request;
+}
+
 describe("preflightCronModelProvider", () => {
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockReset();
@@ -67,8 +81,9 @@ describe("preflightCronModelProvider", () => {
     });
 
     expect(result).toEqual({ status: "available" });
-    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.url).toBe("http://127.0.0.1:8000/v1/models");
-    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.timeoutMs).toBe(2500);
+    const request = requireFetchPreflightRequest();
+    expect(request.url).toBe("http://127.0.0.1:8000/v1/models");
+    expect(request.timeoutMs).toBe(2500);
   });
 
   it("marks unreachable local Ollama endpoints unavailable and caches the result", async () => {
@@ -115,10 +130,9 @@ describe("preflightCronModelProvider", () => {
     expect(second.baseUrl).toBe("http://localhost:11434");
     expect(second.retryAfterMs).toBe(300000);
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.url).toBe("http://localhost:11434/api/tags");
-    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.auditContext).toBe(
-      "cron-model-provider-preflight",
-    );
+    const request = requireFetchPreflightRequest();
+    expect(request.url).toBe("http://localhost:11434/api/tags");
+    expect(request.auditContext).toBe("cron-model-provider-preflight");
   });
 
   it("retries an unavailable endpoint after the cache ttl", async () => {

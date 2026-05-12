@@ -353,7 +353,7 @@ describe("skill upload store", () => {
       sizeBytes: 1,
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
-    await expect(fs.stat(path.join(rootDir, committed.uploadId))).resolves.toBeTruthy();
+    expect((await fs.stat(path.join(rootDir, committed.uploadId))).isDirectory()).toBe(true);
 
     release.resolve();
     await expect(pinned).resolves.toBe(true);
@@ -400,7 +400,7 @@ describe("skill upload store", () => {
       idempotencyKey: "same-upload",
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
-    await expect(fs.stat(path.join(rootDir, committed.uploadId))).resolves.toBeTruthy();
+    expect((await fs.stat(path.join(rootDir, committed.uploadId))).isDirectory()).toBe(true);
 
     release.resolve();
     await expect(pinned).resolves.toBe(true);

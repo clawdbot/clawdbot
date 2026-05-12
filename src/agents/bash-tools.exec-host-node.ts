@@ -92,6 +92,7 @@ export async function executeNodeHostCommand(
         nodeId: target.nodeId,
         security: hostSecurity,
         ask: hostAsk,
+        commandHighlighting: params.commandHighlighting,
         ...buildExecApprovalRequesterContext({
           agentId: prepared.agentId,
           sessionKey: prepared.sessionKey,

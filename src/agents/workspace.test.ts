@@ -67,14 +67,7 @@ async function expectCompletedWithoutBootstrap(dir: string) {
 
 function expectSubagentAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
   const names = files.map((file) => file.name);
-  expect(names).toContain("AGENTS.md");
-  expect(names).toContain("TOOLS.md");
-  expect(names).toContain("SOUL.md");
-  expect(names).toContain("IDENTITY.md");
-  expect(names).toContain("USER.md");
-  expect(names).not.toContain("HEARTBEAT.md");
-  expect(names).not.toContain("BOOTSTRAP.md");
-  expect(names).not.toContain("MEMORY.md");
+  expect(names).toStrictEqual(["AGENTS.md", "SOUL.md", "TOOLS.md", "IDENTITY.md", "USER.md"]);
 }
 
 describe("ensureAgentWorkspace", () => {
@@ -404,12 +397,12 @@ describe("filterBootstrapFilesForSession", () => {
 
   it("returns all files for main session (no sessionKey)", () => {
     const result = filterBootstrapFilesForSession(mockFiles);
-    expect(result).toHaveLength(mockFiles.length);
+    expect(result).toStrictEqual(mockFiles);
   });
 
   it("returns all files for normal (non-subagent, non-cron) session key", () => {
     const result = filterBootstrapFilesForSession(mockFiles, "agent:default:chat:main");
-    expect(result).toHaveLength(mockFiles.length);
+    expect(result).toStrictEqual(mockFiles);
   });
 
   it("filters to allowlist for subagent sessions", () => {

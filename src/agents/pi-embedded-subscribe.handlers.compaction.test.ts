@@ -144,7 +144,7 @@ describe("compaction lifecycle logging", () => {
       aborted: false,
     });
 
-    expect(info.mock.calls[0]?.[0]).toBe("embedded run auto-compaction start");
+    expect(info.mock.calls.at(0)?.[0]).toBe("embedded run auto-compaction start");
     const startMeta = loggedInfoMetaAt(info, 0);
     expect(startMeta.event).toBe("embedded_run_compaction_start");
     expect(startMeta.reason).toBe("threshold");
@@ -153,7 +153,7 @@ describe("compaction lifecycle logging", () => {
       "embedded run auto-compaction start: runId=run-test reason=threshold",
     );
 
-    expect(info.mock.calls[1]?.[0]).toBe("embedded run auto-compaction complete");
+    expect(info.mock.calls.at(1)?.[0]).toBe("embedded run auto-compaction complete");
     const endMeta = loggedInfoMetaAt(info, 1);
     expect(endMeta.event).toBe("embedded_run_compaction_end");
     expect(endMeta.reason).toBe("threshold");
@@ -194,7 +194,7 @@ describe("compaction lifecycle logging", () => {
       aborted: false,
     });
 
-    expect(info.mock.calls[0]?.[0]).toBe("embedded run manual compaction start");
+    expect(info.mock.calls.at(0)?.[0]).toBe("embedded run manual compaction start");
     const startMeta = loggedInfoMetaAt(info, 0);
     expect(startMeta.event).toBe("embedded_run_compaction_start");
     expect(startMeta.reason).toBe("manual");
@@ -203,7 +203,7 @@ describe("compaction lifecycle logging", () => {
       "embedded run manual compaction start: runId=run-test reason=manual",
     );
 
-    expect(info.mock.calls[1]?.[0]).toBe("embedded run manual compaction incomplete");
+    expect(info.mock.calls.at(1)?.[0]).toBe("embedded run manual compaction incomplete");
     const endMeta = loggedInfoMetaAt(info, 1);
     expect(endMeta.event).toBe("embedded_run_compaction_end");
     expect(endMeta.reason).toBe("manual");
@@ -242,7 +242,7 @@ describe("compaction lifecycle logging", () => {
       aborted: false,
     });
 
-    expect(info.mock.calls[0]?.[0]).toBe("embedded run auto-compaction start");
+    expect(info.mock.calls.at(0)?.[0]).toBe("embedded run auto-compaction start");
     const startMeta = loggedInfoMetaAt(info, 0);
     expect(startMeta.event).toBe("embedded_run_compaction_start");
     expect(startMeta.reason).toBe("threshold");
@@ -251,7 +251,7 @@ describe("compaction lifecycle logging", () => {
       "embedded run auto-compaction start: runId=run-test reason=threshold",
     );
 
-    expect(info.mock.calls[1]?.[0]).toBe("embedded run auto-compaction complete");
+    expect(info.mock.calls.at(1)?.[0]).toBe("embedded run auto-compaction complete");
     const endMeta = loggedInfoMetaAt(info, 1);
     expect(endMeta.event).toBe("embedded_run_compaction_end");
     expect(endMeta.reason).toBe("threshold");

@@ -101,6 +101,7 @@ function createMockCronService(): CronServiceContract {
     run: vi.fn(async () => ({ ok: true, ran: false, reason: "not-due" })),
     enqueueRun: vi.fn(async () => ({ ok: true, ran: false, reason: "not-due" })),
     getJob: vi.fn(() => undefined),
+    readJob: vi.fn(async () => undefined),
     getDefaultAgentId: vi.fn(() => undefined),
     wake: vi.fn(() => ({ ok: true })),
   } as CronServiceContract;
@@ -129,9 +130,11 @@ function mockCronAdd(response: CronJob) {
 }
 
 function getCronAddBody() {
-  const addCall = workflowMocks.cronAdd.mock.calls[0];
-  expect(addCall).toBeDefined();
-  return addCall?.[0] as CronJobCreate;
+  const addCall = workflowMocks.cronAdd.mock.calls.at(0);
+  if (!addCall) {
+    throw new Error("Expected cron add call");
+  }
+  return addCall[0] as CronJobCreate;
 }
 
 function expectSessionTurnHandle(

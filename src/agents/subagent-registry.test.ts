@@ -469,7 +469,7 @@ describe("subagent registry seam flow", () => {
       "function",
     );
 
-    const updateStore = mocks.updateSessionStore.mock.calls[0]?.[1] as
+    const updateStore = mocks.updateSessionStore.mock.calls.at(0)?.[1] as
       | ((store: Record<string, Record<string, unknown>>) => void)
       | undefined;
     expect(updateStore).toBeTypeOf("function");
@@ -490,7 +490,7 @@ describe("subagent registry seam flow", () => {
       "updated child session store entry",
     );
 
-    expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
+    expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalledTimes(6);
   });
 
   it("suppresses stale timeout announces when the same child run later finishes successfully", async () => {

@@ -67,8 +67,9 @@ function mockClaudeCliCredentialRead() {
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
   const record = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);
@@ -244,13 +245,13 @@ describe("cli credentials", () => {
       expectFields(first, {
         type: "oauth",
         provider: "anthropic",
-        access: expect.stringMatching(/^token-/),
+        access: "token-1735689600000",
         refresh: "cached-refresh",
       });
       expectFields(second, {
         type: "oauth",
         provider: "anthropic",
-        access: expect.stringMatching(/^token-/),
+        access: expectSameObject ? "token-1735689600000" : "token-1735690500001",
         refresh: "cached-refresh",
       });
       if (expectSameObject) {

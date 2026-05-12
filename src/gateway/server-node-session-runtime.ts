@@ -1,9 +1,8 @@
-import { NodeRegistry } from "./node-registry.js";
+import { NodeRegistry, type SerializedEventPayload } from "./node-registry.js";
 import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
-import { safeParseJson } from "./server-json.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
 import { hasConnectedTalkNode } from "./server-talk-nodes.js";
 
@@ -15,9 +14,12 @@ export function createGatewayNodeSessionRuntime(params: {
   const nodeSubscriptions = createNodeSubscriptionManager();
   const sessionEventSubscribers = createSessionEventSubscriberRegistry();
   const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
-  const nodeSendEvent = (opts: { nodeId: string; event: string; payloadJSON?: string | null }) => {
-    const payload = safeParseJson(opts.payloadJSON ?? null);
-    nodeRegistry.sendEvent(opts.nodeId, opts.event, payload);
+  const nodeSendEvent = (opts: {
+    nodeId: string;
+    event: string;
+    payloadJSON?: SerializedEventPayload | null;
+  }) => {
+    nodeRegistry.sendEventRaw(opts.nodeId, opts.event, opts.payloadJSON ?? null);
   };
   const nodeSendToSession = (sessionKey: string, event: string, payload: unknown) =>
     nodeSubscriptions.sendToSession(sessionKey, event, payload, nodeSendEvent);

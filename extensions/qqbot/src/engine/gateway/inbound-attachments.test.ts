@@ -41,10 +41,15 @@ describe("engine/gateway/inbound-attachments", () => {
   it("returns an empty result when no attachments are present", async () => {
     await expect(
       processAttachments(undefined, { accountId: "qq", cfg: {}, audioConvert }),
-    ).resolves.toMatchObject({
+    ).resolves.toStrictEqual({
       attachmentInfo: "",
       imageUrls: [],
+      imageMediaTypes: [],
       voiceAttachmentPaths: [],
+      voiceAttachmentUrls: [],
+      voiceAsrReferTexts: [],
+      voiceTranscripts: [],
+      voiceTranscriptSources: [],
       attachmentLocalPaths: [],
     });
   });

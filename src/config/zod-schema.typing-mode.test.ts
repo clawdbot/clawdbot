@@ -4,12 +4,10 @@ import { SessionSchema } from "./zod-schema.session.js";
 
 describe("typing mode schema reuse", () => {
   it("accepts supported typingMode values for session and agent defaults", () => {
-    expect(SessionSchema.parse({ typingMode: "thinking" })).toMatchObject({
-      typingMode: "thinking",
-    });
-    expect(AgentDefaultsSchema.parse({ typingMode: "message" })).toMatchObject({
-      typingMode: "message",
-    });
+    const session = SessionSchema.parse({ typingMode: "thinking" });
+    const agentDefaults = AgentDefaultsSchema.parse({ typingMode: "message" });
+    expect(session?.typingMode).toBe("thinking");
+    expect(agentDefaults?.typingMode).toBe("message");
   });
 
   it("rejects unsupported typingMode values for session and agent defaults", () => {

@@ -257,19 +257,15 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       },
     };
 
-    expect(
-      projectOutboundPayloadPlanForDelivery(
-        createOutboundPayloadPlan([{ text: "NO_REPLY" }, { text: "visible reply" }], {
-          cfg,
-          sessionKey: "agent:main:telegram:direct:123",
-          surface: "telegram",
-        }),
-      ),
-    ).toEqual([
-      expect.objectContaining({
-        text: "visible reply",
+    const delivery = projectOutboundPayloadPlanForDelivery(
+      createOutboundPayloadPlan([{ text: "NO_REPLY" }, { text: "visible reply" }], {
+        cfg,
+        sessionKey: "agent:main:telegram:direct:123",
+        surface: "telegram",
       }),
-    ]);
+    );
+    expect(delivery).toHaveLength(1);
+    expect(delivery[0]?.text).toBe("visible reply");
   });
 
   describe("pending spawned subagent children", () => {
@@ -339,19 +335,15 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       },
     };
 
-    expect(
-      projectOutboundPayloadPlanForDelivery(
-        createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
-          cfg,
-          sessionKey: "agent:main:telegram:direct:123",
-          surface: "telegram",
-        }),
-      ),
-    ).toEqual([
-      expect.objectContaining({
-        text: "NO_REPLY",
+    const delivery = projectOutboundPayloadPlanForDelivery(
+      createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
+        cfg,
+        sessionKey: "agent:main:telegram:direct:123",
+        surface: "telegram",
       }),
-    ]);
+    );
+    expect(delivery).toHaveLength(1);
+    expect(delivery[0]?.text).toBe("NO_REPLY");
   });
 
   it("is idempotent for already-normalized delivery payloads", () => {

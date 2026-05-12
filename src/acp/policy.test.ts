@@ -27,7 +27,9 @@ describe("acp policy", () => {
     } satisfies OpenClawConfig;
     expect(isAcpEnabledByPolicy(cfg)).toBe(false);
     expect(resolveAcpDispatchPolicyState(cfg)).toBe("acp_disabled");
-    expect(resolveAcpDispatchPolicyMessage(cfg)).toContain("acp.enabled=false");
+    expect(resolveAcpDispatchPolicyMessage(cfg)).toBe(
+      "ACP is disabled by policy (`acp.enabled=false`).",
+    );
     expect(resolveAcpDispatchPolicyError(cfg)?.code).toBe("ACP_DISPATCH_DISABLED");
   });
 
@@ -42,7 +44,9 @@ describe("acp policy", () => {
     } satisfies OpenClawConfig;
     expect(isAcpDispatchEnabledByPolicy(cfg)).toBe(false);
     expect(resolveAcpDispatchPolicyState(cfg)).toBe("dispatch_disabled");
-    expect(resolveAcpDispatchPolicyMessage(cfg)).toContain("acp.dispatch.enabled=false");
+    expect(resolveAcpDispatchPolicyMessage(cfg)).toBe(
+      "ACP dispatch is disabled by policy (`acp.dispatch.enabled=false`).",
+    );
   });
 
   it("allows explicit ACP turns when only dispatch is disabled", () => {
@@ -67,7 +71,9 @@ describe("acp policy", () => {
         },
       },
     } satisfies OpenClawConfig;
-    expect(resolveAcpExplicitTurnPolicyError(cfg)?.message).toContain("acp.enabled=false");
+    expect(resolveAcpExplicitTurnPolicyError(cfg)?.message).toBe(
+      "ACP is disabled by policy (`acp.enabled=false`).",
+    );
   });
 
   it("applies allowlist filtering for ACP agents", () => {

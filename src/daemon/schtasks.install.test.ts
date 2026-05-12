@@ -103,7 +103,7 @@ describe("installScheduledTask", () => {
       expect(script).not.toContain("set OC_INJECT=");
 
       const parsed = await readScheduledTaskCommand(env);
-      expect(parsed).toMatchObject({
+      expect(parsed).toStrictEqual({
         programArguments: [
           "node",
           "gateway.js",
@@ -115,15 +115,22 @@ describe("installScheduledTask", () => {
           "!token!",
         ],
         workingDirectory: "C:\\temp\\poc&calc",
+        environment: {
+          OC_INJECT: "safe & whoami | calc",
+          OC_CARET: "a^b",
+          OC_PERCENT: "%TEMP%",
+          OC_BANG: "!token!",
+          OC_QUOTE: 'he said "hi"',
+        },
+        environmentValueSources: {
+          OC_INJECT: "inline",
+          OC_CARET: "inline",
+          OC_PERCENT: "inline",
+          OC_BANG: "inline",
+          OC_QUOTE: "inline",
+        },
+        sourcePath: scriptPath,
       });
-      expect(parsed?.environment).toMatchObject({
-        OC_INJECT: "safe & whoami | calc",
-        OC_CARET: "a^b",
-        OC_PERCENT: "%TEMP%",
-        OC_BANG: "!token!",
-        OC_QUOTE: 'he said "hi"',
-      });
-      expect(parsed?.environment).not.toHaveProperty("OC_EMPTY");
 
       expect(schtasksCalls[0]).toEqual(["/Query"]);
       expect(schtasksCalls[1]).toEqual(["/Query", "/TN", "OpenClaw Gateway"]);
@@ -258,11 +265,18 @@ describe("installScheduledTask", () => {
       });
 
       const command = await readScheduledTaskCommand(env);
-      expect(command?.environmentValueSources).toMatchObject({
-        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "inline",
-        TAVILY_API_KEY: "inline",
+      expect(command).toStrictEqual({
+        programArguments: ["node", "gateway.js"],
+        environment: {
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "TAVILY_API_KEY",
+          TAVILY_API_KEY: "old-inline-value",
+        },
+        environmentValueSources: {
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "inline",
+          TAVILY_API_KEY: "inline",
+        },
+        sourcePath: scriptPath,
       });
-      expect(command?.sourcePath).toBe(scriptPath);
 
       const audit = await auditGatewayServiceConfig({
         env,

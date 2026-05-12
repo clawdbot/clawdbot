@@ -95,8 +95,23 @@ describe("statusJsonCommand", () => {
     await statusJsonCommand({}, runtime);
 
     expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
-    expect(logs).toHaveLength(1);
-    expect(JSON.parse(logs[0] ?? "{}")).not.toHaveProperty("securityAudit");
+    expect(logs).toStrictEqual([expect.any(String)]);
+    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      ok: true,
+      configuredChannels: [],
+      os: { platform: "linux" },
+      update: { installKind: "npm", git: { tag: null, branch: null } },
+      updateChannel: "stable",
+      updateChannelSource: "config",
+      memory: null,
+      memoryPlugin: null,
+      gatewayService: { installed: false },
+      nodeService: { installed: false },
+      agents: [],
+      secretDiagnostics: [],
+    });
+    expect(payload).not.toHaveProperty("securityAudit");
   });
 
   it("includes security audit details only when --all is requested", async () => {
@@ -130,7 +145,14 @@ describe("statusJsonCommand", () => {
       "telegram",
       "whatsapp",
     ]);
-    expect(logs).toHaveLength(1);
-    expect(JSON.parse(logs[0] ?? "{}")).toHaveProperty("securityAudit.summary.critical", 1);
+    expect(logs).toStrictEqual([expect.any(String)]);
+    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      ok: true,
+      securityAudit: {
+        summary: { critical: 1, warn: 0, info: 0 },
+        findings: [],
+      },
+    });
   });
 });

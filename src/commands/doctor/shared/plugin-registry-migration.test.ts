@@ -395,10 +395,9 @@ describe("plugin registry install migration", () => {
       action: "migrate",
       force: true,
     });
-    expect(result.deprecationWarnings).toHaveLength(1);
-    expect(result.deprecationWarnings[0]).toContain(
-      `${FORCE_PLUGIN_REGISTRY_MIGRATION_ENV} is deprecated`,
-    );
+    expect(result.deprecationWarnings).toStrictEqual([
+      `${FORCE_PLUGIN_REGISTRY_MIGRATION_ENV} is deprecated and will be removed after the plugin registry migration rollout; use doctor registry repair once available.`,
+    ]);
   });
 
   it("treats falsey env flag strings as unset", async () => {

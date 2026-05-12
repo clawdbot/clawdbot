@@ -458,9 +458,7 @@ describe("deliverWebReply", () => {
     expect(mediaPayload.mimetype).toBe("image/jpeg");
     expect(mockCallArg(msg.sendMedia, 0, 1, "sendMedia")).toBeUndefined();
     expect(msg.reply).toHaveBeenCalledWith("aaa", undefined);
-    expect(
-      findLoggerContext(replyLogger.info, "auto-reply sent (media)", "replyLogger.info"),
-    ).toBeDefined();
+    findLoggerContext(replyLogger.info, "auto-reply sent (media)", "replyLogger.info");
     expect(logVerbose).toHaveBeenCalled();
   });
 

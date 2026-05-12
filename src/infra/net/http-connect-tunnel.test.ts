@@ -95,6 +95,14 @@ vi.mock("node:tls", () => ({
   connect: tlsConnectSpy,
 }));
 
+function requireFirstTlsConnectOptions(): unknown {
+  const [call] = tlsConnectSpy.mock.calls;
+  if (!call) {
+    throw new Error("expected TLS connect call");
+  }
+  return call[0];
+}
+
 describe("openHttpConnectTunnel", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -151,7 +159,7 @@ describe("openHttpConnectTunnel", () => {
       targetPort: 443,
     });
 
-    expect(tlsConnectSpy.mock.calls[0]?.[0]).toEqual({
+    expect(requireFirstTlsConnectOptions()).toEqual({
       host: "proxy.example",
       port: 8443,
       servername: "proxy.example",

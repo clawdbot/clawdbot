@@ -21,7 +21,16 @@ import {
 } from "./clawhub.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  let statError: unknown;
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    statError = error;
+  }
+  if (statError === undefined) {
+    throw new Error(`Expected ${targetPath} to be missing`);
+  }
+  expect((statError as { code?: unknown }).code).toBe("ENOENT");
 }
 
 describe("clawhub helpers", () => {

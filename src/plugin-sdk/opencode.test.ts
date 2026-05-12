@@ -15,18 +15,17 @@ describe("createOpencodeCatalogApiKeyAuthMethod", () => {
       choiceLabel: "OpenCode Go catalog",
     });
 
-    expect(method).toMatchObject({
-      id: "api-key",
-      label: "OpenCode Go catalog",
-      hint: "Shared API key for Zen + Go catalogs",
-      kind: "api_key",
-      wizard: {
-        choiceId: "opencode-go",
-        choiceLabel: "OpenCode Go catalog",
-        groupId: "opencode",
-        groupLabel: "OpenCode",
-        groupHint: "Shared API key for Zen + Go catalogs",
-      },
-    });
+    expect(method.id).toBe("api-key");
+    expect(method.label).toBe("OpenCode Go catalog");
+    expect(method.hint).toBe("Shared API key for Zen + Go catalogs");
+    expect(method.kind).toBe("api_key");
+    if (!method.wizard) {
+      throw new Error("expected OpenCode auth method to include wizard metadata");
+    }
+    expect(method.wizard.choiceId).toBe("opencode-go");
+    expect(method.wizard.choiceLabel).toBe("OpenCode Go catalog");
+    expect(method.wizard.groupId).toBe("opencode");
+    expect(method.wizard.groupLabel).toBe("OpenCode");
+    expect(method.wizard.groupHint).toBe("Shared API key for Zen + Go catalogs");
   });
 });

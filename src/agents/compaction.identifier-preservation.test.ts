@@ -58,13 +58,13 @@ describe("compaction identifier-preservation instructions", () => {
   }
 
   function firstSummaryInstructions() {
-    return extractSummaryInstructions(mockGenerateSummary.mock.calls[0]);
+    return extractSummaryInstructions(mockGenerateSummary.mock.calls.at(0));
   }
 
   it("injects identifier-preservation guidance even without custom instructions", async () => {
     await runSummary(2);
 
-    expect(mockGenerateSummary).toHaveBeenCalled();
+    expect(mockGenerateSummary).toHaveBeenCalledTimes(1);
     expect(firstSummaryInstructions()).toContain(
       "Preserve all opaque identifiers exactly as written",
     );
@@ -80,6 +80,7 @@ describe("compaction identifier-preservation instructions", () => {
       customInstructions: "Focus on release-impacting bugs.",
     });
 
+    expect(mockGenerateSummary).toHaveBeenCalledTimes(1);
     expect(firstSummaryInstructions()).toContain(
       "Preserve all opaque identifiers exactly as written",
     );
@@ -94,7 +95,7 @@ describe("compaction identifier-preservation instructions", () => {
       minMessagesForSplit: 4,
     });
 
-    expect(mockGenerateSummary.mock.calls.length).toBeGreaterThan(1);
+    expect(mockGenerateSummary).toHaveBeenCalledTimes(3);
     for (const call of mockGenerateSummary.mock.calls) {
       expect(extractSummaryInstructions(call)).toContain(
         "Preserve all opaque identifiers exactly as written",
@@ -110,6 +111,7 @@ describe("compaction identifier-preservation instructions", () => {
       customInstructions: "Prioritize customer-visible regressions.",
     });
 
+    expect(mockGenerateSummary).toHaveBeenCalledTimes(3);
     const mergedCall = mockGenerateSummary.mock.calls.at(-1);
     const instructions = extractSummaryInstructions(mergedCall);
     expect(instructions).toContain("Merge these partial summaries into a single cohesive summary.");

@@ -105,7 +105,7 @@ describe("wrapFetchWithAbortSignal", () => {
       duplex: "half",
     } as RequestInit & { duplex: "half" });
 
-    expect(getSeenInit()).toMatchObject({ duplex: "half" });
+    expect((getSeenInit() as (RequestInit & { duplex?: string }) | undefined)?.duplex).toBe("half");
   });
 
   it("converts foreign abort signals to native controllers", async () => {

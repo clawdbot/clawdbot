@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const requireFromHere = createRequire(import.meta.url);
 
 const connectMock = vi.hoisted(() => vi.fn(async () => undefined));
 const listToolsMock = vi.hoisted(() => vi.fn(async () => ({ tools: [] })));
@@ -133,7 +136,7 @@ describe("qa suite runtime agent tools helpers", () => {
       command: "/usr/bin/node",
       args: [
         "--import",
-        expect.stringContaining(path.join("node_modules", "tsx")),
+        requireFromHere.resolve("tsx"),
         path.join(repoRoot, "src", "mcp", "plugin-tools-serve.ts"),
       ],
       stderr: "pipe",

@@ -54,7 +54,7 @@ describe("sandbox fs bridge shell compatibility", () => {
       await bridge.rename({ from: "a.txt", to: "c.txt" });
       await bridge.stat({ filePath: "c.txt" });
 
-      expect(mockedExecDockerRaw).toHaveBeenCalled();
+      expect(mockedExecDockerRaw).toHaveBeenCalledTimes(19);
 
       const scripts = getScriptsFromCalls();
       const executables = mockedExecDockerRaw.mock.calls.map(([args]) => args[3] ?? "");

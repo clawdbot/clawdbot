@@ -28,21 +28,23 @@ function createCtx(params?: Partial<WebhookContext>): WebhookContext {
 }
 
 function requireFetchRequest() {
-  const request = apiMocks.fetchWithSsrFGuard.mock.calls[0]?.[0] as
-    | {
-        url?: string;
-        auditContext?: string;
-        policy?: unknown;
-        init?: {
-          method?: string;
-          body?: unknown;
-        };
-      }
-    | undefined;
-  if (!request) {
+  const [call] = apiMocks.fetchWithSsrFGuard.mock.calls;
+  if (!call) {
     throw new Error("expected Telnyx provider to call fetchWithSsrFGuard");
   }
-  return request;
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected Telnyx provider to call fetchWithSsrFGuard");
+  }
+  return request as {
+    url?: string;
+    auditContext?: string;
+    policy?: unknown;
+    init?: {
+      method?: string;
+      body?: unknown;
+    };
+  };
 }
 
 function decodeBase64Url(input: string): Buffer {

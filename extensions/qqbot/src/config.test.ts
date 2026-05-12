@@ -278,10 +278,12 @@ describe("qqbot config", () => {
       return (value as Record<string, unknown>)[key];
     }, next) as Record<string, unknown> | undefined;
 
-    expect(accountConfig).toMatchObject({
+    expect(accountConfig).toStrictEqual({
       enabled: true,
+      allowFrom: ["*"],
       appId: "102905186",
       clientSecret: "Oi2Mg1Mh2Ni3:Pl7TpBXuHe1OmAYwKi7W",
+      clientSecretFile: undefined,
     });
   });
 
@@ -333,7 +335,7 @@ describe("qqbot config", () => {
         accountId: DEFAULT_ACCOUNT_ID,
         input,
       } as never),
-    ).toMatchObject({
+    ).toStrictEqual({
       channels: {
         qqbot: {
           enabled: true,
@@ -348,7 +350,7 @@ describe("qqbot config", () => {
         accountId: DEFAULT_ACCOUNT_ID,
         input,
       } as never),
-    ).toMatchObject({
+    ).toStrictEqual({
       channels: {
         qqbot: {
           enabled: true,

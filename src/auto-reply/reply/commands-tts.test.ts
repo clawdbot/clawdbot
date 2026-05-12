@@ -224,10 +224,10 @@ describe("handleTtsCommands status fallback reporting", () => {
     const result = await handleTtsCommands(buildTtsParams("/tts status", cfg, "reader"), true);
 
     expectHandled(result);
-    expect(ttsMocks.resolveTtsConfig).toHaveBeenCalledWith(
-      cfg,
-      expect.objectContaining({ agentId: "reader", channelId: "forum" }),
-    );
+    const resolveCall = ttsMocks.resolveTtsConfig.mock.calls.at(-1);
+    expect(resolveCall?.[0]).toBe(cfg);
+    expect(resolveCall?.[1]?.agentId).toBe("reader");
+    expect(resolveCall?.[1]?.channelId).toBe("forum");
   });
 
   it("passes the active agent and account ids to /tts audio synthesis", async () => {
@@ -249,14 +249,11 @@ describe("handleTtsCommands status fallback reporting", () => {
     );
 
     expectHandled(result);
-    expect(ttsMocks.textToSpeech).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "hello",
-        cfg,
-        agentId: "reader",
-        accountId: "feishu-main",
-      }),
-    );
+    const speechCall = ttsMocks.textToSpeech.mock.calls.at(-1)?.[0];
+    expect(speechCall?.text).toBe("hello");
+    expect(speechCall?.cfg).toBe(cfg);
+    expect(speechCall?.agentId).toBe("reader");
+    expect(speechCall?.accountId).toBe("feishu-main");
   });
 
   it("lists and sets configured TTS personas", async () => {
@@ -333,14 +330,10 @@ describe("handleTtsCommands status fallback reporting", () => {
     );
 
     const reply = expectReply(result);
-    expect(reply).toMatchObject({
-      mediaUrl: "/tmp/latest.ogg",
-      audioAsVoice: true,
-      spokenText: "latest visible reply",
-    });
-    expect(ttsMocks.textToSpeech).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "latest visible reply" }),
-    );
+    expect(reply.mediaUrl).toBe("/tmp/latest.ogg");
+    expect(reply.audioAsVoice).toBe(true);
+    expect(reply.spokenText).toBe("latest visible reply");
+    expect(ttsMocks.textToSpeech.mock.calls.at(-1)?.[0]?.text).toBe("latest visible reply");
     expect(sessionEntry.lastTtsReadLatestHash).toMatch(/^[a-f0-9]{64}$/);
     expect(sessionEntry.lastTtsReadLatestAt).toBeGreaterThanOrEqual(beforeTtsRead);
   });

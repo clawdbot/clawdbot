@@ -61,10 +61,12 @@ import {
 } from "./group-allowlist-warnings.js";
 import {
   buildIMessageInboundContext,
+  resolveIMessageReactionContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { parseIMessageNotification } from "./parse-notification.js";
+import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
@@ -127,16 +129,6 @@ function isRetriableWatchSubscribeStartupError(error: unknown): boolean {
   return /imsg rpc timeout \(watch\.subscribe\)|imsg rpc (closed|exited|not running)/i.test(
     String(error),
   );
-}
-
-function formatIMessageReactionText(message: IMessagePayload): string | undefined {
-  if (!message.is_reaction) {
-    return undefined;
-  }
-  const action = message.is_reaction_add === false ? "removed" : "added";
-  const emoji = message.reaction_emoji?.trim() || message.reaction_type?.trim() || "reaction";
-  const target = message.reacted_to_guid?.trim();
-  return target ? `${action} ${emoji} reaction to [id:${target}]` : `${action} ${emoji} reaction`;
 }
 
 async function waitForWatchSubscribeRetryDelay(params: {
@@ -282,6 +274,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     },
     shouldDebounce: (entry) => {
       const msg = entry.message;
+      if (resolveIMessageReactionContext(msg, (msg.text ?? "").trim())) {
+        return false;
+      }
       // From-me messages are cached, not processed — never debounce.
       if (msg.is_from_me === true) {
         return false;
@@ -336,8 +331,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   };
 
   async function handleMessageNow(message: IMessagePayload) {
-    const reactionText = formatIMessageReactionText(message);
-    const messageText = (reactionText ?? message.text ?? "").trim();
+    const messageText = (message.text ?? "").trim();
 
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
     const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
@@ -387,6 +381,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       groupHistories,
       echoCache: sentMessageCache,
       selfChatCache,
+      reactionNotifications: imessageCfg.reactionNotifications,
       logVerbose,
     });
 
@@ -469,6 +464,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           runtime.error?.(`imessage pairing reply failed for ${decision.senderId}: ${String(err)}`);
         },
       });
+      return;
+    }
+
+    if (decision.kind === "reaction") {
+      enqueueIMessageReactionSystemEvent({ decision, runtime, logVerbose });
       return;
     }
 

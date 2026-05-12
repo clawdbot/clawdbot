@@ -159,8 +159,15 @@ describe("setupSkills", () => {
     await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
 
     // OS-mismatched skill should be counted as unsupported, not installable/missing.
-    const status = notes.find((n) => n.title === "Skills status")?.message ?? "";
-    expect(status).toContain("Unsupported on this OS: 1");
+    expect(notes.find((n) => n.title === "Skills status")).toStrictEqual({
+      title: "Skills status",
+      message: [
+        "Eligible: 0",
+        "Missing requirements: 1",
+        "Unsupported on this OS: 1",
+        "Blocked by allowlist: 0",
+      ].join("\n"),
+    });
 
     const brewNote = notes.find((n) => n.title === "Homebrew recommended");
     expect(brewNote).toBeUndefined();

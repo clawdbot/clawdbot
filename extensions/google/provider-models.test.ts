@@ -30,7 +30,6 @@ function expectModelFields(
   model: ProviderRuntimeModel | undefined,
   fields: Partial<ProviderRuntimeModel>,
 ) {
-  expect(model).toBeDefined();
   if (!model) {
     throw new Error("expected provider model");
   }

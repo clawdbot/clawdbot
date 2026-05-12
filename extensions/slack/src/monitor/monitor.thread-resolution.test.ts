@@ -46,8 +46,8 @@ describe("createSlackThreadTsResolver", () => {
     const first = await resolver.resolve({ message, source: "message" });
     const second = await resolver.resolve({ message, source: "message" });
 
-    expect(first).toMatchObject({ _ambiguousThreadReply: true });
-    expect(second).toMatchObject({ _ambiguousThreadReply: true });
+    expect(first._ambiguousThreadReply).toBe(true);
+    expect(second._ambiguousThreadReply).toBe(true);
     expect(historyMock).toHaveBeenCalledTimes(1);
   });
 });

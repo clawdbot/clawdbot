@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
   deriveDeviceIdFromPublicKey,
@@ -7,7 +7,6 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import { sleep } from "../utils.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
@@ -494,12 +493,17 @@ describe("node.invoke approval bypass", () => {
         idempotencyKey: crypto.randomUUID(),
       });
       expect(invoke.ok).toBe(true);
-      for (let i = 0; i < 100; i += 1) {
-        if (lastInvokeParams) {
-          break;
-        }
-        await sleep(50);
-      }
+      await vi.waitFor(
+        () => {
+          if (!lastInvokeParams) {
+            throw new Error("expected forwarded invoke params");
+          }
+        },
+        {
+          timeout: 5_000,
+          interval: 50,
+        },
+      );
       const forwardedParams = requireRecord(lastInvokeParams, "forwarded invoke params");
       expect(forwardedParams["approved"]).toBe(true);
       expect(forwardedParams["approvalDecision"]).toBe("allow-once");
@@ -579,12 +583,17 @@ describe("node.invoke approval bypass", () => {
         idempotencyKey: crypto.randomUUID(),
       });
       expect(invoke.ok).toBe(true);
-      for (let i = 0; i < 100; i += 1) {
-        if (lastInvokeParams) {
-          break;
-        }
-        await sleep(50);
-      }
+      await vi.waitFor(
+        () => {
+          if (!lastInvokeParams) {
+            throw new Error("expected forwarded invoke params");
+          }
+        },
+        {
+          timeout: 5_000,
+          interval: 50,
+        },
+      );
       const forwardedParams = requireRecord(lastInvokeParams, "forwarded invoke params");
       expect(forwardedParams["approved"]).toBe(true);
       expect(forwardedParams["approvalDecision"]).toBe("allow-once");

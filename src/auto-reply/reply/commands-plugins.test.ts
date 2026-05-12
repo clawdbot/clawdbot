@@ -107,8 +107,9 @@ type MockCalls = {
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value, label).toBe("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -125,20 +126,22 @@ function expectPluginEnabledInConfig(config: unknown, enabled: boolean) {
 }
 
 function expectLastReplaceConfig(enabled: boolean) {
+  expect(replaceConfigFileMock).toHaveBeenLastCalledWith(
+    expect.objectContaining({ afterWrite: { mode: "auto" } }),
+  );
   const calls = (replaceConfigFileMock as unknown as MockCalls).mock.calls;
-  expect(calls.length).toBeGreaterThan(0);
   const [payload] = calls.at(-1) ?? [];
   const payloadRecord = requireRecord(payload, "replace config payload");
   expectPluginEnabledInConfig(payloadRecord.nextConfig, enabled);
-  expect(payloadRecord.afterWrite).toEqual({ mode: "auto" });
 }
 
 function expectLastRegistryRefresh(enabled: boolean) {
+  expect(refreshPluginRegistryAfterConfigMutationMock).toHaveBeenLastCalledWith(
+    expect.objectContaining({ reason: "policy-changed" }),
+  );
   const calls = (refreshPluginRegistryAfterConfigMutationMock as unknown as MockCalls).mock.calls;
-  expect(calls.length).toBeGreaterThan(0);
   const [payload] = calls.at(-1) ?? [];
   const payloadRecord = requireRecord(payload, "registry refresh payload");
-  expect(payloadRecord.reason).toBe("policy-changed");
   expectPluginEnabledInConfig(payloadRecord.config, enabled);
 }
 
@@ -300,7 +303,7 @@ describe("handlePluginsCommand", () => {
 
     const result = await handlePluginsCommand(params, true);
     expect(result?.reply?.text).toContain('Plugin "superpowers" enabled');
-    expect(buildPluginRegistrySnapshotReportMock).toHaveBeenCalled();
+    expect(buildPluginRegistrySnapshotReportMock).toHaveBeenCalledTimes(1);
     expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
   });
 

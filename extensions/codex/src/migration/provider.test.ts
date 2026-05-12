@@ -70,7 +70,9 @@ function findItem(items: readonly { id?: string }[], id: string) {
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -329,7 +331,7 @@ describe("buildCodexMigrationProvider", () => {
     });
     expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toEqual({
       enabled: true,
-      allow_destructive_actions: false,
+      allow_destructive_actions: true,
       plugins: {
         "google-calendar": {
           enabled: true,
@@ -649,7 +651,7 @@ describe("buildCodexMigrationProvider", () => {
     });
     expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toEqual({
       enabled: true,
-      allow_destructive_actions: false,
+      allow_destructive_actions: true,
       plugins: {
         "google-calendar": {
           enabled: false,

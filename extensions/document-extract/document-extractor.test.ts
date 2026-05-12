@@ -36,6 +36,14 @@ import { createPdfDocumentExtractor } from "./document-extractor.js";
 
 const require = createRequire(import.meta.url);
 
+function requireFirstMockArg(mock: ReturnType<typeof vi.fn>, label: string) {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call[0];
+}
+
 describe("PDF document extractor", () => {
   afterAll(() => {
     vi.doUnmock("pdfjs-dist/legacy/build/pdf.mjs");
@@ -92,7 +100,7 @@ describe("PDF document extractor", () => {
     });
 
     expect(getDocumentMock).toHaveBeenCalledTimes(1);
-    const [params] = getDocumentMock.mock.calls[0] ?? [];
+    const params = requireFirstMockArg(getDocumentMock, "pdfjs getDocument call");
     const { data, standardFontDataUrl, ...stableParams } = params as {
       data: Uint8Array;
       disableWorker: boolean;

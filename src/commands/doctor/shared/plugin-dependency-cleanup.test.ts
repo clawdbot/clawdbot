@@ -130,7 +130,10 @@ describe("cleanupLegacyPluginDependencyState", () => {
     });
 
     expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toContain(`Removed stale plugin-runtime symlink: ${slackLink}`);
+    expect(result.changes).toStrictEqual([
+      `Removed stale plugin-runtime symlink: ${slackLink}`,
+      `Removed legacy plugin dependency state: ${legacyRuntimeRoot}`,
+    ]);
     await expectPathMissing(slackLink);
     expect((await fs.lstat(liveLink)).isSymbolicLink()).toBe(true);
   });

@@ -104,10 +104,12 @@ describe("probeGatewayStatus", () => {
       json: true,
     });
 
-    expect(result).toMatchObject({
-      ok: true,
-      server: { version: "2026.5.6", connId: "conn-1" },
-    });
+    expect(result.ok).toBe(true);
+    if (!result.ok || !("server" in result)) {
+      throw new Error("expected successful probe with server details");
+    }
+    expect(result.server?.version).toBe("2026.5.6");
+    expect(result.server?.connId).toBe("conn-1");
   });
 
   it("uses a real status RPC when requireRpc is enabled", async () => {
@@ -273,11 +275,9 @@ describe("probeGatewayStatus", () => {
       timeoutMs: 5_000,
     });
 
-    expect(result).toMatchObject({
-      ok: false,
-      kind: "connect",
-      error: "scope upgrade pending approval (requestId: req-123)",
-    });
+    expect(result.ok).toBe(false);
+    expect(result.kind).toBe("connect");
+    expect(result.error).toBe("scope upgrade pending approval (requestId: req-123)");
   });
 
   it("surfaces status RPC errors when requireRpc is enabled", async () => {

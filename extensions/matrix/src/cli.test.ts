@@ -45,7 +45,9 @@ function mockRecoveryKeyStdin(value: string): void {
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -1510,7 +1512,7 @@ describe("matrix CLI verification commands", () => {
     });
 
     expect(process.exitCode).toBe(1);
-    expect(JSON.parse(String(stdoutWriteMock.mock.calls[0]?.[0]))).toEqual({
+    expect(JSON.parse(String(stdoutWriteMock.mock.calls.at(0)?.[0]))).toEqual({
       error: "Matrix requires --homeserver",
     });
   });

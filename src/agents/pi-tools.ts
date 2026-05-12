@@ -1,6 +1,7 @@
 import { createCodingTools, createReadTool } from "@earendil-works/pi-coding-agent";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
+import { resolveExecCommandHighlighting } from "../config/exec-command-highlighting.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
@@ -57,6 +58,7 @@ import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.sc
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
+import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -273,6 +275,10 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
     pathPrepend: agentExec?.pathPrepend ?? globalExec?.pathPrepend,
     safeBins: agentExec?.safeBins ?? globalExec?.safeBins,
     strictInlineEval: agentExec?.strictInlineEval ?? globalExec?.strictInlineEval,
+    commandHighlighting: resolveExecCommandHighlighting({
+      config: cfg,
+      agentId: params.agentId,
+    }),
     safeBinTrustedDirs: agentExec?.safeBinTrustedDirs ?? globalExec?.safeBinTrustedDirs,
     safeBinProfiles: resolveMergedSafeBinProfileFixtures({
       global: globalExec,
@@ -410,7 +416,7 @@ export function createOpenClawCodingTools(options?: {
   forceHeartbeatTool?: boolean;
   /** If false, build plugin tools only while preserving the shared policy pipeline. */
   includeCoreTools?: boolean;
-  /** PI-only: expose OpenClaw Tool Search controls for catalog compaction. */
+  /** Include Tool Search control tools when enabled for this run. */
   includeToolSearchControls?: boolean;
   /** Executes cataloged tools through the active PI run lifecycle. */
   toolSearchCatalogExecutor?: ToolSearchCatalogToolExecutor;
@@ -482,6 +488,15 @@ export function createOpenClawCodingTools(options?: {
     senderUsername: options?.senderUsername,
     senderE164: options?.senderE164,
   });
+  const senderPolicy = resolveSenderToolPolicy({
+    config: options?.config,
+    agentId,
+    messageProvider: options?.messageProvider,
+    senderId: options?.senderId,
+    senderName: options?.senderName,
+    senderUsername: options?.senderUsername,
+    senderE164: options?.senderE164,
+  });
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
 
@@ -545,6 +560,7 @@ export function createOpenClawCodingTools(options?: {
   const agentProviderPolicyWithToolSearchControls =
     mergeToolSearchControlAllowlist(agentProviderPolicy);
   const groupPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(groupPolicy);
+  const senderPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(senderPolicy);
   const sandboxToolPolicyWithToolSearchControls =
     mergeToolSearchControlAllowlist(sandboxToolPolicy);
   const subagentPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(subagentPolicy);
@@ -556,6 +572,7 @@ export function createOpenClawCodingTools(options?: {
     agentPolicyWithToolSearchControls,
     agentProviderPolicyWithToolSearchControls,
     groupPolicyWithToolSearchControls,
+    senderPolicyWithToolSearchControls,
     sandboxToolPolicyWithToolSearchControls,
     subagentPolicyWithToolSearchControls,
   ]);
@@ -666,6 +683,7 @@ export function createOpenClawCodingTools(options?: {
         pathPrepend: options?.exec?.pathPrepend ?? execConfig.pathPrepend,
         safeBins: options?.exec?.safeBins ?? execConfig.safeBins,
         strictInlineEval: options?.exec?.strictInlineEval ?? execConfig.strictInlineEval,
+        commandHighlighting: options?.exec?.commandHighlighting ?? execConfig.commandHighlighting,
         safeBinTrustedDirs: options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,
         safeBinProfiles: options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,
         agentId,
@@ -673,6 +691,8 @@ export function createOpenClawCodingTools(options?: {
         allowBackground,
         scopeKey,
         sessionKey: options?.sessionKey,
+        mainKey: options?.config?.session?.mainKey,
+        sessionScope: options?.config?.session?.scope,
         messageProvider: options?.messageProvider,
         currentChannelId: options?.currentChannelId,
         currentThreadTs: options?.currentThreadTs,
@@ -722,6 +742,7 @@ export function createOpenClawCodingTools(options?: {
     agentPolicy,
     agentProviderPolicy,
     groupPolicy,
+    senderPolicy,
     sandboxToolPolicy,
     subagentPolicy,
     options?.runtimeToolAllowlist ? { allow: options.runtimeToolAllowlist } : undefined,
@@ -734,6 +755,7 @@ export function createOpenClawCodingTools(options?: {
     agentPolicy,
     agentProviderPolicy,
     groupPolicy,
+    senderPolicy,
     sandboxToolPolicy,
     subagentPolicy,
   ]);
@@ -933,6 +955,7 @@ export function createOpenClawCodingTools(options?: {
         agentPolicy: agentPolicyWithToolSearchControls,
         agentProviderPolicy: agentProviderPolicyWithToolSearchControls,
         groupPolicy: groupPolicyWithToolSearchControls,
+        senderPolicy: senderPolicyWithToolSearchControls,
         agentId,
       }),
       { policy: sandboxToolPolicyWithToolSearchControls, label: "sandbox tools.allow" },

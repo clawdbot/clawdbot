@@ -20,7 +20,7 @@ vi.mock("../../gateway/call.js", () => ({
 
 function capturedGatewayCall(): CallGatewayScopedOptions {
   expect(mocks.callGateway).toHaveBeenCalledTimes(1);
-  const call = mocks.callGateway.mock.calls[0];
+  const call = mocks.callGateway.mock.calls.at(0);
   if (!call) {
     throw new Error("expected callGateway to be called");
   }
@@ -196,12 +196,12 @@ describe("gateway tool defaults", () => {
       },
     );
 
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "plugins.sessionAction",
-        scopes: ["operator.approvals"],
-      }),
-    );
+    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+    const [[callParams]] = mocks.callGateway.mock.calls as unknown as Array<
+      [{ method?: string; scopes?: string[] }]
+    >;
+    expect(callParams.method).toBe("plugins.sessionAction");
+    expect(callParams.scopes).toEqual(["operator.approvals"]);
   });
 
   it("falls back to broad scopes when a plugin session action is not locally registered", async () => {
@@ -217,19 +217,19 @@ describe("gateway tool defaults", () => {
       },
     );
 
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "plugins.sessionAction",
-        scopes: [
-          "operator.admin",
-          "operator.read",
-          "operator.write",
-          "operator.approvals",
-          "operator.pairing",
-          "operator.talk.secrets",
-        ],
-      }),
-    );
+    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+    const [[callParams]] = mocks.callGateway.mock.calls as unknown as Array<
+      [{ method?: string; scopes?: string[] }]
+    >;
+    expect(callParams.method).toBe("plugins.sessionAction");
+    expect(callParams.scopes).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+      "operator.talk.secrets",
+    ]);
   });
 
   it("allows explicit scope overrides for dynamic callers", async () => {

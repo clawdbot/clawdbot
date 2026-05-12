@@ -1,13 +1,15 @@
 import type { AckReactionHandle } from "openclaw/plugin-sdk/channel-feedback";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { buildGroupHistoryKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveWhatsAppAccount } from "../../accounts.js";
 import { resolveWhatsAppGroupSessionRoute } from "../../group-session-key.js";
 import { getPrimaryIdentityId, getSenderIdentity } from "../../identity.js";
 import { normalizeE164 } from "../../text-runtime.js";
-import { getRuntimeConfig } from "../config.runtime.js";
+import { buildMentionConfig } from "../mentions.js";
 import type { MentionConfig } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
@@ -20,7 +22,8 @@ import { resolvePeerId } from "./peer.js";
 import { processMessage } from "./process-message.js";
 
 export function createWebOnMessageHandler(params: {
-  cfg: ReturnType<typeof getRuntimeConfig>;
+  cfg: OpenClawConfig;
+  loadConfig?: () => OpenClawConfig;
   verbose: boolean;
   connectionId: string;
   maxMediaBytes: number;
@@ -35,6 +38,7 @@ export function createWebOnMessageHandler(params: {
   account: { authDir?: string; accountId?: string; selfChatMode?: boolean };
 }) {
   const processForRoute = async (
+    cfg: OpenClawConfig,
     msg: WebInboundMsg,
     route: ReturnType<typeof resolveAgentRoute>,
     groupHistoryKey: string,
@@ -47,7 +51,7 @@ export function createWebOnMessageHandler(params: {
     },
   ) => {
     const processParams: Parameters<typeof processMessage>[0] = {
-      cfg: params.cfg,
+      cfg,
       msg,
       route,
       groupHistoryKey,
@@ -83,11 +87,11 @@ export function createWebOnMessageHandler(params: {
   };
 
   return async (msg: WebInboundMsg) => {
+    const cfg = params.loadConfig?.() ?? params.cfg;
     const conversationId = msg.conversationId ?? msg.from;
     const peerId = resolvePeerId(msg);
-    // Fresh config for bindings lookup; other routing inputs are payload-derived.
     const baseRoute = resolveAgentRoute({
-      cfg: getRuntimeConfig(),
+      cfg,
       channel: "whatsapp",
       accountId: msg.accountId,
       peer: {
@@ -106,6 +110,11 @@ export function createWebOnMessageHandler(params: {
             peerId,
           })
         : route.sessionKey;
+    const account = resolveWhatsAppAccount({
+      cfg,
+      accountId: route.accountId ?? msg.accountId ?? params.account.accountId,
+    });
+    const baseMentionConfig = buildMentionConfig(cfg);
 
     // Same-phone mode logging retained
     if (msg.from === msg.to) {
@@ -142,7 +151,7 @@ export function createWebOnMessageHandler(params: {
         return;
       }
       ackReaction = await maybeSendAckReaction({
-        cfg: params.cfg,
+        cfg,
         msg,
         agentId: route.agentId,
         sessionKey: route.sessionKey,
@@ -170,7 +179,7 @@ export function createWebOnMessageHandler(params: {
               OriginatingTo: conversationId,
               AccountId: route.accountId,
             },
-            cfg: params.cfg,
+            cfg,
           })) ?? null;
       } catch {
         // Non-fatal: store null so per-agent retries are suppressed.
@@ -197,7 +206,7 @@ export function createWebOnMessageHandler(params: {
         OriginatingTo: conversationId,
       } satisfies MsgContext;
       updateLastRouteInBackground({
-        cfg: params.cfg,
+        cfg,
         backgroundTasks: params.backgroundTasks,
         storeAgentId: route.agentId,
         sessionKey: route.sessionKey,
@@ -209,16 +218,16 @@ export function createWebOnMessageHandler(params: {
       });
 
       let gating = await applyGroupGating({
-        cfg: params.cfg,
+        cfg,
         msg,
         deferMissingMention: hasAudioBody && Boolean(msg.mediaPath),
         conversationId,
         groupHistoryKey,
         agentId: route.agentId,
         sessionKey: route.sessionKey,
-        baseMentionConfig: params.baseMentionConfig,
-        authDir: params.account.authDir,
-        selfChatMode: params.account.selfChatMode,
+        baseMentionConfig,
+        authDir: account.authDir,
+        selfChatMode: account.selfChatMode,
         groupHistories: params.groupHistories,
         groupHistoryLimit: params.groupHistoryLimit,
         groupMemberNames: params.groupMemberNames,
@@ -232,7 +241,7 @@ export function createWebOnMessageHandler(params: {
       ) {
         await runAudioPreflightOnce();
         gating = await applyGroupGating({
-          cfg: params.cfg,
+          cfg,
           msg,
           ...(typeof preflightAudioTranscript === "string"
             ? { mentionText: preflightAudioTranscript }
@@ -241,9 +250,9 @@ export function createWebOnMessageHandler(params: {
           groupHistoryKey,
           agentId: route.agentId,
           sessionKey: route.sessionKey,
-          baseMentionConfig: params.baseMentionConfig,
-          authDir: params.account.authDir,
-          selfChatMode: params.account.selfChatMode,
+          baseMentionConfig,
+          authDir: account.authDir,
+          selfChatMode: account.selfChatMode,
           groupHistories: params.groupHistories,
           groupHistoryLimit: params.groupHistoryLimit,
           groupMemberNames: params.groupMemberNames,
@@ -271,7 +280,7 @@ export function createWebOnMessageHandler(params: {
     // Does not bypass group mention/activation gating above.
     if (
       await maybeBroadcastMessage({
-        cfg: params.cfg,
+        cfg,
         msg,
         peerId,
         route,
@@ -283,13 +292,13 @@ export function createWebOnMessageHandler(params: {
         // per-agent checks during broadcast fan-out.
         ...(ackAlreadySent && msg.chatType !== "group" ? { ackAlreadySent: true } : {}),
         ...(ackReaction && msg.chatType !== "group" ? { ackReaction } : {}),
-        processMessage: (m, r, k, opts) => processForRoute(m, r, k, opts),
+        processMessage: (m, r, k, opts) => processForRoute(cfg, m, r, k, opts),
       })
     ) {
       return;
     }
 
-    await processForRoute(msg, route, groupHistoryKey, {
+    await processForRoute(cfg, msg, route, groupHistoryKey, {
       ...(preflightAudioTranscript !== undefined ? { preflightAudioTranscript } : {}),
       ...(ackAlreadySent ? { ackAlreadySent: true } : {}),
       ...(ackReaction ? { ackReaction } : {}),

@@ -6,6 +6,17 @@ import {
   createMatrixTextMessageEvent,
 } from "./handler.test-helpers.js";
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function readFirstMockArg(fn: unknown): unknown {
+  return (fn as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0];
+}
+
 describe("createMatrixRoomMessageHandler thread root media", () => {
   it("keeps image-only thread roots visible via attachment markers", async () => {
     installMatrixMonitorTestRuntime();
@@ -66,17 +77,16 @@ describe("createMatrixRoomMessageHandler thread root media", () => {
       }),
     );
 
-    expect(formatAgentEnvelope).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.stringContaining("replying"),
-      }),
+    expect(formatAgentEnvelope).toHaveBeenCalledTimes(1);
+    const envelope = requireRecord(
+      formatAgentEnvelope.mock.calls[0]?.[0],
+      "format agent envelope params",
     );
-    expect(recordInboundSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          ThreadStarterBody: expect.stringContaining("[matrix image attachment]"),
-        }),
-      }),
-    );
+    expect(String(envelope.body)).toContain("replying");
+
+    expect(recordInboundSession).toHaveBeenCalledTimes(1);
+    const inbound = requireRecord(readFirstMockArg(recordInboundSession), "record inbound session");
+    const ctx = requireRecord(inbound.ctx, "inbound context");
+    expect(String(ctx.ThreadStarterBody)).toContain("[matrix image attachment]");
   });
 });

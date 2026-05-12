@@ -305,14 +305,18 @@ describe("streamSignalEvents", () => {
     const abortTimer = setTimeout(() => abortController.abort(), 25);
     abortTimer.unref?.();
 
-    await expect(
-      streamSignalEvents({
+    try {
+      await streamSignalEvents({
         baseUrl,
         timeoutMs: 0,
         abortSignal: abortController.signal,
         onEvent: () => {},
-      }),
-    ).rejects.toMatchObject({ name: "AbortError", message: "Signal SSE aborted" });
+      });
+      throw new Error("expected Signal SSE stream to abort");
+    } catch (error) {
+      expect((error as Error).name).toBe("AbortError");
+      expect((error as Error).message).toBe("Signal SSE aborted");
+    }
   });
 
   it("rejects oversized SSE line buffers by byte size", async () => {

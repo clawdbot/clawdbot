@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { VERSION } from "../../version.js";
 import {
   defaultRuntime,
   resetLifecycleRuntimeLogs,
@@ -9,6 +10,15 @@ import {
 
 const readConfigFileSnapshotMock = vi.fn();
 const loadConfig = vi.fn(() => ({}));
+const newerConfigHints = [
+  "Run the newer openclaw binary on PATH, or reinstall the intended gateway service from the newer install.",
+  "Set OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 only for an intentional downgrade or recovery action.",
+];
+const newerConfigHintItems = newerConfigHints.map((text) => ({ kind: "generic", text }));
+
+function expectLatestRuntimeJson(payload: unknown) {
+  expect(defaultRuntime.writeJson.mock.calls.at(-1)?.[0]).toEqual(payload);
+}
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: () => loadConfig(),
@@ -90,11 +100,14 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
     await expect(runServiceRestart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
 
     expect(service.restart).not.toHaveBeenCalled();
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error: expect.stringContaining("Refusing to restart the gateway service"),
-      }),
-    );
+    expectLatestRuntimeJson({
+      action: "restart",
+      ok: false,
+      error: `Gateway restart blocked: Refusing to restart the gateway service because this OpenClaw binary (${VERSION}) is older than the config last written by OpenClaw 9999.1.1.`,
+      hints: newerConfigHints,
+      hintItems: newerConfigHintItems,
+      warnings: undefined,
+    });
   });
 
   it("proceeds with restart when config is valid", async () => {
@@ -208,10 +221,13 @@ describe("runServiceStop future-config guard", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(service.stop).not.toHaveBeenCalled();
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error: expect.stringContaining("Refusing to stop the gateway service"),
-      }),
-    );
+    expectLatestRuntimeJson({
+      action: "stop",
+      ok: false,
+      error: `Gateway stop blocked: Refusing to stop the gateway service because this OpenClaw binary (${VERSION}) is older than the config last written by OpenClaw 9999.1.1.`,
+      hints: newerConfigHints,
+      hintItems: newerConfigHintItems,
+      warnings: undefined,
+    });
   });
 });

@@ -166,6 +166,20 @@ In strict mode these commands still need explicit approval, and
 `allow-always` does not persist new allowlist entries for them
 automatically.
 
+### `tools.exec.commandHighlighting`
+
+<ParamField path="commandHighlighting" type="boolean" default="false">
+  Controls only presentation in exec approval prompts. When enabled,
+  OpenClaw may attach parser-derived command spans so Web approval
+  prompts can highlight command tokens. Set it to `true` to enable
+  command text highlighting.
+</ParamField>
+
+This setting does **not** change `security`, `ask`, allowlist matching,
+strict inline-eval behavior, approval forwarding, or command execution.
+It can be set globally under `tools.exec.commandHighlighting` or per
+agent under `agents.list[].tools.exec.commandHighlighting`.
+
 ## YOLO mode (no-approval)
 
 If you want host exec to run without approval prompts, you must open

@@ -243,7 +243,7 @@ Each program should have:
 
 ## Related
 
-- [Automation and tasks](/automation): all automation mechanisms at a glance.
+- [Automation](/automation): all automation mechanisms at a glance.
 - [Cron jobs](/automation/cron-jobs): schedule enforcement for standing orders.
 - [Hooks](/automation/hooks): event-driven scripts for agent lifecycle events.
 - [Webhooks](/automation/cron-jobs#webhooks): inbound HTTP event triggers.

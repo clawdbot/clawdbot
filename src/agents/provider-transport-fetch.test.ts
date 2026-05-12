@@ -211,7 +211,7 @@ describe("buildGuardedModelFetch", () => {
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
 
-    const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
+    const policy = fetchWithSsrFGuardMock.mock.calls.at(0)?.[0]?.policy;
     expect(policy).toEqual({
       allowRfc2544BenchmarkRange: true,
       allowIpv6UniqueLocalRange: true,
@@ -233,7 +233,7 @@ describe("buildGuardedModelFetch", () => {
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("https://uploads.openai.com/v1/files", { method: "POST" });
 
-    const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
+    const policy = fetchWithSsrFGuardMock.mock.calls.at(0)?.[0]?.policy;
     expect(policy).toBeUndefined();
   });
 
@@ -249,7 +249,7 @@ describe("buildGuardedModelFetch", () => {
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("http://10.0.0.5:11434/api/chat", { method: "POST" });
 
-    const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
+    const policy = fetchWithSsrFGuardMock.mock.calls.at(0)?.[0]?.policy;
     expect(policy).toEqual({
       allowRfc2544BenchmarkRange: true,
       allowIpv6UniqueLocalRange: true,
@@ -373,12 +373,12 @@ describe("buildGuardedModelFetch", () => {
     });
     const model = {
       id: "gpt-5.4",
-      provider: "openai",
+      provider: "openrouter",
       api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: "https://openrouter.ai/api/v1",
     } as unknown as Model<"openai-responses">;
 
-    const response = await buildGuardedModelFetch(model)("https://api.openai.com/v1/responses", {
+    const response = await buildGuardedModelFetch(model)("https://openrouter.ai/api/v1/responses", {
       method: "POST",
     });
     const items = [];
@@ -387,6 +387,30 @@ describe("buildGuardedModelFetch", () => {
     }
 
     expect(items).toEqual([{ ok: true }]);
+  });
+
+  it("leaves official OpenAI SSE streams unmodified", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response('event: response.created\n\ndata: {"ok": true}\n\n', {
+        headers: { "content-type": "text/event-stream" },
+      }),
+      finalUrl: "https://api.openai.com/v1/responses",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "gpt-5.5",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    } as unknown as Model<"openai-responses">;
+
+    const response = await buildGuardedModelFetch(model)("https://api.openai.com/v1/responses", {
+      method: "POST",
+    });
+
+    await expect(response.text()).resolves.toBe(
+      'event: response.created\n\ndata: {"ok": true}\n\n',
+    );
   });
 
   it("drops whitespace-only SSE data frames with CRLF delimiters", async () => {
@@ -399,13 +423,13 @@ describe("buildGuardedModelFetch", () => {
     });
     const model = {
       id: "gpt-5.4",
-      provider: "openai",
+      provider: "openrouter",
       api: "openai-completions",
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: "https://openrouter.ai/api/v1",
     } as unknown as Model<"openai-completions">;
 
     const response = await buildGuardedModelFetch(model)(
-      "https://api.openai.com/v1/chat/completions",
+      "https://openrouter.ai/api/v1/chat/completions",
       { method: "POST" },
     );
     const items = [];
@@ -446,6 +470,33 @@ describe("buildGuardedModelFetch", () => {
 
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     expect(items).toEqual([{ ok: true }]);
+  });
+
+  it("does not clone Request bodies while checking for streaming JSON fallbacks", async () => {
+    const cloneSpy = vi.spyOn(Request.prototype, "clone");
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response('{"ok": true}', {
+        headers: { "content-type": "application/json" },
+      }),
+      finalUrl: "https://api.openai.com/v1/responses",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "gpt-5.5",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    } as unknown as Model<"openai-responses">;
+    const request = new Request("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-5.5", stream: true }),
+    });
+
+    const response = await buildGuardedModelFetch(model)(request);
+
+    expect(cloneSpy).not.toHaveBeenCalled();
+    expect(response.headers.get("content-type")).toBe("application/json");
   });
 
   it("preserves JSON bodies when the request is not streaming", async () => {
@@ -531,13 +582,13 @@ describe("buildGuardedModelFetch", () => {
     });
     const model = {
       id: "gpt-5.4",
-      provider: "openai",
+      provider: "openrouter",
       api: "openai-completions",
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: "https://openrouter.ai/api/v1",
     } as unknown as Model<"openai-completions">;
 
     const response = await buildGuardedModelFetch(model)(
-      "https://api.openai.com/v1/chat/completions",
+      "https://openrouter.ai/api/v1/chat/completions",
       { method: "POST" },
     );
     const items = [];

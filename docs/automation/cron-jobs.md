@@ -27,6 +27,7 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
   <Step title="Check your jobs">
     ```bash
     openclaw cron list
+    openclaw cron get <job-id>
     openclaw cron show <job-id>
     ```
   </Step>
@@ -359,6 +360,9 @@ When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `
 # List all jobs
 openclaw cron list
 
+# Get one stored job as JSON
+openclaw cron get <jobId>
+
 # Show one job, including resolved delivery route
 openclaw cron show <jobId>
 
@@ -482,7 +486,7 @@ openclaw doctor
 
 ## Related
 
-- [Automation & Tasks](/automation) — all automation mechanisms at a glance
+- [Automation](/automation) — all automation mechanisms at a glance
 - [Background Tasks](/automation/tasks) — task ledger for cron executions
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
 - [Timezone](/concepts/timezone) — timezone configuration

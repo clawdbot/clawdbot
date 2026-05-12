@@ -100,6 +100,20 @@ function setDefaultRouteState() {
   }));
 }
 
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
+function firstMockArg(mock: MockWithCalls, label: string) {
+  return firstMockCall(mock, label)[0];
+}
+
 function firstStatusCall(): {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -107,10 +121,10 @@ function firstStatusCall(): {
   isGroup: boolean;
   defaultGroupActivation: () => "always" | "mention";
 } {
-  const call = runtimeModuleMocks.resolveDirectStatusReplyForSession.mock.calls[0]?.[0];
-  if (!call) {
-    throw new Error("expected resolveDirectStatusReplyForSession to be called");
-  }
+  const call = firstMockArg(
+    runtimeModuleMocks.resolveDirectStatusReplyForSession,
+    "resolveDirectStatusReplyForSession",
+  );
   return call as {
     cfg: OpenClawConfig;
     sessionKey: string;
@@ -162,7 +176,7 @@ describe("discord native /status", () => {
     expect(runtimeModuleMocks.resolveDirectStatusReplyForSession).toHaveBeenCalledTimes(1);
     expect(runtimeModuleMocks.dispatchReplyWithDispatcher).not.toHaveBeenCalled();
     expect(interaction.followUp).toHaveBeenCalledTimes(1);
-    expect(interaction.followUp.mock.calls[0]?.[0]).toStrictEqual({
+    expect(firstMockArg(interaction.followUp, "interaction.followUp")).toStrictEqual({
       content: "status reply",
       ephemeral: true,
     });
@@ -193,7 +207,7 @@ describe("discord native /status", () => {
     expect(runtimeModuleMocks.resolveDirectStatusReplyForSession).toHaveBeenCalledTimes(1);
     expect(executePluginCommand).not.toHaveBeenCalled();
     expect(interaction.followUp).toHaveBeenCalledTimes(1);
-    expect(interaction.followUp.mock.calls[0]?.[0]).toStrictEqual({
+    expect(firstMockArg(interaction.followUp, "interaction.followUp")).toStrictEqual({
       content: "status reply",
       ephemeral: true,
     });
@@ -227,13 +241,13 @@ describe("discord native /status", () => {
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
     expect(runtimeModuleMocks.loadWebMedia).toHaveBeenCalledTimes(1);
-    const [mediaUrl, mediaOptions] = runtimeModuleMocks.loadWebMedia.mock.calls[0] ?? [];
+    const [mediaUrl, mediaOptions] = firstMockCall(runtimeModuleMocks.loadWebMedia, "loadWebMedia");
     expect(mediaUrl).toBe("https://example.com/status.png");
     expect(Array.isArray((mediaOptions as { localRoots?: unknown } | undefined)?.localRoots)).toBe(
       true,
     );
     expect(interaction.followUp.mock.calls.length).toBeGreaterThan(1);
-    const firstPayload = interaction.followUp.mock.calls[0]?.[0] as
+    const firstPayload = firstMockArg(interaction.followUp, "interaction.followUp") as
       | { ephemeral?: boolean; files?: Array<{ name?: string; data?: unknown }> }
       | undefined;
     expect(firstPayload?.ephemeral).toBe(true);

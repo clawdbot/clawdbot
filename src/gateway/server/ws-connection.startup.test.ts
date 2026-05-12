@@ -107,19 +107,32 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       ).toBe(true);
     });
 
-    expect(sent).toContainEqual(
-      expect.objectContaining({
-        type: "res",
-        id: "connect-1",
-        ok: false,
-        error: expect.objectContaining({
-          code: "UNAVAILABLE",
-          retryable: true,
-          retryAfterMs: 500,
-          details: { reason: GATEWAY_STARTUP_UNAVAILABLE_REASON },
-        }),
-      }),
-    );
+    const response = sent.find(
+      (frame) =>
+        typeof frame === "object" &&
+        frame !== null &&
+        (frame as { type?: unknown; id?: unknown }).type === "res" &&
+        (frame as { id?: unknown }).id === "connect-1",
+    ) as
+      | {
+          type?: unknown;
+          id?: unknown;
+          ok?: unknown;
+          error?: {
+            code?: unknown;
+            retryable?: unknown;
+            retryAfterMs?: unknown;
+            details?: unknown;
+          };
+        }
+      | undefined;
+    expect(response?.type).toBe("res");
+    expect(response?.id).toBe("connect-1");
+    expect(response?.ok).toBe(false);
+    expect(response?.error?.code).toBe("UNAVAILABLE");
+    expect(response?.error?.retryable).toBe(true);
+    expect(response?.error?.retryAfterMs).toBe(500);
+    expect(response?.error?.details).toEqual({ reason: GATEWAY_STARTUP_UNAVAILABLE_REASON });
     await vi.waitFor(() => {
       expect(socket.close).toHaveBeenCalledWith(1013, "gateway starting");
     });

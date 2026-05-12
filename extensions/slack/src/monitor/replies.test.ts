@@ -77,7 +77,8 @@ describe("deliverReplies identity passthrough", () => {
     await deliverReplies(baseParams());
 
     expect(sendMock).toHaveBeenCalledOnce();
-    expect(sendMock.mock.calls[0][2]).not.toHaveProperty("identity");
+    const [, , options] = requireSendCall();
+    expect(options).not.toHaveProperty("identity");
   });
 
   it("delivers block-only replies through to sendMessageSlack", async () => {

@@ -346,6 +346,185 @@ jobs:
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
         run: pnpm test:extensions:batch -- "$OPENCLAW_EXTENSION_BATCH"
 
+  plugin-prerelease-inspector:
+    permissions:
+      contents: read
+    name: plugin-prerelease-inspector
+    needs: [preflight]
+    if: needs.preflight.outputs.run_plugin_prerelease_suite == 'true'
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.checkout_revision }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Run plugin inspector advisory sweep
+        env:
+          OPENCLAW_PLUGIN_INSPECTOR_VERSION: "0.3.10"
+          OPENCLAW_PLUGIN_INSPECTOR_ROOT: .artifacts/plugin-inspector
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OPENCLAW_PLUGIN_INSPECTOR_ROOT"
+          set +e
+          node --input-type=module <<'EOF'
+          import { existsSync } from "node:fs";
+          import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+          import path from "node:path";
+
+          const artifactRoot = process.env.OPENCLAW_PLUGIN_INSPECTOR_ROOT;
+          if (!artifactRoot) {
+            throw new Error("OPENCLAW_PLUGIN_INSPECTOR_ROOT is required");
+          }
+
+          const readJson = async (filePath) => JSON.parse(await readFile(filePath, "utf8"));
+          const inferSeams = (pluginManifest, packageJson) => {
+            const contracts = Object.keys(pluginManifest?.contracts ?? {});
+            if (contracts.includes("tools")) {
+              return ["dynamic-tool"];
+            }
+            const openclawPackage = packageJson?.openclaw ?? {};
+            if (openclawPackage.extensions || openclawPackage.runtimeExtensions) {
+              return ["plugin-runtime"];
+            }
+            return ["plugin-metadata"];
+          };
+
+          const extensionRoot = path.resolve("extensions");
+          const fixtures = [];
+          for (const entry of await readdir(extensionRoot, { withFileTypes: true })) {
+            if (!entry.isDirectory()) {
+              continue;
+            }
+            const relativePath = `extensions/${entry.name}`;
+            const packagePath = path.join(extensionRoot, entry.name, "package.json");
+            const manifestPath = path.join(extensionRoot, entry.name, "openclaw.plugin.json");
+            if (!existsSync(packagePath) || !existsSync(manifestPath)) {
+              continue;
+            }
+            const packageJson = await readJson(packagePath);
+            const pluginManifest = await readJson(manifestPath);
+            fixtures.push({
+              id: entry.name,
+              name: pluginManifest.name ?? packageJson.name ?? entry.name,
+              path: relativePath,
+              priority: "high",
+              repo: "local",
+              seams: inferSeams(pluginManifest, packageJson),
+              why: "bundled OpenClaw plugin prerelease advisory fixture",
+            });
+          }
+          fixtures.sort((left, right) => left.id.localeCompare(right.id));
+          if (fixtures.length === 0) {
+            throw new Error("No bundled plugin fixtures found under extensions/");
+          }
+
+          await mkdir(artifactRoot, { recursive: true });
+          const config = `${JSON.stringify(
+            {
+              version: 1,
+              submoduleRoot: ".",
+              openclaw: {
+                defaultCheckoutPath: ".",
+              },
+              fixtures,
+            },
+            null,
+            2,
+          )}\n`;
+          await writeFile("plugin-inspector.config.json", config, "utf8");
+          await writeFile(path.join(artifactRoot, "plugin-inspector.config.json"), config, "utf8");
+          EOF
+          config_status=$?
+          set -e
+          echo "$config_status" > "$OPENCLAW_PLUGIN_INSPECTOR_ROOT/config-exit-code.txt"
+
+          if [ "$config_status" -eq 0 ]; then
+            set +e
+            npm exec --yes "@openclaw/plugin-inspector@${OPENCLAW_PLUGIN_INSPECTOR_VERSION}" -- ci \
+              --config plugin-inspector.config.json \
+              --openclaw "$PWD" \
+              --out "$OPENCLAW_PLUGIN_INSPECTOR_ROOT/reports" \
+              --json \
+              > "$OPENCLAW_PLUGIN_INSPECTOR_ROOT/plugin-inspector-stdout.json" \
+              2> "$OPENCLAW_PLUGIN_INSPECTOR_ROOT/plugin-inspector-stderr.log"
+            inspector_status=$?
+            set -e
+          else
+            inspector_status=127
+            echo "Skipped plugin-inspector because config generation failed." \
+              > "$OPENCLAW_PLUGIN_INSPECTOR_ROOT/plugin-inspector-stderr.log"
+          fi
+          echo "$inspector_status" > "$OPENCLAW_PLUGIN_INSPECTOR_ROOT/exit-code.txt"
+
+          node --input-type=module <<'EOF'
+          import { existsSync } from "node:fs";
+          import { appendFile, readFile, writeFile } from "node:fs/promises";
+          import path from "node:path";
+
+          const artifactRoot = process.env.OPENCLAW_PLUGIN_INSPECTOR_ROOT;
+          const summaryPath = path.join(artifactRoot, "reports/plugin-inspector-ci-summary.json");
+          const markdownPath = path.join(artifactRoot, "reports/plugin-inspector-ci-summary.md");
+          const configExitCode = (await readFile(path.join(artifactRoot, "config-exit-code.txt"), "utf8")).trim();
+          const exitCode = (await readFile(path.join(artifactRoot, "exit-code.txt"), "utf8")).trim();
+          const lines = [
+            "## Plugin Inspector Advisory",
+            "",
+            `Inspector: @openclaw/plugin-inspector@${process.env.OPENCLAW_PLUGIN_INSPECTOR_VERSION}`,
+            `Config exit code: ${configExitCode}`,
+            `Exit code: ${exitCode}`,
+          ];
+
+          if (existsSync(summaryPath)) {
+            const summary = JSON.parse(await readFile(summaryPath, "utf8"));
+            lines.push(
+              `Status: ${String(summary.status ?? "unknown").toUpperCase()}`,
+              "",
+              "| Metric | Count |",
+              "| --- | ---: |",
+              `| Hard breakages | ${summary.summary?.breakages ?? 0} |`,
+              `| Issues | ${summary.summary?.issues ?? 0} |`,
+              `| P0 issues | ${summary.summary?.p0Issues ?? 0} |`,
+              `| P1 issues | ${summary.summary?.p1Issues ?? 0} |`,
+              `| Compat gaps | ${summary.summary?.compatGaps ?? 0} |`,
+              `| Inspector gaps | ${summary.summary?.inspectorGaps ?? 0} |`,
+              "",
+              "This job is informational; Plugin Prerelease blocking status is unchanged.",
+            );
+            await writeFile(path.join(artifactRoot, "advisory-summary.md"), `${lines.join("\n")}\n`, "utf8");
+            if (existsSync(markdownPath)) {
+              lines.push("", "### Full inspector summary", "");
+              lines.push(await readFile(markdownPath, "utf8"));
+            }
+          } else {
+            lines.push("", "No plugin-inspector CI summary was produced.", "");
+            lines.push("This job is informational; inspect the uploaded stdout/stderr artifacts.");
+            await writeFile(path.join(artifactRoot, "advisory-summary.md"), `${lines.join("\n")}\n`, "utf8");
+          }
+
+          await appendFile(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`, "utf8");
+          EOF
+
+      - name: Upload plugin inspector advisory artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: plugin-inspector-advisory
+          path: .artifacts/plugin-inspector/**
+          if-no-files-found: warn
+
   plugin-prerelease-docker-suite:
     name: plugin-prerelease-docker-suite
     needs: [preflight]
@@ -375,6 +554,7 @@ jobs:
       - plugin-prerelease-static-shard
       - plugin-prerelease-node-shard
       - plugin-prerelease-extension-shard
+      - plugin-prerelease-inspector
       - plugin-prerelease-docker-suite
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_plugin_prerelease_suite == 'true' }}
     runs-on: ubuntu-24.04
@@ -389,6 +569,7 @@ jobs:
           STATIC_RESULT: ${{ needs.plugin-prerelease-static-shard.result }}
           NODE_RESULT: ${{ needs.plugin-prerelease-node-shard.result }}
           EXTENSIONS_RESULT: ${{ needs.plugin-prerelease-extension-shard.result }}
+          INSPECTOR_RESULT: ${{ needs.plugin-prerelease-inspector.result }}
           DOCKER_RESULT: ${{ needs.plugin-prerelease-docker-suite.result }}
         shell: bash
         run: |
@@ -411,4 +592,5 @@ jobs:
           check_required "plugin-prerelease-node" "$RUN_NODE" "$NODE_RESULT"
           check_required "plugin-prerelease-extensions" "$RUN_EXTENSIONS" "$EXTENSIONS_RESULT"
           check_required "plugin-prerelease-docker" "$RUN_DOCKER" "$DOCKER_RESULT"
+          echo "plugin-prerelease-inspector advisory result: ${INSPECTOR_RESULT}"
           exit "$failed"

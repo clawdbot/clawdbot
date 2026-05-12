@@ -8,6 +8,7 @@ import {
   executeRemind,
   executeScheduledRemind,
   prepareRemindCronAction,
+  type RemindCronAction,
 } from "./remind-logic.js";
 
 describe("engine/tools/remind-logic", () => {
@@ -208,7 +209,8 @@ describe("engine/tools/remind-logic", () => {
 
   describe("executeScheduledRemind", () => {
     it("runs cron.add directly for relative reminders", async () => {
-      const calls: unknown[] = [];
+      const calls: RemindCronAction[] = [];
+      const before = Date.now();
       const result = await executeScheduledRemind(
         { action: "add", content: "test reminder", to: "qqbot:c2c:123", time: "5m" },
         {},
@@ -219,18 +221,33 @@ describe("engine/tools/remind-logic", () => {
       );
 
       expect(calls).toHaveLength(1);
-      expect(calls[0]).toMatchObject({
-        action: "add",
-        job: {
-          sessionTarget: "isolated",
-          payload: { kind: "agentTurn" },
-          delivery: {
-            mode: "announce",
-            channel: "qqbot",
-            to: "qqbot:c2c:123",
-            accountId: "default",
-          },
-        },
+      const call = calls[0];
+      expect(call?.action).toBe("add");
+      if (call?.action !== "add") {
+        throw new Error("expected add cron action");
+      }
+      expect(call.job.name).toBe("Reminder: test reminder");
+      expect(call.job.schedule.kind).toBe("at");
+      if (call.job.schedule.kind !== "at") {
+        throw new Error("expected at schedule");
+      }
+      if (!("deleteAfterRun" in call.job)) {
+        throw new Error("expected one-shot reminder job");
+      }
+      expect(call.job.schedule.atMs).toBeGreaterThanOrEqual(before + 5 * 60_000);
+      expect(call.job.schedule.atMs).toBeLessThanOrEqual(Date.now() + 5 * 60_000 + 1_000);
+      expect(call.job.sessionTarget).toBe("isolated");
+      expect(call.job.wakeMode).toBe("now");
+      expect(call.job.deleteAfterRun).toBe(true);
+      expect(call.job.payload).toEqual({
+        kind: "agentTurn",
+        message: buildReminderPrompt("test reminder"),
+      });
+      expect(call.job.delivery).toEqual({
+        mode: "announce",
+        channel: "qqbot",
+        to: "qqbot:c2c:123",
+        accountId: "default",
       });
       expect(result.details).toEqual({
         ok: true,

@@ -598,6 +598,7 @@ export class OpenClawApp extends LitElement {
   nodesPollInterval: number | null = null;
   logsPollInterval: number | null = null;
   debugPollInterval: number | null = null;
+  sessionsChangedReloadTimer: number | ReturnType<typeof globalThis.setTimeout> | null = null;
   logsScrollFrame: number | null = null;
   controlUiResponsivenessObserver: { disconnect: () => void } | null = null;
   toolStreamById = new Map<string, ToolStreamEntry>();
@@ -930,8 +931,11 @@ export class OpenClawApp extends LitElement {
     await loadCronInternal(this as unknown as Parameters<typeof loadCronInternal>[0]);
   }
 
-  async handleAbortChat() {
-    await handleAbortChatInternal(this as unknown as Parameters<typeof handleAbortChatInternal>[0]);
+  async handleAbortChat(opts?: Parameters<typeof handleAbortChatInternal>[1]) {
+    await handleAbortChatInternal(
+      this as unknown as Parameters<typeof handleAbortChatInternal>[0],
+      opts,
+    );
   }
 
   handleChatDraftChange(next: string) {

@@ -66,7 +66,7 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
     });
 
     // Must use structured params so config.env entries are not dropped
-    const sanitizeParams = sanitizeHostExecEnvMock.mock.calls[0]?.[0] as
+    const sanitizeParams = sanitizeHostExecEnvMock.mock.calls.at(0)?.[0] as
       | { baseEnv?: NodeJS.ProcessEnv; overrides?: Record<string, string> }
       | undefined;
     expect(sanitizeParams?.baseEnv).toBe(process.env);
@@ -87,7 +87,7 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
 
     spawnLspServerProcess({ command: "typescript-language-server", args: ["--stdio"] });
 
-    const resolveParams = resolveWindowsSpawnProgramMock.mock.calls[0]?.[0] as
+    const resolveParams = resolveWindowsSpawnProgramMock.mock.calls.at(0)?.[0] as
       | { env?: Record<string, string>; allowShellFallback?: boolean }
       | undefined;
     expect(resolveParams?.env).toBe(sanitizedEnv);
@@ -108,7 +108,7 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
 
     spawnLspServerProcess({ command: "typescript-language-server", args: ["--stdio"] });
 
-    const spawnCall = spawnMock.mock.calls[0];
+    const spawnCall = spawnMock.mock.calls.at(0);
     expect(spawnCall?.[0]).toBe("cmd.exe");
     expect(spawnCall?.[1]).toEqual(["/c", "typescript-language-server.cmd", "--stdio"]);
     const spawnOptions = spawnCall?.[2] as

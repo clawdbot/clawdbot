@@ -57,6 +57,17 @@ async function expectFirstModelId(): Promise<string> {
   return firstId;
 }
 
+async function expectMissingReadScope(res: Response) {
+  expect(res.status).toBe(403);
+  await expect(res.json()).resolves.toEqual({
+    ok: false,
+    error: {
+      type: "forbidden",
+      message: "missing scope: operator.read",
+    },
+  });
+}
+
 describe("OpenAI-compatible models HTTP API (e2e)", () => {
   it("serves /v1/models when compatibility endpoints are enabled", async () => {
     const res = await getModels("/v1/models");
@@ -83,26 +94,12 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
 
   it("rejects operator scopes that lack read access", async () => {
     const res = await getModels("/v1/models", { "x-openclaw-scopes": "operator.approvals" });
-    expect(res.status).toBe(403);
-    await expect(res.json()).resolves.toMatchObject({
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: "missing scope: operator.read",
-      },
-    });
+    await expectMissingReadScope(res);
   });
 
   it("rejects requests with no declared operator scopes", async () => {
     const res = await getModels("/v1/models", { "x-openclaw-scopes": "" });
-    expect(res.status).toBe(403);
-    await expect(res.json()).resolves.toMatchObject({
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: "missing scope: operator.read",
-      },
-    });
+    await expectMissingReadScope(res);
   });
 
   it("rejects /v1/models/{id} without read access", async () => {
@@ -110,14 +107,7 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
     const res = await getModels(`/v1/models/${encodeURIComponent(firstId)}`, {
       "x-openclaw-scopes": "operator.approvals",
     });
-    expect(res.status).toBe(403);
-    await expect(res.json()).resolves.toMatchObject({
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: "missing scope: operator.read",
-      },
-    });
+    await expectMissingReadScope(res);
   });
 
   it("rejects when disabled", async () => {

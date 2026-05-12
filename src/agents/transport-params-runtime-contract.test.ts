@@ -154,7 +154,7 @@ describe("transport params runtime contract (Pi/OpenAI path)", () => {
     expect(prepared?.preparedByProvider).toBe(true);
     expect(prepared?.parallel_tool_calls).toBe(false);
     expect(prepared?.transportHookApplied).toBe(true);
-    const transportInput = resolveProviderExtraParamsForTransport.mock.calls[0]?.[0] as
+    const transportInput = resolveProviderExtraParamsForTransport.mock.calls.at(0)?.[0] as
       | {
           context?: {
             extraParams?: { preparedByProvider?: boolean };

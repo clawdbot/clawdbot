@@ -79,7 +79,7 @@ describe("CronService restart catch-up", () => {
     expectedText: string,
   ) {
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    const [text, options] = enqueueSystemEvent.mock.calls[0] ?? [];
+    const [text, options] = enqueueSystemEvent.mock.calls.at(0) ?? [];
     expect(text).toBe(expectedText);
     expect((options as { agentId?: string } | undefined)?.agentId).toBeUndefined();
   }

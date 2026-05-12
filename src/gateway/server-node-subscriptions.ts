@@ -1,7 +1,9 @@
+import { serializeEventPayload, type SerializedEventPayload } from "./node-registry.js";
+
 type NodeSendEventFn = (opts: {
   nodeId: string;
   event: string;
-  payloadJSON?: string | null;
+  payloadJSON?: SerializedEventPayload | null;
 }) => void;
 
 type NodeListConnectedFn = () => Array<{ nodeId: string }>;
@@ -34,7 +36,7 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
   const nodeSubscriptions = new Map<string, Set<string>>();
   const sessionSubscribers = new Map<string, Set<string>>();
 
-  const toPayloadJSON = (payload: unknown) => (payload ? JSON.stringify(payload) : null);
+  const toPayloadJSON = (payload: unknown) => serializeEventPayload(payload);
 
   const subscribe = (nodeId: string, sessionKey: string) => {
     const normalizedNodeId = nodeId.trim();

@@ -209,11 +209,10 @@ describe("status-json-payload", () => {
       secretDiagnostics: [],
     });
 
-    expect(payload.gateway).toMatchObject({
-      modelPricing: {
-        state: "degraded",
-        detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
-      },
-    });
+    const modelPricing = payload.gateway.modelPricing as
+      | { state?: string; detail?: string }
+      | undefined;
+    expect(modelPricing?.state).toBe("degraded");
+    expect(modelPricing?.detail).toBe("OpenRouter pricing fetch failed: TypeError: fetch failed");
   });
 });

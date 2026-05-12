@@ -41,7 +41,7 @@ describe("subscribeEmbeddedPiSession reply tags", () => {
     emit({ type: "message_end", message: assistantMessage });
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    const payload = onBlockReply.mock.calls[0]?.[0];
+    const payload = onBlockReply.mock.calls.at(0)?.[0];
     expect(payload?.text).toBe("Hello");
     expect(payload?.replyToCurrent).toBe(true);
     expect(payload?.replyToTag).toBe(true);
@@ -61,8 +61,8 @@ describe("subscribeEmbeddedPiSession reply tags", () => {
     emit({ type: "message_end", message: assistantMessage });
 
     expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Hello");
-    expect(onBlockReply.mock.calls[1]?.[0]?.text).toBe("[[");
+    expect(onBlockReply.mock.calls.at(0)?.[0]?.text).toBe("Hello");
+    expect(onBlockReply.mock.calls.at(1)?.[0]?.text).toBe("[[");
   });
 
   it("streams partial replies past reply_to tags split across chunks", () => {

@@ -47,8 +47,13 @@ describe("plugin text transforms", () => {
       { input: [{ from: /paper ticket/g, to: "digital ticket" }] },
     );
 
-    expect(merged?.input).toHaveLength(2);
-    expect(merged?.output).toHaveLength(1);
+    expect(merged).toStrictEqual({
+      input: [
+        { from: /red basket/g, to: "blue basket" },
+        { from: /paper ticket/g, to: "digital ticket" },
+      ],
+      output: [{ from: /blue basket/g, to: "red basket" }],
+    });
     expect(applyPluginTextReplacements("red basket paper ticket", merged?.input)).toBe(
       "blue basket digital ticket",
     );

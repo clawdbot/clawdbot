@@ -269,6 +269,15 @@ function normalizePersistedToolResultName(
   return toolResult;
 }
 
+function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage): boolean {
+  if (!message || message.role !== "assistant") {
+    return false;
+  }
+  const provider = normalizeOptionalString((message as { provider?: unknown }).provider) ?? "";
+  const model = normalizeOptionalString((message as { model?: unknown }).model) ?? "";
+  return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
+}
+
 export { getRawSessionAppendMessage };
 
 export function installSessionToolResultGuard(
@@ -449,7 +458,14 @@ export function installSessionToolResultGuard(
     // synthetic results (e.g. OpenAI) accumulate stale pending state when a user message
     // interrupts in-flight tool calls, leaving orphaned tool_use blocks in the transcript
     // that cause API 400 errors on subsequent requests.
-    if (pendingState.shouldFlushBeforeNonToolResult(nextRole, toolCalls.length)) {
+    const transcriptOnlyAssistant =
+      nextRole === "assistant" &&
+      toolCalls.length === 0 &&
+      isTranscriptOnlyOpenClawAssistantMessage(nextMessage);
+    if (
+      !transcriptOnlyAssistant &&
+      pendingState.shouldFlushBeforeNonToolResult(nextRole, toolCalls.length)
+    ) {
       flushPendingToolResults();
     }
     // If new tool calls arrive while older ones are pending, flush the old ones first.

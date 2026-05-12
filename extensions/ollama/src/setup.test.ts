@@ -522,11 +522,7 @@ describe("ollama setup", () => {
           prompter,
         }).catch((err: unknown) => err);
 
-        for (let attempts = 0; attempts < 50 && fetchMock.mock.calls.length < 2; attempts += 1) {
-          await vi.advanceTimersByTimeAsync(0);
-          await Promise.resolve();
-        }
-        expect(fetchMock.mock.calls[1]?.[0]).toContain("/api/pull");
+        await vi.waitFor(() => expect(fetchMock.mock.calls[1]?.[0]).toContain("/api/pull"));
 
         await vi.advanceTimersByTimeAsync(300_000);
         const pullError = await pullPromise;

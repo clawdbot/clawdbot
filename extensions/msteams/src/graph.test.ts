@@ -111,8 +111,10 @@ function fetchCallInit(index: number) {
 
 function fetchCallHeader(index: number, name: string) {
   const headers = fetchCallInit(index)?.headers;
-  expect(headers).toBeDefined();
-  return (headers as Record<string, string> | undefined)?.[name];
+  if (!headers) {
+    throw new Error(`Expected fetch headers at index ${index}`);
+  }
+  return (headers as Record<string, string>)[name];
 }
 
 function expectFetchPathContains(index: number, expectedPath: string) {

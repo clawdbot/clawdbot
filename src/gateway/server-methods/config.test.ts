@@ -104,6 +104,8 @@ describe("config.openFile", () => {
       },
       undefined,
     );
-    expect(logGateway.warn).toHaveBeenCalledWith(expect.stringContaining("spawn xdg-open ENOENT"));
+    expect(logGateway.warn).toHaveBeenCalledWith(
+      "config.openFile failed path=/tmp/config.json: spawn xdg-open ENOENT",
+    );
   });
 });

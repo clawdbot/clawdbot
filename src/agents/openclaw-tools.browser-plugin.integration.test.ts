@@ -135,7 +135,9 @@ describe("createOpenClawTools browser plugin integration", () => {
     });
 
     expect(hoisted.resolvePluginTools).toHaveBeenCalledTimes(1);
-    expect(hoisted.resolvePluginTools.mock.calls[0]?.[0]?.allowGatewaySubagentBinding).toBe(true);
+    expect(hoisted.resolvePluginTools.mock.calls.at(0)?.[0]?.allowGatewaySubagentBinding).toBe(
+      true,
+    );
   });
 
   it("forwards auth profile helpers to plugin resolution and context", async () => {
@@ -210,8 +212,8 @@ describe("createOpenClawTools browser plugin integration", () => {
     });
 
     expect(hoisted.resolvePluginTools).toHaveBeenCalledTimes(1);
-    expect(hoisted.resolvePluginTools.mock.calls[0]?.[0]?.toolAllowlist).toEqual(["*"]);
-    expect(hoisted.resolvePluginTools.mock.calls[0]?.[0]?.toolDenylist).toEqual(["browser"]);
+    expect(hoisted.resolvePluginTools.mock.calls.at(0)?.[0]?.toolAllowlist).toEqual(["*"]);
+    expect(hoisted.resolvePluginTools.mock.calls.at(0)?.[0]?.toolDenylist).toEqual(["browser"]);
   });
 
   it("does not pass a stale active snapshot as plugin runtime config for a resolved run config", () => {

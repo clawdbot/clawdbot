@@ -113,19 +113,20 @@ describe("telegram stickers", () => {
         } as TelegramContext,
       });
 
-      expect(cacheStickerSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          fileId: "new_file_id",
-          emoji: "🔥",
-          setName: "NewSet",
-        }),
-      );
+      const [cachedSticker] =
+        (
+          cacheStickerSpy.mock.calls as unknown as Array<
+            [{ emoji?: string; fileId?: string; setName?: string }]
+          >
+        )[0] ?? [];
+      expect(cachedSticker?.fileId).toBe("new_file_id");
+      expect(cachedSticker?.emoji).toBe("🔥");
+      expect(cachedSticker?.setName).toBe("NewSet");
       expect(media?.stickerMetadata?.fileId).toBe("new_file_id");
       expect(media?.stickerMetadata?.cachedDescription).toBe("Cached description");
-      expect(proxyFetch).toHaveBeenCalledWith(
-        "https://api.telegram.org/file/bottok/stickers/sticker.webp",
-        expect.objectContaining({ redirect: "manual" }),
-      );
+      const [fetchUrl, fetchOptions] = proxyFetch.mock.calls[0] ?? [];
+      expect(fetchUrl).toBe("https://api.telegram.org/file/bottok/stickers/sticker.webp");
+      expect(fetchOptions?.redirect).toBe("manual");
     },
     STICKER_TEST_TIMEOUT_MS,
   );

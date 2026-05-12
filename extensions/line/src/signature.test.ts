@@ -26,7 +26,7 @@ describe("validateLineSignature", () => {
     expect(validateLineSignature(body, "short", secret)).toBe(false);
     expect(spy).toHaveBeenCalledTimes(1);
 
-    const [left, right] = spy.mock.calls[0] ?? [];
+    const [left, right] = spy.mock.calls.at(0) ?? [];
     expect(left).toBeInstanceOf(Buffer);
     expect(right).toBeInstanceOf(Buffer);
     expect(left?.byteLength).toBe(right?.byteLength);

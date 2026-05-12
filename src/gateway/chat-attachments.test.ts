@@ -295,16 +295,19 @@ describe("parseMessageWithAttachments", () => {
 
 describe("parseMessageWithAttachments validation errors", () => {
   it("throws UnsupportedAttachmentError on empty payload", async () => {
-    await expect(
-      parseMessageWithAttachments(
+    let caught: unknown;
+    try {
+      await parseMessageWithAttachments(
         "x",
         [{ type: "file", mimeType: "application/pdf", fileName: "empty.pdf", content: "" }],
         { log: { warn: () => {} } },
-      ),
-    ).rejects.toMatchObject({
-      name: "UnsupportedAttachmentError",
-      reason: "empty-payload",
-    });
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(UnsupportedAttachmentError);
+    expect((caught as UnsupportedAttachmentError).name).toBe("UnsupportedAttachmentError");
+    expect((caught as UnsupportedAttachmentError).reason).toBe("empty-payload");
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
   });
 
@@ -396,10 +399,8 @@ describe("parseMessageWithAttachments validation errors", () => {
       expect(parsed.images).toHaveLength(0);
       expect(parsed.imageOrder).toStrictEqual([]);
       expect(parsed.offloadedRefs).toHaveLength(1);
-      expect(parsed.offloadedRefs[0]).toMatchObject({
-        mimeType: "application/pdf",
-        label: "brief.pdf",
-      });
+      expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/pdf");
+      expect(parsed.offloadedRefs[0]?.label).toBe("brief.pdf");
       expect(parsed.message).toBe("read this");
     } finally {
       await cleanupOffloadedRefs(parsed.offloadedRefs);
@@ -477,7 +478,9 @@ describe("parseMessageWithAttachments validation errors", () => {
       expect(parsed.message).toContain(
         "[image attachment omitted: text-only attachment limit reached]",
       );
-      expect(logs).toContainEqual(expect.stringMatching(/offload limit 10/i));
+      expect(logs).toEqual([
+        "attachment dot-10.png: dropping image because text-only offload limit 10 was reached",
+      ]);
     } finally {
       await cleanupOffloadedRefs(parsed.offloadedRefs);
     }

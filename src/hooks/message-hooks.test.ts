@@ -106,6 +106,14 @@ const actionCases: ActionCase[] = [
   },
 ];
 
+function requireHookEvent(handler: ReturnType<typeof vi.fn>): InternalHookEvent {
+  const call = handler.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected hook handler call");
+  }
+  return call[0] as InternalHookEvent;
+}
+
 describe("message hooks", () => {
   beforeEach(() => {
     clearInternalHooks();
@@ -126,7 +134,7 @@ describe("message hooks", () => {
         );
 
         expect(handler).toHaveBeenCalledOnce();
-        const event = handler.mock.calls[0][0] as InternalHookEvent;
+        const event = requireHookEvent(handler);
         expect(event.type).toBe("message");
         expect(event.action).toBe(testCase.action);
         testCase.assertContext(event.context);
@@ -244,7 +252,7 @@ describe("message hooks", () => {
       );
       const after = new Date();
 
-      const event = handler.mock.calls[0][0] as InternalHookEvent;
+      const event = requireHookEvent(handler);
       expect(event.timestamp).toBeInstanceOf(Date);
       expect(event.timestamp.getTime()).toBeGreaterThanOrEqual(before.getTime());
       expect(event.timestamp.getTime()).toBeLessThanOrEqual(after.getTime());

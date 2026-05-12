@@ -13,8 +13,6 @@ type AgentModelListLike = {
   timeoutMs?: number;
 };
 
-const GOOGLE_CONFIG_MODEL_PROVIDERS = new Set(["google", "google-gemini-cli", "google-vertex"]);
-
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -76,10 +74,6 @@ export function normalizeAgentModelRefForConfig(model: string): string {
   }
 
   const provider = normalizeProviderId(trimmed.slice(0, slash));
-  if (!GOOGLE_CONFIG_MODEL_PROVIDERS.has(provider)) {
-    return trimmed;
-  }
-
   const normalizedModel = normalizeGooglePreviewModelId(trimmed.slice(slash + 1));
   return modelKeyForConfig(provider, normalizedModel);
 }

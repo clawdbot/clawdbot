@@ -283,6 +283,8 @@ function buildUnifiedDistEntries(): Record<string, string> {
     ...dockerE2eHarnessEntries,
     // Internal compat artifact for the root-alias.cjs lazy loader.
     "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
+    // Private bundled Codex helper for app-server native subagent task mirroring.
+    "plugin-sdk/codex-native-task-runtime": "src/plugin-sdk/codex-native-task-runtime.ts",
     ...Object.fromEntries(
       Object.entries(buildPluginSdkEntrySources()).map(([entry, source]) => [
         `plugin-sdk/${entry}`,

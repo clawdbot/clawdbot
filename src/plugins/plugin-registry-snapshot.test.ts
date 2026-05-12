@@ -96,7 +96,6 @@ function requirePluginRecord(
   pluginId: string,
 ): InstalledPluginIndex["plugins"][number] {
   const plugin = plugins.find((candidate) => candidate.pluginId === pluginId);
-  expect(plugin, `plugin ${pluginId}`).toBeDefined();
   if (!plugin) {
     throw new Error(`expected plugin ${pluginId}`);
   }

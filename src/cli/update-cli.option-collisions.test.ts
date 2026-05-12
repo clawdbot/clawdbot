@@ -52,7 +52,7 @@ describe("update cli option collisions", () => {
       argv: ["update", "status", "--json", "--timeout", "9"],
       assert: () => {
         expect(updateStatusCommand).toHaveBeenCalledTimes(1);
-        const [opts] = updateStatusCommand.mock.calls[0] ?? [];
+        const [opts] = updateStatusCommand.mock.calls.at(0) ?? [];
         expect((opts as { json?: boolean; timeout?: string } | undefined)?.json).toBe(true);
         expect((opts as { json?: boolean; timeout?: string } | undefined)?.timeout).toBe("9");
       },
@@ -62,7 +62,7 @@ describe("update cli option collisions", () => {
       argv: ["update", "wizard", "--timeout", "13"],
       assert: () => {
         expect(updateWizardCommand).toHaveBeenCalledTimes(1);
-        const [opts] = updateWizardCommand.mock.calls[0] ?? [];
+        const [opts] = updateWizardCommand.mock.calls.at(0) ?? [];
         expect((opts as { timeout?: string } | undefined)?.timeout).toBe("13");
       },
     },

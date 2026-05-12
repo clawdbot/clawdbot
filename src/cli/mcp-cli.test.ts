@@ -50,6 +50,10 @@ async function runMcpCommand(args: string[]) {
   await sharedProgram.parseAsync(args, { from: "user" });
 }
 
+function lastLogLine(): string {
+  return String(mockLog.mock.calls.at(-1)?.[0] ?? "");
+}
+
 describe("mcp cli", () => {
   if (!sharedProgram) {
     sharedProgram = new Command();
@@ -69,27 +73,30 @@ describe("mcp cli", () => {
   });
 
   it("sets and shows a configured MCP server", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
       const workspaceDir = await createWorkspace();
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
 
       await runMcpCommand(["mcp", "set", "context7", '{"command":"uvx","args":["context7-mcp"]}']);
-      expect(mockLog).toHaveBeenCalledWith(expect.stringContaining('Saved MCP server "context7"'));
+      expect(lastLogLine()).toBe(`Saved MCP server "context7" to ${configPath}.`);
 
       mockLog.mockClear();
       await runMcpCommand(["mcp", "show", "context7", "--json"]);
-      expect(mockLog).toHaveBeenCalledWith(expect.stringContaining('"command": "uvx"'));
+      expect(JSON.parse(lastLogLine())).toEqual({ command: "uvx", args: ["context7-mcp"] });
     });
   });
 
   it("fails when removing an unknown MCP server", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
       const workspaceDir = await createWorkspace();
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
 
       await expect(runMcpCommand(["mcp", "unset", "missing"])).rejects.toThrow("__exit__:1");
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining('No MCP server named "missing"'),
+      const errorLine = String(mockError.mock.calls.at(-1)?.[0] ?? "");
+      expect(errorLine).toBe(
+        `No MCP server named "missing" in ${configPath}. Run openclaw mcp list to see configured servers.`,
       );
     });
   });

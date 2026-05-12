@@ -91,6 +91,9 @@ async function normalizeSentMediaUrlsForDedupe(params: {
 }
 
 function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
+  if (payload.isError) {
+    return true;
+  }
   return payload.audioAsVoice === true && resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 

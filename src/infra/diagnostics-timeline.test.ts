@@ -37,14 +37,20 @@ async function readTimeline(path: string) {
 
 function eventRecord(events: Record<string, unknown>[], index: number): Record<string, unknown> {
   const event = events[index];
-  expect(event).toBeTruthy();
+  if (!event) {
+    throw new Error(`Expected diagnostics event at index ${index}`);
+  }
   return event;
 }
 
 function attributesRecord(event: Record<string, unknown>): Record<string, unknown> {
-  expect(event.attributes).toBeTruthy();
-  expect(typeof event.attributes).toBe("object");
-  expect(Array.isArray(event.attributes)).toBe(false);
+  if (
+    !event.attributes ||
+    typeof event.attributes !== "object" ||
+    Array.isArray(event.attributes)
+  ) {
+    throw new Error("Expected diagnostics event attributes");
+  }
   return event.attributes as Record<string, unknown>;
 }
 

@@ -1,7 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
-const ensureConfigReadyMock = vi.hoisted(() => vi.fn(async () => {}));
+const ensureConfigReadyMock = vi.hoisted(() =>
+  vi.fn(async (_params: { runtime?: unknown; commandPath?: unknown }) => {}),
+);
 const ensurePluginRegistryLoadedMock = vi.hoisted(() => vi.fn());
 const findRoutedCommandMock = vi.hoisted(() => vi.fn());
 const runRouteMock = vi.hoisted(() => vi.fn(async () => true));
@@ -34,8 +36,7 @@ vi.mock("../runtime.js", () => ({
 
 describe("tryRouteCli", () => {
   let tryRouteCli: typeof import("./route.js").tryRouteCli;
-  // After vi.resetModules(), reimported modules get fresh loggingState.
-  // Capture the same reference that route.js uses.
+  // Capture the same loggingState reference that route.js uses.
   let loggingState: typeof import("../logging/state.js").loggingState;
   let originalDisableRouteFirst: string | undefined;
   let originalHideBanner: string | undefined;
@@ -86,10 +87,12 @@ describe("tryRouteCli", () => {
   it("does not pass suppressDoctorStdout for routed non-json commands", async () => {
     await expect(tryRouteCli(["node", "openclaw", "status"])).resolves.toBe(true);
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: expect.any(Object),
-      commandPath: ["status"],
-    });
+    expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
+    const configReadyCall = ensureConfigReadyMock.mock.calls.at(0)?.[0] as
+      | { runtime?: unknown; commandPath?: unknown }
+      | undefined;
+    expect(typeof configReadyCall?.runtime).toBe("object");
+    expect(configReadyCall?.commandPath).toEqual(["status"]);
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "channels",
     });
@@ -102,7 +105,7 @@ describe("tryRouteCli", () => {
     });
 
     // Capture the value inside the mock callback using the same loggingState
-    // reference that route.js sees (both imported after vi.resetModules()).
+    // reference that route.js sees.
     const captured: boolean[] = [];
     ensurePluginRegistryLoadedMock.mockImplementation(() => {
       captured.push(loggingState.forceConsoleToStderr);
@@ -110,7 +113,7 @@ describe("tryRouteCli", () => {
 
     await tryRouteCli(["node", "openclaw", "agents", "--json"]);
 
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
     expect(captured[0]).toBe(true);
     expect(loggingState.forceConsoleToStderr).toBe(true);
   });
@@ -143,7 +146,7 @@ describe("tryRouteCli", () => {
 
     await tryRouteCli(["node", "openclaw", "agents"]);
 
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
     expect(captured[0]).toBe(false);
     expect(loggingState.forceConsoleToStderr).toBe(false);
   });
@@ -157,10 +160,12 @@ describe("tryRouteCli", () => {
       ["status"],
       ["node", "openclaw", "--log-level", "debug", "status"],
     );
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: expect.any(Object),
-      commandPath: ["status"],
-    });
+    expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
+    const configReadyCall = ensureConfigReadyMock.mock.calls.at(0)?.[0] as
+      | { runtime?: unknown; commandPath?: unknown }
+      | undefined;
+    expect(typeof configReadyCall?.runtime).toBe("object");
+    expect(configReadyCall?.commandPath).toEqual(["status"]);
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "channels",
     });

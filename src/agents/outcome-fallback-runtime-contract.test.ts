@@ -68,7 +68,7 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
 
     expect(result.result).toBe(fallback);
     expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[1]).toEqual([
+    expect(run.mock.calls.at(1)).toEqual([
       OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider,
       OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel,
     ]);

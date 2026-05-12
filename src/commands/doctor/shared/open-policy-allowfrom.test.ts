@@ -136,8 +136,8 @@ describe("doctor open-policy allowFrom repair", () => {
     });
 
     expect(warnings).toEqual([
-      expect.stringContaining('channels.signal.allowFrom: set to ["*"]'),
-      expect.stringContaining('Run "openclaw doctor --fix"'),
+      '- channels.signal.allowFrom: set to ["*"] (required by dmPolicy="open")',
+      '- Run "openclaw doctor --fix" to add missing allowFrom wildcards.',
     ]);
   });
 });

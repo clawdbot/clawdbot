@@ -598,15 +598,19 @@ type MockWithCalls = {
 
 function mockCallArg(mock: MockWithCalls, callIndex = 0, argIndex = 0): unknown {
   const call = mock.mock.calls[callIndex];
-  expect(call).toBeDefined();
-  return call?.[argIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
 }
 
 function expectRecordFields(
   record: unknown,
   expected: Record<string, unknown>,
 ): Record<string, unknown> {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -1139,7 +1143,7 @@ describe("/acp command", () => {
     expect(introText).toContain("cwd: /home/bob/clawd");
     expectBoundIntroTextToExclude("session ids: pending (available after the first reply)");
     expectGatewayMethodNotCalled("sessions.patch");
-    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalled();
+    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(1);
     const upsertArgs = hoisted.upsertAcpSessionMetaMock.mock.calls[0]?.[0] as
       | {
           sessionKey: string;
@@ -1627,7 +1631,15 @@ describe("/acp command", () => {
       targetSessionKey: defaultAcpSessionKey,
       reason: "manual",
     });
-    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalled();
+    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(1);
+    const clearMetaArgs = hoisted.upsertAcpSessionMetaMock.mock.calls[0]?.[0] as
+      | {
+          sessionKey: string;
+          mutate: (current: unknown, entry: { sessionId: string; updatedAt: number }) => unknown;
+        }
+      | undefined;
+    expect(clearMetaArgs?.sessionKey).toBe(defaultAcpSessionKey);
+    expect(clearMetaArgs?.mutate(undefined, { sessionId: "session-1", updatedAt: 0 })).toBeNull();
     expect(result?.reply?.text).toContain("Removed 1 binding");
   });
 

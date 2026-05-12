@@ -251,7 +251,9 @@ function makeCall(method: keyof typeof agentsHandlers, params: Record<string, un
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -600,8 +602,15 @@ describe("agents.create", () => {
       rootDir: "/resolved/tmp/ws",
       relativePath: "IDENTITY.md",
     });
-    expect(write.data).toEqual(
-      expect.stringMatching(/- Name: Fancy Agent[\s\S]*- Emoji: 🤖[\s\S]*- Avatar:/),
+    expect(write.data).toBe(
+      [
+        "# IDENTITY.md - Agent Identity",
+        "",
+        "- Name: Fancy Agent",
+        "- Emoji: 🤖",
+        "- Avatar: https://example.com/avatar.png",
+        "",
+      ].join("\n"),
     );
   });
 
@@ -772,10 +781,16 @@ describe("agents.update", () => {
       rootDir: "/workspace/test-agent",
       relativePath: "IDENTITY.md",
     });
-    expect(write.data).toEqual(
-      expect.stringMatching(
-        /- Name: Current Agent[\s\S]*- Theme: steady[\s\S]*- Emoji: 🐢[\s\S]*- Avatar: https:\/\/example\.com\/avatar\.png/,
-      ),
+    expect(write.data).toBe(
+      [
+        "# IDENTITY.md - Agent Identity",
+        "",
+        "- Name: Current Agent",
+        "- Theme: steady",
+        "- Emoji: 🐢",
+        "- Avatar: https://example.com/avatar.png",
+        "",
+      ].join("\n"),
     );
   });
 
@@ -793,8 +808,15 @@ describe("agents.update", () => {
       rootDir: "/workspace/test-agent",
       relativePath: "IDENTITY.md",
     });
-    expect(write.data).toEqual(
-      expect.stringMatching(/- Name: Current Agent[\s\S]*- Theme: steady[\s\S]*- Emoji: 🦀/),
+    expect(write.data).toBe(
+      [
+        "# IDENTITY.md - Agent Identity",
+        "",
+        "- Name: Current Agent",
+        "- Theme: steady",
+        "- Emoji: 🦀",
+        "",
+      ].join("\n"),
     );
   });
 
@@ -820,10 +842,16 @@ describe("agents.update", () => {
       rootDir: "/workspace/test-agent",
       relativePath: "IDENTITY.md",
     });
-    expect(write.data).toEqual(
-      expect.stringMatching(
-        /- Name: New Name[\s\S]*- Theme: steady[\s\S]*- Emoji: 🤖[\s\S]*- Avatar: https:\/\/example\.com\/new\.png/,
-      ),
+    expect(write.data).toBe(
+      [
+        "# IDENTITY.md - Agent Identity",
+        "",
+        "- Name: New Name",
+        "- Theme: steady",
+        "- Emoji: 🤖",
+        "- Avatar: https://example.com/new.png",
+        "",
+      ].join("\n"),
     );
   });
 

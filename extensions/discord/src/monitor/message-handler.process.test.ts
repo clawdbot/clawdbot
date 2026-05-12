@@ -446,12 +446,28 @@ function getReactionEmojis(): string[] {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
   if (typeof value !== "object" || value === null) {
     throw new Error(`${label} was not an object`);
   }
   return value as Record<string, unknown>;
+}
+
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`missing ${label} call`);
+  }
+  return call;
+}
+
+function firstMockArg(mock: MockWithCalls, label: string) {
+  return firstMockCall(mock, label)[0];
+}
+
+function firstDispatchParams(): DispatchInboundParams {
+  return firstMockArg(dispatchInboundMessage, "dispatchInboundMessage") as DispatchInboundParams;
 }
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
@@ -491,7 +507,6 @@ function requireReactionCall(
   index: number,
 ) {
   const call = mock.mock.calls[index] as unknown[] | undefined;
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error(`missing reaction call ${index + 1}`);
   }
@@ -563,11 +578,7 @@ function createMockDraftStreamForTest() {
 }
 
 function expectPreviewEditContent(content: string) {
-  const call = editMessageDiscord.mock.calls[0] as unknown[] | undefined;
-  expect(call).toBeDefined();
-  if (!call) {
-    throw new Error("missing preview edit call");
-  }
+  const call = firstMockCall(editMessageDiscord, "preview edit");
   expect(call[0]).toBe("c1");
   expect(call[1]).toBe("preview-1");
   expect(call[2]).toEqual({ content });
@@ -659,11 +670,14 @@ describe("processDiscordMessage ack reactions", () => {
 
     expect(sendMocks.reactMessageDiscord).toHaveBeenCalled();
     const feedbackOptions = requireRecord(
-      sendMocks.reactMessageDiscord.mock.calls[0]?.[3],
+      requireReactionCall(sendMocks.reactMessageDiscord, 0)[3],
       "feedback reaction options",
     );
     expect(feedbackOptions.rest).toBe(feedbackRest);
-    const deliveryParams = requireRecord(deliverDiscordReply.mock.calls[0]?.[0], "delivery params");
+    const deliveryParams = requireRecord(
+      firstMockArg(deliverDiscordReply, "deliverDiscordReply"),
+      "delivery params",
+    );
     expect(deliveryParams.rest).toBe(deliveryRest);
     expect(feedbackRest).not.toBe(deliveryRest);
   });
@@ -757,13 +771,10 @@ describe("processDiscordMessage ack reactions", () => {
     await runProcessDiscordMessage(ctx);
     await vi.runAllTimersAsync();
 
-    const resolveCall = discordTargetMocks.resolveDiscordTargetChannelId.mock.calls[0] as
-      | unknown[]
-      | undefined;
-    expect(resolveCall).toBeDefined();
-    if (!resolveCall) {
-      throw new Error("missing Discord target resolve call");
-    }
+    const resolveCall = firstMockCall(
+      discordTargetMocks.resolveDiscordTargetChannelId,
+      "resolveDiscordTargetChannelId",
+    );
     expect(resolveCall[0]).toBe("user:u1");
     expect(requireRecord(resolveCall[1], "Discord target resolve options").accountId).toBe(
       "default",
@@ -1558,9 +1569,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledWith("Hello");
-    expect(dispatchInboundMessage.mock.calls[0]?.[0]?.replyOptions?.disableBlockStreaming).toBe(
-      true,
-    );
+    expect(firstDispatchParams().replyOptions?.disableBlockStreaming).toBe(true);
   });
 
   it("keeps progress label visible when Discord tool progress lines are disabled", async () => {
@@ -1591,10 +1600,8 @@ describe("processDiscordMessage draft streaming", () => {
     expect(draftStream.update).toHaveBeenCalledWith("Shelling");
     expect(draftStream.flush).toHaveBeenCalledTimes(1);
     expect(
-      requireRecord(
-        dispatchInboundMessage.mock.calls[0]?.[0]?.replyOptions,
-        "dispatch reply options",
-      ).suppressDefaultToolProgressMessages,
+      requireRecord(firstDispatchParams().replyOptions, "dispatch reply options")
+        .suppressDefaultToolProgressMessages,
     ).toBe(true);
   });
 
@@ -1884,9 +1891,7 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(
-      dispatchInboundMessage.mock.calls[0]?.[0]?.replyOptions?.suppressDefaultToolProgressMessages,
-    ).toBe(true);
+    expect(firstDispatchParams().replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
   });
 
   it("strips reply tags from preview partials", async () => {

@@ -574,9 +574,9 @@ describe("followup queue collect routing", () => {
     await done.promise;
 
     expect(calls.map((call) => call.prompt)).toEqual([
-      expect.stringContaining("first"),
-      expect.stringContaining("second"),
-      expect.stringContaining("third"),
+      "[Queued messages while agent was busy]\n\n---\nQueued #1 (from A)\nfirst",
+      "[Queued messages while agent was busy]\n\n---\nQueued #1 (from Owner)\nsecond",
+      "[Queued messages while agent was busy]\n\n---\nQueued #1 (from A)\nthird",
     ]);
   });
 
@@ -814,8 +814,8 @@ describe("followup queue collect routing", () => {
     expect(guestAttempts).toHaveLength(1);
     expect(ownerAttempts).toHaveLength(2);
     expect(successfulCalls.map((call) => call.prompt)).toEqual([
-      expect.stringContaining("guest message"),
-      expect.stringContaining("owner message"),
+      "[Queued messages while agent was busy]\n\n---\nQueued #1 (from Guest)\nguest message",
+      "[Queued messages while agent was busy]\n\n---\nQueued #1 (from Owner)\nowner message",
     ]);
   });
 

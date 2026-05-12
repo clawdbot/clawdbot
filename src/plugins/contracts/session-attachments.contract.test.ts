@@ -127,7 +127,7 @@ function expectTelegramAttachmentResult(result: unknown, count: number) {
 }
 
 function requireFirstSendMessageParams() {
-  const params = workflowMocks.sendMessage.mock.calls[0]?.[0] as
+  const params = workflowMocks.sendMessage.mock.calls.at(0)?.[0] as
     | Record<string, unknown>
     | undefined;
   if (!params) {

@@ -172,8 +172,8 @@ describe("createQaScenarioRuntimeApi", () => {
       to: "dm:qa-operator",
       text: "hi",
     });
-    expect(inbound.id).toEqual(expect.stringMatching(/\S/));
-    expect(outbound.id).toEqual(expect.stringMatching(/\S/));
+    expect(inbound.id.trim()).not.toBe("");
+    expect(outbound.id.trim()).not.toBe("");
     api.readTransportMessage({ accountId: "qa-channel", messageId: outbound.id });
     await api.reset();
     await api.resetBus();

@@ -19,6 +19,7 @@ function isHeadersLike(value: object): value is HeadersLike {
 export function normalizeHeadersInitForFetch(
   headers: HeadersInit | undefined,
 ): HeadersInit | undefined {
+  // To do: delete once supported Node runtimes accept symbol-keyed header records.
   if (!headers || typeof headers !== "object" || Array.isArray(headers) || isHeadersLike(headers)) {
     return headers;
   }

@@ -1,5 +1,6 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
+import { isTruthyEnvValue, logAcceptedEnvOption, normalizeEnv, normalizeZaiEnv } from "./env.js";
 
 const loggerMocks = vi.hoisted(() => ({
   info: vi.fn(),
@@ -10,19 +11,6 @@ vi.mock("../logging/subsystem.js", () => ({
     info: loggerMocks.info,
   }),
 }));
-
-type EnvModule = typeof import("./env.js");
-
-let isTruthyEnvValue: EnvModule["isTruthyEnvValue"];
-let logAcceptedEnvOption: EnvModule["logAcceptedEnvOption"];
-let normalizeEnv: EnvModule["normalizeEnv"];
-let normalizeZaiEnv: EnvModule["normalizeZaiEnv"];
-
-beforeAll(async () => {
-  vi.resetModules();
-  ({ isTruthyEnvValue, logAcceptedEnvOption, normalizeEnv, normalizeZaiEnv } =
-    await import("./env.js"));
-});
 
 beforeEach(() => {
   loggerMocks.info.mockClear();

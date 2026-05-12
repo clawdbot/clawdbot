@@ -10,6 +10,7 @@ import type {
   CodexDynamicToolCallParams,
   CodexErrorNotification,
   CodexModelListResponse,
+  CodexThreadForkResponse,
   CodexThreadResumeResponse,
   CodexThreadStartResponse,
   CodexTurn,
@@ -47,6 +48,14 @@ export function assertCodexThreadStartResponse(value: unknown): CodexThreadStart
     validateThreadStartResponse,
     normalizeThreadResponse(value),
     "thread/start response",
+  );
+}
+
+export function assertCodexThreadForkResponse(value: unknown): CodexThreadForkResponse {
+  return assertCodexShape(
+    validateThreadStartResponse,
+    normalizeThreadResponse(value),
+    "thread/fork response",
   );
 }
 

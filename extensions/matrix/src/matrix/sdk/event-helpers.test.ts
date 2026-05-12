@@ -78,17 +78,30 @@ describe("event-helpers", () => {
   });
 
   it("serializes current content by default for read APIs", () => {
-    expect(matrixEventToRaw(makeEditedMessageEvent())).toMatchObject({
+    expect(matrixEventToRaw(makeEditedMessageEvent())).toEqual({
+      event_id: "$root",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      origin_server_ts: 1000,
       content: {
         body: "@bot edited",
         "m.mentions": { user_ids: ["@bot:example.org"] },
         msgtype: "m.text",
       },
+      unsigned: {
+        "m.relations": {
+          "m.replace": { event_id: "$edit" },
+        },
+      },
     });
   });
 
   it("can serialize original content for inbound trigger filtering", () => {
-    expect(matrixEventToRaw(makeEditedMessageEvent(), { contentMode: "original" })).toMatchObject({
+    expect(matrixEventToRaw(makeEditedMessageEvent(), { contentMode: "original" })).toEqual({
+      event_id: "$root",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      origin_server_ts: 1000,
       content: { body: "original", msgtype: "m.text" },
       unsigned: {
         "m.relations": {

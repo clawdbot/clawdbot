@@ -47,8 +47,6 @@ class MockMatrixClient {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
   if (typeof value !== "object" || value === null) {
     throw new Error(`${label} was not an object`);
   }
@@ -71,7 +69,6 @@ function expectSavedCredentials(
   accountId: string,
 ) {
   const call = mock.mock.calls[0] as unknown[] | undefined;
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error("missing save credentials call");
   }
@@ -82,7 +79,6 @@ function expectSavedCredentials(
 
 function expectMatrixLoginCall(fields: Record<string, unknown>) {
   const call = matrixDoRequestMock.mock.calls[0] as unknown[] | undefined;
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error("missing Matrix login call");
   }

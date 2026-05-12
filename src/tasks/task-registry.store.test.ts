@@ -25,9 +25,13 @@ function requireFirstUpsertParams(upsertTaskWithDeliveryState: ReturnType<typeof
   task?: { taskId?: string };
   deliveryState?: { lastNotifiedEventAt?: number };
 } {
-  const params = upsertTaskWithDeliveryState.mock.calls[0]?.[0];
-  if (!params) {
+  const [call] = upsertTaskWithDeliveryState.mock.calls;
+  if (!call) {
     throw new Error("expected task upsert params");
+  }
+  const [params] = call;
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("expected task upsert params to be an object");
   }
   return params;
 }

@@ -242,7 +242,7 @@ function readCodexPluginPolicy(item: MigrationItem): ResolvedCodexPluginPolicy |
     marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
     pluginName,
     enabled: true,
-    allowDestructiveActions: false,
+    allowDestructiveActions: true,
   };
 }
 

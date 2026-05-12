@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NodeRegistry } from "./node-registry.js";
+import { NodeRegistry, serializeEventPayload } from "./node-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 function makeClient(connId: string, nodeId: string, sent: string[] = []): GatewayWsClient {
@@ -53,5 +53,35 @@ describe("gateway/node-registry", () => {
     expect(registry.unregister("conn-old")).toBeNull();
     expect(registry.get("node-1")).toBe(newSession);
     await expect(oldDisconnected).resolves.toBeInstanceOf(Error);
+  });
+
+  it("sends raw event payload JSON without changing the envelope shape", () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(makeClient("conn-1", "node-1", frames), {});
+    const payload = serializeEventPayload({ foo: "bar" });
+
+    expect(registry.sendEventRaw("node-1", "chat", payload)).toBe(true);
+    expect(registry.sendEventRaw("missing-node", "chat", payload)).toBe(false);
+    expect(registry.sendEventRaw("node-1", "heartbeat", null)).toBe(true);
+    expect(
+      registry.sendEventRaw(
+        "node-1",
+        "chat",
+        "not-json" as unknown as Parameters<NodeRegistry["sendEventRaw"]>[2],
+      ),
+    ).toBe(false);
+    expect(
+      registry.sendEventRaw(
+        "node-1",
+        "chat",
+        '{"x":1},"seq":999' as unknown as Parameters<NodeRegistry["sendEventRaw"]>[2],
+      ),
+    ).toBe(false);
+
+    expect(frames).toEqual([
+      '{"type":"event","event":"chat","payload":{"foo":"bar"}}',
+      '{"type":"event","event":"heartbeat"}',
+    ]);
   });
 });

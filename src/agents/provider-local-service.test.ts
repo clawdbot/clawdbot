@@ -29,16 +29,23 @@ async function freePort(): Promise<number> {
 }
 
 async function waitForProbeFailure(url: string): Promise<void> {
-  const deadline = Date.now() + 2_000;
-  while (Date.now() < deadline) {
-    try {
-      await fetch(url);
-    } catch {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+  try {
+    await expect
+      .poll(
+        async () => {
+          try {
+            await fetch(url);
+            return false;
+          } catch {
+            return true;
+          }
+        },
+        { timeout: 2_000, interval: 50 },
+      )
+      .toBe(true);
+  } catch {
+    throw new Error("local service still responded after idle stop");
   }
-  throw new Error("local service still responded after idle stop");
 }
 
 describe("provider local service", () => {
@@ -82,9 +89,11 @@ describe("provider local service", () => {
 
     const lease = await ensureModelProviderLocalService(model);
 
-    expect(lease).toBeDefined();
+    if (!lease) {
+      throw new Error("Expected provider local service lease");
+    }
     expect((await fetch(healthUrl)).ok).toBe(true);
-    lease?.release();
+    lease.release();
     await waitForProbeFailure(healthUrl);
   });
 
@@ -114,7 +123,9 @@ describe("provider local service", () => {
       "X-Tenant": "acme",
     });
 
-    expect(lease).toBeDefined();
+    if (!lease) {
+      throw new Error("Expected provider local service lease");
+    }
     expect((await fetch(healthUrl)).status).toBe(401);
     expect(
       (
@@ -276,9 +287,11 @@ describe("provider local service", () => {
       expect((await fetch(healthUrl)).status).toBe(503);
 
       const secondLease = await ensureModelProviderLocalService(model);
-      expect(secondLease).toBeDefined();
+      if (!secondLease) {
+        throw new Error("Expected restarted provider local service lease");
+      }
       expect((await fetch(healthUrl)).ok).toBe(true);
-      secondLease?.release();
+      secondLease.release();
 
       const starts = (await fs.readFile(startsPath, "utf8")).trim().split("\n");
       expect(starts).toHaveLength(2);

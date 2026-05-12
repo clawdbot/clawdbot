@@ -854,7 +854,8 @@ describe("Invalid engine fallback", () => {
         name: "missing registration",
         engineId: uniqueEngineId("does-not-exist"),
         register: () => undefined,
-        expectedError: "does-not-exist",
+        expectedError: (engineId: string) =>
+          `[context-engine] Context engine "${engineId}" is not registered; falling back to default engine "legacy".`,
       },
       {
         name: "factory throws",
@@ -864,7 +865,8 @@ describe("Invalid engine fallback", () => {
             throw new Error("plugin version mismatch");
           });
         },
-        expectedError: "plugin version mismatch",
+        expectedError: (engineId: string) =>
+          `[context-engine] Context engine "${engineId}" factory threw during resolution: plugin version mismatch; falling back to default engine "legacy".`,
       },
       {
         name: "missing info metadata",
@@ -886,7 +888,8 @@ describe("Invalid engine fallback", () => {
               }) as unknown as ContextEngine,
           );
         },
-        expectedError: "missing info",
+        expectedError: (engineId: string) =>
+          `[context-engine] Context engine "${engineId}" factory returned an invalid ContextEngine: missing info.; falling back to default engine "legacy".`,
       },
       {
         name: "missing lifecycle methods",
@@ -903,7 +906,8 @@ describe("Invalid engine fallback", () => {
               }) as unknown as ContextEngine,
           );
         },
-        expectedError: "missing assemble(), missing compact()",
+        expectedError: (engineId: string) =>
+          `[context-engine] Context engine "${engineId}" factory returned an invalid ContextEngine: missing assemble(), missing compact().; falling back to default engine "legacy".`,
       },
       {
         name: "contract validation throws",
@@ -911,7 +915,8 @@ describe("Invalid engine fallback", () => {
         register: (engineId: string) => {
           registerContextEngine(engineId, () => 42n as unknown as ContextEngine);
         },
-        expectedError: "contract validation threw",
+        expectedError: (engineId: string) =>
+          `[context-engine] Context engine "${engineId}" contract validation threw: Do not know how to serialize a BigInt; falling back to default engine "legacy".`,
       },
     ] as const;
 
@@ -923,7 +928,7 @@ describe("Invalid engine fallback", () => {
 
       expect(engine.info.id, testCase.name).toBe("legacy");
       expect(console.error, testCase.name).toHaveBeenCalledWith(
-        expect.stringContaining(testCase.expectedError),
+        testCase.expectedError(testCase.engineId),
       );
     }
   });

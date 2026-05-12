@@ -8,6 +8,14 @@ describe("plugin lifecycle trace", () => {
   const originalTraceEnv = process.env.OPENCLAW_PLUGIN_LIFECYCLE_TRACE;
   let errorSpy: ReturnType<typeof vi.spyOn>;
 
+  function requireErrorMessage(index = 0): unknown {
+    const call = errorSpy.mock.calls.at(index);
+    if (!call) {
+      throw new Error(`expected console.error call ${index}`);
+    }
+    return call[0];
+  }
+
   beforeEach(() => {
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
   });
@@ -40,7 +48,7 @@ describe("plugin lifecycle trace", () => {
     ).toBe(42);
 
     expect(errorSpy).toHaveBeenCalledTimes(1);
-    expect(errorSpy.mock.calls[0]?.[0]).toMatch(
+    expect(requireErrorMessage()).toMatch(
       /^\[plugins:lifecycle\] phase="config read" ms=\d+\.\d{2} status=ok command="inspect" includeDisabled=true$/,
     );
   });
@@ -56,7 +64,7 @@ describe("plugin lifecycle trace", () => {
     ).toThrow(error);
 
     expect(errorSpy).toHaveBeenCalledTimes(1);
-    expect(errorSpy.mock.calls[0]?.[0]).toMatch(
+    expect(requireErrorMessage()).toMatch(
       /^\[plugins:lifecycle\] phase="registry refresh" ms=\d+\.\d{2} status=error$/,
     );
   });
@@ -72,7 +80,7 @@ describe("plugin lifecycle trace", () => {
     ).rejects.toThrow(error);
 
     expect(errorSpy).toHaveBeenCalledTimes(1);
-    expect(errorSpy.mock.calls[0]?.[0]).toMatch(
+    expect(requireErrorMessage()).toMatch(
       /^\[plugins:lifecycle\] phase="manifest registry" ms=\d+\.\d{2} status=error$/,
     );
   });

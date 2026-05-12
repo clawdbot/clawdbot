@@ -4712,12 +4712,14 @@ describe("matrix live qa scenarios", () => {
       expect(endStdin).toHaveBeenCalledTimes(1);
       expect(wait).toHaveBeenCalledTimes(1);
       expect(kill).toHaveBeenCalledTimes(1);
-      expect(registerWithToken).toHaveBeenCalledWith({
-        deviceName: "OpenClaw Matrix QA CLI Self Verification Owner",
-        localpart: expect.stringMatching(/^qa-cli-self-verification-[a-f0-9]{8}$/),
-        password: expect.stringMatching(/^matrix-qa-/),
-        registrationToken: "registration-token",
-      });
+      const registrationRequest = registerWithToken.mock.calls[0]?.[0];
+      expect(registrationRequest?.deviceName).toBe(
+        "OpenClaw Matrix QA CLI Self Verification Owner",
+      );
+      expect(registrationRequest?.localpart?.startsWith("qa-cli-self-verification-")).toBe(true);
+      expect(registrationRequest?.localpart).toHaveLength("qa-cli-self-verification-".length + 8);
+      expect(registrationRequest?.password?.startsWith("matrix-qa-")).toBe(true);
+      expect(registrationRequest?.registrationToken).toBe("registration-token");
       expect(loginWithPassword).toHaveBeenCalledWith({
         deviceName: "OpenClaw Matrix QA CLI Self Verification Device",
         password: "cli-owner-password",

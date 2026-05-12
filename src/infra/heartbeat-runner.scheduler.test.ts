@@ -64,10 +64,13 @@ describe("startHeartbeatRunner", () => {
 
   function getRunCall(runSpy: MockRunOnce, callIndex: number) {
     const call = runSpy.mock.calls[callIndex];
-    expect(call).toBeDefined();
-    const options = call?.[0];
-    expect(typeof options).toBe("object");
-    expect(options).not.toBeNull();
+    if (!call) {
+      throw new Error(`Expected heartbeat run call ${callIndex}`);
+    }
+    const options = call[0];
+    if (!options || typeof options !== "object") {
+      throw new Error(`expected heartbeat run options ${callIndex}`);
+    }
     return options as Record<string, unknown>;
   }
 
@@ -93,9 +96,11 @@ describe("startHeartbeatRunner", () => {
       .slice(params.startIndex ?? 0)
       .map((entry) => entry[0] as { agentId?: string; heartbeat?: { every?: string } })
       .find((options) => options.agentId === params.agentId);
-    expect(call).toBeDefined();
+    if (!call) {
+      throw new Error(`Expected heartbeat run call for ${params.agentId}`);
+    }
     if (params.expectedHeartbeatEvery) {
-      expect(call?.heartbeat?.every).toBe(params.expectedHeartbeatEvery);
+      expect(call.heartbeat?.every).toBe(params.expectedHeartbeatEvery);
     }
   }
 
@@ -473,6 +478,8 @@ describe("startHeartbeatRunner", () => {
               prompt: "Ops prompt",
               directPolicy: "block",
               target: "discord:channel:ops",
+              to: "discord:dm:ops",
+              accountId: "ops-account",
             },
           },
         ]),
@@ -496,6 +503,49 @@ describe("startHeartbeatRunner", () => {
           prompt: "Ops prompt",
           directPolicy: "block",
           target: "last",
+        },
+      },
+    });
+
+    runner.stop();
+  });
+
+  it("keeps non-cron targeted wake destination overrides explicit", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = await expectWakeDispatch({
+      cfg: {
+        ...heartbeatConfig([
+          {
+            id: "ops",
+            heartbeat: {
+              every: "15m",
+              target: "discord:channel:ops",
+              to: "discord:dm:ops",
+              accountId: "ops-account",
+            },
+          },
+        ]),
+      } as OpenClawConfig,
+      runSpy,
+      wake: {
+        source: "hook",
+        intent: "event",
+        reason: "hook:job-123",
+        agentId: "ops",
+        sessionKey: "agent:ops:discord:channel:alerts",
+        heartbeat: { target: "last" },
+        coalesceMs: 0,
+      },
+      expectedCall: {
+        agentId: "ops",
+        reason: "hook:job-123",
+        sessionKey: "agent:ops:discord:channel:alerts",
+        heartbeat: {
+          every: "15m",
+          target: "last",
+          to: "discord:dm:ops",
+          accountId: "ops-account",
         },
       },
     });

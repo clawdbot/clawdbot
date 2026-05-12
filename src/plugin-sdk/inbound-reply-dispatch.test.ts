@@ -38,6 +38,10 @@ import {
   resolveInboundReplyDispatchCounts,
 } from "./inbound-reply-dispatch.js";
 
+function readFirstMockArg(fn: unknown): unknown {
+  return (fn as { mock: { calls: unknown[][] } }).mock.calls.at(0)?.[0];
+}
+
 describe("recordInboundSessionAndDispatchReply", () => {
   beforeEach(() => {
     deliverInboundReplyWithMessageSendContext.mockReset();
@@ -86,12 +90,11 @@ describe("recordInboundSessionAndDispatchReply", () => {
     });
 
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
-    expect(recordInboundSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:test:peer",
-        ctx: ctxPayload,
-      }),
-    );
+    const recordParams = readFirstMockArg(recordInboundSession) as
+      | { ctx?: unknown; sessionKey?: string }
+      | undefined;
+    expect(recordParams?.sessionKey).toBe("agent:main:test:peer");
+    expect(recordParams?.ctx).toBe(ctxPayload);
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
     expect(deliver).toHaveBeenCalledWith({
       text: "hello",
@@ -198,17 +201,24 @@ describe("recordInboundSessionAndDispatchReply", () => {
       onDispatchError: vi.fn(),
     });
 
-    expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        accountId: "default",
-        agentId: "main",
-        ctxPayload,
-        payload: expect.objectContaining({ text: "hello durable" }),
-        info: { kind: "final" },
-        replyToMode: "first",
-      }),
-    );
+    const durableParams = readFirstMockArg(deliverInboundReplyWithMessageSendContext) as
+      | {
+          accountId?: string;
+          agentId?: string;
+          channel?: string;
+          ctxPayload?: unknown;
+          info?: unknown;
+          payload?: { text?: string };
+          replyToMode?: string;
+        }
+      | undefined;
+    expect(durableParams?.channel).toBe("telegram");
+    expect(durableParams?.accountId).toBe("default");
+    expect(durableParams?.agentId).toBe("main");
+    expect(durableParams?.ctxPayload).toBe(ctxPayload);
+    expect(durableParams?.payload?.text).toBe("hello durable");
+    expect(durableParams?.info).toEqual({ kind: "final" });
+    expect(durableParams?.replyToMode).toBe("first");
     expect(deliver).not.toHaveBeenCalled();
   });
 

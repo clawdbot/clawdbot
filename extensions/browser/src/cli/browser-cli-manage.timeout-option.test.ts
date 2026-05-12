@@ -20,7 +20,7 @@ describe("browser manage start timeout option", () => {
     if (!startCall) {
       throw new Error("expected browser /start call");
     }
-    expect(startCall[0]).toMatchObject({ timeout: "60000" });
+    expect((startCall[0] as { timeout?: string } | undefined)?.timeout).toBe("60000");
     expect(startCall[2]).toBeUndefined();
   });
 

@@ -15,7 +15,8 @@ describe("resolveCliAuthEpoch", () => {
     epoch: Awaited<ReturnType<typeof resolveCliAuthEpoch>>,
     label = "auth epoch",
   ): asserts epoch is string {
-    expect(epoch, label).toEqual(expect.stringMatching(/\S/));
+    expect(typeof epoch, label).toBe("string");
+    expect(epoch, label).toMatch(/^[a-f0-9]{64}$/);
   }
 
   it("returns undefined when no local or auth-profile credentials exist", async () => {

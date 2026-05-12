@@ -104,6 +104,14 @@ function createConfigWithDiscordAccount(overrides: Record<string, unknown> = {})
 
 type MockCallReader = { mock: { calls: unknown[][] } };
 
+function firstMockArg(mock: MockCallReader, label: string) {
+  const firstCall = mock.mock.calls.at(0);
+  if (!firstCall) {
+    throw new Error(`expected ${label} mock call`);
+  }
+  return firstCall[0];
+}
+
 function mockMessages(mock: unknown): string[] {
   return (mock as MockCallReader).mock.calls.map((call) => {
     const message = call[0];
@@ -131,6 +139,7 @@ vi.mock("../voice/manager.runtime.js", () => {
     DiscordVoiceManager: function DiscordVoiceManager() {},
     DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
     DiscordVoiceResumedListener: function DiscordVoiceResumedListener() {},
+    DiscordVoiceStateUpdateListener: function DiscordVoiceStateUpdateListener() {},
   };
 });
 describe("monitorDiscordProvider", () => {
@@ -153,7 +162,7 @@ describe("monitorDiscordProvider", () => {
     | { listenerTimeout?: number; slowListenerThreshold?: number }
     | undefined => {
     expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
-    const opts = clientConstructorOptionsMock.mock.calls[0]?.[0] as {
+    const opts = firstMockArg(clientConstructorOptionsMock, "Discord client constructor") as {
       eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
     };
     return opts.eventQueue;
@@ -165,13 +174,11 @@ describe("monitorDiscordProvider", () => {
     requestOptions?: { timeout?: number; runtimeProfile?: string; maxQueueSize?: number };
   } => {
     expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
-    return (
-      (clientConstructorOptionsMock.mock.calls[0]?.[0] as {
-        clientId?: string;
-        eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
-        requestOptions?: { timeout?: number; runtimeProfile?: string; maxQueueSize?: number };
-      }) ?? {}
-    );
+    return firstMockArg(clientConstructorOptionsMock, "Discord client constructor") as {
+      clientId?: string;
+      eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
+      requestOptions?: { timeout?: number; runtimeProfile?: string; maxQueueSize?: number };
+    };
   };
 
   const getHealthProbe = () => {
@@ -263,6 +270,7 @@ describe("monitorDiscordProvider", () => {
         DiscordVoiceManager: function DiscordVoiceManager() {},
         DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
         DiscordVoiceResumedListener: function DiscordVoiceResumedListener() {},
+        DiscordVoiceStateUpdateListener: function DiscordVoiceStateUpdateListener() {},
       } as never;
     });
     providerTesting.setLoadDiscordProviderSessionRuntime(
@@ -691,7 +699,7 @@ describe("monitorDiscordProvider", () => {
         reason: "status-timeout",
       });
 
-      const firstCall = getAcpSessionStatusMock.mock.calls[0]?.[0] as
+      const firstCall = firstMockArg(getAcpSessionStatusMock, "ACP session status") as
         | { signal?: AbortSignal }
         | undefined;
       if (!firstCall?.signal) {

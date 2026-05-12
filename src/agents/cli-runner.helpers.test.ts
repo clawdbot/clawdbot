@@ -4,6 +4,7 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { MAX_IMAGE_BYTES } from "../media/constants.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import {
   buildCliArgs,
   loadPromptRefImages,
@@ -67,7 +68,7 @@ describe("loadPromptRefImages", () => {
       sandbox,
     });
 
-    const [ref, workspaceDir, options] = loadImageFromRefSpy.mock.calls[0] ?? [];
+    const [ref, workspaceDir, options] = loadImageFromRefSpy.mock.calls.at(0) ?? [];
     expect(ref?.resolved).toBe("/tmp/photo.png");
     expect(ref?.type).toBe("path");
     expect(workspaceDir).toBe("/workspace");
@@ -224,10 +225,14 @@ describe("writeCliImages", () => {
     });
 
     try {
-      expect(first.paths).toHaveLength(1);
+      expect(first.paths).toStrictEqual([
+        expect.stringMatching(
+          new RegExp(
+            `^${escapeRegExp(`${resolvePreferredOpenClawTmpDir()}/openclaw-cli-images/`)}.*\\.png$`,
+          ),
+        ),
+      ]);
       expect(second.paths).toEqual(first.paths);
-      expect(first.paths[0]).toContain(`${resolvePreferredOpenClawTmpDir()}/openclaw-cli-images/`);
-      expect(first.paths[0]).toMatch(/\.png$/);
       await expect(fs.readFile(first.paths[0])).resolves.toEqual(Buffer.from(image.data, "base64"));
     } finally {
       await fs.rm(first.paths[0], { force: true });
@@ -296,13 +301,14 @@ describe("writeCliImages", () => {
         useResume: false,
       });
 
-      const imageArgIndex = argv.indexOf("--image");
-      const promptIndex = argv.indexOf("describe the attached image");
-      expect(imageArgIndex).toBeGreaterThanOrEqual(0);
-      expect(promptIndex).toBeGreaterThanOrEqual(0);
-      expect(imageArgIndex).toBeGreaterThan(promptIndex);
-      expect(argv[imageArgIndex + 1]).toContain("openclaw-cli-images");
-      expect(argv[imageArgIndex + 1]).not.toBe(sourceImage);
+      expect(argv).toStrictEqual([
+        "exec",
+        "--json",
+        "describe the attached image",
+        "--image",
+        expect.stringContaining("openclaw-cli-images"),
+      ]);
+      expect(argv[4]).not.toBe(sourceImage);
 
       await prepared.cleanupImages?.();
     } finally {

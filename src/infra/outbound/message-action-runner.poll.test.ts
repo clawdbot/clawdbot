@@ -10,6 +10,21 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundChannelPlugin: vi.fn(),
 }));
 
+function firstMockArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error(`expected ${label} params to be an object`);
+  }
+  return arg as Record<string, unknown>;
+}
+
 vi.mock("./channel-resolution.js", () => ({
   resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
   resetOutboundChannelResolutionStateForTest: vi.fn(),
@@ -95,19 +110,14 @@ async function runPollAction(params: {
     params: params.actionParams as never,
     toolContext: params.toolContext as never,
   });
-  const call = mocks.executePollAction.mock.calls[0]?.[0] as
-    | {
-        resolveCorePoll?: () => {
-          durationHours?: number;
-          maxSelections?: number;
-          threadId?: string;
-        };
-        ctx?: { params?: Record<string, unknown> };
-      }
-    | undefined;
-  if (!call) {
-    return undefined;
-  }
+  const call = firstMockArg(mocks.executePollAction, "executePollAction") as {
+    resolveCorePoll?: () => {
+      durationHours?: number;
+      maxSelections?: number;
+      threadId?: string;
+    };
+    ctx?: { params?: Record<string, unknown> };
+  };
   return {
     ...call.resolveCorePoll?.(),
     ctx: call.ctx,

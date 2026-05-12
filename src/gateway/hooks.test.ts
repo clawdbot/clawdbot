@@ -454,13 +454,10 @@ describe("gateway hooks helpers", () => {
       },
     } as OpenClawConfig);
 
-    expect(resolved.mappings).toMatchObject([
-      {
-        action: "wake",
-        matchPath: "wake",
-        sessionKey: "hook:wake:{{payload.id}}",
-      },
-    ]);
+    expect(resolved.mappings).toHaveLength(1);
+    expect(resolved.mappings[0]?.action).toBe("wake");
+    expect(resolved.mappings[0]?.matchPath).toBe("wake");
+    expect(resolved.mappings[0]?.sessionKey).toBe("hook:wake:{{payload.id}}");
     expect(resolved.sessionPolicy.allowedSessionKeyPrefixes).toBeUndefined();
   });
 

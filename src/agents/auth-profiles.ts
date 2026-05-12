@@ -15,7 +15,10 @@ export {
   externalCliDiscoveryScoped,
   type ExternalCliAuthDiscovery,
 } from "./auth-profiles/external-cli-discovery.js";
-export { resolveApiKeyForProfile } from "./auth-profiles/oauth.js";
+export {
+  refreshOAuthCredentialForRuntime,
+  resolveApiKeyForProfile,
+} from "./auth-profiles/oauth.js";
 export {
   isConfiguredAwsSdkAuthProfileForProvider,
   resolveAuthProfileEligibility,
@@ -60,6 +63,8 @@ export {
 } from "./auth-profiles/store.js";
 export type {
   ApiKeyCredential,
+  AuthProfileBlockedReason,
+  AuthProfileBlockedSource,
   AuthProfileCredential,
   AuthProfileFailureReason,
   AuthProfileIdRepairResult,
@@ -76,6 +81,7 @@ export {
   getSoonestCooldownExpiry,
   isProfileInCooldown,
   markAuthProfileCooldown,
+  markAuthProfileBlockedUntil,
   markAuthProfileFailure,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,

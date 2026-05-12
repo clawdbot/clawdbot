@@ -61,9 +61,13 @@
   },
   "mediaUnderstandingProviderMetadata": {
     "openrouter": {
-      "capabilities": ["image"],
+      "capabilities": ["image", "audio"],
       "defaultModels": {
-        "image": "auto"
+        "image": "auto",
+        "audio": "openai/whisper-large-v3-turbo"
+      },
+      "autoPriority": {
+        "audio": 35
       }
     }
   },

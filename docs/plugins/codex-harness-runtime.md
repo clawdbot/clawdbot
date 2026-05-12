@@ -80,6 +80,11 @@ OpenClaw can mirror selected events, but it cannot rewrite the native Codex
 thread unless Codex exposes that operation through app-server or native hook
 callbacks.
 
+Codex app-server item notifications also provide async `after_tool_call`
+observations for native tool completions that are not already covered by the
+native `PostToolUse` relay. These observations are for telemetry and plugin
+compatibility only; they cannot block, delay, or mutate the native tool call.
+
 Compaction and LLM lifecycle projections come from Codex app-server
 notifications and OpenClaw adapter state, not native Codex hook commands.
 OpenClaw's `before_compaction`, `after_compaction`, `llm_input`, and

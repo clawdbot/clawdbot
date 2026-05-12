@@ -300,7 +300,7 @@ describe("loadEnabledBundlePiSettingsSnapshot", () => {
     expect(snapshot.hideThinkingBlock).toBe(true);
     expect(pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledOnce();
     const [snapshotLookup] =
-      pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot.mock.calls[0] ?? [];
+      pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot.mock.calls.at(0) ?? [];
     expect(snapshotLookup?.config?.plugins?.load).toEqual({
       paths: ["/tmp/changed-plugin-root"],
     });

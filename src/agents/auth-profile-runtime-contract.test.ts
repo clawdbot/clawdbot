@@ -71,7 +71,7 @@ vi.mock("./pi-embedded.js", () => ({
 
 function capturedEmbeddedRunParams(): RunEmbeddedPiAgentParams {
   expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-  const call = runEmbeddedPiAgentMock.mock.calls[0];
+  const call = runEmbeddedPiAgentMock.mock.calls.at(0);
   if (!call) {
     throw new Error("expected runEmbeddedPiAgent to be called");
   }
@@ -261,7 +261,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.authProfileId).toBe(
+    expect(runCliAgentMock.mock.calls.at(0)?.[0]?.authProfileId).toBe(
       expectedForwardedAuthProfile({
         provider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
         authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
@@ -281,7 +281,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.authProfileId).toBe(
+    expect(runCliAgentMock.mock.calls.at(0)?.[0]?.authProfileId).toBe(
       expectedForwardedAuthProfile({
         provider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
         authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
@@ -301,7 +301,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.authProfileId).toBeUndefined();
+    expect(runCliAgentMock.mock.calls.at(0)?.[0]?.authProfileId).toBeUndefined();
   });
 
   it("does not leak an OpenAI Codex auth profile into an unrelated CLI provider", async () => {
@@ -314,7 +314,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.authProfileId).toBeUndefined();
+    expect(runCliAgentMock.mock.calls.at(0)?.[0]?.authProfileId).toBeUndefined();
   });
 
   it("does not let a configured Codex harness leak OpenAI Codex auth into unrelated CLI providers", async () => {
@@ -338,7 +338,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.authProfileId).toBeUndefined();
+    expect(runCliAgentMock.mock.calls.at(0)?.[0]?.authProfileId).toBeUndefined();
   });
 
   it("forwards an OpenAI Codex auth profile through the embedded Pi path", async () => {
@@ -351,7 +351,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     });
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.authProfileId).toBe(
+    expect(runEmbeddedPiAgentMock.mock.calls.at(0)?.[0]?.authProfileId).toBe(
       AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
     );
   });
@@ -366,7 +366,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     });
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.authProfileId).toBe(
+    expect(runEmbeddedPiAgentMock.mock.calls.at(0)?.[0]?.authProfileId).toBe(
       expectedForwardedAuthProfile({
         provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
         authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,

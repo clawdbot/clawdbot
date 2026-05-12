@@ -196,12 +196,12 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     });
 
     expect(normalized[0]?.parameters).toEqual(permissiveParameters);
-    expect(findOpenAIStrictSchemaViolations(permissiveParameters, "cron.parameters")).toEqual(
-      expect.arrayContaining([
-        "cron.parameters.required.schedule",
-        "cron.parameters.additionalProperties",
-      ]),
+    const strictSchemaViolations = findOpenAIStrictSchemaViolations(
+      permissiveParameters,
+      "cron.parameters",
     );
+    expect(strictSchemaViolations).toContain("cron.parameters.required.schedule");
+    expect(strictSchemaViolations).toContain("cron.parameters.additionalProperties");
     expect(
       hooks.inspectToolSchemas({
         provider: "openai",

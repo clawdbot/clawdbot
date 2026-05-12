@@ -405,11 +405,12 @@ describe("registerQrCli", () => {
       bootstrapToken: "bootstrap-123",
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
-    expect(resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        commandName: "qr --remote",
-        targetIds: new Set(["gateway.remote.token", "gateway.remote.password"]),
-      }),
+    const request = resolveCommandSecretRefsViaGateway.mock.calls.at(0)?.[0] as
+      | { commandName?: string; targetIds?: Set<string> }
+      | undefined;
+    expect(request?.commandName).toBe("qr --remote");
+    expect(request?.targetIds).toEqual(
+      new Set(["gateway.remote.token", "gateway.remote.password"]),
     );
   });
 

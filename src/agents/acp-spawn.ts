@@ -319,7 +319,7 @@ function isHeartbeatEnabledForSessionAgent(params: {
     return true;
   }
 
-  const agentEntries = params.cfg.agents?.list ?? [];
+  const agentEntries = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : [];
   const hasExplicitHeartbeatAgents = agentEntries.some((entry) => Boolean(entry?.heartbeat));
   const enabledByPolicy = hasExplicitHeartbeatAgents
     ? agentEntries.some(
@@ -1371,6 +1371,8 @@ export async function spawnAcpDirect(
       parentSessionKey,
       childSessionKey: sessionKey,
       agentId: targetAgentId,
+      mainKey: cfg.session?.mainKey,
+      sessionScope: cfg.session?.scope,
       logPath: streamLogPath,
       deliveryContext: parentDeliveryCtx,
       emitStartNotice: false,
@@ -1424,6 +1426,8 @@ export async function spawnAcpDirect(
         parentSessionKey,
         childSessionKey: sessionKey,
         agentId: targetAgentId,
+        mainKey: cfg.session?.mainKey,
+        sessionScope: cfg.session?.scope,
         logPath: streamLogPath,
         deliveryContext: parentDeliveryCtx,
         emitStartNotice: false,

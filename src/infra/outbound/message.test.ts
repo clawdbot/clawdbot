@@ -109,6 +109,24 @@ function expectDeliveryCallFields(expected: Record<string, unknown>): Record<str
   );
 }
 
+function readPayloadSummary(
+  deliveryCall: Record<string, unknown>,
+): Array<{ text: string; mediaUrl: string | null; mediaUrls: string[] }> {
+  const payloads = deliveryCall.payloads;
+  if (!Array.isArray(payloads)) {
+    return [];
+  }
+  return payloads.map((payload, index) => {
+    const payloadRecord = requireRecord(payload, `outbound payload ${index}`);
+    const mediaUrls = payloadRecord.mediaUrls;
+    return {
+      text: typeof payloadRecord.text === "string" ? payloadRecord.text : "",
+      mediaUrl: typeof payloadRecord.mediaUrl === "string" ? payloadRecord.mediaUrl : null,
+      mediaUrls: Array.isArray(mediaUrls) ? mediaUrls.filter((url) => typeof url === "string") : [],
+    };
+  });
+}
+
 describe("sendMessage", () => {
   beforeAll(async () => {
     ({ sendMessage } = await import("./message.js"));
@@ -418,20 +436,14 @@ describe("sendMessage", () => {
       });
 
       expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-      const deliveryCall = mocks.deliverOutboundPayloads.mock.calls[0]?.[0] as
-        | {
-            payloads?: Array<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }>;
-            mirror?: unknown;
-          }
-        | undefined;
-      const payloadSummary = (deliveryCall?.payloads ?? []).map((payload) => ({
-        text: payload.text ?? "",
-        mediaUrl: payload.mediaUrl ?? null,
-        mediaUrls: payload.mediaUrls ?? [],
-      }));
+      const deliveryCall = requireRecord(
+        getMockCallArg(mocks.deliverOutboundPayloads, 0, 0, "outbound delivery"),
+        "outbound delivery params",
+      );
+      const payloadSummary = readPayloadSummary(deliveryCall);
       expect(payloadSummary, entry.name).toEqual(entry.expectedPayloads);
       expectRecordFields(
-        deliveryCall?.mirror,
+        deliveryCall.mirror,
         {
           sessionKey: "agent:main:forum:dm:123456",
           text: entry.expectedMirror.text,

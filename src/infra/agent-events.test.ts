@@ -152,13 +152,12 @@ describe("agent-events sequencing", () => {
       lastActiveAt: 12_345,
     });
 
-    expect(getAgentRunContext("run-ctx")).toMatchObject({
-      sessionKey: "session-main",
-      verboseLevel: "full",
-      isHeartbeat: true,
-      isControlUiVisible: true,
-      lastActiveAt: 12_345,
-    });
+    const context = getAgentRunContext("run-ctx");
+    expect(context?.sessionKey).toBe("session-main");
+    expect(context?.verboseLevel).toBe("full");
+    expect(context?.isHeartbeat).toBe(true);
+    expect(context?.isControlUiVisible).toBe(true);
+    expect(context?.lastActiveAt).toBe(12_345);
   });
 
   test("falls back to registered sessionKey when event sessionKey is blank", () => {
@@ -232,7 +231,7 @@ describe("agent-events sequencing", () => {
 
     stop();
 
-    expect(second.getAgentRunContext("run-dup")).toMatchObject({ sessionKey: "session-dup" });
+    expect(second.getAgentRunContext("run-dup")?.sessionKey).toBe("session-dup");
     expect(seen).toEqual([
       { seq: 1, sessionKey: "session-dup" },
       { seq: 2, sessionKey: "session-dup" },
@@ -256,7 +255,7 @@ describe("agent-events sequencing", () => {
     stop.mockReturnValue(1_000);
     expect(sweepStaleRunContexts(500)).toBe(1);
     expect(getAgentRunContext("run-stale")).toBeUndefined();
-    expect(getAgentRunContext("run-active")).toMatchObject({ sessionKey: "session-active" });
+    expect(getAgentRunContext("run-active")?.sessionKey).toBe("session-active");
 
     const seen: Array<{ runId: string; seq: number }> = [];
     const unsubscribe = onAgentEvent((evt) => {

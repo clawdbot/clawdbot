@@ -154,10 +154,8 @@ describe("resolveTelegramConversationBaseSessionKey", () => {
     expect(touch).not.toHaveBeenCalled();
     expect(result.configuredBinding).toBeNull();
     expect(result.configuredBindingSessionKey).toBe("");
-    expect(result.route).toMatchObject({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      matchedBy: "default",
-    });
+    expect(result.route.agentId).toBe("main");
+    expect(result.route.sessionKey).toBe("agent:main:main");
+    expect(result.route.matchedBy).toBe("default");
   });
 });

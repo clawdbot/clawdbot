@@ -1,4 +1,5 @@
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
+import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -116,6 +117,9 @@ export async function generateVideo(
   const getProvider = deps.getProvider ?? getVideoGenerationProvider;
   const listProviders = deps.listProviders ?? listVideoGenerationProviders;
   const logger = deps.log ?? log;
+  const timeoutMs =
+    params.timeoutMs ??
+    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.videoGenerationModel);
   const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
     modelConfig: params.cfg.agents?.defaults?.videoGenerationModel,
@@ -302,7 +306,7 @@ export async function generateVideo(
         inputVideos: params.inputVideos,
         inputAudios: params.inputAudios,
         providerOptions: params.providerOptions,
-        ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       };
       if (supportedDurations) {
         generationRequest[SUPPORTED_DURATIONS_HINT] = supportedDurations;

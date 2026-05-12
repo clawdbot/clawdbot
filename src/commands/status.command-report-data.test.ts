@@ -85,13 +85,13 @@ describe("buildStatusCommandReportData", () => {
       }),
     );
 
-    expect(result.overviewRows).toEqual(
-      expect.arrayContaining([
-        {
-          Item: "Model pricing",
-          Value: "warn(degraded · OpenRouter pricing fetch failed: TypeError: fetch failed)",
-        },
-      ]),
-    );
+    const modelPricingIndex = result.overviewRows.findIndex((row) => row.Item === "Model pricing");
+    expect(modelPricingIndex).toBeGreaterThanOrEqual(0);
+    expect(result.overviewRows[modelPricingIndex]).toStrictEqual({
+      Item: "Model pricing",
+      Value:
+        "warn(warning · optional pricing refresh degraded · OpenRouter pricing fetch failed: TypeError: fetch failed)",
+    });
+    expect(result.overviewRows[modelPricingIndex + 1]?.Item).toBe("Memory");
   });
 });

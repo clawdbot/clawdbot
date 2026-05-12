@@ -60,7 +60,12 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
   }
 
   async function expectPathMissing(targetPath: string): Promise<void> {
-    await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+    try {
+      await fs.stat(targetPath);
+      throw new Error(`expected ${targetPath} to be missing`);
+    } catch (error) {
+      expect((error as { code?: string }).code).toBe("ENOENT");
+    }
   }
 
   it("stages Codex-home image paths before Gateway managed-image display", async () => {

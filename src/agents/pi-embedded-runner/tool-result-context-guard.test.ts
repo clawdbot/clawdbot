@@ -486,7 +486,7 @@ describe("installContextEngineLoopHook", () => {
     await callTransform(agent, messages);
 
     expect(engine.afterTurn).toHaveBeenCalledTimes(1);
-    const afterTurnParams = engine.afterTurn.mock.calls[0]?.[0];
+    const afterTurnParams = engine.afterTurn.mock.calls.at(0)?.[0];
     expect(afterTurnParams?.prePromptMessageCount).toBe(1);
     expect(afterTurnParams?.messages).toBe(messages);
     expect(engine.assemble).toHaveBeenCalledTimes(1);
@@ -508,7 +508,7 @@ describe("installContextEngineLoopHook", () => {
     await callTransform(agent, messages);
 
     expect(engine.afterTurn).toHaveBeenCalledTimes(1);
-    const afterTurnParams = engine.afterTurn.mock.calls[0]?.[0];
+    const afterTurnParams = engine.afterTurn.mock.calls.at(0)?.[0];
     expect(afterTurnParams?.prePromptMessageCount).toBe(1);
     expect(afterTurnParams?.runtimeContext).toEqual({
       provider: "anthropic",
@@ -551,7 +551,7 @@ describe("installContextEngineLoopHook", () => {
     await callTransform(agent, withNew);
 
     expect(engine.afterTurn).toHaveBeenCalledTimes(1);
-    const afterTurnParams = engine.afterTurn.mock.calls[0]?.[0];
+    const afterTurnParams = engine.afterTurn.mock.calls.at(0)?.[0];
     expect(afterTurnParams?.prePromptMessageCount).toBe(2);
     expect(afterTurnParams?.messages).toBe(withNew);
     expect(engine.assemble).toHaveBeenCalledTimes(1);
@@ -572,8 +572,8 @@ describe("installContextEngineLoopHook", () => {
     await callTransform(agent, batch2);
 
     expect(engine.afterTurn).toHaveBeenCalledTimes(2);
-    expect(engine.afterTurn.mock.calls[0]?.[0]?.prePromptMessageCount).toBe(2);
-    expect(engine.afterTurn.mock.calls[1]?.[0]?.prePromptMessageCount).toBe(4);
+    expect(engine.afterTurn.mock.calls.at(0)?.[0]?.prePromptMessageCount).toBe(2);
+    expect(engine.afterTurn.mock.calls.at(1)?.[0]?.prePromptMessageCount).toBe(4);
   });
 
   it("reports the latest delivered afterTurn checkpoint", async () => {
@@ -761,8 +761,8 @@ describe("installContextEngineLoopHook", () => {
     await callTransform(agent, batch2);
 
     expect(engine.ingestBatch).toHaveBeenCalledTimes(2);
-    expect(engine.ingestBatch?.mock.calls[0]?.[0]?.messages).toEqual(batch1.slice(2));
-    expect(engine.ingestBatch?.mock.calls[1]?.[0]?.messages).toEqual(batch2.slice(4));
+    expect(engine.ingestBatch?.mock.calls.at(0)?.[0]?.messages).toEqual(batch1.slice(2));
+    expect(engine.ingestBatch?.mock.calls.at(1)?.[0]?.messages).toEqual(batch2.slice(4));
     expect(engine.assemble).toHaveBeenCalledTimes(2);
   });
 
@@ -776,7 +776,7 @@ describe("installContextEngineLoopHook", () => {
     await callTransform(agent, messages);
 
     expect(engine.ingest).toHaveBeenCalledTimes(1);
-    const ingestParams = engine.ingest.mock.calls[0]?.[0];
+    const ingestParams = engine.ingest.mock.calls.at(0)?.[0];
     expect(ingestParams?.sessionId).toBe(sessionId);
     expect(ingestParams?.sessionKey).toBe(sessionKey);
     expect(ingestParams?.message).toBe(toolResult);

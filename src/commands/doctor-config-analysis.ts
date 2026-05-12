@@ -1,8 +1,10 @@
 import path from "node:path";
 import type { ZodIssue } from "zod";
 import { CONFIG_PATH } from "../config/config.js";
+import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
+import { resolvePrimaryStringValue } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { isRecord } from "../utils.js";
 
@@ -129,6 +131,60 @@ export function noteOpencodeProviderOverrides(cfg: OpenClawConfig): void {
     "- Remove these entries to restore per-model API routing + costs (then re-run setup if needed).",
   );
   note(lines.join("\n"), "OpenCode");
+}
+
+function isImplicitFallbackClobber(model: unknown): boolean {
+  const primary = resolvePrimaryStringValue(model);
+  if (typeof model === "string") {
+    return primary !== undefined;
+  }
+  if (model !== null && typeof model === "object" && !Array.isArray(model)) {
+    const obj = model as Record<string, unknown>;
+    // Object with primary but no fallbacks key — intent is ambiguous; warn.
+    // Object with fallbacks: [] — explicit no-fallbacks; no warn.
+    return (
+      Object.hasOwn(obj, "primary") && !Object.hasOwn(obj, "fallbacks") && primary !== undefined
+    );
+  }
+  return false;
+}
+
+export function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
+  const defaultFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
+  if (defaultFallbacks.length === 0) {
+    return [];
+  }
+  const warnings: string[] = [];
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  for (const [index, agent] of agents.entries()) {
+    if (!agent || !isImplicitFallbackClobber(agent.model)) {
+      continue;
+    }
+    const id = typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : String(index);
+    const primary = resolvePrimaryStringValue(agent.model);
+    const location = `agents.list[${index}].model (id=${id})`;
+    const modelStr =
+      typeof agent.model === "string" ? `"${agent.model}"` : `{ primary: "${primary}" }`;
+    const shape =
+      typeof agent.model === "string"
+        ? "bare string with no fallbacks"
+        : 'object with no explicit "fallbacks" key';
+    warnings.push(
+      [
+        `- ${location} is ${modelStr}, a ${shape}. At runtime this clobbers agents.defaults.model.fallbacks (${defaultFallbacks.join(", ")}), leaving the agent with no fallbacks.`,
+        `  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.`,
+      ].join("\n"),
+    );
+  }
+  return warnings;
+}
+
+export function noteImplicitFallbackClobberWarnings(cfg: OpenClawConfig): void {
+  const warnings = collectImplicitFallbackClobberWarnings(cfg);
+  if (warnings.length === 0) {
+    return;
+  }
+  note(warnings.join("\n"), "Doctor warnings");
 }
 
 export function noteIncludeConfinementWarning(snapshot: {

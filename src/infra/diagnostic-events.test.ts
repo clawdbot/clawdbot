@@ -28,7 +28,11 @@ describe("diagnostic-events", () => {
 
   function expectConsoleErrorPrefix(errorSpy: { mock: { calls: unknown[][] } }, prefix: string) {
     expect(errorSpy.mock.calls).toHaveLength(1);
-    const message = errorSpy.mock.calls[0]?.[0];
+    const [call] = errorSpy.mock.calls;
+    if (!call) {
+      throw new Error("expected console error call");
+    }
+    const [message] = call;
     expect(typeof message).toBe("string");
     expect((message as string).startsWith(prefix)).toBe(true);
   }

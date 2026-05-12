@@ -84,15 +84,28 @@ describe("fal video generation provider", () => {
       );
   }
 
+  function requireFetchGuardCall(callNumber: number): { init?: RequestInit; url?: string } {
+    const call = fetchGuardMock.mock.calls[callNumber - 1];
+    if (!call) {
+      throw new Error(`expected fal fetch guard call ${callNumber}`);
+    }
+    const [request] = call;
+    if (!request || typeof request !== "object" || Array.isArray(request)) {
+      throw new Error(`expected fal fetch guard request ${callNumber}`);
+    }
+    return request as { init?: RequestInit; url?: string };
+  }
+
   function getSubmitBody(): Record<string, unknown> {
-    return JSON.parse(String(fetchGuardMock.mock.calls[0]?.[0]?.init?.body ?? "{}")) as Record<
-      string,
-      unknown
-    >;
+    const body = requireFetchGuardCall(1).init?.body;
+    if (typeof body !== "string") {
+      throw new Error("expected fal submit JSON body");
+    }
+    return JSON.parse(body) as Record<string, unknown>;
   }
 
   function fetchGuardUrl(callNumber: number): string | undefined {
-    return (fetchGuardMock.mock.calls[callNumber - 1]?.[0] as { url?: string } | undefined)?.url;
+    return requireFetchGuardCall(callNumber).url;
   }
 
   afterEach(() => {
@@ -142,9 +155,7 @@ describe("fal video generation provider", () => {
     });
 
     expect(fetchGuardUrl(1)).toBe("https://queue.fal.run/fal-ai/minimax/video-01-live");
-    const submitBody = JSON.parse(
-      String(fetchGuardMock.mock.calls[0]?.[0]?.init?.body ?? "{}"),
-    ) as Record<string, unknown>;
+    const submitBody = getSubmitBody();
     expect(submitBody).toEqual({
       prompt: "A spaceship emerges from the clouds",
     });

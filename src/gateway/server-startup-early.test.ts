@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+type StartGatewayDiscovery = typeof import("./server-discovery-runtime.js").startGatewayDiscovery;
+
 const mocks = vi.hoisted(() => ({
   getMachineDisplayName: vi.fn(async () => "Test Machine"),
-  startGatewayDiscovery: vi.fn(async () => ({ bonjourStop: null })),
+  startGatewayDiscovery: vi.fn<StartGatewayDiscovery>(async () => ({ bonjourStop: null })),
 }));
 
 vi.mock("../infra/machine-name.js", () => ({
@@ -87,15 +89,15 @@ describe("startGatewayEarlyRuntime", () => {
       }),
     ).resolves.toBe(stop);
 
-    expect(mocks.startGatewayDiscovery).toHaveBeenCalledWith(
-      expect.objectContaining({
-        machineDisplayName: "Test Machine",
-        port: 19_001,
-        gatewayTls: { enabled: true, fingerprintSha256: "abc123" },
-        tailscaleMode: "serve",
-        mdnsMode: "full",
-        gatewayDiscoveryServices: [service],
-      }),
-    );
+    const [discoveryParams] = mocks.startGatewayDiscovery.mock.calls.at(-1) ?? [];
+    if (discoveryParams === undefined) {
+      throw new Error("Expected gateway discovery to start");
+    }
+    expect(discoveryParams.machineDisplayName).toBe("Test Machine");
+    expect(discoveryParams.port).toBe(19_001);
+    expect(discoveryParams.gatewayTls).toEqual({ enabled: true, fingerprintSha256: "abc123" });
+    expect(discoveryParams.tailscaleMode).toBe("serve");
+    expect(discoveryParams.mdnsMode).toBe("full");
+    expect(discoveryParams.gatewayDiscoveryServices).toEqual([service]);
   });
 });

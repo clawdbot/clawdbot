@@ -4,6 +4,12 @@ import type {
   ExecSecurity,
   SystemRunApprovalPlan,
 } from "../infra/exec-approvals.js";
+import { normalizeExecutableToken } from "../infra/exec-wrapper-tokens.js";
+import {
+  isShellWrapperExecutable,
+  POSIX_SHELL_WRAPPERS,
+  resolveShellWrapperTransportArgv,
+} from "../infra/shell-wrapper-resolution.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
@@ -15,6 +21,7 @@ type ExecApprovalCommandSpansRuntime =
   typeof import("./bash-tools.exec-approval-request.runtime.js");
 
 let execApprovalCommandSpansRuntimePromise: Promise<ExecApprovalCommandSpansRuntime> | null = null;
+const POSIX_COMMAND_HIGHLIGHT_SHELLS: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
 
 function loadExecApprovalCommandSpansRuntime(): Promise<ExecApprovalCommandSpansRuntime> {
   execApprovalCommandSpansRuntimePromise ??=
@@ -178,6 +185,7 @@ type HostExecApprovalParams = {
   ask: ExecAsk;
   warningText?: string;
   commandSpans?: ExecApprovalCommandSpan[];
+  commandHighlighting?: boolean;
   agentId?: string;
   resolvedPath?: string;
   sessionKey?: string;
@@ -234,12 +242,40 @@ async function resolveCommandSpans(
   }
 }
 
+function hasUnsupportedShellArgv(argv: readonly string[] | undefined): boolean {
+  if (!argv?.length) {
+    return false;
+  }
+  const shellWrapperArgv = resolveShellWrapperTransportArgv([...argv]) ?? argv;
+  const executable = shellWrapperArgv[0];
+  if (!executable) {
+    return false;
+  }
+  const normalizedExecutable = normalizeExecutableToken(executable);
+  return (
+    isShellWrapperExecutable(normalizedExecutable) &&
+    !POSIX_COMMAND_HIGHLIGHT_SHELLS.has(normalizedExecutable)
+  );
+}
+
+function shouldSkipGeneratedCommandSpans(params: HostExecApprovalParams): boolean {
+  if (params.host === "gateway" && process.platform === "win32") {
+    return true;
+  }
+  const argv = params.commandArgv?.length ? params.commandArgv : params.systemRunPlan?.argv;
+  return hasUnsupportedShellArgv(argv);
+}
+
 async function buildHostApprovalDecisionParams(
   params: HostExecApprovalParams,
 ): Promise<RequestExecApprovalDecisionParams> {
   const commandSpans =
-    params.commandSpans ??
-    (await resolveCommandSpans(params.command ?? params.systemRunPlan?.commandText));
+    params.commandHighlighting === true
+      ? (params.commandSpans ??
+        (shouldSkipGeneratedCommandSpans(params)
+          ? undefined
+          : await resolveCommandSpans(params.command ?? params.systemRunPlan?.commandText)))
+      : undefined;
   return {
     id: params.approvalId,
     command: params.command,

@@ -193,10 +193,10 @@ const defaultRegistry = createTestRegistry([
 ]);
 
 function getFirstDeliveryText(deliver: ReturnType<typeof vi.fn>): string {
-  const firstCall = deliver.mock.calls[0]?.[0] as
-    | { payloads?: Array<{ text?: string }> }
-    | undefined;
-  return firstCall?.payloads?.[0]?.text ?? "";
+  const firstCall = requireFirstCallArg(deliver, "delivery params") as {
+    payloads?: Array<{ text?: string }>;
+  };
+  return firstCall.payloads?.[0]?.text ?? "";
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -210,7 +210,11 @@ function requireFirstCallArg(
   mock: ReturnType<typeof vi.fn>,
   label: string,
 ): Record<string, unknown> {
-  return requireRecord(mock.mock.calls[0]?.[0], label);
+  const firstCall = mock.mock.calls.at(0);
+  if (!firstCall) {
+    throw new Error(`expected ${label} call`);
+  }
+  return requireRecord(firstCall.at(0), label);
 }
 
 function requireFirstPayload(deliver: ReturnType<typeof vi.fn>): ReplyPayload {

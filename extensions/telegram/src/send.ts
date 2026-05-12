@@ -814,12 +814,13 @@ export async function sendMessageTelegram(
       fileName: media.fileName,
     });
 
-    // Validate photo dimensions before attempting sendPhoto
     let sendImageAsPhoto = true;
-    if (kind === "image" && !isGif && !opts.forceDocument) {
+    const deliveryKind =
+      opts.forceDocument === true && (kind === "image" || kind === "video") ? "document" : kind;
+    if (deliveryKind === "image" && !isGif) {
       sendImageAsPhoto = await shouldSendTelegramImageAsPhoto(media.buffer);
     }
-    const isVideoNote = kind === "video" && opts.asVideoNote === true;
+    const isVideoNote = deliveryKind === "video" && opts.asVideoNote === true;
     const fileName =
       media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind ?? "document")) ?? "file";
     const file = new InputFileCtor(media.buffer, fileName);
@@ -845,7 +846,9 @@ export async function sendMessageTelegram(
       ...(!needsSeparateText && replyMarkup ? { reply_markup: replyMarkup } : {}),
     };
     const videoDimensions =
-      kind === "video" && !isVideoNote ? await probeVideoDimensions(media.buffer) : undefined;
+      deliveryKind === "video" && !isVideoNote
+        ? await probeVideoDimensions(media.buffer)
+        : undefined;
     const mediaParams = {
       ...(htmlCaption ? { caption: htmlCaption, parse_mode: "HTML" as const } : {}),
       ...baseMediaParams,
@@ -868,7 +871,7 @@ export async function sendMessageTelegram(
       );
 
     const mediaSender = (() => {
-      if (isGif && !opts.forceDocument) {
+      if (isGif && deliveryKind !== "document") {
         return {
           label: "animation",
           sender: (effectiveParams: TelegramThreadScopedParams | undefined) =>
@@ -879,7 +882,7 @@ export async function sendMessageTelegram(
             ) as Promise<TelegramMessageLike>,
         };
       }
-      if (kind === "image" && !opts.forceDocument && sendImageAsPhoto) {
+      if (deliveryKind === "image" && !isGif && sendImageAsPhoto) {
         return {
           label: "photo",
           sender: (effectiveParams: TelegramThreadScopedParams | undefined) =>
@@ -890,7 +893,7 @@ export async function sendMessageTelegram(
             ) as Promise<TelegramMessageLike>,
         };
       }
-      if (kind === "video") {
+      if (deliveryKind === "video") {
         if (isVideoNote) {
           return {
             label: "video_note",
@@ -946,8 +949,6 @@ export async function sendMessageTelegram(
           api.sendDocument(
             chatId,
             file,
-            // Only force Telegram to keep the uploaded media type when callers explicitly
-            // opt into document delivery for image/GIF uploads.
             (opts.forceDocument
               ? { ...effectiveParams, disable_content_type_detection: true }
               : effectiveParams) as Parameters<typeof api.sendDocument>[2],

@@ -39,7 +39,7 @@ describe("web-guarded-fetch", () => {
 
     await withTrustedWebToolsEndpoint({ url: "https://example.com" }, async () => undefined);
 
-    const call = vi.mocked(fetchWithSsrFGuard).mock.calls[0]?.[0];
+    const call = vi.mocked(fetchWithSsrFGuard).mock.calls.at(0)?.[0];
     expect(call?.url).toBe("https://example.com");
     expect(call?.policy).toEqual({
       allowRfc2544BenchmarkRange: true,
@@ -58,7 +58,7 @@ describe("web-guarded-fetch", () => {
 
     await withSelfHostedWebToolsEndpoint({ url: "http://127.0.0.1:8080" }, async () => undefined);
 
-    const call = vi.mocked(fetchWithSsrFGuard).mock.calls[0]?.[0];
+    const call = vi.mocked(fetchWithSsrFGuard).mock.calls.at(0)?.[0];
     expect(call?.url).toBe("http://127.0.0.1:8080");
     expect(call?.policy?.dangerouslyAllowPrivateNetwork).toBe(true);
     expect(call?.policy?.allowRfc2544BenchmarkRange).toBe(true);
@@ -75,7 +75,7 @@ describe("web-guarded-fetch", () => {
 
     await withStrictWebToolsEndpoint({ url: "https://example.com" }, async () => undefined);
 
-    const call = vi.mocked(fetchWithSsrFGuard).mock.calls[0]?.[0];
+    const call = vi.mocked(fetchWithSsrFGuard).mock.calls.at(0)?.[0];
     expect(call?.url).toBe("https://example.com");
     expect(call?.policy).toBeUndefined();
     expect(call?.mode).toBe(GUARDED_FETCH_MODE.STRICT);

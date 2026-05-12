@@ -257,19 +257,20 @@ describe("memory tools", () => {
       };
       const entries = Object.values(store.entries ?? {});
       expect(entries).toHaveLength(1);
-      expect(entries[0]).toMatchObject({
-        path: "memory/2026-04-03.md",
-        recallCount: 1,
-      });
+      const entry = entries[0];
+      expect(entry?.path).toBe("memory/2026-04-03.md");
+      expect(entry?.recallCount).toBe(1);
       const events = await waitFor(async () => {
         const memoryEvents = await readMemoryHostEvents({ workspaceDir });
         expect(memoryEvents).toHaveLength(1);
         return memoryEvents;
       });
-      expect(events[0]).toMatchObject({
-        type: "memory.recall.recorded",
-        query: "glacier backup",
-      });
+      const event = events[0];
+      expect(event?.type).toBe("memory.recall.recorded");
+      if (!event || event.type !== "memory.recall.recorded") {
+        throw new Error("expected memory recall recorded event");
+      }
+      expect(event.query).toBe("glacier backup");
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -293,7 +294,7 @@ describe("memory tools", () => {
     const tool = createMemorySearchToolOrThrow();
     const result = await tool.execute("call_wiki_only", { query: "alpha", corpus: "wiki" });
 
-    expect(result.details).toMatchObject({
+    expect(result.details).toStrictEqual({
       results: [
         {
           corpus: "wiki",
@@ -304,6 +305,12 @@ describe("memory tools", () => {
           snippet: "Alpha wiki entry",
         },
       ],
+      citations: "auto",
+      debug: undefined,
+      fallback: undefined,
+      mode: undefined,
+      model: undefined,
+      provider: undefined,
     });
     expect(getMemorySearchManagerMockCalls()).toBe(0);
   });

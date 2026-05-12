@@ -437,28 +437,26 @@ describe("resolveFeishuAccount", () => {
   });
 
   it("ignores non-string account names", () => {
-    expect(
-      resolveFeishuAccount({
-        cfg: {
-          channels: {
-            feishu: {
-              accounts: {
-                main: {
-                  name: { bad: true },
-                  appId: "cli_123",
-                  appSecret: "secret_456", // pragma: allowlist secret
-                } as never,
-              },
+    const account = resolveFeishuAccount({
+      cfg: {
+        channels: {
+          feishu: {
+            accounts: {
+              main: {
+                name: { bad: true },
+                appId: "cli_123",
+                appSecret: "secret_456", // pragma: allowlist secret
+              } as never,
             },
           },
-        } as never,
-        accountId: "main",
-      }),
-    ).toMatchObject({
+        },
+      } as never,
       accountId: "main",
-      appId: "cli_123",
-      appSecret: "secret_456",
-      name: undefined,
     });
+
+    expect(account.accountId).toBe("main");
+    expect(account.appId).toBe("cli_123");
+    expect(account.appSecret).toBe("secret_456");
+    expect(account.name).toBeUndefined();
   });
 });

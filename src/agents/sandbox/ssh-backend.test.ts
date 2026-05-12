@@ -178,13 +178,13 @@ describe("ssh sandbox backend", () => {
       configLabelMatch: true,
     });
     const sessionSettings = requireRecord(
-      sshMocks.createSshSandboxSessionFromSettings.mock.calls[0]?.[0],
+      sshMocks.createSshSandboxSessionFromSettings.mock.calls.at(0)?.[0],
       "ssh session settings",
     );
     expect(sessionSettings.target).toBe("peter@example.com:2222");
     expect(sessionSettings.workspaceRoot).toBe("/remote/openclaw");
     const commandParams = requireRecord(
-      sshMocks.runSshSandboxCommand.mock.calls[0]?.[0],
+      sshMocks.runSshSandboxCommand.mock.calls.at(0)?.[0],
       "ssh run command params",
     );
     expect(commandParams.remoteCommand).toContain("/remote/openclaw/openclaw-ssh-agent-worker");
@@ -206,7 +206,7 @@ describe("ssh sandbox backend", () => {
     });
 
     const commandParams = requireRecord(
-      sshMocks.runSshSandboxCommand.mock.calls[0]?.[0],
+      sshMocks.runSshSandboxCommand.mock.calls.at(0)?.[0],
       "ssh run command params",
     );
     expect(commandParams.allowFailure).toBe(true);
@@ -294,13 +294,13 @@ describe("ssh sandbox backend", () => {
     expect(execSpec.argv.at(-1)).toContain("/remote/openclaw/openclaw-ssh-agent-worker");
     expect(sshMocks.uploadDirectoryToSshTarget).toHaveBeenCalledTimes(2);
     const workspaceUploadParams = requireRecord(
-      sshMocks.uploadDirectoryToSshTarget.mock.calls[0]?.[0],
+      sshMocks.uploadDirectoryToSshTarget.mock.calls.at(0)?.[0],
       "workspace upload params",
     );
     expect(workspaceUploadParams.localDir).toBe("/tmp/workspace");
     expect(workspaceUploadParams.remoteDir).toContain("/workspace");
     const agentUploadParams = requireRecord(
-      sshMocks.uploadDirectoryToSshTarget.mock.calls[1]?.[0],
+      sshMocks.uploadDirectoryToSshTarget.mock.calls.at(1)?.[0],
       "agent upload params",
     );
     expect(agentUploadParams.localDir).toBe("/tmp/agent");
@@ -312,7 +312,8 @@ describe("ssh sandbox backend", () => {
       timedOut: false,
       token: execSpec.finalizeToken,
     });
-    expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalled();
+    expect(sshMocks.createSshSandboxSessionFromSettings).toHaveBeenCalledTimes(2);
+    expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(2);
   });
 
   it("filters blocked secrets from exec subprocess env", async () => {

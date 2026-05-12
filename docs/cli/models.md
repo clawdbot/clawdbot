@@ -188,11 +188,17 @@ specific configured agent store. The parent `--agent` flag is honored by
 `add`, `list`, `login`, `setup-token`, `paste-token`, and
 `login-github-copilot`.
 
+For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login.
+Use `--method api-key` only when you want to add an OpenAI API-key profile,
+usually as a backup for Codex subscription limits. The legacy
+`--provider openai-codex` spelling still works for existing scripts.
+
 Examples:
 
 ```bash
-openclaw models auth login --provider openai-codex --set-default
-openclaw models auth list --provider openai-codex
+openclaw models auth login --provider openai --set-default
+openclaw models auth login --provider openai --method api-key
+openclaw models auth list --provider openai
 ```
 
 Notes:

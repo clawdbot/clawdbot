@@ -89,26 +89,29 @@ describe("agent handler session create events", () => {
       req: { id: "req-agent-create-event" } as never,
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        status: "accepted",
-        runId: "idem-agent-create-event",
-      }),
-      undefined,
-      { runId: "idem-agent-create-event" },
-    );
+    const responseCall = respond.mock.calls[0] as
+      | [boolean, { status?: string; runId?: string }, unknown, { runId?: string }]
+      | undefined;
+    expect(responseCall?.[0]).toBe(true);
+    expect(responseCall?.[1]?.status).toBe("accepted");
+    expect(responseCall?.[1]?.runId).toBe("idem-agent-create-event");
+    expect(responseCall?.[2]).toBeUndefined();
+    expect(responseCall?.[3]?.runId).toBe("idem-agent-create-event");
     await vi.waitFor(
       () => {
-        expect(broadcastToConnIds).toHaveBeenCalledWith(
-          "sessions.changed",
-          expect.objectContaining({
-            sessionKey: "agent:main:subagent:create-test",
-            reason: "create",
-          }),
-          new Set(["conn-1"]),
-          { dropIfSlow: true },
-        );
+        const call = broadcastToConnIds.mock.calls[0] as
+          | [
+              string,
+              { sessionKey?: string; reason?: string },
+              Set<string>,
+              { dropIfSlow?: boolean },
+            ]
+          | undefined;
+        expect(call?.[0]).toBe("sessions.changed");
+        expect(call?.[1]?.sessionKey).toBe("agent:main:subagent:create-test");
+        expect(call?.[1]?.reason).toBe("create");
+        expect(call?.[2]).toEqual(new Set(["conn-1"]));
+        expect(call?.[3]).toEqual({ dropIfSlow: true });
       },
       { timeout: 2_000, interval: 5 },
     );

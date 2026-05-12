@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
+import {
+  formatCodexUsageLimitErrorMessage,
+  resolveCodexUsageLimitResetAtMs,
+  summarizeCodexAccountUsage,
+} from "./rate-limits.js";
 
 describe("formatCodexUsageLimitErrorMessage", () => {
   it("preserves Codex retry hints when structured reset windows are absent", () => {
@@ -40,5 +44,25 @@ describe("formatCodexUsageLimitErrorMessage", () => {
     expect(message).toMatch(/\b[A-Z][a-z]{2} \d{1,2}(?:, \d{4})? at \d{1,2}:\d{2} [AP]M\b/u);
     expect(message).not.toMatch(/\(\d{4}-\d{2}-\d{2}T/u);
     expect(message).not.toContain("Codex did not return a reset time");
+  });
+});
+
+describe("Codex rate limit blocking resets", () => {
+  it("keeps subscriptions blocked until all exhausted windows reset", () => {
+    const nowMs = 1_700_000_000_000;
+    const shortTermReset = Math.ceil(nowMs / 1000) + 60 * 60;
+    const weeklyReset = Math.ceil(nowMs / 1000) + 24 * 60 * 60;
+    const payload = {
+      rateLimitsByLimitId: {
+        codex: {
+          limitId: "codex",
+          primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: shortTermReset },
+          secondary: { usedPercent: 100, windowDurationMins: 10_080, resetsAt: weeklyReset },
+        },
+      },
+    };
+
+    expect(resolveCodexUsageLimitResetAtMs(payload, nowMs)).toBe(weeklyReset * 1000);
+    expect(summarizeCodexAccountUsage(payload, nowMs)?.blockedUntilMs).toBe(weeklyReset * 1000);
   });
 });

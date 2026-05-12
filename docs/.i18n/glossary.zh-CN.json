@@ -12,8 +12,16 @@
     "target": "Coming from BlueBubbles"
   },
   {
+    "source": "BlueBubbles removal and the imsg iMessage path",
+    "target": "BlueBubbles removal and the imsg iMessage path"
+  },
+  {
     "source": "BlueBubbles",
     "target": "BlueBubbles"
+  },
+  {
+    "source": "Configuration reference - iMessage",
+    "target": "Configuration reference - iMessage"
   },
   {
     "source": "Pairing",
@@ -858,6 +866,66 @@
   {
     "source": "/cli/config",
     "target": "/cli/config"
+  },
+  {
+    "source": "Automation",
+    "target": "自动化"
+  },
+  {
+    "source": "Tools, skills, and plugins",
+    "target": "工具、技能和插件"
+  },
+  {
+    "source": "Capabilities",
+    "target": "能力"
+  },
+  {
+    "source": "Overview",
+    "target": "概览"
+  },
+  {
+    "source": "Tools, skills, and plugins overview",
+    "target": "工具、技能和插件概览"
+  },
+  {
+    "source": "Tools overview",
+    "target": "工具概览"
+  },
+  {
+    "source": "Automation overview",
+    "target": "自动化概览"
+  },
+  {
+    "source": "Sub-agents",
+    "target": "子智能体"
+  },
+  {
+    "source": "ACP agents",
+    "target": "ACP 智能体"
+  },
+  {
+    "source": "Tools and custom providers",
+    "target": "工具和自定义提供商"
+  },
+  {
+    "source": "Exec approvals",
+    "target": "Exec 审批"
+  },
+  {
+    "source": "Elevated exec",
+    "target": "提升权限的 Exec"
+  },
+  {
+    "source": "Sandbox vs tool policy vs elevated",
+    "target": "沙箱、工具策略和提升权限"
+  },
+  {
+    "source": "Per-agent sandbox and tool restrictions",
+    "target": "按 Agent 配置的沙箱和工具限制"
+  },
+  {
+    "source": "Agents",
+    "target": "智能体"
   },
   {
     "source": "fs-safe Cleanup Plan",

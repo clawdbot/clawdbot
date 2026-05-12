@@ -33,8 +33,10 @@ function collectMatching<T, U>(
 
 function findBeaconByInstance(beacons: readonly BeaconRecord[], instanceName: string) {
   const beacon = beacons.find((item) => item.instanceName === instanceName);
-  expect(beacon).toBeDefined();
-  return beacon as BeaconRecord;
+  if (!beacon) {
+    throw new Error(`Expected beacon ${instanceName}`);
+  }
+  return beacon;
 }
 
 describe("bonjour-discovery", () => {

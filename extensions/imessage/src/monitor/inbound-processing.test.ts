@@ -4,10 +4,11 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { _resetIMessageShortIdState } from "../monitor-reply-cache.js";
+import { _resetIMessageShortIdState, rememberIMessageReplyCache } from "../monitor-reply-cache.js";
 import {
   buildIMessageInboundContext,
   describeIMessageEchoDropLog,
+  resolveIMessageReactionContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
@@ -45,6 +46,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       groupHistories: new Map(),
       echoCache: undefined,
       selfChatCache: undefined,
+      isKnownFromMeMessageId: () => false,
       logVerbose: undefined,
     };
     return {
@@ -397,6 +399,326 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(logVerbose).toHaveBeenCalledWith(
       `imessage: dropping self-chat reflected duplicate: "${sanitizeTerminalText(bodyText)}"`,
     );
+  });
+
+  it("returns a reaction decision for tapbacks on bot-authored messages by default", async () => {
+    const echoHas = vi.fn((_scope: string, lookup: { text?: string; messageId?: string }) => {
+      return lookup.messageId === "target-guid";
+    });
+
+    const decision = await resolveDecision({
+      message: {
+        guid: "reaction-guid",
+        is_reaction: true,
+        reaction_emoji: "👍",
+        is_reaction_add: true,
+        reacted_to_guid: "target-guid",
+        text: "",
+      },
+      messageText: "",
+      bodyText: "",
+      echoCache: { has: echoHas },
+    });
+
+    expect(decision.kind).toBe("reaction");
+    if (decision.kind !== "reaction") {
+      throw new Error("expected reaction decision");
+    }
+    expect(decision.text).toBe("iMessage reaction added: 👍 by +15555550123 on msg target-guid");
+    expect(decision.route.sessionKey).toBe("agent:main:main");
+    expect(decision.contextKey).toContain("imessage:reaction:added");
+  });
+
+  it("uses the iMessage reply cache to recognize tool-sent messages as bot-authored reaction targets", async () => {
+    const decision = await resolveDecision({
+      message: {
+        guid: "reaction-guid",
+        is_reaction: true,
+        reaction_emoji: "❤️",
+        is_reaction_add: true,
+        reacted_to_guid: "tool-sent-guid",
+        text: "",
+        chat_id: 3,
+        chat_guid: "any;-;+15555550123",
+        chat_identifier: "+15555550123",
+      },
+      messageText: "",
+      bodyText: "",
+      echoCache: { has: () => false },
+      isKnownFromMeMessageId: (messageId, { accountId, chatId, chatGuid, chatIdentifier }) => {
+        expect({ messageId, accountId, chatId, chatGuid, chatIdentifier }).toEqual({
+          messageId: "tool-sent-guid",
+          accountId: "default",
+          chatId: 3,
+          chatGuid: "any;-;+15555550123",
+          chatIdentifier: "+15555550123",
+        });
+        return true;
+      },
+    });
+
+    expect(decision.kind).toBe("reaction");
+    if (decision.kind !== "reaction") {
+      throw new Error("expected reaction decision");
+    }
+    expect(decision.text).toBe("iMessage reaction added: ❤️ by +15555550123 on msg tool-sent-guid");
+  });
+
+  it("routes a thumbs-down tapback on a tool-sent reply as a model-visible reaction event", async () => {
+    const decision = await resolveDecision({
+      message: {
+        guid: "reaction-guid",
+        is_reaction: true,
+        reaction_emoji: "👎",
+        reaction_type: "dislike",
+        is_reaction_add: true,
+        associated_message_guid: "p:0/lobster-reply-guid",
+        associated_message_type: 2000,
+        text: "Disliked “tapback target”",
+        chat_id: 3,
+        chat_guid: "any;-;+15555550123",
+        chat_identifier: "+15555550123",
+      },
+      messageText: "Disliked “tapback target”",
+      bodyText: "Disliked “tapback target”",
+      echoCache: { has: () => false },
+      isKnownFromMeMessageId: (messageId, { accountId, chatId, chatGuid, chatIdentifier }) => {
+        expect({ messageId, accountId, chatId, chatGuid, chatIdentifier }).toEqual({
+          messageId: "lobster-reply-guid",
+          accountId: "default",
+          chatId: 3,
+          chatGuid: "any;-;+15555550123",
+          chatIdentifier: "+15555550123",
+        });
+        return true;
+      },
+    });
+
+    expect(decision.kind).toBe("reaction");
+    if (decision.kind !== "reaction") {
+      throw new Error("expected reaction decision");
+    }
+    expect(decision.text).toBe(
+      "iMessage reaction added: 👎 by +15555550123 on msg lobster-reply-guid",
+    );
+    expect(decision.route.sessionKey).toBe("agent:main:main");
+    expect(decision.contextKey).toBe(
+      "imessage:reaction:added:3:lobster-reply-guid:+15555550123:👎",
+    );
+  });
+
+  it("matches prefixed tapback targets against prefixed bot-authored cache ids in own mode", async () => {
+    const checkedMessageIds: string[] = [];
+    const decision = await resolveDecision({
+      message: {
+        guid: "reaction-guid",
+        is_reaction: true,
+        reaction_emoji: "👎",
+        is_reaction_add: true,
+        associated_message_guid: "p:0/imsg-1",
+        associated_message_type: 2000,
+        text: "Disliked “tapback target”",
+        chat_id: 3,
+        chat_guid: "any;-;+15555550123",
+        chat_identifier: "+15555550123",
+      },
+      messageText: "Disliked “tapback target”",
+      bodyText: "Disliked “tapback target”",
+      echoCache: { has: () => false },
+      isKnownFromMeMessageId: (messageId) => {
+        if (messageId === undefined) {
+          throw new Error("expected reaction target message id");
+        }
+        checkedMessageIds.push(messageId);
+        return messageId === "p:0/imsg-1";
+      },
+    });
+
+    expect(checkedMessageIds).toEqual(["imsg-1", "p:0/imsg-1"]);
+    expect(decision.kind).toBe("reaction");
+    if (decision.kind !== "reaction") {
+      throw new Error("expected reaction decision");
+    }
+    expect(decision.text).toBe("iMessage reaction added: 👎 by +15555550123 on msg imsg-1");
+  });
+
+  it("uses the production reply-cache lookup for bot-authored reaction targets", async () => {
+    const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-reaction-cache-"));
+    const priorStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    try {
+      _resetIMessageShortIdState();
+      rememberIMessageReplyCache({
+        accountId: "default",
+        messageId: "p:0/imsg-production",
+        chatGuid: "any;-;+15555550123",
+        chatIdentifier: "+15555550123",
+        chatId: 3,
+        timestamp: Date.now(),
+        isFromMe: true,
+      });
+
+      const decision = await resolveDecision({
+        message: {
+          guid: "reaction-guid",
+          is_reaction: true,
+          reaction_emoji: "❤️",
+          is_reaction_add: true,
+          associated_message_guid: "p:0/imsg-production",
+          associated_message_type: 2000,
+          text: "Loved “tapback target”",
+          chat_id: 3,
+          chat_guid: "any;-;+15555550123",
+          chat_identifier: "+15555550123",
+        },
+        messageText: "Loved “tapback target”",
+        bodyText: "Loved “tapback target”",
+        echoCache: { has: () => false },
+        isKnownFromMeMessageId: undefined,
+      });
+
+      expect(decision).toMatchObject({ kind: "reaction" });
+      if (decision.kind !== "reaction") {
+        throw new Error("expected reaction decision");
+      }
+      expect(decision.text).toBe(
+        "iMessage reaction added: ❤️ by +15555550123 on msg imsg-production",
+      );
+    } finally {
+      _resetIMessageShortIdState();
+      if (priorStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = priorStateDir;
+      }
+      fs.rmSync(tempStateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("matches prefixed tapback targets against prefixed echo-cache ids in own mode", async () => {
+    const checkedMessageIds: string[] = [];
+    const decision = await resolveDecision({
+      message: {
+        guid: "reaction-guid",
+        is_reaction: true,
+        reaction_emoji: "👍",
+        is_reaction_add: true,
+        associated_message_guid: "p:0/imsg-2",
+        associated_message_type: 2000,
+        text: "Liked “tapback target”",
+        chat_id: 3,
+        chat_guid: "any;-;+15555550123",
+        chat_identifier: "+15555550123",
+      },
+      messageText: "Liked “tapback target”",
+      bodyText: "Liked “tapback target”",
+      echoCache: {
+        has: (_scope, lookup) => {
+          if (lookup.messageId) {
+            checkedMessageIds.push(lookup.messageId);
+          }
+          return lookup.messageId === "p:0/imsg-2";
+        },
+      },
+    });
+
+    expect(checkedMessageIds).toEqual(["imsg-2", "p:0/imsg-2"]);
+    expect(decision.kind).toBe("reaction");
+    if (decision.kind !== "reaction") {
+      throw new Error("expected reaction decision");
+    }
+    expect(decision.text).toBe("iMessage reaction added: 👍 by +15555550123 on msg imsg-2");
+  });
+
+  it("drops tapbacks on non-bot messages in own notification mode", async () => {
+    const decision = await resolveDecision({
+      message: {
+        is_reaction: true,
+        reaction_emoji: "❤️",
+        reacted_to_guid: "someone-else",
+        text: "",
+      },
+      messageText: "",
+      bodyText: "",
+      echoCache: { has: () => false },
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "reaction target not sent by agent" });
+  });
+
+  it("returns a reaction decision for all reaction notification mode", async () => {
+    const decision = await resolveDecision({
+      reactionNotifications: "all",
+      message: {
+        is_reaction: true,
+        reaction_emoji: "😂",
+        reacted_to_guid: "someone-else",
+        text: "",
+      },
+      messageText: "",
+      bodyText: "",
+    });
+
+    expect(decision.kind).toBe("reaction");
+    if (decision.kind !== "reaction") {
+      throw new Error("expected reaction decision");
+    }
+    expect(decision.text).toBe("iMessage reaction added: 😂 by +15555550123 on msg someone-else");
+  });
+
+  it("drops tapbacks when reaction notifications are off", async () => {
+    const decision = await resolveDecision({
+      reactionNotifications: "off",
+      message: {
+        is_reaction: true,
+        reaction_emoji: "👍",
+        reacted_to_guid: "target-guid",
+        text: "",
+      },
+      messageText: "",
+      bodyText: "",
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "reaction notifications disabled" });
+  });
+});
+
+describe("resolveIMessageReactionContext", () => {
+  it("detects legacy tapback text without treating normal prose as a reaction", () => {
+    expect(resolveIMessageReactionContext({}, "Loved “Hello”")).toMatchObject({
+      action: "added",
+      emoji: "❤️",
+      targetText: "Hello",
+    });
+    expect(resolveIMessageReactionContext({}, "Loved the movie")).toBeNull();
+  });
+
+  it("detects imsg tapback flags and associated message types", () => {
+    expect(
+      resolveIMessageReactionContext(
+        { is_tapback: true, reaction_emoji: "👍", reacted_to_guid: "target" },
+        "",
+      ),
+    ).toMatchObject({ action: "added", emoji: "👍", targetGuid: "target" });
+    expect(
+      resolveIMessageReactionContext(
+        {
+          associated_message_guid: "p:0/321D6826-1013-4DF0-B53C-6F6241EF2EF6",
+          associated_message_type: 2000,
+          reaction_emoji: "❤️",
+        },
+        "Loved “tapback proof”",
+      ),
+    ).toMatchObject({
+      action: "added",
+      emoji: "❤️",
+      targetGuid: "321D6826-1013-4DF0-B53C-6F6241EF2EF6",
+    });
+    expect(resolveIMessageReactionContext({ associated_message_type: 2001 }, "")).toMatchObject({
+      action: "added",
+      emoji: "reaction",
+    });
+    expect(resolveIMessageReactionContext({ associated_message_type: 1 }, "ok")).toBeNull();
   });
 });
 

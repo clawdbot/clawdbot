@@ -49,6 +49,14 @@ function createMockBtwPresenter(): MockBtwPresenter & HandlerBtwPresenter {
   } as unknown as MockBtwPresenter & HandlerBtwPresenter;
 }
 
+function requireFinalizedAssistantText(chatLog: MockChatLog, index = 0): string {
+  const call = chatLog.finalizeAssistant.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`expected finalizeAssistant call ${index}`);
+  }
+  return String(call[0]);
+}
+
 describe("tui-event-handlers: handleAgentEvent", () => {
   const makeState = (overrides?: Partial<TuiStateAccess>): TuiStateAccess => ({
     agentDefaultId: "main",
@@ -768,9 +776,9 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
-    const [rendered] = chatLog.finalizeAssistant.mock.calls[0] ?? [];
-    expect(String(rendered)).toContain("HTTP 401");
-    expect(String(rendered)).toContain("Missing scopes: model.request");
+    const rendered = requireFinalizedAssistantText(chatLog);
+    expect(rendered).toContain("HTTP 401");
+    expect(rendered).toContain("Missing scopes: model.request");
     expect(chatLog.dropAssistant).not.toHaveBeenCalledWith("run-error-envelope");
   });
 

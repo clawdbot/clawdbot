@@ -39,6 +39,17 @@ vi.mock("./slash-state.js", () => ({
   activateSlashCommands,
 }));
 
+function requireFirstMockCall<TArgs extends unknown[]>(
+  mock: { mock: { calls: TArgs[] } },
+  label: string,
+): TArgs {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call;
+}
+
 describe("mattermost monitor slash", () => {
   let registerMattermostMonitorSlashCommands: typeof import("./monitor-slash.js").registerMattermostMonitorSlashCommands;
 
@@ -110,10 +121,10 @@ describe("mattermost monitor slash", () => {
     });
 
     expect(registerSlashCommands).toHaveBeenCalledTimes(2);
-    const firstRegistration = registerSlashCommands.mock.calls[0]?.[0];
-    if (!firstRegistration) {
-      throw new Error("expected first Mattermost slash command registration");
-    }
+    const [firstRegistration] = requireFirstMockCall(
+      registerSlashCommands,
+      "first Mattermost slash command registration",
+    );
     expect(firstRegistration).toEqual({
       client,
       teamId: "team-1",
@@ -139,7 +150,10 @@ describe("mattermost monitor slash", () => {
       log: firstRegistration.log,
     });
     expect(typeof firstRegistration.log).toBe("function");
-    const [activation] = activateSlashCommands.mock.calls[0] ?? [];
+    const [activation] = requireFirstMockCall(
+      activateSlashCommands,
+      "Mattermost slash command activation",
+    );
     expect(activation?.commandTokens).toStrictEqual(["token-1", "token-2"]);
     expect(activation?.triggerMap).toStrictEqual(
       new Map([

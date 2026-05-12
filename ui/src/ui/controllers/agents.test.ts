@@ -81,6 +81,21 @@ function createSaveState(): {
   };
 }
 
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireFirstRequestCall(request: ReturnType<typeof vi.fn>): unknown[] {
+  const [call] = request.mock.calls;
+  if (!call) {
+    throw new Error("Expected client request call");
+  }
+  return call;
+}
+
 describe("loadAgents", () => {
   it("preserves selected agent when it still exists in the list", async () => {
     const { state, request } = createState();
@@ -371,12 +386,11 @@ describe("saveAgentsConfig", () => {
 
     await saveAgentsConfig(state);
 
-    expect(request).toHaveBeenNthCalledWith(
-      1,
-      "config.set",
-      expect.objectContaining({ baseHash: "hash-1" }),
-    );
-    expect(JSON.parse(request.mock.calls[0]?.[1]?.raw as string)).toEqual({
+    const [method, params] = requireFirstRequestCall(request);
+    const requestParams = requireRecord(params);
+    expect(method).toBe("config.set");
+    expect(requestParams.baseHash).toBe("hash-1");
+    expect(JSON.parse(String(requestParams.raw))).toEqual({
       agents: { list: [{ id: "main" }] },
     });
     expect(request).toHaveBeenNthCalledWith(2, "config.get", {});

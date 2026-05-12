@@ -235,7 +235,7 @@ describe("main-session-restart-recovery", () => {
 
     expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
-    const resumeParams = vi.mocked(callGateway).mock.calls[0]?.[0].params as
+    const resumeParams = vi.mocked(callGateway).mock.calls.at(0)?.[0].params as
       | { sessionKey?: string; deliver?: boolean; lane?: string }
       | undefined;
     expect(resumeParams?.sessionKey).toBe("agent:main:main");
@@ -303,7 +303,9 @@ describe("main-session-restart-recovery", () => {
 
     expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
-    const callParams = vi.mocked(callGateway).mock.calls[0]?.[0].params as { message?: string };
+    const callParams = vi.mocked(callGateway).mock.calls.at(0)?.[0].params as {
+      message?: string;
+    };
     expect(callParams.message).toContain(pendingPayload);
 
     const beforeStoreRead = Date.now();

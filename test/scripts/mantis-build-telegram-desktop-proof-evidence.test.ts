@@ -94,8 +94,11 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
         "https://github.com/openclaw/openclaw/tree/qa-artifacts/mantis/telegram-desktop/pr-1/run-1",
     });
 
-    expect(body).toContain("| Main | This PR |");
+    expect(body).toContain('<th width="50%">Main</th>');
+    expect(body).toContain('<th width="50%">This PR</th>');
     expect(body).toContain("baseline/telegram-desktop-proof.gif");
     expect(body).toContain("candidate/telegram-desktop-proof.gif");
+    expect(body).toContain('telegram-desktop-proof.gif" width="100%"');
+    expect(body).not.toContain("| Main | This PR |");
   });
 });

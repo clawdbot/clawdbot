@@ -209,14 +209,10 @@ describe("resolvePrivateCommandRouteTargets", () => {
       request: buildApprovalRequest(),
     });
 
-    expect(targets[0]).toMatchObject({
-      channel: "telegram",
-      to: "849985193",
-    });
-    expect(targets[1]).toMatchObject({
-      channel: "whatsapp",
-      to: "+15555550100",
-    });
+    expect(targets[0]?.channel).toBe("telegram");
+    expect(targets[0]?.to).toBe("849985193");
+    expect(targets[1]?.channel).toBe("whatsapp");
+    expect(targets[1]?.to).toBe("+15555550100");
   });
 
   it("does not select a same-surface exec approver unless it is also an owner route", async () => {

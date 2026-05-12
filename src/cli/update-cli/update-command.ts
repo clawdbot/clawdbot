@@ -89,6 +89,10 @@ import {
 import { commitPluginInstallRecordsWithConfig } from "../plugins-install-record-commit.js";
 import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins-registry-refresh.js";
+import {
+  convergenceWarningsToOutcomes,
+  runPostCorePluginConvergence,
+} from "./post-core-plugin-convergence.js";
 import { createUpdateProgress, printResult } from "./progress.js";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 import {
@@ -314,6 +318,51 @@ function createGuidedPostUpdatePluginOutcome(outcome: PluginUpdateOutcome): {
 
 function isDisabledAfterFailureOutcome(outcome: PluginUpdateOutcome): boolean {
   return outcome.status === "skipped" && outcome.message.includes("after plugin update failure");
+}
+
+/**
+ * Build the post-core-update result we return when the active config cannot
+ * even be parsed. Mandatory post-core convergence requires a parseable
+ * config to know which plugins are configured; if one isn't available, we
+ * refuse to restart the gateway and surface this as a hard error so the
+ * existing `status === "error"` ⇒ `exit 1` pre-restart gate fires.
+ *
+ * Exported for unit testing without having to drive the entire
+ * `updatePluginsAfterCoreUpdate` orchestrator.
+ */
+export function buildInvalidConfigPostCoreUpdateResult(): {
+  message: string;
+  guidance: string[];
+  result: PostCorePluginUpdateResult;
+} {
+  const guidance = [
+    "Run `openclaw doctor` to inspect the config validation errors.",
+    "Once the config parses, rerun `openclaw update`.",
+  ];
+  const message =
+    "Plugin post-update convergence skipped because the config is invalid; refusing to restart the gateway with an unverified plugin set.";
+  return {
+    message,
+    guidance,
+    result: {
+      status: "error",
+      reason: "invalid-config",
+      changed: false,
+      sync: {
+        changed: false,
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+      npm: {
+        changed: false,
+        outcomes: [],
+      },
+      integrityDrifts: [],
+      warnings: [{ reason: "invalid-config", message, guidance }],
+    },
+  };
 }
 
 export function shouldPrepareUpdatedInstallRestart(params: {
@@ -1103,7 +1152,7 @@ async function runGitUpdate(params: {
   };
 }
 
-async function updatePluginsAfterCoreUpdate(params: {
+export async function updatePluginsAfterCoreUpdate(params: {
   root: string;
   channel: "stable" | "beta" | "dev";
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
@@ -1112,27 +1161,14 @@ async function updatePluginsAfterCoreUpdate(params: {
   pluginInstallRecords?: Record<string, PluginInstallRecord>;
 }): Promise<PostCorePluginUpdateResult> {
   if (!params.configSnapshot.valid) {
+    const invalid = buildInvalidConfigPostCoreUpdateResult();
     if (!params.opts.json) {
-      defaultRuntime.log(theme.warn("Skipping plugin updates: config is invalid."));
+      defaultRuntime.log(theme.error(invalid.message));
+      for (const line of invalid.guidance) {
+        defaultRuntime.log(theme.muted(`  ${line}`));
+      }
     }
-    return {
-      status: "skipped",
-      reason: "invalid-config",
-      changed: false,
-      sync: {
-        changed: false,
-        switchedToBundled: [],
-        switchedToNpm: [],
-        warnings: [],
-        errors: [],
-      },
-      npm: {
-        changed: false,
-        outcomes: [],
-      },
-      integrityDrifts: [],
-      warnings: [],
-    };
+    return invalid.result;
   }
 
   const pluginLogger = params.opts.json
@@ -1290,6 +1326,51 @@ async function updatePluginsAfterCoreUpdate(params: {
       }),
   );
 
+  // Mandatory post-core convergence: repair any configured plugin install
+  // records that are still missing payloads on disk and run a static smoke
+  // check that the repaired payloads are at least loadable. Failures here
+  // escalate `status` to `"error"`, which the caller maps to exit 1 BEFORE
+  // restarting the gateway. See `post-core-plugin-convergence.ts`.
+  //
+  // We pass `baselineInstallRecords: pluginConfig.plugins?.installs ?? {}`
+  // so that convergence layers its mutations on top of the latest
+  // *in-memory* sync/npm record state — not on the stale pre-update disk
+  // snapshot. The merged map convergence returns is the single source of
+  // truth for the subsequent commit block.
+  const convergenceBaselineRecords = pluginConfig.plugins?.installs ?? {};
+  const convergence = await runPostCorePluginConvergence({
+    cfg: pluginConfig,
+    env: process.env,
+    baselineInstallRecords: convergenceBaselineRecords,
+  });
+  for (const change of convergence.changes) {
+    if (!params.opts.json) {
+      defaultRuntime.log(theme.muted(change));
+    }
+  }
+  const convergenceFolded = convergenceWarningsToOutcomes(convergence);
+  for (const warning of convergenceFolded.warnings) {
+    warnings.push(warning);
+    if (!params.opts.json) {
+      defaultRuntime.log(theme.warn(warning.message));
+      for (const guidance of warning.guidance) {
+        defaultRuntime.log(theme.muted(`  ${guidance}`));
+      }
+    }
+  }
+  pluginUpdateOutcomes.push(...convergenceFolded.outcomes);
+  const convergenceErrored = convergenceFolded.errored;
+  // Reseed `pluginConfig` from convergence's authoritative post-merge
+  // record map. This is unconditional because convergence is what
+  // reconciled the baseline (sync/npm in-memory state) with disk and any
+  // new repairs, and convergence already persisted that exact map. If
+  // we did not adopt it here, the commit block below would overwrite the
+  // disk with `convergenceBaselineRecords` (no repairs included).
+  pluginConfig = withPluginInstallRecords(pluginConfig, convergence.installRecords);
+  if (convergence.changes.length > 0) {
+    pluginsChanged = true;
+  }
+
   if (pluginsChanged) {
     const nextInstallRecords = pluginConfig.plugins?.installs ?? {};
     const nextConfig = withoutPluginInstallRecords(pluginConfig);
@@ -1310,7 +1391,7 @@ async function updatePluginsAfterCoreUpdate(params: {
 
   if (params.opts.json) {
     return {
-      status: warnings.length > 0 ? "warning" : "ok",
+      status: convergenceErrored ? "error" : warnings.length > 0 ? "warning" : "ok",
       changed: pluginsChanged,
       warnings,
       sync: {
@@ -1380,7 +1461,7 @@ async function updatePluginsAfterCoreUpdate(params: {
   }
 
   return {
-    status: warnings.length > 0 ? "warning" : "ok",
+    status: convergenceErrored ? "error" : warnings.length > 0 ? "warning" : "ok",
     changed: pluginsChanged,
     warnings,
     sync: {
@@ -2476,10 +2557,6 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     } else {
       defaultRuntime.error(theme.error("Update failed during plugin post-update sync."));
     }
-    await maybeRestartServiceAfterFailedPackageUpdate({
-      prePackageServiceStop,
-      jsonMode: Boolean(opts.json),
-    });
     defaultRuntime.exit(1);
     return;
   }

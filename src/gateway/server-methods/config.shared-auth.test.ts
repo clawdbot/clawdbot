@@ -332,12 +332,8 @@ describe("config shared auth disconnects", () => {
 
     await configHandlers["config.patch"](options);
 
-    expect(restartSentinelMocks.writeRestartSentinel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-      }),
-    );
     const payload = restartSentinelMocks.writeRestartSentinel.mock.calls.at(-1)?.[0];
+    expect(payload?.sessionKey).toBe("agent:main:main");
     expect(payload?.continuation).toBeUndefined();
   });
 });

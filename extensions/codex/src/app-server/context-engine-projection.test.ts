@@ -1,6 +1,10 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
-import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
+import {
+  projectContextEngineAssemblyForCodex,
+  resolveCodexContextEngineProjectionMaxChars,
+  resolveCodexContextEngineProjectionReserveTokens,
+} from "./context-engine-projection.js";
 
 function textMessage(role: AgentMessage["role"], text: string): AgentMessage {
   return {
@@ -100,5 +104,75 @@ describe("projectContextEngineAssemblyForCodex", () => {
 
     expect(result.promptText).toContain("[truncated ");
     expect(result.promptText.length).toBeLessThan(25_000);
+  });
+
+  it("can scale the rendered context cap for larger Codex context windows", () => {
+    const result = projectContextEngineAssemblyForCodex({
+      assembledMessages: Array.from({ length: 12 }, (_, index) =>
+        textMessage("assistant", `${index}:${"x".repeat(5_900)}`),
+      ),
+      originalHistoryMessages: [],
+      prompt: "next",
+      maxRenderedContextChars: resolveCodexContextEngineProjectionMaxChars({
+        contextTokenBudget: 80_000,
+      }),
+    });
+
+    expect(result.promptText.length).toBeGreaterThan(60_000);
+    expect(result.promptText).not.toContain("[truncated ");
+  });
+
+  it("keeps the old conservative cap when no runtime budget is available", () => {
+    expect(resolveCodexContextEngineProjectionMaxChars({})).toBe(24_000);
+    expect(resolveCodexContextEngineProjectionMaxChars({ contextTokenBudget: 0 })).toBe(24_000);
+  });
+
+  it("uses the shared reserve-token shape while preserving small-model prompt budget", () => {
+    expect(resolveCodexContextEngineProjectionMaxChars({ contextTokenBudget: 80_000 })).toBe(
+      240_000,
+    );
+    expect(resolveCodexContextEngineProjectionMaxChars({ contextTokenBudget: 16_000 })).toBe(
+      32_000,
+    );
+  });
+
+  it("maps OpenClaw compaction reserve config onto Codex projection reserves", () => {
+    expect(
+      resolveCodexContextEngineProjectionReserveTokens({
+        config: { agents: { defaults: { compaction: { reserveTokens: 12_000 } } } },
+      }),
+    ).toBe(20_000);
+    expect(
+      resolveCodexContextEngineProjectionReserveTokens({
+        config: {
+          agents: { defaults: { compaction: { reserveTokens: 12_000, reserveTokensFloor: 0 } } },
+        },
+      }),
+    ).toBe(12_000);
+    expect(
+      resolveCodexContextEngineProjectionReserveTokens({
+        config: { agents: { defaults: { compaction: { reserveTokens: 48_000 } } } },
+      }),
+    ).toBe(48_000);
+    expect(
+      resolveCodexContextEngineProjectionReserveTokens({
+        config: { agents: { defaults: { compaction: { reserveTokensFloor: 0 } } } },
+      }),
+    ).toBe(0);
+  });
+
+  it("applies configured reserve tokens to the scaled projection cap", () => {
+    expect(
+      resolveCodexContextEngineProjectionMaxChars({
+        contextTokenBudget: 80_000,
+        reserveTokens: 40_000,
+      }),
+    ).toBe(160_000);
+  });
+
+  it("caps very large runtime budgets to a bounded projection size", () => {
+    expect(resolveCodexContextEngineProjectionMaxChars({ contextTokenBudget: 1_000_000 })).toBe(
+      1_000_000,
+    );
   });
 });

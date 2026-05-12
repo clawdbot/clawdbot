@@ -52,7 +52,7 @@ describe("warnIfModelConfigLooksOff", () => {
     expect(profileStore?.profiles).toEqual({});
     expect(providerId).toBe("openai-codex");
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining('No auth configured for provider "openai-codex"'),
+      'No auth configured for provider "openai-codex". The agent may fail until credentials are added. Run `openclaw models auth login --provider openai-codex`, `openclaw configure`, or set an API key env var.',
       "Model check",
     );
   });

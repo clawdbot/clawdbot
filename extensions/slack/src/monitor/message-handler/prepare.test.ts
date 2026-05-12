@@ -1626,12 +1626,14 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       opts: { source: "message" },
     });
 
-    expect(prepared).toBeTruthy();
-    expect(prepared!.ctxPayload.WasMentioned).toBe(true);
-    expect(prepared!.ctxPayload.ExplicitlyMentionedBot).toBe(false);
-    expect(prepared!.ctxPayload.MentionedUserIds).toEqual(["UOTHER"]);
-    expect(prepared!.ctxPayload.ImplicitMentionKinds).toEqual(["reply_to_bot"]);
-    expect(prepared!.ctxPayload.MentionSource).toBe("implicit_thread");
+    if (!prepared) {
+      throw new Error("expected prepared Slack message");
+    }
+    expect(prepared.ctxPayload.WasMentioned).toBe(true);
+    expect(prepared.ctxPayload.ExplicitlyMentionedBot).toBe(false);
+    expect(prepared.ctxPayload.MentionedUserIds).toEqual(["UOTHER"]);
+    expect(prepared.ctxPayload.ImplicitMentionKinds).toEqual(["reply_to_bot"]);
+    expect(prepared.ctxPayload.MentionSource).toBe("implicit_thread");
   });
 
   it("marks authorized implicit thread control-command wakes as command bypass source", async () => {
@@ -1670,10 +1672,12 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       opts: { source: "message" },
     });
 
-    expect(prepared).toBeTruthy();
-    expect(prepared!.ctxPayload.WasMentioned).toBe(true);
-    expect(prepared!.ctxPayload.ImplicitMentionKinds).toEqual(["reply_to_bot"]);
-    expect(prepared!.ctxPayload.MentionSource).toBe("command_bypass");
+    if (!prepared) {
+      throw new Error("expected prepared Slack message");
+    }
+    expect(prepared.ctxPayload.WasMentioned).toBe(true);
+    expect(prepared.ctxPayload.ImplicitMentionKinds).toEqual(["reply_to_bot"]);
+    expect(prepared.ctxPayload.MentionSource).toBe("command_bypass");
   });
 
   it("keeps an implicit-conversation root and its Slack thread follow-up on one parent session in `requireMention: false` channels (#78505)", async () => {
@@ -2387,9 +2391,10 @@ describe("prepareSlackMessage sender prefix", () => {
 
     const result = await prepareSenderPrefixMessage(ctx, "<@BOT> /new", "1700000000.0002");
 
-    expect(result).toMatchObject({
-      ctxPayload: { CommandAuthorized: true },
-    });
+    if (!result) {
+      throw new Error("expected sender prefix message result");
+    }
+    expect(result.ctxPayload?.CommandAuthorized).toBe(true);
   });
 });
 

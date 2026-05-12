@@ -172,7 +172,7 @@ describeLive("pi embedded anthropic replay sanitization (live)", () => {
       await Promise.resolve(wrapped(model as never, { messages } as never, {} as never));
 
       expect(baseFn).toHaveBeenCalledTimes(1);
-      const seenMessages = (baseFn.mock.calls[0]?.[1] as { messages?: unknown[] })?.messages;
+      const seenMessages = (baseFn.mock.calls.at(0)?.[1] as { messages?: unknown[] })?.messages;
       expect(seenMessages).toEqual(messages);
 
       logLiveCache(`anthropic replay live model=${model.provider}/${model.id}`);

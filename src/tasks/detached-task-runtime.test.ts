@@ -58,6 +58,21 @@ function findWarningPayload(message: string): Record<string, unknown> | undefine
   return payload && typeof payload === "object" ? (payload as Record<string, unknown>) : undefined;
 }
 
+function requireFirstCallArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error(`expected ${label} params to be an object`);
+  }
+  return arg as Record<string, unknown>;
+}
+
 describe("detached-task-runtime", () => {
   afterEach(() => {
     resetDetachedTaskLifecycleRuntimeForTests();
@@ -130,32 +145,38 @@ describe("detached-task-runtime", () => {
       taskId: runningTask.taskId,
     });
 
-    const queuedArgs = vi.mocked(fakeRuntime.createQueuedTaskRun).mock.calls[0]?.[0];
-    expect(queuedArgs?.runId).toBe("run-queued");
-    expect(queuedArgs?.task).toBe("Queue task");
-    const runningArgs = vi.mocked(fakeRuntime.createRunningTaskRun).mock.calls[0]?.[0];
-    expect(runningArgs?.runId).toBe("run-running");
-    expect(runningArgs?.task).toBe("Run task");
-    const startArgs = vi.mocked(fakeRuntime.startTaskRunByRunId).mock.calls[0]?.[0];
-    expect(startArgs?.runId).toBe("run-running");
-    expect(startArgs?.startedAt).toBe(10);
-    const progressArgs = vi.mocked(fakeRuntime.recordTaskRunProgressByRunId).mock.calls[0]?.[0];
-    expect(progressArgs?.runId).toBe("run-running");
-    expect(progressArgs?.lastEventAt).toBe(20);
+    const queuedArgs = requireFirstCallArg(vi.mocked(fakeRuntime.createQueuedTaskRun), "queued");
+    expect(queuedArgs.runId).toBe("run-queued");
+    expect(queuedArgs.task).toBe("Queue task");
+    const runningArgs = requireFirstCallArg(vi.mocked(fakeRuntime.createRunningTaskRun), "running");
+    expect(runningArgs.runId).toBe("run-running");
+    expect(runningArgs.task).toBe("Run task");
+    const startArgs = requireFirstCallArg(vi.mocked(fakeRuntime.startTaskRunByRunId), "start");
+    expect(startArgs.runId).toBe("run-running");
+    expect(startArgs.startedAt).toBe(10);
+    const progressArgs = requireFirstCallArg(
+      vi.mocked(fakeRuntime.recordTaskRunProgressByRunId),
+      "progress",
+    );
+    expect(progressArgs.runId).toBe("run-running");
+    expect(progressArgs.lastEventAt).toBe(20);
     const finalizeMock = fakeRuntime.finalizeTaskRunByRunId;
     if (!finalizeMock) {
       throw new Error("Expected fake runtime finalizer");
     }
-    const finalizeArgs = vi.mocked(finalizeMock).mock.calls[0]?.[0];
-    expect(finalizeArgs?.runId).toBe("run-running");
-    expect(finalizeArgs?.status).toBe("succeeded");
-    expect(finalizeArgs?.endedAt).toBe(25);
-    const completeArgs = vi.mocked(fakeRuntime.completeTaskRunByRunId).mock.calls[0]?.[0];
-    expect(completeArgs?.runId).toBe("run-running");
-    expect(completeArgs?.endedAt).toBe(30);
-    const failArgs = vi.mocked(fakeRuntime.failTaskRunByRunId).mock.calls[0]?.[0];
-    expect(failArgs?.runId).toBe("run-running");
-    expect(failArgs?.endedAt).toBe(40);
+    const finalizeArgs = requireFirstCallArg(vi.mocked(finalizeMock), "finalize");
+    expect(finalizeArgs.runId).toBe("run-running");
+    expect(finalizeArgs.status).toBe("succeeded");
+    expect(finalizeArgs.endedAt).toBe(25);
+    const completeArgs = requireFirstCallArg(
+      vi.mocked(fakeRuntime.completeTaskRunByRunId),
+      "complete",
+    );
+    expect(completeArgs.runId).toBe("run-running");
+    expect(completeArgs.endedAt).toBe(30);
+    const failArgs = requireFirstCallArg(vi.mocked(fakeRuntime.failTaskRunByRunId), "fail");
+    expect(failArgs.runId).toBe("run-running");
+    expect(failArgs.endedAt).toBe(40);
     const deliveryArgs = vi.mocked(fakeRuntime.setDetachedTaskDeliveryStatusByRunId).mock
       .calls[0]?.[0];
     expect(deliveryArgs?.runId).toBe("run-running");
@@ -200,16 +221,14 @@ describe("detached-task-runtime", () => {
     finalizeTaskRunByRunId({ runId: "legacy-ok", status: "succeeded", endedAt: 10 });
     finalizeTaskRunByRunId({ runId: "legacy-timeout", status: "timed_out", endedAt: 20 });
 
-    const completeArgs = completeTaskRunByRunIdSpy.mock.calls[0]?.[0] as
-      | Parameters<typeof finalizeTaskRunByRunId>[0]
-      | undefined;
-    expect(completeArgs?.runId).toBe("legacy-ok");
-    expect(completeArgs?.status).toBe("succeeded");
-    expect(completeArgs?.endedAt).toBe(10);
-    const failArgs = failTaskRunByRunIdSpy.mock.calls[0]?.[0];
-    expect(failArgs?.runId).toBe("legacy-timeout");
-    expect(failArgs?.status).toBe("timed_out");
-    expect(failArgs?.endedAt).toBe(20);
+    const completeArgs = requireFirstCallArg(completeTaskRunByRunIdSpy, "legacy complete");
+    expect(completeArgs.runId).toBe("legacy-ok");
+    expect(completeArgs.status).toBe("succeeded");
+    expect(completeArgs.endedAt).toBe(10);
+    const failArgs = requireFirstCallArg(failTaskRunByRunIdSpy, "legacy fail");
+    expect(failArgs.runId).toBe("legacy-timeout");
+    expect(failArgs.status).toBe("timed_out");
+    expect(failArgs.endedAt).toBe(20);
   });
 
   describe("tryRecoverTaskBeforeMarkLost", () => {

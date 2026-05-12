@@ -215,7 +215,7 @@ describe("exec-command-resolution", () => {
     fs.chmodSync(busybox, 0o755);
 
     const shellResolution = resolveCommandResolutionFromArgv(["sh", "-lc", "echo hi"]);
-    expect(shellResolution?.execution.resolvedPath).toEqual(expect.stringMatching(/sh$/));
+    expect(shellResolution?.execution.resolvedPath).toMatch(/sh$/);
 
     const wrappedResolution = resolveCommandResolutionFromArgv([busybox, "sh", "-lc", "echo hi"]);
     const evalResult = evaluateExecAllowlist({

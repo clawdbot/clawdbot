@@ -12,8 +12,8 @@ function getSlackCompatibilityNormalizer(): NonNullable<
 }
 
 describe("slack doctor", () => {
-  it("warns when mutable allowlist entries rely on disabled name matching", () => {
-    expect(
+  it("warns when mutable allowlist entries rely on disabled name matching", async () => {
+    const warnings = await Promise.resolve(
       slackDoctor.collectMutableAllowlistWarnings?.({
         cfg: {
           channels: {
@@ -35,13 +35,18 @@ describe("slack doctor", () => {
           },
         } as never,
       }),
-    ).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("mutable allowlist entries across slack"),
-        expect.stringContaining("channels.slack.allowFrom: alice"),
-        expect.stringContaining("channels.slack.accounts.work.channels.general.users: bob"),
-      ]),
     );
+    expect(
+      warnings?.some((warning) => warning.includes("mutable allowlist entries across slack")),
+    ).toBe(true);
+    expect(warnings?.some((warning) => warning.includes("channels.slack.allowFrom: alice"))).toBe(
+      true,
+    );
+    expect(
+      warnings?.some((warning) =>
+        warning.includes("channels.slack.accounts.work.channels.general.users: bob"),
+      ),
+    ).toBe(true);
   });
 
   it("normalizes legacy slack streaming aliases into the nested streaming shape", () => {
@@ -82,16 +87,16 @@ describe("slack doctor", () => {
       mode: "off",
       nativeTransport: false,
     });
-    expect(result.changes).toEqual(
-      expect.arrayContaining([
-        "Moved channels.slack.streamMode → channels.slack.streaming.mode (progress).",
-        "Moved channels.slack.chunkMode → channels.slack.streaming.chunkMode.",
-        "Moved channels.slack.blockStreaming → channels.slack.streaming.block.enabled.",
-        "Moved channels.slack.blockStreamingCoalesce → channels.slack.streaming.block.coalesce.",
-        "Moved channels.slack.accounts.work.streaming (boolean) → channels.slack.accounts.work.streaming.mode (off).",
-        "Moved channels.slack.accounts.work.nativeStreaming → channels.slack.accounts.work.streaming.nativeTransport.",
-      ]),
-    );
+    for (const expectedChange of [
+      "Moved channels.slack.streamMode → channels.slack.streaming.mode (progress).",
+      "Moved channels.slack.chunkMode → channels.slack.streaming.chunkMode.",
+      "Moved channels.slack.blockStreaming → channels.slack.streaming.block.enabled.",
+      "Moved channels.slack.blockStreamingCoalesce → channels.slack.streaming.block.coalesce.",
+      "Moved channels.slack.accounts.work.streaming (boolean) → channels.slack.accounts.work.streaming.mode (off).",
+      "Moved channels.slack.accounts.work.nativeStreaming → channels.slack.accounts.work.streaming.nativeTransport.",
+    ]) {
+      expect(result.changes).toContain(expectedChange);
+    }
   });
 
   it("does not duplicate streaming.mode change messages when streamMode wins over boolean streaming", () => {

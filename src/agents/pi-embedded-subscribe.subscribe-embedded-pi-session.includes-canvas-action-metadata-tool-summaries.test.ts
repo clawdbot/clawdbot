@@ -22,7 +22,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
-    const payload = onToolResult.mock.calls[0][0];
+    const payload = onToolResult.mock.calls.at(0)?.[0];
     expect(payload.text).toContain("🖼️");
     expect(payload.text).toContain("Canvas");
     expect(payload.text).toContain("/tmp/a2ui.jsonl");

@@ -366,7 +366,7 @@ describe("proxy cli runtime", () => {
 
       await runProxyValidateCommand({});
 
-      const output = String(vi.mocked(process.stdout.write).mock.calls[0]?.[0] ?? "");
+      const output = String(vi.mocked(process.stdout.write).mock.calls.at(0)?.[0] ?? "");
       expect(output).toContain("<success>Proxy validation passed</success>");
       expect(output).toContain("<heading>Checks</heading>");
       expect(output).toContain("<success>✓</success>");

@@ -4,7 +4,7 @@ import path from "node:path";
 const command = process.argv[2];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const agentTurnTimeoutSeconds = Number.parseInt(
-  process.env.OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS ?? "900",
+  process.env.OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS ?? "300",
   10,
 );
 

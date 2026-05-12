@@ -237,7 +237,7 @@ describe("runAgentHarnessAttempt", () => {
     const params = createAttemptParams();
     const result = await runAgentHarnessAttempt(params);
 
-    const classifyCall = classify.mock.calls[0];
+    const classifyCall = classify.mock.calls.at(0);
     expect(classifyCall?.[0].sessionIdUsed).toBe("codex");
     expect(classifyCall?.[1]).toBe(params);
     expect(result.agentHarnessId).toBe("codex");

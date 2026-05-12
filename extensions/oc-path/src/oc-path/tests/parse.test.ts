@@ -34,12 +34,14 @@ description: never closes
 Body.
 `;
     const { diagnostics } = parseMd(raw);
-    expect(diagnostics).toContainEqual({
-      line: 1,
-      message: "frontmatter opens with --- but never closes",
-      severity: "warning",
-      code: "OC_FRONTMATTER_UNCLOSED",
-    });
+    expect(diagnostics).toStrictEqual([
+      {
+        line: 1,
+        message: "frontmatter opens with --- but never closes",
+        severity: "warning",
+        code: "OC_FRONTMATTER_UNCLOSED",
+      },
+    ]);
   });
 
   it("strips quotes from values", () => {

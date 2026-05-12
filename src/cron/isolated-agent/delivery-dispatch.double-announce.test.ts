@@ -184,8 +184,9 @@ function makeBaseParams(overrides: {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -406,7 +407,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
-    const ttsCall = maybeApplyTtsToPayloadMock.mock.calls[0];
+    const ttsCall = maybeApplyTtsToPayloadMock.mock.calls.at(0);
     if (!ttsCall) {
       throw new Error("expected TTS payload call");
     }

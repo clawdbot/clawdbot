@@ -8,7 +8,12 @@ import { formatCliCommand } from "./command-format.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 
-type SystemEventOpts = GatewayRpcOpts & { text?: string; mode?: string; json?: boolean };
+type SystemEventOpts = GatewayRpcOpts & {
+  text?: string;
+  mode?: string;
+  sessionKey?: string;
+  json?: boolean;
+};
 type SystemGatewayOpts = GatewayRpcOpts & { json?: boolean };
 
 const normalizeWakeMode = (raw: unknown) => {
@@ -56,6 +61,10 @@ export function registerSystemCli(program: Command) {
       .description("Enqueue a system event and optionally trigger a heartbeat")
       .requiredOption("--text <text>", "System event text")
       .option("--mode <mode>", "Wake mode (now|next-heartbeat)", "next-heartbeat")
+      .option(
+        "--session-key <sessionKey>",
+        "Target a specific session for the event (defaults to the agent's main session)",
+      )
       .option("--json", "Output JSON", false),
   ).action(async (opts: SystemEventOpts) => {
     await runSystemGatewayCommand(
@@ -68,7 +77,13 @@ export function registerSystemCli(program: Command) {
           );
         }
         const mode = normalizeWakeMode(opts.mode);
-        return await callGatewayFromCli("wake", opts, { mode, text }, { expectFinal: false });
+        const sessionKey = normalizeOptionalString(opts.sessionKey);
+        return await callGatewayFromCli(
+          "wake",
+          opts,
+          sessionKey ? { mode, text, sessionKey } : { mode, text },
+          { expectFinal: false },
+        );
       },
       "ok",
     );

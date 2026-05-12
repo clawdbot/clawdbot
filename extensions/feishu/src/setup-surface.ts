@@ -17,6 +17,7 @@ import type { AppRegistrationResult } from "./app-registration.js";
 import type { FeishuConfig, FeishuDomain } from "./types.js";
 
 const channel = "feishu" as const;
+const SCAN_TO_CREATE_TP = "ob_cli_app";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -213,6 +214,7 @@ const feishuDmPolicy: ChannelSetupDmPolicy = {
 };
 
 type WizardPrompter = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["prompter"];
+type FeishuSetupMethod = "manual" | "scan";
 
 // ---------------------------------------------------------------------------
 // Security policy helpers
@@ -245,11 +247,39 @@ function applyNewAppSecurityPolicy(
 // Scan-to-create flow
 // ---------------------------------------------------------------------------
 
-async function runScanToCreate(prompter: WizardPrompter): Promise<AppRegistrationResult | null> {
+async function promptFeishuDomain(params: {
+  prompter: WizardPrompter;
+  initialValue?: FeishuDomain;
+}): Promise<FeishuDomain> {
+  return (await params.prompter.select({
+    message: "Which Feishu domain?",
+    options: [
+      { value: "feishu", label: "Feishu (feishu.cn) - China" },
+      { value: "lark", label: "Lark (larksuite.com) - International" },
+    ],
+    initialValue: params.initialValue ?? "feishu",
+  })) as FeishuDomain;
+}
+
+async function promptFeishuSetupMethod(prompter: WizardPrompter): Promise<FeishuSetupMethod> {
+  return (await prompter.select({
+    message: "How do you want to connect Feishu?",
+    options: [
+      { value: "manual", label: "Enter App ID and App Secret manually" },
+      { value: "scan", label: "Scan a QR code to create a bot automatically" },
+    ],
+    initialValue: "manual",
+  })) as FeishuSetupMethod;
+}
+
+async function runScanToCreate(
+  prompter: WizardPrompter,
+  domain: FeishuDomain,
+): Promise<AppRegistrationResult | null> {
   const { beginAppRegistration, initAppRegistration, pollAppRegistration, printQrCode } =
     await import("./app-registration.js");
   try {
-    await initAppRegistration("feishu");
+    await initAppRegistration(domain);
   } catch {
     await prompter.note(
       "Scan-to-create is not available in this environment. Falling back to manual input.",
@@ -258,9 +288,12 @@ async function runScanToCreate(prompter: WizardPrompter): Promise<AppRegistratio
     return null;
   }
 
-  const begin = await beginAppRegistration("feishu");
+  const begin = await beginAppRegistration(domain);
 
-  await prompter.note("Scan the QR with Lark/Feishu on your phone.", "Feishu scan-to-create");
+  await prompter.note(
+    "Scan the QR with Lark/Feishu on your phone. If the mobile app does not react, rerun setup and choose manual input.",
+    "Feishu scan-to-create",
+  );
   await printQrCode(begin.qrUrl);
 
   const progress = prompter.progress("Fetching configuration results...");
@@ -269,8 +302,8 @@ async function runScanToCreate(prompter: WizardPrompter): Promise<AppRegistratio
     deviceCode: begin.deviceCode,
     interval: begin.interval,
     expireIn: begin.expireIn,
-    initialDomain: "feishu",
-    tp: "ob_app",
+    initialDomain: domain,
+    tp: SCAN_TO_CREATE_TP,
   });
 
   switch (outcome.status) {
@@ -314,8 +347,17 @@ async function runNewAppFlow(params: {
   let appSecretProbeValue: string | null = null;
   let scanDomain: FeishuDomain | undefined;
   let scanOpenId: string | undefined;
+  const feishuCfg = next.channels?.feishu as FeishuConfig | undefined;
+  const currentDomain = feishuCfg?.domain ?? "feishu";
+  const setupMethod = await promptFeishuSetupMethod(prompter);
+  const selectedDomain = await promptFeishuDomain({
+    prompter,
+    initialValue: currentDomain,
+  });
+  scanDomain = selectedDomain;
 
-  const scanResult = await runScanToCreate(prompter);
+  const scanResult =
+    setupMethod === "scan" ? await runScanToCreate(prompter, selectedDomain) : null;
   if (scanResult) {
     appId = scanResult.appId;
     appSecret = scanResult.appSecret;
@@ -324,20 +366,7 @@ async function runNewAppFlow(params: {
     scanOpenId = scanResult.openId;
   } else {
     // Fallback to manual input: collect domain, appId, appSecret.
-    const feishuCfg = next.channels?.feishu as FeishuConfig | undefined;
     await noteFeishuCredentialHelp(prompter);
-
-    // Domain selection first (needed for API calls).
-    const currentDomain = feishuCfg?.domain ?? "feishu";
-    const domain = (await prompter.select({
-      message: "Which Feishu domain?",
-      options: [
-        { value: "feishu", label: "Feishu (feishu.cn) - China" },
-        { value: "lark", label: "Lark (larksuite.com) - International" },
-      ],
-      initialValue: currentDomain,
-    })) as FeishuDomain;
-    scanDomain = domain;
 
     appId = await promptFeishuAppId({
       prompter,
@@ -369,7 +398,7 @@ async function runNewAppFlow(params: {
       scanOpenId = await getAppOwnerOpenId({
         appId,
         appSecret: appSecretProbeValue,
-        domain: scanDomain,
+        domain: selectedDomain,
       });
     }
   }

@@ -241,7 +241,11 @@ describe("startProxy", () => {
     expect(mockLogInfo).toHaveBeenCalledWith(
       "proxy: routing process HTTP traffic through external proxy http://127.0.0.1:3128",
     );
-    expect(mockLogInfo).not.toHaveBeenCalledWith(expect.stringContaining("user:pass"));
+    expect(
+      mockLogInfo.mock.calls.some((call) =>
+        call.some((value) => typeof value === "string" && value.includes("user:pass")),
+      ),
+    ).toBe(false);
   });
 
   it("clears NO_PROXY so internal destinations do not bypass the filtering proxy", async () => {

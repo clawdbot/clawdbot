@@ -31,6 +31,22 @@ describe("extractQuickSettingsSecurity", () => {
     );
   });
 
+  it("reads browser enabled and tool profile from canonical config paths", () => {
+    const result = extractQuickSettingsSecurity(
+      makeState({ browser: { enabled: false }, tools: { profile: "messaging" } }),
+    );
+
+    expect(result.browserEnabled).toBe(false);
+    expect(result.toolProfile).toBe("messaging");
+  });
+
+  it("uses effective quick settings defaults when browser and tool profile are unset", () => {
+    const result = extractQuickSettingsSecurity(makeState({}));
+
+    expect(result.browserEnabled).toBe(true);
+    expect(result.toolProfile).toBe("full");
+  });
+
   it("ignores agents.defaults.exec.security because it is not a schema path", () => {
     const result = extractQuickSettingsSecurity(
       makeState({
@@ -58,5 +74,8 @@ describe("extractQuickSettingsSecurity", () => {
     expect(
       extractQuickSettingsSecurity(makeState({ tools: { exec: { security: "   " } } })).execPolicy,
     ).toBe("allowlist");
+    expect(
+      extractQuickSettingsSecurity(makeState({ tools: { profile: "  coding  " } })).toolProfile,
+    ).toBe("coding");
   });
 });

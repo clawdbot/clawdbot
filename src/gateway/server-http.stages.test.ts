@@ -40,10 +40,9 @@ describe("runGatewayHttpRequestStages", () => {
 
     expect(result).toBe(true);
     expect(stageC).toHaveBeenCalled();
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('stage "broken-facade" threw'),
-      stageError,
-    );
+    expect(consoleSpy.mock.calls).toEqual([
+      ['[gateway-http] stage "broken-facade" threw — skipping:', stageError],
+    ]);
 
     consoleSpy.mockRestore();
   });
@@ -68,10 +67,9 @@ describe("runGatewayHttpRequestStages", () => {
 
     expect(result).toBe(true);
     expect(stageC).toHaveBeenCalled();
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('stage "async-broken" threw'),
-      stageError,
-    );
+    expect(consoleSpy.mock.calls).toEqual([
+      ['[gateway-http] stage "async-broken" threw — skipping:', stageError],
+    ]);
 
     consoleSpy.mockRestore();
   });

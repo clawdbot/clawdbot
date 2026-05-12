@@ -37,7 +37,11 @@ type MockWithCalls = {
 };
 
 function firstObjectArg(mock: MockWithCalls): Record<string, unknown> {
-  const value = mock.mock.calls[0]?.[0];
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected first mock call to receive an object argument");
+  }
+  const value = call[0];
   if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("expected first mock call to receive an object argument");
   }
@@ -53,6 +57,37 @@ function recordField(value: unknown, field: string): Record<string, unknown> {
 
 function firstGoogleClientHttpOptions(): Record<string, unknown> {
   return recordField(firstObjectArg(createGoogleGenAIMock).httpOptions, "httpOptions");
+}
+
+function requireFetchCall(
+  fetchMock: ReturnType<typeof vi.fn>,
+  index: number,
+): [RequestInfo | URL, RequestInit | undefined] {
+  const call = fetchMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected Google video fetch call ${index}`);
+  }
+  return call as [RequestInfo | URL, RequestInit | undefined];
+}
+
+function parseFetchJsonBody(fetchMock: ReturnType<typeof vi.fn>, index: number): unknown {
+  const [, init] = requireFetchCall(fetchMock, index);
+  const body = init?.body;
+  if (typeof body !== "string") {
+    throw new Error(`expected Google video fetch body ${index}`);
+  }
+  return JSON.parse(body) as unknown;
+}
+
+function fetchInputUrl(fetchMock: ReturnType<typeof vi.fn>, index: number): string {
+  const [input] = requireFetchCall(fetchMock, index);
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  return input.url;
 }
 
 let ssrfMock: { mockRestore: () => void } | undefined;
@@ -252,7 +287,7 @@ describe("google video generation provider", () => {
       durationSeconds: 3,
     });
 
-    const [{ downloadPath }] = downloadMock.mock.calls[0] ?? [{}];
+    const [{ downloadPath }] = downloadMock.mock.calls.at(0) ?? [{}];
     const downloadBaseName = path.basename(String(downloadPath));
     expect(downloadBaseName).toContain("video-1.mp4");
     expect(downloadBaseName).toMatch(/\.part$/);
@@ -308,14 +343,14 @@ describe("google video generation provider", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+    expect(fetchInputUrl(fetchMock, 0)).toBe(
       "https://generativelanguage.googleapis.com/v1beta/models/veo-3.1-fast-generate-preview:predictLongRunning",
     );
-    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+    expect(parseFetchJsonBody(fetchMock, 0)).toEqual({
       instances: [{ prompt: "A tiny robot watering a windowsill garden" }],
       parameters: { durationSeconds: 4 },
     });
-    expect(String(fetchMock.mock.calls[1]?.[0])).toBe(
+    expect(fetchInputUrl(fetchMock, 1)).toBe(
       "https://generativelanguage.googleapis.com/v1beta/files/rest-video:download?alt=media&key=google-key",
     );
     expect(downloadMock).not.toHaveBeenCalled();

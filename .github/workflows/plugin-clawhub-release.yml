@@ -228,7 +228,20 @@ jobs:
 
       - name: Install ClawHub CLI dependencies
         working-directory: clawhub-source
-        run: bun install --frozen-lockfile
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if bun install --frozen-lockfile; then
+              exit 0
+            fi
+            status="$?"
+            if [[ "${attempt}" == "3" ]]; then
+              exit "${status}"
+            fi
+            echo "bun install failed while preparing ClawHub CLI; retrying (${attempt}/3)."
+            rm -rf node_modules "${RUNNER_TEMP}/bun-install-cache" || true
+            sleep $((attempt * 15))
+          done
 
       - name: Bootstrap ClawHub CLI
         run: |
@@ -263,7 +276,7 @@ jobs:
       id-token: write
     strategy:
       fail-fast: false
-      max-parallel: 12
+      max-parallel: 32
       matrix:
         plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
     steps:
@@ -309,7 +322,20 @@ jobs:
 
       - name: Install ClawHub CLI dependencies
         working-directory: clawhub-source
-        run: bun install --frozen-lockfile
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if bun install --frozen-lockfile; then
+              exit 0
+            fi
+            status="$?"
+            if [[ "${attempt}" == "3" ]]; then
+              exit "${status}"
+            fi
+            echo "bun install failed while preparing ClawHub CLI; retrying (${attempt}/3)."
+            rm -rf node_modules "${RUNNER_TEMP}/bun-install-cache" || true
+            sleep $((attempt * 15))
+          done
 
       - name: Bootstrap ClawHub CLI
         run: |
@@ -392,3 +418,62 @@ jobs:
           PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
           PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
         run: bash scripts/plugin-clawhub-publish.sh --publish "${PACKAGE_DIR}"
+
+      - name: Verify published ClawHub package
+        env:
+          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+          PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'EOF'
+          const registry = (process.env.CLAWHUB_REGISTRY ?? "https://clawhub.ai").replace(/\/+$/, "");
+          const packageName = process.env.PACKAGE_NAME;
+          const packageVersion = process.env.PACKAGE_VERSION;
+          const packageTag = process.env.PACKAGE_TAG;
+          if (!packageName || !packageVersion || !packageTag) {
+            throw new Error("Missing ClawHub package verification env.");
+          }
+          const encodedName = encodeURIComponent(packageName);
+          const encodedVersion = encodeURIComponent(packageVersion);
+          const detailUrl = `${registry}/api/v1/packages/${encodedName}`;
+          const versionUrl = `${detailUrl}/versions/${encodedVersion}`;
+          const artifactUrl = `${versionUrl}/artifact/download`;
+
+          async function fetchWithRetry(url, options = {}) {
+            let lastStatus = "unknown";
+            for (let attempt = 1; attempt <= 12; attempt += 1) {
+              const response = await fetch(url, { redirect: "manual", ...options });
+              lastStatus = response.status;
+              if (response.status !== 429 && response.status < 500) {
+                return response;
+              }
+              await new Promise((resolve) => setTimeout(resolve, attempt * 5000));
+            }
+            throw new Error(`${url} did not stabilize; last status ${lastStatus}.`);
+          }
+
+          const detailResponse = await fetchWithRetry(detailUrl, {
+            headers: { accept: "application/json" },
+          });
+          if (!detailResponse.ok) {
+            throw new Error(`${detailUrl} returned HTTP ${detailResponse.status}.`);
+          }
+          const detail = await detailResponse.json();
+          const tags = detail?.package?.tags ?? {};
+          if (tags[packageTag] !== packageVersion) {
+            throw new Error(
+              `${packageName}: ClawHub tag ${packageTag} points to ${tags[packageTag] ?? "<missing>"}, expected ${packageVersion}.`,
+            );
+          }
+          const versionResponse = await fetchWithRetry(versionUrl);
+          if (!versionResponse.ok) {
+            throw new Error(`${versionUrl} returned HTTP ${versionResponse.status}.`);
+          }
+          const artifactResponse = await fetchWithRetry(artifactUrl, { method: "HEAD" });
+          if (artifactResponse.status < 200 || artifactResponse.status >= 400) {
+            throw new Error(`${artifactUrl} returned HTTP ${artifactResponse.status}.`);
+          }
+          console.log(`${packageName}@${packageVersion} verified on ClawHub.`);
+          EOF

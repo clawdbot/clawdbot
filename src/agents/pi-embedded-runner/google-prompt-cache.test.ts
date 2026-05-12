@@ -81,15 +81,21 @@ function createCapturingStreamFn(result = "stream") {
 }
 
 function callArg(mock: { mock: { calls: unknown[][] } }, callIndex: number, argIndex: number) {
-  const call = mock.mock.calls[callIndex];
-  expect(call).toBeDefined();
-  return call?.[argIndex];
+  const call = mock.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  if (argIndex >= call.length) {
+    throw new Error(`Expected mock call ${callIndex} argument ${argIndex}`);
+  }
+  return call[argIndex];
 }
 
 function fetchInit(fetchMock: { mock: { calls: unknown[][] } }, callIndex = 0): RequestInit {
   const init = callArg(fetchMock, callIndex, 1);
-  expect(typeof init).toBe("object");
-  expect(init).not.toBeNull();
+  if (!init || typeof init !== "object") {
+    throw new Error(`expected fetch init for call ${callIndex}`);
+  }
   return init as RequestInit;
 }
 
@@ -131,11 +137,13 @@ function preparePromptCacheStream(params: {
 describe("google prompt cache", () => {
   it("creates cached content from the system prompt and strips that prompt from live requests", async () => {
     const now = 1_000_000;
+    const expireTime = new Date(now + 3_600_000).toISOString();
+    const systemPromptDigest = crypto.createHash("sha256").update("Follow policy.").digest("hex");
     const entries: SessionCustomEntry[] = [];
     const sessionManager = makeSessionManager(entries);
     const fetchMock = createCacheFetchMock({
       name: "cachedContents/system-cache-1",
-      expireTime: new Date(now + 3_600_000).toISOString(),
+      expireTime,
     });
     const { streamFn: innerStreamFn, getCapturedPayload } = createCapturingStreamFn();
 
@@ -186,9 +194,27 @@ describe("google prompt cache", () => {
     expect(Array.isArray(streamContext(innerStreamFn).tools)).toBe(true);
     expect(streamOptions(innerStreamFn).temperature).toBe(0.2);
     expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-1");
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.customType).toBe("openclaw.google-prompt-cache");
-    expect((entries[0]?.data as { status?: string; cachedContent?: string })?.status).toBe("ready");
+    expect(entries).toEqual([
+      {
+        type: "custom",
+        id: "entry-1",
+        parentId: null,
+        timestamp: new Date(1_000).toISOString(),
+        customType: "openclaw.google-prompt-cache",
+        data: {
+          status: "ready",
+          timestamp: now,
+          provider: "google",
+          modelId: "gemini-3.1-pro-preview",
+          modelApi: "google-generative-ai",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          systemPromptDigest,
+          cacheRetention: "long",
+          cachedContent: "cachedContents/system-cache-1",
+          expireTime,
+        },
+      },
+    ]);
   });
 
   it("reuses a persisted cache entry without creating a second cache", async () => {
@@ -274,7 +300,7 @@ describe("google prompt cache", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+    expect(String(fetchMock.mock.calls.at(0)?.[0])).toBe(
       "https://generativelanguage.googleapis.com/v1beta/cachedContents/system-cache-3?updateMask=ttl",
     );
     expect(fetchInit(fetchMock).method).toBe("PATCH");

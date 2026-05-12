@@ -271,17 +271,29 @@ function resolveCodexAppServerAuthProfileCredential(
     return undefined;
   }
   const store =
-    lookup.authProfileStore ?? loadCodexAppServerAuthProfileStore(lookup.agentDir, lookup.config);
+    lookup.authProfileStore ??
+    loadCodexAppServerAuthProfileStore({
+      agentDir: lookup.agentDir,
+      authProfileId,
+      config: lookup.config,
+    });
   return store.profiles[authProfileId];
 }
 
-function loadCodexAppServerAuthProfileStore(
-  agentDir: string | undefined,
-  config?: ProviderAuthAliasConfig,
-): AuthProfileStore {
-  return ensureAuthProfileStore(agentDir?.trim() || resolveDefaultAgentDir(config ?? {}), {
-    allowKeychainPrompt: false,
-  });
+function loadCodexAppServerAuthProfileStore(params: {
+  agentDir: string | undefined;
+  authProfileId: string;
+  config?: ProviderAuthAliasConfig;
+}): AuthProfileStore {
+  return ensureAuthProfileStore(
+    params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {}),
+    {
+      allowKeychainPrompt: false,
+      config: params.config,
+      externalCliProviderIds: [CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER],
+      externalCliProfileIds: [params.authProfileId],
+    },
+  );
 }
 
 function isCodexAppServerNativeAuthProvider(params: {

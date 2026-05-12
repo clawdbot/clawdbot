@@ -213,21 +213,17 @@ describe("plugin-sdk/direct-dm", () => {
       onDispatchError: () => {},
     });
 
-    expect(result.route).toMatchObject({
-      agentId: "agent-main",
-      accountId: "default",
-      sessionKey: "dm:sender-1",
-    });
+    expect(result.route.agentId).toBe("agent-main");
+    expect(result.route.accountId).toBe("default");
+    expect(result.route.sessionKey).toBe("dm:sender-1");
     expect(result.storePath).toBe("/tmp/direct-dm-session-store");
-    expect(result.ctxPayload).toMatchObject({
-      Body: "env:hello world",
-      BodyForAgent: "hello world",
-      From: "nostr:sender-1",
-      To: "nostr:bot-1",
-      SenderId: "sender-1",
-      MessageSid: "event-123",
-      CommandAuthorized: true,
-    });
+    expect(result.ctxPayload.Body).toBe("env:hello world");
+    expect(result.ctxPayload.BodyForAgent).toBe("hello world");
+    expect(result.ctxPayload.From).toBe("nostr:sender-1");
+    expect(result.ctxPayload.To).toBe("nostr:bot-1");
+    expect(result.ctxPayload.SenderId).toBe("sender-1");
+    expect(result.ctxPayload.MessageSid).toBe("event-123");
+    expect(result.ctxPayload.CommandAuthorized).toBe(true);
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
     expect(deliver).toHaveBeenCalledWith({ text: "reply text" });

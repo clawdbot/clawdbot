@@ -75,9 +75,11 @@ describe("compactSkillPaths", () => {
     });
 
     const locationMatch = prompt.match(/<location>([^<]+)<\/location>/);
-    expect(locationMatch).not.toBeNull();
-    expect(locationMatch![1]).toContain("~/");
-    expect(locationMatch![1]).toContain("\\literal-skill");
+    if (!locationMatch) {
+      throw new Error("expected prompt location tag");
+    }
+    expect(locationMatch[1]).toContain("~/");
+    expect(locationMatch[1]).toContain("\\literal-skill");
   });
 
   it("preserves paths outside home directory", () => {

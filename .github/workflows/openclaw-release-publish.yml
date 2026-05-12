@@ -288,7 +288,7 @@ jobs:
           wait_for_run() {
             local workflow="$1"
             local run_id="$2"
-            local status conclusion url updated_at last_state
+            local status conclusion url updated_at created_at duration_seconds duration_label last_state
 
             last_state=""
             while true; do
@@ -307,11 +307,26 @@ jobs:
               sleep 30
             done
 
-            conclusion="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json conclusion --jq '.conclusion')"
-            url="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json url --jq '.url')"
-            echo "${workflow} finished with ${conclusion}: ${url}"
+            run_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json conclusion,url,createdAt,updatedAt)"
+            conclusion="$(printf '%s' "$run_json" | jq -r '.conclusion')"
+            url="$(printf '%s' "$run_json" | jq -r '.url')"
+            created_at="$(printf '%s' "$run_json" | jq -r '.createdAt')"
+            updated_at="$(printf '%s' "$run_json" | jq -r '.updatedAt')"
+            duration_seconds="$(
+              CREATED_AT="${created_at}" UPDATED_AT="${updated_at}" node --input-type=module -e '
+                const created = Date.parse(process.env.CREATED_AT ?? "");
+                const updated = Date.parse(process.env.UPDATED_AT ?? "");
+                console.log(Number.isFinite(created) && Number.isFinite(updated) ? Math.max(0, Math.round((updated - created) / 1000)) : "");
+              '
+            )"
+            if [[ -n "${duration_seconds}" ]]; then
+              duration_label="$((duration_seconds / 60))m$(printf '%02d' $((duration_seconds % 60)))s"
+            else
+              duration_label="unknown duration"
+            fi
+            echo "${workflow} finished with ${conclusion} in ${duration_label}: ${url}"
             {
-              echo "- ${workflow}: ${conclusion} (${url})"
+              echo "- ${workflow}: ${conclusion} in ${duration_label} (${url})"
             } >> "$GITHUB_STEP_SUMMARY"
             if [[ "$conclusion" != "success" ]]; then
               gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
@@ -414,6 +429,10 @@ jobs:
 
           plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml "${npm_args[@]}")"
           plugin_clawhub_run_id="$(dispatch_workflow plugin-clawhub-release.yml "${clawhub_args[@]}")"
+          {
+            echo "- Plugin npm run ID: \`${plugin_npm_run_id}\`"
+            echo "- Plugin ClawHub run ID: \`${plugin_clawhub_run_id}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
           if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}"; then
             echo "Plugin npm publish failed; cancelling ClawHub publish child ${plugin_clawhub_run_id}." >&2
@@ -428,6 +447,7 @@ jobs:
               -f preflight_only=false \
               -f preflight_run_id="${PREFLIGHT_RUN_ID}" \
               -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}")"
+            echo "- OpenClaw npm run ID: \`${openclaw_npm_run_id}\`" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "- OpenClaw npm publish: skipped by input" >> "$GITHUB_STEP_SUMMARY"
           fi

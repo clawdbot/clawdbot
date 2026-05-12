@@ -27,7 +27,11 @@ function expectDiscordActionCall(params: {
   options?: unknown;
 }) {
   expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
-  const [payload, cfg, options] = handleDiscordActionMock.mock.calls[0] ?? [];
+  const [call] = handleDiscordActionMock.mock.calls;
+  if (!call) {
+    throw new Error("expected Discord action call");
+  }
+  const [payload, cfg, options] = call;
   expect(payload).toEqual(params.payload);
   expect(cfg).toBe(params.cfg);
   if ("options" in params) {

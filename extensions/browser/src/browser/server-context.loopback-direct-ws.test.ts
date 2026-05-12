@@ -13,6 +13,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function expectFetchCalledWithManualRedirect(
+  fetchMock: ReturnType<typeof vi.fn>,
+  expectedUrl: string,
+) {
+  const call = fetchMock.mock.calls.find(([url]) => String(url) === expectedUrl);
+  if (!call) {
+    throw new Error(`Expected fetch call for ${expectedUrl}`);
+  }
+  const init = call[1] as RequestInit | undefined;
+  expect(init?.redirect).toBe("manual");
+  expect(init?.headers).toEqual({});
+  expect(init?.signal).toBeInstanceOf(AbortSignal);
+}
+
 describe("browser server-context loopback direct WebSocket profiles", () => {
   it("uses an HTTP /json/list base when opening about:blank under strict SSRF", async () => {
     const createTargetViaCdp = vi
@@ -94,13 +108,13 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
     await openclaw.focusTab("T1");
     await openclaw.closeTab("T1");
 
-    expect(fetchMock).toHaveBeenCalledWith(
+    expectFetchCalledWithManualRedirect(
+      fetchMock,
       "http://127.0.0.1:18800/json/activate/T1?token=abc",
-      expect.any(Object),
     );
-    expect(fetchMock).toHaveBeenCalledWith(
+    expectFetchCalledWithManualRedirect(
+      fetchMock,
       "http://127.0.0.1:18800/json/close/T1?token=abc",
-      expect.any(Object),
     );
   });
 

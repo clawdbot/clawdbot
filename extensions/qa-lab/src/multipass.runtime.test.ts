@@ -123,17 +123,12 @@ describe("qa multipass runtime", () => {
 
     const script = renderQaMultipassGuestScript(plan);
 
-    expect(plan.qaCommand).toEqual(
-      expect.arrayContaining([
-        "--provider-mode",
-        "live-frontier",
-        "--model",
-        "openai/gpt-5.5",
-        "--alt-model",
-        "openai/gpt-5.5",
-        "--fast",
-      ]),
-    );
+    expect(plan.qaCommand).toContain("--provider-mode");
+    expect(plan.qaCommand).toContain("live-frontier");
+    expect(plan.qaCommand).toContain("--model");
+    expect(plan.qaCommand).toContain("openai/gpt-5.5");
+    expect(plan.qaCommand).toContain("--alt-model");
+    expect(plan.qaCommand).toContain("--fast");
     expect(plan.forwardedEnv.OPENAI_API_KEY).toBe("test-openai-key");
     expect(script).toContain("OPENAI_API_KEY='test-openai-key'");
     expect(script).toContain("'pnpm' 'openclaw' 'qa' 'suite' '--transport' 'qa-channel'");
@@ -148,7 +143,7 @@ describe("qa multipass runtime", () => {
       scenarioIds: ["channel-chat-baseline"],
     });
 
-    expect(plan.qaCommand).toEqual(expect.arrayContaining(["--allow-failures"]));
+    expect(plan.qaCommand).toContain("--allow-failures");
   });
 
   it("redacts forwarded live secrets in the persisted artifact script", () => {

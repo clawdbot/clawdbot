@@ -47,40 +47,59 @@ function expectSingleProfileCredential(
   profiles: ReturnType<typeof resolveExternalCliAuthProfiles>,
   profileId: string,
 ) {
-  expect(profiles).toHaveLength(1);
-  expect(profiles[0]?.profileId).toBe(profileId);
-  expect(profiles[0]?.credential).toBeTruthy();
-  return profiles[0]?.credential as Record<string, unknown>;
+  expect(profiles).toStrictEqual([
+    {
+      credential: expect.any(Object),
+      persistence: profileId === OPENAI_CODEX_DEFAULT_PROFILE_ID ? "runtime-only" : "persisted",
+      profileId,
+    },
+  ]);
+  const credential = profiles[0]?.credential;
+  if (!credential) {
+    throw new Error(`Expected credential for profile ${profileId}`);
+  }
+  return credential as Record<string, unknown>;
 }
 
 function expectSingleProfile(
   profiles: ReturnType<typeof resolveExternalCliAuthProfiles>,
   profileId: string,
 ) {
-  expect(profiles).toHaveLength(1);
-  expect(profiles[0]?.profileId).toBe(profileId);
-  expect(profiles[0]?.credential).toBeTruthy();
-  return profiles[0];
+  expect(profiles).toStrictEqual([
+    {
+      credential: expect.any(Object),
+      persistence: profileId === OPENAI_CODEX_DEFAULT_PROFILE_ID ? "runtime-only" : "persisted",
+      profileId,
+    },
+  ]);
+  const profile = profiles[0];
+  if (!profile?.credential) {
+    throw new Error(`Expected credential for profile ${profileId}`);
+  }
+  return profile;
 }
 
 function expectCredentialFields(
   credential: Record<string, unknown> | undefined,
   expected: Record<string, unknown>,
 ) {
-  expect(credential).toBeTruthy();
+  if (!credential) {
+    throw new Error("Expected credential");
+  }
   for (const [key, value] of Object.entries(expected)) {
-    expect(credential?.[key]).toBe(value);
+    expect(credential[key]).toBe(value);
   }
 }
 
 function expectReaderPolicyCall(mock: { mock: { calls: unknown[][] } }) {
-  expect(mock.mock.calls).toHaveLength(1);
-  const [arg] = mock.mock.calls[0] ?? [];
-  expect(arg).toBeTruthy();
-  if (!arg || typeof arg !== "object") {
-    throw new Error("Expected CLI reader options");
-  }
-  expect((arg as { allowKeychainPrompt?: unknown }).allowKeychainPrompt).toBe(false);
+  expect(mock.mock.calls).toStrictEqual([
+    [
+      {
+        allowKeychainPrompt: false,
+        ttlMs: 15 * 60 * 1000,
+      },
+    ],
+  ]);
 }
 
 describe("external cli oauth resolution", () => {

@@ -18,6 +18,8 @@ describe("session parent fork config keys", () => {
         candidate.path === "session" &&
         candidate.message.includes('Unrecognized key: "parentForkMaxTokens"'),
     );
-    expect(issue).toBeDefined();
+    if (!issue) {
+      throw new Error("Expected legacy session.parentForkMaxTokens validation issue");
+    }
   });
 });

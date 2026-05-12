@@ -724,7 +724,7 @@ describe("plugins cli install", () => {
 
     await runPluginsCommand(["plugins", "install", pluginId]);
 
-    expect(enablePluginInConfig).toHaveBeenCalled();
+    expect(enablePluginInConfig).toHaveBeenCalledTimes(1);
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
     expect(runtimeLogsContain("requires configuration first")).toBe(false);
   });

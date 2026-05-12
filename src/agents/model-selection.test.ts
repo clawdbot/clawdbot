@@ -1768,6 +1768,34 @@ describe("model-selection", () => {
       ).toEqual({ provider: "modelstudio", model: "qwen3.6-plus" });
     });
 
+    it("normalizes retired nested Gemini ids in exact configured provider refs", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "kilocode/google/gemini-3-pro-preview" },
+          },
+        },
+        models: {
+          providers: {
+            kilocode: {
+              api: "openai-completions",
+              baseUrl: "https://kilocode.test/v1",
+              models: [{ id: "google/gemini-3-pro-preview", name: "Gemini 3 Pro" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(
+        resolveConfiguredModelRef({
+          cfg,
+          defaultProvider: "anthropic",
+          defaultModel: "claude-opus-4-6",
+          allowPluginNormalization: false,
+        }),
+      ).toEqual({ provider: "kilocode", model: "google/gemini-3.1-pro-preview" });
+    });
+
     it("keeps legacy modelstudio aliases when no exact foreign api owner is configured", () => {
       const cfg = {
         agents: {

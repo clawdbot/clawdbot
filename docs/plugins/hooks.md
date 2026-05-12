@@ -134,7 +134,7 @@ observation-only.
 
 **Sessions and compaction**
 
-- `session_start` / `session_end` - track session lifecycle boundaries
+- `session_start` / `session_end` - track session lifecycle boundaries. The event's `reason` is one of `new`, `reset`, `idle`, `daily`, `compaction`, `deleted`, `shutdown`, `restart`, or `unknown`. The `shutdown` and `restart` values fire from the gateway shutdown finalizer when the process is stopped or restarted while sessions are still active, so downstream plugins (such as memory or transcript stores) can finalize ghost rows that would otherwise be left in an open state across restarts. The finalizer is bounded so a slow plugin cannot block SIGTERM/SIGINT.
 - `before_compaction` / `after_compaction` - observe or annotate compaction cycles
 - `before_reset` - observe session-reset events (`/reset`, programmatic resets)
 

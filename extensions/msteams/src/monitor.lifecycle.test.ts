@@ -236,10 +236,19 @@ function createStores() {
   };
 }
 
+function readMockCallArg(mock: ReturnType<typeof vi.fn>, callIndex: number, argIndex: number) {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected mock call #${callIndex + 1}`);
+  }
+  if (argIndex >= call.length) {
+    throw new Error(`expected mock call #${callIndex + 1} argument #${argIndex + 1}`);
+  }
+  return call[argIndex];
+}
+
 function requireRegisteredMSTeamsConfig(): OpenClawConfig {
-  const registered = registerMSTeamsHandlers.mock.calls[0]?.[1] as
-    | { cfg?: OpenClawConfig }
-    | undefined;
+  const registered = readMockCallArg(registerMSTeamsHandlers, 0, 1) as { cfg?: OpenClawConfig };
   if (!registered?.cfg) {
     throw new Error("expected registered MSTeams handler config");
   }
@@ -305,7 +314,9 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => {
+      expect(expressControl.apps.length).toBeGreaterThan(0);
+    });
 
     const app = expressControl.apps.at(-1);
     if (!app) {
@@ -317,10 +328,10 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     if (typeof jsonMiddleware !== "function") {
       throw new Error("expected Express JSON middleware");
     }
-    expect(app.use.mock.calls[1]?.[0]).not.toBe(jsonMiddleware);
-    expect(app.use.mock.calls[2]?.[0]).toBe(jsonMiddleware);
+    expect(readMockCallArg(app.use, 1, 0)).not.toBe(jsonMiddleware);
+    expect(readMockCallArg(app.use, 2, 0)).toBe(jsonMiddleware);
 
-    const jwtMiddleware = app.use.mock.calls[1]?.[0] as (
+    const jwtMiddleware = readMockCallArg(app.use, 1, 0) as (
       req: Request,
       res: Response,
       next: (err?: unknown) => void,

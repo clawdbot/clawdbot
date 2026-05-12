@@ -15,6 +15,14 @@ beforeAll(async () => {
 
 installProviderHttpMockCleanup();
 
+function requireFirstPostJsonRequest(): unknown {
+  const [call] = postJsonRequestMock.mock.calls;
+  if (!call) {
+    throw new Error("expected DeepInfra video request");
+  }
+  return call[0];
+}
+
 describe("deepinfra video generation provider", () => {
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildDeepInfraVideoGenerationProvider());
@@ -66,7 +74,7 @@ describe("deepinfra video generation provider", () => {
       ],
     ]);
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const [postRequest] = postJsonRequestMock.mock.calls[0] ?? [];
+    const postRequest = requireFirstPostJsonRequest();
     const postRequestHeaders = Reflect.get(postRequest ?? {}, "headers");
     expect(postRequestHeaders).toBeInstanceOf(Headers);
     expect(Object.fromEntries((postRequestHeaders as Headers).entries())).toEqual({

@@ -215,6 +215,9 @@ describe("bundled plugin public surface loader", () => {
     const moduleRealPath = fs.realpathSync(modulePath);
     vi.spyOn(fs, "statSync").mockImplementation((target, options) => {
       const stat = realStatSync(target, options);
+      if (stat === undefined) {
+        return stat;
+      }
       if (fs.realpathSync(target) !== moduleRealPath) {
         return stat;
       }

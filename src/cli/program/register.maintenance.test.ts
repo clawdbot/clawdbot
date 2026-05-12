@@ -53,7 +53,7 @@ describe("registerMaintenanceCommands doctor action", () => {
     await runMaintenanceCli(["doctor", "--non-interactive", "--yes"]);
 
     expect(doctorCommand).toHaveBeenCalledTimes(1);
-    const [runtimeArg, options] = doctorCommand.mock.calls[0] as unknown as [
+    const [runtimeArg, options] = doctorCommand.mock.calls.at(0)! as unknown as [
       typeof runtime,
       Record<string, unknown>,
     ];
@@ -79,7 +79,7 @@ describe("registerMaintenanceCommands doctor action", () => {
     await runMaintenanceCli(["doctor", "--fix"]);
 
     expect(doctorCommand).toHaveBeenCalledTimes(1);
-    const [runtimeArg, options] = doctorCommand.mock.calls[0] as unknown as [
+    const [runtimeArg, options] = doctorCommand.mock.calls.at(0)! as unknown as [
       typeof runtime,
       Record<string, unknown>,
     ];
@@ -93,7 +93,7 @@ describe("registerMaintenanceCommands doctor action", () => {
     await runMaintenanceCli(["dashboard", "--no-open"]);
 
     expect(dashboardCommand).toHaveBeenCalledTimes(1);
-    const [runtimeArg, options] = dashboardCommand.mock.calls[0] as unknown as [
+    const [runtimeArg, options] = dashboardCommand.mock.calls.at(0)! as unknown as [
       typeof runtime,
       Record<string, unknown>,
     ];
@@ -114,7 +114,7 @@ describe("registerMaintenanceCommands doctor action", () => {
     ]);
 
     expect(resetCommand).toHaveBeenCalledTimes(1);
-    const [runtimeArg, options] = resetCommand.mock.calls[0] as unknown as [
+    const [runtimeArg, options] = resetCommand.mock.calls.at(0)! as unknown as [
       typeof runtime,
       Record<string, unknown>,
     ];
@@ -141,7 +141,7 @@ describe("registerMaintenanceCommands doctor action", () => {
     ]);
 
     expect(uninstallCommand).toHaveBeenCalledTimes(1);
-    const [runtimeArg, options] = uninstallCommand.mock.calls[0] as unknown as [
+    const [runtimeArg, options] = uninstallCommand.mock.calls.at(0)! as unknown as [
       typeof runtime,
       Record<string, unknown>,
     ];

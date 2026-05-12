@@ -34,6 +34,6 @@ describe("subscribeEmbeddedPiSession", () => {
     emitAssistantTextDeltaAndEnd({ emit, text });
 
     expect(onBlockReply).toHaveBeenCalledTimes(3);
-    expect(onBlockReply.mock.calls[1][0].text).toBe("~~~sh\nline1\nline2\n~~~");
+    expect(onBlockReply.mock.calls.at(1)?.[0].text).toBe("~~~sh\nline1\nline2\n~~~");
   });
 });

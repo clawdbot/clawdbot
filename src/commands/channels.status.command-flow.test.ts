@@ -106,6 +106,7 @@ vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: () => mocks.listChannelPlugins(),
   getChannelPlugin: (channel: string) =>
     (mocks.listChannelPlugins() as Array<{ id: string }>).find((plugin) => plugin.id === channel),
+  normalizeChannelId: (channel: string) => (channel === "imsg" ? "imessage" : channel),
 }));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
@@ -210,6 +211,22 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     mocks.listChannelPlugins.mockReturnValue([createTokenOnlyPlugin()]);
   });
 
+  it("passes a channel filter to the gateway status request", async () => {
+    mocks.callGateway.mockResolvedValue({
+      channelAccounts: { imessage: [] },
+      channels: { imessage: {} },
+    });
+    const { runtime } = createCapturingTestRuntime();
+
+    await channelsStatusCommand({ channel: "imsg", json: true, probe: true }, runtime as never);
+
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "channels.status",
+      params: { channel: "imsg", probe: true, timeoutMs: 30000 },
+      timeoutMs: 30000,
+    });
+  });
+
   it("keeps read-only fallback output when SecretRefs are unresolved", async () => {
     mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
     mocks.requireValidConfigSnapshot.mockResolvedValue({ secretResolved: false, channels: {} });
@@ -300,7 +317,7 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     });
     const { runtime, logs, errors } = createCapturingTestRuntime();
 
-    await channelsStatusCommand({ json: true, probe: false }, runtime as never);
+    await channelsStatusCommand({ channel: "imsg", json: true, probe: false }, runtime as never);
 
     expect(mocks.listChannelPlugins).not.toHaveBeenCalled();
     expect(mocks.listConfiguredChannelIdsForReadOnlyScope).toHaveBeenCalledOnce();
@@ -322,6 +339,6 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(payload.error).not.toContain("fallback-secret");
     expect(payload.gatewayReachable).toBe(false);
     expect(payload.configOnly).toBe(true);
-    expect(payload.configuredChannels).toStrictEqual(["discord"]);
+    expect(payload.configuredChannels).toStrictEqual([]);
   });
 });

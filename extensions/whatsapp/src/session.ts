@@ -117,7 +117,7 @@ async function safeSaveCreds(
 }
 
 async function printTerminalQr(qr: string): Promise<void> {
-  const output = await renderQrTerminal(qr, { small: true });
+  const output = await renderQrTerminal(qr);
   process.stdout.write(output.endsWith("\n") ? output : `${output}\n`);
 }
 

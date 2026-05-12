@@ -35,6 +35,14 @@ function mockFetchWithRedirect(redirectMap: Record<string, string>, finalBody = 
   });
 }
 
+function fetchInitAt(fetchMock: ReturnType<typeof vi.fn>, index: number): unknown {
+  const call = fetchMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected fetch call ${index}`);
+  }
+  return call[1];
+}
+
 async function expectSafeFetchStatus(params: {
   fetchMock: ReturnType<typeof vi.fn>;
   url: string;
@@ -150,7 +158,7 @@ describe("safeFetch", () => {
     });
     expect(fetchMock).toHaveBeenCalledOnce();
     // Should have used redirect: "manual"
-    expect(fetchMock.mock.calls[0][1]).toHaveProperty("redirect", "manual");
+    expect(fetchInitAt(fetchMock, 0)).toHaveProperty("redirect", "manual");
   });
 
   it("follows a redirect to an allowlisted host with public IP", async () => {
@@ -455,20 +463,16 @@ describe("Graph shared-link helpers", () => {
   it("tryBuildGraphSharesUrlForSharedLink rewrites SharePoint URLs", () => {
     const url = "https://contoso.sharepoint.com/personal/user/Documents/report.pdf";
     const result = tryBuildGraphSharesUrlForSharedLink(url);
-    expect(result).toEqual(
-      expect.stringMatching(
-        /^https:\/\/graph\.microsoft\.com\/v1\.0\/shares\/u![A-Za-z0-9_-]+\/driveItem\/content$/,
-      ),
+    expect(result).toBe(
+      `https://graph.microsoft.com/v1.0/shares/${encodeGraphShareId(url)}/driveItem/content`,
     );
   });
 
   it("tryBuildGraphSharesUrlForSharedLink rewrites OneDrive URLs", () => {
     const url = "https://1drv.ms/b/s!AkxYabcdefg";
     const result = tryBuildGraphSharesUrlForSharedLink(url);
-    expect(result).toEqual(
-      expect.stringMatching(
-        /^https:\/\/graph\.microsoft\.com\/v1\.0\/shares\/u![A-Za-z0-9_-]+\/driveItem\/content$/,
-      ),
+    expect(result).toBe(
+      `https://graph.microsoft.com/v1.0/shares/${encodeGraphShareId(url)}/driveItem/content`,
     );
   });
 

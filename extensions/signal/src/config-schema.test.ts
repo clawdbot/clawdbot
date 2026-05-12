@@ -126,8 +126,8 @@ describe("signal groups schema", () => {
       },
     });
 
-    expect(issues.map((issue) => issue.path.join("."))).toContainEqual(
-      expect.stringMatching(/^groups/),
-    );
+    expect(
+      issues.map((issue) => issue.path.join(".")).some((entry) => entry.startsWith("groups")),
+    ).toBe(true);
   });
 });

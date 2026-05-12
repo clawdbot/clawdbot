@@ -65,9 +65,11 @@ describe("runHeartbeatOnce commitments", () => {
     commitment: CommitmentRecord | undefined,
     expected: Partial<CommitmentRecord>,
   ) {
-    expect(commitment).toBeDefined();
+    if (!commitment) {
+      throw new Error("Expected heartbeat commitment");
+    }
     for (const [key, value] of Object.entries(expected)) {
-      expect(commitment?.[key as keyof CommitmentRecord]).toEqual(value);
+      expect(commitment[key as keyof CommitmentRecord]).toEqual(value);
     }
   }
 

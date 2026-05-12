@@ -962,8 +962,9 @@ describe("createImageGenerateTool", () => {
     expect(mockCallArg(webMedia.loadWebMedia, 0, "loadWebMedia", 0)).toBe(
       "media://inbound/reference.png",
     );
-    expect(loadArgs).not.toBeNull();
-    expect(typeof loadArgs).toBe("object");
+    if (!loadArgs || typeof loadArgs !== "object") {
+      throw new Error("expected loadWebMedia options");
+    }
   });
 
   it("passes web_fetch SSRF policy to remote reference images", async () => {

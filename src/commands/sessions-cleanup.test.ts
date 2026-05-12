@@ -221,16 +221,31 @@ describe("sessionsCleanupCommand", () => {
     );
 
     expect(logs).toHaveLength(1);
-    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
-    expect(payload.applied).toBe(true);
-    expect(payload.mode).toBe("enforce");
-    expect(payload.beforeCount).toBe(3);
-    expect(payload.appliedCount).toBe(1);
-    expect(payload.pruned).toBe(0);
-    expect(payload.capped).toBe(2);
-    const diskBudget = payload.diskBudget as Record<string, unknown>;
-    expect(diskBudget.removedFiles).toBe(0);
-    expect(diskBudget.removedEntries).toBe(0);
+    expect(JSON.parse(logs[0] ?? "{}")).toEqual({
+      agentId: "main",
+      storePath: "/resolved/sessions.json",
+      mode: "enforce",
+      dryRun: false,
+      beforeCount: 3,
+      afterCount: 1,
+      missing: 0,
+      dmScopeRetired: 0,
+      pruned: 0,
+      capped: 2,
+      diskBudget: {
+        totalBytesBefore: 1200,
+        totalBytesAfter: 800,
+        removedFiles: 0,
+        removedEntries: 0,
+        freedBytes: 400,
+        maxBytes: 1000,
+        highWaterBytes: 800,
+        overBudget: true,
+      },
+      wouldMutate: true,
+      applied: true,
+      appliedCount: 1,
+    });
     expect(mocks.runSessionsCleanup).toHaveBeenCalledOnce();
     const cleanupCall = mocks.runSessionsCleanup.mock.calls[0]?.[0];
     expect(cleanupCall?.cfg).toEqual({ session: { store: "/cfg/sessions.json" } });
@@ -274,7 +289,23 @@ describe("sessionsCleanupCommand", () => {
     expect(gatewayCall?.params.enforce).toBe(true);
     expect(gatewayCall?.requiredMethods).toEqual(["sessions.cleanup"]);
     expect(mocks.updateSessionStore).not.toHaveBeenCalled();
-    expect(JSON.parse(logs[0] ?? "{}").appliedCount).toBe(1);
+    expect(logs).toHaveLength(1);
+    expect(JSON.parse(logs[0] ?? "{}")).toEqual({
+      agentId: "main",
+      storePath: "/resolved/sessions.json",
+      mode: "enforce",
+      dryRun: false,
+      beforeCount: 3,
+      afterCount: 1,
+      missing: 0,
+      dmScopeRetired: 0,
+      pruned: 2,
+      capped: 0,
+      diskBudget: null,
+      wouldMutate: true,
+      applied: true,
+      appliedCount: 1,
+    });
   });
 
   it("returns dry-run JSON without mutating the store", async () => {
@@ -326,14 +357,31 @@ describe("sessionsCleanupCommand", () => {
     );
 
     expect(logs).toHaveLength(1);
-    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
-    expect(payload.dryRun).toBe(true);
-    expect(payload.applied).toBeUndefined();
+    expect(JSON.parse(logs[0] ?? "{}")).toEqual({
+      agentId: "main",
+      storePath: "/resolved/sessions.json",
+      mode: "warn",
+      dryRun: true,
+      beforeCount: 2,
+      afterCount: 1,
+      missing: 0,
+      dmScopeRetired: 0,
+      pruned: 1,
+      capped: 0,
+      diskBudget: {
+        totalBytesBefore: 1000,
+        totalBytesAfter: 700,
+        removedFiles: 1,
+        removedEntries: 1,
+        freedBytes: 300,
+        maxBytes: 900,
+        highWaterBytes: 700,
+        overBudget: true,
+      },
+      wouldMutate: true,
+    });
     expect(mocks.runSessionsCleanup).toHaveBeenCalled();
     expect(mocks.updateSessionStore).not.toHaveBeenCalled();
-    const diskBudget = payload.diskBudget as Record<string, unknown>;
-    expect(diskBudget.removedFiles).toBe(1);
-    expect(diskBudget.removedEntries).toBe(1);
   });
 
   it("counts missing transcript entries when --fix-missing is enabled in dry-run", async () => {
@@ -378,10 +426,20 @@ describe("sessionsCleanupCommand", () => {
     );
 
     expect(logs).toHaveLength(1);
-    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
-    expect(payload.beforeCount).toBe(1);
-    expect(payload.afterCount).toBe(0);
-    expect(payload.missing).toBe(1);
+    expect(JSON.parse(logs[0] ?? "{}")).toEqual({
+      agentId: "main",
+      storePath: "/resolved/sessions.json",
+      mode: "warn",
+      dryRun: true,
+      beforeCount: 1,
+      afterCount: 0,
+      missing: 1,
+      dmScopeRetired: 0,
+      pruned: 0,
+      capped: 0,
+      diskBudget: null,
+      wouldMutate: true,
+    });
   });
 
   it("renders a dry-run action table with keep/prune actions", async () => {
@@ -512,9 +570,40 @@ describe("sessionsCleanupCommand", () => {
     );
 
     expect(logs).toHaveLength(1);
-    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
-    expect(payload.allAgents).toBe(true);
-    expect(Array.isArray(payload.stores)).toBe(true);
-    expect((payload.stores as unknown[]).length).toBe(2);
+    expect(JSON.parse(logs[0] ?? "{}")).toEqual({
+      allAgents: true,
+      mode: "warn",
+      dryRun: true,
+      stores: [
+        {
+          agentId: "main",
+          storePath: "/resolved/main-sessions.json",
+          mode: "warn",
+          dryRun: true,
+          beforeCount: 1,
+          afterCount: 0,
+          missing: 0,
+          dmScopeRetired: 0,
+          pruned: 1,
+          capped: 0,
+          diskBudget: null,
+          wouldMutate: true,
+        },
+        {
+          agentId: "work",
+          storePath: "/resolved/work-sessions.json",
+          mode: "warn",
+          dryRun: true,
+          beforeCount: 1,
+          afterCount: 0,
+          missing: 0,
+          dmScopeRetired: 0,
+          pruned: 1,
+          capped: 0,
+          diskBudget: null,
+          wouldMutate: true,
+        },
+      ],
+    });
   });
 });

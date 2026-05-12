@@ -518,14 +518,21 @@ describe("sendMediaWithLeadingCaption", () => {
       }),
     ).resolves.toBe(true);
 
-    expect(onError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mediaUrl: "https://example.com/a.png",
-        caption: "hello",
-        index: 0,
-        isFirst: true,
-      }),
-    );
+    expect(onError).toHaveBeenCalledTimes(1);
+    const [[errorPayload]] = onError.mock.calls as unknown as Array<
+      [
+        {
+          mediaUrl?: string;
+          caption?: string;
+          index?: number;
+          isFirst?: boolean;
+        },
+      ]
+    >;
+    expect(errorPayload.mediaUrl).toBe("https://example.com/a.png");
+    expect(errorPayload.caption).toBe("hello");
+    expect(errorPayload.index).toBe(0);
+    expect(errorPayload.isFirst).toBe(true);
     expect(send).toHaveBeenNthCalledWith(2, {
       mediaUrl: "https://example.com/b.png",
       caption: undefined,

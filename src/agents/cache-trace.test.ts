@@ -273,8 +273,20 @@ describe("createCacheTrace", () => {
     });
 
     expect(lines.length).toBe(1);
+    const fingerprint = crypto
+      .createHash("sha256")
+      .update('{"child":{"ref":"[Circular]"},"content":"hello","role":"user"}')
+      .digest("hex");
     const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
-    expect(event.messageCount).toBe(1);
-    expect(event.messageFingerprints).toHaveLength(1);
+    expect(event).toStrictEqual({
+      ts: expect.any(String),
+      seq: 1,
+      stage: "prompt:images",
+      messageCount: 1,
+      messageRoles: ["user"],
+      messageFingerprints: [fingerprint],
+      messagesDigest: crypto.createHash("sha256").update(JSON.stringify(fingerprint)).digest("hex"),
+      messages: [{ role: "user", content: "hello", child: { ref: "[Circular]" } }],
+    });
   });
 });

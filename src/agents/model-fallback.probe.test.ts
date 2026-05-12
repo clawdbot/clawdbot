@@ -157,7 +157,9 @@ function expectRecordWithFields(
   const matching = records.find((record) =>
     Object.entries(expected).every(([key, value]) => record[key] === value),
   );
-  expect(matching, `expected matching record for ${JSON.stringify(expected)}`).toBeDefined();
+  if (!matching) {
+    throw new Error(`Expected matching record for ${JSON.stringify(expected)}`);
+  }
 }
 
 async function expectProbeFailureFallsBack({

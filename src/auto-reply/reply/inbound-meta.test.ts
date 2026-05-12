@@ -287,6 +287,40 @@ describe("buildInboundUserContextPrefix", () => {
     expect(conversationInfo["conversation_label"]).toBeUndefined();
   });
 
+  it("adds delivery guidance beside inbound source context for message-tool-only turns", () => {
+    const text = buildInboundUserContextPrefix(
+      {
+        ChatType: "direct",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:849985193",
+        MessageSid: "776",
+        SenderName: "Nik",
+      } as TemplateContext,
+      undefined,
+      { sourceReplyDeliveryMode: "message_tool_only" },
+    );
+
+    expect(text).toContain("Delivery: to send a message, use the `message` tool.");
+    expect(text.indexOf("Delivery:")).toBeLessThan(text.indexOf("Conversation info"));
+    expect(text).toContain("Conversation info (untrusted metadata):");
+  });
+
+  it("does not add delivery guidance for automatic source delivery", () => {
+    const text = buildInboundUserContextPrefix(
+      {
+        ChatType: "direct",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:849985193",
+        MessageSid: "776",
+      } as TemplateContext,
+      undefined,
+      { sourceReplyDeliveryMode: "automatic" },
+    );
+
+    expect(text).not.toContain("Delivery: to send a message");
+    expect(text).toContain("Conversation info (untrusted metadata):");
+  });
+
   it("includes message identifiers for direct chats when channel is inferred from Provider", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",

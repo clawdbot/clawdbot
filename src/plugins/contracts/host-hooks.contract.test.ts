@@ -45,9 +45,7 @@ import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
 import { registerHostHookFixture, registerTrustedHostHookFixture } from "./host-hook-fixture.js";
 
 async function waitForPluginEventHandlers(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 function requireFirstCommandRegistration(
@@ -78,7 +76,9 @@ function diagnosticSummaries(diagnostics: readonly unknown[]) {
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);

@@ -150,8 +150,9 @@ function createIndex(
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value, label).toBe("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -838,7 +839,6 @@ describe("plugin registry facade", () => {
     });
 
     const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-    expect(persisted).not.toBeNull();
     if (!persisted) {
       throw new Error("Expected persisted plugin index");
     }

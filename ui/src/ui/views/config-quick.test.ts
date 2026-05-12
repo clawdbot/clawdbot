@@ -43,8 +43,12 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
       gatewayAuth: "Unknown",
       execPolicy: "Allowlist",
       deviceAuth: true,
+      browserEnabled: true,
+      toolProfile: "coding",
     },
     onSecurityConfigure: vi.fn(),
+    onBrowserEnabledToggle: vi.fn(),
+    onToolProfileChange: vi.fn(),
     theme: "claw",
     themeMode: "system",
     hasCustomTheme: false,
@@ -107,6 +111,45 @@ describe("renderQuickSettings", () => {
     ]);
     expect(container.querySelectorAll(".qs-side-stack .qs-card")).toHaveLength(2);
     expect(container.querySelectorAll(".qs-card--span-all")).toHaveLength(1);
+  });
+
+  it("lets operators change browser and tool profile from Security quick settings", () => {
+    const onBrowserEnabledToggle = vi.fn();
+    const onToolProfileChange = vi.fn();
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          security: {
+            gatewayAuth: "token",
+            execPolicy: "allowlist",
+            deviceAuth: true,
+            browserEnabled: false,
+            toolProfile: "messaging",
+          },
+          onBrowserEnabledToggle,
+          onToolProfileChange,
+        }),
+      ),
+      container,
+    );
+
+    const browserInput = Array.from(container.querySelectorAll("input")).find((input) =>
+      input.closest(".qs-row")?.textContent?.includes("Browser enabled"),
+    );
+    expect(browserInput).toBeInstanceOf(HTMLInputElement);
+    expect((browserInput as HTMLInputElement).checked).toBe(false);
+
+    (browserInput as HTMLInputElement).checked = true;
+    browserInput?.dispatchEvent(new Event("change"));
+    expect(onBrowserEnabledToggle).toHaveBeenCalledWith(true);
+
+    expectButtonByText(container, "full").click();
+    expect(onToolProfileChange).toHaveBeenCalledWith("full");
+    expect(expectButtonByText(container, "messaging").classList).toContain(
+      "qs-segmented__btn--active",
+    );
   });
 
   it("keeps the local user name fixed and shows the assistant identity", () => {

@@ -86,6 +86,18 @@ beforeEach(async () => {
   vi.clearAllMocks();
 });
 
+function requireLaunchOptions() {
+  const [call] = launch.mock.calls;
+  if (!call) {
+    throw new Error("expected browser launch call");
+  }
+  const [launchOptions] = call;
+  if (!launchOptions || typeof launchOptions !== "object" || Array.isArray(launchOptions)) {
+    throw new Error("expected browser launch options");
+  }
+  return launchOptions as Record<string, unknown>;
+}
+
 describe("qa web runtime", () => {
   it("opens, interacts with, snapshots, and closes a page", async () => {
     const opened = await qaWebOpenPage({ url: "http://127.0.0.1:3000/chat" });
@@ -102,9 +114,9 @@ describe("qa web runtime", () => {
     const evaluated = await qaWebEvaluate({ pageId: opened.pageId, expression: "'ok'" });
     await closeAllQaWebSessions();
 
-    expect(launch).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "chrome", headless: true }),
-    );
+    const launchOptions = requireLaunchOptions();
+    expect(launchOptions?.channel).toBe("chrome");
+    expect(launchOptions?.headless).toBe(true);
     expect(goto).toHaveBeenCalledWith("http://127.0.0.1:3000/chat", {
       waitUntil: "domcontentloaded",
       timeout: 20_000,
@@ -128,9 +140,8 @@ describe("qa web runtime", () => {
     await expect(qaWebSnapshot({ pageId: first.pageId })).rejects.toThrow(
       `unknown web session: ${first.pageId}`,
     );
-    await expect(qaWebSnapshot({ pageId: second.pageId })).resolves.toMatchObject({
-      text: "hello from body",
-    });
+    const snapshot = await qaWebSnapshot({ pageId: second.pageId });
+    expect(snapshot.text).toBe("hello from body");
     await closeAllQaWebSessions();
   });
 });

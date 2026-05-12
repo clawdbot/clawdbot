@@ -49,8 +49,10 @@ function transcribeCallContext(index = 0): Record<string, unknown> {
   const arg = transcribeFirstAudioMock.mock.calls[index]?.[0] as
     | { ctx?: Record<string, unknown> }
     | undefined;
-  expect(arg?.ctx).toBeDefined();
-  return arg?.ctx ?? {};
+  if (!arg?.ctx) {
+    throw new Error(`Expected transcribe call ${index} context`);
+  }
+  return arg.ctx;
 }
 
 describe("resolveTelegramInboundBody", () => {

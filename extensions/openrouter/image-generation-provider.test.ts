@@ -36,11 +36,39 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
 function requireOpenRouterPostBody(): {
   messages?: Array<{ content?: unknown }>;
 } {
-  const request = postJsonRequestMock.mock.calls[0]?.[0];
-  if (!request) {
+  const request = requireOpenRouterPostRequest();
+  return request.body as { messages?: Array<{ content?: unknown }> };
+}
+
+function requireOpenRouterPostRequest(): Record<string, unknown> {
+  const [call] = postJsonRequestMock.mock.calls;
+  if (!call) {
     throw new Error("expected OpenRouter image generation request");
   }
-  return request.body as { messages?: Array<{ content?: unknown }> };
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected OpenRouter image generation request");
+  }
+  return request as Record<string, unknown>;
+}
+
+function requireOpenRouterConfigRequest(): Record<string, unknown> {
+  const [call] = resolveProviderHttpRequestConfigMock.mock.calls;
+  if (!call) {
+    throw new Error("expected OpenRouter image config request");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected OpenRouter image config request");
+  }
+  return request;
+}
+
+function requireHeaders(value: unknown): Headers {
+  if (!(value instanceof Headers)) {
+    throw new Error("expected OpenRouter image request headers");
+  }
+  return value;
 }
 
 function requireGeneratedImage(
@@ -114,20 +142,22 @@ describe("openrouter image generation provider", () => {
           providers: {
             openrouter: {
               baseUrl: "https://custom.openrouter.test/api/v1",
+              models: [],
             },
           },
         },
-      } as never,
+      },
     });
 
     expect(resolveApiKeyForProviderMock).toHaveBeenCalledOnce();
-    expect(resolveApiKeyForProviderMock.mock.calls[0]?.[0]).toEqual({
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith({
       provider: "openrouter",
       cfg: {
         models: {
           providers: {
             openrouter: {
               baseUrl: "https://custom.openrouter.test/api/v1",
+              models: [],
             },
           },
         },
@@ -136,7 +166,7 @@ describe("openrouter image generation provider", () => {
       store: undefined,
     });
     expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledOnce();
-    expect(resolveProviderHttpRequestConfigMock.mock.calls[0]?.[0]).toEqual({
+    expect(requireOpenRouterConfigRequest()).toEqual({
       baseUrl: "https://custom.openrouter.test/api/v1",
       defaultBaseUrl: "https://openrouter.ai/api/v1",
       allowPrivateNetwork: false,
@@ -150,19 +180,16 @@ describe("openrouter image generation provider", () => {
       transport: "http",
     });
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const request = postJsonRequestMock.mock.calls[0]?.[0];
-    if (!request) {
-      throw new Error("expected OpenRouter image generation request");
-    }
-    expect(request.headers).toBeInstanceOf(Headers);
-    expect(Object.fromEntries(request.headers.entries())).toEqual({
+    const request = requireOpenRouterPostRequest();
+    const headers = requireHeaders(request.headers);
+    expect(Object.fromEntries(headers.entries())).toEqual({
       authorization: "Bearer openrouter-key",
       "http-referer": "https://openclaw.ai",
       "x-openrouter-title": "OpenClaw",
     });
     expect(request).toEqual({
       url: "https://custom.openrouter.test/api/v1/chat/completions",
-      headers: request.headers,
+      headers,
       body: {
         model: "google/gemini-3.1-flash-image-preview",
         messages: [
@@ -219,7 +246,7 @@ describe("openrouter image generation provider", () => {
       model: "google/gemini-3.1-flash-image-preview",
       prompt: "turn this into watercolor",
       inputImages: [{ buffer: Buffer.from("source-image"), mimeType: "image/png" }],
-      cfg: {} as never,
+      cfg: {},
     });
 
     const body = requireOpenRouterPostBody();

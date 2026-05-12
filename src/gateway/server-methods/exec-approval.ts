@@ -1,3 +1,4 @@
+import { resolveExecCommandHighlighting } from "../../config/exec-command-highlighting.js";
 import { resolveCommandAnalysisSummaryForDisplay } from "../../infra/command-analysis/explain.js";
 import {
   resolveExecApprovalCommandDisplay,
@@ -241,6 +242,12 @@ export function createExecApprovalHandlers(
       }
       const envBinding = buildSystemRunApprovalEnvBinding(p.env);
       const warningText = normalizeOptionalString(p.warningText);
+      const runtimeConfig =
+        typeof context.getRuntimeConfig === "function" ? context.getRuntimeConfig() : {};
+      const commandHighlighting = resolveExecCommandHighlighting({
+        config: runtimeConfig,
+        agentId: effectiveAgentId,
+      });
       const commandAnalysis = resolveCommandAnalysisSummaryForDisplay({
         host,
         commandText: effectiveCommandText,
@@ -250,7 +257,7 @@ export function createExecApprovalHandlers(
       });
       const sanitizedCommandText = sanitizeExecApprovalDisplayText(effectiveCommandText);
       const commandSpans =
-        sanitizedCommandText === effectiveCommandText
+        commandHighlighting && sanitizedCommandText === effectiveCommandText
           ? normalizeCommandSpans(p.commandSpans, sanitizedCommandText.length)
           : undefined;
       const systemRunBinding =

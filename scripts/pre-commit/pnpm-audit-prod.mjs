@@ -23,6 +23,16 @@ const NESTED_MAPPING_ENTRY_INDENT = 8;
 const SNAPSHOT_SECTIONS = ["dependencies", "optionalDependencies"];
 const IMPORTER_SECTIONS = ["dependencies", "optionalDependencies"];
 const LOCAL_REFERENCE_PREFIXES = ["file:", "link:", "portal:", "workspace:"];
+// GitHub's GHSA-3q49-cfcf-g5fm feed includes an overbroad ">=0" range alongside
+// the compromised @mistralai/mistralai versions. Keep the production audit
+// blocking for the compromised releases while allowing our pinned 2.2.1 lock.
+const AUDIT_ADVISORY_VERSION_OVERRIDES = [
+  {
+    packageName: "@mistralai/mistralai",
+    advisoryIds: new Set(["1118204", "GHSA-3q49-cfcf-g5fm"]),
+    unaffectedVersions: new Set(["2.2.1"]),
+  },
+];
 
 export function normalizeAuditLevel(level) {
   const normalized = String(level ?? "").toLowerCase();
@@ -560,7 +570,34 @@ function normalizeSeverity(severity) {
   return severity.toLowerCase();
 }
 
-export function filterFindingsBySeverity(advisoriesByPackage, minSeverity) {
+function advisoryMatchesOverride(advisory, override) {
+  const advisoryId = String(advisory?.id ?? "");
+  const advisoryUrl = typeof advisory?.url === "string" ? advisory.url : "";
+  return (
+    override.advisoryIds.has(advisoryId) ||
+    [...override.advisoryIds].some((id) => advisoryUrl.includes(id))
+  );
+}
+
+function shouldSuppressAdvisoryFinding({ packageName, advisory, versionsByPackage }) {
+  if (!versionsByPackage) {
+    return false;
+  }
+  const override = AUDIT_ADVISORY_VERSION_OVERRIDES.find(
+    (candidate) =>
+      candidate.packageName === packageName && advisoryMatchesOverride(advisory, candidate),
+  );
+  if (!override) {
+    return false;
+  }
+  const resolvedVersions = versionsByPackage.get(packageName);
+  if (!resolvedVersions || resolvedVersions.size === 0) {
+    return false;
+  }
+  return [...resolvedVersions].every((version) => override.unaffectedVersions.has(version));
+}
+
+export function filterFindingsBySeverity(advisoriesByPackage, minSeverity, versionsByPackage) {
   const threshold = normalizeAuditLevel(minSeverity);
   const findings = [];
 
@@ -574,6 +611,9 @@ export function filterFindingsBySeverity(advisoriesByPackage, minSeverity) {
       }
       const severity = normalizeSeverity(advisory.severity);
       if ((SEVERITY_RANK[severity] ?? -1) < SEVERITY_RANK[threshold]) {
+        continue;
+      }
+      if (shouldSuppressAdvisoryFinding({ packageName, advisory, versionsByPackage })) {
         continue;
       }
       findings.push({
@@ -651,7 +691,8 @@ export async function runPnpmAuditProd({
   const normalizedMinSeverity = normalizeAuditLevel(minSeverity);
   const lockfilePath = path.join(rootDir, "pnpm-lock.yaml");
   const lockfileText = await readFile(lockfilePath, "utf8");
-  const payload = createBulkAdvisoryPayload(collectProdResolvedPackagesFromLockfile(lockfileText));
+  const versionsByPackage = collectProdResolvedPackagesFromLockfile(lockfileText);
+  const payload = createBulkAdvisoryPayload(versionsByPackage);
   const payloadEntries = Object.entries(payload);
 
   if (payloadEntries.length === 0) {
@@ -669,7 +710,11 @@ export async function runPnpmAuditProd({
     Object.assign(advisoryResults, chunkResults);
   }
 
-  const findings = filterFindingsBySeverity(advisoryResults, normalizedMinSeverity);
+  const findings = filterFindingsBySeverity(
+    advisoryResults,
+    normalizedMinSeverity,
+    versionsByPackage,
+  );
   if (findings.length === 0) {
     stdout.write(
       `No ${normalizedMinSeverity} or higher advisories found for production dependencies.\n`,

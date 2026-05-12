@@ -310,8 +310,8 @@ async function expectFallsBackToHaiku(params: {
 
   expect(result.result).toBe("ok");
   expect(run).toHaveBeenCalledTimes(2);
-  expect(run.mock.calls[1]?.[0]).toBe("anthropic");
-  expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
+  expect(run.mock.calls.at(1)?.[0]).toBe("anthropic");
+  expect(run.mock.calls.at(1)?.[1]).toBe("claude-haiku-3-5");
 }
 
 function createOverrideFailureRun(params: {
@@ -678,7 +678,7 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toEqual({ payloads: [{ text: "fallback ok" }] });
     expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[1]).toEqual(["anthropic", "claude-haiku-3-5"]);
+    expect(run.mock.calls.at(1)).toEqual(["anthropic", "claude-haiku-3-5"]);
     expect(result.attempts[0]?.provider).toBe("openai-codex");
     expect(result.attempts[0]?.model).toBe("gpt-5.4");
     expect(result.attempts[0]?.reason).toBe("format");
@@ -878,7 +878,7 @@ describe("runWithModelFallback", () => {
     });
 
     expect(onError).toHaveBeenCalledTimes(1);
-    const errorCall = requireRecord(onError.mock.calls[0]?.[0], "onError payload");
+    const errorCall = requireRecord(onError.mock.calls.at(0)?.[0], "onError payload");
     expect(errorCall.provider).toBe("openai");
     expect(errorCall.model).toBe("gpt-4.1-mini");
     expect(errorCall.attempt).toBe(1);
@@ -1257,7 +1257,7 @@ describe("runWithModelFallback", () => {
 
         expect(result.result).toBe("ok");
         expect(run).toHaveBeenCalledTimes(2);
-        expect(run.mock.calls[1]).toEqual(testCase.expectedFallback);
+        expect(run.mock.calls.at(1)).toEqual(testCase.expectedFallback);
         if (testCase.expectedReason) {
           expect(result.attempts).toHaveLength(1);
           expect(result.attempts[0]?.reason).toBe(testCase.expectedReason);
@@ -1357,7 +1357,7 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run.mock.calls[0]?.[0]).toBe("openrouter");
+    expect(run.mock.calls.at(0)?.[0]).toBe("openrouter");
     expect(result.attempts).toStrictEqual([]);
   });
 

@@ -115,26 +115,24 @@ describe("agent-runner-utils", () => {
       authProfile,
     });
 
-    expect(resolved).toMatchObject({
-      sessionFile: run.sessionFile,
-      workspaceDir: run.workspaceDir,
-      agentDir: run.agentDir,
-      config: run.config,
-      skillsSnapshot: run.skillsSnapshot,
-      ownerNumbers: run.ownerNumbers,
-      enforceFinalTag: true,
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      authProfileId: "profile-openai",
-      authProfileIdSource: "user",
-      thinkLevel: run.thinkLevel,
-      verboseLevel: run.verboseLevel,
-      reasoningLevel: run.reasoningLevel,
-      execOverrides: run.execOverrides,
-      bashElevated: run.bashElevated,
-      timeoutMs: run.timeoutMs,
-      runId: "run-1",
-    });
+    expect(resolved.sessionFile).toBe(run.sessionFile);
+    expect(resolved.workspaceDir).toBe(run.workspaceDir);
+    expect(resolved.agentDir).toBe(run.agentDir);
+    expect(resolved.config).toBe(run.config);
+    expect(resolved.skillsSnapshot).toBe(run.skillsSnapshot);
+    expect(resolved.ownerNumbers).toBe(run.ownerNumbers);
+    expect(resolved.enforceFinalTag).toBe(true);
+    expect(resolved.provider).toBe("openai");
+    expect(resolved.model).toBe("gpt-4.1-mini");
+    expect(resolved.authProfileId).toBe("profile-openai");
+    expect(resolved.authProfileIdSource).toBe("user");
+    expect(resolved.thinkLevel).toBe(run.thinkLevel);
+    expect(resolved.verboseLevel).toBe(run.verboseLevel);
+    expect(resolved.reasoningLevel).toBe(run.reasoningLevel);
+    expect(resolved.execOverrides).toBe(run.execOverrides);
+    expect(resolved.bashElevated).toBe(run.bashElevated);
+    expect(resolved.timeoutMs).toBe(run.timeoutMs);
+    expect(resolved.runId).toBe("run-1");
   });
 
   it("does not force final-tag enforcement for minimax providers", () => {
@@ -170,14 +168,12 @@ describe("agent-runner-utils", () => {
       authProfileId: undefined,
       authProfileIdSource: undefined,
     });
-    expect(resolved.embeddedContext).toMatchObject({
-      sessionId: run.sessionId,
-      sessionKey: run.sessionKey,
-      agentId: run.agentId,
-      messageProvider: "openai",
-      messageTo: "channel-1",
-      memberRoleIds: ["admin", "operator"],
-    });
+    expect(resolved.embeddedContext.sessionId).toBe(run.sessionId);
+    expect(resolved.embeddedContext.sessionKey).toBe(run.sessionKey);
+    expect(resolved.embeddedContext.agentId).toBe(run.agentId);
+    expect(resolved.embeddedContext.messageProvider).toBe("openai");
+    expect(resolved.embeddedContext.messageTo).toBe("channel-1");
+    expect(resolved.embeddedContext.memberRoleIds).toEqual(["admin", "operator"]);
     expect(resolved.senderContext).toEqual({
       senderId: "sender-1",
       senderName: undefined,
@@ -235,11 +231,9 @@ describe("agent-runner-utils", () => {
       hasRepliedRef: undefined,
     });
 
-    expect(context).toMatchObject({
-      currentChannelId: "telegram:-1003841603622",
-      currentThreadTs: "928",
-      currentMessageId: "2284",
-    });
+    expect(context.currentChannelId).toBe("telegram:-1003841603622");
+    expect(context.currentThreadTs).toBe("928");
+    expect(context.currentMessageId).toBe("2284");
   });
 
   it("uses OriginatingTo for threading tool context on discord native commands", () => {
@@ -255,9 +249,7 @@ describe("agent-runner-utils", () => {
       hasRepliedRef: undefined,
     });
 
-    expect(context).toMatchObject({
-      currentChannelId: "channel:123456789012345678",
-      currentMessageId: "msg-9",
-    });
+    expect(context.currentChannelId).toBe("channel:123456789012345678");
+    expect(context.currentMessageId).toBe("msg-9");
   });
 });

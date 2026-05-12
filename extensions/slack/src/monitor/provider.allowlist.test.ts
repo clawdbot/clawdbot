@@ -16,6 +16,14 @@ beforeEach(() => {
   resetSlackTestState();
 });
 
+function resolveAllowlistCallAt(index: number): { entries?: unknown } {
+  const call = slackTestState.resolveSlackUserAllowlistMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected allowlist resolver call ${index}`);
+  }
+  return call[0] as { entries?: unknown };
+}
+
 describe("slack allowlist log formatting", () => {
   it("prints channel names alongside ids", () => {
     expect(
@@ -122,14 +130,10 @@ describe("slack startup user allowlist resolution", () => {
       await flush();
 
       expect(slackTestState.resolveSlackUserAllowlistMock).toHaveBeenCalledTimes(2);
-      expect(slackTestState.resolveSlackUserAllowlistMock).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({ entries: ["@global-user"] }),
-      );
-      expect(slackTestState.resolveSlackUserAllowlistMock).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({ entries: ["@channel-user"] }),
-      );
+      const globalAllowlist = resolveAllowlistCallAt(0);
+      const channelAllowlist = resolveAllowlistCallAt(1);
+      expect(globalAllowlist?.entries).toEqual(["@global-user"]);
+      expect(channelAllowlist?.entries).toEqual(["@channel-user"]);
     } finally {
       await stopSlackMonitor(monitor);
     }

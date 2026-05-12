@@ -562,7 +562,7 @@ describe("GatewayChatClient", () => {
       await vi.advanceTimersByTimeAsync(2);
 
       expect(onDisconnected).toHaveBeenCalledWith(
-        expect.stringContaining("blocked by proxy.loopbackMode"),
+        "proxy: Gateway loopback control-plane connections are blocked by proxy.loopbackMode",
       );
     } finally {
       await stopProxy(proxyHandle);

@@ -185,16 +185,28 @@ type MockWithCalls = {
   mock: { calls: unknown[][] };
 };
 
+function mockCallAt(mock: MockWithCalls, index = 0): unknown[] {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected mock call ${index}`);
+  }
+  return call;
+}
+
 function firstObjectArg(mock: MockWithCalls): Record<string, unknown> {
-  const value = mock.mock.calls[0]?.[0];
+  const value = mockCallAt(mock)[0];
   if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("expected first mock call to receive an object argument");
   }
   return value as Record<string, unknown>;
 }
 
+function continueConversationCall(mock: MockWithCalls): unknown[] {
+  return mockCallAt(mock);
+}
+
 function continueConversationRef(mock: MockWithCalls): Record<string, unknown> {
-  const ref = mock.mock.calls[0]?.[1];
+  const ref = continueConversationCall(mock)[1];
   if (ref === undefined || ref === null || typeof ref !== "object" || Array.isArray(ref)) {
     throw new Error("expected continueConversation ref object");
   }
@@ -478,10 +490,10 @@ describe("editMessageMSTeams", () => {
 
     expect(result.conversationId).toBe("19:conversation@thread.tacv2");
     expect(mockContinueConversation).toHaveBeenCalledTimes(1);
-    const continueConversationCall = mockContinueConversation.mock.calls[0];
-    expect(continueConversationCall?.[0]).toBe("app-id");
+    const call = continueConversationCall(mockContinueConversation);
+    expect(call[0]).toBe("app-id");
     expect(continueConversationRef(mockContinueConversation).activityId).toBeUndefined();
-    expect(typeof continueConversationCall?.[2]).toBe("function");
+    expect(typeof call[2]).toBe("function");
     expect(mockUpdateActivity).toHaveBeenCalledWith({
       type: "message",
       id: "activity-123",
@@ -529,10 +541,10 @@ describe("deleteMessageMSTeams", () => {
 
     expect(result.conversationId).toBe("19:conversation@thread.tacv2");
     expect(mockContinueConversation).toHaveBeenCalledTimes(1);
-    const continueConversationCall = mockContinueConversation.mock.calls[0];
-    expect(continueConversationCall?.[0]).toBe("app-id");
+    const call = continueConversationCall(mockContinueConversation);
+    expect(call[0]).toBe("app-id");
     expect(continueConversationRef(mockContinueConversation).activityId).toBeUndefined();
-    expect(typeof continueConversationCall?.[2]).toBe("function");
+    expect(typeof call[2]).toBe("function");
     expect(mockDeleteActivity).toHaveBeenCalledWith("activity-456");
   });
 
@@ -569,7 +581,7 @@ describe("deleteMessageMSTeams", () => {
     });
 
     // appId should be forwarded correctly
-    expect(mockContinueConversation.mock.calls[0]?.[0]).toBe("my-app-id");
+    expect(continueConversationCall(mockContinueConversation)[0]).toBe("my-app-id");
     // activityId on the proactive ref should be cleared (undefined) — proactive pattern
     expect(continueConversationRef(mockContinueConversation).activityId).toBeUndefined();
   });

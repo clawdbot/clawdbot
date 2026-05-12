@@ -52,17 +52,16 @@ describe("qa-bus state", () => {
 
     const snapshot = state.getSnapshot();
     expect(snapshot.threads).toHaveLength(1);
-    expect(snapshot.threads[0]).toMatchObject({
-      id: thread.id,
-      conversationId: "qa-room",
-      title: "QA thread",
-    });
-    expect(snapshot.messages[0]).toMatchObject({
-      id: message.id,
-      text: "inside thread (edited)",
-      deleted: true,
-      reactions: [{ emoji: "eyes", senderId: "alice" }],
-    });
+    expect(snapshot.threads[0]?.id).toBe(thread.id);
+    expect(snapshot.threads[0]?.conversationId).toBe("qa-room");
+    expect(snapshot.threads[0]?.title).toBe("QA thread");
+    expect(snapshot.messages[0]?.id).toBe(message.id);
+    expect(snapshot.messages[0]?.text).toBe("inside thread (edited)");
+    expect(snapshot.messages[0]?.deleted).toBe(true);
+    expect(snapshot.messages[0]?.reactions).toHaveLength(1);
+    expect(snapshot.messages[0]?.reactions[0]?.emoji).toBe("eyes");
+    expect(snapshot.messages[0]?.reactions[0]?.senderId).toBe("alice");
+    expect(typeof snapshot.messages[0]?.reactions[0]?.timestamp).toBe("number");
   });
 
   it("waits for a text match and rejects on timeout", async () => {
@@ -156,11 +155,10 @@ describe("qa-bus state", () => {
 
     const readback = state.readMessage({ messageId: outbound.id });
     expect(readback.attachments).toHaveLength(1);
-    expect(readback.attachments?.[0]).toMatchObject({
-      kind: "image",
-      fileName: "qa-screenshot.png",
-      altText: "QA dashboard screenshot",
-    });
+    const attachment = readback.attachments?.[0];
+    expect(attachment?.kind).toBe("image");
+    expect(attachment?.fileName).toBe("qa-screenshot.png");
+    expect(attachment?.altText).toBe("QA dashboard screenshot");
 
     const byFilename = state.searchMessages({
       query: "screenshot",

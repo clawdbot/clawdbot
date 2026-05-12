@@ -1,9 +1,28 @@
 import type { resolveProviderHttpRequestConfig } from "openclaw/plugin-sdk/provider-http";
-import { afterEach, vi } from "vitest";
+import { afterEach, vi, type Mock } from "vitest";
 
 type ResolveProviderHttpRequestConfigParams = Parameters<
   typeof resolveProviderHttpRequestConfig
 >[0];
+
+type ResolveProviderHttpRequestConfigResult = {
+  baseUrl: string;
+  allowPrivateNetwork: boolean;
+  headers: Headers;
+  dispatcherPolicy: undefined;
+};
+
+type AnyMock = Mock<(...args: any[]) => any>;
+
+interface MinimaxProviderHttpMocks {
+  resolveApiKeyForProviderMock: Mock<() => Promise<{ apiKey: string }>>;
+  postJsonRequestMock: AnyMock;
+  fetchWithTimeoutMock: AnyMock;
+  assertOkOrThrowHttpErrorMock: Mock<() => Promise<void>>;
+  resolveProviderHttpRequestConfigMock: Mock<
+    (params: ResolveProviderHttpRequestConfigParams) => ResolveProviderHttpRequestConfigResult
+  >;
+}
 
 const minimaxProviderHttpMocks = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "provider-key" })),
@@ -42,7 +61,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   waitProviderOperationPollInterval: async () => {},
 }));
 
-export function getMinimaxProviderHttpMocks() {
+export function getMinimaxProviderHttpMocks(): MinimaxProviderHttpMocks {
   return minimaxProviderHttpMocks;
 }
 

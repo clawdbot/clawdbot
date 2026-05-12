@@ -36,6 +36,15 @@ enum GatewayWebSocketTestSupport {
         return obj["params"] as? [String: Any]
     }
 
+    static func connectScopes(from message: URLSessionWebSocketTask.Message) -> [String]? {
+        guard let obj = self.requestFrameObject(from: message) else { return nil }
+        guard (obj["type"] as? String) == "req", (obj["method"] as? String) == "connect" else {
+            return nil
+        }
+        let params = obj["params"] as? [String: Any]
+        return params?["scopes"] as? [String]
+    }
+
     static func connectOkData(id: String) -> Data {
         let json = """
         {

@@ -79,8 +79,9 @@ type MockCallSource = {
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -102,6 +103,14 @@ function findRequestPayload(source: MockCallSource, method: string, label: strin
 
 function fetchInit(source: MockCallSource, callIndex: number) {
   return requireRecord(mockArg(source, callIndex, 1, `fetch init ${callIndex}`), "fetch init");
+}
+
+function fetchUrl(source: MockCallSource, callIndex: number) {
+  const input = mockArg(source, callIndex, 0, `fetch input ${callIndex}`);
+  if (typeof input === "string" || input instanceof URL || input instanceof Request) {
+    return requestUrl(input);
+  }
+  throw new Error(`expected fetch input ${callIndex}`);
 }
 
 function makeHost(overrides?: Partial<ChatHost>): ChatHost {
@@ -179,23 +188,13 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
-async function raceWithMacrotask(
-  promise: Promise<unknown>,
-  delayMs: number,
-): Promise<"resolved" | "pending"> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise.then(() => "resolved" as const),
-      new Promise<"pending">((resolve) => {
-        timer = setTimeout(() => resolve("pending"), delayMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+async function raceWithMacrotask(promise: Promise<unknown>): Promise<"resolved" | "pending"> {
+  return await Promise.race([
+    promise.then(() => "resolved" as const),
+    new Promise<"pending">((resolve) => {
+      setImmediate(() => resolve("pending"));
+    }),
+  ]);
 }
 
 describe("refreshChat", () => {
@@ -213,7 +212,7 @@ describe("refreshChat", () => {
     });
 
     const refresh = refreshChat(host);
-    const outcome = await raceWithMacrotask(refresh, 0);
+    const outcome = await raceWithMacrotask(refresh);
 
     expect(outcome).toBe("resolved");
     expect(host.chatLoading).toBe(true);
@@ -255,7 +254,7 @@ describe("refreshChat", () => {
     });
 
     const refresh = refreshChat(host, { awaitHistory: true, scheduleScroll: false });
-    const pendingOutcome = await raceWithMacrotask(refresh, 0);
+    const pendingOutcome = await raceWithMacrotask(refresh);
 
     expect(pendingOutcome).toBe("pending");
     history.resolve({
@@ -312,14 +311,11 @@ describe("refreshChatAvatar", () => {
     const host = makeHost({ basePath: "", sessionKey: "agent:main" });
     await refreshChatAvatar(host);
 
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/avatar/main?meta=1");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 0)).toBe("/avatar/main?meta=1");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 0).method).toBe("GET");
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("/avatar/main");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 1)).toBe("/avatar/main");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 1).method).toBe("GET");
-    const avatarFetchInit = (
-      fetchMock.mock.calls as Array<[string | URL | Request, RequestInit?]>
-    )[1]?.[1];
-    expect(avatarFetchInit).not.toHaveProperty("headers");
+    expect(fetchInit(fetchMock as unknown as MockCallSource, 1)).not.toHaveProperty("headers");
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(revokeObjectURL).not.toHaveBeenCalled();
     expect(host.chatAvatarUrl).toBe("blob:local-avatar");
@@ -362,12 +358,14 @@ describe("refreshChatAvatar", () => {
     });
     await refreshChatAvatar(host);
 
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/openclaw/avatar/main?meta=1");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 0)).toBe(
+      "/openclaw/avatar/main?meta=1",
+    );
     expect(fetchInit(fetchMock as unknown as MockCallSource, 0).method).toBe("GET");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 0).headers).toEqual({
       Authorization: "Bearer device-token",
     });
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("/avatar/main");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 1)).toBe("/avatar/main");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 1).method).toBe("GET");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 1).headers).toEqual({
       Authorization: "Bearer device-token",
@@ -412,12 +410,14 @@ describe("refreshChatAvatar", () => {
     });
     await refreshChatAvatar(host);
 
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/openclaw/avatar/main?meta=1");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 0)).toBe(
+      "/openclaw/avatar/main?meta=1",
+    );
     expect(fetchInit(fetchMock as unknown as MockCallSource, 0).method).toBe("GET");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 0).headers).toEqual({
       Authorization: "Bearer session-token",
     });
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("/avatar/main");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 1)).toBe("/avatar/main");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 1).method).toBe("GET");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 1).headers).toEqual({
       Authorization: "Bearer session-token",
@@ -437,7 +437,7 @@ describe("refreshChatAvatar", () => {
     const host = makeHost({ basePath: "/openclaw/", sessionKey: "agent:ops:main" });
     await refreshChatAvatar(host);
 
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/openclaw/avatar/ops?meta=1");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 0)).toBe("/openclaw/avatar/ops?meta=1");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 0).method).toBe("GET");
     expect(host.chatAvatarUrl).toBeNull();
   });
@@ -534,11 +534,11 @@ describe("refreshChatAvatar", () => {
 
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(host.chatAvatarUrl).toBe("blob:ops-avatar");
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/avatar/main?meta=1");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 0)).toBe("/avatar/main?meta=1");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 0).method).toBe("GET");
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("/avatar/ops?meta=1");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 1)).toBe("/avatar/ops?meta=1");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 1).method).toBe("GET");
-    expect(fetchMock.mock.calls[2]?.[0]).toBe("/avatar/ops");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 2)).toBe("/avatar/ops");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 2).method).toBe("GET");
   });
 });
@@ -565,7 +565,7 @@ describe("refreshChat", () => {
         sessionKey: "main",
       });
 
-      const outcome = await raceWithMacrotask(refreshChat(host), 20);
+      const outcome = await raceWithMacrotask(refreshChat(host));
 
       expect(outcome).toBe("resolved");
       expect(host.chatMessages).toEqual([
@@ -576,9 +576,11 @@ describe("refreshChat", () => {
         "sessions.list",
         "sessions list payload",
       );
+      expect(sessionsListPayload.activeMinutes).toBe(120);
       expect(sessionsListPayload.agentId).toBe("main");
       expect(sessionsListPayload.includeGlobal).toBe(true);
       expect(sessionsListPayload.includeUnknown).toBe(true);
+      expect(sessionsListPayload.limit).toBe(100);
       expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
       const commandsListPayload = findRequestPayload(
         request as unknown as MockCallSource,
@@ -1137,7 +1139,9 @@ describe("handleSendChat", () => {
     expect(payload.sessionKey).toBe("agent:main");
     expect(payload.message).toBe("/btw what changed?");
     expect(payload.deliver).toBe(false);
-    expect(payload.idempotencyKey).toEqual(expect.stringMatching(uuidPattern));
+    const idempotencyKey = payload.idempotencyKey;
+    expect(typeof idempotencyKey).toBe("string");
+    expect(uuidPattern.test(idempotencyKey as string)).toBe(true);
     expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatRunId).toBe("run-main");
     expect(host.chatStream).toBe("Working...");
@@ -1345,11 +1349,19 @@ describe("handleSendChat", () => {
 
     await steerQueuedChatMessage(host, "queued-1");
 
-    expect(request).toHaveBeenCalledWith("chat.send", {
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "steered chat send payload",
+    );
+    const idempotencyKey = payload.idempotencyKey;
+    expect(typeof idempotencyKey).toBe("string");
+    expect(uuidPattern.test(idempotencyKey as string)).toBe(true);
+    expect(payload).toEqual({
       sessionKey: "agent:main:main",
       message: "tighten the plan",
       deliver: false,
-      idempotencyKey: expect.stringMatching(uuidPattern),
+      idempotencyKey,
       attachments: undefined,
     });
     expect(host.chatRunId).toBe("run-1");
@@ -1459,6 +1471,43 @@ describe("handleAbortChat", () => {
     await loadChatHelpers();
   });
 
+  it("preserves the draft for connected toolbar aborts", async () => {
+    const request = vi.fn(async () => ({ aborted: true }));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: "run-main",
+      chatMessage: "next prompt",
+      sessionKey: "agent:main",
+    });
+
+    await handleAbortChat(host, { preserveDraft: true });
+
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      runId: "run-main",
+      sessionKey: "agent:main",
+    });
+    expect(host.chatMessage).toBe("next prompt");
+    expect(host.chatRunId).toBe("run-main");
+  });
+
+  it("clears typed stop commands after aborting the active run", async () => {
+    const request = vi.fn(async () => ({ aborted: true }));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: "run-main",
+      chatMessage: "/stop",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      runId: "run-main",
+      sessionKey: "agent:main",
+    });
+    expect(host.chatMessage).toBe("");
+  });
+
   it("queues the active run abort while disconnected", async () => {
     const host = makeHost({
       connected: false,
@@ -1471,6 +1520,21 @@ describe("handleAbortChat", () => {
 
     expect(host.pendingAbort).toEqual({ runId: "run-main", sessionKey: "agent:main" });
     expect(host.chatMessage).toBe("");
+    expect(host.chatRunId).toBe("run-main");
+  });
+
+  it("preserves the draft when queueing a toolbar abort while disconnected", async () => {
+    const host = makeHost({
+      connected: false,
+      chatRunId: "run-main",
+      chatMessage: "draft",
+      sessionKey: "agent:main",
+    });
+
+    await handleAbortChat(host, { preserveDraft: true });
+
+    expect(host.pendingAbort).toEqual({ runId: "run-main", sessionKey: "agent:main" });
+    expect(host.chatMessage).toBe("draft");
     expect(host.chatRunId).toBe("run-main");
   });
 

@@ -3,12 +3,20 @@
 import { describe, expect, it, vi } from "vitest";
 import { submitRealtimeTalkConsult } from "./chat/realtime-talk-shared.js";
 
+function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 describe("RealtimeTalkSession consult handoff", () => {
   it("submits realtime consults through the Gateway tool-call endpoint", async () => {
     let listener: ((event: { event: string; payload?: unknown }) => void) | undefined;
     const request = vi.fn(async (method: string, _params: unknown) => {
       if (method === "talk.client.toolCall") {
-        window.setTimeout(() => {
+        setImmediate(() => {
           listener?.({
             event: "chat",
             payload: {
@@ -17,7 +25,7 @@ describe("RealtimeTalkSession consult handoff", () => {
               message: { text: "Basement lights are off." },
             },
           });
-        }, 0);
+        });
         return { runId: "run-1" };
       }
       throw new Error(`unexpected request: ${method}`);
@@ -41,14 +49,13 @@ describe("RealtimeTalkSession consult handoff", () => {
       submit,
     });
 
-    expect(request).toHaveBeenCalledWith(
-      "talk.client.toolCall",
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        name: "openclaw_agent_consult",
-        args: { question: "Are the basement lights off?" },
-      }),
-    );
+    const toolCall = requireFirstMockCall(request.mock.calls, "Gateway request") as
+      | [string, { sessionKey?: string; name?: string; args?: { question?: string } }]
+      | undefined;
+    expect(toolCall?.[0]).toBe("talk.client.toolCall");
+    expect(toolCall?.[1]?.sessionKey).toBe("agent:main:main");
+    expect(toolCall?.[1]?.name).toBe("openclaw_agent_consult");
+    expect(toolCall?.[1]?.args).toEqual({ question: "Are the basement lights off?" });
     expect(submit).toHaveBeenCalledWith("call-1", { result: "Basement lights are off." });
   });
 });

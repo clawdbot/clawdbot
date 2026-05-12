@@ -166,14 +166,13 @@ describe("node.pending handlers", () => {
       timeoutMs: 3_000,
     });
     expect(mocks.maybeSendNodeWakeNudge).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        nodeId: "ios-node-2",
-        revision: 4,
-        wakeTriggered: true,
-      }),
-      undefined,
-    );
+    const call = respond.mock.calls[0] as
+      | [boolean, { nodeId?: string; revision?: number; wakeTriggered?: boolean }, unknown?]
+      | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]?.nodeId).toBe("ios-node-2");
+    expect(call?.[1]?.revision).toBe(4);
+    expect(call?.[1]?.wakeTriggered).toBe(true);
+    expect(call?.[2]).toBeUndefined();
   });
 });

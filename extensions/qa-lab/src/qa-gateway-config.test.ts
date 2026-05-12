@@ -73,15 +73,11 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.gateway?.reload?.deferralTimeoutMs).toBe(1_000);
     expect(cfg.tools?.profile).toBe("coding");
     expect(cfg.agents?.list?.[0]?.tools?.profile).toBe("coding");
-    expect(cfg.channels?.["qa-channel"]).toMatchObject({
-      enabled: true,
-      baseUrl: "http://127.0.0.1:43124",
-      pollTimeoutMs: 250,
-    });
-    expect(cfg.messages?.groupChat).toMatchObject({
-      mentionPatterns: ["\\b@?openclaw\\b"],
-      visibleReplies: "automatic",
-    });
+    expect(cfg.channels?.["qa-channel"]?.enabled).toBe(true);
+    expect(cfg.channels?.["qa-channel"]?.baseUrl).toBe("http://127.0.0.1:43124");
+    expect(cfg.channels?.["qa-channel"]?.pollTimeoutMs).toBe(250);
+    expect(cfg.messages?.groupChat?.mentionPatterns).toEqual(["\\b@?openclaw\\b"]);
+    expect(cfg.messages?.groupChat?.visibleReplies).toBe("automatic");
   });
 
   it("maps provider-qualified openai and anthropic refs through the mock provider lane", () => {
@@ -298,9 +294,7 @@ describe("buildQaGatewayConfig", () => {
     });
 
     expect(cfg.agents?.defaults?.thinkingDefault).toBe("xhigh");
-    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]?.params).toMatchObject({
-      thinking: "xhigh",
-    });
+    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]?.params?.thinking).toBe("xhigh");
   });
 
   it("can disable control ui for suite-only gateway children", () => {

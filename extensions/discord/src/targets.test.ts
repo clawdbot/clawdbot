@@ -16,9 +16,9 @@ function expectTargetFields(
   target: unknown,
   expected: { kind: string; id: string; normalized?: string },
 ): void {
-  expect(target).toBeDefined();
-  expect(typeof target).toBe("object");
-  expect(target).not.toBeNull();
+  if (!target || typeof target !== "object") {
+    throw new Error("Expected target record");
+  }
   const actual = target as Record<string, unknown>;
   expect(actual.kind).toBe(expected.kind);
   expect(actual.id).toBe(expected.id);

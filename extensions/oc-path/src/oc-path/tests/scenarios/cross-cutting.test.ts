@@ -126,7 +126,9 @@ describe("cross-cutting", () => {
     ];
     for (const path of cases) {
       const m = resolveOcPath(ast, path);
-      expect(m, `failed for ${JSON.stringify(path)}`).not.toBeNull();
+      if (m === null) {
+        throw new Error(`failed for ${JSON.stringify(path)}`);
+      }
     }
   });
 });

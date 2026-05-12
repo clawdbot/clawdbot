@@ -55,6 +55,8 @@ export function formatGatewayAuthFailureMessage(params: {
       return "unauthorized: too many failed authentication attempts (retry later)";
     case "device_token_mismatch":
       return "unauthorized: device token mismatch (rotate/reissue device token)";
+    case "scope_mismatch":
+      return "unauthorized: device token scope mismatch (re-pair or approve scope upgrade)";
     default:
       break;
   }

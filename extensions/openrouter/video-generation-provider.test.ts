@@ -94,8 +94,6 @@ function requireFetchCallHeaders(index: number): Headers {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
   if (typeof value !== "object" || value === null) {
     throw new Error(`${label} was not an object`);
   }
@@ -258,7 +256,6 @@ describe("openrouter video generation provider", () => {
     });
     expect(rows).toHaveLength(1);
     const row = rows[0];
-    expect(row).toBeDefined();
     if (!row) {
       throw new Error("expected OpenRouter catalog row");
     }

@@ -10,6 +10,6 @@
     "dev": "convex dev"
   },
   "dependencies": {
-    "convex": "^1.35.1"
+    "convex": "1.35.1"
   }
 }

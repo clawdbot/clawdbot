@@ -172,6 +172,18 @@ function installConsoleMethodSpy(method: "log" | "warn") {
   return spy;
 }
 
+function requireConsoleMessage(spy: { mock: { calls: unknown[][] } }, index = 0): string {
+  const call = spy.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`expected console call ${index}`);
+  }
+  expect(typeof call[0]).toBe("string");
+  if (typeof call[0] !== "string") {
+    throw new Error(`expected console call ${index} to contain a string message`);
+  }
+  return call[0];
+}
+
 function resolveWithConflictingCoreName(options?: { suppressNameConflicts?: boolean }) {
   return resolvePluginTools(
     createResolveToolsParams({
@@ -377,7 +389,7 @@ function mockCallParams(
   mock: { mock: { calls: unknown[][] } },
   index = 0,
 ): Record<string, unknown> {
-  const call = mock.mock.calls[index];
+  const call = mock.mock.calls.at(index);
   if (!call) {
     throw new Error(`expected mock call ${index}`);
   }
@@ -388,8 +400,7 @@ function expectLoaderSelectedOnlyPluginIds(expectedPluginIds: readonly string[])
   const selectedPluginIds = loadOpenClawPluginsMock.mock.calls.map(
     ([params]) => (params as { onlyPluginIds?: string[] }).onlyPluginIds,
   );
-  expect(selectedPluginIds.length).toBeGreaterThan(0);
-  expect(selectedPluginIds).toEqual(selectedPluginIds.map(() => expectedPluginIds));
+  expect(selectedPluginIds).toStrictEqual([expectedPluginIds]);
 }
 
 function expectSingleDiagnosticMessage(
@@ -1524,7 +1535,7 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["optional_tool"]);
     expect(warnSpy).toHaveBeenCalledTimes(1);
-    const message = String(warnSpy.mock.calls[0]?.[0] ?? "");
+    const message = requireConsoleMessage(warnSpy);
     expect(message).toContain("[trace:plugin-tools] factory timings");
     expect(message).toContain("totalMs=1200");
     expect(message).toContain("optional-demo:1200ms@1200ms");
@@ -1554,7 +1565,7 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["optional_tool"]);
     expect(logSpy).toHaveBeenCalledTimes(1);
-    const message = String(logSpy.mock.calls[0]?.[0] ?? "");
+    const message = requireConsoleMessage(logSpy);
     expect(message).toContain("[trace:plugin-tools] factory timings");
     expect(message).toContain("totalMs=5");
     expect(message).toContain("optional-demo:5ms@5ms");

@@ -141,6 +141,11 @@ The Gateway writes a rolling log file (printed on startup as
 - `bonjour: watchdog detected non-announced service ...`
 - `bonjour: disabling advertiser after ... failed restarts ...`
 
+The watchdog treats active `probing`, `announcing`, and fresh conflict-renames as
+in-progress states. If the service never reaches `announced`, OpenClaw eventually
+recreates the advertiser and, after repeated failures, disables Bonjour for that
+Gateway process instead of re-advertising forever.
+
 Bonjour uses the system hostname for the advertised `.local` host when it is a
 valid DNS label. If the system hostname contains spaces, underscores, or another
 invalid DNS-label character, OpenClaw falls back to `openclaw.local`. Set

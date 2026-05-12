@@ -46,6 +46,14 @@ vi.mock("./image-runtime.js", () => ({
   describeImageWithModel: mocks.describeImageWithModel,
 }));
 
+function requireRunCapabilityRequest(): unknown {
+  const [call] = mocks.runCapability.mock.calls;
+  if (!call) {
+    throw new Error("expected runCapability call");
+  }
+  return call[0];
+}
+
 describe("media-understanding runtime", () => {
   afterEach(() => {
     mocks.buildProviderRegistry.mockReset();
@@ -200,7 +208,7 @@ describe("media-understanding runtime", () => {
     });
 
     expect(mocks.runCapability).toHaveBeenCalledOnce();
-    expect(mocks.runCapability.mock.calls[0]?.[0]).toEqual({
+    expect(requireRunCapabilityRequest()).toEqual({
       capability: "image",
       cfg: {
         tools: {
@@ -287,17 +295,26 @@ describe("media-understanding runtime", () => {
     });
 
     expect(mocks.normalizeMediaProviderId).toHaveBeenCalledWith("gemini");
-    expect(describeImage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        buffer: Buffer.from("image-bytes"),
-        fileName: "sample.jpg",
-        mime: "image/jpeg",
-        provider: "gemini",
-        model: "vision-v1",
-        prompt: "Describe the sample.",
-        agentDir: "/tmp/agent",
-      }),
-    );
+    const [[describeImageOptions]] = describeImage.mock.calls as unknown as Array<
+      [
+        {
+          buffer?: Buffer;
+          fileName?: string;
+          mime?: string;
+          provider?: string;
+          model?: string;
+          prompt?: string;
+          agentDir?: string;
+        },
+      ]
+    >;
+    expect(describeImageOptions?.buffer).toEqual(Buffer.from("image-bytes"));
+    expect(describeImageOptions?.fileName).toBe("sample.jpg");
+    expect(describeImageOptions?.mime).toBe("image/jpeg");
+    expect(describeImageOptions?.provider).toBe("gemini");
+    expect(describeImageOptions?.model).toBe("vision-v1");
+    expect(describeImageOptions?.prompt).toBe("Describe the sample.");
+    expect(describeImageOptions?.agentDir).toBe("/tmp/agent");
   });
 
   it("routes structured extraction to a provider by id and model", async () => {
@@ -347,27 +364,38 @@ describe("media-understanding runtime", () => {
       "Vision-Plugin",
       providerRegistry,
     );
-    expect(extractStructured).toHaveBeenCalledWith(
-      expect.objectContaining({
-        input: [
-          { type: "text", text: "Extract the fact." },
-          {
-            type: "image",
-            buffer: Buffer.from("image-bytes"),
-            fileName: "fact.png",
-            mime: "image/png",
-          },
-        ],
-        instructions: "Return JSON.",
-        provider: "Vision-Plugin",
-        model: "vision-json",
-        profile: "work",
-        preferredProfile: "preferred-work",
-        authStore,
-        timeoutMs: 45_000,
-        agentDir: "/tmp/agent",
-      }),
-    );
+    const [[extractOptions]] = extractStructured.mock.calls as unknown as Array<
+      [
+        {
+          input?: unknown;
+          instructions?: string;
+          provider?: string;
+          model?: string;
+          profile?: string;
+          preferredProfile?: string;
+          authStore?: AuthProfileStore;
+          timeoutMs?: number;
+          agentDir?: string;
+        },
+      ]
+    >;
+    expect(extractOptions?.input).toEqual([
+      { type: "text", text: "Extract the fact." },
+      {
+        type: "image",
+        buffer: Buffer.from("image-bytes"),
+        fileName: "fact.png",
+        mime: "image/png",
+      },
+    ]);
+    expect(extractOptions?.instructions).toBe("Return JSON.");
+    expect(extractOptions?.provider).toBe("Vision-Plugin");
+    expect(extractOptions?.model).toBe("vision-json");
+    expect(extractOptions?.profile).toBe("work");
+    expect(extractOptions?.preferredProfile).toBe("preferred-work");
+    expect(extractOptions?.authStore).toBe(authStore);
+    expect(extractOptions?.timeoutMs).toBe(45_000);
+    expect(extractOptions?.agentDir).toBe("/tmp/agent");
   });
 
   it("rejects text-only structured extraction before provider lookup", async () => {

@@ -65,6 +65,20 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
+function firstMockArg(mock: MockWithCalls, label: string) {
+  return firstMockCall(mock, label)[0];
+}
+
 function discordTestSendResult(messageId: string, channelId = "dm-channel") {
   return {
     messageId,
@@ -318,7 +332,9 @@ describe("discord component interactions", () => {
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(lastDispatchCtx?.BodyForAgent).toBe('Clicked "Approve".');
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
-    const dispatchParams = dispatchReplyMock.mock.calls[0]?.[0] as DispatchParams | undefined;
+    const dispatchParams = firstMockArg(dispatchReplyMock, "dispatchReplyMock") as
+      | DispatchParams
+      | undefined;
     expect(typeof dispatchParams?.dispatcherOptions.responsePrefixContextProvider).toBe("function");
     expect(typeof dispatchParams?.replyOptions?.onModelSelected).toBe("function");
     expect(resolveDiscordComponentEntry({ id: "btn_1" })).toBeNull();
@@ -866,8 +882,10 @@ describe("discord component interactions", () => {
 
     expect(acknowledge).toHaveBeenCalledTimes(1);
     expect(editDiscordComponentMessageMock).toHaveBeenCalledTimes(1);
-    const [target, messageId, payload, options] =
-      editDiscordComponentMessageMock.mock.calls[0] ?? [];
+    const [target, messageId, payload, options] = firstMockCall(
+      editDiscordComponentMessageMock,
+      "editDiscordComponentMessageMock",
+    );
     expect(target).toBe("user:123456789");
     expect(messageId).toBe("msg-1");
     expect(typeof (payload as { text?: unknown } | undefined)?.text).toBe("string");

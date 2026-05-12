@@ -8,7 +8,7 @@ import {
 
 const waitForAsyncCallbacks = async () => {
   await Promise.resolve();
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise<void>((resolve) => setImmediate(resolve));
 };
 
 describe("subscribeEmbeddedPiSession block reply rejections", () => {

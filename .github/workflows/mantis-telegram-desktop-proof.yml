@@ -5,19 +5,9 @@ on:
     types: [created]
   workflow_dispatch:
     inputs:
-      baseline_ref:
-        description: Ref, tag, or SHA to capture as the before GIF
-        required: true
-        default: main
-        type: string
-      candidate_ref:
-        description: Ref, tag, or SHA to capture as the after GIF
-        required: true
-        default: main
-        type: string
       pr_number:
-        description: Optional PR number to receive the QA evidence comment
-        required: false
+        description: PR number to capture
+        required: true
         type: string
       instructions:
         description: Optional freeform proof instructions for the agent
@@ -37,13 +27,10 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: write
   issues: write
   pull-requests: write
-
-concurrency:
-  group: mantis-telegram-desktop-proof-${{ github.event.issue.number || inputs.pr_number || inputs.candidate_ref || github.run_id }}-${{ github.run_attempt }}
-  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -63,10 +50,10 @@ jobs:
         (
           github.event_name == 'issue_comment' &&
           github.event.issue.pull_request &&
+          contains(github.event.issue.labels.*.name, 'mantis: telegram-visible-proof') &&
           (
-            contains(github.event.comment.body, '@Mantis') ||
-            contains(github.event.comment.body, '@mantis') ||
-            contains(github.event.comment.body, '/mantis')
+            contains(github.event.comment.body, '@openclaw-mantis') ||
+            contains(github.event.comment.body, '/openclaw-mantis')
           )
         )
       }}
@@ -103,7 +90,6 @@ jobs:
       lease_id: ${{ steps.resolve.outputs.lease_id }}
       pr_number: ${{ steps.resolve.outputs.pr_number }}
       request_source: ${{ steps.resolve.outputs.request_source }}
-      should_run: ${{ steps.resolve.outputs.should_run }}
     steps:
       - name: Resolve refs and target PR
         id: resolve
@@ -117,47 +103,11 @@ jobs:
               core.info(`${name}=${value ?? ""}`);
             }
 
-            if (eventName === "workflow_dispatch") {
-              const inputs = context.payload.inputs ?? {};
-              setOutput("should_run", "true");
-              setOutput("baseline_ref", inputs.baseline_ref || "main");
-              setOutput("candidate_ref", inputs.candidate_ref || "main");
-              setOutput("pr_number", inputs.pr_number || "");
-              setOutput("instructions", inputs.instructions || "");
-              setOutput("crabbox_provider", inputs.crabbox_provider || "aws");
-              setOutput("lease_id", inputs.crabbox_lease_id || "");
-              setOutput("request_source", "workflow_dispatch");
-              return;
-            }
-
-            if (eventName !== "issue_comment") {
-              core.setFailed(`Unsupported event: ${eventName}`);
-              return;
-            }
-
-            const issue = context.payload.issue;
-            const body = context.payload.comment?.body ?? "";
-            if (!issue?.pull_request) {
-              core.setFailed("Mantis issue_comment trigger requires a pull request comment.");
-              return;
-            }
-
-            const normalized = body.toLowerCase();
-            const requested =
-              (normalized.includes("@mantis") || normalized.includes("/mantis")) &&
-              normalized.includes("telegram") &&
-              (normalized.includes("desktop") || normalized.includes("native")) &&
-              normalized.includes("proof");
-            if (!requested) {
-              core.notice("Comment mentioned Mantis but did not request Telegram desktop proof.");
-              setOutput("should_run", "false");
-              setOutput("baseline_ref", "");
-              setOutput("candidate_ref", "");
-              setOutput("pr_number", "");
-              setOutput("instructions", "");
-              setOutput("crabbox_provider", "");
-              setOutput("lease_id", "");
-              setOutput("request_source", "unsupported_issue_comment");
+            const inputs = context.payload.inputs ?? {};
+            const prNumber =
+              eventName === "workflow_dispatch" ? inputs.pr_number : String(context.payload.issue?.number ?? "");
+            if (!prNumber) {
+              core.setFailed("Mantis Telegram desktop proof requires a pull request.");
               return;
             }
 
@@ -165,59 +115,40 @@ jobs:
             const { data: pr } = await github.rest.pulls.get({
               owner,
               repo,
-              pull_number: issue.number,
+              pull_number: Number(prNumber),
             });
-            let mergedBaseline = "";
-            let mergedCandidate = "";
-            if (pr.merged) {
-              const { data: commits } = await github.rest.pulls.listCommits({
-                owner,
-                repo,
-                pull_number: issue.number,
-                per_page: 100,
-              });
-              mergedCandidate = pr.merge_commit_sha || commits.at(-1)?.sha || "";
-              mergedBaseline = mergedCandidate && commits.length > 0 ? `${mergedCandidate}~${commits.length}` : "";
-            }
-            const baselineMatch = body.match(/(?:baseline|base)[\s:=]+([^\s`]+)/i);
-            const candidateMatch = body.match(/(?:candidate|head)[\s:=]+([^\s`]+)/i);
-            const providerMatch = body.match(/(?:provider|crabbox_provider)[\s:=]+([^\s`]+)/i);
-            const leaseMatch = body.match(/(?:lease|lease_id|crabbox_lease_id)[\s:=]+([^\s`]+)/i);
-            const provider = providerMatch?.[1] || "aws";
+            const body = eventName === "workflow_dispatch" ? inputs.instructions || "" : context.payload.comment?.body || "";
+            const provider = inputs.crabbox_provider || "aws";
             if (!["aws", "hetzner"].includes(provider)) {
               core.setFailed(`Unsupported Crabbox provider for Mantis Telegram desktop proof: ${provider}`);
               return;
             }
-            const rawCandidate = candidateMatch?.[1];
-            const candidate =
-              rawCandidate && !["head", "pr", "pr-head"].includes(rawCandidate.toLowerCase())
-                ? rawCandidate
-                : mergedCandidate || pr.head.sha;
 
-            setOutput("should_run", "true");
-            setOutput("baseline_ref", baselineMatch?.[1] || mergedBaseline || "main");
-            setOutput("candidate_ref", candidate);
-            setOutput("pr_number", String(issue.number));
+            setOutput("baseline_ref", pr.base.sha);
+            setOutput("candidate_ref", pr.head.sha);
+            setOutput("pr_number", String(pr.number));
             setOutput("instructions", body);
             setOutput("crabbox_provider", provider);
-            setOutput("lease_id", leaseMatch?.[1] || "");
-            setOutput("request_source", "issue_comment");
+            setOutput("lease_id", inputs.crabbox_lease_id || "");
+            setOutput("request_source", eventName);
 
-            await github.rest.reactions.createForIssueComment({
-              owner,
-              repo,
-              comment_id: context.payload.comment.id,
-              content: "eyes",
-            }).catch((error) => core.warning(`Could not add eyes reaction: ${error.message}`));
+            if (eventName === "issue_comment") {
+              await github.rest.reactions.createForIssueComment({
+                owner,
+                repo,
+                comment_id: context.payload.comment.id,
+                content: "eyes",
+              }).catch((error) => core.warning(`Could not add eyes reaction: ${error.message}`));
+            }
 
   validate_refs:
     name: Validate selected refs
     needs: resolve_request
-    if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
     runs-on: ubuntu-24.04
     outputs:
       baseline_revision: ${{ steps.validate.outputs.baseline_revision }}
       candidate_revision: ${{ steps.validate.outputs.candidate_revision }}
+      candidate_trust: ${{ steps.validate.outputs.candidate_trust }}
     steps:
       - name: Checkout harness ref
         uses: actions/checkout@v6
@@ -241,55 +172,56 @@ jobs:
             git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr/${PR_NUMBER}" || true
           fi
 
-          validate_ref() {
-            local label="$1"
+          resolve_commit() {
             local input_ref="$2"
             local revision=""
-            local reason=""
 
             if ! revision="$(git rev-parse --verify "${input_ref}^{commit}" 2>/dev/null)"; then
-              echo "${label} ref '${input_ref}' is not available in the workflow checkout." >&2
-              exit 1
-            fi
-            if git merge-base --is-ancestor "$revision" refs/remotes/origin/main; then
-              reason="main-ancestor"
-            elif git tag --points-at "$revision" | grep -Eq '^v'; then
-              reason="release-tag"
-            else
-              local pr_head_count
-              pr_head_count="$(
-                gh api \
-                  -H "Accept: application/vnd.github+json" \
-                  "repos/${GITHUB_REPOSITORY}/commits/${revision}/pulls" \
-                  --jq '[.[] | select(.state == "open" and .head.repo.full_name == "'"${GITHUB_REPOSITORY}"'" and .head.sha == "'"${revision}"'")] | length'
-              )"
-              if [[ "$pr_head_count" != "0" ]]; then
-                reason="open-pr-head"
-              fi
-            fi
-
-            if [[ -z "$reason" ]]; then
-              echo "${label} ref '${input_ref}' resolved to ${revision}, which is not trusted for this secret-bearing Mantis run." >&2
+              echo "$1 ref '${input_ref}' is not available in the workflow checkout." >&2
               exit 1
             fi
             printf '%s\n' "$revision"
           }
 
-          baseline_revision="$(validate_ref baseline "$BASELINE_REF")"
-          candidate_revision="$(validate_ref candidate "$CANDIDATE_REF")"
+          baseline_revision="$(resolve_commit baseline "$BASELINE_REF")"
+          candidate_revision="$(resolve_commit candidate "$CANDIDATE_REF")"
+          if ! git merge-base --is-ancestor "$baseline_revision" refs/remotes/origin/main; then
+            echo "baseline ref '${BASELINE_REF}' resolved to ${baseline_revision}, which is not on main." >&2
+            exit 1
+          fi
+          pr_head="$(
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+              --jq '{state, head_sha: .head.sha, head_repo: .head.repo.full_name}'
+          )"
+          pr_state="$(jq -r '.state' <<<"$pr_head")"
+          pr_head_sha="$(jq -r '.head_sha' <<<"$pr_head")"
+          pr_head_repo="$(jq -r '.head_repo' <<<"$pr_head")"
+          if [[ "$pr_state" != "open" || "$candidate_revision" != "$pr_head_sha" ]]; then
+            echo "candidate ref '${CANDIDATE_REF}' resolved to ${candidate_revision}, which is not the open PR head." >&2
+            exit 1
+          fi
+          candidate_trust="open-pr-head"
+          if [[ "$pr_head_repo" != "$GITHUB_REPOSITORY" ]]; then
+            candidate_trust="fork-pr-head"
+          fi
+
           echo "baseline_revision=${baseline_revision}" >> "$GITHUB_OUTPUT"
           echo "candidate_revision=${candidate_revision}" >> "$GITHUB_OUTPUT"
+          echo "candidate_trust=${candidate_trust}" >> "$GITHUB_OUTPUT"
           {
             echo "baseline: \`${BASELINE_REF}\`"
             echo "baseline SHA: \`${baseline_revision}\`"
+            echo "baseline trust: \`main-ancestor\`"
             echo "candidate: \`${CANDIDATE_REF}\`"
             echo "candidate SHA: \`${candidate_revision}\`"
+            echo "candidate trust: \`${candidate_trust}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   run_telegram_desktop_proof:
     name: Run agentic native Telegram proof
     needs: [resolve_request, validate_refs]
-    if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 360
     environment: qa-live-shared
@@ -297,6 +229,31 @@ jobs:
       comparison_status: ${{ steps.inspect.outputs.comparison_status }}
       output_dir: ${{ steps.inspect.outputs.output_dir }}
     steps:
+      - name: Wait for older Mantis Telegram account run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_created="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq .created_at)"
+          while true; do
+            blockers="$(
+              for workflow in mantis-telegram-desktop-proof.yml mantis-telegram-live.yml; do
+                gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --limit 100 --json databaseId,status,createdAt,url \
+                  | jq -r \
+                    --argjson current_id "$GITHUB_RUN_ID" \
+                    --arg current_created "$current_created" \
+                    '.[] | select(.databaseId != $current_id) | select(.createdAt < $current_created or (.createdAt == $current_created and .databaseId < $current_id)) | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending" or .status == "requested") | "\(.createdAt)\t#\(.databaseId)\t\(.status)\t\(.url)"'
+              done | sort -u
+            )"
+            if [[ -z "$blockers" ]]; then
+              break
+            fi
+            echo "Waiting for older Mantis Telegram account run:"
+            printf '%s\n' "$blockers" | head -n 10
+            sleep 60
+          done
+
       - name: Checkout harness ref
         uses: actions/checkout@v6
         with:
@@ -336,6 +293,14 @@ jobs:
         run: |
           set -euo pipefail
           test -f scripts/e2e/telegram-user-driver.py
+          cat >"${RUNNER_TEMP}/openclaw-telegram-user-crabbox-proof" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec node --import tsx "${GITHUB_WORKSPACE}/scripts/e2e/telegram-user-crabbox-proof.ts" "$@"
+          EOF
+          chmod 0755 "${RUNNER_TEMP}/openclaw-telegram-user-crabbox-proof"
+          sudo install -m 0755 "${RUNNER_TEMP}/openclaw-telegram-user-crabbox-proof" /usr/local/bin/openclaw-telegram-user-crabbox-proof
+          /usr/local/bin/openclaw-telegram-user-crabbox-proof --help >/dev/null
           media_tools="${RUNNER_TEMP}/mantis-media-tools"
           install -d "$media_tools"
           curl --fail --location --retry 3 --retry-delay 2 \
@@ -368,9 +333,9 @@ jobs:
             printf '%s\n' 'Defaults env_keep += "CODEX_HOME CODEX_INTERNAL_ORIGINATOR_OVERRIDE"'
             printf '%s\n' 'Defaults env_keep += "BASELINE_REF BASELINE_SHA CANDIDATE_REF CANDIDATE_SHA"'
             printf '%s\n' 'Defaults env_keep += "CRABBOX_ACCESS_CLIENT_ID CRABBOX_ACCESS_CLIENT_SECRET CRABBOX_COORDINATOR CRABBOX_COORDINATOR_TOKEN CRABBOX_LEASE_ID CRABBOX_PROVIDER"'
-            printf '%s\n' 'Defaults env_keep += "GH_TOKEN MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_NUMBER"'
+            printf '%s\n' 'Defaults env_keep += "GH_TOKEN MANTIS_CANDIDATE_TRUST MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_NUMBER"'
             printf '%s\n' 'Defaults env_keep += "OPENCLAW_BUILD_PRIVATE_QA OPENCLAW_ENABLE_PRIVATE_QA_CLI OPENCLAW_QA_CONVEX_SECRET_CI OPENCLAW_QA_CONVEX_SITE_URL OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN"'
-            printf '%s\n' 'Defaults env_keep += "OPENCLAW_TELEGRAM_USER_CRABBOX_BIN OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT"'
+            printf '%s\n' 'Defaults env_keep += "OPENCLAW_TELEGRAM_USER_CRABBOX_BIN OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT OPENCLAW_TELEGRAM_USER_PROOF_CMD"'
           } | sudo tee /etc/sudoers.d/mantis-codex-env >/dev/null
           sudo chmod 0440 /etc/sudoers.d/mantis-codex-env
           codex_home="/tmp/mantis-codex-home-${GITHUB_RUN_ID}"
@@ -399,6 +364,7 @@ jobs:
           CRABBOX_LEASE_ID: ${{ needs.resolve_request.outputs.lease_id }}
           CRABBOX_PROVIDER: ${{ needs.resolve_request.outputs.crabbox_provider }}
           GH_TOKEN: ${{ github.token }}
+          MANTIS_CANDIDATE_TRUST: ${{ needs.validate_refs.outputs.candidate_trust }}
           MANTIS_INSTRUCTIONS: ${{ needs.resolve_request.outputs.instructions }}
           MANTIS_OUTPUT_DIR: ${{ env.MANTIS_OUTPUT_DIR }}
           MANTIS_PR_NUMBER: ${{ needs.resolve_request.outputs.pr_number }}
@@ -409,6 +375,7 @@ jobs:
           OPENCLAW_TELEGRAM_USER_CRABBOX_BIN: /usr/local/bin/crabbox
           OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER: ${{ needs.resolve_request.outputs.crabbox_provider }}
           OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT: ${{ github.workspace }}/scripts/e2e/telegram-user-driver.py
+          OPENCLAW_TELEGRAM_USER_PROOF_CMD: /usr/local/bin/openclaw-telegram-user-crabbox-proof
         with:
           openai-api-key: ${{ secrets.OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           prompt-file: .github/codex/prompts/mantis-telegram-desktop-proof.md

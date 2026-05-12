@@ -149,7 +149,9 @@ function buildUnownedProviderTransportReplayFallback(params: {
     ...(isAnthropic || isStrictOpenAiCompatible || isClaudeOpenAiResponses
       ? { validateAnthropicTurns: true }
       : {}),
-    ...(isGoogle || isAnthropic ? { allowSyntheticToolResults: true } : {}),
+    ...(isGoogle || isAnthropic || isOpenAiResponsesCompatibleApi(params.modelApi)
+      ? { allowSyntheticToolResults: true }
+      : {}),
   };
 }
 

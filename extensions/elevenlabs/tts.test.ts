@@ -25,16 +25,24 @@ describe("elevenlabs tts diagnostics", () => {
   }
 
   function getHeadersFromFirstFetchCall(fetchMock: ReturnType<typeof vi.fn>): Headers {
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
-    return new Headers(init?.headers);
+    return new Headers(getInitFromFirstFetchCall(fetchMock).headers);
+  }
+
+  function requireFirstFetchCall(fetchMock: ReturnType<typeof vi.fn>): [string | URL, RequestInit] {
+    const [call] = fetchMock.mock.calls;
+    if (!call) {
+      throw new Error("expected ElevenLabs fetch call");
+    }
+    return call as [string | URL, RequestInit];
   }
 
   function getInitFromFirstFetchCall(fetchMock: ReturnType<typeof vi.fn>): RequestInit {
-    return (fetchMock.mock.calls[0] as unknown[])[1] as RequestInit;
+    const [, init] = requireFirstFetchCall(fetchMock);
+    return init;
   }
 
   function getUrlFromFirstFetchCall(fetchMock: ReturnType<typeof vi.fn>): URL {
-    const url = fetchMock.mock.calls[0]?.[0] as string | URL;
+    const [url] = requireFirstFetchCall(fetchMock);
     return new URL(url.toString());
   }
 

@@ -147,16 +147,12 @@ describe("msteams adaptive card action invoke", () => {
     expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
       1,
     );
-    expect(
-      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0],
-    ).toMatchObject({
-      ctxPayload: {
-        RawBody: JSON.stringify(payload),
-        BodyForAgent: JSON.stringify(payload),
-        CommandBody: JSON.stringify(payload),
-        SessionKey: "msteams:direct:user-aad",
-        SenderId: "user-aad",
-      },
-    });
+    const dispatched = runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock
+      .calls[0]?.[0] as { ctxPayload?: Record<string, unknown> } | undefined;
+    expect(dispatched?.ctxPayload?.RawBody).toBe(JSON.stringify(payload));
+    expect(dispatched?.ctxPayload?.BodyForAgent).toBe(JSON.stringify(payload));
+    expect(dispatched?.ctxPayload?.CommandBody).toBe(JSON.stringify(payload));
+    expect(dispatched?.ctxPayload?.SessionKey).toBe("msteams:direct:user-aad");
+    expect(dispatched?.ctxPayload?.SenderId).toBe("user-aad");
   });
 });

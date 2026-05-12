@@ -428,7 +428,7 @@ describe("normalizeToolParameters", () => {
     );
 
     expect(streamCalls).toBe(2);
-    const executeCall = execute.mock.calls[0];
+    const executeCall = execute.mock.calls.at(0);
     expect(executeCall?.[0]).toBe("call-null-args");
     expect(executeCall?.[1]).toEqual({});
     expect(executeCall?.[2]).toBeUndefined();

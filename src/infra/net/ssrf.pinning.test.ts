@@ -173,12 +173,11 @@ describe("ssrf pinning", () => {
       { address: "93.184.216.34", family: 4 },
     ]) as unknown as LookupFn;
 
-    await expect(
-      resolvePinnedHostnameWithPolicy("assets.example.com", {
-        lookupFn: lookup,
-        policy: { hostnameAllowlist: ["*.example.com"] },
-      }),
-    ).resolves.toMatchObject({ hostname: "assets.example.com" });
+    const allowed = await resolvePinnedHostnameWithPolicy("assets.example.com", {
+      lookupFn: lookup,
+      policy: { hostnameAllowlist: ["*.example.com"] },
+    });
+    expect(allowed.hostname).toBe("assets.example.com");
 
     await expect(
       resolvePinnedHostnameWithPolicy("example.com", {
@@ -242,30 +241,24 @@ describe("ssrf pinning", () => {
       { address: "2001:db8:1234::5efe:127.0.0.1", family: 6 },
     ]) as unknown as LookupFn;
 
-    await expect(
-      resolvePinnedHostnameWithPolicy("2001:db8:1234::5efe:127.0.0.1", {
-        lookupFn: lookup,
-        policy: { allowPrivateNetwork: true },
-      }),
-    ).resolves.toMatchObject({
-      hostname: "2001:db8:1234::5efe:127.0.0.1",
-      addresses: ["2001:db8:1234::5efe:127.0.0.1"],
+    const pinned = await resolvePinnedHostnameWithPolicy("2001:db8:1234::5efe:127.0.0.1", {
+      lookupFn: lookup,
+      policy: { allowPrivateNetwork: true },
     });
+    expect(pinned.hostname).toBe("2001:db8:1234::5efe:127.0.0.1");
+    expect(pinned.addresses).toEqual(["2001:db8:1234::5efe:127.0.0.1"]);
     expect(lookup).toHaveBeenCalledTimes(1);
   });
 
   it("accepts dangerouslyAllowPrivateNetwork as an allowPrivateNetwork alias", async () => {
     const lookup = vi.fn(async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as LookupFn;
 
-    await expect(
-      resolvePinnedHostnameWithPolicy("localhost", {
-        lookupFn: lookup,
-        policy: { dangerouslyAllowPrivateNetwork: true },
-      }),
-    ).resolves.toMatchObject({
-      hostname: "localhost",
-      addresses: ["127.0.0.1"],
+    const pinned = await resolvePinnedHostnameWithPolicy("localhost", {
+      lookupFn: lookup,
+      policy: { dangerouslyAllowPrivateNetwork: true },
     });
+    expect(pinned.hostname).toBe("localhost");
+    expect(pinned.addresses).toEqual(["127.0.0.1"]);
     expect(lookup).toHaveBeenCalledTimes(1);
   });
 });

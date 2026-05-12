@@ -333,7 +333,9 @@ describe("thread binding lifecycle", () => {
       expect(hoisted.restGet).not.toHaveBeenCalled();
       expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
       expect(hoisted.sendMessageDiscord).toHaveBeenCalledTimes(1);
-      const farewell = hoisted.sendMessageDiscord.mock.calls[0]?.[1] as string | undefined;
+      const farewell = mockCallArg(hoisted.sendMessageDiscord, 0, 1, "sendMessageDiscord") as
+        | string
+        | undefined;
       expect(farewell).toContain("after 1m of inactivity");
     } finally {
       vi.useRealTimers();
@@ -372,7 +374,9 @@ describe("thread binding lifecycle", () => {
 
       expect(manager.getByThreadId("thread-1")).toBeUndefined();
       expect(hoisted.sendMessageDiscord).toHaveBeenCalledTimes(1);
-      const farewell = hoisted.sendMessageDiscord.mock.calls[0]?.[1] as string | undefined;
+      const farewell = mockCallArg(hoisted.sendMessageDiscord, 0, 1, "sendMessageDiscord") as
+        | string
+        | undefined;
       expect(farewell).toContain("max age of 1m");
     } finally {
       vi.useRealTimers();
@@ -949,9 +953,12 @@ describe("thread binding lifecycle", () => {
       threadId: "thread-created-runtime",
       targetSessionKey: "agent:main:subagent:child-runtime",
     });
-    const firstClientArgs = hoisted.createDiscordRestClient.mock.calls[0]?.[0] as
-      | { accountId?: string; token?: string }
-      | undefined;
+    const firstClientArgs = mockCallArg(
+      hoisted.createDiscordRestClient,
+      0,
+      0,
+      "createDiscordRestClient",
+    ) as { accountId?: string; token?: string } | undefined;
     expectFields(firstClientArgs, "first client args", {
       accountId: "runtime",
       token: "runtime-token",

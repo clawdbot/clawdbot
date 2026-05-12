@@ -161,17 +161,14 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       commandName: "memory status",
       targetIds: new Set(["talk.providers.*.apiKey"]),
     });
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config,
-        method: "secrets.resolve",
-        requiredMethods: ["secrets.resolve"],
-        params: {
-          commandName: "memory status",
-          targetIds: ["talk.providers.*.apiKey"],
-        },
-      }),
-    );
+    const gatewayRequest = callGateway.mock.calls.at(0)?.[0];
+    expect(gatewayRequest?.config).toBe(config);
+    expect(gatewayRequest?.method).toBe("secrets.resolve");
+    expect(gatewayRequest?.requiredMethods).toEqual(["secrets.resolve"]);
+    expect(gatewayRequest?.params).toEqual({
+      commandName: "memory status",
+      targetIds: ["talk.providers.*.apiKey"],
+    });
     expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("sk-live");
   });
 

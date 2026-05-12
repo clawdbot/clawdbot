@@ -47,3 +47,4 @@ export {
   formatLocalEnvelopeTimestamp,
 } from "./test-helpers/envelope-timestamp.js";
 export { expectPairingReplyText, extractPairingCode } from "./test-helpers/pairing-reply.js";
+export { stripAnsi } from "../terminal/ansi.js";

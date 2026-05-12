@@ -15,6 +15,7 @@ import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { streamSessionTranscriptLines } from "../../config/sessions/transcript-stream.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   measureDiagnosticsTimelineSpan,
@@ -1356,14 +1357,14 @@ async function transcriptHasIdempotencyKey(
   idempotencyKey: string,
 ): Promise<boolean> {
   try {
-    const lines = (await fs.promises.readFile(transcriptPath, "utf-8")).split(/\r?\n/);
-    for (const line of lines) {
-      if (!line.trim()) {
+    for await (const line of streamSessionTranscriptLines(transcriptPath)) {
+      try {
+        const parsed = JSON.parse(line) as { message?: { idempotencyKey?: unknown } };
+        if (parsed?.message?.idempotencyKey === idempotencyKey) {
+          return true;
+        }
+      } catch {
         continue;
-      }
-      const parsed = JSON.parse(line) as { message?: { idempotencyKey?: unknown } };
-      if (parsed?.message?.idempotencyKey === idempotencyKey) {
-        return true;
       }
     }
     return false;

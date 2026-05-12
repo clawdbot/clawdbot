@@ -63,12 +63,10 @@ describeLive("openrouter plugin live", () => {
       throw new Error(`openrouter provider did not resolve ${LIVE_MODEL_ID}`);
     }
 
-    expect(resolved).toMatchObject({
-      provider: "openrouter",
-      id: LIVE_MODEL_ID,
-      api: "openai-completions",
-      baseUrl: "https://openrouter.ai/api/v1",
-    });
+    expect(resolved.provider).toBe("openrouter");
+    expect(resolved.id).toBe(LIVE_MODEL_ID);
+    expect(resolved.api).toBe("openai-completions");
+    expect(resolved.baseUrl).toBe("https://openrouter.ai/api/v1");
 
     const client = new OpenAI({
       apiKey: OPENROUTER_API_KEY,

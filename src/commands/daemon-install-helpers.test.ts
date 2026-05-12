@@ -607,8 +607,14 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test");
     expect(plan.environment.ANTHROPIC_TOKEN).toBe("ant-test-token");
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("NODE_OPTIONS"), "Auth profile");
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("GIT_ASKPASS"), "Auth profile");
+    expect(warn).toHaveBeenCalledWith(
+      'Auth profile env ref "NODE_OPTIONS" blocked by host-env security policy',
+      "Auth profile",
+    );
+    expect(warn).toHaveBeenCalledWith(
+      'Auth profile env ref "GIT_ASKPASS" blocked by host-env security policy',
+      "Auth profile",
+    );
   });
 });
 

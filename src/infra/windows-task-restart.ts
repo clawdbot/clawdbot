@@ -13,6 +13,10 @@ import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 const TASK_RESTART_RETRY_LIMIT = 12;
 const TASK_RESTART_RETRY_DELAY_SEC = 1;
 
+function quotePowerShellSingleQuotedLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
 function resolveWindowsTaskName(env: NodeJS.ProcessEnv): string {
   const override = env.OPENCLAW_WINDOWS_TASK_NAME?.trim();
   if (override) {
@@ -29,6 +33,10 @@ function buildScheduledTaskRestartScript(params: {
 }): string {
   const { quotedLogPath, setupLines, taskName, taskScriptPath } = params;
   const quotedTaskName = quoteCmdScriptArg(taskName);
+  const queryTaskStateCommand = `(Get-ScheduledTask -TaskName ${quotePowerShellSingleQuotedLiteral(
+    taskName,
+  )} -ErrorAction SilentlyContinue).State`;
+  const quotedQueryTaskStateCommand = quoteCmdScriptArg(queryTaskStateCommand);
   const lines = [
     "@echo off",
     "setlocal",
@@ -40,6 +48,9 @@ function buildScheduledTaskRestartScript(params: {
     ":retry",
     `timeout /t ${TASK_RESTART_RETRY_DELAY_SEC} /nobreak >nul`,
     "set /a attempts+=1",
+    // Avoid racing with another restart path that already started the scheduled task.
+    `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ${quotedQueryTaskStateCommand} 2>nul | findstr /I /C:"Running" >nul 2>&1`,
+    "if not errorlevel 1 goto cleanup",
     `schtasks /Run /TN ${quotedTaskName} >> ${quotedLogPath} 2>&1`,
     "if not errorlevel 1 goto cleanup",
     `if %attempts% GEQ ${TASK_RESTART_RETRY_LIMIT} goto fallback`,

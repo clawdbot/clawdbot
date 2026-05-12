@@ -226,6 +226,25 @@ describe("discord config schema", () => {
     expect(cfg.voice?.captureSilenceGraceMs).toBe(3_500);
   });
 
+  it("accepts Discord voice allowed channels", () => {
+    const cfg = expectValidDiscordConfig({
+      voice: {
+        allowedChannels: [{ guildId: "123", channelId: "456" }],
+      },
+    });
+
+    expect(cfg.voice?.allowedChannels).toEqual([{ guildId: "123", channelId: "456" }]);
+  });
+
+  it("rejects invalid Discord voice allowed channels", () => {
+    for (const voice of [
+      { allowedChannels: [{ guildId: "", channelId: "456" }] },
+      { allowedChannels: [{ guildId: "123", channelId: "" }] },
+    ]) {
+      expectInvalidDiscordConfig({ voice });
+    }
+  });
+
   it("rejects invalid Discord voice timing overrides", () => {
     for (const voice of [
       { connectTimeoutMs: 0 },

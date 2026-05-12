@@ -461,11 +461,13 @@ describeLive("gateway live (cli backend)", () => {
           } else {
             expect(text).toContain(`CLI-BACKEND-${nonce}`);
           }
-          expect(
+          const injectedFileNames =
             resultWithMeta.meta?.systemPromptReport?.injectedWorkspaceFiles?.map(
               (entry) => entry.name,
-            ) ?? [],
-          ).toEqual(expect.arrayContaining(bootstrapWorkspace?.expectedInjectedFiles ?? []));
+            ) ?? [];
+          for (const expectedFile of bootstrapWorkspace?.expectedInjectedFiles ?? []) {
+            expect(injectedFileNames).toContain(expectedFile);
+          }
         }
 
         if (modelSwitchTarget) {

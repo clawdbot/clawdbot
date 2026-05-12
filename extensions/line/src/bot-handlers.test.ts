@@ -873,11 +873,10 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).not.toHaveBeenCalled();
     const entries = groupHistories.get("group-hist-1");
     expect(entries).toHaveLength(1);
-    expect(entries?.[0]).toMatchObject({
-      sender: "user:user-hist",
-      body: "hello history",
-      timestamp: 1700000000000,
-    });
+    const entry = entries?.[0];
+    expect(entry?.sender).toBe("user:user-hist");
+    expect(entry?.body).toBe("hello history");
+    expect(entry?.timestamp).toBe(1700000000000);
   });
 
   it("skips group messages without mention when requireMention is set", async () => {

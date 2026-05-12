@@ -870,7 +870,7 @@ const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 config.update = { ...(config.update || {}), channel: "dev" };
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\\n");
 JS
-/usr/bin/env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 ${guestNode} ${guestOpenClawEntry} update --channel dev --yes --json
+/usr/bin/env NODE_OPTIONS=--max-old-space-size=8192 OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 ${guestNode} ${guestOpenClawEntry} update --channel dev --yes --json
 ${guestNode} ${guestOpenClawEntry} --version
 ${guestNode} ${guestOpenClawEntry} update status --json`,
     );

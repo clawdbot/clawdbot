@@ -766,7 +766,9 @@ describe("updateNpmInstalledPlugins", () => {
       "dist.shasum",
       "--json",
     ]);
-    expect(npmViewCall()?.[1]).toBeDefined();
+    if (npmViewCall()?.[1] === undefined) {
+      throw new Error("Expected npm view command options");
+    }
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(false);
     expect(result.config).toBe(config);
@@ -1105,9 +1107,9 @@ describe("updateNpmInstalledPlugins", () => {
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(peerLinkPath("brave"))).toBe(true);
     expect(fs.existsSync(peerLinkPath("codex"))).toBe(true);
-    expect(warnMessages).toContainEqual(
-      expect.stringContaining('Could not repair openclaw peer link for "broken"'),
-    );
+    expect(warnMessages).toEqual([
+      `Could not repair openclaw peer link for "broken" at ${brokenInstallPath}: Skipping openclaw peerDependency link because ${path.join(brokenInstallPath, "node_modules")} is not a real directory.`,
+    ]);
   });
 
   it("refreshes legacy npm install records before skipping unchanged artifacts", async () => {
@@ -1969,13 +1971,18 @@ describe("updateNpmInstalledPlugins", () => {
 
     expect(npmInstallCall(0)?.spec).toBe("openclaw-codex-app-server@beta");
     expect(npmInstallCall(1)?.spec).toBe("openclaw-codex-app-server");
-    expect(warnMessages).toEqual([expect.stringContaining("has no beta npm release")]);
+    expect(warnMessages).toEqual([
+      'Plugin "openclaw-codex-app-server" has no beta npm release for openclaw-codex-app-server@beta; using openclaw-codex-app-server instead. Core update can still complete.',
+    ]);
     expectCodexAppServerInstallState({
       result,
       spec: "openclaw-codex-app-server",
       version: "0.2.6",
       resolvedSpec: "openclaw-codex-app-server@0.2.6",
     });
+    expect(result.outcomes[0]?.message).toBe(
+      "Updated openclaw-codex-app-server: unknown -> 0.2.6. (warning: beta channel fallback used openclaw-codex-app-server because openclaw-codex-app-server@beta could not be used).",
+    );
   });
 
   it("falls back to the default npm spec when the beta package exists but is invalid", async () => {
@@ -2009,13 +2016,18 @@ describe("updateNpmInstalledPlugins", () => {
 
     expect(npmInstallCall(0)?.spec).toBe("openclaw-codex-app-server@beta");
     expect(npmInstallCall(1)?.spec).toBe("openclaw-codex-app-server");
-    expect(warnMessages).toEqual([expect.stringContaining("failed beta npm update")]);
+    expect(warnMessages).toEqual([
+      'Plugin "openclaw-codex-app-server" failed beta npm update for openclaw-codex-app-server@beta; using openclaw-codex-app-server instead. Core update can still complete.',
+    ]);
     expectCodexAppServerInstallState({
       result,
       spec: "openclaw-codex-app-server",
       version: "0.2.6",
       resolvedSpec: "openclaw-codex-app-server@0.2.6",
     });
+    expect(result.outcomes[0]?.message).toBe(
+      "Updated openclaw-codex-app-server: unknown -> 0.2.6. (warning: beta channel fallback used openclaw-codex-app-server because openclaw-codex-app-server@beta could not be used).",
+    );
   });
 
   it("reports the fallback npm spec when beta fallback also fails", async () => {
@@ -2206,7 +2218,9 @@ describe("updateNpmInstalledPlugins", () => {
 
     expect(clawHubInstallCall(0)?.spec).toBe("clawhub:demo@beta");
     expect(clawHubInstallCall(1)?.spec).toBe("clawhub:demo");
-    expect(warnMessages).toEqual([expect.stringContaining("has no beta ClawHub release")]);
+    expect(warnMessages).toEqual([
+      'Plugin "demo" has no beta ClawHub release for clawhub:demo@beta; using clawhub:demo instead. Core update can still complete.',
+    ]);
     expectRecordFields(result.config.plugins?.installs?.demo, {
       source: "clawhub",
       spec: "clawhub:demo",
@@ -2214,6 +2228,9 @@ describe("updateNpmInstalledPlugins", () => {
       version: "1.2.4",
       clawhubPackage: "demo",
     });
+    expect(result.outcomes[0]?.message).toBe(
+      "Updated demo: unknown -> 1.2.4. (warning: beta channel fallback used clawhub:demo because clawhub:demo@beta could not be used).",
+    );
   });
 
   it("preserves explicit ClawHub tags when updating on the beta channel", async () => {

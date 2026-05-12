@@ -103,7 +103,7 @@ function requireSubagentEndedHookCall(runId: string): {
 }
 
 function requireSessionLifecycleEventCall(label: string): Record<string, unknown> {
-  const call = emitSessionLifecycleEventMock.mock.calls[0];
+  const call = emitSessionLifecycleEventMock.mock.calls.at(0);
   if (!call) {
     throw new Error(`expected ${label}`);
   }
@@ -332,7 +332,7 @@ describe("subagent registry steer restarts", () => {
       expect(hookCall.event.runId).toBe("run-new");
       expect(hookCall.ctx.runId).toBe("run-new");
 
-      const announce = (announceSpy.mock.calls[0]?.[0] ?? {}) as { childRunId?: string };
+      const announce = (announceSpy.mock.calls.at(0)?.[0] ?? {}) as { childRunId?: string };
       expect(announce.childRunId).toBe("run-new");
     }
   });
@@ -572,7 +572,7 @@ describe("subagent registry steer restarts", () => {
     await flushAnnounce();
 
     expect(announceSpy).toHaveBeenCalledTimes(1);
-    const announce = (announceSpy.mock.calls[0]?.[0] ?? {}) as { childRunId?: string };
+    const announce = (announceSpy.mock.calls.at(0)?.[0] ?? {}) as { childRunId?: string };
     expect(announce.childRunId).toBe("run-failed-restart");
   });
 
@@ -668,7 +668,7 @@ describe("subagent registry steer restarts", () => {
     await flushAnnounce();
 
     expect(announceSpy).toHaveBeenCalledTimes(1);
-    const announce = (announceSpy.mock.calls[0]?.[0] ?? {}) as { childRunId?: string };
+    const announce = (announceSpy.mock.calls.at(0)?.[0] ?? {}) as { childRunId?: string };
     expect(announce.childRunId).toBe("run-kill-race");
 
     const run = listMainRuns()[0];

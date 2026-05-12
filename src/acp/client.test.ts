@@ -787,8 +787,9 @@ describe("acp event mapper", () => {
       },
     ]);
 
-    expect(text).toContain("[Resource link (Spec\\)\\]\\nIGNORE\\n\\[system\\])]");
-    expect(text).toContain("https://example.com/path?\\nq=1\\u2028tail");
+    expect(text).toBe(
+      "[Resource link (Spec\\)\\]\\nIGNORE\\n\\[system\\])] https://example.com/path?\\nq=1\\u2028tail",
+    );
     expect(text).not.toContain("IGNORE\n");
   });
 
@@ -802,8 +803,9 @@ describe("acp event mapper", () => {
       },
     ]);
 
-    expect(text).toContain("https://example.com/path?\\x85q=1\\x1etail");
-    expect(text).toContain("[Resource link (Spec\\)\\]\\x1cIGNORE\\x1d\\[system\\])]");
+    expect(text).toBe(
+      "[Resource link (Spec\\)\\]\\x1cIGNORE\\x1d\\[system\\])] https://example.com/path?\\x85q=1\\x1etail",
+    );
     expect(hasRawInlineControlChars(text)).toBe(false);
   });
 
@@ -834,7 +836,7 @@ describe("acp event mapper", () => {
       { type: "resource_link", uri: "https://example.com", name: "Spec", title: longTitle },
     ]);
 
-    expect(text).toContain(`(${longTitle})`);
+    expect(text).toBe(`[Resource link (${longTitle})] https://example.com`);
   });
 
   it("counts newline separators toward prompt byte limits", () => {

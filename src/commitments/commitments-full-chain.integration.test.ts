@@ -160,7 +160,7 @@ describe("commitments full-chain integration", () => {
 
       expect(result.status).toBe("ran");
       expect(sendTelegram).toHaveBeenCalledOnce();
-      const sendCall = sendTelegram.mock.calls[0];
+      const sendCall = sendTelegram.mock.calls.at(0);
       if (!sendCall) {
         throw new Error("Expected Telegram send call");
       }

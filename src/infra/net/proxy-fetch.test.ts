@@ -92,6 +92,32 @@ function requireProxyFetch(
   return fetchFn;
 }
 
+function requireUndiciFetchCall(index = 0): unknown[] {
+  const call = undiciFetch.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected undici fetch call at index ${index}`);
+  }
+  return call;
+}
+
+function requireUndiciFetchInit(index = 0): Record<string, unknown> {
+  const init = requireUndiciFetchCall(index)[1];
+  if (!init || typeof init !== "object" || Array.isArray(init)) {
+    throw new Error(`expected undici fetch init at index ${index}`);
+  }
+  return init as Record<string, unknown>;
+}
+
+function requireHeadersInit(value: unknown, label: string): HeadersInit {
+  if (value === undefined || value instanceof Headers || Array.isArray(value)) {
+    return value as HeadersInit;
+  }
+  if (value && typeof value === "object") {
+    return value as HeadersInit;
+  }
+  throw new Error(`expected ${label} headers`);
+}
+
 function clearProxyEnv(): void {
   for (const key of PROXY_ENV_KEYS) {
     delete process.env[key];
@@ -127,10 +153,11 @@ describe("makeProxyFetch", () => {
     await proxyFetch("https://api.example.com/v1/audio");
 
     expect(proxyAgentSpy).toHaveBeenCalledWith(proxyUrl);
-    expect(undiciFetch).toHaveBeenCalledWith(
-      "https://api.example.com/v1/audio",
-      expect.objectContaining({ dispatcher: getLastAgent() }),
-    );
+    expect(undiciFetch).toHaveBeenCalledOnce();
+    const [input] = requireUndiciFetchCall();
+    const init = requireUndiciFetchInit();
+    expect(input).toBe("https://api.example.com/v1/audio");
+    expect(init.dispatcher).toBe(getLastAgent());
   });
 
   it("reuses the same ProxyAgent across calls", async () => {
@@ -139,9 +166,9 @@ describe("makeProxyFetch", () => {
     const proxyFetch = makeProxyFetch("http://proxy.test:8080");
 
     await proxyFetch("https://api.example.com/one");
-    const firstDispatcher = undiciFetch.mock.calls[0]?.[1]?.dispatcher;
+    const firstDispatcher = requireUndiciFetchInit().dispatcher;
     await proxyFetch("https://api.example.com/two");
-    const secondDispatcher = undiciFetch.mock.calls[1]?.[1]?.dispatcher;
+    const secondDispatcher = requireUndiciFetchInit(1).dispatcher;
 
     expect(proxyAgentSpy).toHaveBeenCalledOnce();
     expect(secondDispatcher).toBe(firstDispatcher);
@@ -164,13 +191,13 @@ describe("makeProxyFetch", () => {
       body: form,
     });
 
-    const passedInit = undiciFetch.mock.calls[0]?.[1];
-    expect(passedInit?.body).toBeInstanceOf(MockUndiciFormData);
-    const passedBody = passedInit?.body as InstanceType<typeof MockUndiciFormData>;
+    const passedInit = requireUndiciFetchInit();
+    expect(passedInit.body).toBeInstanceOf(MockUndiciFormData);
+    const passedBody = passedInit.body as InstanceType<typeof MockUndiciFormData>;
     expect(passedBody.get("model")).toBe("whisper-1");
     expect(passedBody.get("file")).toBeInstanceOf(Blob);
     expect(passedBody.entriesList.find(([key]) => key === "file")?.[2]).toBe("voice.ogg");
-    const sentHeaders = new Headers(passedInit?.headers);
+    const sentHeaders = new Headers(requireHeadersInit(passedInit.headers, "FormData proxy"));
     expect(sentHeaders.has("content-length")).toBe(false);
     expect(sentHeaders.has("content-type")).toBe(false);
   });
@@ -186,7 +213,7 @@ describe("makeProxyFetch", () => {
       body,
     });
 
-    expect(undiciFetch.mock.calls[0]?.[1]?.body).toBe(body);
+    expect(requireUndiciFetchInit().body).toBe(body);
   });
 
   it("drops symbol metadata from plain header dictionaries before undici fetch", async () => {
@@ -207,10 +234,12 @@ describe("makeProxyFetch", () => {
       body: "{}",
     });
 
-    const passedHeaders = undiciFetch.mock.calls[0]?.[1]?.headers;
+    const passedHeaders = requireUndiciFetchInit().headers;
     expect(passedHeaders).not.toBe(headers);
     expect(Object.getOwnPropertySymbols(passedHeaders as object)).toStrictEqual([]);
-    expect(new Headers(passedHeaders).get("content-type")).toBe("application/json");
+    expect(
+      new Headers(requireHeadersInit(passedHeaders, "plain dictionary proxy")).get("content-type"),
+    ).toBe("application/json");
     expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
   });
 
@@ -226,7 +255,7 @@ describe("makeProxyFetch", () => {
       body: form as unknown as BodyInit,
     });
 
-    expect(undiciFetch.mock.calls[0]?.[1]?.body).toBe(form);
+    expect(requireUndiciFetchInit().body).toBe(form);
   });
 
   it("converts FormData-like bodies from another implementation", async () => {
@@ -245,9 +274,9 @@ describe("makeProxyFetch", () => {
       body: formLike as unknown as BodyInit,
     });
 
-    const passedInit = undiciFetch.mock.calls[0]?.[1];
-    expect(passedInit?.body).toBeInstanceOf(MockUndiciFormData);
-    expect(passedInit?.body.get("model")).toBe("whisper-1");
+    const passedBody = requireUndiciFetchInit().body;
+    expect(passedBody).toBeInstanceOf(MockUndiciFormData);
+    expect((passedBody as InstanceType<typeof MockUndiciFormData>).get("model")).toBe("whisper-1");
   });
 });
 
@@ -301,10 +330,11 @@ describe("resolveProxyFetchFromEnv", () => {
     expect(envAgentSpy).toHaveBeenCalledWith({ httpsProxy: "http://proxy.test:8080" });
 
     await fetchFn("https://api.example.com");
-    expect(undiciFetch).toHaveBeenCalledWith(
-      "https://api.example.com",
-      expect.objectContaining({ dispatcher: EnvHttpProxyAgent.lastCreated }),
-    );
+    expect(undiciFetch).toHaveBeenCalledOnce();
+    const [input] = requireUndiciFetchCall();
+    const init = requireUndiciFetchInit();
+    expect(input).toBe("https://api.example.com");
+    expect(init.dispatcher).toBe(EnvHttpProxyAgent.lastCreated);
   });
 
   it("converts global FormData bodies when using proxy env fetch", async () => {
@@ -326,10 +356,12 @@ describe("resolveProxyFetchFromEnv", () => {
       body: form,
     });
 
-    const passedInit = undiciFetch.mock.calls[0]?.[1];
-    expect(passedInit?.body).toBeInstanceOf(MockUndiciFormData);
-    expect(passedInit?.body.get("model")).toBe("test-model");
-    expect(passedInit?.body.get("file")).toBeInstanceOf(Blob);
+    const passedBody = requireUndiciFetchInit().body;
+    expect(passedBody).toBeInstanceOf(MockUndiciFormData);
+    expect((passedBody as InstanceType<typeof MockUndiciFormData>).get("model")).toBe("test-model");
+    expect((passedBody as InstanceType<typeof MockUndiciFormData>).get("file")).toBeInstanceOf(
+      Blob,
+    );
   });
 
   it("returns proxy fetch when HTTP_PROXY is set", () => {

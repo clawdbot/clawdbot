@@ -64,7 +64,7 @@ describe("Google Meet OAuth", () => {
     expect(tokens.tokenType).toBe("Bearer");
     expect(Number.isFinite(tokens.expiresAt)).toBe(true);
     expect(tokens.expiresAt).toBeGreaterThan(Date.now());
-    const body = fetchMock.mock.calls[0]?.[1]?.body;
+    const body = fetchMock.mock.calls.at(0)?.[1]?.body;
     expect(body).toBeInstanceOf(URLSearchParams);
     const params = body as URLSearchParams;
     expect(params.get("grant_type")).toBe("refresh_token");

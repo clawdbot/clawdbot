@@ -65,7 +65,7 @@ describe("resolveCopilotApiToken", () => {
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    const [url, init] = fetchImpl.mock.calls.at(0) as unknown as [string, RequestInit];
     expect(url).toBe("https://api.github.com/copilot_internal/v2/token");
     expect(init.method).toBe("GET");
     expect(init.headers).toEqual({

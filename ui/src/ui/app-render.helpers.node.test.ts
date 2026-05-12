@@ -17,6 +17,8 @@ const {
 }));
 
 vi.mock("./app-chat.ts", () => ({
+  CHAT_SESSIONS_ACTIVE_MINUTES: 120,
+  CHAT_SESSIONS_REFRESH_LIMIT: 100,
   refreshChat: refreshChatMock,
   refreshChatAvatar: refreshChatAvatarMock,
 }));
@@ -646,6 +648,52 @@ describe("resolveSessionOptionGroups", () => {
 
     expect(labels).toEqual(["Beta main"]);
   });
+
+  it("nests subagent sessions under their parent with visual prefix", () => {
+    const parentKey = "agent:main:main";
+    const subagentKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
+    const labels = labelsForSessionOptions({
+      sessionKey: parentKey,
+      sessions: [
+        row({ key: parentKey, label: "Spock" }),
+        row({ key: subagentKey, label: "PLC Coder", spawnedBy: parentKey }),
+      ],
+    });
+
+    expect(labels).toContain("Spock");
+    expect(labels).toContain("└─ PLC Coder");
+  });
+
+  it("uses raw key fallback for subagent without label when nested", () => {
+    const parentKey = "agent:main:main";
+    const subagentKey = "agent:main:subagent:f4ac7ef1-1234-5678-9abc-def012345678";
+    const labels = labelsForSessionOptions({
+      sessionKey: parentKey,
+      sessions: [
+        row({ key: parentKey, label: "Spock" }),
+        row({ key: subagentKey, spawnedBy: parentKey }),
+      ],
+    });
+
+    expect(labels).toContain("Spock");
+    expect(labels).toContain("└─ f4ac7ef1-1234-5678-9abc-def012345678");
+  });
+
+  it("preserves sibling row order when nesting subagent sessions", () => {
+    const parentKey = "agent:main:main";
+    const newerSubagentKey = "agent:main:subagent:newer";
+    const olderSubagentKey = "agent:main:subagent:older";
+    const labels = labelsForSessionOptions({
+      sessionKey: parentKey,
+      sessions: [
+        row({ key: newerSubagentKey, label: "Newer", spawnedBy: parentKey }),
+        row({ key: olderSubagentKey, label: "Older", spawnedBy: parentKey }),
+        row({ key: parentKey, label: "Spock" }),
+      ],
+    });
+
+    expect(labels).toEqual(["Spock", "└─ Newer", "└─ Older"]);
+  });
 });
 
 describe("handleChatManualRefresh", () => {
@@ -734,8 +782,8 @@ describe("createChatSession", () => {
         emitCommandHooks: true,
       },
       {
-        activeMinutes: 0,
-        limit: 0,
+        activeMinutes: 120,
+        limit: 100,
         includeGlobal: true,
         includeUnknown: true,
         showArchived: false,
@@ -936,8 +984,8 @@ describe("switchChatSession", () => {
     });
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
     expect(loadSessionsMock).toHaveBeenCalledWith(state, {
-      activeMinutes: 0,
-      limit: 0,
+      activeMinutes: 120,
+      limit: 100,
       includeGlobal: true,
       includeUnknown: true,
       showArchived: false,

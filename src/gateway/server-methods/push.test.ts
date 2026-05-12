@@ -159,7 +159,9 @@ describe("push.test handler", () => {
     expect(sendApnsAlert).toHaveBeenCalledTimes(1);
     const call = respond.mock.calls[0] as RespondCall | undefined;
     expect(call?.[0]).toBe(true);
-    expect(call?.[1]).toMatchObject({ ok: true, status: 200 });
+    const result = call?.[1] as ApnsPushResult | undefined;
+    expect(result?.ok).toBe(true);
+    expect(result?.status).toBe(200);
   });
 
   it("sends push test through relay registrations", async () => {
@@ -216,7 +218,10 @@ describe("push.test handler", () => {
     expect(sendApnsAlert).toHaveBeenCalledTimes(1);
     const call = respond.mock.calls[0] as RespondCall | undefined;
     expect(call?.[0]).toBe(true);
-    expect(call?.[1]).toMatchObject({ ok: true, status: 200, transport: "relay" });
+    const result = call?.[1] as ApnsPushResult | undefined;
+    expect(result?.ok).toBe(true);
+    expect(result?.status).toBe(200);
+    expect(result?.transport).toBe("relay");
   });
 
   it("clears stale registrations after invalid token push-test failures", async () => {

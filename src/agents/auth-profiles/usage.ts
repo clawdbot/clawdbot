@@ -3,7 +3,12 @@ import { normalizeProviderId } from "../provider-id.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
-import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
+import type {
+  AuthProfileBlockedSource,
+  AuthProfileFailureReason,
+  AuthProfileStore,
+  ProfileUsageStats,
+} from "./types.js";
 import {
   isActiveUnusableWindow,
   isAuthCooldownBypassedForProvider,
@@ -61,9 +66,6 @@ const WHAM_PROBE_FAILURE_COOLDOWN_MS = 30_000;
 const WHAM_HTTP_ERROR_COOLDOWN_MS = 5 * 60 * 1000;
 const WHAM_TOKEN_EXPIRED_COOLDOWN_MS = 12 * 60 * 60 * 1000;
 const WHAM_DEAD_ACCOUNT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
-const WHAM_TEAM_ROLLING_MAX_COOLDOWN_MS = 2 * 60 * 60 * 1000;
-const WHAM_PERSONAL_MAX_COOLDOWN_MS = 4 * 60 * 60 * 1000;
-const WHAM_TEAM_WEEKLY_MAX_COOLDOWN_MS = 4 * 60 * 60 * 1000;
 
 type WhamUsageWindow = {
   limit_window_seconds?: number;
@@ -83,6 +85,8 @@ type WhamUsageResponse = {
 type WhamCooldownProbeResult = {
   cooldownMs: number;
   reason: string;
+  blockedUntil?: number;
+  blockedSource?: AuthProfileBlockedSource;
 };
 
 function shouldProbeWhamForFailure(
@@ -136,12 +140,31 @@ function applyWhamCooldownResult(params: {
   whamResult: WhamCooldownProbeResult;
 }): ProfileUsageStats {
   const existingCooldownUntil = params.existing.cooldownUntil;
+  const existingBlockedUntil = params.existing.blockedUntil;
   const existingActiveCooldownUntil =
     typeof existingCooldownUntil === "number" &&
     Number.isFinite(existingCooldownUntil) &&
     existingCooldownUntil > params.now
       ? existingCooldownUntil
       : 0;
+  const existingActiveBlockedUntil =
+    typeof existingBlockedUntil === "number" &&
+    Number.isFinite(existingBlockedUntil) &&
+    existingBlockedUntil > params.now
+      ? existingBlockedUntil
+      : 0;
+  if (params.whamResult.blockedUntil) {
+    return {
+      ...params.computed,
+      blockedUntil: Math.max(existingActiveBlockedUntil, params.whamResult.blockedUntil),
+      blockedReason: "subscription_limit",
+      blockedSource: params.whamResult.blockedSource ?? "wham",
+      blockedModel: undefined,
+      cooldownUntil: undefined,
+      cooldownReason: undefined,
+      cooldownModel: undefined,
+    };
+  }
   return {
     ...params.computed,
     cooldownUntil: Math.max(existingActiveCooldownUntil, params.now + params.whamResult.cooldownMs),
@@ -210,7 +233,9 @@ async function probeWhamForCooldown(
         return { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS, reason: "wham_probe_failed" };
       }
       return {
-        cooldownMs: Math.min(Math.floor(primaryResetMs / 2), WHAM_PERSONAL_MAX_COOLDOWN_MS),
+        cooldownMs: WHAM_BURST_COOLDOWN_MS,
+        blockedUntil: now + primaryResetMs,
+        blockedSource: "wham",
         reason: "wham_personal_rolling",
       };
     }
@@ -220,7 +245,9 @@ async function probeWhamForCooldown(
         return { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS, reason: "wham_probe_failed" };
       }
       return {
-        cooldownMs: Math.min(Math.floor(secondaryResetMs / 2), WHAM_TEAM_WEEKLY_MAX_COOLDOWN_MS),
+        cooldownMs: WHAM_BURST_COOLDOWN_MS,
+        blockedUntil: now + secondaryResetMs,
+        blockedSource: "wham",
         reason: "wham_team_weekly",
       };
     }
@@ -230,7 +257,9 @@ async function probeWhamForCooldown(
         return { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS, reason: "wham_probe_failed" };
       }
       return {
-        cooldownMs: Math.min(Math.floor(primaryResetMs / 2), WHAM_TEAM_ROLLING_MAX_COOLDOWN_MS),
+        cooldownMs: WHAM_BURST_COOLDOWN_MS,
+        blockedUntil: now + primaryResetMs,
+        blockedSource: "wham",
         reason: "wham_team_rolling",
       };
     }
@@ -273,6 +302,11 @@ export function resolveProfilesUnavailableReason(params: {
     if (disabledActive && stats.disabledReason && FAILURE_REASON_SET.has(stats.disabledReason)) {
       // Disabled reasons are explicit and high-signal; weight heavily.
       addScore(stats.disabledReason, 1_000);
+      continue;
+    }
+
+    if (isActiveUnusableWindow(stats.blockedUntil, now)) {
+      addScore("rate_limit", 1_000);
       continue;
     }
 
@@ -468,6 +502,10 @@ function resetUsageStats(
   return {
     ...existing,
     errorCount: 0,
+    blockedUntil: undefined,
+    blockedReason: undefined,
+    blockedSource: undefined,
+    blockedModel: undefined,
     cooldownUntil: undefined,
     cooldownReason: undefined,
     cooldownModel: undefined,
@@ -716,6 +754,121 @@ export async function markAuthProfileFailure(params: {
     profileId,
     provider: store.profiles[profileId]?.provider ?? profile.provider,
     reason,
+    previous: previousStats,
+    next: nextStats,
+    now,
+  });
+}
+
+export async function markAuthProfileBlockedUntil(params: {
+  store: AuthProfileStore;
+  profileId: string;
+  blockedUntil: number;
+  source: AuthProfileBlockedSource;
+  agentDir?: string;
+  runId?: string;
+  modelId?: string;
+}): Promise<void> {
+  const { store, profileId, blockedUntil, agentDir, runId, modelId, source } = params;
+  const profile = store.profiles[profileId];
+  if (
+    !profile ||
+    isAuthCooldownBypassedForProvider(profile.provider) ||
+    !Number.isFinite(blockedUntil) ||
+    blockedUntil <= Date.now()
+  ) {
+    return;
+  }
+
+  let nextStats: ProfileUsageStats | undefined;
+  let previousStats: ProfileUsageStats | undefined;
+  let updateTime = 0;
+  const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
+    agentDir,
+    updater: (freshStore) => {
+      const profile = freshStore.profiles[profileId];
+      if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
+        return false;
+      }
+      const now = Date.now();
+      previousStats = freshStore.usageStats?.[profileId];
+      updateTime = now;
+      const existingBlockedUntil = previousStats?.blockedUntil;
+      const activeBlockedUntil =
+        typeof existingBlockedUntil === "number" &&
+        Number.isFinite(existingBlockedUntil) &&
+        existingBlockedUntil > now
+          ? existingBlockedUntil
+          : 0;
+      nextStats = {
+        ...previousStats,
+        blockedUntil: Math.max(activeBlockedUntil, blockedUntil),
+        blockedReason: "subscription_limit",
+        blockedSource: source,
+        blockedModel: modelId,
+        cooldownUntil: undefined,
+        cooldownReason: undefined,
+        cooldownModel: undefined,
+        lastFailureAt: now,
+        failureCounts: {
+          ...previousStats?.failureCounts,
+          rate_limit: (previousStats?.failureCounts?.rate_limit ?? 0) + 1,
+        },
+      };
+      updateUsageStatsEntry(freshStore, profileId, () => nextStats as ProfileUsageStats);
+      return true;
+    },
+  });
+  if (updated) {
+    store.usageStats = updated.usageStats;
+    if (nextStats) {
+      logAuthProfileFailureStateChange({
+        runId,
+        profileId,
+        provider: profile.provider,
+        reason: "rate_limit",
+        previous: previousStats,
+        next: nextStats,
+        now: updateTime,
+      });
+    }
+    return;
+  }
+  if (!store.profiles[profileId]) {
+    return;
+  }
+
+  const now = Date.now();
+  previousStats = store.usageStats?.[profileId];
+  const existingBlockedUntil = previousStats?.blockedUntil;
+  const activeBlockedUntil =
+    typeof existingBlockedUntil === "number" &&
+    Number.isFinite(existingBlockedUntil) &&
+    existingBlockedUntil > now
+      ? existingBlockedUntil
+      : 0;
+  nextStats = {
+    ...previousStats,
+    blockedUntil: Math.max(activeBlockedUntil, blockedUntil),
+    blockedReason: "subscription_limit",
+    blockedSource: source,
+    blockedModel: modelId,
+    cooldownUntil: undefined,
+    cooldownReason: undefined,
+    cooldownModel: undefined,
+    lastFailureAt: now,
+    failureCounts: {
+      ...previousStats?.failureCounts,
+      rate_limit: (previousStats?.failureCounts?.rate_limit ?? 0) + 1,
+    },
+  };
+  updateUsageStatsEntry(store, profileId, () => nextStats as ProfileUsageStats);
+  authProfileUsageDeps.saveAuthProfileStore(store, agentDir);
+  logAuthProfileFailureStateChange({
+    runId,
+    profileId,
+    provider: store.profiles[profileId]?.provider ?? profile.provider,
+    reason: "rate_limit",
     previous: previousStats,
     next: nextStats,
     now,

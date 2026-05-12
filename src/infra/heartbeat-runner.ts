@@ -298,6 +298,34 @@ function resolveHeartbeatConfig(
   return { ...defaults, ...overrides };
 }
 
+function omitExplicitHeartbeatDestination(heartbeat: HeartbeatConfig | undefined) {
+  if (!heartbeat) {
+    return undefined;
+  }
+  const next = { ...heartbeat };
+  delete next.to;
+  delete next.accountId;
+  return next;
+}
+
+function resolveHeartbeatForWake(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  configuredHeartbeat?: HeartbeatConfig;
+  requestedHeartbeat?: HeartbeatConfig;
+  source?: HeartbeatWakeSource;
+  mergeRequestedHeartbeat: boolean;
+}): HeartbeatConfig | undefined {
+  const base = params.configuredHeartbeat ?? resolveHeartbeatConfig(params.cfg, params.agentId);
+  const heartbeat =
+    params.requestedHeartbeat && params.mergeRequestedHeartbeat
+      ? { ...base, ...params.requestedHeartbeat }
+      : (params.requestedHeartbeat ?? base);
+  return params.source === "cron" && params.requestedHeartbeat?.target === "last"
+    ? omitExplicitHeartbeatDestination(heartbeat)
+    : heartbeat;
+}
+
 function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
   const list = cfg.agents?.list ?? [];
   if (hasExplicitHeartbeatAgents(cfg)) {
@@ -1180,7 +1208,13 @@ export async function runHeartbeatOnce(opts: {
   const agentId = normalizeAgentId(
     explicitAgentId || forcedSessionAgentId || resolveDefaultAgentId(cfg),
   );
-  const heartbeat = opts.heartbeat ?? resolveHeartbeatConfig(cfg, agentId);
+  const heartbeat = resolveHeartbeatForWake({
+    cfg,
+    agentId,
+    requestedHeartbeat: opts.heartbeat,
+    source: opts.source,
+    mergeRequestedHeartbeat: opts.source === "cron",
+  });
   if (!areHeartbeatsEnabled()) {
     return { status: "skipped", reason: "disabled" };
   }
@@ -2183,8 +2217,6 @@ export function startHeartbeatRunner(opts: {
     const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
     const requestedSessionKey = normalizeOptionalString(params?.sessionKey);
     const requestedHeartbeat = params?.heartbeat;
-    const resolveRequestedHeartbeat = (heartbeat?: HeartbeatConfig) =>
-      requestedHeartbeat ? { ...heartbeat, ...requestedHeartbeat } : heartbeat;
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
@@ -2208,7 +2240,14 @@ export function startHeartbeatRunner(opts: {
           const res = await runOnce({
             cfg: state.cfg,
             agentId: targetAgent.agentId,
-            heartbeat: resolveRequestedHeartbeat(targetAgent.heartbeat),
+            heartbeat: resolveHeartbeatForWake({
+              cfg: state.cfg,
+              agentId: targetAgent.agentId,
+              configuredHeartbeat: targetAgent.heartbeat,
+              requestedHeartbeat,
+              source: params.source,
+              mergeRequestedHeartbeat: true,
+            }),
             source: params.source,
             intent,
             reason,

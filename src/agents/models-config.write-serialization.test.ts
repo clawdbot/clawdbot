@@ -138,7 +138,7 @@ describe("models-config write serialization", () => {
 
       await ensureOpenClawModelsJson({}, agentDir);
 
-      const params = planOpenClawModelsJsonMock.mock.calls[0]?.[0] as
+      const params = planOpenClawModelsJsonMock.mock.calls.at(0)?.[0] as
         | { pluginMetadataSnapshot?: PluginMetadataSnapshot }
         | undefined;
       expect(params?.pluginMetadataSnapshot).not.toBe(snapshot);
@@ -154,7 +154,7 @@ describe("models-config write serialization", () => {
 
       await ensureOpenClawModelsJson({}, agentDir, { workspaceDir });
 
-      const params = planOpenClawModelsJsonMock.mock.calls[0]?.[0] as
+      const params = planOpenClawModelsJsonMock.mock.calls.at(0)?.[0] as
         | { workspaceDir?: string; pluginMetadataSnapshot?: PluginMetadataSnapshot }
         | undefined;
       expect(params?.workspaceDir).toBe(workspaceDir);
@@ -194,7 +194,7 @@ describe("models-config write serialization", () => {
       });
 
       expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
-      const params = planOpenClawModelsJsonMock.mock.calls[1]?.[0] as
+      const params = planOpenClawModelsJsonMock.mock.calls.at(1)?.[0] as
         | {
             providerDiscoveryProviderIds?: string[];
             providerDiscoveryTimeoutMs?: number;

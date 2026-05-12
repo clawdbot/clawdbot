@@ -49,11 +49,11 @@ describe("session identifier helpers", () => {
       },
     });
 
-    expect(lines).toContain("agent session id: inner-123");
-    expect(lines).toContain("acpx session id: acpx-123");
-    expect(lines).toContain(
+    expect(lines).toStrictEqual([
+      "agent session id: inner-123",
+      "acpx session id: acpx-123",
       "resume in Codex CLI: `codex resume inner-123` (continues this conversation).",
-    );
+    ]);
   });
 
   it("adds a Kimi resume hint when agent identity is resolved", () => {
@@ -76,11 +76,11 @@ describe("session identifier helpers", () => {
       },
     });
 
-    expect(lines).toContain("agent session id: kimi-inner-123");
-    expect(lines).toContain("acpx session id: acpx-kimi-123");
-    expect(lines).toContain(
+    expect(lines).toStrictEqual([
+      "agent session id: kimi-inner-123",
+      "acpx session id: acpx-kimi-123",
       "resume in Kimi CLI: `kimi resume kimi-inner-123` (continues this conversation).",
-    );
+    ]);
   });
 
   it("shows pending identity text for status rendering", () => {

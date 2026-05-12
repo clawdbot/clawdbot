@@ -124,7 +124,9 @@ describe("startGatewayMemoryBackend", () => {
     expect(log.info).toHaveBeenCalledWith(
       'qmd memory startup boot sync completed for 2 agents: "ops", "main"',
     );
-    expect(log.info).not.toHaveBeenCalledWith(expect.stringContaining("deferred"));
+    expect(log.info.mock.calls.some(([message]) => String(message).includes("deferred"))).toBe(
+      false,
+    );
   });
 
   it("logs a warning when qmd manager init fails and continues with other agents", async () => {

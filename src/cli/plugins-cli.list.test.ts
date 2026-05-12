@@ -38,7 +38,7 @@ describe("plugins cli list", () => {
     await runPluginsCommand(["plugins", "list", "--json"]);
 
     expect(buildPluginRegistrySnapshotReport).toHaveBeenCalledTimes(1);
-    const [reportOptions] = buildPluginRegistrySnapshotReport.mock.calls[0] as [
+    const [reportOptions] = buildPluginRegistrySnapshotReport.mock.calls.at(0) as [
       {
         config?: unknown;
         logger?: { info?: unknown; warn?: unknown; error?: unknown };

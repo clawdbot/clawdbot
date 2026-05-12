@@ -51,6 +51,7 @@ function resolveProviderChoiceOptions(params?: {
               : {}),
           }
         : {},
+      contribution.option.onboardingFeatured ? { onboardingFeatured: true } : {},
     ),
   );
 }

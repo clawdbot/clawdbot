@@ -95,14 +95,11 @@ describe("gateway control-plane write rate limit", () => {
     const blocked = await runRequest({ method: "config.patch", context, client, handler });
 
     expect(handlerCalls).toHaveBeenCalledTimes(3);
-    expect(blocked).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        retryable: true,
-      }),
-    );
+    const error = blocked.mock.calls[0]?.[2] as { code?: string; retryable?: boolean } | undefined;
+    expect(blocked.mock.calls[0]?.[0]).toBe(false);
+    expect(blocked.mock.calls[0]?.[1]).toBeUndefined();
+    expect(error?.code).toBe("UNAVAILABLE");
+    expect(error?.retryable).toBe(true);
     expect(logWarn).toHaveBeenCalledTimes(1);
   });
 
@@ -120,11 +117,9 @@ describe("gateway control-plane write rate limit", () => {
     await runRequest({ method: "update.run", context, client, handler });
 
     const blocked = await runRequest({ method: "update.run", context, client, handler });
-    expect(blocked).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
+    expect(blocked.mock.calls[0]?.[0]).toBe(false);
+    expect(blocked.mock.calls[0]?.[1]).toBeUndefined();
+    expect(blocked.mock.calls[0]?.[2]?.code).toBe("UNAVAILABLE");
 
     vi.advanceTimersByTime(60_001);
 
@@ -150,17 +145,13 @@ describe("gateway control-plane write rate limit", () => {
       const blocked = await runRequest({ method, context, client, handler });
 
       expect(handlerCalls).not.toHaveBeenCalled();
-      expect(blocked).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "UNAVAILABLE",
-          retryable: true,
-          retryAfterMs: 500,
-          details: { reason: "startup-sidecars", method },
-        }),
-      );
       const error = blocked.mock.calls[0]?.[2];
+      expect(blocked.mock.calls[0]?.[0]).toBe(false);
+      expect(blocked.mock.calls[0]?.[1]).toBeUndefined();
+      expect(error?.code).toBe("UNAVAILABLE");
+      expect(error?.retryable).toBe(true);
+      expect(error?.retryAfterMs).toBe(500);
+      expect(error?.details).toEqual({ reason: "startup-sidecars", method });
       expect(isRetryableGatewayStartupUnavailableError(error)).toBe(true);
     },
   );

@@ -191,6 +191,14 @@ function expectResolvedTokenStatusSummary(
   }
 }
 
+function requireReadOnlyPluginListCall(): unknown[] {
+  const call = listReadOnlyChannelPluginsForConfig.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected listReadOnlyChannelPluginsForConfig call");
+  }
+  return call;
+}
+
 describe("config-only channels status output", () => {
   it("uses setup fallback plugins so configured external channels can be shown", async () => {
     registerSingleTestPlugin("token-only", makeUnavailableTokenPlugin());
@@ -200,7 +208,7 @@ describe("config-only channels status output", () => {
     await formatLocalStatusSummary(cfg);
 
     expect(listReadOnlyChannelPluginsForConfig).toHaveBeenCalledOnce();
-    expect(listReadOnlyChannelPluginsForConfig.mock.calls[0]).toStrictEqual([
+    expect(requireReadOnlyPluginListCall()).toStrictEqual([
       cfg,
       { activationSourceConfig: cfg, includeSetupFallbackPlugins: true },
     ]);

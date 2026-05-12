@@ -35,6 +35,18 @@ class FakeEmitter {
   }
 }
 
+function statusCallAt(setStatus: ReturnType<typeof vi.fn>, index: number): Record<string, unknown> {
+  const call = setStatus.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected status call ${index}`);
+  }
+  const [status] = call;
+  if (!status || typeof status !== "object" || Array.isArray(status)) {
+    throw new Error(`expected status call ${index} payload`);
+  }
+  return status as Record<string, unknown>;
+}
+
 describe("slack socket reconnect helpers", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -47,17 +59,12 @@ describe("slack socket reconnect helpers", () => {
     publishSlackConnectedStatus(setStatus);
 
     expect(setStatus).toHaveBeenCalledTimes(1);
-    expect(setStatus).toHaveBeenCalledWith(
-      expect.objectContaining({
-        connected: true,
-        lastConnectedAt: 1_711_406_400_000,
-        healthState: "healthy",
-        lastError: null,
-      }),
-    );
-    expect(setStatus).not.toHaveBeenCalledWith(
-      expect.objectContaining({ lastEventAt: 1_711_406_400_000 }),
-    );
+    const status = statusCallAt(setStatus, 0);
+    expect(status?.connected).toBe(true);
+    expect(status?.lastConnectedAt).toBe(1_711_406_400_000);
+    expect(status?.healthState).toBe("healthy");
+    expect(status?.lastError).toBeNull();
+    expect(status).not.toHaveProperty("lastEventAt");
   });
 
   it("marks socket mode disconnected when an error closes the socket", () => {

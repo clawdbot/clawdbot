@@ -373,21 +373,56 @@ describe("diagnostics-otel service", () => {
       attempt: 2,
     });
 
-    expect(telemetryState.counters.get("openclaw.webhook.received")?.add).toHaveBeenCalled();
+    expect(telemetryState.counters.get("openclaw.webhook.received")?.add).toHaveBeenCalledWith(1, {
+      "openclaw.channel": "telegram",
+      "openclaw.webhook": "telegram-post",
+    });
     expect(
       telemetryState.histograms.get("openclaw.webhook.duration_ms")?.record,
-    ).toHaveBeenCalled();
-    expect(telemetryState.counters.get("openclaw.message.queued")?.add).toHaveBeenCalled();
-    expect(telemetryState.counters.get("openclaw.message.processed")?.add).toHaveBeenCalled();
+    ).toHaveBeenCalledWith(120, {
+      "openclaw.channel": "telegram",
+      "openclaw.webhook": "telegram-post",
+    });
+    expect(telemetryState.counters.get("openclaw.message.queued")?.add).toHaveBeenCalledWith(1, {
+      "openclaw.channel": "telegram",
+      "openclaw.source": "telegram",
+    });
+    expect(telemetryState.histograms.get("openclaw.queue.depth")?.record).toHaveBeenCalledTimes(2);
+    expect(telemetryState.histograms.get("openclaw.queue.depth")?.record).toHaveBeenCalledWith(2, {
+      "openclaw.channel": "telegram",
+      "openclaw.source": "telegram",
+    });
+    expect(telemetryState.histograms.get("openclaw.queue.depth")?.record).toHaveBeenCalledWith(3, {
+      "openclaw.lane": "main",
+    });
+    expect(telemetryState.counters.get("openclaw.message.processed")?.add).toHaveBeenCalledWith(1, {
+      "openclaw.channel": "telegram",
+      "openclaw.outcome": "completed",
+    });
     expect(
       telemetryState.histograms.get("openclaw.message.duration_ms")?.record,
-    ).toHaveBeenCalled();
-    expect(telemetryState.histograms.get("openclaw.queue.wait_ms")?.record).toHaveBeenCalled();
-    expect(telemetryState.counters.get("openclaw.session.stuck")?.add).toHaveBeenCalled();
+    ).toHaveBeenCalledWith(55, {
+      "openclaw.channel": "telegram",
+      "openclaw.outcome": "completed",
+    });
+    expect(telemetryState.histograms.get("openclaw.queue.wait_ms")?.record).toHaveBeenCalledWith(
+      10,
+      {
+        "openclaw.lane": "main",
+      },
+    );
+    expect(telemetryState.counters.get("openclaw.session.stuck")?.add).toHaveBeenCalledTimes(1);
+    expect(telemetryState.counters.get("openclaw.session.stuck")?.add).toHaveBeenCalledWith(1, {
+      "openclaw.state": "processing",
+    });
     expect(
       telemetryState.histograms.get("openclaw.session.stuck_age_ms")?.record,
-    ).toHaveBeenCalled();
-    expect(telemetryState.counters.get("openclaw.run.attempt")?.add).toHaveBeenCalled();
+    ).toHaveBeenCalledWith(125_000, {
+      "openclaw.state": "processing",
+    });
+    expect(telemetryState.counters.get("openclaw.run.attempt")?.add).toHaveBeenCalledWith(1, {
+      "openclaw.attempt": 2,
+    });
 
     const spanNames = telemetryState.tracer.startSpan.mock.calls.map((call) => call[0]);
     expect(spanNames).toContain("openclaw.webhook.processed");

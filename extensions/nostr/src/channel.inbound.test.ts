@@ -163,12 +163,11 @@ describe("nostr inbound gateway path", () => {
 
     expect(harness.recordInboundSession).toHaveBeenCalledTimes(1);
     expect(harness.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
-    expect(harness.dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0]?.ctx).toMatchObject({
-      BodyForAgent: "hello from nostr",
-      SenderId: "sender-pubkey",
-      MessageSid: "event-123",
-      CommandAuthorized: true,
-    });
+    const ctx = harness.dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0]?.ctx;
+    expect(ctx?.BodyForAgent).toBe("hello from nostr");
+    expect(ctx?.SenderId).toBe("sender-pubkey");
+    expect(ctx?.MessageSid).toBe("event-123");
+    expect(ctx?.CommandAuthorized).toBe(true);
     expect(sendReply).toHaveBeenCalledWith("converted:|a|b|");
 
     cleanup.stop();

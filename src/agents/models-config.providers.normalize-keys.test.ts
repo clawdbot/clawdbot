@@ -193,14 +193,13 @@ describe("normalizeProviders", () => {
       const normalized = normalizeProviders({ providers, agentDir });
 
       expect(normalized?.google?.models).toHaveLength(1);
-      expect(normalized?.google?.models?.[0]).toMatchObject({
-        id: "gemini-3.1-pro-preview",
-        name: "Pinned Gemini",
-        contextWindow: 12345,
-        maxTokens: 2048,
-        reasoning: false,
-        cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
-      });
+      const model = normalized?.google?.models?.[0];
+      expect(model?.id).toBe("gemini-3.1-pro-preview");
+      expect(model?.name).toBe("Pinned Gemini");
+      expect(model?.contextWindow).toBe(12345);
+      expect(model?.maxTokens).toBe(2048);
+      expect(model?.reasoning).toBe(false);
+      expect(model?.cost).toEqual({ input: 1, output: 2, cacheRead: 3, cacheWrite: 4 });
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }

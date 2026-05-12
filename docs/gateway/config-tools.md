@@ -78,6 +78,26 @@ Further restrict tools for specific providers or models. Order: base profile →
 }
 ```
 
+### `tools.toolsBySender`
+
+Restricts tools for a specific requester identity. This is defense-in-depth on top of channel access control; sender values must come from the channel adapter, not message text.
+
+```json5
+{
+  tools: {
+    toolsBySender: {
+      "channel:discord:1234567890123": { alsoAllow: ["group:fs"] },
+      "id:guest-user-id": { deny: ["group:runtime", "group:fs"] },
+      "*": { deny: ["exec", "process", "write", "edit", "apply_patch"] },
+    },
+  },
+}
+```
+
+Keys use explicit prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `e164:<phone>`, `username:<handle>`, `name:<displayName>`, or `"*"`. Channel ids are canonical OpenClaw ids; aliases such as `teams` normalize to `msteams`. Legacy unprefixed keys are accepted as `id:` only. Matching order is channel+id, id, e164, username, name, then wildcard.
+
+Per-agent `agents.list[].tools.toolsBySender` overrides the global sender match when it matches, even with an empty `{}` policy.
+
 ### `tools.elevated`
 
 Controls elevated exec access outside the sandbox:
@@ -111,6 +131,7 @@ Controls elevated exec access outside the sandbox:
       cleanupMs: 1800000,
       notifyOnExit: true,
       notifyOnExitEmptySuccess: false,
+      commandHighlighting: false,
       applyPatch: {
         enabled: false,
         allowModels: ["gpt-5.5"],
@@ -371,6 +392,7 @@ Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto
         model: "minimax/MiniMax-M2.7",
         maxConcurrent: 8,
         runTimeoutSeconds: 900,
+        announceTimeoutMs: 120000,
         archiveAfterMinutes: 60,
       },
     },
@@ -381,6 +403,7 @@ Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto
 - `model`: default model for spawned sub-agents. If omitted, sub-agents inherit the caller's model.
 - `allowAgents`: default allowlist of target agent ids for `sessions_spawn` when the requester agent does not set its own `subagents.allowAgents` (`["*"]` = any; default: same agent only).
 - `runTimeoutSeconds`: default timeout (seconds) for `sessions_spawn` when the tool call omits `runTimeoutSeconds`. `0` means no timeout.
+- `announceTimeoutMs`: per-call timeout (milliseconds) for gateway `agent` announce delivery attempts. Default: `120000`. Transient retries can make the total announce wait longer than one configured timeout.
 - Per-subagent tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny`.
 
 ---

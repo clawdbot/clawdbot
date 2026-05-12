@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  cleanupCommandLogMessages,
   createCleanupCommandRuntime,
   resetCleanupCommandMocks,
   silenceCleanupCommandRuntime,
@@ -26,7 +27,11 @@ describe("resetCommand", () => {
       dryRun: true,
     });
 
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("openclaw backup create"));
+    expect(
+      cleanupCommandLogMessages(runtime).some((message) =>
+        message.includes("openclaw backup create"),
+      ),
+    ).toBe(true);
   });
 
   it("does not recommend backup for config-only reset", async () => {
@@ -37,6 +42,10 @@ describe("resetCommand", () => {
       dryRun: true,
     });
 
-    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("openclaw backup create"));
+    expect(
+      cleanupCommandLogMessages(runtime).some((message) =>
+        message.includes("openclaw backup create"),
+      ),
+    ).toBe(false);
   });
 });

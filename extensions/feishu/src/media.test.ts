@@ -91,8 +91,10 @@ function mockCallArg<T>(
   _type?: (value: unknown) => value is T,
 ): T {
   const call = mock.mock.calls[callIndex];
-  expect(call).toBeDefined();
-  return call?.[argIndex] as T;
+  if (!call) {
+    throw new Error(`Expected mock call at index ${callIndex}`);
+  }
+  return call[argIndex] as T;
 }
 
 function callData<T>(
@@ -101,7 +103,9 @@ function callData<T>(
   _type?: (value: unknown) => value is T,
 ): T {
   const arg = mockCallArg<{ data?: unknown }>(mock, callIndex, 0);
-  expect(arg.data).toBeDefined();
+  if (arg.data === undefined) {
+    throw new Error(`Expected mock call data at index ${callIndex}`);
+  }
   return arg.data as T;
 }
 

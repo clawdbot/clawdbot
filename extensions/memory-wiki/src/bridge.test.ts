@@ -154,15 +154,13 @@ describe("syncMemoryWikiBridgeSources", () => {
 
     const result = await syncMemoryWikiBridgeSources({ config });
 
-    expect(result).toMatchObject({
-      importedCount: 0,
-      updatedCount: 0,
-      skippedCount: 0,
-      removedCount: 0,
-      artifactCount: 0,
-      workspaces: 0,
-      pagePaths: [],
-    });
+    expect(result.importedCount).toBe(0);
+    expect(result.updatedCount).toBe(0);
+    expect(result.skippedCount).toBe(0);
+    expect(result.removedCount).toBe(0);
+    expect(result.artifactCount).toBe(0);
+    expect(result.workspaces).toBe(0);
+    expect(result.pagePaths).toEqual([]);
   });
 
   it("returns a no-op result when bridge mode is enabled without exported memory artifacts", async () => {
@@ -189,15 +187,13 @@ describe("syncMemoryWikiBridgeSources", () => {
 
     const result = await syncMemoryWikiBridgeSources({ config, appConfig });
 
-    expect(result).toMatchObject({
-      importedCount: 0,
-      updatedCount: 0,
-      skippedCount: 0,
-      removedCount: 0,
-      artifactCount: 0,
-      workspaces: 0,
-      pagePaths: [],
-    });
+    expect(result.importedCount).toBe(0);
+    expect(result.updatedCount).toBe(0);
+    expect(result.skippedCount).toBe(0);
+    expect(result.removedCount).toBe(0);
+    expect(result.artifactCount).toBe(0);
+    expect(result.workspaces).toBe(0);
+    expect(result.pagePaths).toEqual([]);
   });
 
   it("imports the public memory event journal when followMemoryEvents is enabled", async () => {
@@ -299,9 +295,10 @@ describe("syncMemoryWikiBridgeSources", () => {
 
     expect(second.artifactCount).toBe(0);
     expect(second.removedCount).toBe(1);
-    await expect(fs.stat(path.join(vaultDir, firstPagePath))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expect(fs.stat(path.join(vaultDir, firstPagePath))).rejects.toHaveProperty(
+      "code",
+      "ENOENT",
+    );
   });
 
   it("refuses to overwrite bridge source pages through vault symlinks", async () => {

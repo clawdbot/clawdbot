@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
+import type { GhConfigDiscoveryInput } from "../agents/skills/gh-config-discovery.js";
 import { createEmptyInstallChecks } from "../cli/requirements-test-fixtures.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   collectUnavailableAgentSkills,
+  describeGhConfigDirHintFromDiscovery,
   disableUnavailableSkillsInConfig,
   formatUnavailableSkillDoctorLines,
 } from "./doctor-skills.js";
@@ -85,6 +87,101 @@ describe("doctor skills", () => {
     expect(lines.join("\n")).toContain("places: bins: goplaces; env: GOOGLE_MAPS_API_KEY");
     expect(lines.join("\n")).toContain("install option: Install goplaces (brew)");
     expect(lines.join("\n")).toContain("openclaw doctor --fix");
+  });
+
+  it("surfaces a GH_CONFIG_DIR hint when the github skill is eligible but auth lives at a different HOME", () => {
+    const githubSkill = createSkill({
+      name: "github",
+      skillKey: "github",
+      eligible: true,
+      missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
+    });
+    const discovery: GhConfigDiscoveryInput = {
+      platform: "linux",
+      env: { HOME: "/root/.openclaw/agents/main/agent/codex-home/home" },
+      fileExists: (p) => p === "/root/.config/gh/hosts.yml",
+    };
+
+    const lines = describeGhConfigDirHintFromDiscovery([githubSkill], discovery);
+
+    expect(lines.some((line) => line.includes("/root/.config/gh"))).toBe(true);
+    expect(lines.join("\n")).toContain("GH_CONFIG_DIR=/root/.config/gh");
+  });
+
+  it("does not surface the GH_CONFIG_DIR hint when the github skill is missing the gh binary", () => {
+    const githubSkill = createSkill({
+      name: "github",
+      skillKey: "github",
+      eligible: false,
+      missing: { bins: ["gh"], anyBins: [], env: [], config: [], os: [] },
+    });
+    const discovery: GhConfigDiscoveryInput = {
+      platform: "linux",
+      env: { HOME: "/agent/home" },
+      fileExists: (p) => p === "/root/.config/gh/hosts.yml",
+    };
+
+    expect(describeGhConfigDirHintFromDiscovery([githubSkill], discovery)).toEqual([]);
+  });
+
+  it("does not surface the GH_CONFIG_DIR hint when the github skill is disabled", () => {
+    const githubSkill = createSkill({
+      name: "github",
+      skillKey: "github",
+      eligible: false,
+      disabled: true,
+      missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
+    });
+    const discovery: GhConfigDiscoveryInput = {
+      platform: "linux",
+      env: { HOME: "/agent/home" },
+      fileExists: (p) => p === "/root/.config/gh/hosts.yml",
+    };
+
+    expect(describeGhConfigDirHintFromDiscovery([githubSkill], discovery)).toEqual([]);
+  });
+
+  it("does not surface the GH_CONFIG_DIR hint when the github skill is filtered out for the agent", () => {
+    const githubSkill = createSkill({
+      name: "github",
+      skillKey: "github",
+      eligible: true,
+      blockedByAgentFilter: true,
+      missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
+    });
+    const discovery: GhConfigDiscoveryInput = {
+      platform: "linux",
+      env: { HOME: "/agent/home" },
+      fileExists: (p) => p === "/root/.config/gh/hosts.yml",
+    };
+
+    expect(describeGhConfigDirHintFromDiscovery([githubSkill], discovery)).toEqual([]);
+  });
+
+  it("does not surface the GH_CONFIG_DIR hint when GH_CONFIG_DIR is already set", () => {
+    const githubSkill = createSkill({
+      name: "github",
+      skillKey: "github",
+      eligible: true,
+      missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
+    });
+    const discovery: GhConfigDiscoveryInput = {
+      platform: "linux",
+      env: { HOME: "/agent/home", GH_CONFIG_DIR: "/etc/openclaw/gh" },
+      fileExists: () => true,
+    };
+
+    expect(describeGhConfigDirHintFromDiscovery([githubSkill], discovery)).toEqual([]);
+  });
+
+  it("does not surface the GH_CONFIG_DIR hint when the github skill is not present in the report", () => {
+    const discovery: GhConfigDiscoveryInput = {
+      platform: "linux",
+      env: { HOME: "/agent/home" },
+      fileExists: (p) => p === "/root/.config/gh/hosts.yml",
+    };
+
+    expect(describeGhConfigDirHintFromDiscovery([], discovery)).toEqual([]);
   });
 
   it("disables unavailable skills through skills.entries without dropping existing config", () => {

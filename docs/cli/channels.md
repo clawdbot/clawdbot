@@ -32,7 +32,7 @@ openclaw channels logs --channel all
 
 ## Status / capabilities / resolve / logs
 
-- `channels status`: `--probe`, `--timeout <ms>`, `--json`
+- `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>`, `--json`
 - `channels capabilities`: `--channel <name>`, `--account <id>` (only with `--channel`), `--target <dest>`, `--timeout <ms>`, `--json`
 - `channels resolve`: `<entries...>`, `--channel <name>`, `--account <id>`, `--kind <auto|user|group>`, `--json`
 - `channels logs`: `--channel <name|all>`, `--lines <n>`, `--json`

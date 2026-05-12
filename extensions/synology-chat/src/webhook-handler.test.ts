@@ -268,8 +268,6 @@ describe("createWebhookHandler", () => {
     const responses = requests.map(() => makeRes());
     const runs = requests.map((req, index) => handler(req, responses[index]));
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
     // Default maxInFlightPerKey is 8; 12 total requests leaves 4 rejected with 429.
     expect(countMatching(responses, (res) => res._status === 0)).toBe(8);
     expect(countMatching(responses, (res) => res._status === 429)).toBe(4);

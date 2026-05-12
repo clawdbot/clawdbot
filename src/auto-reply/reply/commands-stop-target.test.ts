@@ -154,24 +154,35 @@ describe("handleStopCommand target fallback", () => {
     });
     expect(replyRunAbortMock).toHaveBeenCalledWith("agent:target:telegram:direct:123");
     expect(abortEmbeddedPiRunMock).not.toHaveBeenCalledWith("wrapper-session-id");
-    expect(persistAbortTargetEntryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        key: "agent:target:telegram:direct:123",
-        entry: undefined,
-      }),
-    );
-    expect(stopSubagentsForRequesterMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requesterSessionKey: "agent:target:telegram:direct:123",
-      }),
-    );
+    const [[persistAbortTargetParams]] = persistAbortTargetEntryMock.mock.calls as unknown as Array<
+      [
+        {
+          key?: string;
+          entry?: unknown;
+          sessionStore?: unknown;
+          storePath?: string;
+        },
+      ]
+    >;
+    expect(persistAbortTargetParams?.key).toBe("agent:target:telegram:direct:123");
+    expect(persistAbortTargetParams?.entry).toBeUndefined();
+    expect(persistAbortTargetParams?.sessionStore).toBe(params.sessionStore);
+    expect(persistAbortTargetParams?.storePath).toBe("/tmp/sessions.json");
+    const [[stopSubagentsParams]] = stopSubagentsForRequesterMock.mock.calls as unknown as Array<
+      [{ cfg?: unknown; requesterSessionKey?: string }]
+    >;
+    expect(stopSubagentsParams?.cfg).toBe(params.cfg);
+    expect(stopSubagentsParams?.requesterSessionKey).toBe("agent:target:telegram:direct:123");
     expect(createInternalHookEventMock).toHaveBeenCalledWith(
       "command",
       "stop",
       "agent:target:telegram:direct:123",
-      expect.objectContaining({
+      {
         sessionEntry: undefined,
-      }),
+        sessionId: undefined,
+        commandSource: "telegram",
+        senderId: "owner",
+      },
     );
   });
 

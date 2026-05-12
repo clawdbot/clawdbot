@@ -501,7 +501,7 @@ describe("ensureSandboxBrowser create args", () => {
     ).rejects.toThrow("hung container has been forcefully removed");
 
     expect(dockerMocks.execDocker).toHaveBeenCalledWith(
-      ["rm", "-f", expect.stringMatching(/^openclaw-sbx-browser-session-test-/)],
+      ["rm", "-f", "openclaw-sbx-browser-session-test-0661d10a"],
       { allowFailure: true },
     );
   });

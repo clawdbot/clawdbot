@@ -3,11 +3,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
+  isStoredCredentialCompatibleWithAuthProvider,
   resolveAuthProfileOrder,
 } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore, hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
-import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 
 const sessionStoreRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/store.runtime.js"),
@@ -23,16 +23,18 @@ function isProfileForProvider(params: {
   profileId: string;
   store: ReturnType<typeof ensureAuthProfileStore>;
 }): boolean {
-  const providerKeys = params.providers.map((provider) =>
-    resolveProviderIdForAuth(provider, { config: params.cfg }),
-  );
   const entry = params.store.profiles[params.profileId];
   if (entry) {
     if (!entry.provider) {
       return false;
     }
-    const profileProviderKey = resolveProviderIdForAuth(entry.provider, { config: params.cfg });
-    return providerKeys.includes(profileProviderKey);
+    return params.providers.some((provider) =>
+      isStoredCredentialCompatibleWithAuthProvider({
+        cfg: params.cfg,
+        provider,
+        credential: entry,
+      }),
+    );
   }
   return params.providers.some((provider) =>
     isConfiguredAwsSdkAuthProfileForProvider({

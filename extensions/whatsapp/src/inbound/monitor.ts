@@ -135,6 +135,7 @@ function isNonEmptyString(value: string | undefined): value is string {
 
 type MonitorWebInboxOptions = {
   cfg: OpenClawConfig;
+  loadConfig?: () => OpenClawConfig;
   verbose: boolean;
   accountId: string;
   authDir: string;
@@ -548,8 +549,9 @@ export async function attachWebInboxToSocket(
       ? Number(msg.messageTimestamp) * 1000
       : undefined;
 
+    const accessCfg = options.loadConfig?.() ?? options.cfg;
     const access = await checkInboundAccessControl({
-      cfg: options.cfg,
+      cfg: accessCfg,
       accountId: options.accountId,
       from,
       selfE164: self.e164 ?? null,

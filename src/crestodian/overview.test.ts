@@ -52,19 +52,15 @@ describe("loadCrestodianOverview", () => {
       },
     });
 
-    expect(overview.config).toMatchObject({
-      exists: true,
-      valid: true,
-    });
+    expect(overview.config.exists).toBe(true);
+    expect(overview.config.valid).toBe(true);
     expect(overview.defaultAgentId).toBe("main");
     expect(overview.defaultModel).toBe("openai/gpt-5.2");
     expect(overview.agents.map((agent) => agent.id)).toEqual(["main", "work"]);
     expect(overview.tools.codex.found).toBe(true);
     expect(overview.tools.claude.found).toBe(false);
-    expect(overview.gateway).toMatchObject({
-      url: "ws://127.0.0.1:19001",
-      reachable: false,
-    });
+    expect(overview.gateway.url).toBe("ws://127.0.0.1:19001");
+    expect(overview.gateway.reachable).toBe(false);
     expect(overview.references.docsPath).toMatch(/docs$/);
     expect(overview.references.sourceUrl).toBe("https://github.com/openclaw/openclaw");
     expect(formatCrestodianOverview(overview)).toContain(

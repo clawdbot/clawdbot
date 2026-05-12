@@ -52,7 +52,7 @@ export function isCronRunSessionKey(sessionKey: string | undefined | null): bool
   if (!parsed) {
     return false;
   }
-  return /^cron:[^:]+:run:[^:]+$/.test(parsed.rest);
+  return /^cron:[^:]+:run:[^:]+(?::|$)/.test(parsed.rest);
 }
 
 export function isCronSessionKey(sessionKey: string | undefined | null): boolean {

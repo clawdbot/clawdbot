@@ -22,7 +22,7 @@ type CronDoctorOutcome = {
   warnings: string[];
 };
 
-type CrontabReader = () => Promise<{ stdout: string; stderr?: string }>;
+type CrontabReader = () => Promise<{ stdout?: unknown; stderr?: unknown }>;
 
 const execFileAsync = promisify(execFile);
 const LEGACY_WHATSAPP_HEALTH_SCRIPT_RE =
@@ -153,8 +153,21 @@ async function readUserCrontab(): Promise<{ stdout: string; stderr?: string }> {
   };
 }
 
-function findLegacyWhatsAppHealthCrontabLines(crontab: string): string[] {
-  return crontab
+function coerceCrontabText(crontab: unknown): string {
+  if (typeof crontab === "string") {
+    return crontab;
+  }
+  if (crontab == null) {
+    return "";
+  }
+  if (typeof crontab === "number" || typeof crontab === "boolean" || typeof crontab === "bigint") {
+    return String(crontab);
+  }
+  return "";
+}
+
+function findLegacyWhatsAppHealthCrontabLines(crontab: unknown): string[] {
+  return coerceCrontabText(crontab)
     .split(/\r?\n/u)
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && !line.startsWith("#"))
@@ -171,7 +184,7 @@ export async function noteLegacyWhatsAppCrontabHealthCheck(
     return;
   }
 
-  let crontab: string;
+  let crontab: unknown;
   try {
     crontab = (await (params.readCrontab ?? readUserCrontab)()).stdout;
   } catch {

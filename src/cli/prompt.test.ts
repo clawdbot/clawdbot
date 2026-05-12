@@ -78,6 +78,6 @@ describe("promptYesNo", () => {
     readlineState.emit("close");
 
     await expect(result).rejects.toThrow(PromptInputClosedError);
-    expect(readlineState.close).toHaveBeenCalled();
+    expect(readlineState.close).toHaveBeenCalledTimes(1);
   });
 });

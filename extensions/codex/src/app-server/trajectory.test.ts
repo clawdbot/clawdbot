@@ -162,9 +162,7 @@ describe("Codex trajectory recorder", () => {
     const parsed = JSON.parse(
       fs.readFileSync(path.join(tmpDir, "session.trajectory.jsonl"), "utf8"),
     ) as { data?: { truncated?: boolean; reason?: string } };
-    expect(parsed.data).toMatchObject({
-      truncated: true,
-      reason: "trajectory-event-size-limit",
-    });
+    expect(parsed.data?.truncated).toBe(true);
+    expect(parsed.data?.reason).toBe("trajectory-event-size-limit");
   });
 });

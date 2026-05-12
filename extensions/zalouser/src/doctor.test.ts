@@ -29,14 +29,16 @@ describe("zalouser doctor", () => {
       }) ?? [],
     );
 
-    const mutableWarning = warnings.find((warning: string) =>
-      warning.includes("mutable allowlist entry across zalouser"),
-    );
-    const groupPathWarning = warnings.find((warning: string) =>
-      warning.includes("channels.zalouser.groups: group:trusted"),
-    );
-    expect(mutableWarning).toBeDefined();
-    expect(groupPathWarning).toBeDefined();
+    expect(
+      warnings.some((warning: string) =>
+        warning.includes("mutable allowlist entry across zalouser"),
+      ),
+    ).toBe(true);
+    expect(
+      warnings.some((warning: string) =>
+        warning.includes("channels.zalouser.groups: group:trusted"),
+      ),
+    ).toBe(true);
   });
 
   it("normalizes legacy group allow aliases to enabled", () => {

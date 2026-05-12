@@ -32,7 +32,9 @@ function expectExecCall(
   options?: Record<string, unknown>,
 ) {
   const call = exec.mock.calls[callNumber - 1];
-  expect(call, `call ${callNumber}`).toBeDefined();
+  if (!call) {
+    throw new Error(`Expected exec call ${callNumber}`);
+  }
   expect(call[0]).toBe(command);
   expect(call[1]).toEqual(args);
   if (options) {

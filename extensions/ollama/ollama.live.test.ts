@@ -142,12 +142,10 @@ describe.skipIf(!LIVE)("ollama live", () => {
         model?: string;
         outputs?: Array<{ text?: string }>;
       };
-      expect(payload).toMatchObject({
-        ok: true,
-        transport: "local",
-        provider: "ollama",
-        model: CHAT_MODEL,
-      });
+      expect(payload.ok).toBe(true);
+      expect(payload.transport).toBe("local");
+      expect(payload.provider).toBe("ollama");
+      expect(payload.model).toBe(CHAT_MODEL);
       expect(payload.outputs?.[0]?.text?.trim().length ?? 0).toBeGreaterThan(0);
     });
   }, 120_000);

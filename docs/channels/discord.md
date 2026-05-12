@@ -1179,6 +1179,12 @@ Auto-join example:
             channelId: "234567890123456789",
           },
         ],
+        allowedChannels: [
+          {
+            guildId: "123456789012345678",
+            channelId: "234567890123456789",
+          },
+        ],
         daveEncryption: true,
         decryptionFailureTolerance: 24,
         connectTimeoutMs: 30000,
@@ -1212,6 +1218,7 @@ Notes:
 - Discord voice is opt-in for text-only configs; set `channels.discord.voice.enabled=true` (or keep an existing `channels.discord.voice` block) to enable `/vc` commands, the voice runtime, and the `GuildVoiceStates` gateway intent.
 - `channels.discord.intents.voiceStates` can explicitly override voice-state intent subscription. Leave it unset for the intent to follow effective voice enablement.
 - If `voice.autoJoin` has multiple entries for the same guild, OpenClaw joins the last configured channel for that guild.
+- `voice.allowedChannels` is an optional residency allowlist. Leave it unset to allow `/vc join` into any authorized Discord voice channel. When set, `/vc join`, startup auto-join, and bot voice-state moves are restricted to the listed `{ guildId, channelId }` entries. Set it to an empty array to deny all Discord voice joins. If Discord moves the bot outside the allowlist, OpenClaw leaves that channel and rejoins the configured auto-join target when one is available.
 - `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options.
 - `@discordjs/voice` defaults are `daveEncryption=true` and `decryptionFailureTolerance=24` if unset.
 - OpenClaw defaults to the pure-JS `opusscript` decoder for Discord voice receive. The optional native `@discordjs/opus` package is ignored by the repo pnpm install policy so normal installs, Docker lanes, and unrelated tests do not compile a native addon. Dedicated voice-performance hosts can opt in with `OPENCLAW_DISCORD_OPUS_DECODER=native` after installing the native addon.

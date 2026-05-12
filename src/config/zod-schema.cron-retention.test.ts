@@ -3,17 +3,16 @@ import { OpenClawSchema } from "./zod-schema.js";
 
 describe("OpenClawSchema cron retention and run-log validation", () => {
   it("accepts valid cron.sessionRetention and runLog values", () => {
-    expect(
-      OpenClawSchema.safeParse({
-        cron: {
-          sessionRetention: "1h30m",
-          runLog: {
-            maxBytes: "5mb",
-            keepLines: 2500,
-          },
+    const result = OpenClawSchema.safeParse({
+      cron: {
+        sessionRetention: "1h30m",
+        runLog: {
+          maxBytes: "5mb",
+          keepLines: 2500,
         },
-      }),
-    ).toMatchObject({ success: true });
+      },
+    });
+    expect(result.success).toBe(true);
   });
 
   it("rejects invalid cron.sessionRetention", () => {

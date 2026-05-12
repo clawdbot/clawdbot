@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { NON_PACKAGED_BUNDLED_PLUGIN_DIRS } from "./lib/bundled-plugin-build-entries.mjs";
+import {
+  collectBundledPluginBuildEntries,
+  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
+} from "./lib/bundled-plugin-build-entries.mjs";
 import { shouldBuildBundledCluster } from "./lib/optional-bundled-clusters.mjs";
 import {
   mergeGeneratedChannelConfigs,
@@ -17,7 +20,10 @@ const GENERATED_BUNDLED_SKILLS_DIR = "bundled-skills";
 const TRANSIENT_COPY_ERROR_CODES = new Set(["EEXIST", "ENOENT", "ENOTEMPTY", "EBUSY"]);
 const COPY_RETRY_DELAYS_MS = [10, 25, 50];
 
-function shouldCopyBundledPluginMetadata(id, env) {
+function shouldCopyBundledPluginMetadata(id, env, buildablePluginDirs) {
+  if (!buildablePluginDirs.has(id)) {
+    return false;
+  }
   if (!NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id)) {
     return true;
   }
@@ -237,6 +243,9 @@ export function copyBundledPluginMetadata(params = {}) {
     return;
   }
 
+  const buildablePluginDirs = new Set(
+    collectBundledPluginBuildEntries({ cwd: repoRoot, env }).map((entry) => entry.id),
+  );
   const generatedChannelConfigsByPlugin = readGeneratedBundledChannelConfigs(repoRoot);
   const sourcePluginDirs = new Set();
   for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
@@ -252,7 +261,7 @@ export function copyBundledPluginMetadata(params = {}) {
       ? JSON.parse(fs.readFileSync(packageJsonPath, "utf8"))
       : undefined;
     const topLevelPublicSurfaceEntries = collectTopLevelPublicSurfaceEntries(pluginDir);
-    if (!shouldCopyBundledPluginMetadata(dirent.name, env)) {
+    if (!shouldCopyBundledPluginMetadata(dirent.name, env, buildablePluginDirs)) {
       removePathIfExists(distPluginDir);
       continue;
     }

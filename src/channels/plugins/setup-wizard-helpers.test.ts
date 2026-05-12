@@ -2118,12 +2118,14 @@ describe("resolveAccountIdForConfigure", () => {
     });
 
     expect(accountId).toBe("prompted-id");
-    expect(prompter.select).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Signal account",
-        initialValue: "fallback",
-      }),
-    );
+    const selectCalls = prompter.select.mock.calls as unknown as Array<
+      [{ message?: string; initialValue?: string }]
+    >;
+    const selectOptions = selectCalls[0]?.[0] as
+      | { message?: string; initialValue?: string }
+      | undefined;
+    expect(selectOptions?.message).toBe("Signal account");
+    expect(selectOptions?.initialValue).toBe("fallback");
     expect(prompter.text).not.toHaveBeenCalled();
   });
 });

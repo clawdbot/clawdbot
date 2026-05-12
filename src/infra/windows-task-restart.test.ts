@@ -45,6 +45,14 @@ function decodeCmdPathArg(value: string): string {
   return withoutQuotes.replace(/\^!/g, "!").replace(/%%/g, "%");
 }
 
+function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 afterEach(() => {
   envSnapshot.restore();
   for (const scriptPath of createdScriptPaths) {
@@ -92,21 +100,18 @@ describe("relaunchGatewayScheduledTask", () => {
 
     const result = relaunchGatewayScheduledTask({ OPENCLAW_PROFILE: "work" });
 
-    expect(result).toMatchObject({
-      ok: true,
-      method: "schtasks",
-      tried: expect.arrayContaining(['schtasks /Run /TN "OpenClaw Gateway (work)"']),
-    });
+    expect(result.ok).toBe(true);
+    expect(result.method).toBe("schtasks");
+    expect(result.tried).toContain('schtasks /Run /TN "OpenClaw Gateway (work)"');
     expect(result.tried).toContain(`cmd.exe /d /s /c ${seenCommandArg}`);
-    expect(spawnMock).toHaveBeenCalledWith(
-      "cmd.exe",
-      ["/d", "/s", "/c", expect.any(String)],
-      expect.objectContaining({
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-      }),
-    );
+    const spawnCall = requireFirstMockCall(spawnMock, "restart helper spawn");
+    expect(spawnCall[0]).toBe("cmd.exe");
+    expect(spawnCall[1]).toStrictEqual(["/d", "/s", "/c", seenCommandArg]);
+    expect(spawnCall[2]).toStrictEqual({
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
     expect(unref).toHaveBeenCalledOnce();
 
     const scriptPath = [...createdScriptPaths][0];
@@ -120,7 +125,13 @@ describe("relaunchGatewayScheduledTask", () => {
     expect(script).toContain(
       'openclaw restart attempt source=windows-task-handoff target="OpenClaw Gateway (work)"',
     );
+    expect(script).toContain(
+      `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "(Get-ScheduledTask -TaskName 'OpenClaw Gateway (work)' -ErrorAction SilentlyContinue).State" 2>nul | findstr /I /C:"Running" >nul 2>&1`,
+    );
     expect(script).toContain('schtasks /Run /TN "OpenClaw Gateway (work)" >>');
+    expect(script.indexOf("powershell.exe -NoProfile")).toBeLessThan(
+      script.indexOf('schtasks /Run /TN "OpenClaw Gateway (work)"'),
+    );
     expect(script).toContain('del "%~f0" >nul 2>&1');
   });
 
@@ -138,6 +149,23 @@ describe("relaunchGatewayScheduledTask", () => {
     const scriptPath = [...createdScriptPaths][0];
     const script = fs.readFileSync(scriptPath, "utf8");
     expect(script).toContain('schtasks /Run /TN "OpenClaw Gateway (custom)" >>');
+  });
+
+  it("escapes custom task names in the PowerShell running-task probe", () => {
+    spawnMock.mockImplementation((_file: string, args: string[]) => {
+      createdScriptPaths.add(decodeCmdPathArg(args[3]));
+      return { unref: vi.fn() };
+    });
+
+    relaunchGatewayScheduledTask({
+      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (Bob's work)",
+    });
+
+    const scriptPath = [...createdScriptPaths][0];
+    const script = fs.readFileSync(scriptPath, "utf8");
+    expect(script).toContain(
+      "-Command \"(Get-ScheduledTask -TaskName 'OpenClaw Gateway (Bob''s work)' -ErrorAction SilentlyContinue).State\"",
+    );
   });
 
   it("returns failed when the helper cannot be spawned", () => {
@@ -161,11 +189,26 @@ describe("relaunchGatewayScheduledTask", () => {
 
     relaunchGatewayScheduledTask({ OPENCLAW_PROFILE: "work" });
 
-    expect(spawnMock).toHaveBeenCalledWith(
-      "cmd.exe",
-      ["/d", "/s", "/c", expect.stringMatching(/^".*&.*"$/)],
-      expect.any(Object),
-    );
+    expect(spawnMock).toHaveBeenCalledOnce();
+    const spawnCall = requireFirstMockCall(spawnMock, "restart helper spawn");
+    const commandArgs = spawnCall[1];
+    if (!Array.isArray(commandArgs)) {
+      throw new Error("expected cmd.exe argument array");
+    }
+    const commandArg = commandArgs[3];
+    if (typeof commandArg !== "string") {
+      throw new Error("expected quoted restart helper path");
+    }
+    expect(spawnCall[0]).toBe("cmd.exe");
+    expect(commandArgs).toStrictEqual(["/d", "/s", "/c", commandArg]);
+    expect(commandArg.startsWith('"')).toBe(true);
+    expect(commandArg.endsWith('"')).toBe(true);
+    expect(commandArg).toContain("&");
+    expect(spawnCall[2]).toStrictEqual({
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
   });
 
   it("includes startup fallback", () => {

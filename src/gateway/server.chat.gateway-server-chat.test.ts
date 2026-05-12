@@ -131,9 +131,9 @@ describe("gateway server chat", () => {
       .filter((value): value is string => typeof value === "string");
 
   const expectRecordFields = (value: unknown, expected: Record<string, unknown>) => {
-    expect(value).toBeDefined();
-    expect(typeof value).toBe("object");
-    expect(value).not.toBeNull();
+    if (!value || typeof value !== "object") {
+      throw new Error("Expected record");
+    }
     const actual = value as Record<string, unknown>;
     for (const [key, expectedValue] of Object.entries(expected)) {
       expect(actual[key]).toEqual(expectedValue);
@@ -961,7 +961,7 @@ describe("gateway server chat", () => {
         await finalPromise;
 
         let assistantMessage: Record<string, unknown> | undefined;
-        for (let attempt = 0; attempt < 50; attempt += 1) {
+        await vi.waitFor(async () => {
           const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
             sessionKey: "main",
           });
@@ -973,15 +973,10 @@ describe("gateway server chat", () => {
               message !== null &&
               (message as { role?: unknown }).role === "assistant",
           );
-          if (assistantMessage) {
-            break;
+          if (!assistantMessage) {
+            throw new Error("Expected assistant history message");
           }
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-
-        if (!assistantMessage) {
-          throw new Error("expected assistant history message");
-        }
+        });
         const assistantContent = (assistantMessage as { content?: unknown[] }).content ?? [];
         expect(assistantContent).toHaveLength(2);
         expect(assistantContent[0]).toEqual({ type: "text", text: "Image reply" });

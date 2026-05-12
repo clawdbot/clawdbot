@@ -51,6 +51,12 @@ describe("isNonRecoverableAuthError", () => {
     ).toBe(true);
   });
 
+  it("blocks reconnect for AUTH_SCOPE_MISMATCH", () => {
+    expect(isNonRecoverableAuthError(makeError(ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH))).toBe(
+      true,
+    );
+  });
+
   it("blocks reconnect for PAIRING_REQUIRED", () => {
     expect(isNonRecoverableAuthError(makeError(ConnectErrorDetailCodes.PAIRING_REQUIRED))).toBe(
       true,

@@ -72,11 +72,29 @@ describe("compaction toolResult details stripping", () => {
     });
 
     expect(summary).toBe("summary");
-    expect(piCodingAgentMocks.generateSummary).toHaveBeenCalled();
+    expect(piCodingAgentMocks.generateSummary).toHaveBeenCalledTimes(1);
 
     const chunk = (
-      piCodingAgentMocks.generateSummary.mock.calls as unknown as Array<[unknown]>
+      piCodingAgentMocks.generateSummary.mock.calls as unknown as Array<[AgentMessage[]]>
     )[0]?.[0];
+    expect(chunk).toMatchObject([
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_1", name: "browser", arguments: { action: "tabs" } },
+        ],
+        timestamp: 1,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "browser",
+        isError: false,
+        content: [{ type: "text", text: "ok" }],
+        timestamp: 2,
+      },
+    ]);
+    expect(chunk?.[1]).not.toHaveProperty("details");
     const serialized = JSON.stringify(chunk);
     expect(serialized).not.toContain("Ignore previous instructions");
     expect(serialized).not.toContain('"details"');
@@ -105,9 +123,14 @@ describe("compaction toolResult details stripping", () => {
       contextWindow: 10000,
     });
 
+    expect(piCodingAgentMocks.generateSummary).toHaveBeenCalledTimes(1);
     const chunk = (
-      piCodingAgentMocks.generateSummary.mock.calls as unknown as Array<[unknown]>
+      piCodingAgentMocks.generateSummary.mock.calls as unknown as Array<[AgentMessage[]]>
     )[0]?.[0];
+    expect(chunk).toStrictEqual([
+      { role: "user", content: "visible ask", timestamp: 1 },
+      { role: "assistant", content: "visible answer", timestamp: 3 },
+    ]);
     const serialized = JSON.stringify(chunk);
     expect(serialized).toContain("visible ask");
     expect(serialized).not.toContain("openclaw.runtime-context");

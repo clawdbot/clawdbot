@@ -192,6 +192,7 @@ export function expectFallbackMediaAnnouncement({
   resultMediaPath,
   mediaUrls,
 }: FallbackAnnouncementExpectation): void {
+  expect(deliverAnnouncementMock).toHaveBeenCalledTimes(1);
   const params = requireMockFirstParam(
     deliverAnnouncementMock,
     "deliverSubagentAnnouncement params",

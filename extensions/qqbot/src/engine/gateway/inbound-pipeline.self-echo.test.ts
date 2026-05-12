@@ -271,9 +271,10 @@ describe("buildInboundContext bot self-echo suppression", () => {
     expect(getRefIndexMock).toHaveBeenCalledWith("REF_BOT");
     expect(formatRefEntryForAgentMock).toHaveBeenCalled();
     expect(inbound.blocked).toBe(false);
-    expect(inbound.replyTo).toMatchObject({
+    expect(inbound.replyTo).toStrictEqual({
       id: "REF_BOT",
       body: "bot reply",
+      sender: "qq-main",
       isQuote: true,
     });
     expect(deps.startTyping).toHaveBeenCalledTimes(1);

@@ -297,23 +297,21 @@ describe("forkSessionFromParentRuntime", () => {
       .split(/\r?\n/u)
       .map((line) => JSON.parse(line) as Record<string, unknown>);
     const resolvedParentSessionFile = await fs.realpath(parentSessionFile);
-    expect(forkedEntries[0]).toMatchObject({
-      type: "session",
-      id: fork.sessionId,
-      cwd,
-      parentSession: resolvedParentSessionFile,
-    });
+    const forkedHeader = forkedEntries[0];
+    expect(forkedHeader?.type).toBe("session");
+    expect(forkedHeader?.id).toBe(fork.sessionId);
+    expect(forkedHeader?.cwd).toBe(cwd);
+    expect(forkedHeader?.parentSession).toBe(resolvedParentSessionFile);
     expect(forkedEntries.map((entry) => entry.type)).toEqual([
       "session",
       "message",
       "message",
       "label",
     ]);
-    expect(forkedEntries.at(-1)).toMatchObject({
-      type: "label",
-      targetId: "user-1",
-      label: "start",
-    });
+    const forkedLabel = forkedEntries.at(-1);
+    expect(forkedLabel?.type).toBe("label");
+    expect(forkedLabel?.targetId).toBe("user-1");
+    expect(forkedLabel?.label).toBe("start");
   });
 
   it("creates a header-only child when the parent has no entries", async () => {
@@ -351,10 +349,9 @@ describe("forkSessionFromParentRuntime", () => {
     const lines = raw.trim().split(/\r?\n/u);
     expect(lines).toHaveLength(1);
     const resolvedParentSessionFile = await fs.realpath(parentSessionFile);
-    expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
-      type: "session",
-      id: fork.sessionId,
-      parentSession: resolvedParentSessionFile,
-    });
+    const header = JSON.parse(lines[0] ?? "{}") as Record<string, unknown>;
+    expect(header.type).toBe("session");
+    expect(header.id).toBe(fork.sessionId);
+    expect(header.parentSession).toBe(resolvedParentSessionFile);
   });
 });

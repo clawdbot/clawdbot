@@ -130,7 +130,7 @@ export function buildGatewayStatusWarnings(params: {
     }
     warnings.push({
       code: "model_pricing_degraded",
-      message: `Model pricing degraded: ${detail}`,
+      message: `Model pricing warning: optional pricing refresh degraded: ${detail}`,
       targetIds: [result.target.id],
     });
   }
@@ -149,9 +149,7 @@ export function writeGatewayStatusJson(params: {
   primaryTargetId: string | null;
 }) {
   const reachable = params.probed.filter((entry) => isProbeReachable(entry.probe));
-  const degraded =
-    params.probed.some((entry) => isPostConnectProbeFailure(entry.probe)) ||
-    reachable.some((entry) => readModelPricingDegradedDetail(entry.probe.health));
+  const degraded = params.probed.some((entry) => isPostConnectProbeFailure(entry.probe));
   const capability = summarizeGatewayProbeCapability(reachable.map((entry) => entry.probe));
   writeRuntimeJson(params.runtime, {
     ok: reachable.length > 0,

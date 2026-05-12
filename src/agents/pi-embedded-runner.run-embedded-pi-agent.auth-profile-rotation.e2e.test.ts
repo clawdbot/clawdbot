@@ -1222,7 +1222,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
 
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
       const attemptParams = requireRecord(
-        runEmbeddedAttemptMock.mock.calls[0]?.[0],
+        runEmbeddedAttemptMock.mock.calls.at(0)?.[0],
         "embedded attempt params",
       );
       expect(attemptParams.authProfileId).toBe("openai-codex:work");

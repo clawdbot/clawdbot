@@ -82,6 +82,12 @@ function createChatEvent(params: {
   } as unknown as EventFrame;
 }
 
+async function waitForChatSend(requestMock: { mock: { calls: Array<readonly unknown[]> } }) {
+  await vi.waitFor(() =>
+    expect(requestMock.mock.calls.some((call) => call[0] === "chat.send")).toBe(true),
+  );
+}
+
 describe("ACP translator event ledger replay", () => {
   it("loads complete ledger-backed sessions without the lossy Gateway transcript fallback", async () => {
     const eventLedger = createInMemoryAcpEventLedger();
@@ -107,14 +113,7 @@ describe("ACP translator event ledger replay", () => {
     firstConnection.__sessionUpdateMock.mockClear();
 
     const promptPromise = firstAgent.prompt(createPromptRequest(created.sessionId, "Question"));
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      if (firstRequestMock.mock.calls.some((call) => call[0] === "chat.send")) {
-        break;
-      }
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-    }
+    await waitForChatSend(firstRequestMock);
     const runId = firstSessionStore.getSession(created.sessionId)?.activeRunId;
     if (!runId) {
       throw new Error("Expected active ACP run");
@@ -169,21 +168,22 @@ describe("ACP translator event ledger replay", () => {
 
     await secondAgent.loadSession(createLoadSessionRequest(created.sessionId));
 
-    expect(secondRequestMock).not.toHaveBeenCalledWith("sessions.get", expect.anything());
+    expect(secondRequestMock.mock.calls.map((call) => call[0])).not.toContain("sessions.get");
     const replayedUpdates = secondConnection.__sessionUpdateMock.mock.calls.map(
       (call) => call[0]?.update,
     );
     const replayedUpdateTypes = replayedUpdates.map((update) => update?.sessionUpdate);
-    expect(replayedUpdateTypes).toEqual(
-      expect.arrayContaining([
-        "session_info_update",
-        "available_commands_update",
-        "user_message_chunk",
-        "tool_call",
-        "tool_call_update",
-        "agent_message_chunk",
-      ]),
-    );
+    expect(replayedUpdateTypes).toEqual([
+      "session_info_update",
+      "available_commands_update",
+      "user_message_chunk",
+      "tool_call",
+      "tool_call_update",
+      "agent_message_chunk",
+      "session_info_update",
+      "session_info_update",
+      "available_commands_update",
+    ]);
     expect(replayedUpdates).toContainEqual({
       sessionUpdate: "user_message_chunk",
       content: { type: "text", text: "Question" },
@@ -223,25 +223,26 @@ describe("ACP translator event ledger replay", () => {
 
     await listedAgent.loadSession(createLoadSessionRequest(firstSession.sessionKey));
 
-    expect(listedRequestMock).not.toHaveBeenCalledWith("sessions.get", expect.anything());
+    expect(listedRequestMock.mock.calls.map((call) => call[0])).not.toContain("sessions.get");
     const listedReplayTypes = listedConnection.__sessionUpdateMock.mock.calls.map(
       (call) => call[0]?.update?.sessionUpdate,
     );
-    expect(listedReplayTypes).toEqual(
-      expect.arrayContaining(["user_message_chunk", "tool_call", "agent_message_chunk"]),
-    );
+    expect(listedReplayTypes).toEqual([
+      "session_info_update",
+      "available_commands_update",
+      "user_message_chunk",
+      "tool_call",
+      "tool_call_update",
+      "agent_message_chunk",
+      "session_info_update",
+      "session_info_update",
+      "available_commands_update",
+    ]);
 
     const listedPrompt = listedAgent.prompt(
       createPromptRequest(firstSession.sessionKey, "Follow-up"),
     );
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      if (listedRequestMock.mock.calls.some((call) => call[0] === "chat.send")) {
-        break;
-      }
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-    }
+    await waitForChatSend(listedRequestMock);
     const listedRunId = listedSessionStore.getSession(firstSession.sessionKey)?.activeRunId;
     if (!listedRunId) {
       throw new Error("Expected listed ACP session to have an active run");
@@ -265,7 +266,7 @@ describe("ACP translator event ledger replay", () => {
     ).toHaveLength(2);
     await expect(
       eventLedger.readReplayBySessionId({ sessionId: firstSession.sessionKey }),
-    ).resolves.toMatchObject({ complete: false });
+    ).resolves.toEqual({ complete: false, events: [] });
 
     firstSessionStore.clearAllSessionsForTest();
   });
@@ -366,14 +367,7 @@ describe("ACP translator event ledger replay", () => {
     }
 
     const prompt = agent.prompt(createPromptRequest(created.sessionId, "Question"));
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      if (requestMock.mock.calls.some((call) => call[0] === "chat.send")) {
-        break;
-      }
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-    }
+    await waitForChatSend(requestMock);
     await markIncompletePromise;
     const runId = sessionStore.getSession(created.sessionId)?.activeRunId;
     if (!runId) {

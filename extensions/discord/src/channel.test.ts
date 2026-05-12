@@ -110,7 +110,11 @@ function objectArgAt(
 }
 
 function argAt(mock: MockWithCalls, callIndex: number, argIndex: number): unknown {
-  return mock.mock.calls[callIndex]?.[argIndex];
+  const call = mock.mock.calls[callIndex];
+  if (!call || !(argIndex in call)) {
+    throw new Error(`expected call ${callIndex} argument ${argIndex}`);
+  }
+  return call[argIndex];
 }
 
 function recordField(value: unknown, field: string): Record<string, unknown> {
@@ -444,7 +448,7 @@ describe("discordPlugin outbound", () => {
         target: "channel:222",
       });
 
-      expect(fetchPermissionsSpy.mock.calls[0]?.[0]).toBe("222");
+      expect(argAt(fetchPermissionsSpy, 0, 0)).toBe("222");
       expect(objectArgAt(fetchPermissionsSpy, 0, 1).token).toBe("discord-token");
       const permissions = recordField(diagnostics?.details?.permissions, "permissions");
       expect(permissions.channelId).toBe("222");

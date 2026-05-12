@@ -639,8 +639,11 @@ export function createMusicGenerateTool(options?: {
       const format = normalizeOutputFormat(readStringParam(args, "format"));
       const filename = readStringParam(args, "filename");
       const requestedTimeoutMs = readGenerationTimeoutMs(args);
-      const timeout = normalizeMusicGenerationTimeoutMs(requestedTimeoutMs);
+      const requestedGenerationTimeoutMs =
+        requestedTimeoutMs ?? musicGenerationModelConfig.timeoutMs;
+      const timeout = normalizeMusicGenerationTimeoutMs(requestedGenerationTimeoutMs);
       const timeoutMs = timeout.timeoutMs;
+      const referenceFetchTimeoutMs = requestedTimeoutMs === undefined ? undefined : timeoutMs;
       const imageInputs = normalizeReferenceImageInputs(args);
       const selectedModelRef =
         parseMusicGenerationModelRef(model) ??
@@ -659,7 +662,7 @@ export function createMusicGenerateTool(options?: {
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
         ssrfPolicy: remoteMediaSsrfPolicy,
-        timeoutMs,
+        timeoutMs: referenceFetchTimeoutMs,
       });
       validateMusicGenerationCapabilities({
         provider: selectedProvider,

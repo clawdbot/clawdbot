@@ -28,6 +28,7 @@ type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
 >;
 type DeliverRepliesFn = typeof import("./bot/delivery.js").deliverReplies;
 type DeliverRepliesParams = Parameters<DeliverRepliesFn>[0];
+type LoadModelCatalogFn = typeof import("openclaw/plugin-sdk/agent-runtime").loadModelCatalog;
 type MatchPluginCommandFn = typeof import("./bot-native-commands.runtime.js").matchPluginCommand;
 
 const dispatchReplyResult: DispatchReplyWithBufferedBlockDispatcherResult = {
@@ -52,6 +53,16 @@ const sessionMocks = vi.hoisted(() => ({
 }));
 const commandAuthMocks = vi.hoisted(() => ({
   resolveCommandArgMenu: vi.fn(),
+}));
+const agentRuntimeMocks = vi.hoisted(() => ({
+  loadModelCatalog: vi.fn<LoadModelCatalogFn>(async () => [
+    {
+      provider: "openai",
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      reasoning: true,
+    },
+  ]),
 }));
 const pluginRuntimeMocks = vi.hoisted(() => ({
   executePluginCommand: vi.fn(async () => ({ text: "ok" })),
@@ -167,6 +178,15 @@ vi.mock("openclaw/plugin-sdk/command-auth-native", async () => {
   return {
     ...actual,
     resolveCommandArgMenu: commandAuthMocks.resolveCommandArgMenu,
+  };
+});
+vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-runtime")>(
+    "openclaw/plugin-sdk/agent-runtime",
+  );
+  return {
+    ...actual,
+    loadModelCatalog: agentRuntimeMocks.loadModelCatalog,
   };
 });
 vi.mock("./bot-native-commands.runtime.js", async () => {
@@ -524,6 +544,14 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     persistentBindingMocks.ensureConfiguredBindingRouteReady.mockClear();
     persistentBindingMocks.ensureConfiguredBindingRouteReady.mockResolvedValue({ ok: true });
     commandAuthMocks.resolveCommandArgMenu.mockClear();
+    agentRuntimeMocks.loadModelCatalog.mockClear().mockResolvedValue([
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        reasoning: true,
+      },
+    ]);
     sessionMocks.loadSessionStore.mockClear().mockReturnValue({});
     sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
     sessionMocks.resolveAndPersistSessionFile.mockClear().mockImplementation(async (params) => {
@@ -697,6 +725,36 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       textIncludes: "Current thinking level: medium.\nChoose level for /think.",
       requireReplyMarkup: true,
       label: "default model thinking menu",
+    });
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("hydrates runtime catalog metadata for thinking menu defaults", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+        },
+      },
+    } as OpenClawConfig;
+    sessionMocks.loadSessionStore.mockReturnValue({});
+
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "think",
+      cfg,
+      allowFrom: ["*"],
+    });
+    await handler(createTelegramPrivateCommandContext());
+
+    expect(agentRuntimeMocks.loadModelCatalog).toHaveBeenCalledWith({
+      config: cfg,
+    });
+    expectSendMessageCall({
+      sendMessage,
+      chatId: 100,
+      textIncludes: "Current thinking level: medium.\nChoose level for /think.",
+      requireReplyMarkup: true,
+      label: "runtime catalog thinking menu",
     });
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });

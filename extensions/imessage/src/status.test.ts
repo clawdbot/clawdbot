@@ -50,6 +50,22 @@ describe("createIMessageRpcClient", () => {
     );
     expect(spawnMock).not.toHaveBeenCalled();
   });
+
+  it("promotes Full Disk Access rpc banners to the public probe error", async () => {
+    const { IMessageRpcClient, PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR } =
+      await import("./client.js");
+    const client = new IMessageRpcClient();
+    const internals = client as unknown as {
+      handleLine: (line: string) => void;
+      buildCloseError: (code: number | null, signal: NodeJS.Signals | null) => Error;
+    };
+
+    internals.handleLine(
+      "imsg cannot access /Users/alice/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+    );
+
+    expect(internals.buildCloseError(1, null).message).toBe(PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR);
+  });
 });
 
 describe("imessage setup status", () => {

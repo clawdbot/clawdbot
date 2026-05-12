@@ -117,7 +117,6 @@ describe("runtime TaskFlow", () => {
     expect(storedTask?.ownerKey).toBe("agent:main:main");
     expect(getTaskFlowById(created.flowId)?.flowId).toBe(created.flowId);
     const summary = ownerTaskFlow.getTaskSummary(created.flowId);
-    expect(summary).toBeDefined();
     if (!summary) {
       throw new Error("expected task summary for created flow");
     }

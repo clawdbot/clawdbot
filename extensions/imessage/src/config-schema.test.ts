@@ -71,6 +71,30 @@ describe("imessage config schema", () => {
     }
   });
 
+  it("accepts reaction notification mode overrides", () => {
+    const res = IMessageConfigSchema.safeParse({
+      reactionNotifications: "all",
+      accounts: {
+        quiet: {
+          reactionNotifications: "off",
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects invalid reaction notification modes", () => {
+    const res = IMessageConfigSchema.safeParse({
+      reactionNotifications: "allowlist",
+    });
+
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues[0]?.path.join(".")).toBe("reactionNotifications");
+    }
+  });
+
   it("accepts private API action gates", () => {
     const res = IMessageConfigSchema.safeParse({
       cliPath: "imsg",

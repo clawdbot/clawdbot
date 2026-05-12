@@ -31,9 +31,9 @@ function mockSingleActiveSummary(overrides: Partial<typeof baseActiveAnthropicSu
 }
 
 function expectModelFields(model: unknown, expected: Record<string, unknown>): void {
-  expect(model).toBeDefined();
-  expect(typeof model).toBe("object");
-  expect(model).not.toBeNull();
+  if (!model || typeof model !== "object") {
+    throw new Error("Expected model record");
+  }
   const actual = model as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);

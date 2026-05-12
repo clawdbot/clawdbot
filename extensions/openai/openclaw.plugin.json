@@ -762,6 +762,28 @@
   },
   "providerAuthChoices": [
     {
+      "provider": "openai",
+      "method": "oauth",
+      "choiceId": "openai",
+      "choiceLabel": "ChatGPT Login",
+      "choiceHint": "Sign in with your ChatGPT or Codex subscription",
+      "assistantPriority": -40,
+      "groupId": "openai",
+      "groupLabel": "OpenAI",
+      "groupHint": "ChatGPT subscription or API key"
+    },
+    {
+      "provider": "openai",
+      "method": "device-code",
+      "choiceId": "openai-device-code",
+      "choiceLabel": "ChatGPT Device Pairing",
+      "choiceHint": "Pair your ChatGPT account in browser with a device code",
+      "assistantPriority": -10,
+      "groupId": "openai",
+      "groupLabel": "OpenAI",
+      "groupHint": "ChatGPT subscription or API key"
+    },
+    {
       "provider": "openai-codex",
       "method": "oauth",
       "choiceId": "openai-codex",
@@ -785,14 +807,32 @@
       "groupHint": "ChatGPT/Codex sign-in"
     },
     {
+      "provider": "openai-codex",
+      "method": "api-key",
+      "choiceId": "openai-codex-api-key",
+      "choiceLabel": "OpenAI API Key Backup",
+      "choiceHint": "Use an OpenAI API key when your Codex subscription is unavailable",
+      "assistantPriority": 5,
+      "assistantVisibility": "manual-only",
+      "groupId": "openai-codex",
+      "groupLabel": "OpenAI Codex",
+      "groupHint": "ChatGPT/Codex sign-in",
+      "optionKey": "openaiApiKey",
+      "cliFlag": "--openai-api-key",
+      "cliOption": "--openai-api-key <key>",
+      "cliDescription": "OpenAI API Key Backup"
+    },
+    {
       "provider": "openai",
       "method": "api-key",
       "choiceId": "openai-api-key",
       "choiceLabel": "OpenAI API Key",
-      "assistantPriority": -40,
+      "choiceHint": "Use your OpenAI API key directly",
+      "assistantPriority": 5,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "Direct API key",
+      "groupHint": "ChatGPT subscription or API key",
+      "onboardingFeatured": true,
       "optionKey": "openaiApiKey",
       "cliFlag": "--openai-api-key",
       "cliOption": "--openai-api-key <key>",

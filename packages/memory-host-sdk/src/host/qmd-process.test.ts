@@ -133,7 +133,8 @@ describe("checkQmdBinaryAvailability", () => {
     await expect(
       checkQmdBinaryAvailability({ command: "qmd", env: process.env, cwd: tempDir }),
     ).resolves.toEqual({ available: true });
-    expect(child.kill).toHaveBeenCalled();
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    expect(child.kill).toHaveBeenCalledWith();
   });
 
   it("returns unavailable when the qmd process cannot be spawned", async () => {

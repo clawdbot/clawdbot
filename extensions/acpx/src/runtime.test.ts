@@ -111,7 +111,11 @@ function makeLeaseStore() {
 function readFirstEnsureSessionInput(ensure: {
   mock: { calls: Array<Array<unknown>> };
 }): Parameters<AcpRuntime["ensureSession"]>[0] {
-  const input = ensure.mock.calls[0]?.[0];
+  const [call] = ensure.mock.calls;
+  if (!call) {
+    throw new Error("Expected ensureSession to be called");
+  }
+  const [input] = call;
   if (typeof input !== "object" || input === null) {
     throw new Error("Expected ensureSession to be called with an input object");
   }
@@ -667,20 +671,17 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(leaseStore.store.save).toHaveBeenCalledTimes(2);
     const leases = Array.from(leaseStore.leases.values());
     expect(leases).toHaveLength(1);
-    expect(leases[0]).toMatchObject({
-      gatewayInstanceId: "gateway-test",
-      sessionKey: "agent:codex:acp:binding:test",
-      rootPid: 777,
-      state: "open",
-      wrapperPath: "/tmp/openclaw/acpx/codex-acp-wrapper.mjs",
-    });
+    const lease = leases[0];
+    expect(lease?.gatewayInstanceId).toBe("gateway-test");
+    expect(lease?.sessionKey).toBe("agent:codex:acp:binding:test");
+    expect(lease?.rootPid).toBe(777);
+    expect(lease?.state).toBe("open");
+    expect(lease?.wrapperPath).toBe("/tmp/openclaw/acpx/codex-acp-wrapper.mjs");
     expect(launchCommands[0]).toContain("OPENCLAW_ACPX_LEASE_ID=");
     expect(launchCommands[0]).toContain("OPENCLAW_GATEWAY_INSTANCE_ID=gateway-test");
     expect(savedRecords[0]?.agentCommand).toBe(CODEX_ACP_WRAPPER_COMMAND);
-    expect(savedRecords[0]).toMatchObject({
-      openclawGatewayInstanceId: "gateway-test",
-      openclawLeaseId: leases[0]?.leaseId,
-    });
+    expect(savedRecords[0]?.openclawGatewayInstanceId).toBe("gateway-test");
+    expect(savedRecords[0]?.openclawLeaseId).toBe(lease?.leaseId);
   });
 
   it("keeps reusable persistent ACP launch commands stable across ensures", async () => {
@@ -757,10 +758,9 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       openclawWrapperRoot: "/tmp/openclaw/acpx",
     });
 
-    await expect(wrappedStore.load("agent:codex:acp:binding:test")).resolves.toMatchObject({
-      openclawGatewayInstanceId: "gateway-test",
-      openclawLeaseId: "lease-loaded",
-    });
+    const loadedRecord = await wrappedStore.load("agent:codex:acp:binding:test");
+    expect(loadedRecord?.openclawGatewayInstanceId).toBe("gateway-test");
+    expect(loadedRecord?.openclawLeaseId).toBe("lease-loaded");
   });
 
   it("merges the lease for the current ACPX session process when old leases exist", async () => {
@@ -801,10 +801,9 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       openclawWrapperRoot: "/tmp/openclaw/acpx",
     });
 
-    await expect(wrappedStore.load("agent:codex:acp:binding:test")).resolves.toMatchObject({
-      openclawGatewayInstanceId: "gateway-test",
-      openclawLeaseId: "lease-current",
-    });
+    const loadedRecord = await wrappedStore.load("agent:codex:acp:binding:test");
+    expect(loadedRecord?.openclawGatewayInstanceId).toBe("gateway-test");
+    expect(loadedRecord?.openclawLeaseId).toBe("lease-current");
   });
 
   it("uses matching leases before legacy pid cleanup on close", async () => {

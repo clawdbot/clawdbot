@@ -22,6 +22,32 @@ let loadProviderUsageSummary: typeof import("./provider-usage.load.js").loadProv
 
 const usageNow = Date.UTC(2026, 0, 7, 0, 0, 0);
 
+function requireFirstPluginUsageCall(): {
+  provider?: unknown;
+  context?: {
+    provider?: unknown;
+    token?: unknown;
+    timeoutMs?: unknown;
+  };
+} {
+  const [call] = resolveProviderUsageSnapshotWithPluginMock.mock.calls;
+  if (!call) {
+    throw new Error("expected provider usage plugin call");
+  }
+  const [pluginCall] = call;
+  if (!pluginCall || typeof pluginCall !== "object" || Array.isArray(pluginCall)) {
+    throw new Error("expected provider usage plugin call");
+  }
+  return pluginCall as {
+    provider?: unknown;
+    context?: {
+      provider?: unknown;
+      token?: unknown;
+      timeoutMs?: unknown;
+    };
+  };
+}
+
 describe("provider-usage.load plugin boundary", () => {
   beforeAll(async () => {
     ({ loadProviderUsageSummary } = await import("./provider-usage.load.js"));
@@ -61,19 +87,7 @@ describe("provider-usage.load plugin boundary", () => {
 
     expect(mockFetch).not.toHaveBeenCalled();
     expect(resolveProviderUsageSnapshotWithPluginMock).toHaveBeenCalledOnce();
-    const pluginCall = resolveProviderUsageSnapshotWithPluginMock.mock.calls[0]?.[0] as
-      | {
-          provider?: unknown;
-          context?: {
-            provider?: unknown;
-            token?: unknown;
-            timeoutMs?: unknown;
-          };
-        }
-      | undefined;
-    if (!pluginCall) {
-      throw new Error("missing provider usage plugin call");
-    }
+    const pluginCall = requireFirstPluginUsageCall();
     expect(pluginCall.provider).toBe("github-copilot");
     expect(pluginCall.context?.provider).toBe("github-copilot");
     expect(pluginCall.context?.token).toBe("copilot-token");

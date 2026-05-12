@@ -31,6 +31,14 @@ vi.mock("openclaw/plugin-sdk/hook-runtime", async () => {
 
 import { createSignalEventHandler } from "./event-handler.js";
 
+function requireInternalHookEventCall() {
+  const [call] = internalHookMocks.createInternalHookEvent.mock.calls;
+  if (!call) {
+    throw new Error("expected internal hook event call");
+  }
+  return call;
+}
+
 describe("signal mention-skip silent ingest", () => {
   it("emits internal message:received when ingest is enabled", async () => {
     internalHookMocks.createInternalHookEvent.mockClear();
@@ -67,8 +75,7 @@ describe("signal mention-skip silent ingest", () => {
     );
 
     expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
-    const [type, action, sessionKey, context] =
-      internalHookMocks.createInternalHookEvent.mock.calls[0] ?? [];
+    const [type, action, sessionKey, context] = requireInternalHookEventCall();
     expect(type).toBe("message");
     expect(action).toBe("received");
     expect(sessionKey).toContain("signal");

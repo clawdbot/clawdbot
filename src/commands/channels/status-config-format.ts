@@ -2,6 +2,7 @@ import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
 } from "../../channels/account-snapshot-fields.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import {
   buildChannelAccountSnapshot,
@@ -33,7 +34,7 @@ type ChannelStatusPluginLabel = {
 export async function formatConfigChannelsStatusLines(
   cfg: OpenClawConfig,
   meta: { path?: string; mode?: "local" | "remote" },
-  opts?: { sourceConfig?: OpenClawConfig },
+  opts?: { sourceConfig?: OpenClawConfig; channel?: string },
 ): Promise<string[]> {
   const lines: string[] = [];
   lines.push(theme.warn("Gateway not reachable; showing config-only status."));
@@ -63,10 +64,11 @@ export async function formatConfigChannelsStatusLines(
     });
 
   const sourceConfig = opts?.sourceConfig ?? cfg;
+  const requestedChannel = opts?.channel ? normalizeChannelId(opts.channel) : null;
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
     activationSourceConfig: sourceConfig,
     includeSetupFallbackPlugins: true,
-  });
+  }).filter((plugin) => !requestedChannel || plugin.id === requestedChannel);
   const visibleChannelIds = new Set<string>();
   for (const plugin of plugins) {
     visibleChannelIds.add(plugin.id);
@@ -108,6 +110,9 @@ export async function formatConfigChannelsStatusLines(
     ]),
   ];
   for (const channelId of missingChannelIds) {
+    if (requestedChannel && channelId !== requestedChannel) {
+      continue;
+    }
     if (visibleChannelIds.has(channelId)) {
       continue;
     }

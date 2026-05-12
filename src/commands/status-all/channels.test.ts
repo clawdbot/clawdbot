@@ -99,13 +99,18 @@ describe("buildChannelsTable", () => {
 
     const table = await buildChannelsTable({ channels: { feishu: { appId: "cli_xxx" } } });
 
-    expect(table.rows).toContainEqual({
-      id: "feishu",
-      label: "Feishu",
-      enabled: true,
-      state: "warn",
-      detail:
-        "plugin not installed - run openclaw plugins install @openclaw/feishu or openclaw doctor --fix",
+    expect(table).toStrictEqual({
+      rows: [
+        {
+          id: "feishu",
+          label: "Feishu",
+          enabled: true,
+          state: "warn",
+          detail:
+            "plugin not installed - run openclaw plugins install @openclaw/feishu or openclaw doctor --fix",
+        },
+      ],
+      details: [],
     });
     expect(mocks.resolveInspectedChannelAccount).not.toHaveBeenCalled();
   });

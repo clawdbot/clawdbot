@@ -445,6 +445,12 @@ export async function maybeWakeNodeWithApns(
     try {
       const registration = await loadApnsRegistration(nodeId);
       if (!registration) {
+        // Avoid leaking the state entry we speculatively set at the top of
+        // maybeWakeNodeWithApns: this nodeId has no APNs registration, so the
+        // throttle bookkeeping we just created will never be touched by the
+        // WS-close cleanup path (clearNodeWakeState is only called for
+        // registered nodes in ws-connection.ts).
+        nodeWakeById.delete(nodeId);
         return withDuration({ available: false, throttled: false, path: "no-registration" });
       }
 

@@ -87,10 +87,19 @@ function expectErrorContaining(errorFn: unknown, text: string): void {
   expect(messages.some((message) => message.includes(text))).toBe(true);
 }
 
+function mockStringMessages(mocked: unknown): string[] {
+  return ((mocked as { mock?: { calls?: unknown[][] } }).mock?.calls ?? []).map((call) =>
+    typeof call[0] === "string" ? call[0] : call[0] instanceof Error ? call[0].message : "",
+  );
+}
+
 function mockCallArg(mocked: unknown, callIndex: number, argIndex: number): unknown {
   const calls = (mocked as { mock?: { calls?: unknown[][] } }).mock?.calls;
-  expect(calls?.[callIndex]).toBeDefined();
-  return calls?.[callIndex]?.[argIndex];
+  const call = calls?.[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call at index ${callIndex}`);
+  }
+  return call[argIndex];
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -167,6 +176,75 @@ describe("web auto-reply connection", () => {
 
       expectErrorContaining(runtime.error, scenario.expectedError);
     }
+  });
+
+  it("retries opening-phase Boom 428 through the reconnect policy", async () => {
+    const boom428 = {
+      output: {
+        statusCode: 428,
+        payload: { error: "Precondition Required", message: "Connection Terminated" },
+      },
+    };
+    const listenerFactory = vi.fn(async () => {
+      throw boom428;
+    });
+
+    const sleep = vi.fn(async () => {});
+    const { runtime, run } = startWebAutoReplyMonitor({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory,
+      sleep,
+      reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 2, factor: 1.1 },
+    });
+
+    await run;
+
+    expect(listenerFactory).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalled();
+    expectErrorContaining(runtime.error, "status 428");
+    expectErrorContaining(runtime.error, "Retry 1/2");
+    expectErrorContaining(runtime.error, "2/2 attempts");
+  });
+
+  it("keeps post-open Baileys 428 on the reconnect path", async () => {
+    const sleep = vi.fn(async () => {});
+    const scripted = createScriptedWebListenerFactory();
+    const { controller, run } = startWebAutoReplyMonitor({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory: scripted.listenerFactory,
+      sleep,
+      reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(scripted.getListenerCount()).toBe(1);
+      },
+      { timeout: 250, interval: 2 },
+    );
+    scripted.resolveClose(0, {
+      status: 428,
+      isLoggedOut: false,
+      error: "Connection Terminated",
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);
+      },
+      { timeout: 250, interval: 2 },
+    );
+
+    controller.abort();
+    scripted.resolveClose(scripted.getListenerCount() - 1, {
+      status: 499,
+      isLoggedOut: false,
+      error: "aborted",
+    });
+    await run;
+
+    expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);
+    expect(sleep).toHaveBeenCalled();
   });
 
   it("treats status 440 as non-retryable and stops without retrying", async () => {
@@ -373,10 +451,14 @@ describe("web auto-reply connection", () => {
       await Promise.resolve();
       await run;
 
-      expect(runtime.log).toHaveBeenCalledWith(
-        expect.stringContaining("WhatsApp Web watchdog is recovering a stale connection"),
-      );
-      expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("status 499"));
+      expect(
+        mockStringMessages(runtime.log).some((message) =>
+          message.includes("WhatsApp Web watchdog is recovering a stale connection"),
+        ),
+      ).toBe(true);
+      expect(
+        mockStringMessages(runtime.error).some((message) => message.includes("status 499")),
+      ).toBe(false);
       expect(
         statuses.some(
           (status) =>

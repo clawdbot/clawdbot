@@ -74,4 +74,59 @@ describe("msteams thread session isolation", () => {
     expect(sessionKey).toContain("thread-root");
     expect(sessionKey).not.toContain("nested-reply");
   });
+
+  // Regression coverage for #66771 — malformed mixed thread session key from
+  // pre-suffixed base. The handler may pass a base that has already been
+  // thread-qualified by a prior turn (e.g. cache-miss-returned route object
+  // mutated in-place by message-handler.ts:489). The helper must be idempotent
+  // and re-derive from a clean base.
+  describe("idempotency against pre-suffixed bases (#66771)", () => {
+    it("collapses an already-thread-suffixed base when re-applied with a different thread", () => {
+      const sessionKey = resolveMSTeamsRouteSessionKey({
+        baseSessionKey: `${channelConversationSessionKey}:thread:old-root`,
+        isChannel: true,
+        conversationMessageId: "new-root",
+      });
+
+      expect(sessionKey).toBe(`${channelConversationSessionKey}:thread:new-root`);
+      expect(sessionKey).not.toContain("old-root");
+      // No `:thread:OLD:thread:NEW` mixed shape.
+      expect(sessionKey.match(/:thread:/g)).toHaveLength(1);
+    });
+
+    it("collapses a doubly-thread-suffixed (already-malformed) base to a single suffix", () => {
+      const sessionKey = resolveMSTeamsRouteSessionKey({
+        baseSessionKey: `${channelConversationSessionKey}:thread:x:thread:y`,
+        isChannel: true,
+        conversationMessageId: "z",
+      });
+
+      expect(sessionKey).toBe(`${channelConversationSessionKey}:thread:z`);
+      expect(sessionKey).not.toContain(":thread:x");
+      expect(sessionKey).not.toContain(":thread:y");
+      expect(sessionKey.match(/:thread:/g)).toHaveLength(1);
+    });
+
+    it("is idempotent when the base is already qualified with the same thread", () => {
+      const sessionKey = resolveMSTeamsRouteSessionKey({
+        baseSessionKey: `${channelConversationSessionKey}:thread:same-root`,
+        isChannel: true,
+        conversationMessageId: "same-root",
+      });
+
+      expect(sessionKey).toBe(`${channelConversationSessionKey}:thread:same-root`);
+      expect(sessionKey.match(/:thread:/g)).toHaveLength(1);
+    });
+
+    it("strips a stale thread suffix when the inbound is a top-level channel message", () => {
+      const sessionKey = resolveMSTeamsRouteSessionKey({
+        baseSessionKey: `${channelConversationSessionKey}:thread:stale-root`,
+        isChannel: true,
+        replyToId: undefined,
+      });
+
+      expect(sessionKey).toBe(channelConversationSessionKey);
+      expect(sessionKey).not.toContain("thread:");
+    });
+  });
 });

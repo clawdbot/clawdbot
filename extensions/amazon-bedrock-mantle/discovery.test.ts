@@ -21,16 +21,35 @@ type MockWithCalls = {
   mock: { calls: unknown[][] };
 };
 
+function argAt(mock: MockWithCalls, callIndex: number, argIndex: number): unknown {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected call ${callIndex}`);
+  }
+  if (!(argIndex in call)) {
+    throw new Error(`expected call ${callIndex} argument ${argIndex}`);
+  }
+  return call[argIndex];
+}
+
 function objectArgAt(
   mock: MockWithCalls,
   callIndex: number,
   argIndex: number,
 ): Record<string, unknown> {
-  const value = mock.mock.calls[callIndex]?.[argIndex];
+  const value = argAt(mock, callIndex, argIndex);
   if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`expected call ${callIndex} argument ${argIndex} to be an object`);
   }
   return value as Record<string, unknown>;
+}
+
+function stringArgAt(mock: MockWithCalls, callIndex: number, argIndex: number): string {
+  const value = argAt(mock, callIndex, argIndex);
+  if (typeof value !== "string") {
+    throw new Error(`expected call ${callIndex} argument ${argIndex} to be a string`);
+  }
+  return value;
 }
 
 function recordField(value: unknown, field: string): Record<string, unknown> {
@@ -245,7 +264,7 @@ describe("bedrock mantle discovery", () => {
     expect(models[2]?.reasoning).toBe(true); // GPT-OSS 120B supports reasoning
 
     // Verify correct endpoint and auth header
-    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://bedrock-mantle.us-east-1.api.aws/v1/models");
+    expect(stringArgAt(mockFetch, 0, 0)).toBe("https://bedrock-mantle.us-east-1.api.aws/v1/models");
     expect(recordField(objectArgAt(mockFetch, 0, 1).headers, "headers").Authorization).toBe(
       "Bearer test-token",
     );
@@ -472,7 +491,7 @@ describe("bedrock mantle discovery", () => {
 
     expect(provider?.apiKey).toBe(MANTLE_IAM_TOKEN_MARKER);
     expect(tokenProvider).toHaveBeenCalledTimes(1);
-    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://bedrock-mantle.us-east-1.api.aws/v1/models");
+    expect(stringArgAt(mockFetch, 0, 0)).toBe("https://bedrock-mantle.us-east-1.api.aws/v1/models");
     expect(recordField(objectArgAt(mockFetch, 0, 1).headers, "headers").Authorization).toBe(
       "Bearer bedrock-api-key-iam",
     );
@@ -543,8 +562,8 @@ describe("bedrock mantle discovery", () => {
     });
 
     expect(provider?.baseUrl).toBe("https://bedrock-mantle.us-east-1.api.aws/v1");
-    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://bedrock-mantle.us-east-1.api.aws/v1/models");
-    expect(mockFetch.mock.calls[0]?.[1]).toBeDefined();
+    expect(stringArgAt(mockFetch, 0, 0)).toBe("https://bedrock-mantle.us-east-1.api.aws/v1/models");
+    objectArgAt(mockFetch, 0, 1);
   });
 
   // ---------------------------------------------------------------------------

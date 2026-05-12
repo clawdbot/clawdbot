@@ -82,14 +82,16 @@ describe("google provider plugin hooks", () => {
       } as ProviderSanitizeReplayHistoryContext),
     );
 
-    expect(sanitized).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          role: "user",
-          content: "(session bootstrap)",
-        }),
-      ]),
-    );
+    const bootstrapMessage = sanitized?.[0] as
+      | { role?: string; content?: unknown; timestamp?: unknown }
+      | undefined;
+    expect(bootstrapMessage?.role).toBe("user");
+    expect(bootstrapMessage?.content).toBe("(session bootstrap)");
+    expect(typeof bootstrapMessage?.timestamp).toBe("number");
+    expect(sanitized?.[1]).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "hello" }],
+    });
     expect(customEntries).toHaveLength(1);
     expect(customEntries[0]?.customType).toBe("google-turn-ordering-bootstrap");
   });
@@ -122,8 +124,9 @@ describe("google provider plugin hooks", () => {
           ],
         } as never) ?? [];
 
-      expect(tool).toMatchObject({
+      expect(tool).toEqual({
         name: "write_file",
+        description: "Write a file",
         parameters: {
           type: "object",
           properties: {
@@ -173,8 +176,12 @@ describe("google provider plugin hooks", () => {
       );
 
       const capturedPayload = capturedStream.getCapturedPayload();
-      expect(capturedPayload).toMatchObject({
-        config: { thinkingConfig: { thinkingLevel: "HIGH" } },
+      expect(capturedPayload).toEqual({
+        config: {
+          thinkingConfig: {
+            thinkingLevel: "HIGH",
+          },
+        },
       });
       const thinkingConfig = (
         (capturedPayload as Record<string, unknown>).config as Record<string, unknown>

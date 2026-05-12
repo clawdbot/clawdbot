@@ -422,4 +422,33 @@ describe("noteLegacyWhatsAppCrontabHealthCheck", () => {
 
     expect(noteMock).not.toHaveBeenCalled();
   });
+
+  it("ignores malformed crontab output instead of crashing", async () => {
+    await expect(
+      noteLegacyWhatsAppCrontabHealthCheck({
+        platform: "linux",
+        readCrontab: async () => ({
+          stdout: undefined,
+        }),
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      noteLegacyWhatsAppCrontabHealthCheck({
+        platform: "linux",
+        readCrontab: async () => ({
+          stdout: 12345,
+        }),
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      noteLegacyWhatsAppCrontabHealthCheck({
+        platform: "linux",
+        readCrontab: async () => ({
+          stdout: { lines: ["*/5 * * * * ~/.openclaw/bin/ensure-whatsapp.sh"] },
+        }),
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(noteMock).not.toHaveBeenCalled();
+  });
 });

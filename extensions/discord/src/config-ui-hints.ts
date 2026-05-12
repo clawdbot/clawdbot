@@ -230,6 +230,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Voice Auto-Join",
     help: "Voice channels to auto-join on startup (list of guildId/channelId entries).",
   },
+  "voice.allowedChannels": {
+    label: "Discord Voice Allowed Channels",
+    help: "Optional voice channel residency allowlist. When set, /vc join, auto-join, and bot voice-state moves are restricted to these guildId/channelId entries. Leave unset to allow any voice channel.",
+  },
   "voice.daveEncryption": {
     label: "Discord Voice DAVE Encryption",
     help: "Toggle DAVE end-to-end encryption for Discord voice joins (default: true in @discordjs/voice; Discord may require this).",

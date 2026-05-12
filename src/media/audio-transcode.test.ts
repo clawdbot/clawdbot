@@ -12,6 +12,16 @@ vi.mock("./ffmpeg-exec.js", () => ({
 
 import { transcodeAudioBufferToOpus } from "./audio-transcode.js";
 
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 describe("transcodeAudioBufferToOpus", () => {
   afterEach(() => {
     runFfmpegMock.mockReset();
@@ -44,7 +54,7 @@ describe("transcodeAudioBufferToOpus", () => {
     ).resolves.toEqual(Buffer.from("opus-output"));
 
     expect(runFfmpegMock).toHaveBeenCalledTimes(1);
-    expect(runFfmpegMock.mock.calls[0]).toStrictEqual([
+    expect(firstMockCall(runFfmpegMock, "runFfmpeg")).toStrictEqual([
       [
         "-hide_banner",
         "-loglevel",

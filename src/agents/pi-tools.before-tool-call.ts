@@ -490,14 +490,16 @@ export async function runBeforeToolCallHook(args: {
       }
     }
 
-    recordToolCall(
-      sessionState,
-      toolName,
-      params,
-      args.toolCallId,
-      args.ctx.loopDetection,
-      loopScope,
-    );
+    if (args.ctx.loopDetection?.enabled !== false) {
+      recordToolCall(
+        sessionState,
+        toolName,
+        params,
+        args.toolCallId,
+        args.ctx.loopDetection,
+        loopScope,
+      );
+    }
   }
 
   const hookRunner = getGlobalHookRunner();

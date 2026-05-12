@@ -167,6 +167,7 @@ describe("openai codex provider", () => {
     const provider = buildOpenAICodexProviderPlugin();
     const oauth = requireAuthMethod(provider, "oauth");
     const deviceCode = requireAuthMethod(provider, "device-code");
+    const apiKey = requireAuthMethod(provider, "api-key");
 
     expectRecordFields(oauth.wizard, "oauth wizard", {
       choiceLabel: "OpenAI Codex Browser Login",
@@ -176,6 +177,13 @@ describe("openai codex provider", () => {
     });
     expectRecordFields(deviceCode.wizard, "device-code wizard", {
       choiceLabel: "OpenAI Codex Device Pairing",
+      groupId: "openai-codex",
+      groupLabel: "OpenAI Codex",
+      groupHint: "ChatGPT/Codex sign-in",
+    });
+    expectRecordFields(apiKey.wizard, "api-key wizard", {
+      choiceLabel: "OpenAI API Key Backup",
+      choiceHint: "Use an OpenAI API key when your Codex subscription is unavailable",
       groupId: "openai-codex",
       groupLabel: "OpenAI Codex",
       groupHint: "ChatGPT/Codex sign-in",
@@ -213,7 +221,7 @@ describe("openai codex provider", () => {
     const oauth = requireAuthMethod(provider, "oauth");
     const deviceCode = requireAuthMethod(provider, "device-code");
 
-    expect(provider.auth?.map((method) => method.id)).toEqual(["oauth", "device-code"]);
+    expect(provider.auth?.map((method) => method.id)).toEqual(["oauth", "device-code", "api-key"]);
     expect(oauth.label).toBe("OpenAI Codex Browser Login");
     expect(oauth.hint).toBe("Sign in with OpenAI in your browser");
     expectRecordFields(oauth.wizard, "oauth wizard", {

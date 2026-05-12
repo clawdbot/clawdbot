@@ -103,7 +103,9 @@ function mockMediaLoad(fileName: string, contentType: string, data: string) {
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -359,7 +361,9 @@ describe("deliverReplies", () => {
       bot,
     });
 
-    expect(mockCallArg(messageHookRunner.runMessageSending, 0, 0)).toBeDefined();
+    if (mockCallArg(messageHookRunner.runMessageSending, 0, 0) === undefined) {
+      throw new Error("Expected message_sending hook payload");
+    }
     expectRecordFields(mockCallArg(messageHookRunner.runMessageSending, 0, 1), {
       channelId: "telegram",
       accountId: "work",
@@ -628,7 +632,9 @@ describe("deliverReplies", () => {
     });
 
     expect(sendPhoto.mock.calls[0]?.[0]).toBe("123");
-    expect(sendPhoto.mock.calls[0]?.[1]).toBeDefined();
+    if (sendPhoto.mock.calls[0]?.[1] === undefined) {
+      throw new Error("Expected Telegram photo media");
+    }
     expectRecordFields(mockCallArg(sendPhoto, 0, 2), {
       caption: "hi <b>boss</b>",
       parse_mode: "HTML",
@@ -654,7 +660,9 @@ describe("deliverReplies", () => {
 
     expect(probeVideoDimensions).toHaveBeenCalledWith(Buffer.from("video"));
     expect(sendVideo.mock.calls[0]?.[0]).toBe("123");
-    expect(sendVideo.mock.calls[0]?.[1]).toBeDefined();
+    if (sendVideo.mock.calls[0]?.[1] === undefined) {
+      throw new Error("Expected Telegram video media");
+    }
     expectRecordFields(mockCallArg(sendVideo, 0, 2), {
       caption: "hi <b>boss</b>",
       parse_mode: "HTML",
@@ -681,7 +689,9 @@ describe("deliverReplies", () => {
 
     expect(probeVideoDimensions).not.toHaveBeenCalled();
     expect(sendAnimation.mock.calls[0]?.[0]).toBe("123");
-    expect(sendAnimation.mock.calls[0]?.[1]).toBeDefined();
+    if (sendAnimation.mock.calls[0]?.[1] === undefined) {
+      throw new Error("Expected Telegram animation media");
+    }
     const options = mockCallArg(sendAnimation, 0, 2) as Record<string, unknown>;
     expect(typeof options.width).not.toBe("number");
     expect(typeof options.height).not.toBe("number");
@@ -1122,7 +1132,9 @@ describe("deliverReplies", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
     expect(sendMessage.mock.calls[0]?.[1]).toContain("Hello there");
-    expect(sendMessage.mock.calls[0]?.[2]).toBeDefined();
+    if (sendMessage.mock.calls[0]?.[2] === undefined) {
+      throw new Error("Expected Telegram fallback text options");
+    }
   });
 
   it("keeps disable_notification on voice fallback text when silent is true", async () => {

@@ -7,6 +7,23 @@ vi.mock("./post-json.js", () => ({
   postJson: postJsonMock,
 }));
 
+function requirePostJsonParams(): {
+  url?: unknown;
+  headers?: unknown;
+  body?: unknown;
+  errorPrefix?: unknown;
+} {
+  const [call] = postJsonMock.mock.calls;
+  if (!call) {
+    throw new Error("expected postJson call");
+  }
+  const [params] = call;
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("expected postJson params to be an object");
+  }
+  return params;
+}
+
 describe("fetchRemoteEmbeddingVectors", () => {
   beforeEach(() => {
     postJsonMock.mockReset();
@@ -27,11 +44,11 @@ describe("fetchRemoteEmbeddingVectors", () => {
     });
 
     expect(vectors).toEqual([[0.1, 0.2], [], [0.3]]);
-    const postJsonParams = postJsonMock.mock.calls[0]?.[0];
-    expect(postJsonParams?.url).toBe("https://memory.example/v1/embeddings");
-    expect(postJsonParams?.headers).toEqual({ Authorization: "Bearer test" });
-    expect(postJsonParams?.body).toEqual({ input: ["one", "two", "three"] });
-    expect(postJsonParams?.errorPrefix).toBe("embedding fetch failed");
+    const postJsonParams = requirePostJsonParams();
+    expect(postJsonParams.url).toBe("https://memory.example/v1/embeddings");
+    expect(postJsonParams.headers).toEqual({ Authorization: "Bearer test" });
+    expect(postJsonParams.body).toEqual({ input: ["one", "two", "three"] });
+    expect(postJsonParams.errorPrefix).toBe("embedding fetch failed");
   });
 
   it("throws a status-rich error on non-ok responses", async () => {

@@ -175,7 +175,8 @@ describe("resolvePluginWebFetchProviders", () => {
     });
 
     expect(providers).toStrictEqual([]);
-    const { logger: inFlightLogger, ...inFlightLoadOptions } = inFlightSpy.mock.calls[0]?.[0] ?? {};
+    const { logger: inFlightLogger, ...inFlightLoadOptions } =
+      inFlightSpy.mock.calls.at(0)?.[0] ?? {};
     expect(Object.keys(inFlightLogger ?? {}).toSorted()).toEqual([
       "debug",
       "error",
@@ -291,7 +292,7 @@ describe("resolvePluginWebFetchProviders", () => {
       diagnostics: [],
       installRecords: {},
     });
-    const { logger, ...loadOptions } = loadOpenClawPluginsMock.mock.calls[0]?.[0] ?? {};
+    const { logger, ...loadOptions } = loadOpenClawPluginsMock.mock.calls.at(0)?.[0] ?? {};
     expect(Object.keys(logger ?? {}).toSorted()).toEqual(["debug", "error", "info", "warn"]);
     expect(loadOptions).toEqual({
       config: createFirecrawlAllowConfig(),

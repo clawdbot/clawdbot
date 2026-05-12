@@ -45,14 +45,17 @@ function pluginTool(name: string, description: string, pluginId = "fake-catalog"
 }
 
 function resultDetails(result: { details?: unknown }): Record<string, unknown> {
-  expect(result.details).toBeDefined();
-  expect(typeof result.details).toBe("object");
+  if (!result.details || typeof result.details !== "object") {
+    throw new Error("Expected result details");
+  }
   return result.details as Record<string, unknown>;
 }
 
 function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0): unknown[] {
   const call = mock.mock.calls[index];
-  expect(call).toBeDefined();
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
   return call;
 }
 
@@ -337,8 +340,10 @@ describe("Tool Search", () => {
     const entry = __testing.sessionCatalogs
       .get("session:session-hooks")
       ?.entries.find((candidate) => candidate.name === "fake_hooked");
-    expect(entry).toBeTruthy();
-    expect(isToolWrappedWithBeforeToolCallHook(entry!.tool as AnyAgentTool)).toBe(true);
+    if (!entry) {
+      throw new Error("Expected fake_hooked catalog entry");
+    }
+    expect(isToolWrappedWithBeforeToolCallHook(entry.tool as AnyAgentTool)).toBe(true);
 
     const [runtimeCodeTool] = createToolSearchTools({
       sessionId: "session-hooks",
@@ -652,7 +657,7 @@ describe("Tool Search", () => {
       });
 
     await vi.waitFor(() => expect(target.execute).toHaveBeenCalledTimes(1));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(settled).toBe(false);
     resolveTool?.();
     const result = await resultPromise;
@@ -863,8 +868,10 @@ describe("Tool Search", () => {
         code: `return await openclaw.tools.call("fake_abort_on_timeout", { value: "wait" });`,
       }),
     ).rejects.toThrow("tool_search_code timed out");
-    expect(observedSignal).toBeDefined();
-    expect(observedSignal?.aborted).toBe(true);
+    if (!observedSignal) {
+      throw new Error("Expected observed abort signal");
+    }
+    expect(observedSignal.aborted).toBe(true);
     expect(abortCount).toBe(1);
   });
 });

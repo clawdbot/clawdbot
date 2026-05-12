@@ -147,21 +147,29 @@ function expectInvokeResponse(sendActivity: ReturnType<typeof vi.fn>, status?: n
     );
   })?.[0] as { value?: { status?: unknown } } | undefined;
 
-  expect(activity).toBeDefined();
+  if (!activity) {
+    throw new Error("Expected invokeResponse activity");
+  }
   if (status !== undefined) {
-    expect(activity?.value?.status).toBe(status);
+    expect(activity.value?.status).toBe(status);
   }
 }
 
 function expectLogFields(logFn: unknown, message: string, fields: Record<string, unknown>): void {
   const calls = (logFn as { mock?: { calls?: Array<[unknown, unknown?]> } }).mock?.calls;
-  expect(calls).toBeDefined();
-  const call = calls?.find(([text]) => text === message);
-  expect(call).toBeDefined();
-  const meta = call?.[1] as Record<string, unknown> | undefined;
-  expect(meta).toBeDefined();
+  if (!calls) {
+    throw new Error("Expected log mock calls");
+  }
+  const call = calls.find(([text]) => text === message);
+  if (!call) {
+    throw new Error(`Expected log message: ${message}`);
+  }
+  const meta = call[1] as Record<string, unknown> | undefined;
+  if (!meta) {
+    throw new Error(`Expected log metadata for: ${message}`);
+  }
   for (const [key, value] of Object.entries(fields)) {
-    expect(meta?.[key]).toEqual(value);
+    expect(meta[key]).toEqual(value);
   }
 }
 

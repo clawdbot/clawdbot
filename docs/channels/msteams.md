@@ -700,7 +700,7 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.tools`: per-channel tool policy overrides (`allow`/`deny`/`alsoAllow`).
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`: per-channel per-sender tool policy overrides (`"*"` wildcard supported).
 - `toolsBySender` keys should use explicit prefixes:
-  `id:`, `e164:`, `username:`, `name:` (legacy unprefixed keys still map to `id:` only).
+  `channel:`, `id:`, `e164:`, `username:`, `name:` (legacy unprefixed keys still map to `id:` only).
 - `channels.msteams.actions.memberInfo`: enable or disable the Graph-backed member info action (default: enabled when Graph credentials are available).
 - `channels.msteams.authType`: authentication type - `"secret"` (default) or `"federated"`.
 - `channels.msteams.certificatePath`: path to PEM certificate file (federated + certificate auth).

@@ -13,6 +13,16 @@ function createApi(config: OpenClawConfig, registerHttpRoute = vi.fn()): OpenCla
   });
 }
 
+function registeredRouteAt(registerHttpRoute: ReturnType<typeof vi.fn>, index: number) {
+  const call = registerHttpRoute.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected registered HTTP route ${index}`);
+  }
+  return call[0] as {
+    handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+  };
+}
+
 describe("registerSlackPluginHttpRoutes", () => {
   it("registers account webhook paths without resolving unresolved token refs", () => {
     const registerHttpRoute = vi.fn();
@@ -72,15 +82,11 @@ describe("registerSlackPluginHttpRoutes", () => {
 
     try {
       registerSlackPluginHttpRoutes(createApi({}, registerHttpRoute));
-      const route = registerHttpRoute.mock.calls[0]?.[0] as
-        | {
-            handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
-          }
-        | undefined;
+      const route = registeredRouteAt(registerHttpRoute, 0);
       const req = { url: "/slack/events" } as IncomingMessage;
       const res = {} as ServerResponse;
 
-      await expect(route?.handler(req, res)).resolves.toBe(true);
+      await expect(route.handler(req, res)).resolves.toBe(true);
 
       expect(routeHandler).toHaveBeenCalledWith(req, res);
     } finally {

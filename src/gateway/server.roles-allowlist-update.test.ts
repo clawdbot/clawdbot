@@ -210,14 +210,9 @@ async function expectPendingPairingCommands(nodeId: string, commands: string[]) 
     pending?: Array<{ nodeId?: string; commands?: string[] }>;
   }>(ws, "node.pair.list", {});
   expect(pairingList.ok).toBe(true);
-  expect(pairingList.payload?.pending ?? []).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        nodeId,
-        commands,
-      }),
-    ]),
-  );
+  const pending = (pairingList.payload?.pending ?? []).find((entry) => entry.nodeId === nodeId);
+  expect(pending?.nodeId).toBe(nodeId);
+  expect(pending?.commands).toEqual(commands);
 }
 
 describe("gateway role enforcement", () => {
@@ -250,7 +245,7 @@ describe("gateway role enforcement", () => {
       await expect(nodeClient.request("status", {})).rejects.toThrow("unauthorized role");
 
       const healthPayload = await nodeClient.request<HealthSummary>("health", {});
-      expect(healthPayload).toMatchObject({ ok: true });
+      expect(healthPayload.ok).toBe(true);
     } finally {
       nodeClient?.stop();
     }

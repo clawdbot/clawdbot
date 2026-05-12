@@ -41,13 +41,23 @@ function mockSuccessfulBytePlusTask(params?: { model?: string }) {
     });
 }
 
-function requireBytePlusPostBody(): Record<string, unknown> {
-  const request = postJsonRequestMock.mock.calls[0]?.[0] as
-    | { body?: Record<string, unknown> }
-    | undefined;
+function requireBytePlusPostRequest(): { body?: Record<string, unknown>; url?: string } {
+  const [call] = postJsonRequestMock.mock.calls;
+  if (!call) {
+    throw new Error("expected BytePlus video request");
+  }
+  const [request] = call;
   if (!request) {
     throw new Error("expected BytePlus video request");
   }
+  if (typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected BytePlus video request options");
+  }
+  return request as { body?: Record<string, unknown>; url?: string };
+}
+
+function requireBytePlusPostBody(): Record<string, unknown> {
+  const request = requireBytePlusPostRequest();
   if (!request.body) {
     throw new Error("expected BytePlus video request body");
   }
@@ -71,8 +81,8 @@ describe("byteplus video generation provider", () => {
     });
 
     expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
-    const request = postJsonRequestMock.mock.calls[0]?.[0] as { url?: string } | undefined;
-    expect(request?.url).toBe(
+    const request = requireBytePlusPostRequest();
+    expect(request.url).toBe(
       "https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks",
     );
     expect(result.videos).toHaveLength(1);

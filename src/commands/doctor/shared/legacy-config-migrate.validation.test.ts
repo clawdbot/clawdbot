@@ -32,9 +32,13 @@ describe("legacy config migrate validation", () => {
       historyLimit: 8,
       mentionPatterns: ["@openclaw"],
     });
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
+      "Moved routing.allowFrom → channels.whatsapp.allowFrom.",
+      'Moved routing.groupChat.requireMention → channels.whatsapp.groups."*".requireMention.',
       'Moved routing.groupChat.requireMention → channels.telegram.groups."*".requireMention.',
-    );
+      "Moved routing.groupChat.historyLimit → messages.groupChat.historyLimit.",
+      "Moved routing.groupChat.mentionPatterns → messages.groupChat.mentionPatterns.",
+    ]);
   });
 
   it("returns migrated config when unrelated plugin validation issues remain (#76798)", () => {
@@ -57,12 +61,10 @@ describe("legacy config migrate validation", () => {
     });
 
     expect(res.partiallyValid).toBe(true);
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds.",
-    );
-    expect(res.changes).toContain(
       "Migration applied; other validation issues remain — run doctor to review.",
-    );
+    ]);
     expect(res.config?.agents?.defaults).toEqual({
       model: { primary: "openai/gpt-5.5" },
     });

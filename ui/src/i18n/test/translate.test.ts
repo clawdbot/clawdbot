@@ -134,10 +134,9 @@ describe("i18n", () => {
     const fresh = await importFreshTranslate();
 
     expect(fresh.i18n.getLocale()).toBe("en");
-    expect(warningSpy).not.toHaveBeenCalledWith(
+    const warningMessages = warningSpy.mock.calls.map((call) => String(call[0]));
+    expect(warningMessages).not.toContain(
       "`--localstorage-file` was provided without a valid path",
-      expect.anything(),
-      expect.anything(),
     );
   });
 

@@ -1,10 +1,11 @@
 import { readFile, rm, writeFile } from "node:fs/promises";
 import type { Message } from "@grammyjs/types";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   buildTelegramConversationContext,
   buildTelegramReplyChain,
   createTelegramMessageCache,
+  resetTelegramMessageCacheBucketsForTest,
   resolveTelegramMessageCachePath,
 } from "./message-cache.js";
 
@@ -71,10 +72,9 @@ describe("telegram message cache", () => {
         } as Message,
       });
 
-      vi.resetModules();
-      const reloaded = await import("./message-cache.js");
-      const secondCache = reloaded.createTelegramMessageCache({ persistedPath });
-      const chain = reloaded.buildTelegramReplyChain({
+      resetTelegramMessageCacheBucketsForTest();
+      const secondCache = createTelegramMessageCache({ persistedPath });
+      const chain = buildTelegramReplyChain({
         cache: secondCache,
         accountId: "default",
         chatId: 7,
@@ -228,9 +228,8 @@ describe("telegram message cache", () => {
       const lines = (await readFile(persistedPath, "utf-8")).trim().split("\n");
       expect(lines).toHaveLength(5);
 
-      vi.resetModules();
-      const reloaded = await import("./message-cache.js");
-      const reloadedCache = reloaded.createTelegramMessageCache({ persistedPath, maxMessages: 4 });
+      resetTelegramMessageCacheBucketsForTest();
+      const reloadedCache = createTelegramMessageCache({ persistedPath, maxMessages: 4 });
       expect(reloadedCache.get({ accountId: "default", chatId: 7, messageId: "9150" })).toBeNull();
       expect(
         reloadedCache.get({ accountId: "default", chatId: 7, messageId: "9151" })?.messageId,

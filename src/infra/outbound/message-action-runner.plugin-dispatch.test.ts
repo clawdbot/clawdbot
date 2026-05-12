@@ -21,7 +21,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function readFirstPluginCall(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
-  const call = mock.mock.calls[0]?.[0];
+  const [mockCall] = mock.mock.calls;
+  const call = mockCall?.[0];
   if (!isRecord(call)) {
     throw new Error("expected plugin action call");
   }
@@ -32,7 +33,8 @@ function readPluginCall(
   mock: { mock: { calls: unknown[][] } },
   callIndex: number,
 ): Record<string, unknown> {
-  const call = mock.mock.calls[callIndex]?.[0];
+  const mockCall = mock.mock.calls[callIndex];
+  const call = mockCall?.[0];
   if (!isRecord(call)) {
     throw new Error(`expected plugin action call ${callIndex}`);
   }
@@ -49,7 +51,8 @@ function readMockCallArg(
   callIndex = 0,
   argIndex = 0,
 ): Record<string, unknown> {
-  const value = mock.mock.calls[callIndex]?.[argIndex];
+  const mockCall = mock.mock.calls[callIndex];
+  const value = mockCall?.[argIndex];
   if (!isRecord(value)) {
     throw new Error(`expected ${label}`);
   }

@@ -50,24 +50,31 @@ describe("detectImageReferences", () => {
   it("detects relative paths starting with ./", () => {
     const ref = expectSingleImageReference("Look at ./images/photo.jpg");
 
-    expect(ref?.raw).toBe("./images/photo.jpg");
-    expect(ref?.type).toBe("path");
+    expect(ref).toStrictEqual({
+      raw: "./images/photo.jpg",
+      type: "path",
+      resolved: "./images/photo.jpg",
+    });
   });
 
   it("detects relative paths starting with ../", () => {
     const ref = expectSingleImageReference("The file is at ../screenshots/test.jpeg");
 
-    expect(ref?.raw).toBe("../screenshots/test.jpeg");
-    expect(ref?.type).toBe("path");
+    expect(ref).toStrictEqual({
+      raw: "../screenshots/test.jpeg",
+      type: "path",
+      resolved: "../screenshots/test.jpeg",
+    });
   });
 
   it("detects home directory paths starting with ~/", () => {
     const ref = expectSingleImageReference("My photo is at ~/Pictures/vacation.png");
 
-    expect(ref?.raw).toBe("~/Pictures/vacation.png");
-    expect(ref?.type).toBe("path");
-    // Resolved path should expand ~
-    expect(ref?.resolved?.startsWith("~")).toBe(false);
+    expect(ref).toStrictEqual({
+      raw: "~/Pictures/vacation.png",
+      type: "path",
+      resolved: path.join(process.env.HOME ?? os.homedir(), "Pictures/vacation.png"),
+    });
   });
 
   it("detects multiple image references in a prompt", () => {
@@ -80,14 +87,28 @@ describe("detectImageReferences", () => {
       1,
     );
 
-    expect(refs.map((ref) => ref.type)).toContain("path");
+    expect(refs).toStrictEqual([
+      {
+        raw: "/home/user/photo1.png",
+        type: "path",
+        resolved: "/home/user/photo1.png",
+      },
+    ]);
   });
 
   it("does not leak parser state between calls", () => {
-    expectSingleImageReference("[media attached: /tmp/first.png (image/png)]");
-    expectSingleImageReference("[Image: source: /tmp/second.jpg]");
-    expectSingleImageReference("See file:///tmp/third.webp");
-    expectSingleImageReference("See ./fourth.jpeg");
+    expect(detectImageReferences("[media attached: /tmp/first.png (image/png)]")).toStrictEqual([
+      { raw: "/tmp/first.png", type: "path", resolved: "/tmp/first.png" },
+    ]);
+    expect(detectImageReferences("[Image: source: /tmp/second.jpg]")).toStrictEqual([
+      { raw: "/tmp/second.jpg", type: "path", resolved: "/tmp/second.jpg" },
+    ]);
+    expect(detectImageReferences("See file:///tmp/third.webp")).toStrictEqual([
+      { raw: "file:///tmp/third.webp", type: "path", resolved: "/tmp/third.webp" },
+    ]);
+    expect(detectImageReferences("See ./fourth.jpeg")).toStrictEqual([
+      { raw: "./fourth.jpeg", type: "path", resolved: "./fourth.jpeg" },
+    ]);
   });
 
   it("handles various image extensions", () => {
@@ -95,21 +116,52 @@ describe("detectImageReferences", () => {
     for (const ext of extensions) {
       const prompt = `Image: /test/image.${ext}`;
       const refs = detectImageReferences(prompt);
-      expect(refs.length).toBeGreaterThanOrEqual(1);
-      expect(refs[0]?.raw).toContain(`.${ext}`);
+      expect(refs).toStrictEqual([
+        {
+          raw: `/test/image.${ext}`,
+          type: "path",
+          resolved: `/test/image.${ext}`,
+        },
+      ]);
     }
   });
 
   it("deduplicates repeated image references", () => {
-    expectImageReferenceCount("Look at /path/image.png and also /path/image.png again", 1);
+    expect(
+      detectImageReferences("Look at /path/image.png and also /path/image.png again"),
+    ).toStrictEqual([
+      {
+        raw: "/path/image.png",
+        type: "path",
+        resolved: "/path/image.png",
+      },
+    ]);
   });
 
   it("dedupe casing follows host filesystem conventions", () => {
+    const prompt = "Look at /tmp/Image.png and /tmp/image.png";
     if (process.platform === "win32") {
-      expectImageReferenceCount("Look at /tmp/Image.png and /tmp/image.png", 1);
+      expect(detectImageReferences(prompt)).toStrictEqual([
+        {
+          raw: "/tmp/Image.png",
+          type: "path",
+          resolved: "/tmp/Image.png",
+        },
+      ]);
       return;
     }
-    expectImageReferenceCount("Look at /tmp/Image.png and /tmp/image.png", 2);
+    expect(detectImageReferences(prompt)).toStrictEqual([
+      {
+        raw: "/tmp/Image.png",
+        type: "path",
+        resolved: "/tmp/Image.png",
+      },
+      {
+        raw: "/tmp/image.png",
+        type: "path",
+        resolved: "/tmp/image.png",
+      },
+    ]);
   });
 
   it("returns empty array when no images found", () => {
@@ -123,21 +175,32 @@ describe("detectImageReferences", () => {
   it("handles paths inside quotes (without spaces)", () => {
     const ref = expectSingleImageReference('The file is at "/path/to/image.png"');
 
-    expect(ref?.raw).toBe("/path/to/image.png");
+    expect(ref).toStrictEqual({
+      raw: "/path/to/image.png",
+      type: "path",
+      resolved: "/path/to/image.png",
+    });
   });
 
   it("handles paths in parentheses", () => {
     const ref = expectSingleImageReference("See the image (./screenshot.png) for details");
 
-    expect(ref?.raw).toBe("./screenshot.png");
+    expect(ref).toStrictEqual({
+      raw: "./screenshot.png",
+      type: "path",
+      resolved: "./screenshot.png",
+    });
   });
 
   it("detects [Image: source: ...] format from messaging systems", () => {
     const ref = expectSingleImageReference(`What does this image show?
 [Image: source: /Users/tyleryust/Library/Messages/Attachments/IMG_0043.jpeg]`);
 
-    expect(ref?.raw).toBe("/Users/tyleryust/Library/Messages/Attachments/IMG_0043.jpeg");
-    expect(ref?.type).toBe("path");
+    expect(ref).toStrictEqual({
+      raw: "/Users/tyleryust/Library/Messages/Attachments/IMG_0043.jpeg",
+      type: "path",
+      resolved: "/Users/tyleryust/Library/Messages/Attachments/IMG_0043.jpeg",
+    });
   });
 
   it("handles complex message attachment paths", () => {
@@ -145,7 +208,12 @@ describe("detectImageReferences", () => {
       "[Image: source: /Users/tyleryust/Library/Messages/Attachments/23/03/AA4726EA-DB27-4269-BA56-1436936CC134/5E3E286A-F585-4E5E-9043-5BC2AFAFD81BIMG_0043.jpeg]",
     );
 
-    expect(ref?.resolved).toContain("IMG_0043.jpeg");
+    expect(ref).toStrictEqual({
+      raw: "/Users/tyleryust/Library/Messages/Attachments/23/03/AA4726EA-DB27-4269-BA56-1436936CC134/5E3E286A-F585-4E5E-9043-5BC2AFAFD81BIMG_0043.jpeg",
+      type: "path",
+      resolved:
+        "/Users/tyleryust/Library/Messages/Attachments/23/03/AA4726EA-DB27-4269-BA56-1436936CC134/5E3E286A-F585-4E5E-9043-5BC2AFAFD81BIMG_0043.jpeg",
+    });
   });
 
   it("detects multiple images in [media attached: ...] format", () => {
@@ -158,8 +226,18 @@ what about these images?`,
       2,
     );
 
-    expect(refs[0]?.resolved).toContain("IMG_6430.jpeg");
-    expect(refs[1]?.resolved).toContain("IMG_6431.jpeg");
+    expect(refs).toStrictEqual([
+      {
+        raw: "/Users/tyleryust/.openclaw/media/IMG_6430.jpeg",
+        type: "path",
+        resolved: "/Users/tyleryust/.openclaw/media/IMG_6430.jpeg",
+      },
+      {
+        raw: "/Users/tyleryust/.openclaw/media/IMG_6431.jpeg",
+        type: "path",
+        resolved: "/Users/tyleryust/.openclaw/media/IMG_6431.jpeg",
+      },
+    ]);
   });
 
   it("does not double-count path and url in same bracket", () => {
@@ -168,7 +246,11 @@ what about these images?`,
       "[media attached: /cache/IMG_6430.jpeg (image/jpeg) | /cache/IMG_6430.jpeg]",
     );
 
-    expect(ref?.resolved).toContain("IMG_6430.jpeg");
+    expect(ref).toStrictEqual({
+      raw: "/cache/IMG_6430.jpeg",
+      type: "path",
+      resolved: "/cache/IMG_6430.jpeg",
+    });
   });
 
   it("ignores remote URLs entirely (local-only)", () => {
@@ -179,7 +261,13 @@ Also https://cdn.mysite.com/img.jpg`,
       1,
     );
 
-    expect(refs[0]?.raw).toBe("/path/to/real.png");
+    expect(refs).toStrictEqual([
+      {
+        raw: "/path/to/real.png",
+        type: "path",
+        resolved: "/path/to/real.png",
+      },
+    ]);
   });
 
   it("handles single file format with URL (no index)", () => {
@@ -187,7 +275,11 @@ Also https://cdn.mysite.com/img.jpg`,
       expectSingleImageReference(`[media attached: /cache/photo.jpeg (image/jpeg) | https://example.com/url]
 what is this?`);
 
-    expect(ref?.resolved).toContain("photo.jpeg");
+    expect(ref).toStrictEqual({
+      raw: "/cache/photo.jpeg",
+      type: "path",
+      resolved: "/cache/photo.jpeg",
+    });
   });
 
   it("handles paths with spaces in filename", () => {
@@ -196,8 +288,11 @@ what is this?`);
       expectSingleImageReference(`[media attached: /Users/test/.openclaw/media/ChatGPT Image Apr 21, 2025.png (image/png) | https://example.com/same.png]
 what is this?`);
 
-    // Only 1 ref - the local path (example.com URLs are skipped)
-    expect(ref?.resolved).toContain("ChatGPT Image Apr 21, 2025.png");
+    expect(ref).toStrictEqual({
+      raw: "/Users/test/.openclaw/media/ChatGPT Image Apr 21, 2025.png",
+      type: "path",
+      resolved: "/Users/test/.openclaw/media/ChatGPT Image Apr 21, 2025.png",
+    });
   });
 
   it("ignores remote-host file URLs", () => {
@@ -268,7 +363,10 @@ describe("loadImageFromRef", () => {
       );
 
       expect(image?.type).toBe("image");
-      expect(image?.data.length).toBeGreaterThan(0);
+      expect(image?.mimeType).toBe("image/png");
+      expect(image?.data).toBe(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==",
+      );
     } finally {
       await fs.rm(sandboxParent, { recursive: true, force: true });
     }

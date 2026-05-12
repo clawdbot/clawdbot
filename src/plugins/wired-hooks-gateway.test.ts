@@ -31,6 +31,14 @@ async function expectGatewayHookCall(params: {
   expect(handler).toHaveBeenCalledWith(params.event, params.gatewayCtx);
 }
 
+function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 describe("gateway hook runner methods", () => {
   const gatewayCtx = {
     port: 18789,
@@ -121,7 +129,8 @@ describe("gateway hook runner methods", () => {
     await runner.runCronChanged(event, gatewayCtx);
 
     expect(handler).toHaveBeenCalledWith(event, gatewayCtx);
-    expect(handler.mock.calls[0][0].job).toEqual({
+    const [cronChangedEvent] = requireFirstMockCall(handler, "cron_changed handler");
+    expect((cronChangedEvent as PluginHookCronChangedEvent).job).toEqual({
       id: "job-3",
       name: "deleted-job",
       sessionTarget: "isolated",

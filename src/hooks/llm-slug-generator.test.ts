@@ -23,11 +23,15 @@ vi.mock("../agents/pi-embedded.js", () => ({
 import { generateSlugViaLLM } from "./llm-slug-generator.js";
 
 function requireFirstRunOptions(): Record<string, unknown> {
-  const options = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
-  if (!options) {
+  const [call] = runEmbeddedPiAgentMock.mock.calls;
+  if (!call) {
+    throw new Error("expected embedded Pi agent run");
+  }
+  const [options] = call;
+  if (!options || typeof options !== "object") {
     throw new Error("expected embedded Pi agent run options");
   }
-  return options;
+  return options as Record<string, unknown>;
 }
 
 describe("generateSlugViaLLM", () => {

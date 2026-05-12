@@ -31,7 +31,19 @@ async function readJsonlRecords(filePath: string): Promise<ReplayRecord[]> {
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  let statError: unknown;
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    statError = error;
+  }
+  if (statError === undefined) {
+    throw new Error(`Expected ${targetPath} to be missing`);
+  }
+  if (!statError || typeof statError !== "object") {
+    throw new Error("expected stat error object");
+  }
+  expect((statError as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
 describe("replayRecentUserAssistantMessages", () => {
@@ -63,11 +75,25 @@ describe("replayRecentUserAssistantMessages", () => {
 
     expect(await call(source, target)).toBe(DEFAULT_REPLAY_MAX_MESSAGES);
     const records = await readJsonlRecords(target);
-    expect(records[0]).toMatchObject({ type: "session", id: "new-session" });
+    expect(records[0]?.type).toBe("session");
+    expect(records[0]?.id).toBe("new-session");
     expect(records).toHaveLength(1 + DEFAULT_REPLAY_MAX_MESSAGES);
-    for (const r of records.slice(1)) {
-      expect(["user", "assistant"]).toContain(r.message?.role);
-    }
+    expect(records.slice(1).map((record) => record.message?.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
+    expect(records.slice(1).map((record) => record.message?.content)).toEqual([
+      "m4",
+      "m5",
+      "m6",
+      "m7",
+      "m8",
+      "m9",
+    ]);
     expect(await call(path.join(root, "missing.jsonl"), path.join(root, "out.jsonl"))).toBe(0);
 
     const assistantSource = path.join(root, "all-assistant.jsonl");
@@ -93,7 +119,7 @@ describe("replayRecentUserAssistantMessages", () => {
     expect(await call(source, target)).toBe(DEFAULT_REPLAY_MAX_MESSAGES - 1);
     const records = await readJsonlRecords(target);
     expect(records.reduce((count, r) => count + (r.type === "session" ? 1 : 0), 0)).toBe(1);
-    expect(records[0]).toMatchObject({ id: "existing" });
+    expect(records[0]?.id).toBe("existing");
     expect(records[1].message?.role).toBe("user");
   });
 

@@ -48,8 +48,9 @@ function createModelRegistry(models: ProviderRuntimeModel[]) {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -76,9 +77,11 @@ describe("anthropic provider replay hooks", () => {
     const captured = capturePluginRegistration({ register: anthropicPlugin.register });
 
     const backend = captured.cliBackends.find((entry) => entry.id === "claude-cli");
-    expect(backend).toBeDefined();
-    expect(backend?.bundleMcp).toBe(true);
-    expectFields(backend?.config, {
+    if (!backend) {
+      throw new Error("Expected claude-cli backend");
+    }
+    expect(backend.bundleMcp).toBe(true);
+    expectFields(backend.config, {
       command: "claude",
       modelArg: "--model",
       sessionArg: "--session-id",

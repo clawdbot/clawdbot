@@ -108,20 +108,32 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       replyResolver: async () => ({ text: "model reply" }),
     });
 
-    expect(runtimePluginMocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
-      config: emptyConfig,
-      workspaceDir: expect.any(String),
-    });
-    expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:test:session",
-        sendPolicy: "allow",
-        inboundAudio: false,
-      }),
-      expect.objectContaining({
-        cfg: emptyConfig,
-      }),
-    );
+    expect(runtimePluginMocks.ensureRuntimePluginsLoaded).toHaveBeenCalledOnce();
+    const runtimeLoadCall = runtimePluginMocks.ensureRuntimePluginsLoaded.mock.calls[0]?.[0] as
+      | { config?: unknown; workspaceDir?: unknown }
+      | undefined;
+    expect(runtimeLoadCall?.config).toBe(emptyConfig);
+    expect(typeof runtimeLoadCall?.workspaceDir).toBe("string");
+    expect(String(runtimeLoadCall?.workspaceDir).length).toBeGreaterThan(0);
+
+    expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledOnce();
+    const [replyDispatchEvent, replyDispatchRuntime] =
+      (hookMocks.runner.runReplyDispatch.mock.calls[0] as
+        | [
+            {
+              sessionKey?: string;
+              sendPolicy?: string;
+              inboundAudio?: boolean;
+            },
+            {
+              cfg?: unknown;
+            },
+          ]
+        | undefined) ?? [];
+    expect(replyDispatchEvent?.sessionKey).toBe("agent:test:session");
+    expect(replyDispatchEvent?.sendPolicy).toBe("allow");
+    expect(replyDispatchEvent?.inboundAudio).toBe(false);
+    expect(replyDispatchRuntime?.cfg).toBe(emptyConfig);
     expect(result).toEqual({
       queuedFinal: true,
       counts: { tool: 1, block: 2, final: 3 },

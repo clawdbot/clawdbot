@@ -29,10 +29,16 @@ describe("noteStartupOptimizationHints", () => {
     expect(noteFn).toHaveBeenCalledTimes(1);
     const [message, title] = noteFn.mock.calls[0] ?? [];
     expect(title).toBe("Startup optimization");
-    expect(message).toContain("NODE_COMPILE_CACHE points to /tmp");
-    expect(message).toContain("OPENCLAW_NO_RESPAWN is not set to 1");
-    expect(message).toContain("export NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache");
-    expect(message).toContain("export OPENCLAW_NO_RESPAWN=1");
+    expect(message).toBe(
+      [
+        "- NODE_COMPILE_CACHE points to /tmp; use /var/tmp so cache survives reboots and warms startup reliably.",
+        "- OPENCLAW_NO_RESPAWN is not set to 1; set it to avoid extra startup overhead from self-respawn.",
+        "- Suggested env for low-power hosts:",
+        "  export NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache",
+        "  mkdir -p /var/tmp/openclaw-compile-cache",
+        "  export OPENCLAW_NO_RESPAWN=1",
+      ].join("\n"),
+    );
   });
 
   it("warns when compile cache is disabled via env override", () => {
@@ -49,8 +55,16 @@ describe("noteStartupOptimizationHints", () => {
 
     expect(noteFn).toHaveBeenCalledTimes(1);
     const [message] = noteFn.mock.calls[0] ?? [];
-    expect(message).toContain("NODE_DISABLE_COMPILE_CACHE is set");
-    expect(message).toContain("unset NODE_DISABLE_COMPILE_CACHE");
+    expect(message).toBe(
+      [
+        "- NODE_DISABLE_COMPILE_CACHE is set; startup compile cache is disabled.",
+        "- Suggested env for low-power hosts:",
+        "  export NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache",
+        "  mkdir -p /var/tmp/openclaw-compile-cache",
+        "  export OPENCLAW_NO_RESPAWN=1",
+        "  unset NODE_DISABLE_COMPILE_CACHE",
+      ].join("\n"),
+    );
   });
 
   it("skips startup optimization note on win32", () => {

@@ -86,7 +86,7 @@ describe("gateway shared token session rotation", () => {
       });
       expect(setRes.ok).toBe(true);
 
-      await expect(closed).resolves.toMatchObject({
+      await expect(closed).resolves.toEqual({
         code: 4001,
         reason: "gateway auth changed",
       });

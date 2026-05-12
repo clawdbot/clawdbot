@@ -97,6 +97,28 @@ function buildPluginApprovalElicitation(overrides: Record<string, unknown> = {})
   };
 }
 
+function buildConnectorPluginApprovalElicitation(overrides: Record<string, unknown> = {}) {
+  return {
+    threadId: "thread-1",
+    turnId: "turn-1",
+    serverName: "codex_apps",
+    mode: "form",
+    message: "Allow Google Calendar to create an event?",
+    _meta: {
+      codex_approval_kind: "mcp_tool_call",
+      source: "connector",
+      connector_id: "connector_google_calendar",
+      connector_name: "Google Calendar",
+      tool_title: "create_event",
+    },
+    requestedSchema: {
+      type: "object",
+      properties: {},
+    },
+    ...overrides,
+  };
+}
+
 function createPluginAppPolicyContext(
   params: {
     allowDestructiveActions?: boolean;
@@ -540,6 +562,114 @@ describe("Codex app-server elicitation bridge", () => {
       content: { approve: true },
       _meta: null,
     });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("accepts connector-id plugin app elicitations when destructive actions are enabled", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildConnectorPluginApprovalElicitation(),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({
+        allowDestructiveActions: true,
+        apps: [
+          {
+            appId: "connector_google_calendar",
+            pluginName: "google-calendar",
+            mcpServerNames: [],
+          },
+        ],
+      }),
+    });
+
+    expect(result).toEqual({
+      action: "accept",
+      content: null,
+      _meta: null,
+    });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("declines connector-id plugin app elicitations when destructive actions are disabled", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildConnectorPluginApprovalElicitation(),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({
+        allowDestructiveActions: false,
+        apps: [
+          {
+            appId: "connector_google_calendar",
+            pluginName: "google-calendar",
+            mcpServerNames: [],
+          },
+        ],
+      }),
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("declines live connector elicitations that only match display names", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildConnectorPluginApprovalElicitation({
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          source: "connector",
+          connector_name: "Google Calendar",
+          tool_title: "create_event",
+        },
+      }),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({
+        allowDestructiveActions: true,
+        apps: [
+          {
+            appId: "connector_google_calendar",
+            pluginName: "google-calendar",
+            mcpServerNames: [],
+          },
+        ],
+      }),
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("declines live connector elicitations with mismatched app and connector ids", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildConnectorPluginApprovalElicitation({
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          source: "connector",
+          app_id: "other-app",
+          connector_id: "connector_google_calendar",
+          connector_name: "Google Calendar",
+          tool_title: "create_event",
+        },
+      }),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({
+        allowDestructiveActions: true,
+        apps: [
+          {
+            appId: "connector_google_calendar",
+            pluginName: "google-calendar",
+            mcpServerNames: [],
+          },
+        ],
+      }),
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 

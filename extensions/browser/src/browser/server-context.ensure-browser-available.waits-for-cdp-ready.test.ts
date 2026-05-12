@@ -49,6 +49,16 @@ function createAttachOnlyLoopbackProfile(cdpUrl: string) {
   return { profile: ctx.forProfile("manual-cdp"), state };
 }
 
+function requireFirstLaunchOptions(launchOpenClawChrome: {
+  mock: { calls: unknown[][] };
+}): unknown {
+  const [call] = launchOpenClawChrome.mock.calls;
+  if (!call) {
+    throw new Error("expected Chrome launch call");
+  }
+  return call[2];
+}
+
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
@@ -149,7 +159,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
     await expect(promise).resolves.toBeUndefined();
 
     expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
-    expect(launchOpenClawChrome.mock.calls[0]?.[2]).toEqual({ headlessOverride: true });
+    expect(requireFirstLaunchOptions(launchOpenClawChrome)).toEqual({ headlessOverride: true });
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
   });
 
@@ -179,7 +189,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
 
     expect(stopOpenClawChrome).toHaveBeenCalledTimes(1);
     expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
-    expect(launchOpenClawChrome.mock.calls[0]?.[2]).toEqual({ headlessOverride: true });
+    expect(requireFirstLaunchOptions(launchOpenClawChrome)).toEqual({ headlessOverride: true });
   });
 
   it("does not share inflight lazy-start promises across different headless overrides", async () => {

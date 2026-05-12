@@ -101,7 +101,7 @@ describe("listSandboxBrowsers", () => {
   it("compares browser runtimes against sandbox.browser.image", async () => {
     const results = await listSandboxBrowsers();
 
-    const describeInput = backendMocks.describeRuntime.mock.calls[0]?.[0] as
+    const describeInput = backendMocks.describeRuntime.mock.calls.at(0)?.[0] as
       | { agentId?: string; entry?: { configLabelKind?: string } }
       | undefined;
     expect(describeInput?.agentId).toBe("coder");
@@ -115,7 +115,7 @@ describe("listSandboxBrowsers", () => {
   it("removes browser runtimes with BrowserImage config label kind", async () => {
     await removeSandboxBrowserContainer("browser-1");
 
-    const removeInput = backendMocks.removeRuntime.mock.calls[0]?.[0] as
+    const removeInput = backendMocks.removeRuntime.mock.calls.at(0)?.[0] as
       | {
           entry?: {
             containerName?: string;

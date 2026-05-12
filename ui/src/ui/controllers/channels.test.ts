@@ -15,6 +15,17 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+function createChannelsSnapshot(label: string): ChannelsStatusSnapshot {
+  return {
+    ts: Date.now(),
+    channelOrder: ["test"],
+    channelLabels: { test: label },
+    channels: {},
+    channelAccounts: {},
+    channelDefaultAccountId: {},
+  };
+}
+
 function createState(): ChannelsState {
   return {
     client: {
@@ -70,6 +81,34 @@ describe("channels controller WhatsApp wait", () => {
 });
 
 describe("loadChannels", () => {
+  it("keeps a stale slow probe from replacing a newer non-probe snapshot", async () => {
+    const state = createState();
+    const request = vi.mocked(state.client!.request);
+    const slowProbe = createDeferred<ChannelsStatusSnapshot | null>();
+    const fastRuntime = createDeferred<ChannelsStatusSnapshot | null>();
+    request.mockImplementation(async (_method: string, params?: unknown) => {
+      if ((params as { probe?: boolean } | undefined)?.probe) {
+        return slowProbe.promise;
+      }
+      return fastRuntime.promise;
+    });
+
+    const probeLoad = loadChannels(state, true, { softTimeoutMs: 1 });
+    await probeLoad;
+    const runtimeLoad = loadChannels(state, false);
+    expect(request).toHaveBeenCalledTimes(2);
+
+    fastRuntime.resolve(createChannelsSnapshot("fresh"));
+    await runtimeLoad;
+    expect(state.channelsSnapshot?.channelLabels.test).toBe("fresh");
+
+    slowProbe.resolve(createChannelsSnapshot("stale"));
+    await Promise.resolve();
+
+    expect(state.channelsSnapshot?.channelLabels.test).toBe("fresh");
+    expect(state.channelsLoading).toBe(false);
+  });
+
   it("returns after a soft timeout while preserving the stale snapshot", async () => {
     vi.useFakeTimers();
     try {

@@ -79,8 +79,9 @@ function createMonitorHarness(params?: { cpuMsPerWallMs?: number; utilization?: 
 }
 
 function expectSnapshotFields(snapshot: unknown, expected: Record<string, unknown>) {
-  expect(typeof snapshot).toBe("object");
-  expect(snapshot).not.toBeNull();
+  if (!snapshot || typeof snapshot !== "object") {
+    throw new Error("expected event loop health snapshot");
+  }
   const actual = snapshot as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);

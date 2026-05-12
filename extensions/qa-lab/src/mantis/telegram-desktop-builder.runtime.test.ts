@@ -99,13 +99,13 @@ describe("mantis Telegram desktop builder runtime", () => {
     const runCommand = commands.find(
       (entry) => entry.command === "/tmp/crabbox" && entry.args[0] === "run",
     );
-    expect(runCommand?.env).toMatchObject({
-      OPENCLAW_LIVE_OPENAI_KEY: "openai-runtime-key",
-      OPENCLAW_MANTIS_TELEGRAM_DESKTOP_PROFILE_TGZ_B64: "profile-archive",
-      OPENCLAW_MANTIS_TELEGRAM_DRIVER_BOT_TOKEN: "driver-token",
-      OPENCLAW_MANTIS_TELEGRAM_GROUP_ID: "-1001234567890",
-      OPENCLAW_MANTIS_TELEGRAM_SUT_BOT_TOKEN: "sut-token",
-    });
+    expect(runCommand?.env?.OPENCLAW_LIVE_OPENAI_KEY).toBe("openai-runtime-key");
+    expect(runCommand?.env?.OPENCLAW_MANTIS_TELEGRAM_DESKTOP_PROFILE_TGZ_B64).toBe(
+      "profile-archive",
+    );
+    expect(runCommand?.env?.OPENCLAW_MANTIS_TELEGRAM_DRIVER_BOT_TOKEN).toBe("driver-token");
+    expect(runCommand?.env?.OPENCLAW_MANTIS_TELEGRAM_GROUP_ID).toBe("-1001234567890");
+    expect(runCommand?.env?.OPENCLAW_MANTIS_TELEGRAM_SUT_BOT_TOKEN).toBe("sut-token");
     const remoteScript = runCommand?.args.at(-1);
     expect(remoteScript).toContain("https://telegram.org/dl/desktop/linux");
     expect(remoteScript).toContain('-workdir "$telegram_profile_dir"');
@@ -130,19 +130,15 @@ describe("mantis Telegram desktop builder runtime", () => {
       status: string;
       telegramDesktop: { profileArchiveEnv?: string; profileDir: string };
     };
-    expect(summary).toMatchObject({
-      crabbox: {
-        id: "cbx_a123",
-        vncCommand: "/tmp/crabbox vnc --provider hetzner --id cbx_a123 --open",
-      },
-      gatewaySetup: true,
-      hydrateMode: "source",
-      status: "pass",
-      telegramDesktop: {
-        profileArchiveEnv: "TELEGRAM_PROFILE_TGZ_B64",
-        profileDir: "/home/crabbox/.local/share/TelegramDesktop",
-      },
-    });
+    expect(summary.crabbox.id).toBe("cbx_a123");
+    expect(summary.crabbox.vncCommand).toBe(
+      "/tmp/crabbox vnc --provider hetzner --id cbx_a123 --open",
+    );
+    expect(summary.gatewaySetup).toBe(true);
+    expect(summary.hydrateMode).toBe("source");
+    expect(summary.status).toBe("pass");
+    expect(summary.telegramDesktop.profileArchiveEnv).toBe("TELEGRAM_PROFILE_TGZ_B64");
+    expect(summary.telegramDesktop.profileDir).toBe("/home/crabbox/.local/share/TelegramDesktop");
   });
 
   it("leases Convex Telegram credentials and maps them into the VM env", async () => {
@@ -231,18 +227,16 @@ describe("mantis Telegram desktop builder runtime", () => {
     });
 
     expect(result.status).toBe("pass");
-    expect(events).toEqual(expect.arrayContaining(["acquire", "release"]));
+    expect(events).toEqual(["acquire", "release"]);
     const runCommand = commands.find(
       (entry) => entry.command === "/tmp/crabbox" && entry.args[0] === "run",
     );
-    expect(runCommand?.env).toMatchObject({
-      OPENCLAW_MANTIS_TELEGRAM_DRIVER_BOT_TOKEN: "driver-leased",
-      OPENCLAW_MANTIS_TELEGRAM_GROUP_ID: "-100222333444",
-      OPENCLAW_MANTIS_TELEGRAM_SUT_BOT_TOKEN: "sut-leased",
-      OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver-leased",
-      OPENCLAW_QA_TELEGRAM_GROUP_ID: "-100222333444",
-      OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut-leased",
-    });
+    expect(runCommand?.env?.OPENCLAW_MANTIS_TELEGRAM_DRIVER_BOT_TOKEN).toBe("driver-leased");
+    expect(runCommand?.env?.OPENCLAW_MANTIS_TELEGRAM_GROUP_ID).toBe("-100222333444");
+    expect(runCommand?.env?.OPENCLAW_MANTIS_TELEGRAM_SUT_BOT_TOKEN).toBe("sut-leased");
+    expect(runCommand?.env?.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN).toBe("driver-leased");
+    expect(runCommand?.env?.OPENCLAW_QA_TELEGRAM_GROUP_ID).toBe("-100222333444");
+    expect(runCommand?.env?.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN).toBe("sut-leased");
     expect(
       commands.some((entry) => entry.command === "/tmp/crabbox" && entry.args[0] === "stop"),
     ).toBe(true);

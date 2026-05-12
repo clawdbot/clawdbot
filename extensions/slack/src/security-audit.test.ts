@@ -54,14 +54,10 @@ describe("Slack security audit findings", () => {
   it("flags slash commands without a channel users allowlist", async () => {
     const findings = await collectSlackFindingsForConfig(createSlashCommandSlackConfig());
 
-    expect(findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "channels.slack.commands.slash.no_allowlists",
-          severity: "warn",
-        }),
-      ]),
+    const slashAllowlistFinding = findings.find(
+      ({ checkId }) => checkId === "channels.slack.commands.slash.no_allowlists",
     );
+    expect(slashAllowlistFinding?.severity).toBe("warn");
   });
 
   it("flags slash commands when access-group enforcement is disabled", async () => {
@@ -69,13 +65,9 @@ describe("Slack security audit findings", () => {
       createSlashCommandSlackConfig({ useAccessGroups: false }),
     );
 
-    expect(findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "channels.slack.commands.slash.useAccessGroups_off",
-          severity: "critical",
-        }),
-      ]),
+    const accessGroupFinding = findings.find(
+      ({ checkId }) => checkId === "channels.slack.commands.slash.useAccessGroups_off",
     );
+    expect(accessGroupFinding?.severity).toBe("critical");
   });
 });

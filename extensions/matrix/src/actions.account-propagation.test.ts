@@ -15,7 +15,7 @@ const { matrixMessageActions } = await import("./actions.js");
 const profileAction = "set-profile" as ChannelMessageActionContext["action"];
 
 function matrixActionCall() {
-  const call = mocks.handleMatrixAction.mock.calls[0];
+  const call = mocks.handleMatrixAction.mock.calls.at(0);
   if (!call) {
     throw new Error("expected handleMatrixAction call");
   }

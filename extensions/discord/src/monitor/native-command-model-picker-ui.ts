@@ -85,12 +85,6 @@ function buildDiscordModelPickerCurrentModel(
   return `${defaultProvider}/${defaultModel}`;
 }
 
-function resolveConfiguredAgentRuntimeId(value: {
-  agentRuntime?: { id?: unknown };
-}): string | undefined {
-  return normalizeOptionalString(value.agentRuntime?.id);
-}
-
 export function buildDiscordModelPickerAllowedModelRefs(
   data: Awaited<ReturnType<typeof loadDiscordModelPickerData>>,
 ): Set<string> {
@@ -262,36 +256,6 @@ export function resolveDiscordModelPickerCurrentModel(params: {
   }
 }
 
-export function resolveDiscordModelPickerCurrentRuntime(params: {
-  cfg: OpenClawConfig;
-  route: ResolvedAgentRoute;
-}): string {
-  try {
-    const storePath = resolveStorePath(params.cfg.session?.store, {
-      agentId: params.route.agentId,
-    });
-    const sessionStore = loadSessionStore(storePath, { skipCache: true });
-    const sessionRuntime = normalizeOptionalString(
-      sessionStore[params.route.sessionKey]?.agentRuntimeOverride,
-    );
-    if (sessionRuntime) {
-      return sessionRuntime;
-    }
-  } catch {
-    // Fall through to configured defaults when the session store is unavailable.
-  }
-
-  const agentRuntime = resolveConfiguredAgentRuntimeId(
-    params.cfg.agents?.list?.find(
-      (entry) => normalizeOptionalString(entry.id) === params.route.agentId,
-    ) ?? {},
-  );
-  if (agentRuntime) {
-    return agentRuntime;
-  }
-  return resolveConfiguredAgentRuntimeId(params.cfg.agents?.defaults ?? {}) ?? "auto";
-}
-
 export async function replyWithDiscordModelPickerProviders(params: {
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
   cfg: OpenClawConfig;
@@ -313,10 +277,6 @@ export async function replyWithDiscordModelPickerProviders(params: {
     cfg: params.cfg,
     route,
     data,
-  });
-  const currentRuntime = resolveDiscordModelPickerCurrentRuntime({
-    cfg: params.cfg,
-    route,
   });
   const quickModels = await readDiscordModelPickerRecentModels({
     scope: resolveDiscordModelPickerPreferenceScope({
@@ -341,7 +301,6 @@ export async function replyWithDiscordModelPickerProviders(params: {
     page: 1,
     providerPage: 1,
     currentModel,
-    currentRuntime,
     quickModels,
   });
   const payload = {

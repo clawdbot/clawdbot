@@ -69,7 +69,7 @@ function requireMappedCall(
 }
 
 function requireFirstPlayTtsCall(provider: FakeProvider) {
-  const call = provider.playTtsCalls[0];
+  const call = provider.playTtsCalls.at(0);
   if (!call) {
     throw new Error("expected provider.playTts to be called once");
   }
@@ -85,13 +85,21 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 
 function requireSingleStartListeningCall(provider: FakeProvider) {
   expect(provider.startListeningCalls).toHaveLength(1);
-  return requireRecord(provider.startListeningCalls[0], "start listening call");
+  return requireRecord(provider.startListeningCalls.at(0), "start listening call");
+}
+
+function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
 }
 
 type HarnessManager = Awaited<ReturnType<typeof createManagerHarness>>["manager"];
 
 async function waitForPlaybackDispatch() {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 async function initiateCallWithMessage(
@@ -302,7 +310,7 @@ describe("CallManager notify and mapping", () => {
       expect(startListeningCall.callId).toBe(callId);
       expect(startListeningCall.providerCallId).toBe("call-uuid");
       expect(warn).toHaveBeenCalledOnce();
-      expect(String(warn.mock.calls[0]?.[0])).toContain(
+      expect(String(requireFirstMockCall(warn.mock.calls, "console warn")[0])).toContain(
         `[voice-call] Failed to speak initial message for call ${callId}: synthetic start listening failure`,
       );
     } finally {

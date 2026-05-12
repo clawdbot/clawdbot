@@ -45,6 +45,14 @@ function makeLookupFn(): LookupFn {
   return vi.fn(async () => ({ address: "149.154.167.220", family: 4 })) as unknown as LookupFn;
 }
 
+function requireFetchGuardRequest(): unknown {
+  const [call] = fetchWithSsrFGuardMock.mock.calls;
+  if (!call) {
+    throw new Error("expected fetchWithSsrFGuard call");
+  }
+  return call[0];
+}
+
 async function expectRemoteMediaMaxBytesError(params: {
   fetchImpl: Parameters<typeof fetchRemoteMedia>[0]["fetchImpl"];
   maxBytes: number;
@@ -342,7 +350,7 @@ describe("fetchRemoteMedia", () => {
     });
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]).toStrictEqual({
+    expect(requireFetchGuardRequest()).toStrictEqual({
       url: "https://files.example.test/file/bot123/photos/test.jpg",
       fetchImpl,
       init: undefined,

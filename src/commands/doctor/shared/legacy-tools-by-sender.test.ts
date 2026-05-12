@@ -52,8 +52,8 @@ describe("doctor legacy toolsBySender helpers", () => {
     } as OpenClawConfig);
 
     expect(result.changes).toEqual([
-      expect.stringContaining("migrated 1 legacy key to typed id: entries"),
-      expect.stringContaining("removed 1 legacy key where typed id: entries already existed"),
+      "- channels.whatsapp.groups.123@g.us.toolsBySender: migrated 1 legacy key to typed id: entries (owner (kept existing id:owner), alice -> id:alice).",
+      "- channels.whatsapp.groups.123@g.us.toolsBySender: removed 1 legacy key where typed id: entries already existed.",
     ]);
     expect(result.config.channels?.whatsapp?.groups?.["123@g.us"]?.toolsBySender).toEqual({
       "id:owner": { allow: ["fs.read"] },
@@ -75,9 +75,9 @@ describe("doctor legacy toolsBySender helpers", () => {
     });
 
     expect(warnings).toEqual([
-      expect.stringContaining("legacy untyped toolsBySender key"),
-      expect.stringContaining("explicit prefixes"),
-      expect.stringContaining('Run "openclaw doctor --fix"'),
+      "- Found 1 legacy untyped toolsBySender key (for example channels.whatsapp.groups.123@g.us.toolsBySender.owner).",
+      "- Untyped sender keys are deprecated; use explicit prefixes (id:, e164:, username:, name:).",
+      '- Run "openclaw doctor --fix" to migrate legacy keys to typed id: entries.',
     ]);
   });
 });

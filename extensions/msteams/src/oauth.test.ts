@@ -38,6 +38,14 @@ function responseJson(body: unknown, status = 200): Response {
   });
 }
 
+function firstFetchCall(fetchSpy: ReturnType<typeof vi.fn>): [string, RequestInit] {
+  const [call] = fetchSpy.mock.calls;
+  if (!call) {
+    throw new Error("expected fetch call");
+  }
+  return call as [string, RequestInit];
+}
+
 describe("generatePkce", () => {
   it("produces a 64-char hex verifier and a base64url SHA-256 challenge", () => {
     const { verifier, challenge } = generatePkce();
@@ -191,7 +199,7 @@ describe("exchangeMSTeamsCodeForTokens", () => {
 
     // Verify the request was well-formed
     expect(fetchSpy).toHaveBeenCalledOnce();
-    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const [url, init] = firstFetchCall(fetchSpy);
     expect(url).toBe(buildMSTeamsTokenEndpoint("tenant-1"));
     const body = new URLSearchParams(init.body as string);
     expect(body.get("client_id")).toBe("client-1");
@@ -259,7 +267,7 @@ describe("refreshMSTeamsDelegatedTokens", () => {
     expect(tokens.expiresAt).toBeGreaterThanOrEqual(now + 3300 * 1000 - 1000);
 
     // Verify the request body includes refresh_token grant type
-    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const [, init] = firstFetchCall(fetchSpy);
     const body = new URLSearchParams(init.body as string);
     expect(body.get("grant_type")).toBe("refresh_token");
     expect(body.get("refresh_token")).toBe("original-rt");

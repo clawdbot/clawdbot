@@ -1021,6 +1021,59 @@ describe("device pairing tokens", () => {
     );
   });
 
+  test("bootstrap-issued operator tokens accept handoff scopes and reject admin or pairing", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const request = await requestDevicePairing(
+      {
+        deviceId: "bootstrap-device-operator-default",
+        publicKey: "bootstrap-public-key-operator-default",
+        role: "node",
+        roles: ["node", "operator"],
+        scopes: [],
+        silent: true,
+      },
+      baseDir,
+    );
+
+    await expect(
+      approveBootstrapDevicePairing(
+        request.request.requestId,
+        PAIRING_SETUP_BOOTSTRAP_PROFILE,
+        baseDir,
+      ),
+    ).resolves.toEqual(expect.objectContaining({ status: "approved" }));
+
+    const paired = await getPairedDevice("bootstrap-device-operator-default", baseDir);
+    const operatorToken = requireToken(paired?.tokens?.operator?.token);
+    await expect(
+      verifyDeviceToken({
+        deviceId: "bootstrap-device-operator-default",
+        token: operatorToken,
+        role: "operator",
+        scopes: ["operator.approvals", "operator.read", "operator.write"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      verifyDeviceToken({
+        deviceId: "bootstrap-device-operator-default",
+        token: operatorToken,
+        role: "operator",
+        scopes: ["operator.admin"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
+    await expect(
+      verifyDeviceToken({
+        deviceId: "bootstrap-device-operator-default",
+        token: operatorToken,
+        role: "operator",
+        scopes: ["operator.pairing"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
+  });
+
   test("bootstrap pairing keeps operator token scopes operator-only", async () => {
     const baseDir = await makeDevicePairingDir();
     const request = await requestDevicePairing(

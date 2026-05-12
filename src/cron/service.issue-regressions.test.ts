@@ -253,10 +253,12 @@ describe("Cron issue regressions", () => {
 
     const result = await cron.run("missing-enabled-due", "due");
     expect(result).toEqual({ ok: true, ran: true });
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "missing-enabled-due",
-      expect.objectContaining({ agentId: undefined }),
-    );
+    const enqueueCall = enqueueSystemEvent.mock.calls.at(0);
+    if (!enqueueCall) {
+      throw new Error("Expected due cron job to enqueue a system event");
+    }
+    expect(enqueueCall[0]).toBe("missing-enabled-due");
+    expect(enqueueCall[1]?.agentId).toBeUndefined();
 
     cron.stop();
   });
@@ -283,9 +285,12 @@ describe("Cron issue regressions", () => {
     let persisted = await loadCronStore(store.storePath);
     let storedJob = persisted.jobs.find((job) => job.id === disabledJob.id);
     expect(storedJob?.enabled).toBe(false);
-    expect(storedJob?.schedule).toEqual(
-      expect.objectContaining({ kind: "cron", expr: "0 * * * *", tz: "UTC" }),
-    );
+    expect(storedJob?.schedule.kind).toBe("cron");
+    if (storedJob?.schedule.kind !== "cron") {
+      throw new Error("expected stored cron schedule");
+    }
+    expect(storedJob.schedule.expr).toBe("0 * * * *");
+    expect(storedJob.schedule.tz).toBe("UTC");
 
     await writeCronStoreSnapshot(store.storePath, [
       {

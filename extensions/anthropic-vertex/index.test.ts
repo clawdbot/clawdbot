@@ -69,18 +69,17 @@ describe("anthropic-vertex provider plugin", () => {
       }),
     } as never);
 
-    expect(result).toEqual({
-      provider: {
-        api: "anthropic-messages",
-        apiKey: "gcp-vertex-credentials",
-        baseUrl: "https://europe-west4-aiplatform.googleapis.com",
-        headers: { "x-test-header": "1" },
-        models: [
-          expect.objectContaining({ id: "claude-opus-4-6" }),
-          expect.objectContaining({ id: "claude-sonnet-4-6" }),
-        ],
-      },
-    });
+    if (!result || !("provider" in result)) {
+      throw new Error("expected single provider catalog result");
+    }
+    expect(result.provider.api).toBe("anthropic-messages");
+    expect(result.provider.apiKey).toBe("gcp-vertex-credentials");
+    expect(result.provider.baseUrl).toBe("https://europe-west4-aiplatform.googleapis.com");
+    expect(result.provider.headers).toEqual({ "x-test-header": "1" });
+    expect(result.provider.models.map((model) => model.id)).toEqual([
+      "claude-opus-4-6",
+      "claude-sonnet-4-6",
+    ]);
   });
 
   it("owns Anthropic-style replay policy", async () => {

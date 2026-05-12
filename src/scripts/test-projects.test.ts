@@ -97,12 +97,8 @@ const {
   ) => number;
 };
 
-const VITEST_NODE_PREFIX = [
-  "exec",
-  "node",
-  "--no-maglev",
-  expect.stringMatching(/(?:^|[\\/])node_modules[\\/]vitest[\\/]vitest\.mjs$/),
-];
+const VITEST_CLI_ENTRY = path.join(process.cwd(), "node_modules", "vitest", "vitest.mjs");
+const VITEST_NODE_PREFIX = ["exec", "node", "--no-maglev", VITEST_CLI_ENTRY];
 
 describe("test-projects args", () => {
   it("drops a pnpm passthrough separator while preserving targeted filters", () => {

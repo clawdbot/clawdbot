@@ -175,7 +175,9 @@ function readEncodedRequestFromCommand(command: string): Record<string, unknown>
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
-  expect(value).toBeTruthy();
+  if (!value) {
+    throw new Error("expected record");
+  }
   expect(typeof value).toBe("object");
   expect(Array.isArray(value)).toBe(false);
   return value as Record<string, unknown>;
@@ -191,10 +193,12 @@ function execCallRecord(
   index = 0,
 ): { defaults: Record<string, unknown>; params: Record<string, unknown> } {
   const call = execCalls[index];
-  expect(call).toBeTruthy();
+  if (!call) {
+    throw new Error(`expected exec call at index ${index}`);
+  }
   return {
-    defaults: requireRecord(call?.defaults),
-    params: requireRecord(call?.params),
+    defaults: requireRecord(call.defaults),
+    params: requireRecord(call.params),
   };
 }
 

@@ -159,6 +159,51 @@ describe("createMSTeamsReplyDispatcher", () => {
     return lastContextSendActivity;
   }
 
+  type DispatcherOptions = {
+    onReplyStart?: () => Promise<void> | void;
+    deliver: (payload: { text: string }) => Promise<void> | void;
+  };
+
+  type PipelineArgs = {
+    typing?: {
+      keepaliveIntervalMs?: number;
+      maxDurationMs?: number;
+      start?: () => Promise<void>;
+    };
+  };
+
+  function dispatcherOptions(): DispatcherOptions {
+    const [call] = createReplyDispatcherWithTypingMock.mock.calls;
+    if (!call) {
+      throw new Error("expected reply dispatcher factory call");
+    }
+    return call[0] as DispatcherOptions;
+  }
+
+  function pipelineArgs(): PipelineArgs {
+    const [call] = createChannelMessageReplyPipelineMock.mock.calls;
+    if (!call) {
+      throw new Error("expected reply pipeline factory call");
+    }
+    return call[0] as PipelineArgs;
+  }
+
+  function pipelineTypingStart(): () => Promise<void> {
+    const sendTyping = pipelineArgs().typing?.start;
+    if (typeof sendTyping !== "function") {
+      throw new Error("expected typing start callback");
+    }
+    return sendTyping;
+  }
+
+  function firstSystemEventCall(): [string, unknown] {
+    const [call] = enqueueSystemEventMock.mock.calls;
+    if (!call) {
+      throw new Error("expected system event call");
+    }
+    return call as [string, unknown];
+  }
+
   async function triggerPartialReply(text: string): Promise<void> {
     if (!lastCreatedDispatcher) {
       throw new Error("createDispatcher must be called first");
@@ -168,7 +213,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   it("sends an informative status update once work expands in personal chats", async () => {
     const dispatcher = createDispatcher("personal", { streaming: { mode: "progress" } });
-    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    const options = dispatcherOptions();
 
     await options.onReplyStart?.();
     await dispatcher.replyOptions.onToolStart?.({ name: "exec" });
@@ -180,7 +225,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   it("starts the typing keepalive in personal chats so the TurnContext survives long tool chains", async () => {
     createDispatcher("personal");
-    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    const options = dispatcherOptions();
 
     await options.onReplyStart?.();
 
@@ -192,7 +237,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   it("skips the typing keepalive in personal chats when typingIndicator=false", async () => {
     createDispatcher("personal", { typingIndicator: false });
-    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    const options = dispatcherOptions();
 
     await options.onReplyStart?.();
 
@@ -203,18 +248,17 @@ describe("createMSTeamsReplyDispatcher", () => {
   it("passes a longer keepalive TTL so the loop survives long tool chains", () => {
     createDispatcher("personal");
 
-    const pipelineArgs = createChannelMessageReplyPipelineMock.mock.calls[0]?.[0];
-    expect(pipelineArgs?.typing?.keepaliveIntervalMs).toBeGreaterThan(3_000);
-    expect(pipelineArgs?.typing?.keepaliveIntervalMs).toBeLessThanOrEqual(10_000);
+    const args = pipelineArgs();
+    expect(args.typing?.keepaliveIntervalMs).toBeGreaterThan(3_000);
+    expect(args.typing?.keepaliveIntervalMs).toBeLessThanOrEqual(10_000);
     // Issue #59731 reports 60s+ tool chains — the default 60s TTL is too
     // tight so the dispatcher passes its own generous ceiling.
-    expect(pipelineArgs?.typing?.maxDurationMs).toBeGreaterThanOrEqual(300_000);
+    expect(args.typing?.maxDurationMs).toBeGreaterThanOrEqual(300_000);
   });
 
   it("allows typing keepalive sends before any stream tokens arrive", async () => {
     createDispatcher("personal");
-    const pipelineArgs = createChannelMessageReplyPipelineMock.mock.calls[0]?.[0];
-    const sendTyping = pipelineArgs?.typing?.start as () => Promise<void>;
+    const sendTyping = pipelineTypingStart();
 
     // No onPartialReply has been called yet, so the stream is not active.
     // The typing keepalive should be allowed to warm the TurnContext.
@@ -226,8 +270,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   it("suppresses typing keepalive sends while the stream card is actively chunking", async () => {
     createDispatcher("personal");
-    const pipelineArgs = createChannelMessageReplyPipelineMock.mock.calls[0]?.[0];
-    const sendTyping = pipelineArgs?.typing?.start as () => Promise<void>;
+    const sendTyping = pipelineTypingStart();
 
     // Simulate the stream actively receiving a partial chunk. While the
     // stream card is live we do not want a plain "..." typing indicator
@@ -242,8 +285,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   it("resumes typing keepalive sends once the stream finalizes between tool rounds", async () => {
     createDispatcher("personal");
-    const pipelineArgs = createChannelMessageReplyPipelineMock.mock.calls[0]?.[0];
-    const sendTyping = pipelineArgs?.typing?.start as () => Promise<void>;
+    const sendTyping = pipelineTypingStart();
 
     // First segment: tokens flow, stream is active, typing is gated off.
     await triggerPartialReply("first segment tokens");
@@ -271,8 +313,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   it("fires native typing in group chats (no stream) because the gate never applies", async () => {
     createDispatcher("groupchat");
-    const pipelineArgs = createChannelMessageReplyPipelineMock.mock.calls[0]?.[0];
-    const sendTyping = pipelineArgs?.typing?.start as () => Promise<void>;
+    const sendTyping = pipelineTypingStart();
 
     // In group chats we don't create a stream, so isStreamActive() always
     // returns false and the typing indicator still fires normally.
@@ -284,8 +325,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   it("is a no-op for channel conversations (typing unsupported)", async () => {
     createDispatcher("channel");
-    const pipelineArgs = createChannelMessageReplyPipelineMock.mock.calls[0]?.[0];
-    const sendTyping = pipelineArgs?.typing?.start as () => Promise<void>;
+    const sendTyping = pipelineTypingStart();
 
     const contextSendActivity = getContextSendActivity();
     contextSendActivity.mockClear();
@@ -297,7 +337,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   it("sends native typing indicator for channel conversations by default", async () => {
     createDispatcher("channel");
-    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    const options = dispatcherOptions();
 
     await options.onReplyStart?.();
 
@@ -307,7 +347,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   it("skips native typing indicator when typingIndicator=false", async () => {
     createDispatcher("channel", { typingIndicator: false });
-    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    const options = dispatcherOptions();
 
     await options.onReplyStart?.();
 
@@ -372,7 +412,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     await dispatcher.replyOptions.onToolStart?.({ name: "exec" });
 
     expect(streamInstances[0]?.sendInformativeUpdate).toHaveBeenCalledWith(
-      expect.stringMatching(/^[^\n]+\.\.\.$/),
+      pickInformativeStatusText({ seed: "default:conv" }),
     );
   });
 
@@ -393,7 +433,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     sendMSTeamsMessagesMock.mockResolvedValue(["id-1"] as never);
 
     const dispatcher = createDispatcher("personal", { streaming: { mode: "block" } });
-    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    const options = dispatcherOptions();
 
     await options.deliver({ text: "block content" });
 
@@ -420,7 +460,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     sendMSTeamsMessagesMock.mockResolvedValue(["id-1"] as never);
 
     createDispatcher("personal", { blockStreaming: true });
-    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    const options = dispatcherOptions();
 
     // Call deliver — with blockStreaming enabled it should flush immediately
     await options.deliver({ text: "block content" });
@@ -432,7 +472,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     renderReplyPayloadsToMessagesMock.mockReturnValue([{ content: "hello" }] as never);
 
     createDispatcher("personal", { blockStreaming: false });
-    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    const options = dispatcherOptions();
 
     await options.deliver({ text: "block content" });
 
@@ -455,23 +495,22 @@ describe("createMSTeamsReplyDispatcher", () => {
       { blockStreaming: false },
       { onSentMessageIds },
     );
-    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    const options = dispatcherOptions();
 
     await options.deliver({ text: "block content" });
     await dispatcher.markDispatchIdle();
 
     expect(onSentMessageIds).toHaveBeenCalledWith(["id-1"]);
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      expect.stringContaining("Microsoft Teams delivery failed"),
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        contextKey: "msteams:delivery-failure:conv",
-      }),
-    );
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      expect.stringContaining("The user may not have received the full reply"),
-      expect.any(Object),
-    );
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    const [message, context] = firstSystemEventCall();
+    expect(message).toContain("Microsoft Teams delivery failed");
+    expect(message).toContain("1 of 2 message blocks were not delivered");
+    expect(message).toContain("The user may not have received the full reply");
+    expect(message).toContain("Error: Error: gateway timeout.");
+    expect(context).toEqual({
+      sessionKey: "agent:main:main",
+      contextKey: "msteams:delivery-failure:conv",
+    });
   });
 
   it("does not queue a delivery-failure system event when Teams send succeeds", async () => {
@@ -479,7 +518,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     sendMSTeamsMessagesMock.mockResolvedValue(["id-1"] as never);
 
     const dispatcher = createDispatcher("personal", { blockStreaming: false });
-    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    const options = dispatcherOptions();
 
     await options.deliver({ text: "block content" });
     await dispatcher.markDispatchIdle();

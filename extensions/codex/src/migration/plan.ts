@@ -251,8 +251,8 @@ export function buildCodexPluginsConfigValue(
       enabled: true,
       allow_destructive_actions:
         params.config === undefined
-          ? false
-          : (readExistingAllowDestructiveActions(params.config) ?? false),
+          ? true
+          : (readExistingAllowDestructiveActions(params.config) ?? true),
       plugins,
     },
   };

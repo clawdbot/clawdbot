@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,
   CodexAppServerClient,
-  CodexAppServerRpcError,
   MIN_CODEX_APP_SERVER_VERSION,
   isCodexAppServerApprovalRequest,
   readCodexVersionFromUserAgent,
@@ -122,11 +121,9 @@ describe("CodexAppServerClient", () => {
     const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({ id: outbound.id, error: { code: -32601, message: "Method not found" } });
 
-    await expect(request).rejects.toMatchObject({
-      name: "CodexAppServerRpcError",
-      code: -32601,
-      message: "Method not found",
-    } satisfies Partial<CodexAppServerRpcError>);
+    await expect(request).rejects.toHaveProperty("name", "CodexAppServerRpcError");
+    await expect(request).rejects.toHaveProperty("code", -32601);
+    await expect(request).rejects.toHaveProperty("message", "Method not found");
   });
 
   it("rejects timed-out requests and ignores late responses", async () => {

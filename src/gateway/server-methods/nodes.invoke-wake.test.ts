@@ -96,6 +96,47 @@ function expectRecordFields(
   return record;
 }
 
+function requireString(value: unknown, label: string): string {
+  expect(typeof value, `${label} must be a string`).toBe("string");
+  return value as string;
+}
+
+function isLowerHex(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (!((code >= 48 && code <= 57) || (code >= 97 && code <= 102))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isUuidV4(value: string): boolean {
+  const parts = value.split("-");
+  if (parts.length !== 5) {
+    return false;
+  }
+  const [part0, part1, part2, part3, part4] = parts;
+  if (
+    part0?.length !== 8 ||
+    part1?.length !== 4 ||
+    part2?.length !== 4 ||
+    part3?.length !== 4 ||
+    part4?.length !== 12
+  ) {
+    return false;
+  }
+  if (part2[0] !== "4" || !part3[0] || !"89ab".includes(part3[0])) {
+    return false;
+  }
+  for (const part of parts) {
+    if (!isLowerHex(part)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function requireRespondPayload(call: RespondCall | undefined, label: string) {
   expect(call?.[0], `${label} success`).toBe(true);
   return requireRecord(call?.[1], `${label} payload`);
@@ -317,18 +358,22 @@ describe("node plugin surface refresh", () => {
       context: {} as never,
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      {
-        surface: "canvas",
-        pluginSurfaceUrls: {
-          canvas: expect.stringContaining("/__openclaw__/cap/"),
-        },
-        expiresAtMs: 1_100,
-      },
-      undefined,
-    );
-    expect(client.pluginSurfaceUrls.canvas).not.toContain("old-token");
+    expect(respond).toHaveBeenCalledTimes(1);
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    expect(call?.[2]).toBeUndefined();
+    const payload = requireRecord(call?.[1], "refresh payload");
+    expect(payload.surface).toBe("canvas");
+    expect(payload.expiresAtMs).toBe(1_100);
+    const pluginSurfaceUrls = requireRecord(payload.pluginSurfaceUrls, "refresh surface urls");
+    const canvasUrl = requireString(pluginSurfaceUrls.canvas, "refresh canvas url");
+    const parsedCanvasUrl = new URL(canvasUrl);
+    expect(parsedCanvasUrl.origin).toBe("http://127.0.0.1:18789");
+    expect(parsedCanvasUrl.pathname.startsWith("/__openclaw__/cap/")).toBe(true);
+    const capabilityToken = parsedCanvasUrl.pathname.slice("/__openclaw__/cap/".length);
+    expect(capabilityToken.length).toBeGreaterThan(0);
+    expect(capabilityToken).not.toBe("old-token");
+    expect(client.pluginSurfaceUrls.canvas).toBe(canvasUrl);
   });
 });
 
@@ -684,15 +729,11 @@ describe("node.invoke APNs wake path", () => {
       paramsJSON: JSON.stringify({ url: "http://example.com/" }),
     });
 
-    const queuedActionId = (pullPayload.actions as Array<{ id?: string }> | undefined)?.[0]?.id;
-    expect(queuedActionId).toEqual(
-      expect.stringMatching(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-      ),
+    const queuedActionId = requireString(
+      (pullPayload.actions as Array<{ id?: string }> | undefined)?.[0]?.id,
+      "queued action id",
     );
-    if (queuedActionId === undefined) {
-      throw new Error("expected queued action id");
-    }
+    expect(isUuidV4(queuedActionId)).toBe(true);
 
     const ackRespond = await ackPending("ios-node-queued", [queuedActionId], ["canvas.navigate"]);
     const ackCall = ackRespond.mock.calls[0] as RespondCall | undefined;

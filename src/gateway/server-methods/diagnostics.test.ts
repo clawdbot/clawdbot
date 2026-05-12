@@ -21,9 +21,13 @@ describe("diagnostics gateway methods", () => {
     stopDiagnosticStabilityRecorder();
     resetDiagnosticStabilityRecorderForTest();
     resetDiagnosticEventsForTest();
+    vi.useRealTimers();
   });
 
   it("returns a filtered stability snapshot", async () => {
+    const now = new Date("2026-01-02T03:04:05.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
     emitDiagnosticEvent({ type: "webhook.received", channel: "telegram" });
     emitDiagnosticEvent({
       type: "payload.large",
@@ -43,20 +47,53 @@ describe("diagnostics gateway methods", () => {
       respond,
     });
 
-    expect(respond).toHaveBeenCalledWith(
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(respond.mock.calls[0]).toEqual([
       true,
-      expect.objectContaining({
+      {
+        generatedAt: now.toISOString(),
+        capacity: 1000,
         count: 1,
+        dropped: 0,
+        firstSeq: 2,
+        lastSeq: 2,
         events: [
-          expect.objectContaining({
+          {
+            seq: 2,
+            ts: now.getTime(),
             type: "payload.large",
             surface: "gateway.http.json",
             action: "rejected",
-          }),
+            bytes: 1024,
+            limitBytes: 512,
+            count: undefined,
+            channel: undefined,
+            pluginId: undefined,
+          },
         ],
-      }),
+        summary: {
+          byType: { "payload.large": 1 },
+          payloadLarge: {
+            count: 1,
+            rejected: 1,
+            truncated: 0,
+            chunked: 0,
+            bySurface: { "gateway.http.json": 1 },
+          },
+        },
+      },
       undefined,
-    );
+    ]);
+    expect(Object.keys(respond.mock.calls[0]?.[1] as Record<string, unknown>).toSorted()).toEqual([
+      "capacity",
+      "count",
+      "dropped",
+      "events",
+      "firstSeq",
+      "generatedAt",
+      "lastSeq",
+      "summary",
+    ]);
   });
 
   it("rejects invalid stability params", async () => {
@@ -70,13 +107,15 @@ describe("diagnostics gateway methods", () => {
       respond,
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: "limit must be between 1 and 1000",
-      }),
-    );
+    expect(respond.mock.calls).toEqual([
+      [
+        false,
+        undefined,
+        {
+          code: "INVALID_REQUEST",
+          message: "limit must be between 1 and 1000",
+        },
+      ],
+    ]);
   });
 });

@@ -34,7 +34,8 @@ export const execSchema = Type.Object({
   }),
   security: Type.Optional(
     Type.String({
-      description: "Exec security mode (deny|allowlist|full).",
+      description:
+        "Ignored for normal calls; exec security is set by tools.exec.security and host approvals.",
     }),
   ),
   ask: Type.Optional(

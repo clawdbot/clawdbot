@@ -183,8 +183,9 @@ function expectFirstInstallPlanCallOmitsToken() {
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
   const record = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);
@@ -194,8 +195,10 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 function readFirstInstallPlanArg(): Record<string, unknown> {
   const [firstArg] =
     (buildGatewayInstallPlanMock.mock.calls.at(0) as [Record<string, unknown>] | undefined) ?? [];
-  expect(firstArg).toBeDefined();
-  return firstArg as Record<string, unknown>;
+  if (!firstArg) {
+    throw new Error("Expected gateway install plan arg");
+  }
+  return firstArg;
 }
 
 function expectLastEmittedResult(result: string): void {
@@ -323,16 +326,26 @@ describe("runDaemonInstall", () => {
 
     await runDaemonInstall({ json: true });
 
-    expect(service.install).toHaveBeenCalledWith(
-      expect.objectContaining({
-        environment: {
-          OPENROUTER_API_KEY: "or-operator-key",
+    const installCalls = service.install.mock.calls as unknown as Array<
+      [
+        {
+          environment?: Record<string, string>;
+          environmentValueSources?: Record<string, string>;
         },
-        environmentValueSources: {
-          OPENROUTER_API_KEY: "file",
-        },
-      }),
-    );
+      ]
+    >;
+    const installOptions = installCalls[0]?.[0] as
+      | {
+          environment?: Record<string, string>;
+          environmentValueSources?: Record<string, string>;
+        }
+      | undefined;
+    expect(installOptions?.environment).toEqual({
+      OPENROUTER_API_KEY: "or-operator-key",
+    });
+    expect(installOptions?.environmentValueSources).toEqual({
+      OPENROUTER_API_KEY: "file",
+    });
   });
 
   it("does not treat env-template gateway.auth.token as plaintext during install", async () => {
@@ -362,7 +375,7 @@ describe("runDaemonInstall", () => {
 
     expect(actionState.failed).toStrictEqual([]);
     expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
-    const writeParams = replaceConfigFileMock.mock.calls[0]?.[0] as {
+    const writeParams = replaceConfigFileMock.mock.calls.at(0)?.[0] as {
       nextConfig?: { gateway?: { auth?: { token?: string } } };
     };
     expect(writeParams.nextConfig?.gateway?.auth?.token).toBe("minted-token");
@@ -588,7 +601,7 @@ describe("runDaemonInstall", () => {
     await runDaemonInstall({ json: true });
 
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
-    expectFields(resolveNodeStartupTlsEnvironmentMock.mock.calls[0]?.[0], {
+    expectFields(resolveNodeStartupTlsEnvironmentMock.mock.calls.at(0)?.[0], {
       execPath: "/home/test/.nvm/versions/node/v22.18.0/bin/node",
     });
   });

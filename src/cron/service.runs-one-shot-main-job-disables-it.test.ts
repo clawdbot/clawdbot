@@ -200,11 +200,29 @@ async function addMainOneShotHelloJob(
   });
 }
 
-function expectMainSystemEventPosted(enqueueSystemEvent: unknown, text: string) {
-  expect(enqueueSystemEvent).toHaveBeenCalledWith(
-    text,
-    expect.objectContaining({ agentId: undefined }),
-  );
+function expectMainSystemEventPosted(
+  enqueueSystemEvent: ReturnType<typeof vi.fn>,
+  params: { text: string; jobId: string; sessionKey?: string },
+) {
+  expect(enqueueSystemEvent).toHaveBeenCalledWith(params.text, {
+    agentId: undefined,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    contextKey: `cron:${params.jobId}`,
+  });
+}
+
+function expectQueuedCronHeartbeat(
+  requestHeartbeat: ReturnType<typeof vi.fn>,
+  params: { jobId: string; sessionKey?: string },
+) {
+  expect(requestHeartbeat).toHaveBeenCalledWith({
+    source: "cron",
+    intent: "immediate",
+    reason: `cron:${params.jobId}`,
+    agentId: undefined,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    heartbeat: { target: "last" },
+  });
 }
 
 async function stopCronAndCleanup(cron: CronService, store: { cleanup: () => Promise<void> }) {
@@ -271,7 +289,7 @@ describe("CronService", () => {
     const jobs = await cron.list({ includeDisabled: true });
     const updated = jobs.find((j) => j.id === job.id);
     expect(updated?.enabled).toBe(false);
-    expectMainSystemEventPosted(enqueueSystemEvent, "hello");
+    expectMainSystemEventPosted(enqueueSystemEvent, { text: "hello", jobId: job.id });
     expect(requestHeartbeat).toHaveBeenCalled();
 
     await cron.list({ includeDisabled: true });
@@ -290,7 +308,7 @@ describe("CronService", () => {
 
     const jobs = await cron.list({ includeDisabled: true });
     expect(jobs.find((j) => j.id === job.id)).toBeUndefined();
-    expectMainSystemEventPosted(enqueueSystemEvent, "hello");
+    expectMainSystemEventPosted(enqueueSystemEvent, { text: "hello", jobId: job.id });
     expect(requestHeartbeat).toHaveBeenCalled();
 
     await stopCronAndCleanup(cron, store);
@@ -324,7 +342,7 @@ describe("CronService", () => {
 
     expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
     expect(requestHeartbeat).not.toHaveBeenCalled();
-    expectMainSystemEventPosted(enqueueSystemEvent, "hello");
+    expectMainSystemEventPosted(enqueueSystemEvent, { text: "hello", jobId: job.id });
     expect(job.state.runningAtMs).toBeTypeOf("number");
 
     if (typeof resolveHeartbeat === "function") {
@@ -385,12 +403,7 @@ describe("CronService", () => {
     await cron.run(job.id, "force");
 
     expect(runHeartbeatOnce).toHaveBeenCalled();
-    expect(requestHeartbeat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        reason: `cron:${job.id}`,
-        sessionKey,
-      }),
-    );
+    expectQueuedCronHeartbeat(requestHeartbeat, { jobId: job.id, sessionKey });
     expect(job.state.lastStatus).toBe("ok");
     expect(job.state.lastError).toBeUndefined();
 
@@ -417,12 +430,7 @@ describe("CronService", () => {
     await cron.run(job.id, "force");
 
     expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
-    expect(requestHeartbeat).toHaveBeenCalledWith(
-      expect.objectContaining({
-        reason: `cron:${job.id}`,
-        sessionKey,
-      }),
-    );
+    expectQueuedCronHeartbeat(requestHeartbeat, { jobId: job.id, sessionKey });
     expect(job.state.lastStatus).toBe("ok");
     expect(job.state.lastError).toBeUndefined();
 

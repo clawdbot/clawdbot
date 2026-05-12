@@ -18,6 +18,21 @@ function createStubChild() {
   return child;
 }
 
+function spawnOptionsAt(
+  spawnMock: { mock: { calls: readonly unknown[][] } },
+  callIndex: number,
+): { stdio?: unknown } {
+  const call = spawnMock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected spawn call ${callIndex}`);
+  }
+  const options = call[2];
+  if (typeof options !== "object" || options === null || Array.isArray(options)) {
+    throw new Error(`expected spawn call ${callIndex} options`);
+  }
+  return options;
+}
+
 describe("spawnWithFallback", () => {
   it("retries on EBADF using fallback options", async () => {
     const spawnMock = vi
@@ -39,8 +54,8 @@ describe("spawnWithFallback", () => {
     expect(result.usedFallback).toBe(true);
     expect(result.fallbackLabel).toBe("safe-stdin");
     expect(spawnMock).toHaveBeenCalledTimes(2);
-    expect(spawnMock.mock.calls[0]?.[2]?.stdio).toEqual(["pipe", "pipe", "pipe"]);
-    expect(spawnMock.mock.calls[1]?.[2]?.stdio).toEqual(["ignore", "pipe", "pipe"]);
+    expect(spawnOptionsAt(spawnMock, 0).stdio).toEqual(["pipe", "pipe", "pipe"]);
+    expect(spawnOptionsAt(spawnMock, 1).stdio).toEqual(["ignore", "pipe", "pipe"]);
   });
 
   it("does not retry on non-EBADF errors", async () => {

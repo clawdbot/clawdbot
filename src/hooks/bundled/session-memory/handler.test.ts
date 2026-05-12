@@ -137,6 +137,26 @@ async function runNewWithPreviousSession(params: {
   return { tempDir, files, memoryContent };
 }
 
+function isAsciiDigits(value: string): boolean {
+  return /^[0-9]+$/.test(value);
+}
+
+function expectDatedMemoryFile(files: string[], slug: string) {
+  expect(files).toHaveLength(1);
+  const filename = files[0];
+  if (!filename) {
+    throw new Error("expected one session memory file");
+  }
+  const suffix = `-${slug}.md`;
+  expect(filename.endsWith(suffix)).toBe(true);
+  const datePrefix = filename.slice(0, -suffix.length);
+  const [year, month, day] = datePrefix.split("-");
+  expect([year?.length, month?.length, day?.length]).toEqual([4, 2, 2]);
+  expect(year ? isAsciiDigits(year) : false).toBe(true);
+  expect(month ? isAsciiDigits(month) : false).toBe(true);
+  expect(day ? isAsciiDigits(day) : false).toBe(true);
+}
+
 async function createSessionMemoryWorkspace(params?: {
   activeSession?: { name: string; content: string };
 }): Promise<{ tempDir: string; sessionsDir: string; activeSessionFile?: string }> {
@@ -308,7 +328,7 @@ describe("session-memory hook", () => {
               },
             }) satisfies OpenClawConfig,
         });
-        expect(files).toEqual([expect.stringMatching(/^\d{4}-\d{2}-\d{2}-simple-math\.md$/)]);
+        expectDatedMemoryFile(files, "simple-math");
       },
     );
 
@@ -375,7 +395,7 @@ describe("session-memory hook", () => {
         await flushSessionMemoryWritesForTest();
 
         const files = await fs.readdir(path.join(tempDir, "memory"));
-        expect(files).toEqual([expect.stringMatching(/^\d{4}-\d{2}-\d{2}-slow-reset\.md$/)]);
+        expectDatedMemoryFile(files, "slow-reset");
       },
     );
   });

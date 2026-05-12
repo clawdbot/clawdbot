@@ -700,6 +700,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow stdin-only safe binaries to run without explicit allowlist entries.",
   "tools.exec.strictInlineEval":
     "Require explicit approval for interpreter inline-eval forms such as `python -c`, `node -e`, `ruby -e`, or `osascript -e`. Prevents silent allowlist reuse and downgrades allow-always to ask-each-time for those forms.",
+  "tools.exec.commandHighlighting":
+    "Show parser-derived command highlights in exec approval prompts (default: false). Enable this to render highlighted command text without changing exec approval policy.",
   "tools.exec.safeBinTrustedDirs":
     "Additional explicit directories trusted for safe-bin path checks (PATH entries are never auto-trusted).",
   "tools.exec.safeBinProfiles":

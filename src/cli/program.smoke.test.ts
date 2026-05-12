@@ -52,20 +52,25 @@ describe("cli program (smoke)", () => {
 
   it("runs tui with explicit timeout override", async () => {
     await runProgram(["tui", "--timeout-ms", "45000"]);
-    expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 45000 }));
+    const options = runTui.mock.calls.at(0)?.[0] as { timeoutMs?: number } | undefined;
+    expect(options?.timeoutMs).toBe(45000);
   });
 
   it("runs crestodian one-shot requests", async () => {
     await runProgram(["crestodian", "--message", "status"]);
-    expect(runCrestodian).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "status", yes: false, json: false }),
-    );
+    const options = runCrestodian.mock.calls.at(0)?.[0] as
+      | { message?: string; yes?: boolean; json?: boolean }
+      | undefined;
+    expect(options?.message).toBe("status");
+    expect(options?.yes).toBe(false);
+    expect(options?.json).toBe(false);
   });
 
   it("warns and ignores invalid tui timeout override", async () => {
     await runProgram(["tui", "--timeout-ms", "nope"]);
     expect(runtime.error).toHaveBeenCalledWith('warning: invalid --timeout-ms "nope"; ignoring');
-    expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: undefined }));
+    const options = runTui.mock.calls.at(0)?.[0] as { timeoutMs?: number } | undefined;
+    expect(options?.timeoutMs).toBeUndefined();
   });
 
   it("runs setup wizard when wizard flags are present", async () => {

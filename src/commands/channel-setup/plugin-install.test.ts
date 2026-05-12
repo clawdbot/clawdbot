@@ -207,11 +207,7 @@ function expectSetupSnapshotDoesNotScopeToPlugin(params: {
     workspaceDir: "/tmp/openclaw-workspace",
   });
 
-  expect(loadOpenClawPlugins).toHaveBeenCalledWith(
-    expect.not.objectContaining({
-      onlyPluginIds: [params.pluginId],
-    }),
-  );
+  expect(loadOpenClawPlugins).toHaveBeenCalledTimes(1);
   const firstLoadCall = vi.mocked(loadOpenClawPlugins).mock.calls[0]?.[0] as
     | { onlyPluginIds?: string[] }
     | undefined;
@@ -305,7 +301,10 @@ async function runInitialValueForChannel(channel: "dev" | "beta") {
   });
 
   const call = select.mock.calls[0];
-  return call?.[0]?.initialValue;
+  if (!call) {
+    throw new Error("Expected select call");
+  }
+  return call[0]?.initialValue;
 }
 
 function expectPluginLoadedFromLocalPath(

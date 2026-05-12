@@ -265,10 +265,7 @@ async function listStartupMemoryPathsByDate(params: {
         })),
       ),
     );
-    const sluggedStatsByStamp = new Map<
-      string,
-      Array<{ name: string; stat: Awaited<ReturnType<typeof fs.promises.stat>> }>
-    >();
+    const sluggedStatsByStamp = new Map<string, Array<{ name: string; stat: fs.Stats }>>();
     for (const result of sluggedNameResults) {
       if (result.status !== "fulfilled") {
         continue;
@@ -287,7 +284,7 @@ async function listStartupMemoryPathsByDate(params: {
       uniqueStamps.map((stamp) => {
         const newestSluggedNames = (sluggedStatsByStamp.get(stamp) ?? [])
           .toSorted((left, right) => {
-            const mtimeDiff = Number(right.stat.mtimeMs) - Number(left.stat.mtimeMs);
+            const mtimeDiff = right.stat.mtimeMs - left.stat.mtimeMs;
             if (mtimeDiff !== 0) {
               return mtimeDiff;
             }

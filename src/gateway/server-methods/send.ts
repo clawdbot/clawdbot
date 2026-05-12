@@ -60,27 +60,29 @@ const getInflightMap = (context: GatewayRequestContext) => {
   return inflight;
 };
 
-async function resolveGatewayInflightMap(params: {
-  context: GatewayRequestContext;
-  dedupeKey: string;
-  respond: RespondFn;
-}): Promise<Map<string, Promise<InflightResult>> | undefined> {
+function resolveGatewayInflightMap(params: { context: GatewayRequestContext; dedupeKey: string }):
+  | {
+      kind: "cached";
+      cached: NonNullable<ReturnType<GatewayRequestContext["dedupe"]["get"]>>;
+    }
+  | {
+      kind: "inflight";
+      inflight: Promise<InflightResult>;
+    }
+  | {
+      kind: "ready";
+      inflightMap: Map<string, Promise<InflightResult>>;
+    } {
   const cached = params.context.dedupe.get(params.dedupeKey);
   if (cached) {
-    params.respond(cached.ok, cached.payload, cached.error, {
-      cached: true,
-    });
-    return undefined;
+    return { kind: "cached", cached };
   }
   const inflightMap = getInflightMap(params.context);
   const inflight = inflightMap.get(params.dedupeKey);
   if (inflight) {
-    const result = await inflight;
-    const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
-    params.respond(result.ok, result.payload, result.error, meta);
-    return undefined;
+    return { kind: "inflight", inflight };
   }
-  return inflightMap;
+  return { kind: "ready", inflightMap };
 }
 
 async function runGatewayInflightWork(params: {
@@ -312,35 +314,45 @@ export const sendHandlers: GatewayRequestHandlers = {
     const senderIsOwner = callerIsFullOperator && request.senderIsOwner === true;
     const idem = request.idempotencyKey;
     const dedupeKey = `message.action:${idem}`;
-    const inflightMap = await resolveGatewayInflightMap({ context, dedupeKey, respond });
-    if (!inflightMap) {
+    const inflight = resolveGatewayInflightMap({ context, dedupeKey });
+    if (inflight.kind === "cached") {
+      respond(inflight.cached.ok, inflight.cached.payload, inflight.cached.error, {
+        cached: true,
+      });
       return;
     }
-    const resolvedChannel = await resolveRequestedChannel({
-      requestChannel: request.channel,
-      unsupportedMessage: (input) => `unsupported channel: ${input}`,
-      context,
-      rejectWebchatAsInternalOnly: true,
-    });
-    if ("error" in resolvedChannel) {
-      respond(false, undefined, resolvedChannel.error);
+    if (inflight.kind === "inflight") {
+      const result = await inflight.inflight;
+      const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
+      respond(result.ok, result.payload, result.error, meta);
       return;
     }
-    const { cfg, channel } = resolvedChannel;
-    const plugin = resolveOutboundChannelPlugin({ channel, cfg });
-    if (!plugin?.actions?.handleAction) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `Channel ${channel} does not support action ${request.action}.`,
-        ),
-      );
+    if (inflight.kind !== "ready") {
       return;
     }
-
+    const inflightMap = inflight.inflightMap;
     const work = (async (): Promise<InflightResult> => {
+      const resolvedChannel = await resolveRequestedChannel({
+        requestChannel: request.channel,
+        unsupportedMessage: (input) => `unsupported channel: ${input}`,
+        context,
+        rejectWebchatAsInternalOnly: true,
+      });
+      if ("error" in resolvedChannel) {
+        return { ok: false, error: resolvedChannel.error };
+      }
+      const { cfg, channel } = resolvedChannel;
+      const plugin = resolveOutboundChannelPlugin({ channel, cfg });
+      if (!plugin?.actions?.handleAction) {
+        return {
+          ok: false,
+          error: errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `Channel ${channel} does not support action ${request.action}.`,
+          ),
+        };
+      }
+
       try {
         const handled = await dispatchChannelMessageAction({
           channel,
@@ -410,10 +422,20 @@ export const sendHandlers: GatewayRequestHandlers = {
     };
     const idem = request.idempotencyKey;
     const dedupeKey = `send:${idem}`;
-    const inflightMap = await resolveGatewayInflightMap({ context, dedupeKey, respond });
-    if (!inflightMap) {
+    const inflight = resolveGatewayInflightMap({ context, dedupeKey });
+    if (inflight.kind === "cached") {
+      respond(inflight.cached.ok, inflight.cached.payload, inflight.cached.error, {
+        cached: true,
+      });
       return;
     }
+    if (inflight.kind === "inflight") {
+      const result = await inflight.inflight;
+      const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
+      respond(result.ok, result.payload, result.error, meta);
+      return;
+    }
+    const inflightMap = inflight.inflightMap;
     const to = normalizeOptionalString(request.to) ?? "";
     const message = normalizeOptionalString(request.message) ?? "";
     const mediaUrl = normalizeOptionalString(request.mediaUrl);
@@ -430,32 +452,30 @@ export const sendHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const resolvedChannel = await resolveRequestedChannel({
-      requestChannel: request.channel,
-      unsupportedMessage: (input) => `unsupported channel: ${input}`,
-      context,
-      rejectWebchatAsInternalOnly: true,
-    });
-    if ("error" in resolvedChannel) {
-      respond(false, undefined, resolvedChannel.error);
-      return;
-    }
-    const { cfg, channel } = resolvedChannel;
     const accountId = normalizeOptionalString(request.accountId);
     const replyToId = normalizeOptionalString(request.replyToId);
     const threadId = normalizeOptionalString(request.threadId);
-    const outboundChannel = channel;
-    const plugin = resolveOutboundChannelPlugin({ channel, cfg });
-    if (!plugin) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unsupported channel: ${channel}`),
-      );
-      return;
-    }
 
     const work = (async (): Promise<InflightResult> => {
+      const resolvedChannel = await resolveRequestedChannel({
+        requestChannel: request.channel,
+        unsupportedMessage: (input) => `unsupported channel: ${input}`,
+        context,
+        rejectWebchatAsInternalOnly: true,
+      });
+      if ("error" in resolvedChannel) {
+        return { ok: false, error: resolvedChannel.error };
+      }
+      const { cfg, channel } = resolvedChannel;
+      const outboundChannel = channel;
+      const plugin = resolveOutboundChannelPlugin({ channel, cfg });
+      if (!plugin) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, `unsupported channel: ${channel}`),
+        };
+      }
+
       try {
         const resolvedTarget = resolveGatewayOutboundTarget({
           channel: outboundChannel,
@@ -617,107 +637,114 @@ export const sendHandlers: GatewayRequestHandlers = {
       idempotencyKey: string;
     };
     const idem = request.idempotencyKey;
-    const cached = context.dedupe.get(`poll:${idem}`);
-    if (cached) {
-      respond(cached.ok, cached.payload, cached.error, {
+    const dedupeKey = `poll:${idem}`;
+    const inflight = resolveGatewayInflightMap({ context, dedupeKey });
+    if (inflight.kind === "cached") {
+      respond(inflight.cached.ok, inflight.cached.payload, inflight.cached.error, {
         cached: true,
       });
       return;
     }
-    const to = request.to.trim();
-    const resolvedChannel = await resolveRequestedChannel({
-      requestChannel: request.channel,
-      unsupportedMessage: (input) => `unsupported poll channel: ${input}`,
-      context,
-    });
-    if ("error" in resolvedChannel) {
-      respond(false, undefined, resolvedChannel.error);
+    if (inflight.kind === "inflight") {
+      const result = await inflight.inflight;
+      const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
+      respond(result.ok, result.payload, result.error, meta);
       return;
     }
-    const { cfg, channel } = resolvedChannel;
-    const plugin = resolveOutboundChannelPlugin({ channel, cfg });
-    const outbound = plugin?.outbound;
-    if (
-      typeof request.durationSeconds === "number" &&
-      outbound?.supportsPollDurationSeconds !== true
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `durationSeconds is not supported for ${channel} polls`,
-        ),
-      );
+    if (inflight.kind !== "ready") {
       return;
     }
-    if (typeof request.isAnonymous === "boolean" && outbound?.supportsAnonymousPolls !== true) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `isAnonymous is not supported for ${channel} polls`),
-      );
-      return;
-    }
-    const poll = {
-      question: request.question,
-      options: request.options,
-      maxSelections: request.maxSelections,
-      durationSeconds: request.durationSeconds,
-      durationHours: request.durationHours,
-    };
-    const threadId = normalizeOptionalString(request.threadId);
-    const accountId = normalizeOptionalString(request.accountId);
-    try {
-      if (!outbound?.sendPoll) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unsupported poll channel: ${channel}`),
-        );
-        return;
-      }
-      const resolvedTarget = resolveGatewayOutboundTarget({
-        channel: channel,
-        to,
-        cfg,
-        accountId,
-      });
-      if (!resolvedTarget.ok) {
-        respond(false, undefined, resolvedTarget.error);
-        return;
-      }
-      const normalized = outbound.pollMaxOptions
-        ? normalizePollInput(poll, { maxOptions: outbound.pollMaxOptions })
-        : normalizePollInput(poll);
-      const result = await outbound.sendPoll({
-        cfg,
-        to: resolvedTarget.to,
-        poll: normalized,
-        accountId,
-        threadId,
-        silent: request.silent,
-        isAnonymous: request.isAnonymous,
-        gatewayClientScopes: client?.connect?.scopes ?? [],
-      });
-      const payload = buildGatewayDeliveryPayload({ runId: idem, channel, result });
-      cacheGatewayDedupeSuccess({
+    const inflightMap = inflight.inflightMap;
+    const work = (async (): Promise<InflightResult> => {
+      const resolvedChannel = await resolveRequestedChannel({
+        requestChannel: request.channel,
+        unsupportedMessage: (input) => `unsupported poll channel: ${input}`,
         context,
-        dedupeKey: `poll:${idem}`,
-        payload,
       });
-      respond(true, payload, undefined, { channel });
-    } catch (err) {
-      const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
-      cacheGatewayDedupeFailure({
-        context,
-        dedupeKey: `poll:${idem}`,
-        error,
-      });
-      respond(false, undefined, error, {
-        channel,
-        error: formatForLog(err),
-      });
-    }
+      if ("error" in resolvedChannel) {
+        return { ok: false, error: resolvedChannel.error };
+      }
+      const { cfg, channel } = resolvedChannel;
+      const plugin = resolveOutboundChannelPlugin({ channel, cfg });
+      const outbound = plugin?.outbound;
+      if (
+        typeof request.durationSeconds === "number" &&
+        outbound?.supportsPollDurationSeconds !== true
+      ) {
+        return {
+          ok: false,
+          error: errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `durationSeconds is not supported for ${channel} polls`,
+          ),
+        };
+      }
+      if (typeof request.isAnonymous === "boolean" && outbound?.supportsAnonymousPolls !== true) {
+        return {
+          ok: false,
+          error: errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `isAnonymous is not supported for ${channel} polls`,
+          ),
+        };
+      }
+      const poll = {
+        question: request.question,
+        options: request.options,
+        maxSelections: request.maxSelections,
+        durationSeconds: request.durationSeconds,
+        durationHours: request.durationHours,
+      };
+      const threadId = normalizeOptionalString(request.threadId);
+      const accountId = normalizeOptionalString(request.accountId);
+      try {
+        if (!outbound?.sendPoll) {
+          const error = errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `unsupported poll channel: ${channel}`,
+          );
+          return { ok: false, error };
+        }
+        const resolvedTarget = resolveGatewayOutboundTarget({
+          channel: channel,
+          to: request.to.trim(),
+          cfg,
+          accountId,
+        });
+        if (!resolvedTarget.ok) {
+          return { ok: false, error: resolvedTarget.error };
+        }
+        const normalized = outbound.pollMaxOptions
+          ? normalizePollInput(poll, { maxOptions: outbound.pollMaxOptions })
+          : normalizePollInput(poll);
+        const result = await outbound.sendPoll({
+          cfg,
+          to: resolvedTarget.to,
+          poll: normalized,
+          accountId,
+          threadId,
+          silent: request.silent,
+          isAnonymous: request.isAnonymous,
+          gatewayClientScopes: client?.connect?.scopes ?? [],
+        });
+        const payload = buildGatewayDeliveryPayload({ runId: idem, channel, result });
+        cacheGatewayDedupeSuccess({
+          context,
+          dedupeKey,
+          payload,
+        });
+        return { ok: true, payload, meta: { channel } };
+      } catch (err) {
+        const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+        cacheGatewayDedupeFailure({
+          context,
+          dedupeKey,
+          error,
+        });
+        return { ok: false, error, meta: { channel, error: formatForLog(err) } };
+      }
+    })();
+
+    await runGatewayInflightWork({ inflightMap, dedupeKey, work, respond });
   },
 };

@@ -111,16 +111,10 @@ describe("Telegram direct session recreation after delete", () => {
       opts: {},
     });
 
-    expect(store[TELEGRAM_DIRECT_KEY]).toEqual(
-      expect.objectContaining({
-        lastChannel: "telegram",
-        lastTo: "telegram:7463849194",
-        origin: expect.objectContaining({
-          chatType: "direct",
-          provider: "telegram",
-        }),
-      }),
-    );
+    expect(store[TELEGRAM_DIRECT_KEY]?.lastChannel).toBe("telegram");
+    expect(store[TELEGRAM_DIRECT_KEY]?.lastTo).toBe("telegram:7463849194");
+    expect(store[TELEGRAM_DIRECT_KEY]?.origin?.chatType).toBe("direct");
+    expect(store[TELEGRAM_DIRECT_KEY]?.origin?.provider).toBe("telegram");
     expect(listed.sessions.map((session) => session.key)).toContain(TELEGRAM_DIRECT_KEY);
   });
 });

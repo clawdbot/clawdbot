@@ -39,10 +39,8 @@ describe("renderGatewayServiceStartHints", () => {
       renderGatewayServiceStartHints({
         OPENCLAW_CONTAINER: "openclaw-demo-container",
       } as NodeJS.ProcessEnv),
-    ).toEqual(
-      expect.arrayContaining([
-        "Restart the container or the service that manages it for openclaw-demo-container.",
-      ]),
+    ).toContain(
+      "Restart the container or the service that manages it for openclaw-demo-container.",
     );
   });
 
@@ -51,10 +49,8 @@ describe("renderGatewayServiceStartHints", () => {
       renderGatewayServiceStartHints({
         OPENCLAW_CONTAINER_HINT: "openclaw-demo-container",
       } as NodeJS.ProcessEnv),
-    ).toEqual(
-      expect.arrayContaining([
-        "Restart the container or the service that manages it for openclaw-demo-container.",
-      ]),
+    ).toContain(
+      "Restart the container or the service that manages it for openclaw-demo-container.",
     );
   });
 });

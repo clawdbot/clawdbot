@@ -1358,10 +1358,8 @@ describe("sanitizeAuthProfileStoreForLiveGateway", () => {
     try {
       const sanitized = sanitizeAuthProfileStoreForLiveGateway(store);
       expect(sanitized.profiles.openaiProfile).toBeUndefined();
-      expect(sanitized.profiles.codexProfile).toMatchObject({
-        type: "oauth",
-        provider: "openai-codex",
-      });
+      expect(sanitized.profiles.codexProfile?.type).toBe("oauth");
+      expect(sanitized.profiles.codexProfile?.provider).toBe("openai-codex");
       expect(sanitized.order).toEqual({ "openai-codex": ["codexProfile"] });
       expect(sanitized.lastGood).toEqual({ "openai-codex": "codexProfile" });
       expect(sanitized.usageStats).toEqual({ codexProfile: { lastUsed: 2 } });

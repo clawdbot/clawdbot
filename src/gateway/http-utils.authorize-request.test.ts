@@ -108,16 +108,16 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
       trustedProxies: ["127.0.0.1"],
     });
 
-    expect(vi.mocked(authorizeHttpGatewayConnect)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        browserOriginPolicy: {
-          requestHost: "gateway.example.com",
-          origin: "https://evil.example",
-          allowedOrigins: ["https://control.example.com"],
-          allowHostHeaderOriginFallback: false,
-        },
-      }),
-    );
+    const [authParams] = vi.mocked(authorizeHttpGatewayConnect).mock.calls.at(-1) ?? [];
+    if (authParams === undefined) {
+      throw new Error("Expected HTTP gateway auth to be called");
+    }
+    expect(authParams.browserOriginPolicy).toEqual({
+      requestHost: "gateway.example.com",
+      origin: "https://evil.example",
+      allowedOrigins: ["https://control.example.com"],
+      allowHostHeaderOriginFallback: false,
+    });
   });
 
   it("replies with auth failure and returns null when auth fails", async () => {

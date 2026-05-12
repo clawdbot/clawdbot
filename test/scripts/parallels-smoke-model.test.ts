@@ -245,6 +245,17 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     expect(script).toContain("DPkg::Lock::Timeout=300");
   });
 
+  it("keeps Linux bad-plugin diagnostics gated for historical update baselines", () => {
+    const script = readFileSync(TS_PATHS.linux, "utf8");
+
+    expect(script).toContain('BAD_PLUGIN_DIAGNOSTIC_MIN_VERSION = "2026.5.7"');
+    expect(script).toContain("parseOpenClawPackageVersion");
+    expect(script).toContain("maybeInjectBadPluginFixture");
+    expect(script).toContain("maybeVerifyBadPluginDiagnostic");
+    expect(script).toContain("Skipping bad plugin diagnostic fixture");
+    expect(script).toContain("Skipping bad plugin diagnostic assertion");
+  });
+
   it("resolves provider defaults and explicit model overrides", () => {
     expect(resolveProviderAuth("openai", { env: { OPENAI_API_KEY: "sk-openai" } })).toEqual({
       apiKeyEnv: "OPENAI_API_KEY",

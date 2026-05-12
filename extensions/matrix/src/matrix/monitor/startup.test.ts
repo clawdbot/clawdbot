@@ -63,6 +63,20 @@ function createStartupVerificationOutcome(
   } as MatrixStartupVerificationOutcome;
 }
 
+async function expectMatrixStartupAbort(promise: Promise<unknown>): Promise<void> {
+  let rejection: unknown;
+  try {
+    await promise;
+  } catch (error) {
+    rejection = error;
+  }
+
+  expect(rejection).toBeInstanceOf(Error);
+  const error = rejection as Error;
+  expect(error.name).toBe("AbortError");
+  expect(error.message).toBe("Matrix startup aborted");
+}
+
 function createLegacyCryptoRestoreResult(
   overrides: Partial<MatrixLegacyCryptoRestoreResult> = {},
 ): MatrixLegacyCryptoRestoreResult {
@@ -155,7 +169,7 @@ describe("runMatrixStartupMaintenance", () => {
     await runMatrixStartupMaintenance(params, deps);
 
     expect(deps.syncMatrixOwnProfile).toHaveBeenCalledTimes(1);
-    const [profileSyncParams] = vi.mocked(deps.syncMatrixOwnProfile).mock.calls[0] ?? [];
+    const [profileSyncParams] = vi.mocked(deps.syncMatrixOwnProfile).mock.calls.at(0) ?? [];
     if (!profileSyncParams) {
       throw new Error("profile sync params missing");
     }
@@ -269,10 +283,7 @@ describe("runMatrixStartupMaintenance", () => {
       return createProfileSyncResult();
     });
 
-    await expect(runMatrixStartupMaintenance(params, deps)).rejects.toMatchObject({
-      message: "Matrix startup aborted",
-      name: "AbortError",
-    });
+    await expectMatrixStartupAbort(runMatrixStartupMaintenance(params, deps));
     expect(deps.ensureMatrixStartupVerification).not.toHaveBeenCalled();
     expect(deps.maybeRestoreLegacyMatrixBackup).not.toHaveBeenCalled();
   });

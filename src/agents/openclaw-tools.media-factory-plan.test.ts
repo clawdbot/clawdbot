@@ -13,6 +13,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveOptionalMediaToolFactoryPlan } from "./openclaw-tools.media-factory-plan.js";
+import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "./tool-policy.js";
 import * as pdfModelConfigModule from "./tools/pdf-tool.model-config.js";
 
 type CreateOpenClawToolsOptions = Parameters<
@@ -226,6 +227,75 @@ describe("optional media tool factory planning", () => {
       videoGenerate: true,
       musicGenerate: true,
       pdf: true,
+    });
+  });
+
+  it("preserves implicit allow-all from alsoAllow-only policies for built-in media factories", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          imageGenerationModel: { primary: "image-owner/model" },
+          videoGenerationModel: { primary: "video-owner/model" },
+          musicGenerationModel: { primary: "music-owner/model" },
+          pdfModel: { primary: "media-owner/model" },
+        },
+      },
+    };
+    const allowlistFromAlsoAllowOnlyPolicy = ["group:memory", DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY];
+    installSnapshot(config, []);
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(),
+        toolAllowlist: allowlistFromAlsoAllowOnlyPolicy,
+      }),
+    ).toEqual({
+      imageGenerate: true,
+      videoGenerate: true,
+      musicGenerate: true,
+      pdf: true,
+    });
+
+    const toolNames = (
+      await createOpenClawToolsForTest({
+        config,
+        agentDir: "/tmp/openclaw-agent-main",
+        authProfileStore: createAuthStore(),
+        pluginToolAllowlist: allowlistFromAlsoAllowOnlyPolicy,
+      })
+    ).map((tool) => tool.name);
+    expect(toolNames).toContain("image_generate");
+    expect(toolNames).toContain("video_generate");
+    expect(toolNames).toContain("music_generate");
+    expect(toolNames).toContain("pdf");
+  });
+
+  it("keeps denylists authoritative when alsoAllow-only policies preserve factory construction", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          imageGenerationModel: { primary: "image-owner/model" },
+          videoGenerationModel: { primary: "video-owner/model" },
+          musicGenerationModel: { primary: "music-owner/model" },
+          pdfModel: { primary: "media-owner/model" },
+        },
+      },
+    };
+    installSnapshot(config, []);
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(),
+        toolAllowlist: [DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY],
+        toolDenylist: ["video_generate", "pdf"],
+      }),
+    ).toEqual({
+      imageGenerate: true,
+      videoGenerate: false,
+      musicGenerate: true,
+      pdf: false,
     });
   });
 

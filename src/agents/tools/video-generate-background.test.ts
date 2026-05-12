@@ -171,7 +171,7 @@ describe("video generate background helpers", () => {
     });
 
     expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
-    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalled();
+    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
 
   it("keeps completed video agent-mediated even when direct send is enabled", async () => {

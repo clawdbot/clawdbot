@@ -43,6 +43,25 @@ vi.mock("./browser-cli-state.js", () => stateMocks);
 
 const { registerBrowserCli } = await import("./browser-cli.js");
 
+function requireFirstCall<TArgs extends unknown[]>(
+  mock: { mock: { calls: TArgs[] } },
+  label: string,
+): TArgs {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call;
+}
+
+function requireTrailingCommand(args: unknown[], label: string): Command {
+  const command = args.at(-1);
+  if (!(command instanceof Command)) {
+    throw new Error(`expected trailing command for ${label}`);
+  }
+  return command;
+}
+
 describe("registerBrowserCli lazy browser subcommands", () => {
   beforeEach(() => {
     vi.unstubAllEnvs();
@@ -108,7 +127,8 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     expect(manageMocks.registerBrowserManageCommands).toHaveBeenCalledTimes(1);
     expect(debugMocks.registerBrowserDebugCommands).not.toHaveBeenCalled();
     expect(manageMocks.doctorAction).toHaveBeenCalledTimes(1);
-    expect(manageMocks.doctorAction.mock.calls[0]?.[0]).toMatchObject({ deep: true });
+    const [doctorOptions] = requireFirstCall(manageMocks.doctorAction, "doctor action call");
+    expect(doctorOptions.deep).toBe(true);
   });
 
   it("preserves parent --json while reparsing lazy manage commands", async () => {
@@ -120,8 +140,11 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     await program.parseAsync(["browser", "--json", "open", "about:blank"], { from: "user" });
 
     expect(manageMocks.openAction).toHaveBeenCalledTimes(1);
-    const openCommand = manageMocks.openAction.mock.calls[0]?.at(-1) as Command | undefined;
-    expect(openCommand?.parent?.opts()).toMatchObject({ json: true });
+    const openCommand = requireTrailingCommand(
+      requireFirstCall(manageMocks.openAction, "open action call"),
+      "open action",
+    );
+    expect(openCommand.parent?.opts().json).toBe(true);
 
     const tabsProgram = new Command();
     tabsProgram.name("openclaw");
@@ -130,8 +153,11 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     await tabsProgram.parseAsync(["browser", "--json", "tabs"], { from: "user" });
 
     expect(manageMocks.tabsAction).toHaveBeenCalledTimes(1);
-    const tabsCommand = manageMocks.tabsAction.mock.calls[0]?.at(-1) as Command | undefined;
-    expect(tabsCommand?.parent?.opts()).toMatchObject({ json: true });
+    const tabsCommand = requireTrailingCommand(
+      requireFirstCall(manageMocks.tabsAction, "tabs action call"),
+      "tabs action",
+    );
+    expect(tabsCommand.parent?.opts().json).toBe(true);
   });
 
   it("can eagerly register all browser groups for compatibility", async () => {

@@ -35,7 +35,9 @@ describe("plugin contract registry", () => {
 
   it("loads bundled non-provider capability registries without import-time failure", () => {
     expect(providerContractLoadError).toBeUndefined();
-    expect(pluginRegistrationContractRegistry.length).toBeGreaterThan(0);
+    expect(Array.from(pluginRegistrationContractRegistry)).toStrictEqual(
+      BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
+    );
   });
 
   it.each([

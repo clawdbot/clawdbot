@@ -468,9 +468,7 @@ describe("live model switch", () => {
       const result = shouldSwitchToLiveModel(makeShouldSwitchParams());
 
       expect(result).toBeUndefined();
-      // Give the fire-and-forget clearLiveModelSwitchPending a tick to resolve
-      await new Promise((r) => setTimeout(r, 10));
-      expect(state.updateSessionStoreMock).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(state.updateSessionStoreMock).toHaveBeenCalledTimes(1));
       expect(sessionEntry).not.toHaveProperty("liveModelSwitchPending");
     });
 

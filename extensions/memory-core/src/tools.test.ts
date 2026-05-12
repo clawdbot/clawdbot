@@ -113,19 +113,24 @@ describe("memory_search unavailable payloads", () => {
       agentSessionKey: "agent:main:main:active-memory:debug",
     });
     const result = await tool.execute("debug", { query: "favorite food" });
-    expect(result.details).toMatchObject({
-      mode: "query",
-      debug: {
-        backend: "qmd",
-        configuredMode: "search",
-        effectiveMode: "query",
-        fallback: "unsupported-search-flags",
-        hits: 1,
-      },
-    });
-    expect(
-      (result.details as { debug?: { searchMs?: number } }).debug?.searchMs,
-    ).toBeGreaterThanOrEqual(0);
+    const details = result.details as {
+      mode?: unknown;
+      debug?: {
+        backend?: unknown;
+        configuredMode?: unknown;
+        effectiveMode?: unknown;
+        fallback?: unknown;
+        hits?: unknown;
+        searchMs?: number;
+      };
+    };
+    expect(details.mode).toBe("query");
+    expect(details.debug?.backend).toBe("qmd");
+    expect(details.debug?.configuredMode).toBe("search");
+    expect(details.debug?.effectiveMode).toBe("query");
+    expect(details.debug?.fallback).toBe("unsupported-search-flags");
+    expect(details.debug?.hits).toBe(1);
+    expect(details.debug?.searchMs).toBeGreaterThanOrEqual(0);
   });
 });
 

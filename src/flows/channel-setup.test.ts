@@ -79,9 +79,19 @@ function makePluginRegistry(overrides: Partial<PluginRegistry> = {}): PluginRegi
 }
 
 function callArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0, _type?: (value: T) => T): T {
-  const call = mock.mock.calls[index];
-  expect(call).toBeDefined();
-  return call?.[0] as T;
+  const call = mock.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  return call[0] as T;
+}
+
+function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0): unknown[] {
+  const call = mock.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  return call;
 }
 
 function expectExternalCatalogInstallCall(index = 0) {
@@ -915,11 +925,12 @@ describe("setupChannels workspace shadow exclusion", () => {
         },
       );
 
-      expect(getTrustedChannelPluginCatalogEntry.mock.calls[0]?.[0]).toBe("external-chat");
-      expect(
-        (getTrustedChannelPluginCatalogEntry.mock.calls[0]?.[1] as { workspaceDir?: string })
-          ?.workspaceDir,
-      ).toBe("/tmp/openclaw-workspace");
+      const catalogLookupCall = mockCall(getTrustedChannelPluginCatalogEntry) as [
+        string,
+        { workspaceDir?: string } | undefined,
+      ];
+      expect(catalogLookupCall[0]).toBe("external-chat");
+      expect(catalogLookupCall[1]?.workspaceDir).toBe("/tmp/openclaw-workspace");
       expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledTimes(1);
       expectExternalCatalogInstallCall();
       expect(note).not.toHaveBeenCalledWith("external-chat plugin not available.", "Channel setup");

@@ -33,14 +33,26 @@ function expectQueuedRunAck(result: unknown) {
   expect(typeof ack.runId).toBe("string");
 }
 
+function requireMockCall(
+  mock: { mock: { calls: unknown[][] } },
+  callIndex: number,
+  label: string,
+): unknown[] {
+  const call = mock.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex}`);
+  }
+  return call;
+}
+
 function expectIsolatedRunJobId(
   runIsolatedAgentJob: ReturnType<typeof vi.fn>,
   callIndex: number,
   jobId: string,
 ) {
-  const params = runIsolatedAgentJob.mock.calls[callIndex]?.[0] as
-    | { job?: { id?: string } }
-    | undefined;
+  const [params] = requireMockCall(runIsolatedAgentJob, callIndex, "runIsolatedAgentJob") as [
+    { job?: { id?: string } }?,
+  ];
   expect(params?.job?.id).toBe(jobId);
 }
 
@@ -326,10 +338,12 @@ describe("cron service ops regressions", () => {
     const result = await run(state, "stale-running", "force");
     expect(result).toEqual({ ok: true, ran: true });
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEvent.mock.calls[0]?.[0]).toBe("stale-running");
-    expect(
-      (enqueueSystemEvent.mock.calls[0]?.[1] as { agentId?: unknown } | undefined)?.agentId,
-    ).toBeUndefined();
+    const [text, options] = requireMockCall(enqueueSystemEvent, 0, "enqueueSystemEvent") as [
+      string,
+      { agentId?: unknown }?,
+    ];
+    expect(text).toBe("stale-running");
+    expect(options?.agentId).toBeUndefined();
   });
 
   it("queues manual cron.run requests behind the cron execution lane", async () => {
@@ -446,7 +460,7 @@ describe("cron service ops regressions", () => {
 
     await errorLogged.promise;
     expect(log.error).toHaveBeenCalledTimes(1);
-    expect(log.error.mock.calls[0]?.[1]).toBe(
+    expect(requireMockCall(log.error, 0, "logger error")[1]).toBe(
       "cron: queued manual run background execution failed",
     );
 

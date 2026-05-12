@@ -65,15 +65,12 @@ describe("live-agent-probes", () => {
         exactReply: spec.name,
       }),
     ).toContain("previous OpenClaw cron MCP tool call was cancelled");
-    expect(JSON.parse(spec.argsJson)).toEqual(
-      expect.objectContaining({
-        job: expect.objectContaining({
-          sessionTarget: "session:agent:codex:acp:test",
-          agentId: "codex",
-          sessionKey: "agent:codex:acp:test",
-        }),
-      }),
-    );
+    const args = JSON.parse(spec.argsJson) as {
+      job?: { sessionTarget?: string; agentId?: string; sessionKey?: string };
+    };
+    expect(args.job?.sessionTarget).toBe("session:agent:codex:acp:test");
+    expect(args.job?.agentId).toBe("codex");
+    expect(args.job?.sessionKey).toBe("agent:codex:acp:test");
   });
 
   it("validates cron cli job shape for the shared live probe", () => {

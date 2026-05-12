@@ -277,7 +277,9 @@ export function buildStatusHealthRows(params: {
     rows.push({
       Item: "Model pricing",
       Status: params.warn("WARN"),
-      Detail: params.health.modelPricing.detail ?? params.health.modelPricing.state,
+      Detail: `optional pricing refresh degraded${
+        params.health.modelPricing.detail ? `: ${params.health.modelPricing.detail}` : ""
+      }`,
     });
   }
   for (const line of params.formatHealthChannelLines(params.health, { accountMode: "all" })) {

@@ -170,9 +170,9 @@ async function expectNoUnhandledRejection(run: () => void | Promise<void>): Prom
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
-  expect(value).toBeTruthy();
-  expect(typeof value).toBe("object");
-  expect(Array.isArray(value)).toBe(false);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
   return value as Record<string, unknown>;
 }
 
@@ -218,10 +218,10 @@ describe("setup-registry module loader", () => {
     }
 
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(
+    expect(mocks.createJiti.mock.calls.at(0)?.[0]).toBe(
       pathToFileURL(path.join(pluginRoot, "setup-api.js"), { windows: true }).href,
     );
-    expect(requireRecord(mocks.createJiti.mock.calls[0]?.[1]).tryNative).toBe(true);
+    expect(requireRecord(mocks.createJiti.mock.calls.at(0)?.[1]).tryNative).toBe(true);
   });
 
   it("passes explicit plugin id scope into setup manifest reads", () => {
@@ -238,9 +238,9 @@ describe("setup-registry module loader", () => {
     });
 
     expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(1);
-    expect(requireRecord(mocks.loadPluginManifestRegistry.mock.calls[0]?.[0]).pluginIds).toEqual([
-      "test-plugin",
-    ]);
+    expect(requireRecord(mocks.loadPluginManifestRegistry.mock.calls.at(0)?.[0]).pluginIds).toEqual(
+      ["test-plugin"],
+    );
   });
 
   it("skips setup-api loading when config has no relevant migration triggers", () => {
@@ -338,7 +338,7 @@ describe("setup-registry module loader", () => {
 
     expect(result.changes).toEqual(["amazon-bedrock"]);
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(bedrockRoot, "setup-api.js"));
+    expect(mocks.createJiti.mock.calls.at(0)?.[0]).toBe(path.join(bedrockRoot, "setup-api.js"));
   });
 
   it("still loads explicitly configured plugin entries without manifest trigger metadata", () => {
@@ -403,7 +403,7 @@ describe("setup-registry module loader", () => {
     expect(provider.label).toBe("Amazon Bedrock");
     expect(resolvePluginSetupProvider({ provider: "legacy-bedrock", env: {} })).toBeUndefined();
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(pluginRoot, "setup-api.js"));
+    expect(mocks.createJiti.mock.calls.at(0)?.[0]).toBe(path.join(pluginRoot, "setup-api.js"));
   });
 
   it("treats explicit descriptor-only setup as a runtime cutoff", () => {
@@ -632,7 +632,7 @@ describe("setup-registry module loader", () => {
     expect(second).toEqual(first);
     expect(resolvePluginSetupCliBackend({ backend: "legacy-openai-cli", env: {} })).toBeUndefined();
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(openaiRoot, "setup-api.js"));
+    expect(mocks.createJiti.mock.calls.at(0)?.[0]).toBe(path.join(openaiRoot, "setup-api.js"));
   });
 
   it("keeps synchronously registered cli backends even when register returns a promise", () => {

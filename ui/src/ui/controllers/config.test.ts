@@ -268,6 +268,104 @@ describe("updateConfigFormValue", () => {
 
     expect(state.configFormDirty).toBe(false);
   });
+
+  it("removes only automatically added plugin allow entries", () => {
+    const state = createState();
+    applyConfigSnapshot(state, {
+      hash: "hash-plugins",
+      config: {
+        plugins: {
+          allow: ["openai"],
+          entries: {
+            deepseek: { enabled: false },
+          },
+        },
+      },
+      valid: true,
+      issues: [],
+      raw: "{}",
+    });
+
+    updateConfigFormValue(state, ["plugins", "entries", "deepseek", "enabled"], true);
+
+    expect(state.configForm).toEqual({
+      plugins: {
+        allow: ["openai", "deepseek"],
+        entries: {
+          deepseek: { enabled: true },
+        },
+      },
+    });
+    expect(state.configFormDirty).toBe(true);
+
+    updateConfigFormValue(state, ["plugins", "entries", "deepseek", "enabled"], false);
+
+    expect(state.configForm).toEqual({
+      plugins: {
+        allow: ["openai"],
+        entries: {
+          deepseek: { enabled: false },
+        },
+      },
+    });
+    expect(state.configFormDirty).toBe(false);
+
+    updateConfigFormValue(state, ["plugins", "entries", "deepseek", "enabled"], true);
+    updateConfigFormValue(state, ["plugins", "allow"], ["openai", "deepseek", "firecrawl"]);
+    updateConfigFormValue(state, ["plugins", "entries", "deepseek", "enabled"], false);
+
+    expect(state.configForm).toEqual({
+      plugins: {
+        allow: ["openai", "deepseek", "firecrawl"],
+        entries: {
+          deepseek: { enabled: false },
+        },
+      },
+    });
+    expect(state.configFormDirty).toBe(true);
+  });
+
+  it("preserves empty plugin allowlists when enabling a plugin", () => {
+    const state = createState();
+    applyConfigSnapshot(state, {
+      hash: "hash-plugins",
+      config: {
+        plugins: {
+          allow: [],
+          entries: {
+            deepseek: { enabled: false },
+          },
+        },
+      },
+      valid: true,
+      issues: [],
+      raw: "{}",
+    });
+
+    updateConfigFormValue(state, ["plugins", "entries", "deepseek", "enabled"], true);
+
+    expect(state.configForm).toEqual({
+      plugins: {
+        allow: [],
+        entries: {
+          deepseek: { enabled: true },
+        },
+      },
+    });
+    expect(state.configFormDirty).toBe(true);
+
+    updateConfigFormValue(state, ["plugins", "entries", "deepseek", "enabled"], false);
+
+    expect(state.configForm).toEqual({
+      plugins: {
+        allow: [],
+        entries: {
+          deepseek: { enabled: false },
+        },
+      },
+    });
+    expect(state.configFormDirty).toBe(false);
+  });
 });
 
 describe("stageConfigPreset", () => {

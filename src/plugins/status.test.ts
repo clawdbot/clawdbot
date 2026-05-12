@@ -160,8 +160,9 @@ function expectInspectReport(
 
 function mockInput(mock: { mock: { calls: unknown[][] } }, index = 0): Record<string, unknown> {
   const input = mock.mock.calls[index]?.[0];
-  expect(typeof input).toBe("object");
-  expect(input).not.toBeNull();
+  if (!input || typeof input !== "object") {
+    throw new Error(`expected mock input ${index}`);
+  }
   return input as Record<string, unknown>;
 }
 

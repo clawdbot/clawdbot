@@ -26,6 +26,18 @@ export const cliBundleMcpHarness = {
   },
 };
 
+export function requireMcpConfigPath(args: readonly string[] | undefined): string {
+  const configFlagIndex = args?.indexOf("--mcp-config") ?? -1;
+  if (configFlagIndex < 0) {
+    throw new Error("expected --mcp-config arg");
+  }
+  const generatedConfigPath = args?.[configFlagIndex + 1];
+  if (typeof generatedConfigPath !== "string" || generatedConfigPath.length === 0) {
+    throw new Error("expected --mcp-config path arg");
+  }
+  return generatedConfigPath;
+}
+
 export function setupCliBundleMcpTestHarness(): void {
   beforeAll(async () => {
     envSnapshot = captureEnv(["OPENCLAW_BUNDLED_PLUGINS_DIR"]);

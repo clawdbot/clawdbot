@@ -380,9 +380,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       const beforePromptBuildCalls = hookRunner.runBeforePromptBuild.mock.calls as unknown as Array<
         [unknown, unknown]
       >;
-      expect(beforePromptBuildCalls[0]?.[0]).toMatchObject({
-        prompt: "latest ask",
-      });
+      const promptBuildParams = beforePromptBuildCalls[0]?.[0] as { prompt?: string } | undefined;
+      expect(promptBuildParams?.prompt).toBe("latest ask");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

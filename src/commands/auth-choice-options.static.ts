@@ -10,6 +10,7 @@ export type AuthChoiceOption = {
   groupHint?: string;
   assistantPriority?: number;
   assistantVisibility?: "visible" | "manual-only";
+  onboardingFeatured?: boolean;
 };
 
 export type AuthChoiceGroup = {

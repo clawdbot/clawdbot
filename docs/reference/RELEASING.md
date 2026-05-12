@@ -95,8 +95,13 @@ the maintainer-only release runbook.
    preview-passing plugins even when one preview cell flakes, and ends with
    registry verification for every expected plugin version so partial publishes
    remain visible and retryable. After publish, run
-   the post-publish package
-   acceptance against the published `openclaw@YYYY.M.D-beta.N` or
+   `pnpm release:verify-beta -- YYYY.M.D-beta.N --openclaw-npm-run <run-id> --plugin-npm-run <run-id> --plugin-clawhub-run <run-id>`
+   to verify the GitHub prerelease, npm `beta` dist-tags, npm integrity,
+   published install path, ClawHub exact versions, ClawHub artifacts, and child
+   workflow conclusions from one command. Add `--rerun-failed-clawhub` when the
+   ClawHub sidecar failed only in retryable jobs and should be rerun in place.
+   Then run the post-publish package acceptance against the published
+   `openclaw@YYYY.M.D-beta.N` or
    `openclaw@beta` package. If a pushed or published prerelease needs a fix,
    cut the next matching prerelease number; do not delete or rewrite the old
    prerelease.
@@ -224,6 +229,11 @@ Validation` or from the `main`/release workflow ref so workflow logic and
   `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 pnpm test:live:cache`
   using both `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` workflow secrets
 - npm release preflight no longer waits on the separate release checks lane
+- Before tagging a release candidate locally, run
+  `RELEASE_TAG=vYYYY.M.D-beta.N pnpm release:fast-pretag-check`. The helper
+  runs the fast release guardrails, plugin npm/ClawHub release checks, build,
+  UI build, and `release:openclaw:npm:check` in the order that catches common
+  approval-blocking mistakes before the GitHub publish workflow starts.
 - Run `RELEASE_TAG=vYYYY.M.D node --import tsx scripts/openclaw-npm-release-check.ts`
   (or the matching beta/correction tag) before approval
 - After npm publish, run
@@ -655,6 +665,9 @@ OpenClaw package must not be published.
   `plugin_publish_scope=selected`
 - `publish_openclaw_npm`: defaults to `true`; set `false` only when using the
   workflow as a plugin-only repair orchestrator
+- `wait_for_clawhub`: defaults to `false` so npm availability is not blocked by
+  the ClawHub sidecar; set `true` only when workflow completion must include
+  ClawHub completion
 
 `OpenClaw Release Checks` accepts these operator-controlled inputs:
 

@@ -179,13 +179,17 @@ type SessionBindingBindInput = {
 
 function firstFocusTargetSessionParams(): FocusTargetSessionParams {
   const firstCall = hoisted.resolveFocusTargetSessionMock.mock.calls[0];
-  expect(firstCall).toBeDefined();
+  if (!firstCall) {
+    throw new Error("Expected focus target session call");
+  }
   return firstCall[0] as FocusTargetSessionParams;
 }
 
 function firstSessionBindingBindInput(): SessionBindingBindInput {
   const firstCall = hoisted.sessionBindingBindMock.mock.calls[0];
-  expect(firstCall).toBeDefined();
+  if (!firstCall) {
+    throw new Error("Expected session binding bind call");
+  }
   return firstCall[0] as SessionBindingBindInput;
 }
 

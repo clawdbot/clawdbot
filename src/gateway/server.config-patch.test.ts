@@ -288,11 +288,9 @@ describe("gateway config methods", () => {
     expect(res.payload?.path).toBe("gateway.auth");
     expect(res.payload?.hintPath).toBe("gateway.auth");
     const tokenChild = res.payload?.children?.find((child) => child.key === "token");
-    expect(tokenChild).toMatchObject({
-      key: "token",
-      path: "gateway.auth.token",
-      hintPath: "gateway.auth.token",
-    });
+    expect(tokenChild?.key).toBe("token");
+    expect(tokenChild?.path).toBe("gateway.auth.token");
+    expect(tokenChild?.hintPath).toBe("gateway.auth.token");
     expect(res.payload?.schema?.properties).toBeUndefined();
   });
 

@@ -26,6 +26,16 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;
 let loadAuthProfileStoreForRuntime: typeof import("./auth-profiles.js").loadAuthProfileStoreForRuntime;
 
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function firstMockArg(mock: MockWithCalls, label: string) {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call[0];
+}
+
 describe("auth profiles read-only external auth overlay", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -58,7 +68,25 @@ describe("auth profiles read-only external auth overlay", () => {
 
       const loaded = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
 
-      expect(resolveExternalAuthProfilesWithPluginsMock).toHaveBeenCalled();
+      expect(resolveExternalAuthProfilesWithPluginsMock).toHaveBeenCalledTimes(1);
+      const externalAuthCall = firstMockArg(
+        resolveExternalAuthProfilesWithPluginsMock,
+        "resolveExternalAuthProfilesWithPlugins",
+      ) as
+        | {
+            config?: unknown;
+            context?: {
+              agentDir?: string;
+              store?: AuthProfileStore;
+              workspaceDir?: string;
+            };
+          }
+        | undefined;
+      expect(externalAuthCall?.config).toBeUndefined();
+      expect(externalAuthCall?.context?.agentDir).toBe(agentDir);
+      expect(externalAuthCall?.context?.workspaceDir).toBeUndefined();
+      expect(externalAuthCall?.context?.store?.version).toBe(AUTH_STORE_VERSION);
+      expect(externalAuthCall?.context?.store?.profiles).toStrictEqual(baseline.profiles);
       expect(loaded.profiles["minimax-portal:default"]?.type).toBe("oauth");
       expect(loaded.profiles["minimax-portal:default"]?.provider).toBe("minimax-portal");
 

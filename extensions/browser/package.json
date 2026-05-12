@@ -1,16 +1,16 @@
 {
   "name": "@openclaw/browser-plugin",
-  "version": "2026.5.10-beta.1",
+  "version": "2026.5.12-beta.1",
   "private": true,
   "description": "OpenClaw browser tool plugin",
   "type": "module",
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
-    "commander": "^14.0.3",
+    "commander": "14.0.3",
     "express": "5.2.1",
-    "playwright-core": "1.59.1",
+    "playwright-core": "1.60.0",
     "typebox": "1.1.38",
-    "ws": "^8.20.0"
+    "ws": "8.20.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

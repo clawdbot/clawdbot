@@ -9,7 +9,7 @@ vi.mock("../plugin-sdk/facade-loader.js", () => ({
 }));
 
 function requireFirstNoteCall(noteFn: ReturnType<typeof vi.fn>): unknown[] {
-  const call = noteFn.mock.calls[0];
+  const call = noteFn.mock.calls.at(0);
   if (!call) {
     throw new Error("expected browser doctor note");
   }
@@ -53,9 +53,9 @@ describe("doctor browser facade", () => {
 
     await expect(noteChromeMcpBrowserReadiness({}, { noteFn })).resolves.toBeUndefined();
     expect(noteFn).toHaveBeenCalledTimes(1);
-    const noteCall = requireFirstNoteCall(noteFn);
-    expect(String(noteCall[0])).toContain("Browser health check is unavailable");
-    expect(String(noteCall[0])).toContain("missing browser doctor facade");
-    expect(noteCall[1]).toBe("Browser");
+    expect(requireFirstNoteCall(noteFn)).toEqual([
+      "- Browser health check is unavailable: missing browser doctor facade",
+      "Browser",
+    ]);
   });
 });

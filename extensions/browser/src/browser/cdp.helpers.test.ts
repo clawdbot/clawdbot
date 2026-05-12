@@ -26,6 +26,15 @@ describe("cdp helpers", () => {
     fetchWithSsrFGuardMock.mockReset();
   });
 
+  function requireGuardedFetchRequest() {
+    const [call] = fetchWithSsrFGuardMock.mock.calls;
+    if (!call) {
+      throw new Error("expected guarded CDP fetch call");
+    }
+    const [request] = call;
+    return request;
+  }
+
   it("releases guarded CDP fetches after the response body is consumed", async () => {
     const release = vi.fn(async () => {});
     const json = vi.fn(async () => {
@@ -105,15 +114,12 @@ describe("cdp helpers", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://127.0.0.1:9222/json/version",
-        policy: {
-          dangerouslyAllowPrivateNetwork: false,
-          allowedHostnames: ["127.0.0.1"],
-        },
-      }),
-    );
+    const request = requireGuardedFetchRequest();
+    expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
+    expect(request?.policy).toEqual({
+      dangerouslyAllowPrivateNetwork: false,
+      allowedHostnames: ["127.0.0.1"],
+    });
     expect(release).toHaveBeenCalledTimes(1);
   });
 
@@ -134,16 +140,13 @@ describe("cdp helpers", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://127.0.0.1:9222/json/version",
-        policy: {
-          dangerouslyAllowPrivateNetwork: false,
-          hostnameAllowlist: ["*.corp.example"],
-          allowedHostnames: ["127.0.0.1"],
-        },
-      }),
-    );
+    const request = requireGuardedFetchRequest();
+    expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
+    expect(request?.policy).toEqual({
+      dangerouslyAllowPrivateNetwork: false,
+      hostnameAllowlist: ["*.corp.example"],
+      allowedHostnames: ["127.0.0.1"],
+    });
     expect(release).toHaveBeenCalledTimes(1);
   });
 });

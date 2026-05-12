@@ -180,9 +180,9 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         { heartbeatIsolatedBaseSessionKey?: string }
       >;
       expect(store[deeplyAccumulatedKey]).toBeUndefined();
-      expect(store[`${baseSessionKey}:heartbeat`]).toMatchObject({
-        heartbeatIsolatedBaseSessionKey: baseSessionKey,
-      });
+      expect(store[`${baseSessionKey}:heartbeat`]?.heartbeatIsolatedBaseSessionKey).toBe(
+        baseSessionKey,
+      );
     });
   });
 

@@ -43,10 +43,11 @@ describe("registerBackupCommand", () => {
 
   function expectForwardedOptions(command: typeof backupCreateCommand): Record<string, unknown> {
     expect(command).toHaveBeenCalledTimes(1);
-    const [runtimeArg, options] = command.mock.calls[0] as unknown as [
-      typeof runtime,
-      Record<string, unknown>,
-    ];
+    const call = command.mock.calls.at(0);
+    if (!call) {
+      throw new Error("expected backup command call");
+    }
+    const [runtimeArg, options] = call as unknown as [typeof runtime, Record<string, unknown>];
     expect(runtimeArg).toBe(runtime);
     return options;
   }

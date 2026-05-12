@@ -175,16 +175,15 @@ describe("security fix", () => {
       env: process.env,
       channelPlugins: [createWhatsAppConfigFixTestPlugin(["+15551234567"])],
     });
-    expect(fixed.changes).toEqual(
-      expect.arrayContaining([
-        "channels.telegram.groupPolicy=open -> allowlist",
-        "channels.whatsapp.groupPolicy=open -> allowlist",
-        "channels.discord.groupPolicy=open -> allowlist",
-        "channels.signal.groupPolicy=open -> allowlist",
-        "channels.imessage.groupPolicy=open -> allowlist",
-        'logging.redactSensitive=off -> "tools"',
-      ]),
-    );
+    expect(fixed.changes).toEqual([
+      'logging.redactSensitive=off -> "tools"',
+      "channels.telegram.groupPolicy=open -> allowlist",
+      "channels.whatsapp.groupPolicy=open -> allowlist",
+      "channels.discord.groupPolicy=open -> allowlist",
+      "channels.signal.groupPolicy=open -> allowlist",
+      "channels.imessage.groupPolicy=open -> allowlist",
+      "channels.whatsapp.groupAllowFrom=pairing-store",
+    ]);
 
     const channels = fixed.cfg.channels as Record<string, Record<string, unknown>>;
     expect(channels.telegram.groupPolicy).toBe("allowlist");
@@ -291,17 +290,18 @@ describe("security fix", () => {
       includePaths: [includePath],
     });
 
-    expect(targets).toEqual(
-      expect.arrayContaining([
-        { path: stateDir, mode: 0o700, require: "dir" },
-        { path: configPath, mode: 0o600, require: "file" },
-        { path: credsDir, mode: 0o700, require: "dir" },
-        { path: allowFromPath, mode: 0o600, require: "file" },
-        { path: authProfilesPath, mode: 0o600, require: "file" },
-        { path: sessionsStorePath, mode: 0o600, require: "file" },
-        { path: transcriptPath, mode: 0o600, require: "file" },
-        { path: includePath, mode: 0o600, require: "file" },
-      ]),
-    );
+    expect(targets).toEqual([
+      { path: stateDir, mode: 0o700, require: "dir" },
+      { path: configPath, mode: 0o600, require: "file" },
+      { path: includePath, mode: 0o600, require: "file" },
+      { path: credsDir, mode: 0o700, require: "dir" },
+      { path: allowFromPath, mode: 0o600, require: "file" },
+      { path: path.join(stateDir, "agents", "main"), mode: 0o700, require: "dir" },
+      { path: agentDir, mode: 0o700, require: "dir" },
+      { path: authProfilesPath, mode: 0o600, require: "file" },
+      { path: sessionsDir, mode: 0o700, require: "dir" },
+      { path: sessionsStorePath, mode: 0o600, require: "file" },
+      { path: transcriptPath, mode: 0o600, require: "file" },
+    ]);
   });
 });

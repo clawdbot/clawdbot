@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
+import { buildOpenAICodexSetupProvider, buildOpenAISetupProvider } from "./setup-api.js";
 
 const manifest = JSON.parse(
   readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
@@ -54,7 +55,12 @@ function manifestComparableWizardFields(choice: {
 }
 
 function providerWizardByKey() {
-  const providers = [buildOpenAIProvider(), buildOpenAICodexProviderPlugin()];
+  const providers = [
+    buildOpenAIProvider(),
+    buildOpenAICodexProviderPlugin(),
+    buildOpenAISetupProvider(),
+    buildOpenAICodexSetupProvider(),
+  ];
   const wizards = new Map<string, Record<string, unknown>>();
 
   for (const provider of providers) {
@@ -110,10 +116,25 @@ describe("OpenAI plugin manifest", () => {
     const codexDeviceCode = choices.find(
       (choice) => choice.choiceId === "openai-codex-device-code",
     );
+    const openAiLogin = choices.find((choice) => choice.choiceId === "openai");
+    const openAiDeviceCode = choices.find((choice) => choice.choiceId === "openai-device-code");
     const apiKey = choices.find(
       (choice) => choice.provider === "openai" && choice.method === "api-key",
     );
+    const codexApiKey = choices.find((choice) => choice.choiceId === "openai-codex-api-key");
 
+    expect(openAiLogin?.choiceLabel).toBe("ChatGPT Login");
+    expect(openAiLogin?.choiceHint).toBe("Sign in with your ChatGPT or Codex subscription");
+    expect(openAiLogin?.groupId).toBe("openai");
+    expect(openAiLogin?.groupLabel).toBe("OpenAI");
+    expect(openAiLogin?.groupHint).toBe("ChatGPT subscription or API key");
+    expect(openAiDeviceCode?.choiceLabel).toBe("ChatGPT Device Pairing");
+    expect(openAiDeviceCode?.choiceHint).toBe(
+      "Pair your ChatGPT account in browser with a device code",
+    );
+    expect(openAiDeviceCode?.groupId).toBe("openai");
+    expect(openAiDeviceCode?.groupLabel).toBe("OpenAI");
+    expect(openAiDeviceCode?.groupHint).toBe("ChatGPT subscription or API key");
     expect(codexBrowserLogin?.choiceLabel).toBe("OpenAI Codex Browser Login");
     expect(codexBrowserLogin?.choiceHint).toBe("Sign in with OpenAI in your browser");
     expect(codexBrowserLogin?.groupId).toBe("openai-codex");
@@ -125,9 +146,17 @@ describe("OpenAI plugin manifest", () => {
     expect(codexDeviceCode?.groupLabel).toBe("OpenAI Codex");
     expect(codexDeviceCode?.groupHint).toBe("ChatGPT/Codex sign-in");
     expect(apiKey?.choiceLabel).toBe("OpenAI API Key");
+    expect(apiKey?.choiceHint).toBe("Use your OpenAI API key directly");
     expect(apiKey?.groupId).toBe("openai");
     expect(apiKey?.groupLabel).toBe("OpenAI");
-    expect(apiKey?.groupHint).toBe("Direct API key");
+    expect(apiKey?.groupHint).toBe("ChatGPT subscription or API key");
+    expect(codexApiKey?.choiceLabel).toBe("OpenAI API Key Backup");
+    expect(codexApiKey?.choiceHint).toBe(
+      "Use an OpenAI API key when your Codex subscription is unavailable",
+    );
+    expect(codexApiKey?.groupId).toBe("openai-codex");
+    expect(codexApiKey?.groupLabel).toBe("OpenAI Codex");
+    expect(codexApiKey?.groupHint).toBe("ChatGPT/Codex sign-in");
     expect(choices.map((choice) => choice.choiceLabel)).not.toContain(
       "OpenAI Codex (ChatGPT OAuth)",
     );

@@ -33,9 +33,14 @@ describe("loadExtraBootstrapFiles", () => {
 
     const files = await loadExtraBootstrapFiles(workspaceDir, ["packages/*/*"]);
 
-    expect(files).toHaveLength(1);
-    expect(files[0]?.name).toBe("TOOLS.md");
-    expect(files[0]?.content).toBe("tools");
+    expect(files).toStrictEqual([
+      {
+        name: "TOOLS.md",
+        path: path.join(packageDir, "TOOLS.md"),
+        content: "tools",
+        missing: false,
+      },
+    ]);
   });
 
   it("keeps path-traversal attempts outside workspace excluded", async () => {
@@ -65,9 +70,14 @@ describe("loadExtraBootstrapFiles", () => {
 
     const files = await loadExtraBootstrapFiles(linkedWorkspace, ["AGENTS.md"]);
 
-    expect(files).toHaveLength(1);
-    expect(files[0]?.name).toBe("AGENTS.md");
-    expect(files[0]?.content).toBe("linked agents");
+    expect(files).toStrictEqual([
+      {
+        name: "AGENTS.md",
+        path: path.join(linkedWorkspace, "AGENTS.md"),
+        content: "linked agents",
+        missing: false,
+      },
+    ]);
   });
 
   it("rejects hardlinked aliases to files outside workspace", async () => {

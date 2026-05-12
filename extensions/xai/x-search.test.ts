@@ -30,9 +30,37 @@ function installXSearchFetch(payload?: Record<string, unknown>) {
   return mockFetch;
 }
 
+function firstFetchCall(mockFetch: ReturnType<typeof installXSearchFetch>) {
+  const [call] = mockFetch.mock.calls;
+  if (!call) {
+    throw new Error("expected x_search fetch call");
+  }
+  return call;
+}
+
+function firstFetchUrl(mockFetch: ReturnType<typeof installXSearchFetch>) {
+  const [url] = firstFetchCall(mockFetch);
+  return String(url);
+}
+
+function firstFetchInit(mockFetch: ReturnType<typeof installXSearchFetch>): RequestInit {
+  const [, init] = firstFetchCall(mockFetch);
+  if (!init || typeof init !== "object" || Array.isArray(init)) {
+    throw new Error("expected x_search fetch init");
+  }
+  return init as RequestInit;
+}
+
+function firstAuthorizationHeader(mockFetch: ReturnType<typeof installXSearchFetch>) {
+  const headers = firstFetchInit(mockFetch).headers;
+  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
+    throw new Error("expected x_search request headers");
+  }
+  return (headers as Record<string, string>).Authorization;
+}
+
 function parseFirstRequestBody(mockFetch: ReturnType<typeof installXSearchFetch>) {
-  const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
-  const requestBody = request?.body;
+  const requestBody = firstFetchInit(mockFetch).body;
   return JSON.parse(typeof requestBody === "string" ? requestBody : "{}") as Record<
     string,
     unknown
@@ -81,10 +109,7 @@ describe("xai x_search tool", () => {
       query: "auth profile search",
     });
 
-    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
-    expect((request?.headers as Record<string, string> | undefined)?.Authorization).toBe(
-      "Bearer xai-profile-key",
-    );
+    expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-profile-key");
   });
 
   it("enables x_search when the xAI plugin web search key is configured", () => {
@@ -139,7 +164,7 @@ describe("xai x_search tool", () => {
     });
 
     expect(mockFetch).toHaveBeenCalled();
-    expect(String(mockFetch.mock.calls[0]?.[0])).toContain("api.x.ai/v1/responses");
+    expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
     const body = parseFirstRequestBody(mockFetch);
     expect(body.model).toBe("grok-4-1-fast-non-reasoning");
     expect(body.max_turns).toBe(2);
@@ -184,7 +209,7 @@ describe("xai x_search tool", () => {
       query: "base url route",
     });
 
-    expect(String(mockFetch.mock.calls[0]?.[0])).toBe("https://api.x.ai/xai-search/v1/responses");
+    expect(firstFetchUrl(mockFetch)).toBe("https://api.x.ai/xai-search/v1/responses");
   });
 
   it("falls back to Grok web search baseUrl for x_search", async () => {
@@ -208,7 +233,7 @@ describe("xai x_search tool", () => {
       query: "legacy base url route",
     });
 
-    expect(String(mockFetch.mock.calls[0]?.[0])).toBe("https://api.x.ai/legacy/v1/responses");
+    expect(firstFetchUrl(mockFetch)).toBe("https://api.x.ai/legacy/v1/responses");
   });
 
   it("shares plugin webSearch.baseUrl with x_search when xSearch.baseUrl is unset", async () => {
@@ -237,7 +262,7 @@ describe("xai x_search tool", () => {
       query: "shared base url route",
     });
 
-    expect(String(mockFetch.mock.calls[0]?.[0])).toBe("https://api.x.ai/shared/v1/responses");
+    expect(firstFetchUrl(mockFetch)).toBe("https://api.x.ai/shared/v1/responses");
   });
 
   it("reuses the xAI plugin web search key for x_search requests", async () => {
@@ -262,10 +287,7 @@ describe("xai x_search tool", () => {
       query: "latest post from huntharo",
     });
 
-    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
-    expect((request?.headers as Record<string, string> | undefined)?.Authorization).toBe(
-      "Bearer xai-plugin-key",
-    );
+    expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-plugin-key");
   });
 
   it("prefers the active runtime config for shared xAI keys", async () => {
@@ -303,10 +325,7 @@ describe("xai x_search tool", () => {
       query: "runtime key search",
     });
 
-    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
-    expect((request?.headers as Record<string, string> | undefined)?.Authorization).toBe(
-      "Bearer x-search-runtime-key",
-    );
+    expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer x-search-runtime-key");
   });
 
   it("reuses the legacy grok web search key for x_search requests", async () => {
@@ -329,10 +348,7 @@ describe("xai x_search tool", () => {
       query: "latest legacy-key post from huntharo",
     });
 
-    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
-    expect((request?.headers as Record<string, string> | undefined)?.Authorization).toBe(
-      "Bearer xai-legacy-key",
-    );
+    expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-legacy-key");
   });
 
   it("uses migrated runtime auth when the source config still carries legacy x_search apiKey", async () => {
@@ -367,10 +383,7 @@ describe("xai x_search tool", () => {
       query: "migrated runtime auth",
     });
 
-    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
-    expect((request?.headers as Record<string, string> | undefined)?.Authorization).toBe(
-      "Bearer migrated-runtime-key",
-    );
+    expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer migrated-runtime-key");
   });
 
   it("rejects invalid date ordering before calling xAI", async () => {

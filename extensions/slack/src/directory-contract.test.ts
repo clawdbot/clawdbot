@@ -122,14 +122,14 @@ describe("Slack directory contract", () => {
       },
     } as unknown as OpenClawConfig;
 
-    await expect(getSlackDirectorySelfLive({ cfg, accountId: "default" })).resolves.toEqual(
-      expect.objectContaining({
-        kind: "user",
-        id: "user:USELF",
-        name: "Ada",
-        handle: "@ada",
-      }),
-    );
+    const self = await getSlackDirectorySelfLive({ cfg, accountId: "default" });
+    if (!self) {
+      throw new Error("expected Slack self directory entry");
+    }
+    expect(self.kind).toBe("user");
+    expect(self.id).toBe("user:USELF");
+    expect(self.name).toBe("Ada");
+    expect(self.handle).toBe("@ada");
     expect(slackClientMocks.authTest).toHaveBeenCalled();
     expect(slackClientMocks.usersInfo).toHaveBeenCalledWith({ user: "USELF" });
   });
@@ -149,13 +149,13 @@ describe("Slack directory contract", () => {
       },
     } as unknown as OpenClawConfig;
 
-    await expect(getSlackDirectorySelfLive({ cfg, accountId: "default" })).resolves.toEqual(
-      expect.objectContaining({
-        kind: "user",
-        id: "user:USELF",
-        name: "ada",
-        handle: "@ada",
-      }),
-    );
+    const self = await getSlackDirectorySelfLive({ cfg, accountId: "default" });
+    if (!self) {
+      throw new Error("expected Slack self directory entry");
+    }
+    expect(self.kind).toBe("user");
+    expect(self.id).toBe("user:USELF");
+    expect(self.name).toBe("ada");
+    expect(self.handle).toBe("@ada");
   });
 });

@@ -1,4 +1,5 @@
 import { html } from "lit";
+import { t } from "../../i18n/index.ts";
 import {
   agentLogoUrl,
   assistantAvatarFallbackUrl,
@@ -15,11 +16,11 @@ export type ChatWelcomeProps = {
   onSend: () => void;
 };
 
-const WELCOME_SUGGESTIONS = [
-  "What can you do?",
-  "Summarize my recent sessions",
-  "Help me configure a channel",
-  "Check system health",
+const WELCOME_SUGGESTION_KEYS = [
+  "chat.welcome.suggestions.whatCanYouDo",
+  "chat.welcome.suggestions.summarizeRecentSessions",
+  "chat.welcome.suggestions.configureChannel",
+  "chat.welcome.suggestions.checkSystemHealth",
 ];
 
 function resolveAssistantAvatarUrl(
@@ -64,12 +65,18 @@ export function renderWelcomeState(props: ChatWelcomeProps) {
             </div>`}
       <h2>${name}</h2>
       <div class="agent-chat__badges">
-        <span class="agent-chat__badge"><img src=${logoUrl} alt="" /> Ready to chat</span>
+        <span class="agent-chat__badge"
+          ><img src=${logoUrl} alt="" /> ${t("chat.welcome.ready")}</span
+        >
       </div>
-      <p class="agent-chat__hint">Type a message below &middot; <kbd>/</kbd> for commands</p>
+      <p class="agent-chat__hint">
+        ${t("chat.welcome.hintBeforeShortcut")} <kbd>/</kbd>
+        ${t("chat.welcome.hintAfterShortcut")}
+      </p>
       <div class="agent-chat__suggestions">
-        ${WELCOME_SUGGESTIONS.map(
-          (text) => html`
+        ${WELCOME_SUGGESTION_KEYS.map((key) => {
+          const text = t(key);
+          return html`
             <button
               type="button"
               class="agent-chat__suggestion"
@@ -80,8 +87,8 @@ export function renderWelcomeState(props: ChatWelcomeProps) {
             >
               ${text}
             </button>
-          `,
-        )}
+          `;
+        })}
       </div>
     </div>
   `;

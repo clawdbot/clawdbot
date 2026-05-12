@@ -83,14 +83,17 @@ function parseSent(socket: FakeWebSocketInstance): SentRealtimeEvent[] {
 }
 
 async function waitForFakeSocket(): Promise<FakeWebSocketInstance> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const socket = FakeWebSocket.instances[0];
-    if (socket) {
-      return socket;
+  let socket: FakeWebSocketInstance | undefined;
+  await vi.waitFor(() => {
+    socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected session to create a websocket");
     }
-    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  if (!socket) {
+    throw new Error("expected session to create a websocket");
   }
-  throw new Error("expected session to create a websocket");
+  return socket;
 }
 
 function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): Record<string, unknown> {

@@ -161,20 +161,17 @@ describeLive("deepseek plugin live", () => {
 
     const messages = capturedPayload?.messages;
     expect(Array.isArray(messages)).toBe(true);
-    expect((messages as Array<Record<string, unknown>>)[1]).toMatchObject({
-      role: "assistant",
-      reasoning_content: "",
-      tool_calls: [
-        {
-          id: toolCallId,
-          type: "function",
-          function: {
-            name: "noop",
-            arguments: "{}",
-          },
-        },
-      ],
-    });
+    const assistantMessage = (messages as Array<Record<string, unknown>>)[1];
+    expect(assistantMessage?.role).toBe("assistant");
+    expect(assistantMessage?.reasoning_content).toBe("");
+    const toolCalls = assistantMessage?.tool_calls;
+    expect(Array.isArray(toolCalls)).toBe(true);
+    const toolCall = (toolCalls as Array<Record<string, unknown>>)[0];
+    expect(toolCall?.id).toBe(toolCallId);
+    expect(toolCall?.type).toBe("function");
+    const toolFunction = toolCall?.function as Record<string, unknown> | undefined;
+    expect(toolFunction?.name).toBe("noop");
+    expect(toolFunction?.arguments).toBe("{}");
     expect(extractNonEmptyAssistantText(result.content).length).toBeGreaterThan(0);
   }, 60_000);
 
@@ -226,11 +223,10 @@ describeLive("deepseek plugin live", () => {
 
     const messages = capturedPayload?.messages;
     expect(Array.isArray(messages)).toBe(true);
-    expect((messages as Array<Record<string, unknown>>)[1]).toMatchObject({
-      role: "assistant",
-      content: "Hello.",
-      reasoning_content: "",
-    });
+    const assistantMessage = (messages as Array<Record<string, unknown>>)[1];
+    expect(assistantMessage?.role).toBe("assistant");
+    expect(assistantMessage?.content).toBe("Hello.");
+    expect(assistantMessage?.reasoning_content).toBe("");
     expect(extractNonEmptyAssistantText(result.content).length).toBeGreaterThan(0);
   }, 60_000);
 });

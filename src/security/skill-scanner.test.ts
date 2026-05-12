@@ -626,7 +626,13 @@ describe("scanDirectoryWithSummary", () => {
     });
 
     try {
-      await expect(scanDirectoryWithSummary(root)).rejects.toMatchObject({ code: "EACCES" });
+      let thrown: unknown;
+      try {
+        await scanDirectoryWithSummary(root);
+      } catch (error) {
+        thrown = error;
+      }
+      expect((thrown as NodeJS.ErrnoException | undefined)?.code).toBe("EACCES");
     } finally {
       spy.mockRestore();
     }
@@ -660,7 +666,13 @@ describe("scanDirectoryWithSummary", () => {
     const spy = mockStatPermissionDeniedFor(filePath);
 
     try {
-      await expect(scanDirectory(root)).rejects.toMatchObject({ code: "EACCES" });
+      let thrown: unknown;
+      try {
+        await scanDirectory(root);
+      } catch (error) {
+        thrown = error;
+      }
+      expect((thrown as NodeJS.ErrnoException | undefined)?.code).toBe("EACCES");
     } finally {
       spy.mockRestore();
     }

@@ -18,6 +18,10 @@ function resetSuccessfulUsageStats(
   return {
     ...existing,
     errorCount: 0,
+    blockedUntil: undefined,
+    blockedReason: undefined,
+    blockedSource: undefined,
+    blockedModel: undefined,
     cooldownUntil: undefined,
     cooldownReason: undefined,
     cooldownModel: undefined,

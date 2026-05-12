@@ -81,7 +81,7 @@ describe("resolveAttemptTranscriptPolicy", () => {
     expect(policy.toolCallIdMode).toBe("strict");
     expect(policy.repairToolUseResultPairing).toBe(true);
     expect(policy.validateAnthropicTurns).toBe(false);
-    expect(policy.allowSyntheticToolResults).toBe(false);
+    expect(policy.allowSyntheticToolResults).toBe(true);
     expect(resolveProviderRuntimePluginMock).toHaveBeenCalledWith({
       provider: "custom-openai-compatible",
       config: undefined,

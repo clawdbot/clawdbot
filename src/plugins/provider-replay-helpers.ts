@@ -30,11 +30,16 @@ export function buildOpenAICompatibleReplayPolicy(
 
   const sanitizeToolCallIds = options.sanitizeToolCallIds ?? true;
   const dropReasoningFromHistory = options.dropReasoningFromHistory ?? true;
+  const isResponsesFamily =
+    modelApi === "openai-responses" ||
+    modelApi === "openai-codex-responses" ||
+    modelApi === "azure-openai-responses";
 
   return {
     ...(sanitizeToolCallIds
       ? { sanitizeToolCallIds: true, toolCallIdMode: "strict" as const }
       : {}),
+    ...(isResponsesFamily ? { allowSyntheticToolResults: true } : {}),
     ...(modelApi === "openai-completions"
       ? {
           applyAssistantFirstOrderingFix: true,

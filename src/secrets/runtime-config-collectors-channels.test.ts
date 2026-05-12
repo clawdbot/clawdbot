@@ -13,6 +13,23 @@ vi.mock("./channel-contract-api.js", () => ({
   loadChannelSecretContractApi,
 }));
 
+function requireLoadChannelSecretContractApiCall(): {
+  channelId?: unknown;
+  config?: unknown;
+  env?: unknown;
+  loadablePluginOrigins?: unknown;
+} {
+  const [call] = loadChannelSecretContractApi.mock.calls;
+  if (!call) {
+    throw new Error("expected loadChannelSecretContractApi call");
+  }
+  const [params] = call;
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("expected loadChannelSecretContractApi params to be an object");
+  }
+  return params;
+}
+
 describe("runtime channel config collectors", () => {
   beforeEach(() => {
     getBootstrapChannelSecrets.mockReset();
@@ -43,11 +60,11 @@ describe("runtime channel config collectors", () => {
       context: {} as ResolverContext,
     });
 
-    const loadCall = loadChannelSecretContractApi.mock.calls[0]?.[0];
-    expect(loadCall?.channelId).toBe("imessage");
-    expect(loadCall?.config).toBe(config);
-    expect(loadCall?.env).toBeUndefined();
-    expect(loadCall?.loadablePluginOrigins).toBeUndefined();
+    const loadCall = requireLoadChannelSecretContractApiCall();
+    expect(loadCall.channelId).toBe("imessage");
+    expect(loadCall.config).toBe(config);
+    expect(loadCall.env).toBeUndefined();
+    expect(loadCall.loadablePluginOrigins).toBeUndefined();
     expect(collectRuntimeConfigAssignments).toHaveBeenCalledOnce();
     expect(getBootstrapChannelSecrets).not.toHaveBeenCalled();
   });
@@ -72,11 +89,11 @@ describe("runtime channel config collectors", () => {
       context: {} as ResolverContext,
     });
 
-    const loadCall = loadChannelSecretContractApi.mock.calls[0]?.[0];
-    expect(loadCall?.channelId).toBe("legacy");
-    expect(loadCall?.config).toBe(config);
-    expect(loadCall?.env).toBeUndefined();
-    expect(loadCall?.loadablePluginOrigins).toBeUndefined();
+    const loadCall = requireLoadChannelSecretContractApiCall();
+    expect(loadCall.channelId).toBe("legacy");
+    expect(loadCall.config).toBe(config);
+    expect(loadCall.env).toBeUndefined();
+    expect(loadCall.loadablePluginOrigins).toBeUndefined();
     expect(getBootstrapChannelSecrets).toHaveBeenCalledWith("legacy");
     expect(collectRuntimeConfigAssignments).toHaveBeenCalledOnce();
   });

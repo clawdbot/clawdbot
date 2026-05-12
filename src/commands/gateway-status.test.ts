@@ -398,18 +398,20 @@ describe("gateway-status command", () => {
     expect(runtimeErrors).toHaveLength(0);
     const parsed = JSON.parse(runtimeLogs.join("\n")) as {
       degraded?: boolean;
-      warnings?: Array<{ code?: string; message?: string }>;
+      warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
     };
-    expect(parsed.degraded).toBe(true);
-    expect(parsed.warnings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "model_pricing_degraded",
-          message:
-            "Model pricing degraded: OpenRouter pricing fetch failed: TypeError: fetch failed",
-        }),
-      ]),
-    );
+    expect(parsed.degraded).toBe(false);
+    const pricingWarnings =
+      parsed.warnings?.filter((warning) => warning.code === "model_pricing_degraded") ?? [];
+    expect(pricingWarnings).toHaveLength(2);
+    expect(pricingWarnings.map((warning) => warning.message)).toEqual([
+      "Model pricing warning: optional pricing refresh degraded: OpenRouter pricing fetch failed: TypeError: fetch failed",
+      "Model pricing warning: optional pricing refresh degraded: OpenRouter pricing fetch failed: TypeError: fetch failed",
+    ]);
+    expect(pricingWarnings.map((warning) => warning.targetIds)).toEqual([
+      ["sshTunnel"],
+      ["configRemote"],
+    ]);
   });
 
   it("includes diagnostic next steps when no gateway is reachable or discoverable", async () => {

@@ -7,6 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CODEX_CLI_PROFILE_ID,
+  createProviderApiKeyAuthMethod,
   ensureAuthProfileStoreForLocalUpdate,
   listProfilesForProvider,
   type OAuthCredential,
@@ -26,6 +27,8 @@ import {
 import {
   OPENAI_CODEX_DEVICE_PAIRING_HINT,
   OPENAI_CODEX_DEVICE_PAIRING_LABEL,
+  OPENAI_CODEX_API_KEY_BACKUP_HINT,
+  OPENAI_CODEX_API_KEY_BACKUP_LABEL,
   OPENAI_CODEX_LOGIN_HINT,
   OPENAI_CODEX_LOGIN_LABEL,
   OPENAI_CODEX_WIZARD_GROUP,
@@ -50,6 +53,7 @@ import {
 import { resolveOpenAICodexThinkingProfile } from "./thinking-policy.js";
 
 const PROVIDER_ID = "openai-codex";
+const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_BASE_URL = OPENAI_CODEX_RESPONSES_BASE_URL;
 const OPENAI_CODEX_LOGIN_ASSISTANT_PRIORITY = -30;
 const OPENAI_CODEX_DEVICE_PAIRING_ASSISTANT_PRIORITY = -10;
@@ -317,6 +321,24 @@ function buildOpenAICodexAuthConfigPatch(): NonNullable<ProviderAuthResult["conf
   };
 }
 
+function applyOpenAICodexAuthConfig(
+  cfg: ProviderAuthContext["config"],
+): ProviderAuthContext["config"] {
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models: {
+          ...cfg.agents?.defaults?.models,
+          [OPENAI_CODEX_DEFAULT_MODEL]: {},
+        },
+      },
+    },
+  };
+}
+
 async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
   try {
     const { refreshOpenAICodexToken } = await import("./openai-codex-provider.runtime.js");
@@ -485,6 +507,27 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
         },
         run: async (ctx) => await runOpenAICodexDeviceCode(ctx),
       },
+      createProviderApiKeyAuthMethod({
+        providerId: OPENAI_PROVIDER_ID,
+        methodId: "api-key",
+        label: OPENAI_CODEX_API_KEY_BACKUP_LABEL,
+        hint: OPENAI_CODEX_API_KEY_BACKUP_HINT,
+        optionKey: "openaiApiKey",
+        flagName: "--openai-api-key",
+        envVar: "OPENAI_API_KEY",
+        promptMessage: "Enter OpenAI API key",
+        profileId: "openai:default",
+        defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
+        expectedProviders: [OPENAI_PROVIDER_ID],
+        applyConfig: applyOpenAICodexAuthConfig,
+        wizard: {
+          choiceId: "openai-codex-api-key",
+          choiceLabel: OPENAI_CODEX_API_KEY_BACKUP_LABEL,
+          choiceHint: OPENAI_CODEX_API_KEY_BACKUP_HINT,
+          assistantPriority: 5,
+          ...OPENAI_CODEX_WIZARD_GROUP,
+        },
+      }),
     ],
     catalog: {
       order: "profile",

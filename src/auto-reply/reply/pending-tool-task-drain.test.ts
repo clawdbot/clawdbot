@@ -75,7 +75,9 @@ describe("drainPendingToolTasks", () => {
     await vi.advanceTimersByTimeAsync(100);
 
     await expect(drain).resolves.toEqual({ kind: "timeout", remaining: 1 });
-    expect(onTimeout).toHaveBeenCalledWith(expect.stringContaining("1 task(s) still pending"));
+    expect(onTimeout).toHaveBeenCalledWith(
+      "pending tool tasks made no progress within 100ms; proceeding with 1 task(s) still pending to avoid session deadlock",
+    );
     expect(tasks.size).toBe(1);
   });
 

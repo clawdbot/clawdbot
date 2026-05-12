@@ -3,7 +3,6 @@ import os from "node:os";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   createAgentSession,
-  DefaultResourceLoader,
   estimateTokens,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
@@ -141,6 +140,7 @@ import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-disco
 import { readPiModelContextTokens } from "./model-context-tokens.js";
 import { resolveModelAsync } from "./model.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
+import { createEmbeddedPiResourceLoader } from "./resource-loader.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
@@ -996,7 +996,7 @@ async function compactEmbeddedPiSessionDirectOnce(
         modelId,
         model,
       });
-      const resourceLoader = new DefaultResourceLoader({
+      const resourceLoader = createEmbeddedPiResourceLoader({
         cwd: resolvedWorkspace,
         agentDir,
         settingsManager,
@@ -1371,7 +1371,6 @@ async function compactEmbeddedPiSessionDirectOnce(
             await flushPendingToolResultsAfterIdle({
               agent: session?.agent,
               sessionManager,
-              clearPendingOnTimeout: true,
             });
           } catch {
             /* best-effort */

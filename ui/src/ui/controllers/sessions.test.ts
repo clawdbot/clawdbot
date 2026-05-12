@@ -698,12 +698,9 @@ describe("applySessionsChangedEvent", () => {
     });
 
     expect(applied).toEqual({ applied: true, change: "updated" });
-    expect(state.sessionsResult?.sessions).toMatchObject([
-      {
-        key: "agent:main:subagent:done",
-        status: "done",
-      },
-    ]);
+    expect(state.sessionsResult?.sessions).toHaveLength(1);
+    expect(state.sessionsResult?.sessions[0]?.key).toBe("agent:main:subagent:done");
+    expect(state.sessionsResult?.sessions[0]?.status).toBe("done");
   });
 
   it("updates fresh context usage from websocket event payloads", () => {
@@ -738,13 +735,11 @@ describe("applySessionsChangedEvent", () => {
 
     expect(applied).toEqual({ applied: true, change: "updated" });
     expect(state.sessionsResult?.ts).toBe(2);
-    expect(state.sessionsResult?.sessions[0]).toMatchObject({
-      key: "agent:main:main",
-      totalTokens: 190_000,
-      totalTokensFresh: true,
-      contextTokens: 200_000,
-      model: "gpt-5.4",
-    });
+    expect(state.sessionsResult?.sessions[0]?.key).toBe("agent:main:main");
+    expect(state.sessionsResult?.sessions[0]?.totalTokens).toBe(190_000);
+    expect(state.sessionsResult?.sessions[0]?.totalTokensFresh).toBe(true);
+    expect(state.sessionsResult?.sessions[0]?.contextTokens).toBe(200_000);
+    expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5.4");
   });
 
   it("clears old token totals when the gateway marks the measurement stale", () => {
@@ -835,10 +830,8 @@ describe("applySessionsChangedEvent", () => {
 
     expect(applied).toEqual({ applied: true, change: "inserted" });
     expect(state.sessionsResult?.count).toBe(1);
-    expect(state.sessionsResult?.sessions[0]).toMatchObject({
-      key: "agent:main:new",
-      kind: "direct",
-      updatedAt: 2,
-    });
+    expect(state.sessionsResult?.sessions[0]?.key).toBe("agent:main:new");
+    expect(state.sessionsResult?.sessions[0]?.kind).toBe("direct");
+    expect(state.sessionsResult?.sessions[0]?.updatedAt).toBe(2);
   });
 });

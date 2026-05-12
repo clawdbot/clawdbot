@@ -129,11 +129,22 @@ function createExternalProviderConfig(params: {
   return config;
 }
 
-function firstCallParam(calls: unknown[][], label: string) {
-  const call = calls[0];
+type RealtimeConsultToolHandler = (
+  args: unknown,
+  callId: string,
+  context?: { partialUserTranscript?: string },
+) => Promise<unknown>;
+
+function firstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
   if (!call) {
     throw new Error(`expected ${label} call`);
   }
+  return call;
+}
+
+function firstCallParam(calls: readonly unknown[][], label: string) {
+  const call = firstMockCall(calls, label);
   return call[0];
 }
 
@@ -142,6 +153,18 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
     throw new Error(`expected ${label} to be a record`);
   }
   return value as Record<string, unknown>;
+}
+
+function requireRealtimeConsultToolHandler(): RealtimeConsultToolHandler {
+  const registeredToolHandler = firstMockCall(
+    mocks.realtimeHandlerRegisterToolHandler.mock.calls,
+    "realtime tool handler registration",
+  );
+  expect(registeredToolHandler[0]).toBe("openclaw_agent_consult");
+  if (typeof registeredToolHandler[1] !== "function") {
+    throw new Error("expected realtime tool handler callback");
+  }
+  return registeredToolHandler[1] as RealtimeConsultToolHandler;
 }
 
 describe("createVoiceCallRuntime lifecycle", () => {
@@ -377,19 +400,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
       "openclaw_agent_consult",
       "custom_tool",
     ]);
-    const registeredToolHandler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0];
-    expect(registeredToolHandler?.[0]).toBe("openclaw_agent_consult");
-    expect(registeredToolHandler?.[1]).toBeTypeOf("function");
-
-    const handler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0]?.[1] as
-      | ((
-          args: unknown,
-          callId: string,
-          context?: { partialUserTranscript?: string },
-        ) => Promise<unknown>)
-      | undefined;
+    const handler = requireRealtimeConsultToolHandler();
     await expect(
-      handler?.({ question: "What should I say?" }, "call-1", {
+      handler({ question: "What should I say?" }, "call-1", {
         partialUserTranscript: "Also check the ETA.",
       }),
     ).resolves.toEqual({
@@ -461,14 +474,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentRuntime: agentRuntime as never,
     });
 
-    const handler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0]?.[1] as
-      | ((
-          args: unknown,
-          callId: string,
-          context?: { partialUserTranscript?: string },
-        ) => Promise<unknown>)
-      | undefined;
-    await expect(handler?.({ question: "What should I say?" }, "call-1")).resolves.toEqual({
+    const handler = requireRealtimeConsultToolHandler();
+    await expect(handler({ question: "What should I say?" }, "call-1")).resolves.toEqual({
       text: "Per-call consult answer.",
     });
     expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
@@ -530,17 +537,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentRuntime: agentRuntime as never,
     });
 
-    const handler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0]?.[1] as
-      | ((
-          args: unknown,
-          callId: string,
-          context?: { partialUserTranscript?: string },
-        ) => Promise<unknown>)
-      | undefined;
-    const fastContextResult = await handler?.(
-      { question: "Are the basement lights on?" },
-      "call-1",
-    );
+    const handler = requireRealtimeConsultToolHandler();
+    const fastContextResult = await handler({ question: "Are the basement lights on?" }, "call-1");
     const fastContextRecord = requireRecord(fastContextResult, "fast context result");
     expect(fastContextRecord.text).toContain("The caller's basement lights are on.");
     expect(mocks.resolveRealtimeFastContextConsult).toHaveBeenCalledWith({
@@ -607,10 +605,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentRuntime: agentRuntime as never,
     });
 
-    const handler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0]?.[1] as
-      | ((args: unknown, callId: string) => Promise<unknown>)
-      | undefined;
-    await expect(handler?.({ question: "Turn on the lights." }, "call-1")).resolves.toEqual({
+    const handler = requireRealtimeConsultToolHandler();
+    await expect(handler({ question: "Turn on the lights." }, "call-1")).resolves.toEqual({
       text: "Done.",
     });
 

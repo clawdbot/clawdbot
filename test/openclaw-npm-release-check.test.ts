@@ -550,7 +550,9 @@ describe("collectReleaseTagErrors", () => {
         releaseTag: "v2026.3.10",
         now: new Date("2026-03-13T00:00:00Z"),
       }),
-    ).toContainEqual(expect.stringContaining("must be within 2 days"));
+    ).toStrictEqual([
+      "Release version 2026.3.10 is 3 days away from current UTC date 2026-03-13; release CalVer date 2026-03-10 must be within 2 days.",
+    ]);
   });
 
   it("accepts fallback correction tags for stable package versions", () => {
@@ -580,7 +582,9 @@ describe("collectReleaseTagErrors", () => {
         releaseTag: "v2026.3.10-1",
         now: new Date("2026-03-10T00:00:00Z"),
       }),
-    ).toContainEqual(expect.stringContaining("does not match package.json version"));
+    ).toStrictEqual([
+      "Release tag v2026.3.10-1 does not match package.json version 2026.3.10-beta.1; expected v2026.3.10-beta.1.",
+    ]);
   });
 });
 

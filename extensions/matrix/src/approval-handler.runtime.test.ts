@@ -22,9 +22,9 @@ type MatrixPendingPluginApprovalView = Extract<
 const MATRIX_APPROVAL_METADATA_KEY = "com.openclaw.approval";
 
 function expectRecordFields(value: unknown, expected: Record<string, unknown>) {
-  expect(value).toBeDefined();
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(actual[key]).toEqual(expectedValue);

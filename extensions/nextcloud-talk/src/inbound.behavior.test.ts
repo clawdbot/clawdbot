@@ -84,6 +84,22 @@ function createRuntimeEnv() {
   } as unknown as RuntimeEnv;
 }
 
+function requireFirstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call[0];
+}
+
+function requireFirstSendMessageCall(): [unknown, unknown, unknown] {
+  const [call] = sendMessageNextcloudTalkMock.mock.calls;
+  if (!call) {
+    throw new Error("expected Nextcloud Talk send call");
+  }
+  return call as [unknown, unknown, unknown];
+}
+
 function createAccount(
   overrides?: Partial<ResolvedNextcloudTalkAccount>,
 ): ResolvedNextcloudTalkAccount {
@@ -154,17 +170,22 @@ describe("nextcloud-talk inbound behavior", () => {
       statusSink,
     });
 
-    const challengeParams = issueChallenge.mock.calls[0]?.[0] as
-      | { meta?: { name?: string }; senderId?: string; senderIdLine?: string }
-      | undefined;
-    expect(challengeParams?.senderId).toBe("user-1");
-    expect(challengeParams?.senderIdLine).toBe("Your Nextcloud user id: user-1");
-    expect(challengeParams?.meta).toEqual({ name: "Alice" });
+    const challengeParams = requireFirstMockArg(
+      issueChallenge,
+      "Nextcloud Talk pairing challenge",
+    ) as {
+      meta?: { name?: string };
+      senderId?: string;
+      senderIdLine?: string;
+    };
+    expect(challengeParams.senderId).toBe("user-1");
+    expect(challengeParams.senderIdLine).toBe("Your Nextcloud user id: user-1");
+    expect(challengeParams.meta).toEqual({ name: "Alice" });
     expect(sendMessageNextcloudTalkMock).toHaveBeenCalledTimes(1);
-    const sendArgs = sendMessageNextcloudTalkMock.mock.calls[0];
-    expect(sendArgs?.[0]).toBe("room-1");
-    expect(sendArgs?.[1]).toBe("Pair with code 123456");
-    expect(sendArgs?.[2]).toEqual({
+    const sendArgs = requireFirstSendMessageCall();
+    expect(sendArgs[0]).toBe("room-1");
+    expect(sendArgs[1]).toBe("Pair with code 123456");
+    expect(sendArgs[2]).toEqual({
       cfg: { channels: { "nextcloud-talk": {} } },
       accountId: "default",
     });
@@ -279,9 +300,10 @@ describe("nextcloud-talk inbound behavior", () => {
       runtime: createRuntimeEnv(),
     });
 
-    const assembledRequest = (
-      coreRuntime.channel.turn.runAssembled as unknown as { mock: { calls: unknown[][] } }
-    ).mock.calls[0]?.[0] as { replyPipeline?: unknown } | undefined;
-    expect(assembledRequest?.replyPipeline).toEqual({});
+    const assembledRequest = requireFirstMockArg(
+      coreRuntime.channel.turn.runAssembled as ReturnType<typeof vi.fn>,
+      "Nextcloud Talk assembled request",
+    ) as { replyPipeline?: unknown };
+    expect(assembledRequest.replyPipeline).toEqual({});
   });
 });

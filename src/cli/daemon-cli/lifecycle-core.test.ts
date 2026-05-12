@@ -235,7 +235,7 @@ describe("runServiceRestart token drift", () => {
     expect(payload.result).toBe("stopped");
     expect(payload.service?.loaded).toBe(false);
     expect(service.stop).toHaveBeenCalledTimes(1);
-    const [stopOptions] = service.stop.mock.calls[0] ?? [];
+    const [stopOptions] = service.stop.mock.calls.at(0) ?? [];
     expect(stopOptions?.env).toBe(process.env);
     expect(stopOptions?.disable).toBe(true);
     expect(onNotLoaded).not.toHaveBeenCalled();

@@ -154,6 +154,38 @@ function requireFirstAppInstance(appInstances: Record<string, unknown>[]) {
   return appInstance;
 }
 
+function readFirstFetchCall(
+  fetchMock: ReturnType<typeof vi.fn>,
+): [string, { method?: string; headers: { Authorization?: string } }] {
+  const [call] = fetchMock.mock.calls;
+  if (!call) {
+    throw new Error("expected fetch call");
+  }
+  const [url, options] = call;
+  if (typeof url !== "string" || !options || typeof options !== "object") {
+    throw new Error("expected fetch URL and options");
+  }
+  if (!("headers" in options) || !options.headers || typeof options.headers !== "object") {
+    throw new Error("expected fetch options headers");
+  }
+  return [url, options as { method?: string; headers: { Authorization?: string } }];
+}
+
+function readFirstCreatedActivity(createFn: ReturnType<typeof vi.fn>): {
+  type?: string;
+  text?: string;
+} {
+  const [call] = createFn.mock.calls;
+  if (!call) {
+    throw new Error("expected activity create call");
+  }
+  const [activity] = call;
+  if (!activity || typeof activity !== "object") {
+    throw new Error("expected created activity payload");
+  }
+  return activity as { type?: string; text?: string };
+}
+
 describe("createMSTeamsApp", () => {
   it("creates app without the Express 5 wildcard route regression (#55161)", async () => {
     // Regression test for: https://github.com/openclaw/openclaw/issues/55161
@@ -208,10 +240,7 @@ describe("createMSTeamsAdapter", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, options] = fetchMock.mock.calls[0] as unknown as [
-      string,
-      { method?: string; headers?: { Authorization?: string } },
-    ];
+    const [url, options] = readFirstFetchCall(fetchMock);
     expect(url).toBe(
       "https://example.com/v3/conversations/19%3Aconversation%40thread.tacv2/activities/activity-123",
     );
@@ -613,9 +642,9 @@ describe("createMSTeamsAdapter – continueConversation", () => {
     });
 
     expect(createFn).toHaveBeenCalledTimes(1);
-    const activity = createFn.mock.calls[0]?.[0] as { type?: string; text?: string } | undefined;
-    expect(activity?.type).toBe("message");
-    expect(activity?.text).toBe("hello from proactive send");
+    const activity = readFirstCreatedActivity(createFn);
+    expect(activity.type).toBe("message");
+    expect(activity.text).toBe("hello from proactive send");
   });
 
   it("provides deleteActivity via REST DELETE in logic callback", async () => {
@@ -635,7 +664,7 @@ describe("createMSTeamsAdapter – continueConversation", () => {
     });
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    const [url, opts] = mockFetch.mock.calls[0];
+    const [url, opts] = readFirstFetchCall(mockFetch);
     expect(url).toContain("/v3/conversations/conv-456/activities/activity-789");
     expect(opts.method).toBe("DELETE");
     expect(opts.headers.Authorization).toBe("Bearer fake-bot-token");

@@ -40,7 +40,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     });
 
     expect(text).toBe("ok");
-    expect(fetchSpy).toHaveBeenCalled();
+    expect(fetchSpy).toHaveBeenCalledOnce();
   }
 
   it("strips embedded CR/LF before sending Authorization header", async () => {
@@ -95,6 +95,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
       }),
     ).resolves.toBe("ok");
 
+    expect(timeoutSpy).toHaveBeenCalledOnce();
     expect(timeoutSpy).toHaveBeenCalledWith(180_000);
   });
 });

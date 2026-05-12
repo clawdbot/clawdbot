@@ -7,9 +7,9 @@ export function isAuthCooldownBypassedForProvider(provider: string | undefined):
 }
 
 export function resolveProfileUnusableUntil(
-  stats: Pick<ProfileUsageStats, "cooldownUntil" | "disabledUntil">,
+  stats: Pick<ProfileUsageStats, "blockedUntil" | "cooldownUntil" | "disabledUntil">,
 ): number | null {
-  const values = [stats.cooldownUntil, stats.disabledUntil]
+  const values = [stats.blockedUntil, stats.cooldownUntil, stats.disabledUntil]
     .filter((value): value is number => typeof value === "number")
     .filter((value) => Number.isFinite(value) && value > 0);
   if (values.length === 0) {
@@ -150,6 +150,11 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
       Number.isFinite(stats.cooldownUntil) &&
       stats.cooldownUntil > 0 &&
       ts >= stats.cooldownUntil;
+    const blockedExpired =
+      typeof stats.blockedUntil === "number" &&
+      Number.isFinite(stats.blockedUntil) &&
+      stats.blockedUntil > 0 &&
+      ts >= stats.blockedUntil;
     const disabledExpired =
       typeof stats.disabledUntil === "number" &&
       Number.isFinite(stats.disabledUntil) &&
@@ -160,6 +165,13 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
       stats.cooldownUntil = undefined;
       stats.cooldownReason = undefined;
       stats.cooldownModel = undefined;
+      profileMutated = true;
+    }
+    if (blockedExpired) {
+      stats.blockedUntil = undefined;
+      stats.blockedReason = undefined;
+      stats.blockedSource = undefined;
+      stats.blockedModel = undefined;
       profileMutated = true;
     }
     if (disabledExpired) {

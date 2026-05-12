@@ -111,7 +111,7 @@ test("encodeKeySequence supports hex + literal with warnings", () => {
     keys: ["Enter"],
   });
   expect(result.data).toBe("hi\r\n\r");
-  expect(result.warnings.length).toBe(1);
+  expect(result.warnings).toStrictEqual(["Invalid hex byte: zz"]);
 });
 
 test("encodePaste wraps bracketed sequences by default", () => {

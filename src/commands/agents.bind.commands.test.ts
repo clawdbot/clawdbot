@@ -131,9 +131,8 @@ describe("agents bind/unbind commands", () => {
 
     await agentsBindingsCommand({}, runtime);
 
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("main <- matrix"));
     expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("ops <- telegram accountId=work"),
+      ["Routing bindings:", "- main <- matrix", "- ops <- telegram accountId=work"].join("\n"),
     );
   });
 

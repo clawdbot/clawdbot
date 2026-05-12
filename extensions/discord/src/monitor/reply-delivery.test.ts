@@ -55,11 +55,23 @@ function recordField(value: unknown, field: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
+function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string, index: number) {
+  return firstMockCall(mock, label)[index];
+}
+
 function objectArgAt(
   mock: { mock: { calls: unknown[][] } },
   index: number,
 ): Record<string, unknown> {
-  const value = mock.mock.calls[0]?.[index];
+  const value = firstMockArg(mock, "mock", index);
   if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`expected call argument ${index} to be an object`);
   }
@@ -119,8 +131,8 @@ describe("deliverDiscordReply", () => {
 
     const deps = params.deps!;
     await deps.discord("channel:101", "probe", { verbose: false });
-    expect(sendMessageDiscordMock.mock.calls[0]?.[0]).toBe("channel:101");
-    expect(sendMessageDiscordMock.mock.calls[0]?.[1]).toBe("probe");
+    expect(firstMockArg(sendMessageDiscordMock, "sendMessageDiscord", 0)).toBe("channel:101");
+    expect(firstMockArg(sendMessageDiscordMock, "sendMessageDiscord", 1)).toBe("probe");
     const sendOptions = objectArgAt(sendMessageDiscordMock, 2);
     expect(sendOptions.cfg).toBe(params.cfg);
     expect(sendOptions.token).toBe("token");
@@ -377,8 +389,12 @@ describe("deliverDiscordReply", () => {
       replyTo: "reply-1",
     });
 
-    expect(sendVoiceMessageDiscordMock.mock.calls[0]?.[0]).toBe("channel:123");
-    expect(sendVoiceMessageDiscordMock.mock.calls[0]?.[1]).toBe("https://example.com/voice.ogg");
+    expect(firstMockArg(sendVoiceMessageDiscordMock, "sendVoiceMessageDiscord", 0)).toBe(
+      "channel:123",
+    );
+    expect(firstMockArg(sendVoiceMessageDiscordMock, "sendVoiceMessageDiscord", 1)).toBe(
+      "https://example.com/voice.ogg",
+    );
     const voiceOptions = objectArgAt(sendVoiceMessageDiscordMock, 2);
     expect(voiceOptions.cfg).toBe(cfg);
     expect(voiceOptions.token).toBe("token");

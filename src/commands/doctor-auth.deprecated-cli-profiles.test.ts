@@ -57,6 +57,15 @@ function requireAuthConfig(config: OpenClawConfig): NonNullable<OpenClawConfig["
   return config.auth;
 }
 
+function requireFirstMockArg<T>(mock: { mock: { calls: T[][] } }, label: string): T {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  return arg;
+}
+
 beforeEach(() => {
   resolvePluginProvidersMock.mockReset();
   resolvePluginProvidersMock.mockReturnValue([]);
@@ -140,17 +149,15 @@ describe("maybeRepairLegacyOAuthProfileIds", () => {
     );
 
     expect(repairMocks.repairOAuthProfileIdMismatch).toHaveBeenCalledOnce();
-    const repairCall = repairMocks.repairOAuthProfileIdMismatch.mock.calls[0]?.[0] as
-      | {
-          cfg?: OpenClawConfig;
-          store?: AuthProfileStore;
-          provider?: unknown;
-          legacyProfileId?: unknown;
-        }
-      | undefined;
-    if (!repairCall) {
-      throw new Error("expected OAuth profile repair call");
-    }
+    const repairCall = requireFirstMockArg(
+      repairMocks.repairOAuthProfileIdMismatch,
+      "OAuth profile repair",
+    ) as {
+      cfg?: OpenClawConfig;
+      store?: AuthProfileStore;
+      provider?: unknown;
+      legacyProfileId?: unknown;
+    };
     expect(repairCall.cfg?.auth?.profiles?.["anthropic:default"]).toEqual({
       provider: "anthropic",
       mode: "oauth",

@@ -12,12 +12,24 @@ function slackConfig() {
   return { channels: { slack: { botToken: "tok" } } };
 }
 
+function firstInvokeCall(invoke: ReturnType<typeof createInvokeSpy>) {
+  const [call] = invoke.mock.calls;
+  if (!call) {
+    throw new Error("expected first Slack action invoke");
+  }
+  return call;
+}
+
 function expectForwardedCfg(invoke: ReturnType<typeof createInvokeSpy>, cfg: unknown) {
-  expect(invoke.mock.calls[0]?.[1]).toBe(cfg);
+  expect(firstInvokeCall(invoke)[1]).toBe(cfg);
+}
+
+function expectNoForwardedToolContext(invoke: ReturnType<typeof createInvokeSpy>) {
+  expect(firstInvokeCall(invoke)[2]).toBeUndefined();
 }
 
 function firstAction(invoke: ReturnType<typeof createInvokeSpy>) {
-  const action = invoke.mock.calls[0]?.[0];
+  const action = firstInvokeCall(invoke)[0];
   if (!action || typeof action !== "object") {
     throw new Error("expected first invoke action");
   }
@@ -154,7 +166,7 @@ describe("handleSlackMessageAction", () => {
     expect(actionsBlock.type).toBe("actions");
     expect(elementAt(actionsBlock, 0).value).toBe("approve");
     expectForwardedCfg(invoke, cfg);
-    expect(invoke.mock.calls[0]?.[2]).toBeUndefined();
+    expectNoForwardedToolContext(invoke);
   });
 
   it("passes replyBroadcast through for Slack thread sends", async () => {
@@ -183,7 +195,7 @@ describe("handleSlackMessageAction", () => {
     expect(action.threadTs).toBe("111.222");
     expect(action.replyBroadcast).toBe(true);
     expectForwardedCfg(invoke, cfg);
-    expect(invoke.mock.calls[0]?.[2]).toBeUndefined();
+    expectNoForwardedToolContext(invoke);
   });
 
   it("passes topLevel through so same-channel Slack sends can suppress thread inheritance", async () => {
@@ -211,7 +223,7 @@ describe("handleSlackMessageAction", () => {
     expect(action.threadTs).toBeUndefined();
     expect(action.topLevel).toBe(true);
     expectForwardedCfg(invoke, cfg);
-    expect(invoke.mock.calls[0]?.[2]).toBeUndefined();
+    expectNoForwardedToolContext(invoke);
   });
 
   it("treats threadId null as a Slack top-level send request", async () => {
@@ -237,7 +249,7 @@ describe("handleSlackMessageAction", () => {
     expect(action.threadTs).toBeUndefined();
     expect(action.topLevel).toBe(true);
     expectForwardedCfg(invoke, cfg);
-    expect(invoke.mock.calls[0]?.[2]).toBeUndefined();
+    expectNoForwardedToolContext(invoke);
   });
 
   it("maps upload-file to the internal uploadFile action", async () => {
@@ -270,7 +282,7 @@ describe("handleSlackMessageAction", () => {
     expect(action.title).toBe("Build Screenshot");
     expect(action.threadTs).toBe("111.222");
     expectForwardedCfg(invoke, cfg);
-    expect(invoke.mock.calls[0]?.[2]).toBeUndefined();
+    expectNoForwardedToolContext(invoke);
   });
 
   it("rejects replyBroadcast for upload-file", async () => {
@@ -318,7 +330,7 @@ describe("handleSlackMessageAction", () => {
     expect(action.initialComment).toBe("chart attached");
     expect(action.threadTs).toBe("333.444");
     expectForwardedCfg(invoke, cfg);
-    expect(invoke.mock.calls[0]?.[2]).toBeUndefined();
+    expectNoForwardedToolContext(invoke);
   });
 
   it("maps upload-file path alias to filePath", async () => {
@@ -345,7 +357,7 @@ describe("handleSlackMessageAction", () => {
     expect(action.filePath).toBe("/tmp/report.txt");
     expect(action.initialComment).toBe("path alias");
     expectForwardedCfg(invoke, cfg);
-    expect(invoke.mock.calls[0]?.[2]).toBeUndefined();
+    expectNoForwardedToolContext(invoke);
   });
 
   it("forwards messageId for read actions", async () => {
@@ -368,7 +380,7 @@ describe("handleSlackMessageAction", () => {
     expect(action.action).toBe("readMessages");
     expect(action.channelId).toBe("C1");
     expect(action.messageId).toBe("1712345678.654321");
-    expect(invoke.mock.calls[0]?.[1]).toEqual({});
+    expect(firstInvokeCall(invoke)[1]).toEqual({});
   });
 
   it("requires filePath, path, or media for upload-file", async () => {

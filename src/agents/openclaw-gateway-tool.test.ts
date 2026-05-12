@@ -55,8 +55,10 @@ function gatewayCalls(): GatewayCall[] {
 
 function gatewayCall(method: string): GatewayCall {
   const call = gatewayCalls().find(([candidate]) => candidate === method);
-  expect(call).toBeDefined();
-  return call as GatewayCall;
+  if (!call) {
+    throw new Error(`Expected gateway call for ${method}`);
+  }
+  return call;
 }
 
 function expectGatewayCallFields(
@@ -64,7 +66,9 @@ function expectGatewayCallFields(
   expectedParams: Record<string, unknown>,
 ): Record<string, unknown> {
   const [, , params] = gatewayCall(method);
-  expect(params).toBeDefined();
+  if (params === undefined) {
+    throw new Error(`Expected gateway call params for ${method}`);
+  }
   const record = params as Record<string, unknown>;
   for (const [key, value] of Object.entries(expectedParams)) {
     expect(record[key]).toEqual(value);
@@ -84,7 +88,9 @@ function expectRecordFields(
   record: unknown,
   expected: Record<string, unknown>,
 ): Record<string, unknown> {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -104,8 +110,10 @@ function expectConfigMutationCall(params: {
 }) {
   expect(params.callGatewayTool.mock.calls.some(([method]) => method === "config.get")).toBe(true);
   const call = params.callGatewayTool.mock.calls.find(([method]) => method === params.action);
-  expect(call).toBeDefined();
-  expectRecordFields(call?.[2], {
+  if (!call) {
+    throw new Error(`Expected gateway call for ${params.action}`);
+  }
+  expectRecordFields(call[2], {
     raw: params.raw.trim(),
     baseHash: "hash-1",
     sessionKey: params.sessionKey,

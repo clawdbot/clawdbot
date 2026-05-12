@@ -467,7 +467,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
   </Accordion>
 
   <Accordion title="Automation, skills, and tools">
-    - Automation: `wake` schedules an immediate or next-heartbeat wake text injection; `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`, `cron.run`, `cron.runs` manage scheduled work.
+    - Automation: `wake` schedules an immediate or next-heartbeat wake text injection; `cron.get`, `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`, `cron.run`, `cron.runs` manage scheduled work.
     - Skills and tools: `commands.list`, `skills.*`, `tools.catalog`, `tools.effective`, `tools.invoke`.
 
   </Accordion>
@@ -721,6 +721,9 @@ rather than the pre-handshake defaults.
 - Client behavior for `AUTH_TOKEN_MISMATCH`:
   - Trusted clients may attempt one bounded retry with a cached per-device token.
   - If that retry fails, clients should stop automatic reconnect loops and surface operator action guidance.
+- `AUTH_SCOPE_MISMATCH` means the device token was recognized but does not cover
+  the requested role/scopes. Clients should not present this as a bad token;
+  prompt the operator to re-pair or approve the narrower/broader scope contract.
 
 ## Device identity + pairing
 

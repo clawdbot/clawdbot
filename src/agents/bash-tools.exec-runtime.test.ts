@@ -64,7 +64,7 @@ function expectExecTarget(
 }
 
 function requireSystemEventCall(): [string, Record<string, unknown>] {
-  const call = enqueueSystemEventMock.mock.calls[0];
+  const call = enqueueSystemEventMock.mock.calls.at(0);
   if (!call) {
     throw new Error("expected system event call");
   }
@@ -72,7 +72,7 @@ function requireSystemEventCall(): [string, Record<string, unknown>] {
 }
 
 function requireHeartbeatCall(): Record<string, unknown> {
-  const call = requestHeartbeatMock.mock.calls[0];
+  const call = requestHeartbeatMock.mock.calls.at(0);
   if (!call) {
     throw new Error("expected heartbeat call");
   }
@@ -443,7 +443,11 @@ describe("exec notifyOnExit suppression", () => {
     const [message, options] = requireSystemEventCall();
     expect(message).toContain("partial output");
     expect(options.sessionKey).toBe("agent:main:main");
-    expect(requestHeartbeatMock).toHaveBeenCalled();
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const heartbeat = requireHeartbeatCall();
+    expect(heartbeat.coalesceMs).toBe(0);
+    expect(heartbeat.reason).toBe("exec-event");
+    expect(heartbeat.sessionKey).toBe("agent:main:main");
   });
 
   it("still notifies for no-output background exec timeouts", async () => {
@@ -452,7 +456,11 @@ describe("exec notifyOnExit suppression", () => {
     const [message, options] = requireSystemEventCall();
     expect(message).toContain("Exec failed");
     expect(options.sessionKey).toBe("agent:main:main");
-    expect(requestHeartbeatMock).toHaveBeenCalled();
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const heartbeat = requireHeartbeatCall();
+    expect(heartbeat.coalesceMs).toBe(0);
+    expect(heartbeat.reason).toBe("exec-event");
+    expect(heartbeat.sessionKey).toBe("agent:main:main");
   });
 });
 
@@ -487,6 +495,49 @@ describe("emitExecSystemEvent", () => {
     expect(heartbeat.coalesceMs).toBe(0);
     expect(heartbeat.reason).toBe("exec-event");
     expect(heartbeat.sessionKey).toBe("agent:ops:main");
+  });
+
+  it("remaps cron-run event enqueue and wake targets to the drained agent main session", () => {
+    emitExecSystemEvent("Exec finished", {
+      sessionKey: "agent:ops:cron:nightly:run:run-1",
+      contextKey: "exec:run-cron",
+      mainKey: "primary",
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
+      sessionKey: "agent:ops:primary",
+      contextKey: "exec:run-cron",
+      trusted: false,
+    });
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const [[heartbeatParams]] = requestHeartbeatMock.mock.calls as unknown as Array<
+      [{ coalesceMs?: number; reason?: string; sessionKey?: string }]
+    >;
+    expect(heartbeatParams.coalesceMs).toBe(0);
+    expect(heartbeatParams.reason).toBe("exec-event");
+    expect(heartbeatParams.sessionKey).toBe("agent:ops:primary");
+  });
+
+  it("routes global-scope cron-run events to the global queue and preserves the agent wake target", () => {
+    emitExecSystemEvent("Exec finished", {
+      sessionKey: "agent:ops:cron:nightly:run:run-1:subagent:worker",
+      contextKey: "exec:run-global",
+      sessionScope: "global",
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
+      sessionKey: "global",
+      contextKey: "exec:run-global",
+      trusted: false,
+    });
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const [[heartbeatParams]] = requestHeartbeatMock.mock.calls as unknown as Array<
+      [{ agentId?: string; coalesceMs?: number; reason?: string }]
+    >;
+    expect(heartbeatParams.agentId).toBe("ops");
+    expect(heartbeatParams.coalesceMs).toBe(0);
+    expect(heartbeatParams.reason).toBe("exec-event");
+    expect(requestHeartbeatMock.mock.calls.at(0)?.[0]).not.toHaveProperty("sessionKey");
   });
 
   it("keeps wake unscoped for non-agent session keys", () => {

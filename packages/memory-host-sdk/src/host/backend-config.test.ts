@@ -115,11 +115,13 @@ describe("resolveMemoryBackendConfig", () => {
     expect(qmd.collections.length).toBe(2);
     expect(qmd.command).toBe("qmd");
     expect(qmd.searchMode).toBe("search");
-    expect(qmd.update.intervalMs).toBeGreaterThan(0);
+    expect(qmd.update.intervalMs).toBe(300_000);
+    expect(qmd.update.debounceMs).toBe(15_000);
     expect(qmd.update.onBoot).toBe(true);
     expect(qmd.update.startup).toBe("off");
     expect(qmd.update.startupDelayMs).toBe(120_000);
     expect(qmd.update.waitForBootSync).toBe(false);
+    expect(qmd.update.embedIntervalMs).toBe(3_600_000);
     expect(qmd.update.commandTimeoutMs).toBe(30_000);
     expect(qmd.update.updateTimeoutMs).toBe(120_000);
     expect(qmd.update.embedTimeoutMs).toBe(120_000);

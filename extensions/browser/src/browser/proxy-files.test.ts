@@ -49,6 +49,6 @@ describe("persistBrowserProxyFiles", () => {
 
     await expect(
       fs.stat(path.join(tempHome.home, ".openclaw", "media", "browser")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    ).rejects.toHaveProperty("code", "ENOENT");
   });
 });

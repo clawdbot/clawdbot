@@ -5,6 +5,7 @@ import {
 import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
 import {
   CHAT_SESSIONS_ACTIVE_MINUTES,
+  CHAT_SESSIONS_REFRESH_LIMIT,
   clearPendingQueueItemsForRun,
   flushChatQueueForEvent,
   refreshChatAvatar,
@@ -45,7 +46,6 @@ import {
   removeExecApproval,
 } from "./controllers/exec-approval.ts";
 import { loadHealthState, type HealthState } from "./controllers/health.ts";
-import { loadNodes, type NodesState } from "./controllers/nodes.ts";
 import {
   applySessionsChangedEvent,
   loadSessions,
@@ -110,6 +110,7 @@ type GatewayHost = {
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
   reconcileWebPushState?: () => Promise<void> | void;
+  sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
 };
 
 type GatewayHostWithDeferredSessionMessageReload = GatewayHost & {
@@ -132,6 +133,8 @@ type GatewayHostWithSideResults = GatewayHost & {
   chatSideResult?: ChatSideResult | null;
   chatSideResultTerminalRuns?: Set<string>;
 };
+
+const SESSIONS_CHANGED_RELOAD_DEBOUNCE_MS = 5_000;
 
 function enqueueApprovalRequest(host: GatewayHost, entry: ExecApprovalRequest | null) {
   if (!entry) {
@@ -171,6 +174,29 @@ function isChatTurnSessionChangedPayload(payload: unknown): boolean {
     record.reason === "send" ||
     record.reason === "steer"
   );
+}
+
+function clearSessionsChangedReloadTimer(host: GatewayHost) {
+  if (host.sessionsChangedReloadTimer == null) {
+    return;
+  }
+  globalThis.clearTimeout(host.sessionsChangedReloadTimer);
+  host.sessionsChangedReloadTimer = null;
+}
+
+function shouldRunDeferredSessionsReload(host: GatewayHost): boolean {
+  return host.connected && Boolean(host.client) && host.tab !== "chat";
+}
+
+function scheduleSessionsChangedReload(host: GatewayHost) {
+  clearSessionsChangedReloadTimer(host);
+  host.sessionsChangedReloadTimer = globalThis.setTimeout(() => {
+    host.sessionsChangedReloadTimer = null;
+    if (!shouldRunDeferredSessionsReload(host)) {
+      return;
+    }
+    void loadSessions(host as unknown as SessionsState);
+  }, SESSIONS_CHANGED_RELOAD_DEBOUNCE_MS);
 }
 
 type ConnectGatewayOptions = {
@@ -462,6 +488,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
   const reconnectReason = options?.reason ?? "initial";
   shutdownHost.pendingShutdownMessage = null;
   shutdownHost.resumeChatQueueAfterReconnect = false;
+  clearSessionsChangedReloadTimer(host);
   host.lastError = null;
   host.lastErrorCode = null;
   host.hello = null;
@@ -543,8 +570,6 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         void refreshChatAvatar(host as unknown as Parameters<typeof refreshChatAvatar>[0]);
       }
       void loadHealthState(host as unknown as HealthState);
-      void loadNodes(host as unknown as NodesState, { quiet: true });
-      void loadDevices(host as unknown as DevicesState, { quiet: true });
       void loadAgentsThenRefreshActiveTab(host);
       // Re-run push reconciliation now that the gateway client is available.
       void host.reconcileWebPushState?.();
@@ -555,6 +580,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       host.connected = false;
+      clearSessionsChangedReloadTimer(host);
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
       host.lastErrorCode =
         resolveGatewayErrorDetailCode(error) ??
@@ -642,6 +668,7 @@ function handleTerminalChatEvent(
       void loadSessions(host as unknown as SessionsState, {
         activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
         agentId: resolveChatEventSessionListAgentId(host, payload),
+        limit: CHAT_SESSIONS_REFRESH_LIMIT,
       });
     }
   }
@@ -832,7 +859,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     if (result.applied || isChatTurnSessionChangedPayload(evt.payload)) {
       return;
     }
-    void loadSessions(host as unknown as SessionsState);
+    scheduleSessionsChangedReload(host);
     return;
   }
 

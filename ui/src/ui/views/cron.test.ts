@@ -746,20 +746,19 @@ describe("cron view", () => {
       "cron-delivery-to-suggestions",
       "cron-delivery-account-suggestions",
     ]);
-    expect(
-      Array.from(container.querySelectorAll("input[list]")).map((node) =>
-        node.getAttribute("list"),
-      ),
-    ).toEqual(
-      expect.arrayContaining([
-        "cron-agent-suggestions",
-        "cron-model-suggestions",
-        "cron-thinking-suggestions",
-        "cron-tz-suggestions",
-        "cron-delivery-to-suggestions",
-        "cron-delivery-account-suggestions",
-      ]),
+    const inputLists = Array.from(container.querySelectorAll("input[list]")).map((node) =>
+      node.getAttribute("list"),
     );
+    for (const expectedList of [
+      "cron-agent-suggestions",
+      "cron-model-suggestions",
+      "cron-thinking-suggestions",
+      "cron-tz-suggestions",
+      "cron-delivery-to-suggestions",
+      "cron-delivery-account-suggestions",
+    ]) {
+      expect(inputLists).toContain(expectedList);
+    }
     expect(container.querySelectorAll("input[list]")).toHaveLength(6);
   });
 });

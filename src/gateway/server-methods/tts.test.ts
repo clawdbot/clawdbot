@@ -76,14 +76,13 @@ describe("ttsHandlers", () => {
       context: { getRuntimeConfig: mocks.getRuntimeConfig },
     } as never);
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: 'Error: Unknown TTS provider "bad".',
-      }),
-    );
+    const call = respond.mock.calls[0] as
+      | [boolean, unknown, { code?: number; message?: string }]
+      | undefined;
+    expect(call?.[0]).toBe(false);
+    expect(call?.[1]).toBeUndefined();
+    expect(call?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
+    expect(call?.[2]?.message).toBe('Error: Unknown TTS provider "bad".');
     expect(mocks.textToSpeech).not.toHaveBeenCalled();
   });
 });

@@ -129,6 +129,13 @@ export type DiscordVoiceAutoJoinConfig = {
   channelId: string;
 };
 
+export type DiscordVoiceAllowedChannelConfig = {
+  /** Guild ID that owns the voice channel. */
+  guildId: string;
+  /** Voice channel ID allowed for realtime voice sessions. */
+  channelId: string;
+};
+
 export type DiscordVoiceMode = "stt-tts" | "agent-proxy" | "bidi";
 
 export type DiscordVoiceRealtimeConsultPolicy = "auto" | "always";
@@ -178,6 +185,8 @@ export type DiscordVoiceConfig = {
   realtime?: DiscordVoiceRealtimeConfig;
   /** Voice channels to auto-join on startup. */
   autoJoin?: DiscordVoiceAutoJoinConfig[];
+  /** Voice channels the bot is allowed to join or remain in. Unset means any voice channel is allowed. */
+  allowedChannels?: DiscordVoiceAllowedChannelConfig[];
   /** Enable/disable DAVE end-to-end encryption (default: true; Discord may require this). */
   daveEncryption?: boolean;
   /** Consecutive decrypt failures before DAVE session reinitialization (default: 24). */

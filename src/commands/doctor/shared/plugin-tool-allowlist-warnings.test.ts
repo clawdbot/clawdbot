@@ -49,9 +49,7 @@ describe("collectPluginToolAllowlistWarnings", () => {
     });
 
     expect(warnings).toEqual([
-      expect.stringContaining(
-        'plugins.allow is an exclusive plugin allowlist. tools.allow contains "*"',
-      ),
+      '- plugins.allow is an exclusive plugin allowlist. tools.allow contains "*", but that wildcard only matches tools from plugins that are loaded; plugin tools outside plugins.allow stay unavailable. Add the required plugin ids to plugins.allow or remove plugins.allow.',
     ]);
   });
 
@@ -124,7 +122,7 @@ describe("collectPluginToolAllowlistWarnings", () => {
     });
 
     expect(warnings).toEqual([
-      expect.stringContaining('set plugins.bundledDiscovery to "allowlist"'),
+      '- plugins.allow is restrictive, but bundled provider discovery is still in legacy compatibility mode. Bundled provider plugins can still appear in runtime provider inventories; set plugins.bundledDiscovery to "allowlist" after confirming omitted bundled providers are intentionally blocked.',
     ]);
   });
 

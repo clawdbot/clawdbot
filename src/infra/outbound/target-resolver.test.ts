@@ -66,6 +66,21 @@ async function expectOkResolution(
   return result;
 }
 
+function firstMockArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error(`expected ${label} input to be an object`);
+  }
+  return arg as Record<string, unknown>;
+}
+
 describe("resolveMessagingTarget (directory fallback)", () => {
   const cfg = {} as OpenClawConfig;
 
@@ -149,10 +164,9 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       source: "directory",
       display: undefined,
     });
-    expect(mocks.resolveTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        input: "dthcxgoxhifn3pwh65cut3ud3w",
-      }),
+    expect(mocks.resolveTarget).toHaveBeenCalledOnce();
+    expect(firstMockArg(mocks.resolveTarget, "target resolver").input).toBe(
+      "dthcxgoxhifn3pwh65cut3ud3w",
     );
     expect(mocks.listGroups).not.toHaveBeenCalled();
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
@@ -227,11 +241,8 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listPeers).toHaveBeenCalledTimes(1);
     expect(mocks.listPeersLive).toHaveBeenCalledTimes(1);
     expect(mocks.listGroups).not.toHaveBeenCalled();
-    expect(mocks.resolveTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        input: "+15551234567",
-      }),
-    );
+    expect(mocks.resolveTarget).toHaveBeenCalledOnce();
+    expect(firstMockArg(mocks.resolveTarget, "target resolver").input).toBe("+15551234567");
   });
 
   it("keeps plugin-owned id casing when resolver returns a normalized target", async () => {

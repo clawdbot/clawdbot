@@ -35,14 +35,18 @@ type GenerateContentRequest = {
 function lastGoogleGenAIConfig(): GoogleGenAIConfig {
   const calls = createGoogleGenAIMock.mock.calls as unknown[][];
   const config = calls.at(-1)?.[0];
-  expect(config).toBeDefined();
+  if (!config) {
+    throw new Error("Expected GoogleGenAI config");
+  }
   return config as GoogleGenAIConfig;
 }
 
 function firstGenerateContentRequest(): GenerateContentRequest {
   const calls = generateContentMock.mock.calls as unknown[][];
   const request = calls[0]?.[0];
-  expect(request).toBeDefined();
+  if (!request) {
+    throw new Error("Expected generateContent request");
+  }
   return request as GenerateContentRequest;
 }
 

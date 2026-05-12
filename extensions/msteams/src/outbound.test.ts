@@ -48,6 +48,23 @@ function requireSendPoll(): MSTeamsSendPoll {
   return sendPoll;
 }
 
+type PollRecord = Record<string, unknown> & { createdAt: string };
+
+function firstPollRecord(): PollRecord {
+  const [call] = mocks.createPoll.mock.calls;
+  if (!call) {
+    throw new Error("expected createPoll call");
+  }
+  const [pollRecord] = call;
+  if (!pollRecord || typeof pollRecord !== "object" || Array.isArray(pollRecord)) {
+    throw new Error("expected createPoll record");
+  }
+  if (typeof (pollRecord as { createdAt?: unknown }).createdAt !== "string") {
+    throw new Error("expected createPoll record timestamp");
+  }
+  return pollRecord as PollRecord;
+}
+
 describe("msteamsOutbound cfg threading", () => {
   beforeEach(() => {
     mocks.sendMessageMSTeams.mockReset();
@@ -138,7 +155,7 @@ describe("msteamsOutbound cfg threading", () => {
       options: ["Pizza", "Sushi"],
       maxSelections: 1,
     });
-    const [pollRecord] = mocks.createPoll.mock.calls[0] ?? [];
+    const pollRecord = firstPollRecord();
     expect(pollRecord).toEqual({
       id: "poll-1",
       question: "Snack?",

@@ -191,7 +191,7 @@ describe("promptCustomApiConfig", () => {
     await runPromptCustomApi(prompter);
 
     expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("did not respond"),
+      "This endpoint did not respond to OpenAI or Anthropic style requests.",
       "Endpoint detection",
     );
   });

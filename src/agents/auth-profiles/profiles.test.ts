@@ -61,13 +61,21 @@ function isPathInsideOrEqual(parentDir: string, candidatePath: string): boolean 
   );
 }
 
+function expectOAuthProfileRefId(value: unknown): asserts value is string {
+  expect(typeof value).toBe("string");
+  if (typeof value !== "string") {
+    throw new Error("Expected OAuth profile ref id");
+  }
+  expect(value).toMatch(/^[a-f0-9]{32}$/);
+}
+
 function readPersistedOAuthRefId(agentDir: string, profileId: string): string {
   const persisted = JSON.parse(fs.readFileSync(resolveAuthStorePath(agentDir), "utf8")) as {
     profiles: Record<string, { oauthRef?: { id?: string } }>;
   };
   const refId = persisted.profiles[profileId]?.oauthRef?.id;
-  expect(refId).toEqual(expect.any(String));
-  return String(refId);
+  expectOAuthProfileRefId(refId);
+  return refId;
 }
 
 function resolvePersistedOAuthSecretPath(refId: string): string {
@@ -126,7 +134,7 @@ function expectOpenClawCredentialsOAuthRef(
   const ref = oauthRef as Record<string, unknown>;
   expect(ref.source).toBe("openclaw-credentials");
   expect(ref.provider).toBe(provider);
-  expect(ref.id).toEqual(expect.any(String));
+  expectOAuthProfileRefId(ref.id);
 }
 
 describe("promoteAuthProfileInOrder", () => {
@@ -603,7 +611,9 @@ describe("promoteAuthProfileInOrder", () => {
       );
 
       const keyPaths = findFilesNamed(rootDir, "auth-profile-secret-key");
-      expect(keyPaths.length).toBeGreaterThan(0);
+      expect(keyPaths).toEqual([
+        path.join(homeDir, ".openclaw-auth-profile-secrets", "auth-profile-secret-key"),
+      ]);
       expect(keyPaths.every((keyPath) => !isPathInsideOrEqual(stateDir, keyPath))).toBe(true);
       const keyValues = keyPaths.map((keyPath) => fs.readFileSync(keyPath, "utf8").trim());
       const persistedStateTree = readPersistedTree(stateDir);
@@ -856,8 +866,8 @@ describe("promoteAuthProfileInOrder", () => {
         profiles: Record<string, { oauthRef?: { id?: string } }>;
       };
       const refId = persisted.profiles[profileId]?.oauthRef?.id;
-      expect(refId).toEqual(expect.any(String));
-      const secretPath = resolvePersistedOAuthSecretPath(String(refId));
+      expectOAuthProfileRefId(refId);
+      const secretPath = resolvePersistedOAuthSecretPath(refId);
       const secretFile = fs.readFileSync(secretPath, "utf8");
       expect(secretFile).not.toContain("delete-access-token");
       expect(secretFile).not.toContain("delete-refresh-token");

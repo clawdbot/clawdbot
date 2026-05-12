@@ -20,6 +20,14 @@ function installConsoleMethodSpy(method: "log" | "warn" | "error") {
   return spy;
 }
 
+function firstMockArgAsString(mock: { mock: { calls: readonly unknown[][] } }): string {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected console mock call");
+  }
+  return String(call[0]);
+}
+
 beforeAll(async () => {
   await logPathTracker.setup();
 });
@@ -123,7 +131,7 @@ describe("createSubsystemLogger().isEnabled", () => {
 
     log.warn("missing subsystem label");
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("[unknown]");
+    expect(firstMockArgAsString(warn)).toContain("[unknown]");
   });
 
   it("suppresses probe warnings for embedded subsystems based on structured run metadata", () => {
@@ -213,7 +221,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     log.warn(`token=${secret}`);
 
     expect(warn).toHaveBeenCalledTimes(1);
-    const written = String(warn.mock.calls[0]?.[0] ?? "");
+    const written = firstMockArgAsString(warn);
     expect(written).not.toContain(secret);
     expect(written).toMatch(/sk-sup…2345|\*\*\*/);
   });
@@ -227,7 +235,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     log.error(`Authorization failed: ${bearer}`);
 
     expect(error).toHaveBeenCalledTimes(1);
-    const written = String(error.mock.calls[0]?.[0] ?? "");
+    const written = firstMockArgAsString(error);
     expect(written).not.toContain("abcdefghijklmnopqrstuvwxyz");
     expect(written).toContain("Bearer ");
   });
@@ -242,7 +250,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     log.info(`provider API_KEY=${secret}`);
 
     expect(logSpy).toHaveBeenCalledTimes(1);
-    const written = String(logSpy.mock.calls[0]?.[0] ?? "");
+    const written = firstMockArgAsString(logSpy);
     expect(written).not.toContain(secret);
     expect(written).toContain("API_KEY=***");
     expect(written.endsWith("\u001B[39m")).toBe(true);
@@ -257,7 +265,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     log.raw(`raw token ${secret}`);
 
     expect(logSpy).toHaveBeenCalledTimes(1);
-    const written = String(logSpy.mock.calls[0]?.[0] ?? "");
+    const written = firstMockArgAsString(logSpy);
     expect(written).not.toContain(secret);
     expect(written).toContain("sk-raw…3456");
   });

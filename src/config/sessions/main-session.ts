@@ -18,7 +18,7 @@ export function resolveMainSessionKey(cfg?: {
   if (cfg?.session?.scope === "global") {
     return "global";
   }
-  const agents = cfg?.agents?.list ?? [];
+  const agents = Array.isArray(cfg?.agents?.list) ? cfg.agents.list : [];
   const defaultAgentId =
     agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? FALLBACK_DEFAULT_AGENT_ID;
   return buildMainSessionKey(defaultAgentId, cfg?.session?.mainKey);

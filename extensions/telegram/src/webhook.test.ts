@@ -23,9 +23,12 @@ const WEBHOOK_POST_TIMEOUT_MS = process.platform === "win32" ? 20_000 : 8_000;
 const TELEGRAM_TOKEN = "tok";
 const TELEGRAM_SECRET = "secret";
 const TELEGRAM_WEBHOOK_PATH = "/hook";
-const WEBHOOK_TEST_YIELD_MS = 0;
 const WEBHOOK_DRAIN_GUARD_MS = 5;
 const TELEGRAM_WEBHOOK_RATE_LIMIT_BURST = WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests + 10;
+
+async function yieldWebhookTask(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
 
 function collectResponseBody(
   res: IncomingMessage,
@@ -329,7 +332,7 @@ async function postWebhookPayloadWithChunkPlan(params: {
         bytesQueued = offset;
         chunksQueued += 1;
         if (chunksQueued % 10 === 0) {
-          await sleep(WEBHOOK_TEST_YIELD_MS);
+          await yieldWebhookTask();
         }
         if (!canContinue) {
           // Windows CI occasionally stalls on waiting for drain indefinitely.
@@ -567,7 +570,6 @@ describe("startTelegramWebhook", () => {
         const setWebhookCall = requireMockCall(setWebhookSpy, 0, "setWebhook");
         expect(typeof setWebhookCall[0]).toBe("string");
         const options = requireRecord(setWebhookCall[1], "setWebhook options");
-        expect(options.certificate).toBeTruthy();
         const certificate = options.certificate as
           | { path?: string; fileData?: string; filename?: string }
           | undefined;
@@ -882,7 +884,7 @@ describe("startTelegramWebhook", () => {
   it("keeps webhook payload readable when update processing is delayed", async () => {
     let seenUpdate: unknown;
     handleUpdateSpy.mockImplementationOnce(async (update: unknown) => {
-      await sleep(WEBHOOK_TEST_YIELD_MS);
+      await yieldWebhookTask();
       seenUpdate = update;
     });
 
@@ -908,7 +910,7 @@ describe("startTelegramWebhook", () => {
   it("keeps webhook payload readable across multiple delayed reads", async () => {
     const seenPayloads: string[] = [];
     const delayedHandler = async (update: unknown) => {
-      await sleep(WEBHOOK_TEST_YIELD_MS);
+      await yieldWebhookTask();
       seenPayloads.push(JSON.stringify(update));
     };
     handleUpdateSpy.mockImplementationOnce(delayedHandler).mockImplementationOnce(delayedHandler);
@@ -945,7 +947,7 @@ describe("startTelegramWebhook", () => {
   it("processes a second request after first-request delayed-init data loss", async () => {
     const seenUpdates: unknown[] = [];
     handleUpdateSpy.mockImplementation(async (update: unknown) => {
-      await sleep(WEBHOOK_TEST_YIELD_MS);
+      await yieldWebhookTask();
       seenUpdates.push(update);
     });
 

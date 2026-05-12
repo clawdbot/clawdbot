@@ -165,8 +165,6 @@ async function closeServer(server: HttpServer | http2.Http2SecureServer): Promis
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
   if (typeof value !== "object" || value === null) {
     throw new Error(`${label} was not an object`);
   }
@@ -186,7 +184,11 @@ function expectNoProperties(record: Record<string, unknown>, keys: string[]) {
 }
 
 function requireSendRequest(send: ReturnType<typeof vi.fn>, label = "APNs send request") {
-  const request = send.mock.calls[0]?.[0];
+  const [call] = send.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  const [request] = call;
   return requireRecord(request, label);
 }
 
@@ -518,7 +520,7 @@ describe("push APNs send semantics", () => {
       timeoutMs: 50,
     });
 
-    expect(send.mock.calls[0]?.[0]?.timeoutMs).toBe(1000);
+    expect(requireSendRequest(send).timeoutMs).toBe(1000);
     expectRecordFields(requireRecord(result, "APNs result"), {
       ok: false,
       status: 400,
@@ -572,8 +574,7 @@ describe("push APNs send semantics", () => {
       requestSender: send,
     });
 
-    const sent = send.mock.calls[0]?.[0];
-    const payload = requirePayload(requireRecord(sent, "APNs send request"));
+    const payload = requirePayload(requireSendRequest(send));
     expectRecordFields(requireRecord(payload.openclaw, "openclaw payload"), {
       kind: "node.wake",
       reason: "node.invoke",
@@ -700,8 +701,7 @@ describe("push APNs send semantics", () => {
       relayRequestSender: send,
     });
 
-    const sent = send.mock.calls[0]?.[0];
-    const payload = requirePayload(requireRecord(sent, "APNs send request"));
+    const payload = requirePayload(requireSendRequest(send));
     expect(payload.aps).toEqual({
       alert: {
         title: "Exec approval required",

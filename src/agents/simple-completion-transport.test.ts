@@ -81,7 +81,7 @@ describe("prepareModelForSimpleCompletion", () => {
     });
 
     expect(resolveProviderStreamFn).toHaveBeenCalledTimes(1);
-    const [request] = resolveProviderStreamFn.mock.calls[0] as [
+    const [request] = resolveProviderStreamFn.mock.calls.at(0) as [
       {
         provider?: unknown;
         config?: unknown;

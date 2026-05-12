@@ -618,6 +618,7 @@ export async function runPreparedReply(
         }
       : { ...sessionCtx, ThreadStarterBody: undefined },
     envelopeOptions,
+    { sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode },
   );
   const inboundUserContextPromptJoiner = resolveInboundUserContextPromptJoiner(sessionCtx);
   const hasUserBody =

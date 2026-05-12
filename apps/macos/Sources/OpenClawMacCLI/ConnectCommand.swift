@@ -16,6 +16,7 @@ struct ConnectOptions {
     var displayName: String?
     var role: String = "operator"
     var scopes: [String] = defaultOperatorConnectScopes
+    var scopesAreExplicit: Bool = false
     var help: Bool = false
 
     static func parse(_ args: [String]) -> ConnectOptions {
@@ -43,6 +44,7 @@ struct ConnectOptions {
             "--scopes": { opts, raw in
                 opts.scopes = raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                     .filter { !$0.isEmpty }
+                opts.scopesAreExplicit = true
             },
         ]
         var i = 0
@@ -126,6 +128,7 @@ func runConnect(_ args: [String]) async {
         let connectOptions = GatewayConnectOptions(
             role: opts.role,
             scopes: opts.scopes,
+            scopesAreExplicit: opts.scopesAreExplicit,
             caps: [],
             commands: [],
             permissions: [:],

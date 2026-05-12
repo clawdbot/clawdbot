@@ -69,6 +69,12 @@ tool with the `react` action. Reaction behavior varies by channel and transport.
     - Inbound reaction notifications are controlled by `channels.signal.reactionNotifications`: `"off"` disables them, `"own"` (default) emits events when users react to bot messages, and `"all"` emits events for all reactions.
 
   </Accordion>
+
+  <Accordion title="iMessage">
+    - Outbound reactions are iMessage tapbacks (`love`, `like`, `dislike`, `laugh`, `emphasize`, and `question`).
+    - Inbound tapback notifications are controlled by `channels.imessage.reactionNotifications`: `"off"` disables them, `"own"` (default) emits events when users react to bot-authored messages, and `"all"` emits events for all tapbacks from authorized senders.
+
+  </Accordion>
 </AccordionGroup>
 
 ## Reaction level

@@ -99,7 +99,13 @@ describe("doctor WhatsApp responsiveness", () => {
       processes: [{ pid: 101, command: "openclaw-tui" }],
     });
     expect(noteMock).toHaveBeenCalledWith(
-      expect.stringContaining("Stopped local TUI clients: 101"),
+      [
+        "Gateway event loop is degraded while local TUI clients are running.",
+        "WhatsApp replies can queue behind TUI startup/session refresh work.",
+        "Local TUI pids: 101",
+        "",
+        "Stopped local TUI clients: 101",
+      ].join("\n"),
       "WhatsApp responsiveness",
     );
   });

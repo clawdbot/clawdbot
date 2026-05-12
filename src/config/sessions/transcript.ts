@@ -16,6 +16,10 @@ import { loadSessionStore, normalizeStoreSessionKey } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
+import {
+  streamSessionTranscriptLines,
+  streamSessionTranscriptLinesReverse,
+} from "./transcript-stream.js";
 import type { SessionEntry } from "./types.js";
 
 let piCodingAgentModulePromise: Promise<typeof import("@earendil-works/pi-coding-agent")> | null =
@@ -143,17 +147,7 @@ export async function readLatestAssistantTextFromSessionTranscript(
     return undefined;
   }
 
-  let raw: string;
-  try {
-    raw = await fs.promises.readFile(sessionFile, "utf-8");
-  } catch {
-    return undefined;
-  }
-
-  for (const line of raw.split(/\r?\n/).toReversed()) {
-    if (!line.trim()) {
-      continue;
-    }
+  for await (const line of streamSessionTranscriptLinesReverse(sessionFile)) {
     try {
       const assistantText = parseAssistantTranscriptText(line);
       if (assistantText) {
@@ -173,17 +167,7 @@ export async function readTailAssistantTextFromSessionTranscript(
     return undefined;
   }
 
-  let raw: string;
-  try {
-    raw = await fs.promises.readFile(sessionFile, "utf-8");
-  } catch {
-    return undefined;
-  }
-
-  for (const line of raw.split(/\r?\n/).toReversed()) {
-    if (!line.trim()) {
-      continue;
-    }
+  for await (const line of streamSessionTranscriptLinesReverse(sessionFile)) {
     try {
       return parseAssistantTranscriptText(line);
     } catch {
@@ -345,11 +329,7 @@ async function transcriptHasIdempotencyKey(
   idempotencyKey: string,
 ): Promise<string | true | undefined> {
   try {
-    const raw = await fs.promises.readFile(transcriptPath, "utf-8");
-    for (const line of raw.split(/\r?\n/)) {
-      if (!line.trim()) {
-        continue;
-      }
+    for await (const line of streamSessionTranscriptLines(transcriptPath)) {
       try {
         const parsed = JSON.parse(line) as {
           id?: unknown;
@@ -407,37 +387,27 @@ async function findLatestEquivalentAssistantMessageId(
     return undefined;
   }
 
-  try {
-    const raw = await fs.promises.readFile(transcriptPath, "utf-8");
-    const lines = raw.split(/\r?\n/);
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-      const line = lines[index];
-      if (!line.trim()) {
+  for await (const line of streamSessionTranscriptLinesReverse(transcriptPath)) {
+    try {
+      const parsed = JSON.parse(line) as {
+        id?: unknown;
+        message?: SessionTranscriptAssistantMessage;
+      };
+      const candidate = parsed.message;
+      if (!candidate || candidate.role !== "assistant") {
         continue;
       }
-      try {
-        const parsed = JSON.parse(line) as {
-          id?: unknown;
-          message?: SessionTranscriptAssistantMessage;
-        };
-        const candidate = parsed.message;
-        if (!candidate || candidate.role !== "assistant") {
-          continue;
-        }
-        const candidateText = extractAssistantMessageText(candidate);
-        if (candidateText !== expectedText) {
-          return undefined;
-        }
-        if (typeof parsed.id === "string" && parsed.id) {
-          return parsed.id;
-        }
+      const candidateText = extractAssistantMessageText(candidate);
+      if (candidateText !== expectedText) {
         return undefined;
-      } catch {
-        continue;
       }
+      if (typeof parsed.id === "string" && parsed.id) {
+        return parsed.id;
+      }
+      return undefined;
+    } catch {
+      continue;
     }
-  } catch {
-    return undefined;
   }
 
   return undefined;

@@ -29,7 +29,7 @@ describe("logAuthProfileFailureStateChange", () => {
       now: 1_700_000_000_000,
     });
 
-    const consoleLine = warnSpy.mock.calls[0]?.[0];
+    const consoleLine = warnSpy.mock.calls.at(0)?.[0];
     expect(typeof consoleLine).toBe("string");
     expect(consoleLine).toContain("runId=run-1 forged entry test");
     expect(consoleLine).toContain("provider=openai]8;;https://evil.test");

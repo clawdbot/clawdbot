@@ -38,7 +38,7 @@ describe("runEmbeddedPiAgent cron before_agent_reply seam", () => {
 
     expect(mockedGlobalHookRunner.runBeforeAgentReply).toHaveBeenCalledTimes(1);
     const [hookPayload, hookContext] =
-      mockedGlobalHookRunner.runBeforeAgentReply.mock.calls[0] ?? [];
+      mockedGlobalHookRunner.runBeforeAgentReply.mock.calls.at(0) ?? [];
     expect(hookPayload).toEqual({
       cleanedBody: "__openclaw_memory_core_short_term_promotion_dream__",
     });
@@ -94,7 +94,7 @@ describe("runEmbeddedPiAgent cron before_agent_reply seam", () => {
       promptMode: "none",
     });
 
-    const [attemptParams] = (mockedRunEmbeddedAttempt.mock.calls[0] ?? []) as [
+    const [attemptParams] = (mockedRunEmbeddedAttempt.mock.calls.at(0) ?? []) as [
       { modelRun?: boolean; promptMode?: string }?,
     ];
     expect(attemptParams?.modelRun).toBe(true);

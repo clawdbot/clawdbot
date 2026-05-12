@@ -179,11 +179,9 @@ describe("dispatchOutbound", () => {
       { runtime, cfg: {}, account },
     );
 
-    expect(finalized).toMatchObject({
-      MediaType: "audio/wav",
-      MediaTypes: ["audio/wav"],
-      QQVoiceAttachmentPaths: ["/tmp/qqbot/voice.wav"],
-    });
+    expect(finalized?.MediaType).toBe("audio/wav");
+    expect(finalized?.MediaTypes).toEqual(["audio/wav"]);
+    expect(finalized?.QQVoiceAttachmentPaths).toEqual(["/tmp/qqbot/voice.wav"]);
     expect(finalized).not.toHaveProperty("MediaPath");
     expect(finalized).not.toHaveProperty("MediaPaths");
   });
@@ -237,13 +235,11 @@ describe("dispatchOutbound", () => {
       { runtime, cfg: { commands: { text: true } }, account },
     );
 
-    expect(finalized).toMatchObject({
-      CommandBody: "/models",
-      CommandAuthorized: true,
-      CommandSource: "text",
-      Provider: "qqbot",
-      Surface: "qqbot",
-      ChatType: "direct",
-    });
+    expect(finalized?.CommandBody).toBe("/models");
+    expect(finalized?.CommandAuthorized).toBe(true);
+    expect(finalized?.CommandSource).toBe("text");
+    expect(finalized?.Provider).toBe("qqbot");
+    expect(finalized?.Surface).toBe("qqbot");
+    expect(finalized?.ChatType).toBe("direct");
   });
 });

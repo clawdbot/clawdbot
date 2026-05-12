@@ -83,7 +83,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Short chunk.");
+    expect(onBlockReply.mock.calls.at(0)?.[0]?.text).toBe("Short chunk.");
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
   });
 
@@ -157,7 +157,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Final reply before lifecycle end.");
+    expect(onBlockReply.mock.calls.at(0)?.[0]?.text).toBe("Final reply before lifecycle end.");
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
   });
 

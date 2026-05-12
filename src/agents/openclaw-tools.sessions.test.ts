@@ -496,18 +496,47 @@ describe("sessions tools", () => {
         includeDerivedTitles: true,
         includeLastMessage: true,
       });
-      const details = result.details as {
-        sessions?: Array<{
-          key?: string;
-          derivedTitle?: string;
-          lastMessagePreview?: string;
-        }>;
-      };
-      expect(details.sessions).toHaveLength(1);
-      const visible = details.sessions?.[0];
-      expect(visible?.key).toBe("agent:main:main");
-      expect(visible?.derivedTitle).toBe("Visible project kickoff");
-      expect(visible?.lastMessagePreview).toBe("Visible latest reply");
+      const details = result.details as { sessions?: Array<Record<string, unknown>> };
+      expect(details.sessions).toStrictEqual([
+        {
+          key: "agent:main:main",
+          agentId: "main",
+          kind: "other",
+          channel: "unknown",
+          origin: undefined,
+          spawnedBy: undefined,
+          label: undefined,
+          displayName: undefined,
+          derivedTitle: "Visible project kickoff",
+          lastMessagePreview: "Visible latest reply",
+          parentSessionKey: undefined,
+          deliveryContext: undefined,
+          updatedAt: 20,
+          sessionId: "visible",
+          model: undefined,
+          contextTokens: undefined,
+          totalTokens: undefined,
+          estimatedCostUsd: undefined,
+          status: undefined,
+          startedAt: undefined,
+          endedAt: undefined,
+          runtimeMs: undefined,
+          childSessions: undefined,
+          thinkingLevel: undefined,
+          fastMode: undefined,
+          verboseLevel: undefined,
+          reasoningLevel: undefined,
+          elevatedLevel: undefined,
+          responseUsage: undefined,
+          systemSent: undefined,
+          abortedLastRun: undefined,
+          sendPolicy: undefined,
+          lastChannel: undefined,
+          lastTo: undefined,
+          lastAccountId: undefined,
+          transcriptPath: path.join(fs.realpathSync(tmpDir), "visible.jsonl"),
+        },
+      ]);
       expect(JSON.stringify(details.sessions)).not.toContain("Hidden");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -810,7 +839,12 @@ describe("sessions tools", () => {
 
     const result = await tool.execute("call5", { sessionKey: sessionId });
     const details = result.details as { messages?: unknown[] };
-    expect(details.messages).toHaveLength(1);
+    expect(details.messages).toStrictEqual([
+      {
+        content: [{ text: "ok", type: "text" }],
+        role: "assistant",
+      },
+    ]);
     const historyCall = callGatewayMock.mock.calls.find(
       (call) => (call[0] as { method?: string }).method === "chat.history",
     );
@@ -1295,7 +1329,7 @@ describe("sessions tools", () => {
     expect(details.status).toBe("timeout");
     expect(details.error).toBe("agent run timed out");
     expect(details.sessionKey).toBe(targetKey);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
   });
 

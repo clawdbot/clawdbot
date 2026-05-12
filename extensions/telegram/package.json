@@ -1,13 +1,13 @@
 {
   "name": "@openclaw/telegram",
-  "version": "2026.5.10-beta.1",
+  "version": "2026.5.12-beta.1",
   "private": true,
   "description": "OpenClaw Telegram channel plugin",
   "type": "module",
   "dependencies": {
-    "@grammyjs/runner": "^2.0.3",
-    "@grammyjs/transformer-throttler": "^1.2.1",
-    "grammy": "^1.42.0",
+    "@grammyjs/runner": "2.0.3",
+    "@grammyjs/transformer-throttler": "1.2.1",
+    "grammy": "1.42.0",
     "typebox": "1.1.38",
     "undici": "8.2.0"
   },

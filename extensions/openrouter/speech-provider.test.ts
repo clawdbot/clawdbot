@@ -19,6 +19,37 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
 
+function requireOpenRouterConfigRequest(): Record<string, unknown> {
+  const [call] = resolveProviderHttpRequestConfigMock.mock.calls;
+  if (!call) {
+    throw new Error("expected OpenRouter speech config request");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected OpenRouter speech config request");
+  }
+  return request;
+}
+
+function requireOpenRouterPostRequest(): Record<string, unknown> {
+  const [call] = postJsonRequestMock.mock.calls;
+  if (!call) {
+    throw new Error("expected OpenRouter speech request");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected OpenRouter speech request");
+  }
+  return request as Record<string, unknown>;
+}
+
+function requireHeaders(value: unknown): Headers {
+  if (!(value instanceof Headers)) {
+    throw new Error("expected OpenRouter speech request headers");
+  }
+  return value;
+}
+
 describe("openrouter speech provider", () => {
   afterEach(() => {
     assertOkOrThrowHttpErrorMock.mockClear();
@@ -100,7 +131,7 @@ describe("openrouter speech provider", () => {
     });
 
     expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledOnce();
-    expect(resolveProviderHttpRequestConfigMock.mock.calls[0]?.[0]).toEqual({
+    expect(requireOpenRouterConfigRequest()).toEqual({
       baseUrl: "https://openrouter.ai/api/v1",
       defaultBaseUrl: "https://openrouter.ai/api/v1",
       allowPrivateNetwork: false,
@@ -115,12 +146,9 @@ describe("openrouter speech provider", () => {
       transport: "http",
     });
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const request = postJsonRequestMock.mock.calls[0]?.[0];
-    if (!request) {
-      throw new Error("expected OpenRouter speech request");
-    }
-    expect(request.headers).toBeInstanceOf(Headers);
-    expect(Object.fromEntries(request.headers.entries())).toEqual({
+    const request = requireOpenRouterPostRequest();
+    const headers = requireHeaders(request.headers);
+    expect(Object.fromEntries(headers.entries())).toEqual({
       authorization: "Bearer sk-openrouter",
       "content-type": "application/json",
       "http-referer": "https://openclaw.ai",
@@ -128,7 +156,7 @@ describe("openrouter speech provider", () => {
     });
     expect(request).toEqual({
       url: "https://openrouter.ai/api/v1/audio/speech",
-      headers: request.headers,
+      headers,
       body: {
         model: "openai/gpt-4o-mini-tts-2025-12-15",
         input: "hello",

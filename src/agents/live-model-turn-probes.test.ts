@@ -34,15 +34,15 @@ describe("live model turn probes", () => {
   it("builds a text file read probe", () => {
     const context = buildLiveModelFileProbeContext({ systemPrompt: "sys" });
     expect(context.systemPrompt).toBe("sys");
-    expect(context.messages[0]?.content).toEqual(
-      expect.stringContaining(`LIVE_LABEL=${LIVE_MODEL_FILE_PROBE_TOKEN}`),
+    expect(context.messages[0]?.content).toBe(
+      "Read this visible label and reply with only the value after LIVE_LABEL.\n\nLIVE_LABEL=opal",
     );
   });
 
   it("builds a stricter file read retry probe", () => {
     const context = buildLiveModelFileProbeRetryContext({});
-    expect(context.messages[0]?.content).toEqual(
-      expect.stringContaining(`Reply with exactly ${LIVE_MODEL_FILE_PROBE_TOKEN}`),
+    expect(context.messages[0]?.content).toBe(
+      "The visible label value is:\n\nopal\n\nReply with exactly opal.",
     );
   });
 

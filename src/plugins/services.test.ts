@@ -78,6 +78,14 @@ function expectServiceLifecycleState(params: {
   expectServiceContexts(params.contexts, params.config);
 }
 
+function requireLoggerErrorMessage(index = 0): string {
+  const call = mockedLogger.error.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`expected logger error call ${index}`);
+  }
+  return call[0];
+}
+
 async function startTrackingServices(params: {
   services: OpenClawPluginService[];
   config?: Parameters<typeof startPluginServices>[0]["config"];
@@ -169,15 +177,15 @@ describe("startPluginServices", () => {
 
     await handle.stop();
 
-    expect(mockedLogger.error).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "plugin service failed (service-start-fail, plugin=plugin:test, root=/plugins/test-plugin):",
-      ),
-    );
-    expect(mockedLogger.error.mock.calls[0]?.[0]).not.toContain("\n");
-    expect(mockedLogger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("plugin service stop failed (service-stop-fail):"),
-    );
+    expect(mockedLogger.error.mock.calls).toEqual([
+      [
+        "plugin service failed (service-start-fail, plugin=plugin:test, root=/plugins/test-plugin): start failed",
+      ],
+    ]);
+    expect(requireLoggerErrorMessage()).not.toContain("\n");
+    expect(mockedLogger.warn.mock.calls).toEqual([
+      ["plugin service stop failed (service-stop-fail): Error: stop failed"],
+    ]);
     expect(stopOk).toHaveBeenCalledOnce();
     expect(stopThrows).toHaveBeenCalledOnce();
   });

@@ -112,7 +112,27 @@ describe("bash process registry", () => {
 
     markBackgrounded(session);
     markExited(session, 0, null, "completed");
-    expect(listFinishedSessions()).toHaveLength(1);
+    const finishedSessions = listFinishedSessions();
+    const endedAt = finishedSessions[0]?.endedAt;
+    expect(endedAt).toEqual(expect.any(Number));
+    expect(finishedSessions).toStrictEqual([
+      {
+        id: "sess",
+        command: "echo test",
+        scopeKey: undefined,
+        startedAt: session.startedAt,
+        endedAt,
+        cwd: "/tmp",
+        status: "completed",
+        exitCode: 0,
+        exitSignal: null,
+        exitReason: undefined,
+        aggregated: "",
+        tail: "",
+        truncated: false,
+        totalOutputChars: 0,
+      },
+    ]);
   });
 });
 

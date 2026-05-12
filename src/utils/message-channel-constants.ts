@@ -7,7 +7,7 @@ export type InternalMessageChannel = typeof INTERNAL_MESSAGE_CHANNEL;
 // own, but they should still pass agent-param channel validation so internal
 // callers (e.g. sessions_spawn from a heartbeat-driven parent run) are not
 // rejected as "unknown channel".
-export const INTERNAL_NON_DELIVERY_CHANNELS = ["heartbeat", "cron", "webhook"] as const;
+export const INTERNAL_NON_DELIVERY_CHANNELS = ["heartbeat", "cron", "webhook", "voice"] as const;
 export type InternalNonDeliveryChannel = (typeof INTERNAL_NON_DELIVERY_CHANNELS)[number];
 
 export function isInternalNonDeliveryChannel(value: string): value is InternalNonDeliveryChannel {

@@ -27,7 +27,7 @@ describeLive("inworld plugin live", () => {
     });
 
     expect(voices?.length).toBeGreaterThan(0);
-    expect(voices).toEqual(expect.arrayContaining([expect.objectContaining({ id: "Sarah" })]));
+    expect(voices?.some((voice) => voice.id === "Sarah")).toBe(true);
   }, 120_000);
 
   it("synthesizes MP3, native voice-note Ogg/Opus, and telephony PCM", async () => {

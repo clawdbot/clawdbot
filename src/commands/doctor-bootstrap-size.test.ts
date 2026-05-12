@@ -53,10 +53,17 @@ describe("noteBootstrapFileSize", () => {
     await noteBootstrapFileSize({} as OpenClawConfig);
     expect(note).toHaveBeenCalledTimes(1);
     const [message, title] = note.mock.calls[0] ?? [];
-    expect(String(title)).toBe("Bootstrap file size");
-    expect(String(message)).toContain("will be truncated");
-    expect(String(message)).toContain("AGENTS.md");
-    expect(String(message)).toContain("max/file");
+    expect(title).toBe("Bootstrap file size");
+    expect(message).toBe(
+      [
+        "Workspace bootstrap files exceed limits and will be truncated:",
+        "- AGENTS.md: 25,000 raw / 20,000 injected (20% truncated; max/file)",
+        "Total bootstrap injected chars: 20,000 (13% of max/total 150,000).",
+        "Total bootstrap raw chars (before truncation): 25,000.",
+        "",
+        "- Tip: tune `agents.defaults.bootstrapMaxChars` for per-file limits.",
+      ].join("\n"),
+    );
   });
 
   it("stays silent when files are comfortably within limits", async () => {

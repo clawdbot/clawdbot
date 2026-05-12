@@ -160,13 +160,10 @@ describe("bundled channel legacy config migrations", () => {
         },
       },
     });
-    expect(result.changes).toHaveLength(2);
-    expect(result.changes).toContain(
+    expect(result.changes).toStrictEqual([
       "Moved channels.mattermost.allowPrivateNetwork → channels.mattermost.network.dangerouslyAllowPrivateNetwork (true).",
-    );
-    expect(result.changes).toContain(
       "Moved channels.mattermost.accounts.work.allowPrivateNetwork → channels.mattermost.accounts.work.network.dangerouslyAllowPrivateNetwork (false).",
-    );
+    ]);
   });
 
   it("applies plugin doctor normalizers for configured non-channel plugin entries", () => {

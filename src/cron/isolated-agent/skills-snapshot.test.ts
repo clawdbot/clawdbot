@@ -54,10 +54,11 @@ describe("resolveCronSkillsSnapshot", () => {
     });
 
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
-    expect(buildWorkspaceSkillSnapshotMock.mock.calls[0]?.[1]).toMatchObject({
-      agentId: "writer",
-      snapshotVersion: 0,
-    });
+    const snapshotOptions = buildWorkspaceSkillSnapshotMock.mock.calls.at(0)?.[1] as
+      | { agentId?: string; snapshotVersion?: number }
+      | undefined;
+    expect(snapshotOptions?.agentId).toBe("writer");
+    expect(snapshotOptions?.snapshotVersion).toBe(0);
     expect(result).toEqual({ prompt: "fresh", skills: [] });
   });
 

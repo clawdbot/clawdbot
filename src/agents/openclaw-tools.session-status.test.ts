@@ -30,6 +30,7 @@ const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
   configFingerprint: "session-status-test-empty-plugin-metadata",
   plugins: [],
 }));
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 const createMockConfig = () => ({
   session: { mainKey: "main", scope: "per-sender" },
@@ -391,7 +392,9 @@ function expectSpawnedSessionLookupCalls(spawnedBy: string) {
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -879,7 +882,7 @@ describe("session_status tool", () => {
     expect(details.model).toBe("claude-sonnet-4-6");
     expect(details.modelProvider).toBe("anthropic");
     expect(details.modelOverride).toBe("anthropic/claude-sonnet-4-6");
-    expect(updateSessionStoreMock).toHaveBeenCalled();
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
     const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
       string,
       Record<string, SessionEntry>,
@@ -890,8 +893,7 @@ describe("session_status tool", () => {
       modelOverride: "claude-sonnet-4-6",
       liveModelSwitchPending: true,
     });
-    expect(saved.sessionId).toBeTypeOf("string");
-    expect(saved.sessionId.trim().length).toBeGreaterThan(0);
+    expect(saved.sessionId).toMatch(UUID_RE);
   });
 
   it("materializes a valid persisted session entry when the default implicit current fallback mutates model state", async () => {
@@ -905,7 +907,7 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
-    expect(updateSessionStoreMock).toHaveBeenCalled();
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
     const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
       string,
       Record<string, SessionEntry>,
@@ -916,8 +918,7 @@ describe("session_status tool", () => {
       modelOverride: "claude-sonnet-4-6",
       liveModelSwitchPending: true,
     });
-    expect(saved.sessionId).toBeTypeOf("string");
-    expect(saved.sessionId.trim().length).toBeGreaterThan(0);
+    expect(saved.sessionId).toMatch(UUID_RE);
   });
 
   it("does not synthesize a current fallback for unknown non-literal session keys", async () => {
@@ -1670,7 +1671,7 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:main");
-    expect(updateSessionStoreMock).toHaveBeenCalled();
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
   });
 
   it("blocks unsandboxed sessionId session_status outside tree visibility before mutation", async () => {
@@ -1837,27 +1838,30 @@ describe("session_status tool", () => {
     expect(loadSessionStoreMock).toHaveBeenCalledWith("/tmp/main/sessions.json");
     expect(updateSessionStoreMock).not.toHaveBeenCalled();
     expect(callGatewayMock).toHaveBeenCalledTimes(3);
-    expect(callGatewayMock.mock.calls).toContainEqual([
-      {
-        method: "sessions.resolve",
-        params: {
-          sessionId: "s-other",
-          spawnedBy: "agent:main:subagent:child",
-          includeGlobal: false,
-          includeUnknown: false,
-        },
+    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+      method: "sessions.list",
+      params: {
+        includeGlobal: false,
+        includeUnknown: false,
+        spawnedBy: "agent:main:subagent:child",
       },
-    ]);
-    expect(callGatewayMock.mock.calls).toContainEqual([
-      {
-        method: "sessions.list",
-        params: {
-          includeGlobal: false,
-          includeUnknown: false,
-          spawnedBy: "agent:main:subagent:child",
-        },
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
+      method: "sessions.resolve",
+      params: {
+        key: "s-other",
+        spawnedBy: "agent:main:subagent:child",
       },
-    ]);
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(3, {
+      method: "sessions.resolve",
+      params: {
+        sessionId: "s-other",
+        spawnedBy: "agent:main:subagent:child",
+        includeGlobal: false,
+        includeUnknown: false,
+      },
+    });
   });
 
   it("blocks sandboxed child session_status parent sessionId access outside its tree", async () => {
@@ -1888,27 +1892,30 @@ describe("session_status tool", () => {
     expect(loadSessionStoreMock).toHaveBeenCalledWith("/tmp/main/sessions.json");
     expect(updateSessionStoreMock).not.toHaveBeenCalled();
     expect(callGatewayMock).toHaveBeenCalledTimes(3);
-    expect(callGatewayMock.mock.calls).toContainEqual([
-      {
-        method: "sessions.resolve",
-        params: {
-          sessionId: "s-parent",
-          spawnedBy: "agent:main:subagent:child",
-          includeGlobal: false,
-          includeUnknown: false,
-        },
+    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+      method: "sessions.list",
+      params: {
+        includeGlobal: false,
+        includeUnknown: false,
+        spawnedBy: "agent:main:subagent:child",
       },
-    ]);
-    expect(callGatewayMock.mock.calls).toContainEqual([
-      {
-        method: "sessions.list",
-        params: {
-          includeGlobal: false,
-          includeUnknown: false,
-          spawnedBy: "agent:main:subagent:child",
-        },
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
+      method: "sessions.resolve",
+      params: {
+        key: "s-parent",
+        spawnedBy: "agent:main:subagent:child",
       },
-    ]);
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(3, {
+      method: "sessions.resolve",
+      params: {
+        sessionId: "s-parent",
+        spawnedBy: "agent:main:subagent:child",
+        includeGlobal: false,
+        includeUnknown: false,
+      },
+    });
   });
 
   it("keeps legacy main requester keys for sandboxed session tree checks", async () => {
@@ -1973,7 +1980,7 @@ describe("session_status tool", () => {
     const result = await tool.execute("call3", { model: "default" });
     const details = result.details as { modelOverride?: string | null };
     expect(details.modelOverride).toBeNull();
-    expect(updateSessionStoreMock).toHaveBeenCalled();
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
     const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
       string,
       Record<string, unknown>,

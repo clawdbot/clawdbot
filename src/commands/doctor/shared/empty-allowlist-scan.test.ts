@@ -31,10 +31,8 @@ describe("doctor empty allowlist policy scan", () => {
     );
 
     expect(warnings).toEqual([
-      expect.stringContaining('channels.signal.dmPolicy is "allowlist" but allowFrom is empty'),
-      expect.stringContaining(
-        'channels.signal.accounts.work.dmPolicy is "allowlist" but allowFrom is empty',
-      ),
+      '- channels.signal.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to channels.signal.allowFrom, or run "openclaw doctor --fix" to auto-migrate from pairing store when entries exist.',
+      '- channels.signal.accounts.work.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to channels.signal.accounts.work.allowFrom, or run "openclaw doctor --fix" to auto-migrate from pairing store when entries exist.',
     ]);
   });
 
@@ -54,7 +52,10 @@ describe("doctor empty allowlist policy scan", () => {
       },
     );
 
-    expect(warnings).toContain("extra:channels.telegram");
+    expect(warnings).toStrictEqual([
+      '- channels.telegram.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to channels.telegram.groupAllowFrom or channels.telegram.allowFrom, or set groupPolicy to "open".',
+      "extra:channels.telegram",
+    ]);
   });
 
   it("skips disabled channel and account entries", () => {

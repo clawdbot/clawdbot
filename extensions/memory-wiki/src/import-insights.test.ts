@@ -95,46 +95,45 @@ describe("listMemoryWikiImportInsights", () => {
     expect(result.sourceType).toBe("chatgpt");
     expect(result.totalItems).toBe(2);
     expect(result.totalClusters).toBe(2);
-    expect(result.clusters[0]).toMatchObject({
-      key: "topic/health",
-      label: "Health",
-      itemCount: 1,
-      highRiskCount: 1,
-      withheldCount: 1,
-    });
-    expect(result.clusters[1]).toMatchObject({
-      key: "topic/travel",
-      label: "Travel",
-      itemCount: 1,
-      preferenceSignalCount: 1,
-    });
-    expect(result.clusters[1]?.items[0]).toMatchObject({
-      title: "BA flight receipts process",
-      riskReasons: [],
-      activeBranchMessages: 0,
-      userMessageCount: 2,
-      assistantMessageCount: 2,
-      firstUserLine: "how do i get receipts?",
-      lastUserLine: "that option does not exist",
-      assistantOpener: "Try the BA receipt request flow first.",
-      summary: "Try the BA receipt request flow first.",
-      candidateSignals: ["prefers direct airline receipts"],
-      correctionSignals: [],
-      preferenceSignals: ["prefers direct airline receipts"],
-      digestStatus: "available",
-    });
+    const healthCluster = result.clusters[0];
+    expect(healthCluster?.key).toBe("topic/health");
+    expect(healthCluster?.label).toBe("Health");
+    expect(healthCluster?.itemCount).toBe(1);
+    expect(healthCluster?.highRiskCount).toBe(1);
+    expect(healthCluster?.withheldCount).toBe(1);
+
+    const travelCluster = result.clusters[1];
+    expect(travelCluster?.key).toBe("topic/travel");
+    expect(travelCluster?.label).toBe("Travel");
+    expect(travelCluster?.itemCount).toBe(1);
+    expect(travelCluster?.preferenceSignalCount).toBe(1);
+
+    const travelItem = travelCluster?.items[0];
+    expect(travelItem?.title).toBe("BA flight receipts process");
+    expect(travelItem?.riskReasons).toEqual([]);
+    expect(travelItem?.activeBranchMessages).toBe(0);
+    expect(travelItem?.userMessageCount).toBe(2);
+    expect(travelItem?.assistantMessageCount).toBe(2);
+    expect(travelItem?.firstUserLine).toBe("how do i get receipts?");
+    expect(travelItem?.lastUserLine).toBe("that option does not exist");
+    expect(travelItem?.assistantOpener).toBe("Try the BA receipt request flow first.");
+    expect(travelItem?.summary).toBe("Try the BA receipt request flow first.");
+    expect(travelItem?.candidateSignals).toEqual(["prefers direct airline receipts"]);
+    expect(travelItem?.correctionSignals).toEqual([]);
+    expect(travelItem?.preferenceSignals).toEqual(["prefers direct airline receipts"]);
+    expect(travelItem?.digestStatus).toBe("available");
+
     const healthItem = result.clusters
       .flatMap((cluster) => cluster.items)
       .find((item) => item.title === "Migraine Medication Advice");
-    expect(healthItem).toMatchObject({
-      summary:
-        "Sensitive health chat withheld from durable-memory extraction because it touches health.",
-      candidateSignals: [],
-      correctionSignals: [],
-      preferenceSignals: [],
-      userMessageCount: 1,
-      assistantMessageCount: 1,
-    });
+    expect(healthItem?.summary).toBe(
+      "Sensitive health chat withheld from durable-memory extraction because it touches health.",
+    );
+    expect(healthItem?.candidateSignals).toEqual([]);
+    expect(healthItem?.correctionSignals).toEqual([]);
+    expect(healthItem?.preferenceSignals).toEqual([]);
+    expect(healthItem?.userMessageCount).toBe(1);
+    expect(healthItem?.assistantMessageCount).toBe(1);
     expect(healthItem?.firstUserLine).toBeUndefined();
     expect(healthItem?.lastUserLine).toBeUndefined();
     expect(healthItem?.assistantOpener).toBeUndefined();

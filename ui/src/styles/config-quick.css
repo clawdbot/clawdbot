@@ -214,6 +214,23 @@
   color: var(--accent);
 }
 
+.qs-row--tool-profile {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 8px;
+  padding-block: 10px;
+}
+
+.qs-row--tool-profile .qs-row__label {
+  flex: 0 0 auto;
+  width: 100%;
+}
+
+.qs-row--tool-profile .qs-segmented {
+  align-self: stretch;
+  justify-content: flex-start;
+}
+
 .qs-field {
   display: grid;
   gap: 6px;

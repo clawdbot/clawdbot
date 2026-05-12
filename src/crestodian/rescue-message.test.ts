@@ -127,6 +127,14 @@ function commandContext(overrides: Partial<CommandContext> = {}): CommandContext
   };
 }
 
+function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 async function runRescue(
   commandBody: string,
   cfg: OpenClawConfig,
@@ -230,7 +238,10 @@ describe("Crestodian rescue message", () => {
     ).resolves.toContain("search rows: calendar");
     expect(deps.runPluginsList).toHaveBeenCalledTimes(1);
     expect(deps.runPluginsSearch).toHaveBeenCalledTimes(1);
-    const [searchQuery, searchRuntime] = deps.runPluginsSearch.mock.calls[0] ?? [];
+    const [searchQuery, searchRuntime] = requireFirstMockCall(
+      deps.runPluginsSearch,
+      "plugins search",
+    );
     expect(searchQuery).toBe("calendar");
     expect(searchRuntime).toBeTypeOf("object");
   });
@@ -301,8 +312,10 @@ describe("Crestodian rescue message", () => {
     );
 
     expect(deps.runAgentsAdd).toHaveBeenCalledTimes(1);
-    const [agentParams, agentRuntime, agentOptions] = deps.runAgentsAdd.mock
-      .calls[0] as unknown as [
+    const [agentParams, agentRuntime, agentOptions] = requireFirstMockCall(
+      deps.runAgentsAdd,
+      "agents add",
+    ) as unknown as [
       { name: string; workspace: string; nonInteractive: boolean },
       object,
       { hasFlags: boolean },

@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Bot, Context } from "grammy";
 import {
-  buildConfiguredModelCatalog,
+  loadModelCatalog,
   resolveAgentConfig,
   resolveDefaultModelForAgent,
-  resolveThinkingDefault,
+  resolveThinkingDefaultWithRuntimeCatalog,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
@@ -256,13 +256,26 @@ function resolveTelegramCommandMenuModelContext(params: {
   }
 }
 
-function resolveTelegramThinkMenuCurrentLevel(params: {
+async function resolveTelegramDefaultThinkingLevel(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): Promise<string> {
+  return resolveThinkingDefaultWithRuntimeCatalog({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    loadModelCatalog: () => loadModelCatalog({ config: params.cfg }),
+  });
+}
+
+async function resolveTelegramThinkMenuCurrentLevel(params: {
   cfg: OpenClawConfig;
   agentId: string;
   provider?: string;
   model?: string;
   thinkingLevel?: string;
-}): string {
+}): Promise<string> {
   const explicit = normalizeOptionalString(params.thinkingLevel);
   if (explicit) {
     return explicit;
@@ -277,11 +290,10 @@ function resolveTelegramThinkMenuCurrentLevel(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
-  return resolveThinkingDefault({
+  return await resolveTelegramDefaultThinkingLevel({
     cfg: params.cfg,
     provider: params.provider ?? defaultModel.provider,
     model: params.model ?? defaultModel.model,
-    catalog: buildConfiguredModelCatalog({ cfg: params.cfg }),
   });
 }
 
@@ -1050,7 +1062,7 @@ export const registerTelegramNativeCommands = ({
             menu,
             currentThinkingLevel:
               commandDefinition.key === "think"
-                ? resolveTelegramThinkMenuCurrentLevel({
+                ? await resolveTelegramThinkMenuCurrentLevel({
                     cfg: runtimeCfg,
                     agentId: route.agentId,
                     ...menuModelContext,

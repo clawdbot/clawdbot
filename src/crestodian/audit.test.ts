@@ -29,11 +29,10 @@ describe("Crestodian audit log", () => {
     expect(auditPath).toBe(resolveCrestodianAuditPath());
     const lines = (await fs.readFile(auditPath, "utf8")).trim().split("\n");
     expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
-      operation: "config.setDefaultModel",
-      summary: "Set default model to openai/gpt-5.2",
-      configHashBefore: "before",
-      configHashAfter: "after",
-    });
+    const entry = JSON.parse(lines[0] ?? "{}") as Record<string, unknown>;
+    expect(entry.operation).toBe("config.setDefaultModel");
+    expect(entry.summary).toBe("Set default model to openai/gpt-5.2");
+    expect(entry.configHashBefore).toBe("before");
+    expect(entry.configHashAfter).toBe("after");
   });
 });

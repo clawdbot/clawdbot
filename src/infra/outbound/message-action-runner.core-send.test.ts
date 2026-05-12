@@ -4,6 +4,21 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
 
+function firstMockArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error(`expected ${label} input to be an object`);
+  }
+  return arg as Record<string, unknown>;
+}
+
 describe("runMessageAction core send routing", () => {
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
@@ -56,12 +71,10 @@ describe("runMessageAction core send routing", () => {
     });
 
     expect(result.kind).toBe("send");
-    expect(sendMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "caption-only text",
-        mediaUrl: "https://example.com/cat.png",
-      }),
-    );
+    expect(sendMedia).toHaveBeenCalledOnce();
+    const mediaInput = firstMockArg(sendMedia, "send media");
+    expect(mediaInput.text).toBe("caption-only text");
+    expect(mediaInput.mediaUrl).toBe("https://example.com/cat.png");
   });
 
   it("does not misclassify send as poll when zero-valued poll params are present", async () => {
@@ -116,12 +129,10 @@ describe("runMessageAction core send routing", () => {
     });
 
     expect(result.kind).toBe("send");
-    expect(sendMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "hello",
-        mediaUrl: "https://example.com/file.txt",
-      }),
-    );
+    expect(sendMedia).toHaveBeenCalledOnce();
+    const mediaInput = firstMockArg(sendMedia, "send media");
+    expect(mediaInput.text).toBe("hello");
+    expect(mediaInput.mediaUrl).toBe("https://example.com/file.txt");
   });
 
   it("accepts Telegram numeric forum topic targets through plugin-owned grammar", async () => {
@@ -168,12 +179,9 @@ describe("runMessageAction core send routing", () => {
     if (result.kind !== "send") {
       throw new Error(`Expected send result, got ${result.kind}`);
     }
+    const payload = result.payload as { dryRun?: boolean; to?: string };
     expect(result.to).toBe("telegram:-1001234567890:topic:42");
-    expect(result.payload).toEqual(
-      expect.objectContaining({
-        to: "telegram:-1001234567890:topic:42",
-        dryRun: true,
-      }),
-    );
+    expect(payload.to).toBe("telegram:-1001234567890:topic:42");
+    expect(payload.dryRun).toBe(true);
   });
 });

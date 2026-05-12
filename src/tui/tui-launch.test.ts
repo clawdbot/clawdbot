@@ -24,7 +24,7 @@ function createChildProcess(): ChildProcess {
 
 function expectSpawned(expectedArgs: string[]): SpawnOptions {
   expect(spawnMock).toHaveBeenCalledOnce();
-  const call = spawnMock.mock.calls[0] as [string, string[], SpawnOptions] | undefined;
+  const call = spawnMock.mock.calls.at(0) as [string, string[], SpawnOptions] | undefined;
   if (!call) {
     throw new Error("missing spawn call");
   }

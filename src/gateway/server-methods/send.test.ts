@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundSessionRoute: vi.fn(),
   ensureOutboundSessionEntry: vi.fn(async () => undefined),
   resolveMessageChannelSelection: vi.fn(),
+  dispatchChannelMessageAction: vi.fn(),
   sendPoll: vi.fn<
     () => Promise<{
       messageId: string;
@@ -42,6 +43,10 @@ vi.mock("../../channels/plugins/index.js", () => ({
   getLoadedChannelPlugin: mocks.getChannelPlugin,
   getChannelPlugin: mocks.getChannelPlugin,
   normalizeChannelId: (value: string) => (value === "webchat" ? null : value),
+}));
+
+vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
+  dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
 }));
 
 const TEST_AGENT_WORKSPACE = "/tmp/openclaw-test-workspace";
@@ -163,6 +168,16 @@ async function runPollWithClient(
   return { respond };
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 async function runMessageActionRequest(
   params: Record<string, unknown>,
   client?: { connect?: { scopes?: string[] } } | null,
@@ -193,12 +208,27 @@ function firstRespondCall(respond: ReturnType<typeof vi.fn>) {
       Record<string, any> | undefined,
     ]
   >;
-  return calls[0];
+  const call = calls[0];
+  if (!call) {
+    throw new Error("Expected respond call");
+  }
+  return call;
 }
 
-function pollCall(index = 0): Record<string, any> | undefined {
+function lastDispatchChannelMessageActionCall(): Record<string, any> | undefined {
+  const calls = mocks.dispatchChannelMessageAction.mock.calls as unknown as Array<
+    [Record<string, any>]
+  >;
+  return calls.at(-1)?.[0];
+}
+
+function pollCall(index = 0): Record<string, any> {
   const calls = mocks.sendPoll.mock.calls as unknown as Array<[Record<string, any>]>;
-  return calls[index]?.[0];
+  const call = calls[index]?.[0];
+  if (!call) {
+    throw new Error(`Expected poll call at index ${index}`);
+  }
+  return call;
 }
 
 function outboundRouteCall(index = 0): Record<string, any> | undefined {
@@ -256,8 +286,197 @@ describe("gateway send mirroring", () => {
       channel: "slack",
       configured: ["slack"],
     });
+    mocks.dispatchChannelMessageAction.mockResolvedValue({
+      details: { action: "handled" },
+    });
     mocks.sendPoll.mockResolvedValue({ messageId: "poll-1" });
-    mocks.getChannelPlugin.mockReturnValue({ outbound: { sendPoll: mocks.sendPoll } });
+    mocks.getChannelPlugin.mockReturnValue({
+      actions: { handleAction: true },
+      outbound: { sendPoll: mocks.sendPoll },
+    });
+  });
+
+  it("dedupes concurrent message.action requests while inflight", async () => {
+    const context = makeContext();
+    const firstRespond = vi.fn();
+    const secondRespond = vi.fn();
+    const actionDeferred = createDeferred<{ details: { action: string } }>();
+    mocks.dispatchChannelMessageAction.mockReturnValueOnce(actionDeferred.promise);
+
+    const firstRequest = sendHandlers["message.action"]({
+      params: {
+        channel: "slack",
+        action: "poll",
+        params: { question: "Q?" },
+        idempotencyKey: "idem-action-concurrent",
+      } as never,
+      respond: firstRespond,
+      context,
+      req: { type: "req", id: "1", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    const secondRequest = sendHandlers["message.action"]({
+      params: {
+        channel: "slack",
+        action: "poll",
+        params: { question: "Q?" },
+        idempotencyKey: "idem-action-concurrent",
+      } as never,
+      respond: secondRespond,
+      context,
+      req: { type: "req", id: "2", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    await Promise.resolve();
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+
+    actionDeferred.resolve({ details: { action: "handled" } });
+    await Promise.all([firstRequest, secondRequest]);
+
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+    expect(firstRespond).toHaveBeenCalledTimes(1);
+    expect(secondRespond).toHaveBeenCalledTimes(1);
+    const firstCall = firstRespondCall(firstRespond);
+    expect(firstCall?.[0]).toBe(true);
+    expect(firstCall?.[1]).toEqual({ action: "handled" });
+    expect(firstCall?.[2]).toBeUndefined();
+    expect(firstCall?.[3]?.channel).toBe("slack");
+    expect(firstCall?.[3]?.cached).toBeUndefined();
+    const secondCall = firstRespondCall(secondRespond);
+    expect(secondCall?.[0]).toBe(true);
+    expect(secondCall?.[1]).toEqual({ action: "handled" });
+    expect(secondCall?.[2]).toBeUndefined();
+    expect(secondCall?.[3]?.channel).toBe("slack");
+    expect(secondCall?.[3]?.cached).toBe(true);
+  });
+
+  it("dedupes concurrent send requests while inflight", async () => {
+    const context = makeContext();
+    const firstRespond = vi.fn();
+    const secondRespond = vi.fn();
+    const deliveryDeferred = createDeferred<Array<{ messageId: string; channel: string }>>();
+    mocks.deliverOutboundPayloads.mockReturnValueOnce(deliveryDeferred.promise);
+
+    const firstRequest = sendHandlers.send({
+      params: {
+        to: "channel:C1",
+        message: "hi",
+        channel: "slack",
+        idempotencyKey: "idem-send-concurrent",
+      } as never,
+      respond: firstRespond,
+      context,
+      req: { type: "req", id: "1", method: "send" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    const secondRequest = sendHandlers.send({
+      params: {
+        to: "channel:C1",
+        message: "hi",
+        channel: "slack",
+        idempotencyKey: "idem-send-concurrent",
+      } as never,
+      respond: secondRespond,
+      context,
+      req: { type: "req", id: "2", method: "send" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    });
+
+    deliveryDeferred.resolve([{ messageId: "m-concurrent", channel: "slack" }]);
+    await Promise.all([firstRequest, secondRequest]);
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(firstRespond).toHaveBeenCalledTimes(1);
+    expect(secondRespond).toHaveBeenCalledTimes(1);
+    const firstCall = firstRespondCall(firstRespond);
+    expect(firstCall?.[0]).toBe(true);
+    expect(firstCall?.[1]?.messageId).toBe("m-concurrent");
+    expect(firstCall?.[1]?.runId).toBe("idem-send-concurrent");
+    expect(firstCall?.[2]).toBeUndefined();
+    expect(firstCall?.[3]?.channel).toBe("slack");
+    expect(firstCall?.[3]?.cached).toBeUndefined();
+    const secondCall = firstRespondCall(secondRespond);
+    expect(secondCall?.[0]).toBe(true);
+    expect(secondCall?.[1]?.messageId).toBe("m-concurrent");
+    expect(secondCall?.[1]?.runId).toBe("idem-send-concurrent");
+    expect(secondCall?.[2]).toBeUndefined();
+    expect(secondCall?.[3]?.channel).toBe("slack");
+    expect(secondCall?.[3]?.cached).toBe(true);
+  });
+
+  it("dedupes concurrent poll requests while inflight", async () => {
+    const context = makeContext();
+    const firstRespond = vi.fn();
+    const secondRespond = vi.fn();
+    const pollDeferred = createDeferred<{ messageId: string; pollId: string }>();
+    mocks.sendPoll.mockReturnValueOnce(pollDeferred.promise);
+
+    const firstRequest = sendHandlers.poll({
+      params: {
+        to: "channel:C1",
+        question: "Q?",
+        options: ["A", "B"],
+        channel: "slack",
+        idempotencyKey: "idem-poll-concurrent",
+      } as never,
+      respond: firstRespond,
+      context,
+      req: { type: "req", id: "1", method: "poll" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    const secondRequest = sendHandlers.poll({
+      params: {
+        to: "channel:C1",
+        question: "Q?",
+        options: ["A", "B"],
+        channel: "slack",
+        idempotencyKey: "idem-poll-concurrent",
+      } as never,
+      respond: secondRespond,
+      context,
+      req: { type: "req", id: "2", method: "poll" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    await Promise.resolve();
+    expect(mocks.sendPoll).toHaveBeenCalledTimes(1);
+
+    pollDeferred.resolve({ messageId: "poll-concurrent", pollId: "poll-1" });
+    await Promise.all([firstRequest, secondRequest]);
+
+    expect(mocks.sendPoll).toHaveBeenCalledTimes(1);
+    expect(firstRespond).toHaveBeenCalledTimes(1);
+    expect(secondRespond).toHaveBeenCalledTimes(1);
+    const firstCall = firstRespondCall(firstRespond);
+    expect(firstCall?.[0]).toBe(true);
+    expect(firstCall?.[1]?.messageId).toBe("poll-concurrent");
+    expect(firstCall?.[1]?.pollId).toBe("poll-1");
+    expect(firstCall?.[1]?.runId).toBe("idem-poll-concurrent");
+    expect(firstCall?.[2]).toBeUndefined();
+    expect(firstCall?.[3]?.channel).toBe("slack");
+    expect(firstCall?.[3]?.cached).toBeUndefined();
+    const secondCall = firstRespondCall(secondRespond);
+    expect(secondCall?.[0]).toBe(true);
+    expect(secondCall?.[1]?.messageId).toBe("poll-concurrent");
+    expect(secondCall?.[1]?.pollId).toBe("poll-1");
+    expect(secondCall?.[1]?.runId).toBe("idem-poll-concurrent");
+    expect(secondCall?.[2]).toBeUndefined();
+    expect(secondCall?.[3]?.channel).toBe("slack");
+    expect(secondCall?.[3]?.cached).toBe(true);
   });
 
   it("accepts media-only sends without message", async () => {
@@ -468,9 +687,12 @@ describe("gateway send mirroring", () => {
       { connect: { scopes: ["operator.admin"] } },
     );
 
-    expect(pollCall()?.cfg).toBeDefined();
-    expect(pollCall()?.to).toBe("resolved");
-    expect(pollCall()?.gatewayClientScopes).toEqual(["operator.admin"]);
+    const call = pollCall();
+    if (call.cfg === undefined) {
+      throw new Error("Expected poll delivery config");
+    }
+    expect(call.to).toBe("resolved");
+    expect(call.gatewayClientScopes).toEqual(["operator.admin"]);
   });
 
   it("forwards an empty gateway scope array into outbound poll delivery", async () => {
@@ -485,9 +707,12 @@ describe("gateway send mirroring", () => {
       { connect: { scopes: [] } },
     );
 
-    expect(pollCall()?.cfg).toBeDefined();
-    expect(pollCall()?.to).toBe("resolved");
-    expect(pollCall()?.gatewayClientScopes).toEqual([]);
+    const call = pollCall();
+    if (call.cfg === undefined) {
+      throw new Error("Expected poll delivery config");
+    }
+    expect(call.to).toBe("resolved");
+    expect(call.gatewayClientScopes).toEqual([]);
   });
 
   it("includes optional poll delivery identifiers in the gateway payload", async () => {
@@ -532,10 +757,12 @@ describe("gateway send mirroring", () => {
 
     expect(mocks.resolveMessageChannelSelection).toHaveBeenCalled();
     const response = firstRespondCall(respond);
-    expect(response?.[0]).toBe(true);
-    expect(response?.[1]).toBeDefined();
-    expect(response?.[2]).toBeUndefined();
-    expect(response?.[3]).toEqual({ channel: "slack" });
+    expect(response[0]).toBe(true);
+    if (response[1] === undefined) {
+      throw new Error("Expected poll missing-channel response payload");
+    }
+    expect(response[2]).toBeUndefined();
+    expect(response[3]).toEqual({ channel: "slack" });
   });
 
   it("returns invalid request when poll channel selection is ambiguous", async () => {
@@ -787,13 +1014,10 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-send-options",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        forceDocument: true,
-        silent: true,
-        formatting: { parseMode: "HTML" },
-      }),
-    );
+    const options = mocks.deliverOutboundPayloads.mock.calls[0]?.[0];
+    expect(options?.forceDocument).toBe(true);
+    expect(options?.silent).toBe(true);
+    expect(options?.formatting).toEqual({ parseMode: "HTML" });
   });
 
   it("updates mirror session keys and delivery thread ids when Slack routing derives a thread", async () => {
@@ -1019,6 +1243,18 @@ describe("gateway send mirroring", () => {
       ]),
       "send-test-message-action",
     );
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({
+        ok: true,
+        messageId: "wamid.1",
+        requesterSenderId: "trusted-user",
+        currentMessageId: "wamid.1",
+        currentGraphChannelId: "graph:team/chan",
+        replyToMode: "first",
+        hasRepliedRef: true,
+        skipCrossContextDecoration: true,
+      }),
+    );
 
     const { respond } = await runMessageActionRequest({
       channel: "whatsapp",
@@ -1058,7 +1294,6 @@ describe("gateway send mirroring", () => {
   });
 
   it("passes agent-scoped media roots to gateway message actions", async () => {
-    let capturedMediaLocalRoots: readonly string[] | undefined;
     const mediaActionPlugin: ChannelPlugin = {
       id: "telegram",
       meta: {
@@ -1077,10 +1312,7 @@ describe("gateway send mirroring", () => {
       actions: {
         describeMessageTool: () => ({ actions: ["sendAttachment"] }),
         supportsAction: ({ action }) => action === "sendAttachment",
-        handleAction: async ({ mediaLocalRoots }) => {
-          capturedMediaLocalRoots = mediaLocalRoots;
-          return jsonResult({ ok: true });
-        },
+        handleAction: async () => jsonResult({ ok: true }),
       },
     };
     mocks.getChannelPlugin.mockReturnValue(mediaActionPlugin);
@@ -1097,8 +1329,9 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-message-action-media-roots",
     });
 
-    expect(firstRespondCall(respond)?.[0]).toBe(true);
-    expect(capturedMediaLocalRoots).toEqual(expect.arrayContaining([TEST_AGENT_WORKSPACE]));
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    const actionCall = lastDispatchChannelMessageActionCall();
+    expect(actionCall?.mediaLocalRoots).toContain(TEST_AGENT_WORKSPACE);
   });
 
   it("forces senderIsOwner=false for narrowly-scoped callers but honors it for full operators", async () => {
@@ -1147,7 +1380,7 @@ describe("gateway send mirroring", () => {
       },
       { connect: { scopes: ["operator.write"] } },
     );
-    expect(capture.senderIsOwner).toBe(false);
+    expect(lastDispatchChannelMessageActionCall()?.senderIsOwner).toBe(false);
 
     // Full operator (admin-scoped): the trusted runtime is allowed to
     // forward the real channel-sender ownership bit. Wire true → true.
@@ -1165,7 +1398,7 @@ describe("gateway send mirroring", () => {
       },
       { connect: { scopes: ["operator.admin"] } },
     );
-    expect(capture.senderIsOwner).toBe(true);
+    expect(lastDispatchChannelMessageActionCall()?.senderIsOwner).toBe(true);
 
     // Full operator forwarding a non-owner sender: wire false → false
     // (admin scope does not inflate ownership on its own).
@@ -1183,6 +1416,6 @@ describe("gateway send mirroring", () => {
       },
       { connect: { scopes: ["operator.admin"] } },
     );
-    expect(capture.senderIsOwner).toBe(false);
+    expect(lastDispatchChannelMessageActionCall()?.senderIsOwner).toBe(false);
   });
 });

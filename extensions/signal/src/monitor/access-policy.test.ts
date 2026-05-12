@@ -214,10 +214,8 @@ describe("resolveSignalAccessState", () => {
     });
 
     expect(access.senderAccess.decision).toBe("allow");
-    expect(access.commandAccess).toMatchObject({
-      authorized: false,
-      shouldBlockControlCommand: true,
-    });
+    expect(access.commandAccess.authorized).toBe(false);
+    expect(access.commandAccess.shouldBlockControlCommand).toBe(true);
   });
 
   it("authorizes group control commands from the shared ingress command gate", async () => {
@@ -233,10 +231,8 @@ describe("resolveSignalAccessState", () => {
       hasControlCommand: true,
     });
 
-    expect(access.commandAccess).toMatchObject({
-      authorized: true,
-      shouldBlockControlCommand: false,
-    });
+    expect(access.commandAccess.authorized).toBe(true);
+    expect(access.commandAccess.shouldBlockControlCommand).toBe(false);
   });
 });
 

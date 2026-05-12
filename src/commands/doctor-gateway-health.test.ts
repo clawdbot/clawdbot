@@ -92,7 +92,9 @@ describe("checkGatewayHealth", () => {
     ).resolves.toEqual({ healthOk: false });
 
     expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(String(runtime.error.mock.calls[0]?.[0])).toContain("gateway timeout after 3000ms");
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("gateway timeout after 3000ms"),
+    );
   });
 });
 

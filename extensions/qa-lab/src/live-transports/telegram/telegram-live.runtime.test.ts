@@ -28,8 +28,10 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
 
 function requireScenario<T extends { id: string }>(scenarios: T[], id: string): T {
   const scenario = scenarios.find((candidate) => candidate.id === id);
-  expect(scenario).toBeDefined();
-  return scenario as T;
+  if (!scenario) {
+    throw new Error(`Expected scenario ${id}`);
+  }
+  return scenario;
 }
 
 describe("telegram live qa runtime", () => {
@@ -411,11 +413,6 @@ describe("telegram live qa runtime", () => {
         .find((scenario) => scenario.id === "telegram-mentioned-message-reply")
         ?.buildRun("sut_bot").steps[0].replyToLatestSutMessage,
     ).toBe(true);
-    expect(
-      scenarios
-        .find((scenario) => scenario.id === "telegram-reply-chain-exact-marker")
-        ?.buildRun("sut_bot").steps[0],
-    ).toBeDefined();
     const replyChainStep = requireScenario(scenarios, "telegram-reply-chain-exact-marker").buildRun(
       "sut_bot",
     ).steps[0];

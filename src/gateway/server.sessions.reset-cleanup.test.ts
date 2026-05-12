@@ -196,7 +196,9 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
       }
     | undefined;
   expect(closeSessionParams?.allowBackendUnavailable).toBe(true);
-  expect(closeSessionParams?.cfg).toBeTruthy();
+  if (!closeSessionParams?.cfg) {
+    throw new Error("expected closeSession config");
+  }
   expect(closeSessionParams?.discardPersistentState).toBe(true);
   expect(closeSessionParams?.requireAcpSession).toBe(false);
   expect(closeSessionParams?.reason).toBe("session-reset");

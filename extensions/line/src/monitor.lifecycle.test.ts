@@ -51,7 +51,7 @@ type WebhookRegistration = {
 };
 
 function requireWebhookRegistration(): WebhookRegistration {
-  const registration = registerWebhookTargetWithPluginRouteMock.mock.calls[0]?.[0] as
+  const registration = registerWebhookTargetWithPluginRouteMock.mock.calls.at(0)?.[0] as
     | WebhookRegistration
     | undefined;
   if (!registration) {

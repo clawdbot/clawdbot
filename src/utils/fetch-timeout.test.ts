@@ -11,11 +11,25 @@ vi.mock("../logging/subsystem.js", () => ({
 
 import { buildTimeoutAbortSignal } from "./fetch-timeout.js";
 
-function requireWarnRecord(callIndex: number): Record<string, unknown> {
-  const record = warn.mock.calls[callIndex]?.[1] as Record<string, unknown> | undefined;
-  if (!record) {
-    throw new Error(`missing warning record ${callIndex}`);
+function requireWarnCall(callIndex: number): [string, Record<string, unknown>] {
+  const call = warn.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`missing warning call ${callIndex}`);
   }
+  const [message, record] = call;
+  if (typeof message !== "string" || !record || typeof record !== "object") {
+    throw new Error(`invalid warning call ${callIndex}`);
+  }
+  return [message, record as Record<string, unknown>];
+}
+
+function requireWarnMessage(callIndex: number): string {
+  const [message] = requireWarnCall(callIndex);
+  return message;
+}
+
+function requireWarnRecord(callIndex: number): Record<string, unknown> {
+  const [, record] = requireWarnCall(callIndex);
   return record;
 }
 
@@ -42,7 +56,7 @@ describe("buildTimeoutAbortSignal", () => {
     expect((signal?.reason as Error | undefined)?.name).toBe("TimeoutError");
     expect((signal?.reason as Error | undefined)?.message).toBe("request timed out");
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toBe("fetch timeout reached; aborting operation");
+    expect(requireWarnMessage(0)).toBe("fetch timeout reached; aborting operation");
     const record = requireWarnRecord(0);
     expect(record.timeoutMs).toBe(25);
     expect(record.operation).toBe("unit-test");
@@ -102,7 +116,7 @@ describe("buildTimeoutAbortSignal", () => {
     vi.setSystemTime(2_000);
     await vi.advanceTimersByTimeAsync(25);
 
-    expect(warn.mock.calls[0]?.[0]).toBe("fetch timeout reached; aborting operation");
+    expect(requireWarnMessage(0)).toBe("fetch timeout reached; aborting operation");
     const record = requireWarnRecord(0);
     expect(record.timerDelayMs).toBe(2000);
     expect(record.eventLoopDelayHint).toBe("timer delayed 2000ms, likely event-loop starvation");
@@ -122,7 +136,7 @@ describe("buildTimeoutAbortSignal", () => {
 
     await vi.advanceTimersByTimeAsync(25);
 
-    expect(warn.mock.calls[0]?.[0]).toBe("fetch timeout reached; aborting operation");
+    expect(requireWarnMessage(0)).toBe("fetch timeout reached; aborting operation");
     expect(requireWarnRecord(0).url).toBe("/api/responses");
 
     cleanup();
@@ -154,7 +168,7 @@ describe("buildTimeoutAbortSignal", () => {
 
     expect(signal?.aborted).toBe(true);
     expect(warn).toHaveBeenCalledTimes(1);
-    const [, record] = warn.mock.calls[0] as [string, Record<string, unknown>];
+    const record = requireWarnRecord(0);
     expect(record).not.toHaveProperty("operation");
     expect(record).not.toHaveProperty("url");
     expect(record.consoleMessage).toBe("fetch timeout after 25ms (elapsed 25ms)");

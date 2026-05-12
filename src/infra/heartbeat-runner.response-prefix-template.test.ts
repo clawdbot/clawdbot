@@ -51,6 +51,14 @@ describe("runHeartbeatOnce responsePrefix templates", () => {
     });
   }
 
+  function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
+    const call = mock.mock.calls.at(0);
+    if (!call) {
+      throw new Error(`expected ${label} call`);
+    }
+    return call;
+  }
+
   async function runTemplatedHeartbeat(params: { responsePrefix: string; replyText: string }) {
     return withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createTelegramHeartbeatConfig({
@@ -93,11 +101,10 @@ describe("runHeartbeatOnce responsePrefix templates", () => {
     });
 
     expect(sendTelegram).toHaveBeenCalledTimes(1);
-    expect(sendTelegram).toHaveBeenCalledWith(
-      TELEGRAM_GROUP,
-      "[openai-codex/gpt-5.4|think:high] Heartbeat alert",
-      expect.any(Object),
-    );
+    const [target, message, options] = requireFirstMockCall(sendTelegram, "telegram send");
+    expect(target).toBe(TELEGRAM_GROUP);
+    expect(message).toBe("[openai-codex/gpt-5.4|think:high] Heartbeat alert");
+    expect(typeof options).toBe("object");
   });
 
   it("uses the resolved responsePrefix when suppressing prefixed HEARTBEAT_OK replies", async () => {

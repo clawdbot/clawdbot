@@ -131,7 +131,7 @@ describe("sendExecApprovalFollowupResult", () => {
       { sendExecApprovalFollowup, logWarn },
     );
 
-    const call = sendExecApprovalFollowup.mock.calls[0]?.[0] as
+    const call = sendExecApprovalFollowup.mock.calls.at(0)?.[0] as
       | {
           internalRuntimeHandoffId?: string;
           idempotencyKey?: string;
@@ -186,7 +186,7 @@ describe("sendExecApprovalFollowupResult", () => {
       { sendExecApprovalFollowup, logWarn },
     );
 
-    const call = sendExecApprovalFollowup.mock.calls[0]?.[0] as
+    const call = sendExecApprovalFollowup.mock.calls.at(0)?.[0] as
       | {
           internalRuntimeHandoffId?: string;
           idempotencyKey?: string;

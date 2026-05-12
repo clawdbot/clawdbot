@@ -7,8 +7,13 @@ type DraftSendFn = NonNullable<DraftStreamParams["send"]>;
 type DraftEditFn = NonNullable<DraftStreamParams["edit"]>;
 type DraftRemoveFn = NonNullable<DraftStreamParams["remove"]>;
 type DraftWarnFn = NonNullable<DraftStreamParams["warn"]>;
+type MockCalls<TArgs extends readonly unknown[]> = { mock: { calls: TArgs[] } };
 
 const TEST_CFG = {};
+
+function mockCalls<TArgs extends readonly unknown[]>(fn: unknown): TArgs[] {
+  return (fn as MockCalls<TArgs>).mock.calls;
+}
 
 function slackDraftSendResult(messageId: string, channelId = "C123") {
   return {
@@ -75,17 +80,16 @@ describe("createSlackDraftStream", () => {
     stream.update({ text: "updated fallback", blocks: [...blocks] });
     await stream.flush();
 
-    expect(send).toHaveBeenCalledWith(
-      "channel:C123",
-      "fallback",
-      expect.objectContaining({ blocks: [...blocks] }),
-    );
-    expect(edit).toHaveBeenCalledWith(
-      "C123",
-      "111.222",
-      "updated fallback",
-      expect.objectContaining({ blocks: [...blocks] }),
-    );
+    const sendCall = mockCalls<Parameters<DraftSendFn>>(send)[0];
+    expect(sendCall?.[0]).toBe("channel:C123");
+    expect(sendCall?.[1]).toBe("fallback");
+    expect((sendCall?.[2] as { blocks?: unknown } | undefined)?.blocks).toEqual([...blocks]);
+
+    const editCall = mockCalls<Parameters<DraftEditFn>>(edit)[0];
+    expect(editCall?.[0]).toBe("C123");
+    expect(editCall?.[1]).toBe("111.222");
+    expect(editCall?.[2]).toBe("updated fallback");
+    expect((editCall?.[3] as { blocks?: unknown } | undefined)?.blocks).toEqual([...blocks]);
   });
 
   it("forwards identity to the initial send call", async () => {
@@ -105,11 +109,10 @@ describe("createSlackDraftStream", () => {
     stream.update("hello");
     await stream.flush();
 
-    expect(send).toHaveBeenCalledWith(
-      "channel:C123",
-      "hello",
-      expect.objectContaining({ identity }),
-    );
+    const sendCall = mockCalls<Parameters<DraftSendFn>>(send)[0];
+    expect(sendCall?.[0]).toBe("channel:C123");
+    expect(sendCall?.[1]).toBe("hello");
+    expect((sendCall?.[2] as { identity?: unknown } | undefined)?.identity).toEqual(identity);
   });
 
   it("does not send duplicate text", async () => {
@@ -163,13 +166,10 @@ describe("createSlackDraftStream", () => {
     await stream.flush();
 
     expect(send).toHaveBeenCalledTimes(1);
-    expect(send).toHaveBeenCalledWith(
-      "channel:C123",
-      text,
-      expect.objectContaining({
-        token: "xoxb-test",
-      }),
-    );
+    const sendCall = mockCalls<Parameters<DraftSendFn>>(send)[0];
+    expect(sendCall?.[0]).toBe("channel:C123");
+    expect(sendCall?.[1]).toBe(text);
+    expect((sendCall?.[2] as { token?: string } | undefined)?.token).toBe("xoxb-test");
     expect(warn).not.toHaveBeenCalled();
   });
 

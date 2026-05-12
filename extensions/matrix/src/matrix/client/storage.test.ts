@@ -104,6 +104,24 @@ describe("matrix client storage paths", () => {
     } as NodeJS.ProcessEnv;
   }
 
+  function expectFallbackMigrationSnapshot(env: NodeJS.ProcessEnv): void {
+    expect(maybeCreateMatrixMigrationSnapshotMock).toHaveBeenCalledTimes(1);
+    const [params] = maybeCreateMatrixMigrationSnapshotMock.mock.calls.at(0) ?? [];
+    expect(params).toEqual({
+      env,
+      log: {
+        info: (params as { log?: { info?: unknown } })?.log?.info,
+        warn: (params as { log?: { warn?: unknown } })?.log?.warn,
+        error: (params as { log?: { error?: unknown } })?.log?.error,
+      },
+      trigger: "matrix-client-fallback",
+    });
+    const log = (params as { log?: { info?: unknown; warn?: unknown; error?: unknown } })?.log;
+    expect(typeof log?.info).toBe("function");
+    expect(typeof log?.warn).toBe("function");
+    expect(typeof log?.error).toBe("function");
+  }
+
   function resolveDefaultStoragePaths(
     overrides: Partial<{
       homeserver: string;
@@ -343,12 +361,7 @@ describe("matrix client storage paths", () => {
       env,
     });
 
-    expect(maybeCreateMatrixMigrationSnapshotMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env,
-        trigger: "matrix-client-fallback",
-      }),
-    );
+    expectFallbackMigrationSnapshot(env);
     expect(fs.existsSync(path.join(legacyRoot, "bot-storage.json"))).toBe(false);
     expect(fs.readFileSync(storagePaths.storagePath, "utf8")).toBe('{"legacy":true}');
     expect(fs.existsSync(storagePaths.cryptoPath)).toBe(true);
@@ -367,12 +380,7 @@ describe("matrix client storage paths", () => {
       env,
     });
 
-    expect(maybeCreateMatrixMigrationSnapshotMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env,
-        trigger: "matrix-client-fallback",
-      }),
-    );
+    expectFallbackMigrationSnapshot(env);
     expect(fs.readFileSync(storagePaths.storagePath, "utf8")).toBe('{"new":true}');
     expect(fs.existsSync(path.join(legacyRoot, "crypto"))).toBe(false);
     expect(fs.existsSync(storagePaths.cryptoPath)).toBe(true);

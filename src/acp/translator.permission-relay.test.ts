@@ -139,15 +139,30 @@ function approvalResolveCalls(request: ReturnType<typeof vi.fn>) {
   return request.mock.calls.filter(([method]) => method === "exec.approval.resolve");
 }
 
+function hasApprovalRelay(agent: AcpGatewayAgent, approvalId: string): boolean {
+  const relayMap = (
+    agent as unknown as {
+      approvalRelays: Map<string, unknown>;
+    }
+  ).approvalRelays;
+  return relayMap.has(approvalId);
+}
+
 function requireRecord(value: unknown): Record<string, unknown> {
-  expect(value).toBeTruthy();
+  if (!value) {
+    throw new Error("expected record");
+  }
   expect(typeof value).toBe("object");
   expect(Array.isArray(value)).toBe(false);
   return value as Record<string, unknown>;
 }
 
 function firstCallArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  return requireRecord(mock.mock.calls[0]?.[0]);
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected mock call");
+  }
+  return requireRecord(call[0]);
 }
 
 function requestPermissionPayload(mock: ReturnType<typeof vi.fn>): {
@@ -319,7 +334,9 @@ describe("ACP translator permission relay", () => {
       expect(harness.requestPermission).toHaveBeenCalledTimes(1);
       expect(resolveApproval).toHaveBeenCalledTimes(1);
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => {
+      expect(hasApprovalRelay(harness.agent, "approval-retry")).toBe(false);
+    });
 
     await harness.agent.handleGatewayEvent(event);
 

@@ -179,7 +179,7 @@ describe("createEmbeddedRunAuthController", () => {
 
     await controller.initializeAuthProfile();
 
-    const apiKeyParams = mocks.getApiKeyForModel.mock.calls[0]?.[0] as
+    const apiKeyParams = mocks.getApiKeyForModel.mock.calls.at(0)?.[0] as
       | { agentDir?: string; workspaceDir?: string }
       | undefined;
     expect(apiKeyParams?.agentDir).toBe("/tmp/agent");

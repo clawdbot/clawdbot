@@ -250,15 +250,14 @@ describe("gateway silent scope-upgrade reconnect", () => {
     });
 
     try {
-      await expect(
-        callGateway({
-          url: `ws://127.0.0.1:${started.port}`,
-          token: "secret",
-          method: "health",
-          scopes: ["operator.admin"],
-          timeoutMs: 2_000,
-        }),
-      ).resolves.toMatchObject({ ok: true });
+      const health = await callGateway({
+        url: `ws://127.0.0.1:${started.port}`,
+        token: "secret",
+        method: "health",
+        scopes: ["operator.admin"],
+        timeoutMs: 2_000,
+      });
+      expect(health.ok).toBe(true);
 
       const paired = await getPairedDevice(identity.deviceId);
       expect(paired?.approvedScopes).toEqual(["operator.read"]);

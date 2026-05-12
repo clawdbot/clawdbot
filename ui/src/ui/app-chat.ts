@@ -79,7 +79,12 @@ export type ChatSendOptions = {
   restoreDraft?: boolean;
 };
 
+export type ChatAbortOptions = {
+  preserveDraft?: boolean;
+};
+
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
+export const CHAT_SESSIONS_REFRESH_LIMIT = 100;
 export {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -151,20 +156,25 @@ function isBtwCommand(text: string) {
   return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
 }
 
-export async function handleAbortChat(host: ChatHost) {
+export async function handleAbortChat(host: ChatHost, opts?: ChatAbortOptions) {
   const activeRunId = host.chatRunId;
-  // If disconnected but this session is abortable, queue the abort for when we reconnect.
-  if (!host.connected && hasAbortableSessionRun(host)) {
+  const clearDraft = () => {
+    if (opts?.preserveDraft) {
+      return;
+    }
     host.chatMessage = "";
     resetChatInputHistoryNavigation(host);
+  };
+  // If disconnected but this session is abortable, queue the abort for when we reconnect.
+  if (!host.connected && hasAbortableSessionRun(host)) {
+    clearDraft();
     host.pendingAbort = { runId: activeRunId, sessionKey: host.sessionKey };
     return;
   }
   if (!host.connected) {
     return;
   }
-  host.chatMessage = "";
-  resetChatInputHistoryNavigation(host);
+  clearDraft();
   await abortChatRun(host as unknown as ChatState);
 }
 
@@ -759,8 +769,8 @@ export async function refreshChat(
   });
   const secondaryRefresh = Promise.allSettled([
     loadSessions(host as unknown as SessionsState, {
-      activeMinutes: 0,
-      limit: 0,
+      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+      limit: CHAT_SESSIONS_REFRESH_LIMIT,
       includeGlobal: true,
       includeUnknown: true,
       agentId: resolveAgentIdForSession(host) ?? undefined,

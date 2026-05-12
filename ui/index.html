@@ -62,9 +62,260 @@
         } catch (e) {}
       })();
     </script>
+    <style>
+      body.openclaw-mount-fallback-active {
+        margin: 0;
+        min-width: 320px;
+        color: #eef4f8;
+        background: #101418;
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+      }
+
+      body.openclaw-mount-fallback-active openclaw-app {
+        display: none;
+      }
+
+      .mount-fallback {
+        box-sizing: border-box;
+        min-height: 100vh;
+        padding: 24px;
+        place-items: center;
+      }
+
+      .mount-fallback:not([hidden]) {
+        display: grid;
+      }
+
+      .mount-fallback__panel {
+        box-sizing: border-box;
+        width: min(100%, 640px);
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        border-radius: 8px;
+        background: #151b21;
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.36);
+        padding: 28px;
+      }
+
+      .mount-fallback__eyebrow {
+        margin: 0 0 10px;
+        color: #9fb0bd;
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .mount-fallback__panel h1 {
+        margin: 0;
+        color: inherit;
+        font-size: clamp(1.5rem, 3vw, 2rem);
+        line-height: 1.15;
+      }
+
+      .mount-fallback__panel p {
+        margin: 16px 0 0;
+        color: #c8d3da;
+        font-size: 1rem;
+        line-height: 1.6;
+      }
+
+      .mount-fallback__panel ul {
+        margin: 18px 0 0;
+        padding-left: 1.2rem;
+        color: #c8d3da;
+        line-height: 1.6;
+      }
+
+      .mount-fallback__panel a {
+        color: #8bd3ff;
+        text-decoration-thickness: 0.08em;
+        text-underline-offset: 0.18em;
+      }
+
+      .mount-fallback__actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 24px;
+      }
+
+      .mount-fallback__button {
+        min-height: 42px;
+        border: 1px solid rgba(148, 163, 184, 0.36);
+        border-radius: 6px;
+        padding: 0 16px;
+        color: inherit;
+        background: transparent;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .mount-fallback__button--primary {
+        border-color: #66c2ff;
+        color: #061019;
+        background: #8bd3ff;
+      }
+
+      .mount-fallback__panel:focus {
+        outline: none;
+      }
+
+      .mount-fallback__button:focus-visible,
+      .mount-fallback__panel a:focus-visible {
+        outline: 3px solid #f9c74f;
+        outline-offset: 3px;
+      }
+
+      html[data-theme-mode="light"] body.openclaw-mount-fallback-active {
+        color: #151b21;
+        background: #f5f7fa;
+      }
+
+      html[data-theme-mode="light"] .mount-fallback__panel {
+        border-color: rgba(71, 85, 105, 0.22);
+        background: #ffffff;
+        box-shadow: 0 24px 80px rgba(15, 23, 42, 0.14);
+      }
+
+      html[data-theme-mode="light"] .mount-fallback__eyebrow,
+      html[data-theme-mode="light"] .mount-fallback__panel p,
+      html[data-theme-mode="light"] .mount-fallback__panel ul {
+        color: #4b5963;
+      }
+
+      html[data-theme-mode="light"] .mount-fallback__panel a {
+        color: #0369a1;
+      }
+    </style>
   </head>
   <body>
     <openclaw-app></openclaw-app>
+    <section
+      id="openclaw-mount-fallback"
+      class="mount-fallback"
+      data-openclaw-mount-timeout-ms="12000"
+      role="alert"
+      aria-labelledby="openclaw-mount-fallback-title"
+      hidden
+    >
+      <div class="mount-fallback__panel" tabindex="-1">
+        <p class="mount-fallback__eyebrow">OpenClaw Control UI</p>
+        <h1 id="openclaw-mount-fallback-title">Control UI did not start</h1>
+        <p>
+          The browser loaded the static page, but the app bundle did not register the
+          <code>openclaw-app</code> web component. A browser extension or early content script may
+          be blocking module execution.
+        </p>
+        <ul>
+          <li>Try again in a clean browser profile or private window.</li>
+          <li>Disable extensions that run on all pages, then reload this dashboard.</li>
+          <li>
+            See
+            <a
+              href="https://docs.openclaw.ai/web/control-ui#blank-control-ui-page"
+              target="_blank"
+              rel="noopener noreferrer"
+              >Control UI troubleshooting</a
+            >.
+          </li>
+        </ul>
+        <div class="mount-fallback__actions">
+          <button
+            type="button"
+            id="openclaw-mount-retry"
+            class="mount-fallback__button mount-fallback__button--primary"
+          >
+            Try again
+          </button>
+          <button type="button" id="openclaw-mount-wait" class="mount-fallback__button">
+            Keep waiting
+          </button>
+        </div>
+      </div>
+    </section>
+    <script>
+      (function () {
+        var tagName = "openclaw-app";
+        var app = document.querySelector(tagName);
+        var fallback = document.getElementById("openclaw-mount-fallback");
+        if (!app || !fallback) return;
+
+        var panel = fallback.querySelector(".mount-fallback__panel");
+        var retry = document.getElementById("openclaw-mount-retry");
+        var wait = document.getElementById("openclaw-mount-wait");
+        var rawDelay = Number(fallback.getAttribute("data-openclaw-mount-timeout-ms"));
+        var delay = Number.isFinite(rawDelay) && rawDelay > 0 ? rawDelay : 12000;
+        var timer;
+
+        function appMounted() {
+          try {
+            return Boolean(
+              app.isConnected &&
+              window.customElements &&
+              typeof window.customElements.get === "function" &&
+              window.customElements.get(tagName),
+            );
+          } catch (e) {
+            return false;
+          }
+        }
+
+        function hideFallback() {
+          fallback.hidden = true;
+          document.body.classList.remove("openclaw-mount-fallback-active");
+        }
+
+        function showFallback() {
+          if (appMounted()) return;
+          fallback.hidden = false;
+          document.body.classList.add("openclaw-mount-fallback-active");
+          if (panel && typeof panel.focus === "function") {
+            try {
+              panel.focus({ preventScroll: true });
+            } catch (e) {
+              panel.focus();
+            }
+          }
+        }
+
+        function armFallbackTimer() {
+          window.clearTimeout(timer);
+          timer = window.setTimeout(showFallback, delay);
+        }
+
+        armFallbackTimer();
+
+        if (window.customElements && typeof window.customElements.whenDefined === "function") {
+          window.customElements.whenDefined(tagName).then(
+            function () {
+              window.clearTimeout(timer);
+              hideFallback();
+            },
+            function () {},
+          );
+        }
+
+        if (retry) {
+          retry.addEventListener("click", function () {
+            window.location.reload();
+          });
+        }
+        if (wait) {
+          wait.addEventListener("click", function () {
+            hideFallback();
+            armFallbackTimer();
+          });
+        }
+      })();
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

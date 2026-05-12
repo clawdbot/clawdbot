@@ -63,7 +63,7 @@ function buildModelPricingOverviewValue(params: {
     return null;
   }
   const detail = health.detail ? ` · ${health.detail}` : "";
-  return params.warn(`degraded${detail}`);
+  return params.warn(`warning · optional pricing refresh degraded${detail}`);
 }
 
 export function buildStatusCommandOverviewRows(

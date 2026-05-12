@@ -69,13 +69,7 @@ function buildAccount(): ResolvedGoogleChatAccount {
 }
 
 async function waitForGoogleChatMonitorStarted() {
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    if (hoisted.startGoogleChatMonitor.mock.calls.length === 1) {
-      return;
-    }
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-  expect(hoisted.startGoogleChatMonitor).toHaveBeenCalledOnce();
+  await vi.waitFor(() => expect(hoisted.startGoogleChatMonitor).toHaveBeenCalledOnce());
 }
 
 describe("googlechat setup", () => {

@@ -1004,7 +1004,8 @@ describe("Windows rebuildShellCommandFromSource", () => {
       platform: "win32",
     });
     expect(result.ok).toBe(true);
-    expect(result.command).toEqual(expect.stringMatching(/\S/));
+    expect(typeof result.command).toBe("string");
+    expect(result.command?.trim().length).toBeGreaterThan(0);
   });
 
   it("rejects Windows commands with unsafe tokens", () => {

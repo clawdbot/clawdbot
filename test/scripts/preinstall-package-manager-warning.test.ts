@@ -6,7 +6,11 @@ import {
 } from "../../scripts/preinstall-package-manager-warning.mjs";
 
 function requireFirstWarning(warn: ReturnType<typeof vi.fn>): unknown {
-  const [message] = warn.mock.calls[0] ?? [];
+  const [call] = warn.mock.calls;
+  if (!call) {
+    throw new Error("expected package manager warning");
+  }
+  const [message] = call;
   if (message === undefined) {
     throw new Error("expected package manager warning");
   }

@@ -297,7 +297,9 @@ function expectRecordFields(
   record: unknown,
   expected: Record<string, unknown>,
 ): Record<string, unknown> {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -307,14 +309,18 @@ function expectRecordFields(
 
 function mockCallArg(mock: { mock: { calls: Array<Array<unknown>> } }, callIndex = 0): unknown {
   const call = mock.mock.calls[callIndex];
-  expect(call).toBeDefined();
-  return call?.[0];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call[0];
 }
 
 function lastMockCallArg(mock: { mock: { calls: Array<Array<unknown>> } }): unknown {
   const call = mock.mock.calls.at(-1);
-  expect(call).toBeDefined();
-  return call?.[0];
+  if (!call) {
+    throw new Error("Expected last mock call");
+  }
+  return call[0];
 }
 
 function expectMockCallFields(
@@ -327,8 +333,10 @@ function expectMockCallFields(
 
 function expectNthSystemEventFields(callIndex: number, expected: Record<string, unknown>): void {
   const call = mocks.enqueueSystemEvent.mock.calls[callIndex];
-  expect(call).toBeDefined();
-  expectRecordFields(call?.[1], expected);
+  if (!call) {
+    throw new Error(`Expected enqueueSystemEvent call at index ${callIndex}`);
+  }
+  expectRecordFields(call[1], expected);
 }
 
 function expectContinuationDispatchFields(
@@ -463,13 +471,18 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.failDelivery).not.toHaveBeenCalled();
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
-    expect(mocks.logWarn).toHaveBeenCalledWith(expect.stringContaining("retrying in 1000ms"), {
-      channel: "whatsapp",
-      to: "+15550002",
-      sessionKey: "agent:main:main",
-      attempt: 1,
-      maxAttempts: 45,
-    });
+    expect(mocks.logWarn.mock.calls).toEqual([
+      [
+        "restart summary: outbound delivery failed; retrying in 1000ms: Error: transport not ready",
+        {
+          channel: "whatsapp",
+          to: "+15550002",
+          sessionKey: "agent:main:main",
+          attempt: 1,
+          maxAttempts: 45,
+        },
+      ],
+    ]);
   });
 
   it("keeps one queued restart notice when outbound retries are exhausted", async () => {
@@ -479,9 +492,7 @@ describe("scheduleRestartSentinelWake", () => {
     const wakePromise = scheduleRestartSentinelWake({ deps: {} as never });
     await Promise.resolve();
     await Promise.resolve();
-    for (let attempt = 1; attempt < 45; attempt += 1) {
-      await vi.advanceTimersByTimeAsync(1_000);
-    }
+    await vi.advanceTimersByTimeAsync(44_000);
     await wakePromise;
 
     expect(mocks.enqueueDelivery).toHaveBeenCalledTimes(1);
@@ -512,9 +523,7 @@ describe("scheduleRestartSentinelWake", () => {
     const wakePromise = scheduleRestartSentinelWake({ deps: {} as never });
     await Promise.resolve();
     await Promise.resolve();
-    for (let attempt = 1; attempt < 45; attempt += 1) {
-      await vi.advanceTimersByTimeAsync(1_000);
-    }
+    await vi.advanceTimersByTimeAsync(44_000);
     await wakePromise;
 
     expect(mocks.failDelivery).toHaveBeenCalledWith("queue-1", "transport still not ready");
@@ -985,9 +994,9 @@ describe("scheduleRestartSentinelWake", () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.stringContaining("retry failed for entry session-delivery-1: Error: dispatch failed"),
-    );
+    expect(mocks.logWarn.mock.calls).toEqual([
+      ["restart continuation: retry failed for entry session-delivery-1: Error: dispatch failed"],
+    ]);
   });
 
   it("logs and continues when continuation dispatch reports a delivery error", async () => {
@@ -1014,9 +1023,15 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.stringContaining("retry failed for entry session-delivery-1: Error: route failed"),
-    );
+    expect(mocks.logWarn.mock.calls).toEqual([
+      [
+        "restart continuation dispatch failed during final: Error: route failed",
+        {
+          sessionKey: "agent:main:main",
+        },
+      ],
+      ["restart continuation: retry failed for entry session-delivery-1: Error: route failed"],
+    ]);
   });
 
   it("retries restart continuations when the previous run is still shutting down", async () => {
@@ -1071,10 +1086,10 @@ describe("scheduleRestartSentinelWake", () => {
     expectRecordFields(lastMockCallArg(mocks.deliverOutboundPayloads), {
       payloads: [{ text: "done" }],
     });
-    expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "retry failed for entry session-delivery-1: Error: restart continuation deferred because previous run is still shutting down",
-      ),
+    expect(mocks.logWarn.mock.calls).toEqual(
+      Array.from({ length: 6 }, () => [
+        "restart continuation: retry failed for entry session-delivery-1: Error: restart continuation deferred because previous run is still shutting down",
+      ]),
     );
     expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
   });
@@ -1200,10 +1215,15 @@ describe("scheduleRestartSentinelWake", () => {
       sessionKey: "agent:main:main",
     });
     expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
-    expect(mocks.logWarn).toHaveBeenCalledWith(expect.stringContaining("continuation skipped"), {
-      sessionKey: "agent:main:main",
-      continuationKind: "agentTurn",
-    });
+    expect(mocks.logWarn.mock.calls).toEqual([
+      [
+        "restart summary: continuation skipped: restart sentinel sessionKey unavailable",
+        {
+          sessionKey: "agent:main:main",
+          continuationKind: "agentTurn",
+        },
+      ],
+    ]);
   });
   it("skips outbound restart notice when no canonical delivery context survives restart", async () => {
     mocks.readRestartSentinel.mockResolvedValue({

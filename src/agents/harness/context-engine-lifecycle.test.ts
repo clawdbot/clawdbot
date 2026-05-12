@@ -64,7 +64,7 @@ describe("harness context engine lifecycle", () => {
       modelId: "gpt-test",
     });
 
-    const assembleParams = assemble.mock.calls[0]?.[0];
+    const assembleParams = assemble.mock.calls.at(0)?.[0];
     expect(assembleParams?.messages).toEqual([visibleUser, visibleAssistant]);
   });
 

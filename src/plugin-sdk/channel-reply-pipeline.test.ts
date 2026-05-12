@@ -56,12 +56,11 @@ describe("createChannelReplyPipeline", () => {
       model: "gpt-5.5",
       thinkLevel: "high",
     });
-    expect(pipeline.responsePrefixContextProvider()).toMatchObject({
-      model: "gpt-5.5",
-      modelFull: "openai/gpt-5.5",
-      provider: "openai",
-      thinkingLevel: "high",
-    });
+    const prefixContext = pipeline.responsePrefixContextProvider();
+    expect(prefixContext.model).toBe("gpt-5.5");
+    expect(prefixContext.modelFull).toBe("openai/gpt-5.5");
+    expect(prefixContext.provider).toBe("openai");
+    expect(prefixContext.thinkingLevel).toBe("high");
 
     if (!expectTypingCallbacks) {
       expect(pipeline.typingCallbacks).toBeUndefined();

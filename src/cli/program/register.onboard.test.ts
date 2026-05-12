@@ -65,7 +65,6 @@ describe("registerOnboardCommand", () => {
 
   function setupWizardOptions(callIndex = 0): Record<string, unknown> {
     const call = setupWizardCommandMock.mock.calls[callIndex];
-    expect(call).toBeDefined();
     if (!call) {
       throw new Error(`expected setup wizard call ${callIndex}`);
     }

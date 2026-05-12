@@ -101,9 +101,10 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
 
     expect(second.artifactCount).toBe(0);
     expect(second.removedCount).toBe(1);
-    await expect(fs.stat(path.join(vaultDir, firstPagePath))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expect(fs.stat(path.join(vaultDir, firstPagePath))).rejects.toHaveProperty(
+      "code",
+      "ENOENT",
+    );
   });
 
   it("caps composed unsafe-local filenames to the filesystem component limit", async () => {

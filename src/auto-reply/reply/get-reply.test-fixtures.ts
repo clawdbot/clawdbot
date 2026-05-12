@@ -158,20 +158,18 @@ export function expectResolvedTelegramTimezone(
   resolveReplyDirectives: Mock,
   userTimezone = "America/New_York",
 ): void {
-  expect(resolveReplyDirectives).toHaveBeenCalledWith(
-    expect.objectContaining({
-      cfg: expect.objectContaining({
-        channels: expect.objectContaining({
-          telegram: expect.objectContaining({
-            botToken: "resolved-telegram-token",
-          }),
-        }),
-        agents: expect.objectContaining({
-          defaults: expect.objectContaining({
-            userTimezone,
-          }),
-        }),
-      }),
-    }),
-  );
+  expect(resolveReplyDirectives).toHaveBeenCalledTimes(1);
+  const call = resolveReplyDirectives.mock.calls[0]?.[0] as
+    | {
+        cfg?: {
+          channels?: { telegram?: { botToken?: unknown } };
+          agents?: { defaults?: { userTimezone?: unknown } };
+        };
+      }
+    | undefined;
+  if (!call) {
+    throw new Error("expected resolveReplyDirectives call");
+  }
+  expect(call.cfg?.channels?.telegram?.botToken).toBe("resolved-telegram-token");
+  expect(call.cfg?.agents?.defaults?.userTimezone).toBe(userTimezone);
 }

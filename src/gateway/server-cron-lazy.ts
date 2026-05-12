@@ -102,6 +102,9 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
       }
       return loaded.state.cron.getJob(id);
     },
+    async readJob(id) {
+      return await (await load()).state.cron.readJob(id);
+    },
     getDefaultAgentId() {
       if (!loaded) {
         return undefined;

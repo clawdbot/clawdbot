@@ -38,6 +38,15 @@ function installXaiWebSearchFetch() {
   return mockFetch;
 }
 
+function firstFetchUrl(mockFetch: ReturnType<typeof installXaiWebSearchFetch>) {
+  const [call] = mockFetch.mock.calls;
+  if (!call) {
+    throw new Error("expected xai web search fetch call");
+  }
+  const [url] = call;
+  return String(url);
+}
+
 function expectCatalogEntry(
   modelId: string,
   expected: {
@@ -343,7 +352,7 @@ describe("xai web search config resolution", () => {
 
     await tool?.execute({ query: "OpenClaw Grok proxy test" });
 
-    expect(String(mockFetch.mock.calls[0]?.[0])).toBe("https://api.x.ai/proxy/v1/responses");
+    expect(firstFetchUrl(mockFetch)).toBe("https://api.x.ai/proxy/v1/responses");
   });
 
   it("normalizes deprecated grok 4.20 beta model ids to GA ids", () => {

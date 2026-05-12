@@ -1120,9 +1120,9 @@ describe("/model chat UX", () => {
 
     expect(resolveSessionAgentId).toHaveBeenCalledWith({
       sessionKey: "agent:main:dm:1",
-      config: expect.any(Object),
+      config: baseConfig(),
     });
-    expect(resolveAgentDir).toHaveBeenCalledWith(expect.any(Object), "target");
+    expect(resolveAgentDir).toHaveBeenCalledWith(baseConfig(), "target");
   });
 
   it("persists explicit auth profiles after @YYYYMMDD version suffixes in mixed-content messages", async () => {

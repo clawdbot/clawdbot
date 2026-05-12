@@ -61,11 +61,12 @@ describe("plugin-sdk provider-selection-runtime", () => {
       isProviderConfigured: ({ providerConfig }) => providerConfig.providerId === "second",
     });
 
-    expect(resolution).toMatchObject({
-      ok: true,
-      provider: providers[1],
-      providerConfig: { providerId: "second" },
-    });
+    expect(resolution.ok).toBe(true);
+    if (!resolution.ok) {
+      throw new Error("expected provider resolution to succeed");
+    }
+    expect(resolution.provider).toBe(providers[1]);
+    expect(resolution.providerConfig).toEqual({ providerId: "second" });
   });
 
   it("merges canonical and selected provider config", () => {

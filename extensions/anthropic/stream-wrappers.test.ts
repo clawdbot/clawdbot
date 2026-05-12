@@ -11,6 +11,9 @@ import {
 
 const CONTEXT_1M_BETA = "context-1m-2025-08-07";
 const OAUTH_BETA = "oauth-2025-04-20";
+const DEFAULT_BETA_HEADER =
+  "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14";
+const OAUTH_BETA_HEADER = `claude-code-20250219,${OAUTH_BETA},${DEFAULT_BETA_HEADER}`;
 
 function runWrapper(apiKey: string | undefined): Record<string, string> | undefined {
   const captured: { headers?: Record<string, string> } = {};
@@ -88,28 +91,26 @@ describe("anthropic stream wrappers", () => {
   it("strips context-1m for Claude CLI or legacy token auth and warns", () => {
     const warn = vi.spyOn(__testing.log, "warn").mockImplementation(() => undefined);
     const headers = runWrapper("sk-ant-oat01-123");
-    expect(headers?.["anthropic-beta"]).toEqual(expect.stringContaining(OAUTH_BETA));
-    expect(headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
+    expect(headers?.["anthropic-beta"]).toBe(OAUTH_BETA_HEADER);
     expect(warn).toHaveBeenCalledOnce();
   });
 
   it("keeps context-1m for API key auth", () => {
     const warn = vi.spyOn(__testing.log, "warn").mockImplementation(() => undefined);
     const headers = runWrapper("sk-ant-api-123");
-    expect(headers?.["anthropic-beta"]).toEqual(expect.stringContaining(CONTEXT_1M_BETA));
+    expect(headers?.["anthropic-beta"]).toBe(`${DEFAULT_BETA_HEADER},${CONTEXT_1M_BETA}`);
     expect(warn).not.toHaveBeenCalled();
   });
 
   it("skips service_tier for OAuth token in composed stream chain", () => {
     const captured = runComposedAnthropicProviderStream("sk-ant-oat01-oauth-token");
-    expect(captured.headers?.["anthropic-beta"]).toContain(OAUTH_BETA);
-    expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
+    expect(captured.headers?.["anthropic-beta"]).toBe(OAUTH_BETA_HEADER);
     expect(captured.payload?.service_tier).toBeUndefined();
   });
 
   it("composes the anthropic provider stream chain from extra params", () => {
     const captured = runComposedAnthropicProviderStream("sk-ant-api-123");
-    expect(captured.headers?.["anthropic-beta"]).toContain(CONTEXT_1M_BETA);
+    expect(captured.headers?.["anthropic-beta"]).toBe(`${DEFAULT_BETA_HEADER},${CONTEXT_1M_BETA}`);
     expect(captured.payload).toEqual({ service_tier: "auto" });
   });
 });

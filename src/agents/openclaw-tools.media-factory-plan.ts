@@ -8,6 +8,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "./tool-policy.js";
 import {
   hasSnapshotCapabilityAvailability,
   hasSnapshotProviderEnvAvailability,
@@ -82,6 +83,21 @@ export function mergeFactoryPolicyList(
   return merged.length > 0 ? Array.from(new Set(merged)) : undefined;
 }
 
+function mergeBuiltInFactoryAllowlist(...lists: Array<string[] | undefined>): string[] | undefined {
+  const allowlist = mergeFactoryPolicyList(...lists);
+  if (
+    !allowlist?.some(
+      (entry) => typeof entry === "string" && entry.trim() === DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+    )
+  ) {
+    return allowlist;
+  }
+  const withoutDefaultPluginMarker = allowlist.filter(
+    (entry) => typeof entry !== "string" || entry.trim() !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+  );
+  return Array.from(new Set(["*", ...withoutDefaultPluginMarker]));
+}
+
 export function resolveImageToolFactoryAvailable(params: {
   config?: OpenClawConfig;
   agentDir?: string;
@@ -153,7 +169,10 @@ export function resolveOptionalMediaToolFactoryPlan(params: {
   toolDenylist?: string[];
 }): OptionalMediaToolFactoryPlan {
   const defaults = params.config?.agents?.defaults;
-  const toolAllowlist = mergeFactoryPolicyList(params.config?.tools?.allow, params.toolAllowlist);
+  const toolAllowlist = mergeBuiltInFactoryAllowlist(
+    params.config?.tools?.allow,
+    params.toolAllowlist,
+  );
   const toolDenylist = mergeFactoryPolicyList(params.config?.tools?.deny, params.toolDenylist);
   const allowImageGenerate = isToolAllowedByFactoryPolicy({
     toolName: "image_generate",

@@ -44,6 +44,22 @@ const mockAccount: TwitchAccountConfig = {
   channel: "#testchannel",
 };
 
+function requireFirstTextPromptArgs(): {
+  message?: string;
+  initialValue?: string;
+  validate?: (value: string) => string | undefined;
+} {
+  const [call] = mockPromptText.mock.calls;
+  if (!call || typeof call[0] !== "object" || call[0] === null || Array.isArray(call[0])) {
+    throw new Error("expected Twitch text prompt args");
+  }
+  return call[0] as {
+    message?: string;
+    initialValue?: string;
+    validate?: (value: string) => string | undefined;
+  };
+}
+
 describe("setup surface helpers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -113,11 +129,11 @@ describe("setup surface helpers", () => {
       const result = await promptUsername(mockPrompter, null);
 
       expect(result).toBe("mybot");
-      const promptArgs = mockPromptText.mock.calls[0]?.[0];
-      expect(promptArgs?.message).toBe("Twitch bot username");
-      expect(promptArgs?.initialValue).toBe("");
-      expect(promptArgs?.validate?.("")).toBe("Required");
-      expect(promptArgs?.validate?.("mybot")).toBeUndefined();
+      const promptArgs = requireFirstTextPromptArgs();
+      expect(promptArgs.message).toBe("Twitch bot username");
+      expect(promptArgs.initialValue).toBe("");
+      expect(promptArgs.validate?.("")).toBe("Required");
+      expect(promptArgs.validate?.("mybot")).toBeUndefined();
     });
   });
 
@@ -128,11 +144,11 @@ describe("setup surface helpers", () => {
       const result = await promptClientId(mockPrompter, null);
 
       expect(result).toBe("abc123xyz");
-      const promptArgs = mockPromptText.mock.calls[0]?.[0];
-      expect(promptArgs?.message).toBe("Twitch Client ID");
-      expect(promptArgs?.initialValue).toBe("");
-      expect(promptArgs?.validate?.("")).toBe("Required");
-      expect(promptArgs?.validate?.("abc123xyz")).toBeUndefined();
+      const promptArgs = requireFirstTextPromptArgs();
+      expect(promptArgs.message).toBe("Twitch Client ID");
+      expect(promptArgs.initialValue).toBe("");
+      expect(promptArgs.validate?.("")).toBe("Required");
+      expect(promptArgs.validate?.("abc123xyz")).toBeUndefined();
     });
   });
 
@@ -142,7 +158,7 @@ describe("setup surface helpers", () => {
 
       await promptChannelName(mockPrompter, null);
 
-      const { validate } = mockPromptText.mock.calls[0]?.[0] ?? {};
+      const { validate } = requireFirstTextPromptArgs();
       expect(validate?.("")).toBe("Required");
       expect(validate?.("   ")).toBe("Required");
       expect(validate?.("#chan")).toBeUndefined();

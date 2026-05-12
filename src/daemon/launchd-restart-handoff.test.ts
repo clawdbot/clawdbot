@@ -13,6 +13,25 @@ vi.mock("node:child_process", async () => {
 
 import { scheduleDetachedLaunchdRestartHandoff } from "./launchd-restart-handoff.js";
 
+type SpawnCall = [string, string[], { env: Record<string, string | undefined> }];
+
+function requireSpawnCall(callIndex = 0): SpawnCall {
+  const call = spawnMock.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`expected spawn call ${callIndex}`);
+  }
+  const [command, args, options] = call;
+  if (
+    typeof command !== "string" ||
+    !Array.isArray(args) ||
+    !options ||
+    typeof options !== "object"
+  ) {
+    throw new Error(`expected spawn call ${callIndex} with command, args, and options`);
+  }
+  return [command, args as string[], options as SpawnCall[2]];
+}
+
 afterEach(() => {
   spawnMock.mockReset();
   unrefMock.mockReset();
@@ -35,7 +54,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
 
     expect(result).toEqual({ ok: true, pid: 4242 });
     expect(spawnMock).toHaveBeenCalledTimes(1);
-    const [, args] = spawnMock.mock.calls[0] as [string, string[]];
+    const [, args] = requireSpawnCall();
     expect(args[0]).toBe("-c");
     expect(args[2]).toBe("openclaw-launchd-restart-handoff");
     expect(args[6]).toBe("9876");
@@ -64,7 +83,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
       mode: "start-after-exit",
     });
 
-    const [, args] = spawnMock.mock.calls[0] as [string, string[]];
+    const [, args] = requireSpawnCall();
     expect(args[7]).toBe("ai.openclaw.gateway");
     expect(args[1]).toContain('if launchctl print "$service_target" >/dev/null 2>&1; then');
     expect(args[1]).toContain("reason=launchd-auto-reload");
@@ -89,11 +108,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
       mode: "kickstart",
     });
 
-    const [, args, options] = spawnMock.mock.calls[0] as [
-      string,
-      string[],
-      { env: Record<string, string | undefined> },
-    ];
+    const [, args, options] = requireSpawnCall();
     expect(args[1]).toContain("exec >>'/Users/test/.openclaw/logs/gateway-restart.log' 2>&1");
     expect(args[1]).not.toContain("/tmp/evil-bin");
     expect(args[1]).not.toContain("/tmp/evil.dylib");

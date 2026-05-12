@@ -205,19 +205,19 @@ describe("runReplyAgent media path normalization", () => {
       }),
     );
 
-    expect(result).toMatchObject({
-      mediaUrl: "/tmp/outbound-media/generated.png",
-      mediaUrls: ["/tmp/outbound-media/generated.png"],
-    });
-    expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledWith(
-      path.join("/tmp/workspace", "out", "generated.png"),
-      5 * 1024 * 1024,
-      expect.objectContaining({
-        mediaAccess: expect.objectContaining({
-          workspaceDir: "/tmp/workspace",
-        }),
-      }),
-    );
+    expect(Array.isArray(result)).toBe(false);
+    if (!result || Array.isArray(result)) {
+      throw new Error("expected single reply payload");
+    }
+    expect(result.mediaUrl).toBe("/tmp/outbound-media/generated.png");
+    expect(result.mediaUrls).toEqual(["/tmp/outbound-media/generated.png"]);
+    const outboundAttachmentCall = resolveOutboundAttachmentFromUrlMock.mock.calls[0];
+    expect(outboundAttachmentCall?.[0]).toBe(path.join("/tmp/workspace", "out", "generated.png"));
+    expect(outboundAttachmentCall?.[1]).toBe(5 * 1024 * 1024);
+    const outboundAttachmentOptions = outboundAttachmentCall?.[2] as
+      | { mediaAccess?: { workspaceDir?: unknown } }
+      | undefined;
+    expect(outboundAttachmentOptions?.mediaAccess?.workspaceDir).toBe("/tmp/workspace");
   });
 
   it("maps steer queue modes to Pi steering drain modes", async () => {

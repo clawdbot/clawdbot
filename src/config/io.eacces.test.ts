@@ -42,7 +42,7 @@ describe("config io EACCES handling", () => {
     expect(snapshot.issues[0].message).toContain("chown");
     expect(snapshot.issues[0].message).toContain(configPath);
     // Should also emit to the logger
-    expect(errors).toEqual(expect.arrayContaining([expect.stringContaining("chown")]));
+    expect(errors.some((message) => message.includes("chown"))).toBe(true);
   });
 
   it("includes configPath in the chown hint for the correct remediation command", async () => {

@@ -161,7 +161,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     expect(agentCall?.params?.to).toBe(`room:${boundRoom}`);
     expect(agentCall?.params?.threadId).toBe("$thread-root");
     expect(agentCall?.params?.deliver).toBe(true);
-    const registeredRun = hoisted.registerSubagentRunMock.mock.calls[0]?.[0] as
+    const registeredRun = hoisted.registerSubagentRunMock.mock.calls.at(0)?.[0] as
       | {
           requesterOrigin?: { channel?: string; accountId?: string; to?: string };
           expectsCompletionMessage?: boolean;
@@ -222,7 +222,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     expect(agentCall?.params?.accountId).toBe("sut");
     expect(agentCall?.params?.to).toBe("room:!parent:example");
     expect(agentCall?.params?.deliver).toBe(false);
-    const registeredRun = hoisted.registerSubagentRunMock.mock.calls[0]?.[0] as
+    const registeredRun = hoisted.registerSubagentRunMock.mock.calls.at(0)?.[0] as
       | {
           requesterOrigin?: { channel?: string; accountId?: string; to?: string };
           expectsCompletionMessage?: boolean;

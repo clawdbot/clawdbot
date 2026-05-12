@@ -118,14 +118,12 @@ describe("cron run log", () => {
         status: "error",
       });
 
-      expect(readCronRunLogEntriesSync(logPath, { jobId: "job-1" })).toEqual([
-        expect.objectContaining({
-          jobId: "job-1",
-          status: "ok",
-          runAtMs: 900,
-          durationMs: 100,
-        }),
-      ]);
+      const jobEntries = readCronRunLogEntriesSync(logPath, { jobId: "job-1" });
+      expect(jobEntries).toHaveLength(1);
+      expect(jobEntries[0]?.jobId).toBe("job-1");
+      expect(jobEntries[0]?.status).toBe("ok");
+      expect(jobEntries[0]?.runAtMs).toBe(900);
+      expect(jobEntries[0]?.durationMs).toBe(100);
       expect(readCronRunLogEntriesSync(path.join(dir, "runs", "missing.jsonl"))).toStrictEqual([]);
     });
   });
@@ -338,10 +336,12 @@ describe("cron run log", () => {
       });
 
       const entries = await readCronRunLogEntries(logPath, { limit: 10, jobId: "job-1" });
-      expect(entries[0]?.diagnostics).toMatchObject({
-        summary: "exec stderr tail",
-        entries: [{ source: "exec", severity: "error", message: "exec stderr tail", exitCode: 2 }],
-      });
+      expect(entries[0]?.diagnostics?.summary).toBe("exec stderr tail");
+      expect(entries[0]?.diagnostics?.entries).toHaveLength(1);
+      expect(entries[0]?.diagnostics?.entries[0]?.source).toBe("exec");
+      expect(entries[0]?.diagnostics?.entries[0]?.severity).toBe("error");
+      expect(entries[0]?.diagnostics?.entries[0]?.message).toBe("exec stderr tail");
+      expect(entries[0]?.diagnostics?.entries[0]?.exitCode).toBe(2);
       expect(
         (
           await readCronRunLogEntriesPage(logPath, {

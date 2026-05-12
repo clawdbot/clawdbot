@@ -420,6 +420,65 @@ describe("Agent-specific tool filtering", () => {
     ).toEqual({ allow: ["read"] });
   });
 
+  it("should apply global per-sender tool policy to core tools", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        toolsBySender: {
+          "id:guest": { deny: ["exec", "process"] },
+        },
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      messageProvider: "discord",
+      senderId: "guest",
+      workspaceDir: "/tmp/test-global-sender-policy",
+      agentDir: "/tmp/agent-global-sender-policy",
+    });
+    const names = tools.map((tool) => tool.name);
+
+    expect(names).toContain("read");
+    expect(names).not.toContain("exec");
+    expect(names).not.toContain("process");
+  });
+
+  it("should let agent per-sender policy override global sender wildcard", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        toolsBySender: {
+          "*": { deny: ["exec"] },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "trusted",
+            workspace: "~/openclaw-trusted",
+            tools: {
+              toolsBySender: {
+                "id:alice": {},
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:trusted:discord:dm:alice",
+      messageProvider: "discord",
+      senderId: "alice",
+      workspaceDir: "/tmp/test-agent-sender-policy",
+      agentDir: "/tmp/agent-sender-policy",
+    });
+    const names = tools.map((tool) => tool.name);
+
+    expect(names).toContain("read");
+    expect(names).toContain("exec");
+  });
+
   it("should not let default sender policy override group tools", () => {
     const cfg: OpenClawConfig = {
       channels: {

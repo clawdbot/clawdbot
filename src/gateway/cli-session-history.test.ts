@@ -25,8 +25,9 @@ function requireFallbackSeed(
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
   const record = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);
@@ -34,8 +35,9 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 }
 
 function readRecord(value: unknown): Record<string, unknown> {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected record");
+  }
   return value as Record<string, unknown>;
 }
 
@@ -320,7 +322,9 @@ describe("cli session history", () => {
           (record.__openclaw as { cliSessionId?: unknown } | undefined)?.cliSessionId === sessionId
         );
       });
-      expect(importedUser).toBeDefined();
+      if (!importedUser) {
+        throw new Error("Expected imported user CLI history message");
+      }
     });
   });
 

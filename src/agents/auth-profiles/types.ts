@@ -83,9 +83,16 @@ export type AuthProfileFailureReason =
   | "unclassified"
   | "unknown";
 
+export type AuthProfileBlockedReason = "subscription_limit";
+export type AuthProfileBlockedSource = "codex_rate_limits" | "wham";
+
 /** Per-profile usage statistics for round-robin and cooldown tracking */
 export type ProfileUsageStats = {
   lastUsed?: number;
+  blockedUntil?: number;
+  blockedReason?: AuthProfileBlockedReason;
+  blockedSource?: AuthProfileBlockedSource;
+  blockedModel?: string;
   cooldownUntil?: number;
   cooldownReason?: AuthProfileFailureReason;
   cooldownModel?: string;

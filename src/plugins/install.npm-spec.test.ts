@@ -718,6 +718,64 @@ describe("installPluginFromNpmSpec", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "does not fail a managed npm install for an unrelated skipped peer link",
+    async () => {
+      const stateDir = suiteTempRootTracker.makeTempDir();
+      const npmRoot = path.join(stateDir, "npm");
+      const warnings: string[] = [];
+
+      mockNpmViewAndInstallMany([
+        {
+          spec: "peer-plugin@1.0.0",
+          packageName: "peer-plugin",
+          version: "1.0.0",
+          pluginId: "peer-plugin",
+          npmRoot,
+          peerDependencies: { openclaw: "^2026.0.0" },
+        },
+        {
+          spec: "next-plugin@1.0.0",
+          packageName: "next-plugin",
+          version: "1.0.0",
+          pluginId: "next-plugin",
+          npmRoot,
+        },
+      ]);
+
+      const first = await installPluginFromNpmSpec({
+        spec: "peer-plugin@1.0.0",
+        npmDir: npmRoot,
+        logger: { info: () => {}, warn: () => {} },
+      });
+      expect(first.ok).toBe(true);
+
+      const staleNodeModulesPath = path.join(
+        npmRoot,
+        "node_modules",
+        "peer-plugin",
+        "node_modules",
+      );
+      fs.rmSync(staleNodeModulesPath, { recursive: true, force: true });
+      fs.writeFileSync(staleNodeModulesPath, "not a directory", "utf-8");
+
+      const second = await installPluginFromNpmSpec({
+        spec: "next-plugin@1.0.0",
+        npmDir: npmRoot,
+        logger: { info: () => {}, warn: (message) => warnings.push(message) },
+      });
+
+      expect(second.ok).toBe(true);
+      expect(
+        warnings.some((warning) =>
+          warning.includes(`Skipping openclaw peerDependency link because ${staleNodeModulesPath}`),
+        ),
+      ).toBe(true);
+      expect(fs.existsSync(path.join(npmRoot, "node_modules", "next-plugin"))).toBe(true);
+      expect(fs.readFileSync(staleNodeModulesPath, "utf-8")).toBe("not a directory");
+    },
+  );
+
   it("rejects managed npm plugins when their openclaw peer link cannot be repaired", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");

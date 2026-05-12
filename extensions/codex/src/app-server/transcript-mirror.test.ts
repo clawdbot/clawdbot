@@ -251,7 +251,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "scope-1",
     });
 
-    await expect(fs.readFile(sessionFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readFile(sessionFile, "utf8")).rejects.toHaveProperty("code", "ENOENT");
   });
 
   it("migrates small linear transcripts before mirroring", async () => {
@@ -302,8 +302,9 @@ describe("mirrorCodexAppServerTranscript", () => {
       )
       .filter((record) => record.type === "message");
 
-    expect(records[0]).toMatchObject({ id: "legacy-user", parentId: null });
-    expect(records[1]).toMatchObject({ parentId: "legacy-user" });
+    expect(records[0]?.id).toBe("legacy-user");
+    expect(records[0]?.parentId).toBeNull();
+    expect(records[1]?.parentId).toBe("legacy-user");
   });
 
   // Helpers for the identity-based regression tests below.

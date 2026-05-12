@@ -94,6 +94,14 @@ describe("shell env fallback", () => {
     }
   }
 
+  function requireExecCall(exec: ReturnType<typeof vi.fn>): unknown[] {
+    const call = exec.mock.calls.at(0);
+    if (!call) {
+      throw new Error("expected shell env exec call");
+    }
+    return call;
+  }
+
   function getShellPathTwiceWithExec(params: {
     exec: ReturnType<typeof vi.fn>;
     platform: NodeJS.Platform;
@@ -114,7 +122,7 @@ describe("shell env fallback", () => {
 
   function expectBinShFallbackExec(exec: ReturnType<typeof vi.fn>) {
     expect(exec).toHaveBeenCalledTimes(1);
-    const [shell, args, options] = exec.mock.calls[0] as unknown[];
+    const [shell, args, options] = requireExecCall(exec);
     expect(shell).toBe("/bin/sh");
     expect(args).toStrictEqual(["-l", "-c", "env -0"]);
     expect((options as { windowsHide?: unknown } | undefined)?.windowsHide).toBe(true);
@@ -427,7 +435,7 @@ describe("shell env fallback", () => {
 
       expect(res.ok).toBe(true);
       expect(exec).toHaveBeenCalledTimes(1);
-      const [shell, args, options] = exec.mock.calls[0] as unknown[];
+      const [shell, args, options] = requireExecCall(exec);
       expect(shell).toBe(trustedShell);
       expect(args).toStrictEqual(["-l", "-c", "env -0"]);
       expect((options as { windowsHide?: unknown } | undefined)?.windowsHide).toBe(true);

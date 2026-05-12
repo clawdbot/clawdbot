@@ -261,9 +261,7 @@ describe("memory cli", () => {
 
     params.beforeExpect?.();
     expect(close).toHaveBeenCalled();
-    expect(error).toHaveBeenCalledWith(
-      expect.stringContaining("Memory manager close failed: close boom"),
-    );
+    expect(error).toHaveBeenCalledWith("Memory manager close failed: close boom");
     expect(process.exitCode).toBeUndefined();
   }
 
@@ -839,7 +837,7 @@ describe("memory cli", () => {
 
       expectCliSync(sync);
       expect(error).toHaveBeenCalledWith(
-        expect.stringContaining("Memory index failed (main): QMD index file is empty"),
+        `Memory index failed (main): QMD index file is empty: ${dbPath}`,
       );
       expect(close).toHaveBeenCalled();
       expect(process.exitCode).toBe(1);
@@ -1808,7 +1806,6 @@ describe("memory cli", () => {
       const entries = Object.values(store.entries ?? {});
       expect(entries).toHaveLength(1);
       const entry = entries[0];
-      expect(entry).toBeDefined();
       if (!entry) {
         throw new Error("Expected short-term recall entry");
       }

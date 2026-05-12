@@ -15,7 +15,23 @@ import {
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
-// ---------- tests ----------
+function requireModelFallbackRequest(): {
+  fallbacksOverride?: string[];
+  provider?: string;
+  model?: string;
+} {
+  const request = runWithModelFallbackMock.mock.calls.at(0)?.[0] as
+    | {
+        fallbacksOverride?: string[];
+        provider?: string;
+        model?: string;
+      }
+    | undefined;
+  if (!request) {
+    throw new Error("Expected model fallback request");
+  }
+  return request;
+}
 
 describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
   setupRunCronIsolatedAgentTurnSuite();
@@ -55,7 +71,7 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
 
     expect(result.status).toBe("ok");
     expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
-    expect(runWithModelFallbackMock.mock.calls[0][0].fallbacksOverride).toEqual(expectedFallbacks);
+    expect(requireModelFallbackRequest().fallbacksOverride).toEqual(expectedFallbacks);
   });
 
   it("plans Anthropic fallbacks canonically while executing compatible attempts through Claude CLI", async () => {
@@ -100,10 +116,9 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
 
     expect(result.status).toBe("ok");
     expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
-    expect(runWithModelFallbackMock.mock.calls[0][0]).toMatchObject({
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-    });
+    const fallbackRequest = requireModelFallbackRequest();
+    expect(fallbackRequest.provider).toBe("anthropic");
+    expect(fallbackRequest.model).toBe("claude-opus-4-6");
     expect(runCliAgentMock.mock.calls.map((call) => [call[0].provider, call[0].model])).toEqual([
       ["claude-cli", "claude-opus-4-6"],
       ["claude-cli", "claude-sonnet-4-6"],

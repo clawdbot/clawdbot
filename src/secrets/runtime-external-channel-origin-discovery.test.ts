@@ -28,6 +28,21 @@ function requireDiscordConfig(snapshot: Awaited<ReturnType<typeof prepareSecrets
   return config;
 }
 
+function requireLoadChannelSecretContractApiCall(): {
+  channelId?: unknown;
+  loadablePluginOrigins?: unknown;
+} {
+  const [call] = loadChannelSecretContractApiMock.mock.calls;
+  if (!call) {
+    throw new Error("expected loadChannelSecretContractApi call");
+  }
+  const [params] = call;
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("expected loadChannelSecretContractApi params to be an object");
+  }
+  return params;
+}
+
 describe("secrets runtime external channel origin discovery", () => {
   it("discovers loadable plugins for channel SecretRefs when plugins.entries is absent", async () => {
     loadPluginMetadataSnapshotMock.mockReturnValue({
@@ -78,8 +93,8 @@ describe("secrets runtime external channel origin discovery", () => {
 
     expect(requireDiscordConfig(snapshot).token).toBe("resolved-discord-token");
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalled();
-    const loadCall = loadChannelSecretContractApiMock.mock.calls[0]?.[0];
-    expect(loadCall?.channelId).toBe("discord");
-    expect(loadCall?.loadablePluginOrigins).toEqual(new Map([["discord", "global"]]));
+    const loadCall = requireLoadChannelSecretContractApiCall();
+    expect(loadCall.channelId).toBe("discord");
+    expect(loadCall.loadablePluginOrigins).toEqual(new Map([["discord", "global"]]));
   });
 });

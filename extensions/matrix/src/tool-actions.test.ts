@@ -93,11 +93,15 @@ describe("handleMatrixAction pollVote", () => {
       optionIds: ["a2", "a1"],
       optionIndexes: [1, 2],
     });
-    expect(result.details).toMatchObject({
+    expect(result.details).toEqual({
       ok: true,
       result: {
         eventId: "evt-poll-vote",
+        roomId: "!room:example",
+        pollId: "$poll",
         answerIds: ["a1", "a2"],
+        labels: ["Pizza", "Sushi"],
+        maxSelections: 2,
       },
     });
   });
@@ -192,9 +196,9 @@ describe("handleMatrixAction pollVote", () => {
       accountId: "ops",
       limit: 5,
     });
-    expect(result.details).toMatchObject({
+    expect(result.details).toEqual({
       ok: true,
-      reactions: [{ key: "👍", count: 1 }],
+      reactions: [{ key: "👍", count: 1, users: ["@u:example"] }],
     });
   });
 
@@ -361,13 +365,19 @@ describe("handleMatrixAction pollVote", () => {
       displayName: "Ops Bot",
       avatarUrl: "mxc://example/avatar",
     });
-    expect(result.details).toMatchObject({
+    expect(result.details).toEqual({
       ok: true,
       accountId: "ops",
+      displayName: "Ops Bot",
+      avatarUrl: "mxc://example/avatar",
       profile: {
         displayNameUpdated: true,
         avatarUpdated: true,
+        resolvedAvatarUrl: "mxc://example/avatar",
+        uploadedAvatarSource: null,
+        convertedAvatarFromHttp: false,
       },
+      configPath: "channels.matrix.accounts.ops",
     });
   });
 

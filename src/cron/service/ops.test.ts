@@ -182,7 +182,9 @@ describe("cron service ops seam coverage", () => {
     });
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(requestHeartbeat).not.toHaveBeenCalled();
-    expect(state.timer).toBeDefined();
+    if (state.timer === undefined) {
+      throw new Error("Expected cron service timer");
+    }
 
     const persisted = (await loadCronStore(storePath)) as {
       jobs: CronJob[];

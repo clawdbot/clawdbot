@@ -17,6 +17,14 @@ export type ToolDisplaySpec = {
   actions?: Record<string, ToolDisplayActionSpec>;
 };
 
+export type ToolSearchCodeDisplayTarget = {
+  toolName: string;
+  displayToolName?: string;
+  displayArgs?: Record<string, unknown>;
+  detail?: string;
+  bridgeVerb?: "call" | "describe" | "search";
+};
+
 type CoerceDisplayValueOptions = {
   includeFalse?: boolean;
   includeZero?: boolean;
@@ -350,6 +358,253 @@ function collectWebSearchQueries(record: Record<string, unknown>): string[] {
 
   return queries;
 }
+
+function parseToolSearchCall(code: string): { target: string; args?: string } | undefined {
+  const prefixMatch = code.match(/openclaw\.tools\.call\s*\(\s*/s);
+  if (!prefixMatch || prefixMatch.index === undefined) {
+    return undefined;
+  }
+  const rest = code.slice(prefixMatch.index + prefixMatch[0].length);
+  const targetMatch = rest.match(/^("[^"]{1,240}"|'[^']{1,240}'|[^,)\s]{1,240})/s);
+  if (!targetMatch?.[1]) {
+    return undefined;
+  }
+  const afterTarget = rest.slice(targetMatch[0].length);
+  const commaIndex = afterTarget.indexOf(",");
+  if (commaIndex < 0) {
+    return { target: targetMatch[1] };
+  }
+  const args = afterTarget.slice(commaIndex + 1);
+  return { target: targetMatch[1], args };
+}
+
+function normalizeToolSearchDisplayToolName(toolName: string | undefined): string | undefined {
+  const value = normalizeOptionalString(toolName);
+  if (!value) {
+    return undefined;
+  }
+  const catalogIdMatch = value.match(/^(?:openclaw|mcp|client):[^:]+:(.+)$/s);
+  return normalizeOptionalString(catalogIdMatch?.[1]) ?? value;
+}
+
+function collectToolSearchDescribeBindings(code: string): Map<string, string> {
+  const bindings = new Map<string, string>();
+  const bindingPattern =
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?openclaw\.tools\.describe\s*\(\s*("[^"]{1,240}"|'[^']{1,240}')\s*(?:,|\))/gs;
+  for (const match of code.matchAll(bindingPattern)) {
+    const variableName = match[1];
+    const target = summarizeToolSearchTarget(match[2]);
+    if (variableName && target) {
+      bindings.set(variableName, target);
+    }
+  }
+  return bindings;
+}
+
+function resolveToolSearchCallTarget(
+  code: string,
+  rawTarget: string | undefined,
+): string | undefined {
+  const target = normalizeOptionalString(rawTarget);
+  if (!target) {
+    return undefined;
+  }
+  const idReference = target.match(/^([A-Za-z_$][\w$]*)\.id\b/s);
+  if (idReference?.[1]) {
+    const describedTarget = collectToolSearchDescribeBindings(code).get(idReference[1]);
+    if (describedTarget) {
+      return describedTarget;
+    }
+  }
+  return summarizeToolSearchTarget(target);
+}
+
+function summarizeToolSearchTarget(raw: string | undefined): string | undefined {
+  const value = normalizeOptionalString(raw);
+  if (!value) {
+    return undefined;
+  }
+  const literalMatch = value.match(/^[\s]*["']([^"']{1,160})["'][\s]*$/s);
+  if (literalMatch?.[1]) {
+    return normalizeOptionalString(literalMatch[1]);
+  }
+  const idPropertyMatch = value.match(/\.id\b/);
+  if (idPropertyMatch) {
+    return normalizeOptionalString(value.replace(/\.id\b.*/s, ""));
+  }
+  const namePropertyMatch = value.match(/name\s*:\s*["']([^"']{1,120})["']/s);
+  if (namePropertyMatch?.[1]) {
+    return normalizeOptionalString(namePropertyMatch[1]);
+  }
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact.length <= 80 ? compact : undefined;
+}
+
+function parseToolSearchCallArgs(raw: string | undefined): Record<string, unknown> | undefined {
+  const source = extractObjectLiteralSource(raw);
+  if (!source) {
+    return undefined;
+  }
+  const args: Record<string, unknown> = {};
+  const propertyPattern =
+    /(?:^|[,{\s])([A-Za-z_$][\w$]*)\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|true|false|null|-?\d+(?:\.\d+)?)/g;
+  for (const match of source.matchAll(propertyPattern)) {
+    const key = match[1];
+    const value = match[2];
+    if (!key || value === undefined) {
+      continue;
+    }
+    args[key] = parseSimpleToolSearchArgValue(value);
+  }
+  return Object.keys(args).length > 0 ? args : undefined;
+}
+
+function extractObjectLiteralSource(raw: string | undefined): string | undefined {
+  const value = normalizeOptionalString(raw);
+  if (!value) {
+    return undefined;
+  }
+  const start = value.indexOf("{");
+  if (start < 0) {
+    return undefined;
+  }
+  let depth = 0;
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+  for (let i = start; i < value.length; i += 1) {
+    const char = value[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return value.slice(start, i + 1);
+      }
+    }
+  }
+  return undefined;
+}
+
+function parseSimpleToolSearchArgValue(raw: string): unknown {
+  if (raw === "true") {
+    return true;
+  }
+  if (raw === "false") {
+    return false;
+  }
+  if (raw === "null") {
+    return null;
+  }
+  if (/^-?\d+(?:\.\d+)?$/.test(raw)) {
+    return Number(raw);
+  }
+  const quote = raw[0];
+  const inner = raw.slice(1, -1);
+  if (quote === '"') {
+    try {
+      return JSON.parse(raw) as unknown;
+    } catch {
+      return inner;
+    }
+  }
+  return inner.replace(/\\'/g, "'").replace(/\\\\/g, "\\");
+}
+
+function summarizeToolSearchCallInput(raw: string | undefined): string | undefined {
+  const value = normalizeOptionalString(raw)
+    ?.replace(/[);\s]+$/g, "")
+    .trim();
+  if (!value) {
+    return undefined;
+  }
+  const queryMatch = value.match(/query\s*:\s*["']([^"']{1,80})["']/s);
+  if (queryMatch?.[1]) {
+    return "query " + queryMatch[1].trim();
+  }
+  const actionMatch = value.match(/action\s*:\s*["']([^"']{1,80})["']/s);
+  if (actionMatch?.[1]) {
+    return normalizeOptionalString(actionMatch[1]);
+  }
+  const commandMatch = value.match(/command\s*:\s*["']([^"'\n]{1,120})["']/s);
+  if (commandMatch?.[1]) {
+    return normalizeOptionalString(commandMatch[1]);
+  }
+  const sessionMatch = value.match(/sessionId\s*:\s*["']([^"']{1,80})["']/s);
+  if (sessionMatch?.[1]) {
+    return "session " + sessionMatch[1].trim();
+  }
+  const idMatch = value.match(/id\s*:\s*["']([^"']{1,80})["']/s);
+  if (idMatch?.[1]) {
+    return idMatch[1].trim();
+  }
+  return undefined;
+}
+
+export function resolveToolSearchCodeDisplayTarget(
+  args: unknown,
+): ToolSearchCodeDisplayTarget | undefined {
+  const record = asRecord(args);
+  if (!record || typeof record.code !== "string") {
+    return undefined;
+  }
+  const code = record.code;
+  const call = parseToolSearchCall(code);
+  if (call) {
+    const toolName = resolveToolSearchCallTarget(code, call.target);
+    if (!toolName) {
+      return { toolName: "tool_search_code", detail: "call selected tool", bridgeVerb: "call" };
+    }
+    return {
+      toolName,
+      displayToolName: normalizeToolSearchDisplayToolName(toolName),
+      displayArgs: parseToolSearchCallArgs(call.args),
+      detail: summarizeToolSearchCallInput(call.args),
+      bridgeVerb: "call",
+    };
+  }
+  const describeMatch = code.match(/openclaw\.tools\.describe\s*\(\s*([^)]+?)\s*(?:,|\))/s);
+  if (describeMatch) {
+    const toolName = summarizeToolSearchTarget(describeMatch[1]);
+    return toolName
+      ? { toolName, detail: "describe via tool search", bridgeVerb: "describe" }
+      : { toolName: "tool_search_code", detail: "describe selected tool", bridgeVerb: "describe" };
+  }
+  const searchMatch = code.match(/openclaw\.tools\.search\s*\(\s*([^)]+?)\s*(?:,|\))/s);
+  if (searchMatch) {
+    const query = summarizeToolSearchTarget(searchMatch[1]);
+    return {
+      toolName: "tool_search_code",
+      detail: query ? "search " + query : "search tools",
+      bridgeVerb: "search",
+    };
+  }
+  return { toolName: "tool_search_code", detail: "run bridge code" };
+}
+
+function resolveToolSearchCodeDetail(args: unknown): string | undefined {
+  return resolveToolSearchCodeDisplayTarget(args)?.detail;
+}
+
 function resolveWebFetchDetail(args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
@@ -490,6 +745,9 @@ function resolveToolVerbAndDetail(params: {
   }
   if (!detail && params.toolKey === "web_fetch") {
     detail = resolveWebFetchDetail(params.args);
+  }
+  if (!detail && params.toolKey === "tool_search_code") {
+    detail = resolveToolSearchCodeDetail(params.args);
   }
 
   const detailKeys =

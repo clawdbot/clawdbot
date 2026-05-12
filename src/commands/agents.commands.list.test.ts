@@ -121,9 +121,21 @@ describe("agentsListCommand", () => {
 
     expect(buildProviderStatusIndexMock).toHaveBeenCalledOnce();
     expect(buildProviderSummaryMetadataIndexMock).toHaveBeenCalledOnce();
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Providers:"));
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Telegram default: configured"),
-    );
+    expect(vi.mocked(runtime.log).mock.calls).toEqual([
+      [
+        [
+          "Agents:",
+          "- main (default)",
+          "  Workspace: ~/.openclaw/workspace",
+          "  Agent dir: ~/.openclaw/agents/main/agent",
+          "  Routing rules: 1",
+          "  Routing: Telegram default",
+          "  Providers:",
+          "    - Telegram default: configured",
+          "Routing rules map channel/account/peer to an agent. Use --bindings for full rules.",
+          "Channel status reflects local config/creds. For live health: openclaw channels status --probe.",
+        ].join("\n"),
+      ],
+    ]);
   });
 });

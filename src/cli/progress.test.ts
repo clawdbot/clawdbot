@@ -37,9 +37,7 @@ describe("cli progress", () => {
     progress.setPercent(50);
     progress.done();
 
-    const output = writes.join("");
-    expect(output).toContain("Indexing memory... 0%");
-    expect(output).toContain("Indexing memory... 50%");
+    expect(writes).toEqual(["Indexing memory... 0%\n", "Indexing memory... 50%\n"]);
   });
 
   it("does not log without a tty when fallback is none", () => {

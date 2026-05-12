@@ -28,6 +28,14 @@ vi.mock("./plugin-entry.handlers.runtime.js", () => runtimeMocks);
 vi.mock("./runtime-setter-api.js", () => ({ setMatrixRuntime: runtimeMocks.setMatrixRuntime }));
 vi.mock("./src/matrix/subagent-hooks.js", () => runtimeMocks);
 
+function requireFirstCliRegistration(mock: ReturnType<typeof vi.fn>) {
+  const [call] = mock.mock.calls;
+  if (!call || typeof call[0] !== "function") {
+    throw new Error("expected Matrix CLI registration");
+  }
+  return call as [(ctx: unknown) => unknown, unknown];
+}
+
 describe("matrix plugin", () => {
   it("registers matrix CLI through a descriptor-backed lazy registrar", async () => {
     const registerCli = vi.fn();
@@ -45,8 +53,10 @@ describe("matrix plugin", () => {
 
     registerMatrixCliMetadata(api);
 
-    const registrar = registerCli.mock.calls[0]?.[0];
-    expect(registerCli).toHaveBeenCalledWith(expect.any(Function), {
+    expect(registerCli).toHaveBeenCalledTimes(1);
+    const [registrar, options] = requireFirstCliRegistration(registerCli);
+    expect(typeof registrar).toBe("function");
+    expect(options).toEqual({
       descriptors: [
         {
           name: "matrix",
@@ -55,9 +65,6 @@ describe("matrix plugin", () => {
         },
       ],
     });
-    if (!registrar) {
-      throw new Error("expected Matrix CLI registrar to be registered");
-    }
     expect(cliMocks.registerMatrixCli).not.toHaveBeenCalled();
 
     const program = { command: vi.fn() };
@@ -95,7 +102,10 @@ describe("matrix plugin", () => {
 
     entry.register(api);
 
-    expect(registerCli).toHaveBeenCalledWith(expect.any(Function), {
+    expect(registerCli).toHaveBeenCalledTimes(1);
+    const [registrar, options] = requireFirstCliRegistration(registerCli);
+    expect(typeof registrar).toBe("function");
+    expect(options).toEqual({
       descriptors: [
         {
           name: "matrix",

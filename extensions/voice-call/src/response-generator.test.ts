@@ -91,15 +91,23 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
 
 function requireEmbeddedAgentArgs(runEmbeddedPiAgent: ReturnType<typeof vi.fn>) {
   const calls = runEmbeddedPiAgent.mock.calls as unknown[][];
-  const firstCall = calls[0];
-  if (!firstCall) {
-    throw new Error("voice response generator did not invoke the embedded agent");
-  }
+  const firstCall = requireFirstMockCall(
+    calls,
+    "voice response generator embedded agent invocation",
+  );
   const args = firstCall[0] as Partial<EmbeddedAgentArgs> | undefined;
   if (!args?.extraSystemPrompt) {
     throw new Error("voice response generator did not pass the spoken-output contract prompt");
   }
   return args as EmbeddedAgentArgs;
+}
+
+function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
 }
 
 async function runGenerateVoiceResponse(
@@ -202,9 +210,12 @@ describe("generateVoiceResponse", () => {
     expect(pinnedSessionEntry?.providerOverride).toBe("openai");
     expect(pinnedSessionEntry?.modelOverride).toBe("gpt-4.1-nano");
     expect(pinnedSessionEntry?.modelOverrideSource).toBe("auto");
-    const updateSessionStoreCall = updateSessionStore.mock.calls[0];
-    expect(updateSessionStoreCall?.[0]).toBe("/tmp/openclaw/main/sessions.json");
-    expect(updateSessionStoreCall?.[1]).toBeTypeOf("function");
+    const updateSessionStoreCall = requireFirstMockCall(
+      updateSessionStore.mock.calls,
+      "session store update",
+    );
+    expect(updateSessionStoreCall[0]).toBe("/tmp/openclaw/main/sessions.json");
+    expect(updateSessionStoreCall[1]).toBeTypeOf("function");
     const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
     expect(args.provider).toBe("openai");
     expect(args.model).toBe("gpt-4.1-nano");
@@ -269,9 +280,11 @@ describe("generateVoiceResponse", () => {
     expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, "main");
     expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, "main");
     const defaultSessionEntry = sessionStore["voice:15550001111"];
-    expect(defaultSessionEntry).toBeDefined();
+    if (!defaultSessionEntry) {
+      throw new Error("Expected default voice session entry");
+    }
     expect(resolveSessionFilePath).toHaveBeenCalledWith(
-      defaultSessionEntry?.sessionId,
+      defaultSessionEntry.sessionId,
       defaultSessionEntry,
       {
         agentId: "main",
@@ -317,9 +330,11 @@ describe("generateVoiceResponse", () => {
     expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, "voice");
     expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, "voice");
     const voiceSessionEntry = sessionStore["voice:15550001111"];
-    expect(voiceSessionEntry).toBeDefined();
+    if (!voiceSessionEntry) {
+      throw new Error("Expected routed voice session entry");
+    }
     expect(resolveSessionFilePath).toHaveBeenCalledWith(
-      voiceSessionEntry?.sessionId,
+      voiceSessionEntry.sessionId,
       voiceSessionEntry,
       {
         agentId: "voice",

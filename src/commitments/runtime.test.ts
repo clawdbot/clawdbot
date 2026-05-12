@@ -24,6 +24,22 @@ vi.mock("./model-selection.runtime.js", () => ({
   resolveCommitmentDefaultModelRef: resolveDefaultModelMock,
 }));
 
+function requireFirstEmbeddedPiRequest(): {
+  provider?: string;
+  model?: string;
+  disableTools?: boolean;
+} {
+  const [call] = runEmbeddedPiAgentMock.mock.calls;
+  if (!call) {
+    throw new Error("expected embedded PI agent extraction request");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected embedded PI agent extraction request");
+  }
+  return request as { provider?: string; model?: string; disableTools?: boolean };
+}
+
 describe("commitment extraction runtime", () => {
   const tmpDirs: string[] = [];
   const nowMs = Date.parse("2026-04-29T16:00:00.000Z");
@@ -204,7 +220,7 @@ describe("commitment extraction runtime", () => {
     await expect(drainCommitmentExtractionQueue()).resolves.toBe(1);
     expect(resolveDefaultModelMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const request = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
+    const request = requireFirstEmbeddedPiRequest();
     expect(request.provider).toBe("openai-codex");
     expect(request.model).toBe("gpt-5.5");
     expect(request.disableTools).toBe(true);

@@ -29,6 +29,21 @@ vi.mock("../icons.ts", () => ({
   icons: {},
 }));
 
+function requireFirstMockArg(
+  mock: ReturnType<typeof vi.fn>,
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  if (!arg || typeof arg !== "object" || Array.isArray(arg)) {
+    throw new Error(`expected ${label} payload`);
+  }
+  return arg as Record<string, unknown>;
+}
+
 vi.mock("../views/agents-utils.ts", () => {
   const isRenderableControlUiAvatarUrl = (value: string) =>
     /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//"));
@@ -1768,7 +1783,6 @@ describe("grouped chat rendering", () => {
 
     expect(container.querySelector(".chat-tool-card__preview-frame")).toBeNull();
     expect(onOpenSidebar).toHaveBeenCalledTimes(1);
-    const sidebarPayload = onOpenSidebar.mock.calls[0]?.[0] as { kind?: string } | undefined;
-    expect(sidebarPayload?.kind).toBe("markdown");
+    expect(requireFirstMockArg(onOpenSidebar, "sidebar open").kind).toBe("markdown");
   });
 });

@@ -248,8 +248,10 @@ type ValidationMessage = {
 
 function findValidationMessage(messages: ValidationMessage[], path: string): ValidationMessage {
   const message = messages.find((entry) => entry.path === path);
-  expect(message).toBeTruthy();
-  return message ?? {};
+  if (!message) {
+    throw new Error(`expected validation message for ${path}`);
+  }
+  return message;
 }
 
 function expectAllowedValuesInclude(message: ValidationMessage, values: string[]): void {

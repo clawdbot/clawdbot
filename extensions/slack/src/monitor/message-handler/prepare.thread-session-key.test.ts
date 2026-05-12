@@ -59,6 +59,14 @@ function buildChannelMessage(overrides?: Partial<SlackMessageEvent>): SlackMessa
   } as SlackMessageEvent;
 }
 
+function firstBindingRouteRequest() {
+  const [call] = resolveConfiguredBindingRouteMock.mock.calls;
+  if (!call) {
+    throw new Error("expected configured binding route call");
+  }
+  return call[0];
+}
+
 describe("thread-level session keys", () => {
   beforeEach(() => {
     resolveConfiguredBindingRouteMock.mockReset();
@@ -116,7 +124,7 @@ describe("thread-level session keys", () => {
     });
 
     expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
-    const [bindingRouteRequest] = resolveConfiguredBindingRouteMock.mock.calls[0];
+    const bindingRouteRequest = firstBindingRouteRequest();
     expect(bindingRouteRequest).toEqual({
       cfg: ctx.cfg,
       route: {

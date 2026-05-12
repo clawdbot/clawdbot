@@ -60,6 +60,7 @@ export type ProcessGatewayAllowlistParams = {
   safeBins: Set<string>;
   safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
   strictInlineEval?: boolean;
+  commandHighlighting?: boolean;
   trigger?: string;
   agentId?: string;
   sessionKey?: string;
@@ -373,6 +374,7 @@ export async function processGatewayAllowlist(
         host: "gateway",
         security: hostSecurity,
         ask: hostAsk,
+        commandHighlighting: params.commandHighlighting,
         warningText: params.warnings.join("\n").trim() || undefined,
         ...buildExecApprovalRequesterContext({
           agentId: params.agentId,

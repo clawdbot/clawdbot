@@ -121,7 +121,6 @@ describe("subagent spawn depth + child limits", () => {
     expect(accepted.childSessionKey).toMatch(/^agent:main:subagent:/);
 
     const childSession = persistedStore?.[accepted.childSessionKey];
-    expect(childSession).toBeDefined();
     if (!childSession) {
       throw new Error("Expected persisted child session");
     }

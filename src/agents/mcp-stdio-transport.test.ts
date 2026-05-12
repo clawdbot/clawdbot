@@ -46,7 +46,7 @@ describe("OpenClawStdioClientTransport", () => {
     child.emit("spawn");
     await started;
 
-    const [command, args, options] = spawnMock.mock.calls[0] as [string, string[], SpawnOptions];
+    const [command, args, options] = spawnMock.mock.calls.at(0) as [string, string[], SpawnOptions];
     if (process.platform === "linux") {
       expect(command).toBe("/bin/sh");
       expect(args).toEqual([

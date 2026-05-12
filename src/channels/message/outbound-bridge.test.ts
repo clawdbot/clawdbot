@@ -9,6 +9,20 @@ import type {
 
 const cfg = {} as OpenClawConfig;
 
+function requireFirstCallArg(mock: {
+  mock: { calls: readonly unknown[][] };
+}): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected first mock call");
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error("expected first mock call argument to be an object");
+  }
+  return arg as Record<string, unknown>;
+}
+
 describe("createChannelMessageAdapterFromOutbound", () => {
   it("wraps outbound text sends with a message receipt", async () => {
     const sendText = vi.fn(async (_request: ChannelMessageSendTextContext) => ({
@@ -34,11 +48,13 @@ describe("createChannelMessageAdapterFromOutbound", () => {
     expect(adapter.id).toBe("demo");
     expect(adapter.durableFinal).toEqual({ capabilities: { text: true, replyTo: true } });
     expect(sendText).toHaveBeenCalledTimes(1);
-    const sendTextRequest = sendText.mock.calls[0]?.[0];
-    expect(sendTextRequest?.to).toBe("room-1");
-    expect(sendTextRequest?.text).toBe("hello");
-    expect(sendTextRequest?.replyToId).toBe("parent-1");
-    expect(sendTextRequest?.threadId).toBe("thread-1");
+    const sendTextRequest = requireFirstCallArg(
+      sendText,
+    ) as unknown as ChannelMessageSendTextContext;
+    expect(sendTextRequest.to).toBe("room-1");
+    expect(sendTextRequest.text).toBe("hello");
+    expect(sendTextRequest.replyToId).toBe("parent-1");
+    expect(sendTextRequest.threadId).toBe("thread-1");
     expect(result?.messageId).toBe("msg-1");
     expect(result?.receipt.primaryPlatformMessageId).toBe("msg-1");
     expect(result?.receipt.platformMessageIds).toEqual(["msg-1"]);
@@ -109,7 +125,10 @@ describe("createChannelMessageAdapterFromOutbound", () => {
 
     expect(adapter.durableFinal?.capabilities).toEqual({ payload: true, batch: true });
     expect(sendPayload).toHaveBeenCalledTimes(1);
-    expect(sendPayload.mock.calls[0]?.[0].payload).toEqual({
+    const sendPayloadRequest = requireFirstCallArg(
+      sendPayload,
+    ) as unknown as ChannelMessageSendPayloadContext;
+    expect(sendPayloadRequest.payload).toEqual({
       presentation: { blocks: [{ type: "text", text: "ready" }] },
     });
     expect(result?.receipt.parts[0]?.platformMessageId).toBe("card-1");

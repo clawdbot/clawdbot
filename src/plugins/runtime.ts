@@ -7,6 +7,7 @@ import {
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
+import { getActivePluginChannelRegistrySnapshotFromState } from "./runtime-channel-state.js";
 import {
   PLUGIN_REGISTRY_STATE,
   type RegistryState,
@@ -277,10 +278,6 @@ export function resolveActivePluginHttpRouteRegistry(fallback: PluginRegistry): 
   return routeRegistry;
 }
 
-/** Pin the channel registry so that subsequent `setActivePluginRegistry` calls
- *  do not replace the channel snapshot used by `getChannelPlugin`. Call at
- *  gateway startup after the initial plugin load so that config-schema reads
- *  and other non-primary registry loads cannot evict channel plugins. */
 export function pinActivePluginChannelRegistry(registry: PluginRegistry) {
   const previousRegistry = asPluginRegistry(state.channel.registry);
   installSurfaceRegistry(state.channel, registry, true);
@@ -303,15 +300,12 @@ export function releasePinnedPluginChannelRegistry(registry?: PluginRegistry) {
   }
 }
 
-/** Return the registry that should be used for channel plugin resolution.
- *  When pinned, this returns the startup registry regardless of subsequent
- *  `setActivePluginRegistry` calls. */
 export function getActivePluginChannelRegistry(): PluginRegistry | null {
-  return asPluginRegistry(state.channel.registry ?? state.activeRegistry);
+  return getActivePluginChannelRegistrySnapshotFromState().registry as PluginRegistry | null;
 }
 
 export function getActivePluginChannelRegistryVersion(): number {
-  return state.channel.registry ? state.channel.version : state.activeVersion;
+  return getActivePluginChannelRegistrySnapshotFromState().version;
 }
 
 export function requireActivePluginChannelRegistry(): PluginRegistry {

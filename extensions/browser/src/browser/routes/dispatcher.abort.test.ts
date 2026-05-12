@@ -63,23 +63,21 @@ describe("browser route dispatcher (abort)", () => {
 
     ctrl.abort(new Error("timed out"));
 
-    await expect(promise).resolves.toMatchObject({
-      status: 500,
-      body: { error: expect.stringContaining("timed out") },
-    });
+    const result = await promise;
+    expect(result.status).toBe(500);
+    const body = result.body as { error?: unknown };
+    expect(body.error).toBe("Error: timed out");
   });
 
   it("returns 400 for malformed percent-encoding in route params", async () => {
     const dispatcher = createBrowserRouteDispatcher({} as BrowserRouteContext);
 
-    await expect(
-      dispatcher.dispatch({
-        method: "GET",
-        path: "/echo/%E0%A4%A",
-      }),
-    ).resolves.toMatchObject({
-      status: 400,
-      body: { error: expect.stringContaining("invalid path parameter encoding") },
+    const result = await dispatcher.dispatch({
+      method: "GET",
+      path: "/echo/%E0%A4%A",
     });
+    expect(result.status).toBe(400);
+    const body = result.body as { error?: unknown };
+    expect(body.error).toBe("invalid path parameter encoding: id");
   });
 });

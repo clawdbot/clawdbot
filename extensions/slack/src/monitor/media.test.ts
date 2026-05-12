@@ -148,7 +148,7 @@ function expectVerboseLogContains(expected: string): void {
 }
 
 function getRequestHeader(callIndex: number, headerName: string): string | null {
-  const init = mockFetch.mock.calls[callIndex]?.[1];
+  const init = requireMockCall(mockFetch, callIndex, "fetch")[1] as RequestInit | undefined;
   return new Headers(init?.headers).get(headerName);
 }
 
@@ -183,8 +183,8 @@ async function expectPrivateDownloadRedirect(params: {
 
   expectSlackMediaResult(result);
   expect(mockFetch).toHaveBeenCalledTimes(2);
-  expect(mockFetch.mock.calls[0]?.[0]).toBe("https://files.slack.com/download.jpg");
-  expect(mockFetch.mock.calls[1]?.[0]).toBe(params.redirectedUrl);
+  expect(requireMockCall(mockFetch, 0, "fetch")[0]).toBe("https://files.slack.com/download.jpg");
+  expect(requireMockCall(mockFetch, 1, "fetch")[0]).toBe(params.redirectedUrl);
   expect(getRequestHeader(0, "Authorization")).toBe("Bearer xoxb-test-token");
   expect(getRequestHeader(1, "Authorization")).toBe(params.secondAuthorization);
 }
@@ -421,10 +421,13 @@ describe("resolveSlackMedia", () => {
     });
 
     expectSlackMediaResult(result);
-    const fetchOptions = fetchRemoteMediaMock.mock.calls[0]?.[0];
-    expect(fetchOptions?.readIdleTimeoutMs).toBe(SLACK_MEDIA_READ_IDLE_TIMEOUT_MS);
-    expect(fetchOptions?.requestInit?.signal).toBeInstanceOf(AbortSignal);
-    expect(new Headers(fetchOptions?.requestInit?.headers).get("Authorization")).toBe(
+    const fetchOptions = requireRecord(
+      requireMockCall(fetchRemoteMediaMock, 0, "fetchRemoteMedia")[0],
+      "fetchRemoteMedia options",
+    ) as { readIdleTimeoutMs?: number; requestInit?: RequestInit };
+    expect(fetchOptions.readIdleTimeoutMs).toBe(SLACK_MEDIA_READ_IDLE_TIMEOUT_MS);
+    expect(fetchOptions.requestInit?.signal).toBeInstanceOf(AbortSignal);
+    expect(new Headers(fetchOptions.requestInit?.headers).get("Authorization")).toBe(
       "Bearer xoxb-test-token",
     );
   });
@@ -837,13 +840,13 @@ describe("resolveSlackMedia", () => {
 
     expectSlackMediaResult(result);
     expect(runtimeFetchSpy).toHaveBeenCalled();
-    expect(requireRecord(runtimeFetchSpy.mock.calls[0]?.[1], "runtime fetch init").redirect).toBe(
-      "manual",
-    );
-    expect(
-      runtimeFetchSpy.mock.calls[0]?.[1] && "dispatcher" in runtimeFetchSpy.mock.calls[0][1],
-    ).toBe(true);
-    expect(new Headers(runtimeFetchSpy.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
+    const runtimeFetchInit = requireRecord(
+      requireMockCall(runtimeFetchSpy, 0, "runtime fetch")[1],
+      "runtime fetch init",
+    ) as RequestInit & { dispatcher?: unknown };
+    expect(runtimeFetchInit.redirect).toBe("manual");
+    expect("dispatcher" in runtimeFetchInit).toBe(true);
+    expect(new Headers(runtimeFetchInit.headers).get("Authorization")).toBe(
       "Bearer xoxb-test-token",
     );
   });
@@ -1005,11 +1008,11 @@ describe("resolveSlackAttachmentContent", () => {
         },
       ],
     });
-    const firstCall = mockFetch.mock.calls[0];
-    expect(firstCall?.[0]).toBe("https://files.slack.com/forwarded.jpg");
-    const firstInit = firstCall?.[1];
-    expect(firstInit?.redirect).toBe("manual");
-    expect(new Headers(firstInit?.headers).get("Authorization")).toBe("Bearer xoxb-test-token");
+    const firstCall = requireMockCall(mockFetch, 0, "fetch");
+    expect(firstCall[0]).toBe("https://files.slack.com/forwarded.jpg");
+    const firstInit = requireRecord(firstCall[1], "fetch init") as RequestInit;
+    expect(firstInit.redirect).toBe("manual");
+    expect(new Headers(firstInit.headers).get("Authorization")).toBe("Bearer xoxb-test-token");
   });
 });
 

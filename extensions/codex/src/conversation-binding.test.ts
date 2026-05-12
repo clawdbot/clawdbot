@@ -186,7 +186,7 @@ describe("codex conversation binding", () => {
       },
     });
 
-    await expect(fs.stat(sidecar)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(sidecar)).rejects.toHaveProperty("code", "ENOENT");
   });
 
   it("consumes inbound bound messages when command authorization is absent", async () => {
@@ -334,21 +334,17 @@ describe("codex conversation binding", () => {
     expect(requests[1]?.params.sandbox).toBe("workspace-write");
     expect(requests[1]?.params.serviceTier).toBe("priority");
     expect(requests[1]?.params).not.toHaveProperty("modelProvider");
-    expect(requests[2]?.params).toMatchObject({
-      threadId: "thread-new",
-      approvalPolicy: "on-request",
-      serviceTier: "priority",
-    });
+    expect(requests[2]?.params.threadId).toBe("thread-new");
+    expect(requests[2]?.params.approvalPolicy).toBe("on-request");
+    expect(requests[2]?.params.serviceTier).toBe("priority");
     const savedBinding = JSON.parse(
       await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
     );
-    expect(savedBinding).toMatchObject({
-      threadId: "thread-new",
-      authProfileId: "work",
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-      serviceTier: "priority",
-    });
+    expect(savedBinding.threadId).toBe("thread-new");
+    expect(savedBinding.authProfileId).toBe("work");
+    expect(savedBinding.approvalPolicy).toBe("on-request");
+    expect(savedBinding.sandbox).toBe("workspace-write");
+    expect(savedBinding.serviceTier).toBe("priority");
     expect(savedBinding).not.toHaveProperty("modelProvider");
   });
 
@@ -498,8 +494,8 @@ describe("codex conversation binding", () => {
     );
 
     expect(result).toEqual({ handled: true, reply: { text: "done" } });
-    expect(turnStartParams[0]?.input).toMatchObject([
-      { type: "text", text: "use the fallback prompt" },
+    expect(turnStartParams[0]?.input).toEqual([
+      { type: "text", text: "use the fallback prompt", text_elements: [] },
     ]);
   });
 });

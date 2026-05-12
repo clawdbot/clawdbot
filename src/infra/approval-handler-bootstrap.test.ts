@@ -259,17 +259,10 @@ describe("startChannelApprovalHandlerBootstrap", () => {
 
     expect(start).toHaveBeenCalledTimes(1);
     await flushTransitions();
-    expect(logger.error).not.toHaveBeenCalledWith(
-      expect.stringContaining("failed to start native approval handler"),
-    );
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledOnce();
     expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("native approval handler deferred until gateway readiness recovers"),
-    );
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("gateway readiness unavailable before approval handler start"),
-    );
-    expect(logger.warn).not.toHaveBeenCalledWith(
-      expect.stringContaining("gateway event loop readiness timeout"),
+      "native approval handler deferred until gateway readiness recovers: gateway readiness unavailable before approval handler start",
     );
 
     await vi.advanceTimersByTimeAsync(1_000);

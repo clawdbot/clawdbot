@@ -14,6 +14,7 @@ import type {
   SessionEntry,
 } from "../config/sessions.js";
 import { isCompactionCheckpointTranscriptFileName } from "../config/sessions/artifacts.js";
+import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
@@ -150,34 +151,23 @@ function parseTranscriptLineId(
 async function readTranscriptEntriesForForkAsync(
   sessionFile: string,
 ): Promise<PiSessionFileEntry[] | null> {
-  let fileHandle: AsyncTranscriptFileHandle | undefined;
+  const entries: PiSessionFileEntry[] = [];
   try {
-    fileHandle = await fs.open(sessionFile, "r");
-    const content = await fileHandle.readFile("utf-8");
-    const entries: PiSessionFileEntry[] = [];
-    for (const line of content.trim().split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
-      }
+    for await (const line of streamSessionTranscriptLines(sessionFile)) {
       try {
-        entries.push(JSON.parse(trimmed) as PiSessionFileEntry);
+        entries.push(JSON.parse(line) as PiSessionFileEntry);
       } catch {
         // Match pi-coding-agent's loader: malformed JSONL entries are ignored.
       }
     }
-    const firstEntry = entries[0] as { type?: unknown; id?: unknown } | undefined;
-    if (firstEntry?.type !== "session" || typeof firstEntry.id !== "string") {
-      return null;
-    }
-    return entries;
   } catch {
     return null;
-  } finally {
-    if (fileHandle) {
-      await fileHandle.close().catch(() => undefined);
-    }
   }
+  const firstEntry = entries[0] as { type?: unknown; id?: unknown } | undefined;
+  if (firstEntry?.type !== "session" || typeof firstEntry.id !== "string") {
+    return null;
+  }
+  return entries;
 }
 
 export async function readSessionLeafIdFromTranscriptAsync(

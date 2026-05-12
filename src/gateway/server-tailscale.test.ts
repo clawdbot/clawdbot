@@ -63,7 +63,9 @@ describe("startGatewayTailscaleExposure preserveFunnel", () => {
 
     expect(mocks.hasTailscaleFunnelRouteForPort).toHaveBeenCalledWith(18789);
     expect(mocks.enableTailscaleServe).not.toHaveBeenCalled();
-    expect(logTailscale.info).toHaveBeenCalledWith(expect.stringMatching(/preserv/i));
+    expect(logTailscale.info.mock.calls).toEqual([
+      ["serve skipped: preserving externally configured Tailscale Funnel for port 18789"],
+    ]);
   });
 
   it("notes resetOnExit is a no-op when preserveFunnel skips Serve", async () => {
@@ -79,9 +81,11 @@ describe("startGatewayTailscaleExposure preserveFunnel", () => {
     });
 
     expect(mocks.enableTailscaleServe).not.toHaveBeenCalled();
-    expect(logTailscale.info).toHaveBeenCalledWith(
-      expect.stringMatching(/resetOnExit is a no-op/i),
-    );
+    expect(logTailscale.info.mock.calls).toEqual([
+      [
+        "serve skipped: preserving externally configured Tailscale Funnel for port 18789; resetOnExit is a no-op because no Serve route was applied this run",
+      ],
+    ]);
   });
 
   it("falls back to enableTailscaleServe when preserveFunnel is true but no Funnel route exists for the port", async () => {

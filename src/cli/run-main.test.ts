@@ -400,7 +400,9 @@ describe("resolveMissingPluginCommandMessage", () => {
       },
       { registry: losslessClawToolRegistry },
     );
-    expect(message).not.toBeNull();
+    if (message === null) {
+      throw new Error("expected missing plugin command message");
+    }
     expect(message).toContain('"lcm_recent"');
     expect(message).toContain('"lossless-claw"');
     expect(message).toContain("agent tool");
@@ -411,7 +413,9 @@ describe("resolveMissingPluginCommandMessage", () => {
     const message = resolveMissingPluginCommandMessage("LCM_Recent", undefined, {
       registry: losslessClawToolRegistry,
     });
-    expect(message).not.toBeNull();
+    if (message === null) {
+      throw new Error("expected missing plugin command message");
+    }
     expect(message).toContain("agent tool");
     expect(message).toContain('"lossless-claw"');
   });
@@ -495,7 +499,9 @@ describe("resolveMissingPluginCommandMessage", () => {
     const message = resolveMissingPluginCommandMessage("feishu_chat", undefined, {
       resolveToolOwner: () => manifestOnlyOwner,
     });
-    expect(message).not.toBeNull();
+    if (message === null) {
+      throw new Error("expected missing plugin command message");
+    }
     expect(message).toContain("may be provided by");
     expect(message).toContain('"feishu"');
     expect(message).not.toContain("registered by");

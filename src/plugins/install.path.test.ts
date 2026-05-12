@@ -187,7 +187,8 @@ describe("installPluginFromPath", () => {
 
     expect(result.ok).toBe(true);
     expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler.mock.calls[0]?.[0]).toEqual({
+    const [installContext, installMetadata] = handler.mock.calls.at(0) ?? [];
+    expect(installContext).toEqual({
       targetName: "payload",
       targetType: "plugin",
       origin: "plugin-file",
@@ -212,7 +213,7 @@ describe("installPluginFromPath", () => {
         extensions: ["payload.js"],
       },
     });
-    expect(handler.mock.calls[0]?.[1]).toEqual({
+    expect(installMetadata).toEqual({
       origin: "plugin-file",
       targetType: "plugin",
       requestKind: "plugin-file",

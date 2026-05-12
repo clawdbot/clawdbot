@@ -38,8 +38,6 @@ describe("registerNodeCli", () => {
 
     await program.parseAsync(["node", "start", "--json"], { from: "user" });
 
-    expect(daemonMocks.runNodeDaemonStart).toHaveBeenCalledWith(
-      expect.objectContaining({ json: true }),
-    );
+    expect(daemonMocks.runNodeDaemonStart.mock.calls.at(0)?.[0]?.json).toBe(true);
   });
 });

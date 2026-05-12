@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   _resetIMessageShortIdState,
   findLatestIMessageEntryForChat,
+  isKnownFromMeIMessageMessageId,
   rememberIMessageReplyCache,
   resolveIMessageMessageId,
 } from "./monitor-reply-cache.js";
@@ -110,6 +111,52 @@ describe("imessage short message id resolution", () => {
     expect(() => resolveIMessageMessageId("full-guid", { chatContext: { chatId: 99 } })).toThrow(
       "belongs to a different chat",
     );
+  });
+
+  it("recognizes only cached outbound message ids as own messages", () => {
+    rememberIMessageReplyCache({
+      accountId: "default",
+      messageId: "outbound-guid",
+      chatGuid: "any;-;+12069106512",
+      chatIdentifier: "+12069106512",
+      chatId: 3,
+      timestamp: Date.now(),
+      isFromMe: true,
+    });
+    rememberIMessageReplyCache({
+      accountId: "default",
+      messageId: "inbound-guid",
+      chatGuid: "any;-;+12069106512",
+      chatIdentifier: "+12069106512",
+      chatId: 3,
+      timestamp: Date.now(),
+      isFromMe: false,
+    });
+
+    expect(
+      isKnownFromMeIMessageMessageId("outbound-guid", {
+        accountId: "default",
+        chatGuid: "any;-;+12069106512",
+        chatIdentifier: "+12069106512",
+        chatId: 3,
+      }),
+    ).toBe(true);
+    expect(
+      isKnownFromMeIMessageMessageId("inbound-guid", {
+        accountId: "default",
+        chatGuid: "any;-;+12069106512",
+        chatIdentifier: "+12069106512",
+        chatId: 3,
+      }),
+    ).toBe(false);
+    expect(
+      isKnownFromMeIMessageMessageId("outbound-guid", {
+        accountId: "default",
+        chatGuid: "any;-;+12069106514",
+        chatIdentifier: "+12069106514",
+        chatId: 4,
+      }),
+    ).toBe(false);
   });
 });
 

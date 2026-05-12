@@ -127,20 +127,18 @@ describe("warning filter", () => {
         { type: "Warning", code: "OPENCLAW_VISIBLE_OVERRIDE" },
       );
       await flushWarnings();
-      expect(seenWarnings).toContainEqual(
-        expect.objectContaining({
-          code: "OPENCLAW_TEST_WARNING",
-          name: "Warning",
-          message: "Visible warning",
-        }),
-      );
-      expect(seenWarnings).toContainEqual(
-        expect.objectContaining({
-          code: "DEP0040",
-          name: "DeprecationWarning",
-          message: "The punycode module is deprecated.",
-        }),
-      );
+      expect(
+        seenWarnings.find((warning) => warning.code === "OPENCLAW_TEST_WARNING"),
+      ).toStrictEqual({
+        code: "OPENCLAW_TEST_WARNING",
+        name: "Warning",
+        message: "Visible warning",
+      });
+      expect(seenWarnings.find((warning) => warning.code === "DEP0040")).toStrictEqual({
+        code: "DEP0040",
+        name: "DeprecationWarning",
+        message: "The punycode module is deprecated.",
+      });
     } finally {
       process.off("warning", onWarning);
     }

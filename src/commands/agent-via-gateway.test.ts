@@ -88,7 +88,11 @@ function mockLocalAgentReply(text = "local") {
 }
 
 function requireFirstCallArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
-  const [arg] = mock.mock.calls[0] ?? [];
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
   if (arg === undefined) {
     throw new Error(`expected ${label} call`);
   }

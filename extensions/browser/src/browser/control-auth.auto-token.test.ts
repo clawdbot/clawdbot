@@ -64,7 +64,11 @@ vi.mock("../gateway/auth.js", () => ({
 }));
 
 function readPersistedConfig(): OpenClawConfig {
-  const persistedCfg = mocks.writeConfigFile.mock.calls[0]?.[0];
+  const [call] = mocks.writeConfigFile.mock.calls;
+  if (!call) {
+    throw new Error("expected persisted config write");
+  }
+  const [persistedCfg] = call;
   if (!persistedCfg) {
     throw new Error("expected persisted config");
   }

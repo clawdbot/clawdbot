@@ -163,13 +163,13 @@ describe("connectApnsHttp2Session", () => {
     expect(tunnelCall?.targetHost).toBe("api.push.apple.com");
     expect(tunnelCall?.targetPort).toBe(443);
     expect(tunnelCall?.timeoutMs).toBe(10_000);
-    expect(connectSpy).toHaveBeenCalledWith("https://api.push.apple.com", {
-      createConnection: expect.any(Function),
-    });
+    expect(connectSpy).toHaveBeenCalledTimes(1);
     const connectCall = connectSpy.mock.calls.at(-1) as
       | [string, http2.ClientSessionOptions]
       | undefined;
+    expect(connectCall?.[0]).toBe("https://api.push.apple.com");
     const createConnection = connectCall?.[1].createConnection;
+    expect(typeof createConnection).toBe("function");
     expect(createConnection?.(new URL("https://api.push.apple.com"), {})).toBe(fakeTlsSocket);
   });
 

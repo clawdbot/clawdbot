@@ -147,13 +147,30 @@ function wrapLine(line: string, maxWidth: number): string[] {
   return lines;
 }
 
+function coerceNoteMessage(message: unknown): string {
+  if (typeof message === "string") {
+    return message;
+  }
+  if (message == null) {
+    return "";
+  }
+  if (typeof message === "number" || typeof message === "boolean" || typeof message === "bigint") {
+    return String(message);
+  }
+  if (message instanceof Error) {
+    return message.message ? `${message.name}: ${message.message}` : message.name;
+  }
+  return "";
+}
+
 export function wrapNoteMessage(
-  message: string,
+  message: unknown,
   options: { maxWidth?: number; columns?: number } = {},
 ): string {
+  const text = coerceNoteMessage(message);
   const columns = options.columns ?? resolveNoteColumns(process.stdout.columns);
   const maxWidth = options.maxWidth ?? Math.max(40, Math.min(88, columns - 10));
-  return message
+  return text
     .split("\n")
     .flatMap((line) => wrapLine(line, maxWidth))
     .join("\n");
@@ -179,7 +196,7 @@ function createNoteOutput(columns: number): NodeJS.WriteStream {
   return output;
 }
 
-export function note(message: string, title?: string) {
+export function note(message: unknown, title?: string) {
   if (isSuppressedByEnv(process.env.OPENCLAW_SUPPRESS_NOTES)) {
     return;
   }

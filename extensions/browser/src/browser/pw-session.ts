@@ -13,6 +13,7 @@ import type {
 import { formatErrorMessage } from "../infra/errors.js";
 import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
 import { withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
+import { isSelectableCdpBrowserTarget } from "./cdp-target-filter.js";
 import {
   appendCdpPath,
   assertCdpEndpointAllowed,
@@ -1294,6 +1295,9 @@ export async function listPagesViaPlaywright(opts: {
           if (isRecoverablePlaywrightDisconnectError(err)) {
             throw err;
           }
+        }
+        if (!isSelectableCdpBrowserTarget({ url })) {
+          continue;
         }
         results.push({
           targetId: tid,

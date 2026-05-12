@@ -32,6 +32,14 @@ function createApi(params?: {
   });
 }
 
+function requireFirstRouteRegistration(mock: ReturnType<typeof vi.fn>) {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected webhook route registration");
+  }
+  return call[0] as Parameters<OpenClawPluginApi["registerHttpRoute"]>[0];
+}
+
 describe("webhooks plugin registration", () => {
   it("registers SecretRef-backed routes synchronously", () => {
     const registerHttpRoute = vi.fn();
@@ -56,11 +64,11 @@ describe("webhooks plugin registration", () => {
 
     expect(result).toBeUndefined();
     expect(registerHttpRoute).toHaveBeenCalledTimes(1);
-    const route = registerHttpRoute.mock.calls[0]?.[0];
-    expect(route?.path).toBe("/plugins/webhooks/zapier");
-    expect(route?.auth).toBe("plugin");
-    expect(route?.match).toBe("exact");
-    expect(route?.replaceExisting).toBe(true);
-    expect(route?.handler).toBeTypeOf("function");
+    const route = requireFirstRouteRegistration(registerHttpRoute);
+    expect(route.path).toBe("/plugins/webhooks/zapier");
+    expect(route.auth).toBe("plugin");
+    expect(route.match).toBe("exact");
+    expect(route.replaceExisting).toBe(true);
+    expect(route.handler).toBeTypeOf("function");
   });
 });

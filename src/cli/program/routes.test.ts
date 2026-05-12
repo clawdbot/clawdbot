@@ -138,12 +138,14 @@ describe("program routes", () => {
         "status",
         "--json",
         "--probe",
+        "--channel",
+        "imsg",
         "--timeout",
         "5000",
       ]),
     ).resolves.toBe(true);
     expect(channelsStatusCommandMock).toHaveBeenCalledWith(
-      { json: true, probe: true, timeout: "5000" },
+      { channel: "imsg", json: true, probe: true, timeout: "5000" },
       defaultRuntime,
     );
   });

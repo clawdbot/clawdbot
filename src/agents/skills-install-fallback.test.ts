@@ -141,7 +141,7 @@ describe("skills-install fallback edge cases", () => {
 
       expect(result.ok, testCase.label).toBe(false);
       testCase.assert(result);
-      const sudoCall = runCommandWithTimeoutMock.mock.calls[0] as
+      const sudoCall = runCommandWithTimeoutMock.mock.calls.at(0) as
         | [string[], { timeoutMs?: number }]
         | undefined;
       expect(sudoCall?.[0], testCase.label).toEqual(["sudo", "-n", "true"]);
@@ -205,10 +205,10 @@ describe("skills-install fallback edge cases", () => {
       });
 
       expect(result.ok).toBe(true);
-      const brewInstallCall = runCommandWithTimeoutMock.mock.calls[0] as
+      const brewInstallCall = runCommandWithTimeoutMock.mock.calls.at(0) as
         | [string[], { timeoutMs?: number }]
         | undefined;
-      const brewPrefixCall = runCommandWithTimeoutMock.mock.calls[1] as
+      const brewPrefixCall = runCommandWithTimeoutMock.mock.calls.at(1) as
         | [string[], { timeoutMs?: number }]
         | undefined;
       expect(brewInstallCall?.[0]).toEqual(["/safe/homebrew/bin/brew", "install", "go"]);
@@ -257,7 +257,7 @@ describe("skills-install fallback edge cases", () => {
       });
 
       expect(result.ok).toBe(true);
-      const firstCall = runCommandWithTimeoutMock.mock.calls[0] as
+      const firstCall = runCommandWithTimeoutMock.mock.calls.at(0) as
         | [string[], { timeoutMs?: number; env?: Record<string, string | undefined> }]
         | undefined;
       expect(firstCall?.[0]).toEqual(["uv", "tool", "install", "example-package"]);

@@ -118,7 +118,7 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     const result = await runCliAgent({ ...baseRunParams, trigger: "cron", jobId: "cron-job-123" });
 
     expect(runBeforeAgentReplyMock).toHaveBeenCalledTimes(1);
-    const [event, context] = runBeforeAgentReplyMock.mock.calls[0] ?? [];
+    const [event, context] = runBeforeAgentReplyMock.mock.calls.at(0) ?? [];
     expect(event).toEqual({ cleanedBody: baseRunParams.prompt });
     const hookContext = context as Record<string, unknown> | undefined;
     expect(hookContext?.jobId).toBe("cron-job-123");
@@ -164,7 +164,7 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     await runCliAgent({ ...baseRunParams, trigger: "user" });
 
     expect(runBeforeAgentReplyMock).not.toHaveBeenCalled();
-    expect(executePreparedCliRunMock).toHaveBeenCalled();
+    expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
   });
 
   it("falls through to the CLI subprocess when no before_agent_reply hook is registered", async () => {
@@ -175,7 +175,7 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     await runCliAgent({ ...baseRunParams, trigger: "cron" });
 
     expect(runBeforeAgentReplyMock).not.toHaveBeenCalled();
-    expect(executePreparedCliRunMock).toHaveBeenCalled();
+    expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
   });
 
   it("can close temporary CLI live sessions after a run", async () => {

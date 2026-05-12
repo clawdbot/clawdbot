@@ -246,13 +246,15 @@ describe("buildWorkspaceSkillSnapshot", () => {
       }),
     );
 
-    // We should only have loaded a small subset.
     const skillNames = snapshot.skills.map((skill) => skill.name);
-    expect(skillNames.length).toBeGreaterThan(0);
-    expect(skillNames.length).toBeLessThanOrEqual(5);
-    expect(new Set(skillNames).size).toBe(skillNames.length);
+    expect(skillNames).toStrictEqual([
+      "repo-skill-00",
+      "repo-skill-01",
+      "repo-skill-02",
+      "repo-skill-03",
+      "repo-skill-04",
+    ]);
     for (const name of skillNames) {
-      expect(name).toMatch(/^repo-skill-\d{2}$/);
       expect(snapshot.prompt).toContain(name);
     }
   });

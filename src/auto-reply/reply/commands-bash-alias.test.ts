@@ -69,11 +69,11 @@ describe("handleBashCommand alias routing", () => {
     const result = await handleBashCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
-    expect(handleBashChatCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "target",
-        sessionKey: "agent:target:whatsapp:direct:test-user",
-      }),
-    );
+    expect(handleBashChatCommandMock).toHaveBeenCalledTimes(1);
+    const [[bashParams]] = handleBashChatCommandMock.mock.calls as unknown as Array<
+      [{ agentId?: string; sessionKey?: string }]
+    >;
+    expect(bashParams.agentId).toBe("target");
+    expect(bashParams.sessionKey).toBe("agent:target:whatsapp:direct:test-user");
   });
 });

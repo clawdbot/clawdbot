@@ -142,6 +142,20 @@ beforeAll(async () => {
     await import("./invoke-browser.js"));
 });
 
+type BrowserDispatchRequest = {
+  path?: string;
+  query?: unknown;
+};
+
+function firstBrowserDispatchRequest(): BrowserDispatchRequest {
+  const [call] = dispatcherMocks.dispatch.mock.calls;
+  if (!call) {
+    throw new Error("expected browser dispatch call");
+  }
+  const [request] = call as [BrowserDispatchRequest, ...unknown[]];
+  return request;
+}
+
 describe("runBrowserProxyCommand", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -335,11 +349,8 @@ describe("runBrowserProxyCommand", () => {
       }),
     );
 
-    expect(dispatcherMocks.dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: "/snapshot",
-      }),
-    );
+    const request = firstBrowserDispatchRequest();
+    expect(request.path).toBe("/snapshot");
   });
 
   it("rejects unauthorized body.profile when allowProfiles is configured", async () => {
@@ -436,12 +447,9 @@ describe("runBrowserProxyCommand", () => {
       }),
     );
 
-    expect(dispatcherMocks.dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: "/stop",
-        query: { profile: "openclaw" },
-      }),
-    );
+    const request = firstBrowserDispatchRequest();
+    expect(request.path).toBe("/stop");
+    expect(request.query).toEqual({ profile: "openclaw" });
   });
 
   it("rejects persistent profile creation when allowProfiles is empty", async () => {

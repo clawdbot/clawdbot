@@ -1,7 +1,7 @@
 import { lstat, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { defaultQaSuiteConcurrencyForTransport } from "./qa-transport-registry.js";
 import {
   collectQaSuiteGatewayConfigPatch,
@@ -122,7 +122,11 @@ describe("qa suite planning helpers", () => {
     const sleeps: number[] = [];
     const releaseSleeps: Array<() => void> = [];
     const started: number[] = [];
-    const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+    const waitForStarted = async (expected: number[]) => {
+      await vi.waitFor(() => {
+        expect(started).toEqual(expected);
+      });
+    };
     const resultPromise = mapQaSuiteWithConcurrency(
       [1, 2, 3, 4],
       3,
@@ -141,17 +145,13 @@ describe("qa suite planning helpers", () => {
       },
     );
 
-    await tick();
-    expect(started).toEqual([1]);
+    await waitForStarted([1]);
     releaseSleeps.shift()?.();
-    await tick();
-    expect(started).toEqual([1, 2]);
+    await waitForStarted([1, 2]);
     releaseSleeps.shift()?.();
-    await tick();
-    expect(started).toEqual([1, 2, 3]);
+    await waitForStarted([1, 2, 3]);
     releaseSleeps.shift()?.();
-    await tick();
-    expect(started).toEqual([1, 2, 3, 4]);
+    await waitForStarted([1, 2, 3, 4]);
 
     const result = await resultPromise;
     expect(result).toEqual([1, 2, 3, 4]);

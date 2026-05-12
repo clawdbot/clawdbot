@@ -39,8 +39,44 @@ describe("buildWorkspaceSkillStatus", () => {
     };
 
     const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [entry] });
-    expect(report.skills).toHaveLength(1);
-    expect(report.skills[0]?.install).toStrictEqual([]);
+    expect(report.skills).toStrictEqual([
+      {
+        name: "os-scoped",
+        description: "test",
+        source: "test",
+        bundled: false,
+        filePath: "/tmp/os-scoped",
+        baseDir: "/tmp",
+        skillKey: "os-scoped",
+        primaryEnv: undefined,
+        emoji: undefined,
+        homepage: undefined,
+        always: false,
+        disabled: false,
+        blockedByAllowlist: false,
+        blockedByAgentFilter: false,
+        eligible: false,
+        modelVisible: false,
+        userInvocable: true,
+        commandVisible: false,
+        requirements: {
+          anyBins: [],
+          bins: ["fakebin"],
+          config: [],
+          env: [],
+          os: [mismatchedOs],
+        },
+        missing: {
+          anyBins: [],
+          bins: ["fakebin"],
+          config: [],
+          env: [],
+          os: [mismatchedOs],
+        },
+        configChecks: [],
+        install: [],
+      },
+    ]);
   });
 
   it("does not expose raw config values in config checks", () => {

@@ -223,6 +223,64 @@ describe("config io write prepare", () => {
     expect(persisted.gateway?.port).toBe(18888);
   });
 
+  it("normalizes retired Google provider catalog refs during unrelated config writes", () => {
+    const makeModel = (id: string, name: string) => ({
+      id,
+      name,
+      reasoning: true,
+      input: ["text" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+    });
+    const sourceConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            models: [makeModel("google/gemini-3-pro-preview", "Gemini 3 Pro")],
+          },
+          kilocode: {
+            baseUrl: "https://kilocode.test/v1",
+            models: [makeModel("google/gemini-3-pro-preview", "Gemini via Kilo")],
+          },
+        },
+      },
+      gateway: { port: 18789 },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            models: [makeModel("google/gemini-3.1-pro-preview", "Gemini 3 Pro")],
+          },
+          kilocode: {
+            baseUrl: "https://kilocode.test/v1",
+            models: [makeModel("google/gemini-3.1-pro-preview", "Gemini via Kilo")],
+          },
+        },
+      },
+      gateway: { port: 18789 },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig: {
+        ...runtimeConfig,
+        gateway: { port: 18888 },
+      },
+    }) as OpenClawConfig;
+
+    expect(persisted.models?.providers?.google?.models).toEqual([
+      makeModel("google/gemini-3.1-pro-preview", "Gemini 3 Pro"),
+    ]);
+    expect(persisted.models?.providers?.kilocode?.models).toEqual([
+      makeModel("google/gemini-3.1-pro-preview", "Gemini via Kilo"),
+    ]);
+    expect(persisted.gateway?.port).toBe(18888);
+  });
+
   it("allows explicit unsets to remove authored agent provider params", () => {
     const sourceConfig: OpenClawConfig = {
       agents: {
@@ -574,9 +632,7 @@ describe("config io write prepare", () => {
       auth: { mode: "token" },
     });
     const channels = persisted.channels as Record<string, Record<string, unknown>> | undefined;
-    expect(channels?.imessage).toMatchObject({
-      cliPath: "/usr/local/bin/imsg",
-    });
+    expect(channels?.imessage?.cliPath).toBe("/usr/local/bin/imsg");
     expect(channels?.imessage).not.toHaveProperty("runtimeOnlyDefault");
   });
 

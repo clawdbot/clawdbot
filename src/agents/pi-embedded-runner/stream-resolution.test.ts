@@ -30,8 +30,6 @@ const overrideBoundaryAwareStreamFnOnce = (streamFn: StreamFn): void => {
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`expected ${label} to be an object`);
   }

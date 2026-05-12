@@ -16,12 +16,28 @@ function jsonResponse(payload: unknown, status = 200) {
   });
 }
 
+function requireFirstFetchCall(fetchImpl: ReturnType<typeof vi.fn>) {
+  const [call] = fetchImpl.mock.calls as unknown[][];
+  if (!call) {
+    throw new Error("expected fetch call");
+  }
+  return call;
+}
+
 function requireFirstFetchInput(fetchImpl: ReturnType<typeof vi.fn>): RequestInfo | URL {
-  const input = fetchImpl.mock.calls[0]?.[0] as RequestInfo | URL | undefined;
+  const input = requireFirstFetchCall(fetchImpl)[0] as RequestInfo | URL | undefined;
   if (!input) {
     throw new Error("expected fetch input");
   }
   return input;
+}
+
+function requireFirstFetchInit(fetchImpl: ReturnType<typeof vi.fn>): RequestInit {
+  const init = requireFirstFetchCall(fetchImpl)[1];
+  if (!init || typeof init !== "object" || Array.isArray(init)) {
+    throw new Error("expected fetch init");
+  }
+  return init as RequestInit;
 }
 
 async function expectQaCredentialAdminError(promise: Promise<unknown>, code: string) {
@@ -69,8 +85,10 @@ describe("qa credential admin runtime", () => {
     });
 
     expect(result.credential.credentialId).toBe("cred-1");
-    const [url, init] = fetchImpl.mock.calls[0] ?? [];
-    expect(url).toBe("https://first-schnauzer-821.convex.site/qa-credentials/v1/admin/add");
+    expect(requireFirstFetchInput(fetchImpl)).toBe(
+      "https://first-schnauzer-821.convex.site/qa-credentials/v1/admin/add",
+    );
+    const init = requireFirstFetchInit(fetchImpl);
     const headers = init?.headers as Record<string, string>;
     expect(headers.authorization).toBe("Bearer maint-secret");
     const bodyText = init?.body;
@@ -207,8 +225,7 @@ describe("qa credential admin runtime", () => {
     });
 
     expect(result.credentials).toHaveLength(1);
-    const [, init] = fetchImpl.mock.calls[0] ?? [];
-    const bodyText = init?.body;
+    const bodyText = requireFirstFetchInit(fetchImpl).body;
     expect(typeof bodyText).toBe("string");
     const body = JSON.parse(bodyText as string) as Record<string, unknown>;
     expect(body).toEqual({

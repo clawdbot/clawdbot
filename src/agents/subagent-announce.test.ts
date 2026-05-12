@@ -369,7 +369,7 @@ describe("subagent announce seam flow", () => {
     });
 
     expect(didAnnounce).toBe(true);
-    const queuedCall = queueEmbeddedPiMessageWithOutcomeMock.mock.calls[0];
+    const queuedCall = queueEmbeddedPiMessageWithOutcomeMock.mock.calls.at(0);
     expect(queuedCall?.[0]).toBe("session-origin-provider-steer");
     expect(queuedCall?.[1]).toContain("[Internal task completion event]");
     expect(queuedCall?.[1]).toContain("task: do thing");
@@ -402,7 +402,7 @@ describe("subagent announce seam flow", () => {
 
     expect(didAnnounce).toBe(true);
     expect(agentSpy).toHaveBeenCalledTimes(1);
-    const agentCall = agentSpy.mock.calls[0]?.[0];
+    const agentCall = agentSpy.mock.calls.at(0)?.[0];
     expect(agentCall?.method).toBe("agent");
     expect(agentCall?.params?.sessionKey).toBe("agent:main:main");
     expect(agentCall?.params?.deliver).toBe(false);
@@ -435,7 +435,7 @@ describe("subagent announce seam flow", () => {
 
     expect(didAnnounce).toBe(true);
     expect(agentSpy).toHaveBeenCalledTimes(1);
-    const call = agentSpy.mock.calls[0]?.[0];
+    const call = agentSpy.mock.calls.at(0)?.[0];
     const params = call?.params ?? {};
     expect(params.sessionKey).toBe("agent:main:subagent:orchestrator");
     expect(params.deliver).toBe(false);
@@ -476,7 +476,7 @@ describe("subagent announce seam flow", () => {
 
     expect(didAnnounce).toBe(true);
     expect(agentSpy).toHaveBeenCalledTimes(1);
-    const agentCall = agentSpy.mock.calls[0]?.[0];
+    const agentCall = agentSpy.mock.calls.at(0)?.[0];
     expect(agentCall?.params?.deliver).toBe(true);
     expect(agentCall?.params?.channel).toBe("telegram");
     expect(agentCall?.params?.accountId).toBe("bot-123");

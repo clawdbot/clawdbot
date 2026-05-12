@@ -52,10 +52,18 @@ function createDeferred<T>() {
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
-  expect(value).toBeTruthy();
-  expect(typeof value).toBe("object");
-  expect(Array.isArray(value)).toBe(false);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
   return value as Record<string, unknown>;
+}
+
+function requireFirstRequestCall(request: ReturnType<typeof vi.fn>): unknown[] {
+  const [call] = request.mock.calls;
+  if (!call) {
+    throw new Error("Expected client request call");
+  }
+  return call;
 }
 
 function expectTextChatMessage(message: unknown, role: string, text: string): void {
@@ -901,8 +909,9 @@ describe("sendChatMessage", () => {
 
     expect(result).toMatch(UUID_V4_RE);
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request.mock.calls[0]?.[0]).toBe("chat.send");
-    const sendParams = requireRecord(request.mock.calls[0]?.[1]);
+    const [requestMethod, requestParams] = requireFirstRequestCall(request);
+    expect(requestMethod).toBe("chat.send");
+    const sendParams = requireRecord(requestParams);
     expect(sendParams.message).toBe("summarize");
     expect(sendParams.attachments).toEqual([
       {
@@ -950,8 +959,9 @@ describe("sendChatMessage", () => {
 
     expect(result).toMatch(UUID_V4_RE);
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request.mock.calls[0]?.[0]).toBe("chat.send");
-    const sendParams = requireRecord(request.mock.calls[0]?.[1]);
+    const [requestMethod, requestParams] = requireFirstRequestCall(request);
+    expect(requestMethod).toBe("chat.send");
+    const sendParams = requireRecord(requestParams);
     const attachments = sendParams.attachments;
     expect(Array.isArray(attachments)).toBe(true);
     const [attachmentParam] = attachments as unknown[];

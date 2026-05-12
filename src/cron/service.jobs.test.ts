@@ -468,20 +468,17 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
 
   it("allows isolated session job for non-default agents", () => {
     const state = createMockState(now, { defaultAgentId: "main" });
-    expect(
-      createJob(state, {
-        name: "isolated-job",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        wakeMode: "now",
-        payload: { kind: "agentTurn", message: "do it" },
-        agentId: "custom-agent",
-      }),
-    ).toMatchObject({
-      agentId: "custom-agent",
+    const job = createJob(state, {
+      name: "isolated-job",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
       sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "do it" },
+      agentId: "custom-agent",
     });
+    expect(job.agentId).toBe("custom-agent");
+    expect(job.sessionTarget).toBe("isolated");
   });
 
   it("rejects custom session targets with path separators", () => {

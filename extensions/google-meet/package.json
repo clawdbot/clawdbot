@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/google-meet",
-  "version": "2026.5.10-beta.1",
+  "version": "2026.5.12-beta.1",
   "description": "OpenClaw Google Meet participant plugin",
   "repository": {
     "type": "git",
@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "commander": "^14.0.3",
+    "commander": "14.0.3",
     "typebox": "1.1.38"
   },
   "devDependencies": {
@@ -16,7 +16,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.5.10-beta.1"
+    "openclaw": ">=2026.5.12-beta.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -33,10 +33,10 @@
       "minHostVersion": ">=2026.4.20"
     },
     "compat": {
-      "pluginApi": ">=2026.5.10-beta.1"
+      "pluginApi": ">=2026.5.12-beta.1"
     },
     "build": {
-      "openclawVersion": "2026.5.10-beta.1"
+      "openclawVersion": "2026.5.12-beta.1"
     },
     "release": {
       "publishToClawHub": true,

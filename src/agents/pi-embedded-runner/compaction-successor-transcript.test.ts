@@ -124,7 +124,31 @@ describe("rotateTranscriptAfterCompaction", () => {
     const header = requireValue(successor.getHeader(), "successor header");
     expect(header.parentSession).toBe(sessionFile);
     expect(header.cwd).toBe(dir);
-    expect(successor.buildSessionContext().messages.length).toBeGreaterThan(0);
+    const messages = successor.buildSessionContext().messages;
+    expect(messages.map((message) => message.role)).toStrictEqual([
+      "compactionSummary",
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
+    expect(messages[0]).toMatchObject({
+      role: "compactionSummary",
+      summary: "Summary of old user and old assistant.",
+      tokensBefore: 5000,
+    });
+    expect(messages[1]).toMatchObject({ role: "user", content: "kept user", timestamp: 3 });
+    expect(messages[2]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "kept assistant" }],
+      timestamp: 4,
+    });
+    expect(messages[3]).toMatchObject({ role: "user", content: "post user", timestamp: 5 });
+    expect(messages[4]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "post assistant" }],
+      timestamp: 6,
+    });
   });
 
   it("creates a compacted successor transcript and leaves the archive untouched", async () => {

@@ -68,10 +68,11 @@ function expectTypingCall(
   mock: ReturnType<typeof vi.fn>,
   expected: { cfg: OpenClawConfig; to: string },
 ) {
-  const params = mock.mock.calls[0]?.[0] as { cfg?: unknown; to?: unknown } | undefined;
-  if (!params) {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
     throw new Error("missing typing call");
   }
+  const [params] = call as [{ cfg?: unknown; to?: unknown }];
   expect(params.cfg).toBe(expected.cfg);
   expect(params.to).toBe(expected.to);
 }

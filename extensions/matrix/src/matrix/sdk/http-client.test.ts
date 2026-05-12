@@ -123,15 +123,20 @@ describe("MatrixAuthedHttpClient", () => {
       homeserver: "https://matrix.example.org",
       accessToken: "token",
     });
-    await expect(
-      client.requestJson({
+    let rejection: unknown;
+    try {
+      await client.requestJson({
         method: "GET",
         endpoint: "/_matrix/client/v3/rooms",
         timeoutMs: 5000,
-      }),
-    ).rejects.toMatchObject({
-      message: "forbidden",
-      statusCode: 403,
-    });
+      });
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(Error);
+    const httpError = rejection as Error & { statusCode?: unknown };
+    expect(httpError.message).toBe("forbidden");
+    expect(httpError.statusCode).toBe(403);
   });
 });

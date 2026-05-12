@@ -158,8 +158,9 @@ function buildPreparedContext(params?: {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -175,8 +176,13 @@ function callArg(
   label: string,
 ) {
   const call = mock.mock.calls.at(callIndex);
-  expect(call, label).toBeDefined();
-  return call?.[argIndex];
+  if (!call) {
+    throw new Error(`Expected mock call: ${label}`);
+  }
+  if (argIndex >= call.length) {
+    throw new Error(`Expected mock call argument ${argIndex}: ${label}`);
+  }
+  return call[argIndex];
 }
 
 async function expectFailoverAttribution(
@@ -284,7 +290,7 @@ describe("runCliAgent reliability", () => {
     ).rejects.toThrow("produced no output");
 
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [notice, opts] = enqueueSystemEventMock.mock.calls[0] ?? [];
+    const [notice, opts] = enqueueSystemEventMock.mock.calls.at(0) ?? [];
     expect(String(notice)).toContain("produced no output");
     expect(String(notice)).toContain("interactive input or an approval prompt");
     expect(requireRecord(opts, "system event options").sessionKey).toBe("agent:main:main");

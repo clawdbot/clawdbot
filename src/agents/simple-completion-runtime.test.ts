@@ -102,8 +102,10 @@ function expectPreparedModelResult(
 
 function callArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
   const call = mock.mock.calls[index];
-  expect(call).toBeDefined();
-  return call?.[0];
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  return call[0];
 }
 
 describe("prepareSimpleCompletionModel", () => {
@@ -352,7 +354,7 @@ describe("prepareSimpleCompletionModel", () => {
       modelId: "chat-local",
     });
 
-    const overrideCall = hoisted.applyLocalNoAuthHeaderOverrideMock.mock.calls[0];
+    const overrideCall = hoisted.applyLocalNoAuthHeaderOverrideMock.mock.calls.at(0);
     expect((overrideCall?.[0] as { provider?: string; id?: string } | undefined)?.provider).toBe(
       "local-openai",
     );

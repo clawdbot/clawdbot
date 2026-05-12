@@ -1179,7 +1179,18 @@ describe("ensureOnboardingPluginInstalled", () => {
         workspaceDir,
       });
 
-      expect(recordPluginInstall).toHaveBeenCalledWith(expect.anything(), {
+      const [recordCfg, recordUpdate] = readFirstMockCall(
+        recordPluginInstall,
+        "recordPluginInstall",
+      ) as [OpenClawConfig, PluginInstallRecord];
+      expect(recordCfg).toEqual({
+        plugins: {
+          load: {
+            paths: [realPluginDir],
+          },
+        },
+      });
+      expect(recordUpdate).toEqual({
         pluginId: "demo-plugin",
         source: "path",
         sourcePath: "./plugins/demo",

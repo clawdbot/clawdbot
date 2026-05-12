@@ -105,10 +105,13 @@ function mockNodeList(params?: { commands?: string[]; remoteIp?: string }) {
 
 function expectSingleImage(result: NodesToolResult, params?: { mimeType?: string }) {
   const images = (result.content ?? []).filter((block) => block.type === "image");
-  expect(images).toHaveLength(1);
-  if (params?.mimeType) {
-    expect(images[0]?.mimeType).toBe(params.mimeType);
-  }
+  expect(images).toEqual([
+    {
+      type: "image",
+      data: JPG_PAYLOAD.base64,
+      mimeType: params?.mimeType ?? "image/jpeg",
+    },
+  ]);
 }
 
 function expectNoImages(result: NodesToolResult) {

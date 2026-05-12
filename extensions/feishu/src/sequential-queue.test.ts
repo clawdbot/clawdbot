@@ -84,7 +84,7 @@ describe("createSequentialQueue", () => {
         }),
       ).rejects.toThrow("boom");
 
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise<void>((resolve) => setImmediate(resolve));
       expect(unhandled).toStrictEqual([]);
 
       await expect(

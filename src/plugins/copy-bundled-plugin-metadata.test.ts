@@ -437,6 +437,25 @@ describe("copyBundledPluginMetadata", () => {
     expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", pluginId))).toBe(expectedExists);
   });
 
+  it("removes build-excluded bundled plugin metadata", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-excluded-meta-");
+    createPlugin(repoRoot, {
+      id: "qqbot",
+      packageName: "@openclaw/qqbot",
+      packageOpenClaw: {
+        extensions: ["./index.ts"],
+        setupEntry: "./setup-entry.ts",
+      },
+    });
+    const staleDistDir = path.join(repoRoot, "dist", "extensions", "qqbot");
+    fs.mkdirSync(staleDistDir, { recursive: true });
+    fs.writeFileSync(path.join(staleDistDir, "index.js"), "export default {}\n", "utf8");
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    expect(fs.existsSync(staleDistDir)).toBe(false);
+  });
+
   it("preserves manifest-less runtime support package outputs and copies package metadata", () => {
     const repoRoot = makeRepoRoot("openclaw-bundled-runtime-support-");
     const pluginDir = path.join(repoRoot, "extensions", "image-generation-core");

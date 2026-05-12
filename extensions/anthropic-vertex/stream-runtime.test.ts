@@ -141,13 +141,10 @@ describe("createAnthropicVertexStreamFn", () => {
 
     void streamFn(model, { messages: [] }, {});
 
-    expect(streamAnthropicMock).toHaveBeenCalledWith(
-      model,
-      { messages: [] },
-      expect.objectContaining({
-        maxTokens: 128000,
-      }),
-    );
+    const transportOptions = streamAnthropicMock.mock.calls[0]?.[2] as
+      | { maxTokens?: number }
+      | undefined;
+    expect(transportOptions?.maxTokens).toBe(128000);
   });
 
   it("clamps explicit maxTokens to the selected model limit", () => {
@@ -157,13 +154,10 @@ describe("createAnthropicVertexStreamFn", () => {
 
     void streamFn(model, { messages: [] }, { maxTokens: 999999 });
 
-    expect(streamAnthropicMock).toHaveBeenCalledWith(
-      model,
-      { messages: [] },
-      expect.objectContaining({
-        maxTokens: 128000,
-      }),
-    );
+    const transportOptions = streamAnthropicMock.mock.calls[0]?.[2] as
+      | { maxTokens?: number }
+      | undefined;
+    expect(transportOptions?.maxTokens).toBe(128000);
   });
 
   it("maps xhigh reasoning to max effort for adaptive Opus models", () => {
@@ -173,14 +167,11 @@ describe("createAnthropicVertexStreamFn", () => {
 
     void streamFn(model, { messages: [] }, { reasoning: "xhigh" });
 
-    expect(streamAnthropicMock).toHaveBeenCalledWith(
-      model,
-      { messages: [] },
-      expect.objectContaining({
-        thinkingEnabled: true,
-        effort: "max",
-      }),
-    );
+    const transportOptions = streamAnthropicMock.mock.calls[0]?.[2] as
+      | { effort?: string; thinkingEnabled?: boolean }
+      | undefined;
+    expect(transportOptions?.thinkingEnabled).toBe(true);
+    expect(transportOptions?.effort).toBe("max");
   });
 
   it("maps xhigh reasoning to xhigh effort for Opus 4.7", () => {
@@ -190,14 +181,11 @@ describe("createAnthropicVertexStreamFn", () => {
 
     void streamFn(model, { messages: [] }, { reasoning: "xhigh" });
 
-    expect(streamAnthropicMock).toHaveBeenCalledWith(
-      model,
-      { messages: [] },
-      expect.objectContaining({
-        thinkingEnabled: true,
-        effort: "xhigh",
-      }),
-    );
+    const transportOptions = streamAnthropicMock.mock.calls[0]?.[2] as
+      | { effort?: string; thinkingEnabled?: boolean }
+      | undefined;
+    expect(transportOptions?.thinkingEnabled).toBe(true);
+    expect(transportOptions?.effort).toBe("xhigh");
   });
 
   it("applies Anthropic cache-boundary shaping before forwarding payload hooks", async () => {
@@ -266,13 +254,12 @@ describe("createAnthropicVertexStreamFn", () => {
 
     void streamFn(model, { messages: [] }, { maxTokens: Number.NaN });
 
-    expect(streamAnthropicMock).toHaveBeenCalledWith(
-      model,
-      { messages: [] },
-      expect.not.objectContaining({
-        maxTokens: expect.anything(),
-      }),
-    );
+    expect(streamAnthropicMock).toHaveBeenCalledTimes(1);
+    const [calledModel, payload, transportOptions] = streamAnthropicMock.mock.calls[0] ?? [];
+    expect(calledModel).toBe(model);
+    expect(payload).toEqual({ messages: [] });
+    expect(transportOptions).toBeTypeOf("object");
+    expect(Object.hasOwn(transportOptions as object, "maxTokens")).toBe(false);
   });
 });
 

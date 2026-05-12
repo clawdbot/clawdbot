@@ -13,11 +13,19 @@ function createOkFetcher() {
   return vi.fn<ZaloFetch>(async () => new Response(JSON.stringify({ ok: true, result: {} })));
 }
 
+function requireFirstFetchCall(fetcher: ReturnType<typeof createOkFetcher>, label: string) {
+  const [call] = fetcher.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call;
+}
+
 async function expectPostJsonRequest(run: (token: string, fetcher: ZaloFetch) => Promise<unknown>) {
   const fetcher = createOkFetcher();
   await run("test-token", fetcher);
   expect(fetcher).toHaveBeenCalledTimes(1);
-  const [, init] = fetcher.mock.calls[0] ?? [];
+  const [, init] = requireFirstFetchCall(fetcher, "Zalo request");
   if (!init) {
     throw new Error("expected Zalo request init");
   }
@@ -69,7 +77,7 @@ describe("Zalo API request methods", () => {
       await vi.advanceTimersByTimeAsync(25);
 
       await rejected;
-      const [, init] = fetcher.mock.calls[0] ?? [];
+      const [, init] = requireFirstFetchCall(fetcher, "Zalo chat action request");
       if (!init) {
         throw new Error("expected Zalo chat action request init");
       }

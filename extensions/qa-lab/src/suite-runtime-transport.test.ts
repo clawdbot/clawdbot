@@ -224,6 +224,7 @@ describe("qa suite transport helpers", () => {
       senderName: "OpenClaw QA",
     });
 
-    await expect(pending).resolves.toMatchObject({ text: "done" });
+    const message = await pending;
+    expect(message.text).toBe("done");
   });
 });

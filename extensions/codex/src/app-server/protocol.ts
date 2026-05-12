@@ -97,10 +97,34 @@ export type CodexThreadStartResponse = {
   modelProvider?: string | null;
 };
 
+export type CodexThreadForkParams = CodexThreadStartParams & {
+  threadId: string;
+  baseInstructions?: string;
+  ephemeral?: boolean;
+  threadSource?: string | JsonObject;
+  excludeTurns?: boolean;
+};
+
+export type CodexThreadForkResponse = CodexThreadStartResponse;
+
 export type CodexThreadResumeResponse = {
   thread: CodexThread;
   model: string;
   modelProvider?: string | null;
+};
+
+export type CodexThreadInjectItemsParams = JsonObject & {
+  threadId: string;
+  items: JsonValue[];
+};
+
+export type CodexThreadUnsubscribeParams = JsonObject & {
+  threadId: string;
+};
+
+export type CodexTurnInterruptParams = JsonObject & {
+  threadId: string;
+  turnId: string;
 };
 
 export type CodexTurnStartParams = JsonObject & {
@@ -142,7 +166,54 @@ export type CodexThread = {
   id: string;
   sessionId?: string;
   name?: string | null;
+  preview?: string | null;
+  createdAt?: number | null;
+  updatedAt?: number | null;
+  status?: CodexThreadStatus | null;
   cwd?: string | null;
+  source?: CodexSessionSource | null;
+  threadSource?: string | null;
+  agentNickname?: string | null;
+  agentRole?: string | null;
+};
+
+export type CodexThreadStatus =
+  | { type: "notLoaded" }
+  | { type: "idle" }
+  | { type: "systemError" }
+  | { type: "active"; activeFlags?: string[] };
+
+export type CodexSubAgentThreadSpawnSource = {
+  parent_thread_id: string;
+  depth?: number;
+  agent_path?: string | null;
+  agent_nickname?: string | null;
+  agent_role?: string | null;
+};
+
+export type CodexSubAgentSource =
+  | "review"
+  | "compact"
+  | "memory_consolidation"
+  | { thread_spawn: CodexSubAgentThreadSpawnSource }
+  | { other: string };
+
+export type CodexSessionSource =
+  | "cli"
+  | "vscode"
+  | "exec"
+  | "appServer"
+  | "unknown"
+  | { custom: string }
+  | { subAgent: CodexSubAgentSource };
+
+export type CodexThreadStartedNotification = {
+  thread: CodexThread;
+};
+
+export type CodexThreadStatusChangedNotification = {
+  threadId: string;
+  status: CodexThreadStatus;
 };
 
 export type CodexThreadItem = {
@@ -401,7 +472,11 @@ export declare namespace v2 {
 }
 
 type CodexAppServerRequestParamsOverride = {
+  "thread/fork": CodexThreadForkParams;
+  "thread/inject_items": CodexThreadInjectItemsParams;
   "thread/start": CodexThreadStartParams;
+  "thread/unsubscribe": CodexThreadUnsubscribeParams;
+  "turn/interrupt": CodexTurnInterruptParams;
 };
 
 type CodexAppServerRequestResultMap = {
@@ -422,9 +497,12 @@ type CodexAppServerRequestResultMap = {
   "review/start": JsonValue;
   "skills/list": CodexSkillsListResponse;
   "thread/compact/start": JsonValue;
+  "thread/fork": CodexThreadForkResponse;
+  "thread/inject_items": JsonValue;
   "thread/list": JsonValue;
   "thread/resume": CodexThreadResumeResponse;
   "thread/start": CodexThreadStartResponse;
+  "thread/unsubscribe": JsonValue;
   "turn/interrupt": JsonValue;
   "turn/start": CodexTurnStartResponse;
   "turn/steer": JsonValue;

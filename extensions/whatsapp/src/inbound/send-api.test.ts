@@ -19,6 +19,13 @@ vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
   };
 });
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`${label} was not an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
 describe("createWebSendApi", () => {
   const sendMessage = vi.fn(
     async (
@@ -37,15 +44,6 @@ describe("createWebSendApi", () => {
       defaultAccountId: "main",
     });
   });
-
-  function requireRecord(value: unknown, label: string): Record<string, unknown> {
-    expect(typeof value).toBe("object");
-    expect(value).not.toBeNull();
-    if (typeof value !== "object" || value === null) {
-      throw new Error(`${label} was not an object`);
-    }
-    return value as Record<string, unknown>;
-  }
 
   function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
     for (const [key, value] of Object.entries(fields)) {
@@ -423,9 +421,8 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
     });
     await api.sendPoll("+15555550000", { question: "Q?", options: ["a", "b"] });
     expect(sendMessage.mock.calls[0]?.[0]).toBe("987654@lid");
-    expect(typeof sendMessage.mock.calls[0]?.[1]).toBe("object");
-    expect(sendMessage.mock.calls[0]?.[1]).not.toBeNull();
-    expect("poll" in (sendMessage.mock.calls[0]?.[1] as Record<string, unknown>)).toBe(true);
+    const payload = requireRecord(sendMessage.mock.calls[0]?.[1], "send poll payload");
+    expect("poll" in payload).toBe(true);
   });
 
   it("resolves PN to LID for sendComposingTo presence", async () => {

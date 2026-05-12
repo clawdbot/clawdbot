@@ -44,6 +44,14 @@ function expectResolvedReasoningLevel(value: unknown, expected: string) {
   expect((value as { resolvedReasoningLevel?: unknown }).resolvedReasoningLevel).toBe(expected);
 }
 
+function requireBuildStatusReplyParams(index = 0): unknown {
+  const call = buildStatusReply.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`expected buildStatusReply call ${index}`);
+  }
+  return call[0];
+}
+
 describe("resolveDirectStatusReplyForSession", () => {
   beforeEach(() => {
     buildStatusReply.mockReset();
@@ -100,7 +108,7 @@ describe("resolveDirectStatusReplyForSession", () => {
     });
 
     expect(buildStatusReply).toHaveBeenCalledOnce();
-    expectResolvedReasoningLevel(buildStatusReply.mock.calls[0]?.[0], "off");
+    expectResolvedReasoningLevel(requireBuildStatusReplyParams(), "off");
     expectResolvedReasoningLevel(result, "off");
   });
 

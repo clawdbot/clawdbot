@@ -442,7 +442,7 @@ export async function setupFeishuLifecycleHandler(params: {
   });
 
   const handlers: Record<string, (data: unknown) => Promise<void>> = {};
-  for (const [key, value] of Object.entries(register.mock.calls[0]?.[0] ?? {})) {
+  for (const [key, value] of Object.entries(register.mock.calls.at(0)?.[0] ?? {})) {
     handlers[key] = value as (data: unknown) => Promise<void>;
   }
   const handler = handlers[params.handlerKey];

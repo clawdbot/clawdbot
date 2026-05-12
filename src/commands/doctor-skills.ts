@@ -1,6 +1,13 @@
+import { existsSync } from "node:fs";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
+import {
+  detectGhConfigDirMismatch,
+  formatGhConfigDirMismatchHint,
+  type GhConfigDiscoveryInput,
+  type GhConfigDiscoveryResult,
+} from "../agents/skills/gh-config-discovery.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { note } from "../terminal/note.js";
@@ -41,6 +48,41 @@ function formatInstallHints(skill: SkillStatusEntry): string[] {
     return [];
   }
   return skill.install.slice(0, 2).map((entry) => `  install option: ${entry.label}`);
+}
+
+function defaultGhConfigDiscoveryInput(): GhConfigDiscoveryInput {
+  return {
+    platform: process.platform,
+    env: process.env as GhConfigDiscoveryInput["env"],
+    fileExists: (absolutePath) => existsSync(absolutePath),
+  };
+}
+
+export function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
+  return describeGhConfigDirHintFromDiscovery(skills, defaultGhConfigDiscoveryInput());
+}
+
+export function describeGhConfigDirHintFromDiscovery(
+  skills: SkillStatusEntry[],
+  discoveryInput: GhConfigDiscoveryInput,
+): string[] {
+  const githubSkill = skills.find((skill) => skill.name === "github");
+  if (!githubSkill) {
+    return [];
+  }
+  if (
+    !githubSkill.eligible ||
+    githubSkill.blockedByAgentFilter ||
+    githubSkill.disabled ||
+    githubSkill.blockedByAllowlist
+  ) {
+    return [];
+  }
+  const result: GhConfigDiscoveryResult = detectGhConfigDirMismatch(discoveryInput);
+  if (result.kind !== "mismatch") {
+    return [];
+  }
+  return formatGhConfigDirMismatchHint(result);
 }
 
 export function formatUnavailableSkillDoctorLines(skills: SkillStatusEntry[]): string[] {
@@ -91,6 +133,10 @@ export async function maybeRepairSkillReadiness(params: {
     config: params.cfg,
     agentId,
   });
+  const githubHint = describeGhConfigDirHint(report.skills);
+  if (githubHint.length > 0) {
+    note(githubHint.join("\n"), "GitHub CLI");
+  }
   const unavailable = collectUnavailableAgentSkills(report);
   if (unavailable.length === 0) {
     return params.cfg;

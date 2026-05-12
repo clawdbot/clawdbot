@@ -95,7 +95,9 @@ describe("resolveGatewayHealthProbeToken", () => {
       } as OpenClawConfig);
 
       expect(resolved.token).toBeUndefined();
-      expect(resolved.unresolvedRefReason).toContain("gateway.auth.token SecretRef is unresolved");
+      expect(resolved.unresolvedRefReason).toBe(
+        "gateway.auth.token SecretRef is unresolved (file:gateway-token-file:value).",
+      );
     });
   });
 

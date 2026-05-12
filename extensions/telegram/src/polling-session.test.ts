@@ -79,9 +79,11 @@ function statusPatches(source: MockCallSource): Record<string, unknown>[] {
 }
 
 function expectPollingConnectedPatch(patch: Record<string, unknown> | undefined): void {
-  expect(patch).toBeDefined();
-  expect(patch?.connected).toBe(true);
-  expect(patch?.mode).toBe("polling");
+  if (!patch) {
+    throw new Error("Expected polling connected patch");
+  }
+  expect(patch.connected).toBe(true);
+  expect(patch.mode).toBe("polling");
 }
 
 function makeBot() {

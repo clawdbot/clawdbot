@@ -16,8 +16,7 @@ describe("buildStreamErrorAssistantMessage", () => {
       model,
       errorMessage: "stream aborted by upstream host=internal.example.com",
     });
-    expect(Array.isArray(message.content)).toBe(true);
-    expect(message.content.length).toBeGreaterThan(0);
+    expect(message.content).toStrictEqual([{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }]);
   });
 
   it("places only the sentinel in content and never echoes the raw error text", () => {

@@ -3,8 +3,14 @@ import type { ProviderAuthContext, ProviderAuthResult } from "openclaw/plugin-sd
 import type { ProviderAuthMethod } from "openclaw/plugin-sdk/plugin-entry";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  OPENAI_ACCOUNT_WIZARD_GROUP,
   OPENAI_API_KEY_LABEL,
-  OPENAI_API_KEY_WIZARD_GROUP,
+  OPENAI_CHATGPT_DEVICE_PAIRING_HINT,
+  OPENAI_CHATGPT_DEVICE_PAIRING_LABEL,
+  OPENAI_CHATGPT_LOGIN_HINT,
+  OPENAI_CHATGPT_LOGIN_LABEL,
+  OPENAI_CODEX_API_KEY_BACKUP_HINT,
+  OPENAI_CODEX_API_KEY_BACKUP_LABEL,
   OPENAI_CODEX_DEVICE_PAIRING_HINT,
   OPENAI_CODEX_DEVICE_PAIRING_LABEL,
   OPENAI_CODEX_LOGIN_HINT,
@@ -37,7 +43,37 @@ async function runOpenAICodexProviderAuthMethod(
   return method.run(ctx);
 }
 
-function buildOpenAISetupProvider(): ProviderPlugin {
+export function buildOpenAISetupProvider(): ProviderPlugin {
+  const oauthMethod = {
+    id: "oauth",
+    label: OPENAI_CHATGPT_LOGIN_LABEL,
+    hint: OPENAI_CHATGPT_LOGIN_HINT,
+    kind: "oauth",
+    wizard: {
+      choiceId: "openai",
+      choiceLabel: OPENAI_CHATGPT_LOGIN_LABEL,
+      choiceHint: OPENAI_CHATGPT_LOGIN_HINT,
+      assistantPriority: -40,
+      ...OPENAI_ACCOUNT_WIZARD_GROUP,
+    },
+    run: async (ctx) => runOpenAICodexProviderAuthMethod("oauth", ctx),
+  } satisfies ProviderAuthMethod;
+
+  const deviceCodeMethod = {
+    id: "device-code",
+    label: OPENAI_CHATGPT_DEVICE_PAIRING_LABEL,
+    hint: OPENAI_CHATGPT_DEVICE_PAIRING_HINT,
+    kind: "device_code",
+    wizard: {
+      choiceId: "openai-device-code",
+      choiceLabel: OPENAI_CHATGPT_DEVICE_PAIRING_LABEL,
+      choiceHint: OPENAI_CHATGPT_DEVICE_PAIRING_HINT,
+      assistantPriority: -10,
+      ...OPENAI_ACCOUNT_WIZARD_GROUP,
+    },
+    run: async (ctx) => runOpenAICodexProviderAuthMethod("device-code", ctx),
+  } satisfies ProviderAuthMethod;
+
   const apiKeyMethod = {
     id: "api-key",
     label: OPENAI_API_KEY_LABEL,
@@ -46,7 +82,9 @@ function buildOpenAISetupProvider(): ProviderPlugin {
     wizard: {
       choiceId: "openai-api-key",
       choiceLabel: OPENAI_API_KEY_LABEL,
-      ...OPENAI_API_KEY_WIZARD_GROUP,
+      choiceHint: "Use your OpenAI API key directly",
+      assistantPriority: 5,
+      ...OPENAI_ACCOUNT_WIZARD_GROUP,
     },
     run: async (ctx) => runOpenAIProviderAuthMethod("api-key", ctx),
   } satisfies ProviderAuthMethod;
@@ -56,11 +94,11 @@ function buildOpenAISetupProvider(): ProviderPlugin {
     label: "OpenAI",
     docsPath: "/providers/models",
     envVars: ["OPENAI_API_KEY"],
-    auth: [apiKeyMethod],
+    auth: [oauthMethod, deviceCodeMethod, apiKeyMethod],
   };
 }
 
-function buildOpenAICodexSetupProvider(): ProviderPlugin {
+export function buildOpenAICodexSetupProvider(): ProviderPlugin {
   const oauthMethod = {
     id: "oauth",
     label: OPENAI_CODEX_LOGIN_LABEL,
@@ -91,11 +129,26 @@ function buildOpenAICodexSetupProvider(): ProviderPlugin {
     run: async (ctx) => runOpenAICodexProviderAuthMethod("device-code", ctx),
   } satisfies ProviderAuthMethod;
 
+  const apiKeyBackupMethod = {
+    id: "api-key",
+    label: OPENAI_CODEX_API_KEY_BACKUP_LABEL,
+    hint: OPENAI_CODEX_API_KEY_BACKUP_HINT,
+    kind: "api_key",
+    wizard: {
+      choiceId: "openai-codex-api-key",
+      choiceLabel: OPENAI_CODEX_API_KEY_BACKUP_LABEL,
+      choiceHint: OPENAI_CODEX_API_KEY_BACKUP_HINT,
+      assistantPriority: 5,
+      ...OPENAI_CODEX_WIZARD_GROUP,
+    },
+    run: async (ctx) => runOpenAICodexProviderAuthMethod("api-key", ctx),
+  } satisfies ProviderAuthMethod;
+
   return {
     id: "openai-codex",
     label: "OpenAI Codex",
     docsPath: "/providers/models",
-    auth: [oauthMethod, deviceCodeMethod],
+    auth: [oauthMethod, deviceCodeMethod, apiKeyBackupMethod],
   };
 }
 

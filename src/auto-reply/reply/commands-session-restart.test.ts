@@ -127,24 +127,28 @@ describe("handleRestartCommand", () => {
     const result = await handleRestartCommand(restartCommandParams(), true);
 
     expect(result?.shouldContinue).toBe(false);
-    expect(mocks.writeRestartSentinel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "restart",
-        status: "ok",
-        sessionKey: "agent:main:telegram:direct:123:thread:thread-1",
-        deliveryContext: {
-          channel: "telegram",
-          to: "telegram:123",
-          accountId: "default",
-        },
-        threadId: "thread-1",
-        message: "/restart",
-        continuation: {
-          kind: "agentTurn",
-          message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
-        },
-      }),
-    );
+    expect(mocks.writeRestartSentinel).toHaveBeenCalledOnce();
+    const sentinelPayload = mocks.writeRestartSentinel.mock.calls[0]?.[0];
+    expect(sentinelPayload?.kind).toBe("restart");
+    expect(sentinelPayload?.status).toBe("ok");
+    expect(typeof sentinelPayload?.ts).toBe("number");
+    expect(sentinelPayload?.sessionKey).toBe("agent:main:telegram:direct:123:thread:thread-1");
+    expect(sentinelPayload?.deliveryContext).toEqual({
+      channel: "telegram",
+      to: "telegram:123",
+      accountId: "default",
+    });
+    expect(sentinelPayload?.threadId).toBe("thread-1");
+    expect(sentinelPayload?.message).toBe("/restart");
+    expect(sentinelPayload?.continuation).toEqual({
+      kind: "agentTurn",
+      message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+    });
+    expect(sentinelPayload?.doctorHint).toBe("Run: openclaw doctor --non-interactive");
+    expect(sentinelPayload?.stats).toEqual({
+      mode: "gateway.restart",
+      reason: "/restart",
+    });
     expect(mocks.triggerOpenClawRestart).toHaveBeenCalledTimes(1);
   });
 
@@ -161,16 +165,16 @@ describe("handleRestartCommand", () => {
       const scheduledArgs = mocks.scheduleGatewaySigusr1Restart.mock.calls.at(-1)?.[0];
       await scheduledArgs?.emitHooks?.beforeEmit?.();
 
-      expect(mocks.writeRestartSentinel).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "restart",
-          status: "ok",
-          sessionKey: "agent:main:telegram:direct:123:thread:thread-1",
-          continuation: expect.objectContaining({
-            kind: "agentTurn",
-          }),
-        }),
-      );
+      expect(mocks.writeRestartSentinel).toHaveBeenCalledOnce();
+      const sentinelPayload = mocks.writeRestartSentinel.mock.calls[0]?.[0];
+      expect(sentinelPayload?.kind).toBe("restart");
+      expect(sentinelPayload?.status).toBe("ok");
+      expect(sentinelPayload?.sessionKey).toBe("agent:main:telegram:direct:123:thread:thread-1");
+      expect(sentinelPayload?.continuation).toEqual({
+        kind: "agentTurn",
+        message:
+          "The gateway restart completed successfully. Tell the user OpenClaw restarted successfully and continue any pending work.",
+      });
     } finally {
       process.removeListener("SIGUSR1", handler);
     }

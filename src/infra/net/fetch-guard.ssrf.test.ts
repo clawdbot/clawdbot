@@ -98,28 +98,42 @@ function expectDispatcherAttached(value: unknown): void {
 }
 
 function getSecondRequestHeaders(fetchImpl: ReturnType<typeof vi.fn>): Headers {
-  const [, secondInit] = fetchImpl.mock.calls[1] as [string, RequestInit];
+  const [, secondInit] = fetchImpl.mock.calls.at(1) as [string, RequestInit];
   return new Headers(secondInit.headers);
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function getFirstRequestInit(fetchImpl: ReturnType<typeof vi.fn>): RequestInit {
+  const [call] = fetchImpl.mock.calls;
+  if (!call) {
+    throw new Error("expected first fetch call");
+  }
+  const [, init] = call as [string, RequestInit | undefined];
+  return requireRecord(init, "first fetch init") as RequestInit;
+}
+
 function getSecondRequestInit(fetchImpl: ReturnType<typeof vi.fn>): RequestInit {
-  const [, secondInit] = fetchImpl.mock.calls[1] as [string, RequestInit];
+  const [, secondInit] = fetchImpl.mock.calls.at(1) as [string, RequestInit];
   return secondInit;
 }
 
 function expectAgentConstructorOptions(params: { bodyTimeout: number; headersTimeout: number }) {
-  const options = agentCtor.mock.calls[0]?.[0] as
-    | {
-        connect?: { lookup?: unknown };
-        allowH2?: boolean;
-        bodyTimeout?: number;
-        headersTimeout?: number;
-      }
-    | undefined;
-  expect(typeof options?.connect?.lookup).toBe("function");
-  expect(options?.allowH2).toBe(false);
-  expect(options?.bodyTimeout).toBe(params.bodyTimeout);
-  expect(options?.headersTimeout).toBe(params.headersTimeout);
+  const [call] = agentCtor.mock.calls;
+  if (!call) {
+    throw new Error("expected Agent constructor call");
+  }
+  const options = requireRecord(call[0], "Agent constructor options");
+  const connect = requireRecord(options.connect, "Agent connect options");
+  expect(typeof connect.lookup).toBe("function");
+  expect(options.allowH2).toBe(false);
+  expect(options.bodyTimeout).toBe(params.bodyTimeout);
+  expect(options.headersTimeout).toBe(params.headersTimeout);
 }
 
 async function expectRedirectFailure(params: {
@@ -287,7 +301,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     ).rejects.toThrow(/private|internal|blocked/i);
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(logWarnMock).toHaveBeenCalledTimes(1);
-    const [warning] = logWarnMock.mock.calls[0] as [string];
+    const [warning] = logWarnMock.mock.calls.at(0) as [string];
     expect(warning).toContain(
       "security: blocked URL fetch (qa-audit) targetOrigin=http://127.0.0.1:8080",
     );
@@ -588,11 +602,11 @@ describe("fetchWithSsrFGuard hardening", () => {
       },
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const fetchCall = fetchImpl.mock.calls[0] as unknown as
-      | [string, { dispatcher?: unknown }]
-      | undefined;
+    const fetchCall = fetchImpl.mock.calls.at(0) as [string, { dispatcher?: unknown }] | undefined;
     expect(fetchCall?.[0]).toBe("https://public.example/resource");
-    expect(fetchCall?.[1].dispatcher).toBeTruthy();
+    if (!fetchCall?.[1].dispatcher) {
+      throw new Error("Expected proxy dispatcher");
+    }
     await result.release();
   });
 
@@ -706,7 +720,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     });
 
     expect(result.response.status).toBe(200);
-    const firstHeaders = fetchImpl.mock.calls[0]?.[1]?.headers;
+    const firstHeaders = getFirstRequestInit(fetchImpl).headers;
     expect(firstHeaders).not.toBe(headers);
     expect(Object.getOwnPropertySymbols(firstHeaders as object)).toStrictEqual([]);
     const secondHeaders = getSecondRequestHeaders(fetchImpl);

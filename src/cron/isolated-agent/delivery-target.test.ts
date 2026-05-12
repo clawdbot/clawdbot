@@ -383,19 +383,20 @@ describe("resolveDeliveryTarget", () => {
       source: "directory",
     });
 
-    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+    const cfg = makeCfg({ bindings: [] });
+    const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
       channel: "forum",
       to: "123456789",
     });
 
     expect(result.ok).toBe(true);
     expect(result.to).toBe("user:123456789");
-    expect(maybeResolveIdLikeTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "forum",
-        input: "123456789",
-      }),
-    );
+    expect(maybeResolveIdLikeTarget).toHaveBeenCalledWith({
+      cfg,
+      channel: "forum",
+      input: "123456789",
+      accountId: undefined,
+    });
   });
 
   it("skips id-like target normalization for dry-run delivery previews", async () => {
@@ -433,24 +434,28 @@ describe("resolveDeliveryTarget", () => {
     );
     vi.mocked(resolveOutboundTarget).mockReturnValueOnce({ ok: true, to: "room:default" });
 
-    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+    const cfg = makeCfg({ bindings: [] });
+    const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
       channel: "forum",
       to: "room:default",
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        ok: true,
-        channel: "forum",
-        to: "room:default",
-      }),
-    );
-    expect(resolveOutboundTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "forum",
-        to: "room:default",
-      }),
-    );
+    expect(result).toEqual({
+      ok: true,
+      channel: "forum",
+      to: "room:default",
+      accountId: undefined,
+      threadId: undefined,
+      mode: "explicit",
+    });
+    expect(resolveOutboundTarget).toHaveBeenCalledWith({
+      channel: "forum",
+      to: "room:default",
+      cfg,
+      accountId: undefined,
+      mode: "explicit",
+      allowFrom: undefined,
+    });
   });
 
   it("returns an unresolved target when loaded target resolution throws", async () => {

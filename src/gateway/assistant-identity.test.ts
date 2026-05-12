@@ -16,11 +16,10 @@ describe("resolveAssistantIdentity avatar normalization", () => {
       },
     };
 
-    expect(resolveAssistantIdentity({ cfg, agentId: "main", workspaceDir: "" })).toMatchObject({
-      agentId: "main",
-      name: "Main assistant",
-      avatar: "M",
-    });
+    const identity = resolveAssistantIdentity({ cfg, agentId: "main", workspaceDir: "" });
+    expect(identity.agentId).toBe("main");
+    expect(identity.name).toBe("Main assistant");
+    expect(identity.avatar).toBe("M");
   });
 
   it("prefers non-default agent identity over global ui.assistant identity", () => {
@@ -36,13 +35,10 @@ describe("resolveAssistantIdentity avatar normalization", () => {
       },
     };
 
-    expect(resolveAssistantIdentity({ cfg, agentId: "fs-daying", workspaceDir: "" })).toMatchObject(
-      {
-        agentId: "fs-daying",
-        name: "大颖",
-        avatar: "D",
-      },
-    );
+    const identity = resolveAssistantIdentity({ cfg, agentId: "fs-daying", workspaceDir: "" });
+    expect(identity.agentId).toBe("fs-daying");
+    expect(identity.name).toBe("大颖");
+    expect(identity.avatar).toBe("D");
   });
 
   it("falls back to ui.assistant identity for non-default agents without their own identity", () => {
@@ -58,11 +54,10 @@ describe("resolveAssistantIdentity avatar normalization", () => {
       },
     };
 
-    expect(resolveAssistantIdentity({ cfg, agentId: "worker", workspaceDir: "" })).toMatchObject({
-      agentId: "worker",
-      name: "Main assistant",
-      avatar: "M",
-    });
+    const identity = resolveAssistantIdentity({ cfg, agentId: "worker", workspaceDir: "" });
+    expect(identity.agentId).toBe("worker");
+    expect(identity.name).toBe("Main assistant");
+    expect(identity.avatar).toBe("M");
   });
 
   it("drops sentence-like avatar placeholders", () => {

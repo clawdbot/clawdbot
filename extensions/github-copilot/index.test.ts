@@ -5,6 +5,13 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
+import type {
+  OpenClawConfig,
+  OpenClawPluginApi,
+  ProviderAuthResult,
+  ProviderCatalogResult,
+  UnifiedModelCatalogEntry,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
@@ -23,6 +30,21 @@ vi.mock("./register.runtime.js", () => ({
 import plugin from "./index.js";
 
 const tempDirs: string[] = [];
+type RegisteredMemoryEmbeddingProvider = Parameters<
+  OpenClawPluginApi["registerMemoryEmbeddingProvider"]
+>[0];
+type GithubCopilotTestProvider = {
+  auth: Array<{
+    run: (ctx: unknown) => Promise<ProviderAuthResult | null>;
+    runNonInteractive: (ctx: unknown) => Promise<OpenClawConfig | null>;
+  }>;
+  catalog: {
+    run: (ctx: unknown) => Promise<ProviderCatalogResult>;
+  };
+};
+type GithubCopilotTestModelCatalogProvider = {
+  liveCatalog: (ctx: unknown) => Promise<readonly UnifiedModelCatalogEntry[] | null | undefined>;
+};
 
 afterEach(async () => {
   vi.clearAllMocks();
@@ -46,9 +68,21 @@ function _registerProvider() {
   return registerProviderWithPluginConfig({});
 }
 
+function requireFirstMockArg<T>(
+  mock: { mock: { calls: Array<[T, ...unknown[]]> } },
+  label: string,
+) {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call[0];
+}
+
 function registerProviderAndCatalogWithPluginConfig(pluginConfig: Record<string, unknown>) {
-  const registerProviderMock = vi.fn();
-  const registerModelCatalogProviderMock = vi.fn();
+  const registerProviderMock = vi.fn<OpenClawPluginApi["registerProvider"]>();
+  const registerModelCatalogProviderMock =
+    vi.fn<OpenClawPluginApi["registerModelCatalogProvider"]>();
 
   plugin.register(
     createTestPluginApi({
@@ -66,8 +100,14 @@ function registerProviderAndCatalogWithPluginConfig(pluginConfig: Record<string,
   expect(registerProviderMock).toHaveBeenCalledTimes(1);
   expect(registerModelCatalogProviderMock).toHaveBeenCalledTimes(1);
   return {
-    provider: registerProviderMock.mock.calls[0]?.[0],
-    modelCatalogProvider: registerModelCatalogProviderMock.mock.calls[0]?.[0],
+    provider: requireFirstMockArg(
+      registerProviderMock,
+      "provider registration",
+    ) as GithubCopilotTestProvider,
+    modelCatalogProvider: requireFirstMockArg(
+      registerModelCatalogProviderMock,
+      "model catalog provider registration",
+    ) as GithubCopilotTestModelCatalogProvider,
   };
 }
 
@@ -77,7 +117,8 @@ function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>)
 
 describe("github-copilot plugin", () => {
   it("registers embedding provider", () => {
-    const registerMemoryEmbeddingProviderMock = vi.fn();
+    const registerMemoryEmbeddingProviderMock =
+      vi.fn<OpenClawPluginApi["registerMemoryEmbeddingProvider"]>();
 
     plugin.register(
       createTestPluginApi({
@@ -93,7 +134,10 @@ describe("github-copilot plugin", () => {
     );
 
     expect(registerMemoryEmbeddingProviderMock).toHaveBeenCalledTimes(1);
-    const adapter = registerMemoryEmbeddingProviderMock.mock.calls[0]?.[0];
+    const adapter = requireFirstMockArg<RegisteredMemoryEmbeddingProvider>(
+      registerMemoryEmbeddingProviderMock,
+      "memory embedding provider registration",
+    );
     expect(adapter.id).toBe("github-copilot");
   });
 
@@ -330,6 +374,9 @@ describe("github-copilot plugin", () => {
         initialValue: false,
       });
       expect(mocks.githubCopilotLoginCommand).not.toHaveBeenCalled();
+      if (!result) {
+        throw new Error("Expected GitHub Copilot auth result");
+      }
       expect(result.profiles[0]?.credential).toEqual({
         type: "token",
         provider: "github-copilot",

@@ -67,7 +67,9 @@ async function* streamChunks(chunks: readonly unknown[]): AsyncGenerator<never> 
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -990,7 +992,7 @@ describe("openai transport stream", () => {
 
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
-    expect(output.content).toContainEqual({ type: "text", text: "ok" });
+    expect(output.content).toStrictEqual([{ type: "text", text: "ok" }]);
     expect(output.stopReason).toBe("stop");
   });
 

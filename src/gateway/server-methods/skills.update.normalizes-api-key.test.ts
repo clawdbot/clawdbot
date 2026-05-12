@@ -23,6 +23,20 @@ vi.mock("../../config/config.js", () => {
 
 const { skillsHandlers } = await import("./skills.js");
 
+function expectWrittenSkillEntry(skillKey: string, entry: unknown) {
+  if (!writtenConfig) {
+    throw new Error("Expected written config");
+  }
+  const config = writtenConfig as {
+    skills?: {
+      entries?: Record<string, unknown>;
+    };
+  };
+  expect(Object.keys(config).toSorted()).toEqual(["skills"]);
+  expect(Object.keys(config.skills ?? {}).toSorted()).toEqual(["entries"]);
+  expect(config.skills?.entries?.[skillKey]).toEqual(entry);
+}
+
 describe("skills.update", () => {
   it("strips embedded CR/LF from apiKey", async () => {
     writtenConfig = null;
@@ -51,14 +65,8 @@ describe("skills.update", () => {
 
     expect(ok).toBe(true);
     expect(error).toBeUndefined();
-    expect(writtenConfig).toMatchObject({
-      skills: {
-        entries: {
-          "brave-search": {
-            apiKey: "abcdef",
-          },
-        },
-      },
+    expectWrittenSkillEntry("brave-search", {
+      apiKey: "abcdef",
     });
   });
 
@@ -90,17 +98,11 @@ describe("skills.update", () => {
     });
 
     // Full values must be persisted to config
-    expect(writtenConfig).toMatchObject({
-      skills: {
-        entries: {
-          "demo-skill": {
-            apiKey: "secret-api-key-123",
-            env: {
-              GEMINI_API_KEY: "secret-env-key-456",
-              BRAVE_REGION: "us",
-            },
-          },
-        },
+    expectWrittenSkillEntry("demo-skill", {
+      apiKey: "secret-api-key-123",
+      env: {
+        GEMINI_API_KEY: "secret-env-key-456",
+        BRAVE_REGION: "us",
       },
     });
 
@@ -145,17 +147,11 @@ describe("skills.update", () => {
       respond: () => {},
     });
 
-    expect(writtenConfig).toMatchObject({
-      skills: {
-        entries: {
-          "demo-skill": {
-            apiKey: "secret-api-key-123",
-            env: {
-              GEMINI_API_KEY: "secret-env-key-456",
-              BRAVE_REGION: "eu",
-            },
-          },
-        },
+    expectWrittenSkillEntry("demo-skill", {
+      apiKey: "secret-api-key-123",
+      env: {
+        GEMINI_API_KEY: "secret-env-key-456",
+        BRAVE_REGION: "eu",
       },
     });
   });

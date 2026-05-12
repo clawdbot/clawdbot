@@ -14,6 +14,19 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
   return { ...original, fetchWithSsrFGuard: mockFetchGuard };
 });
 
+function requireFirstFetchCall() {
+  const [call] = mockFetchGuard.mock.calls;
+  if (!call) {
+    throw new Error("expected Mattermost probe fetch call");
+  }
+  return call[0] as {
+    url?: string;
+    init?: { headers?: unknown; signal?: unknown };
+    auditContext?: string;
+    policy?: unknown;
+  };
+}
+
 describe("probeMattermost", () => {
   beforeEach(() => {
     mockFetchGuard.mockReset();
@@ -43,7 +56,7 @@ describe("probeMattermost", () => {
 
     const result = await probeMattermost("https://mm.example.com/api/v4/", "bot-token");
 
-    const [fetchCall] = mockFetchGuard.mock.calls[0] ?? [];
+    const fetchCall = requireFirstFetchCall();
     expect(fetchCall?.url).toBe("https://mm.example.com/api/v4/users/me");
     expect(fetchCall?.init?.headers).toStrictEqual({ Authorization: "Bearer bot-token" });
     expect(fetchCall?.init?.signal).toBeInstanceOf(AbortSignal);
@@ -70,7 +83,7 @@ describe("probeMattermost", () => {
 
     await probeMattermost("https://mm.example.com", "bot-token", 2500, true);
 
-    const [fetchCall] = mockFetchGuard.mock.calls[0] ?? [];
+    const fetchCall = requireFirstFetchCall();
     expect(fetchCall?.policy).toStrictEqual({ allowPrivateNetwork: true });
   });
 

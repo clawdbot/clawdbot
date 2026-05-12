@@ -95,12 +95,16 @@ function expectRpcCall(params: {
   if (params.rpcParams) {
     expectFields(requireRecord(rpcParams, "rpc params"), params.rpcParams);
   } else {
-    expect(rpcParams).toBeDefined();
+    if (rpcParams === undefined) {
+      throw new Error("expected rpc params argument");
+    }
   }
   if (params.options) {
     expectFields(requireRecord(options, "rpc options"), params.options);
   } else {
-    expect(options).toBeDefined();
+    if (options === undefined) {
+      throw new Error("expected rpc options argument");
+    }
   }
 }
 

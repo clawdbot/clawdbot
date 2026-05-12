@@ -2,6 +2,7 @@ import {
   GatewayDispatchEvents,
   type APIMessage,
   type APIReaction,
+  type APIVoiceState,
   type GatewayPresenceUpdateDispatchData,
   type GatewayThreadUpdateDispatchData,
 } from "discord-api-types/v10";
@@ -74,6 +75,11 @@ export abstract class PresenceUpdateListener extends BaseListener {
     data: GatewayPresenceUpdateDispatchData,
     client: Client,
   ): Promise<void> | void;
+}
+
+export abstract class VoiceStateUpdateListener extends BaseListener {
+  readonly type = GatewayDispatchEvents.VoiceStateUpdate;
+  abstract override handle(data: APIVoiceState, client: Client): Promise<void> | void;
 }
 
 export abstract class ThreadUpdateListener extends BaseListener {

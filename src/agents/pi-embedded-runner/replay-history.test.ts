@@ -196,16 +196,14 @@ describe("normalizeAssistantReplayContent", () => {
     const messages = [userMessage("hello"), bedrockAssistant([], "error")];
     const out = normalizeAssistantReplayContent(messages);
     expect(out).not.toBe(messages);
-    expect(out).toHaveLength(1);
-    expect(out[0]).toBe(messages[0]);
+    expect(out).toStrictEqual([messages[0]]);
   });
 
   it("drops a trailing zero-usage empty stop assistant turn (#77228)", () => {
     const falseSuccessStop = bedrockAssistant([], "stop");
     const messages = [userMessage("hello"), falseSuccessStop];
     const out = normalizeAssistantReplayContent(messages);
-    expect(out).toHaveLength(1);
-    expect(out[0]).toBe(messages[0]);
+    expect(out).toStrictEqual([messages[0]]);
   });
 
   it("drops a trailing assistant turn that already carries the persisted sentinel content (#77228)", () => {
@@ -216,8 +214,7 @@ describe("normalizeAssistantReplayContent", () => {
     const persistedSentinel = bedrockAssistant([{ type: "text", text: FALLBACK_TEXT }], "error");
     const messages = [userMessage("hello"), persistedSentinel];
     const out = normalizeAssistantReplayContent(messages);
-    expect(out).toHaveLength(1);
-    expect(out[0]).toBe(messages[0]);
+    expect(out).toStrictEqual([messages[0]]);
   });
 
   it("drops several consecutive trailing sentinel/empty-error turns at the tail", () => {
@@ -296,7 +293,6 @@ describe("normalizeAssistantReplayContent", () => {
     );
     const messages = [userMessage("hi"), persistedZeroUsageSentinel];
     const out = normalizeAssistantReplayContent(messages);
-    expect(out).toHaveLength(1);
-    expect(out[0]).toBe(messages[0]);
+    expect(out).toStrictEqual([messages[0]]);
   });
 });

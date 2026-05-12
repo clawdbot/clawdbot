@@ -7,11 +7,17 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatEnvelopeTimestamp } from "../envelope.js";
+import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { TemplateContext } from "../templating.js";
 
 const MAX_UNTRUSTED_JSON_STRING_CHARS = 2_000;
 const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
+const MESSAGE_TOOL_DELIVERY_HINT = "Delivery: to send a message, use the `message` tool.";
+
+type InboundUserContextPrefixOptions = {
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+};
 
 function stripNullBytes(value: string): string {
   return value.replaceAll("\u0000", "");
@@ -411,8 +417,12 @@ export function buildInboundMetaSystemPrompt(
 export function buildInboundUserContextPrefix(
   ctx: TemplateContext,
   envelope?: EnvelopeFormatOptions,
+  options?: InboundUserContextPrefixOptions,
 ): string {
   const blocks: string[] = [];
+  if (options?.sourceReplyDeliveryMode === "message_tool_only") {
+    blocks.push(MESSAGE_TOOL_DELIVERY_HINT);
+  }
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
   const directChannelValue = resolveInboundChannel(ctx);

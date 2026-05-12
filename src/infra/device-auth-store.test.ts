@@ -101,9 +101,9 @@ describe("infra/device-auth-store", () => {
       });
 
       expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toBeNull();
-      expect(loadDeviceAuthToken({ deviceId: "device-1", role: "node", env })).toMatchObject({
-        token: "node-token",
-      });
+      expect(loadDeviceAuthToken({ deviceId: "device-1", role: "node", env })?.token).toBe(
+        "node-token",
+      );
     });
   });
 });

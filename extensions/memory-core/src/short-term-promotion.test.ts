@@ -1834,4 +1834,128 @@ describe("short-term promotion", () => {
       "対応",
     ]);
   });
+
+  describe("MEMORY.md budget compaction (#73691)", () => {
+    it("drops the oldest promoted section before write when memoryFileMaxChars would be exceeded", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        // Source daily note that the candidate references (rehydrate reads it).
+        await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
+          "Notes",
+          "",
+          "Rotate the staging Postgres credentials before next deploy.",
+        ]);
+
+        // Seed an oversized MEMORY.md with two pre-existing promotion sections.
+        const memoryPath = path.join(workspaceDir, "MEMORY.md");
+        const filler = "x".repeat(600);
+        const seeded = [
+          "# Long-Term Memory",
+          "",
+          "## Promoted From Short-Term Memory (2026-04-10)",
+          "<!-- openclaw-memory-promotion:legacy-old -->",
+          `- ${filler}`,
+          "",
+          "## Promoted From Short-Term Memory (2026-04-20)",
+          "<!-- openclaw-memory-promotion:legacy-newer -->",
+          `- ${filler}`,
+          "",
+        ].join("\n");
+        await fs.writeFile(memoryPath, seeded, "utf-8");
+
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "rotate creds",
+          nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
+          results: [
+            {
+              path: "memory/2026-04-29.md",
+              startLine: 3,
+              endLine: 3,
+              score: 0.96,
+              snippet: "Rotate the staging Postgres credentials before next deploy.",
+              source: "memory",
+            },
+          ],
+        });
+
+        const ranked = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+        });
+
+        const applied = await applyShortTermPromotions({
+          workspaceDir,
+          candidates: ranked,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
+          memoryFileMaxChars: 1_400,
+        });
+
+        expect(applied.applied).toBe(1);
+        expect(applied.compactedSections).toBeGreaterThan(0);
+        expect(applied.compactedDates).toContain("2026-04-10");
+
+        const memoryText = await fs.readFile(memoryPath, "utf-8");
+        expect(memoryText).not.toContain("(2026-04-10)");
+        expect(memoryText).not.toContain("legacy-old");
+        // Newer pre-existing section + the freshly-written one survive.
+        expect(memoryText).toContain("Rotate the staging Postgres credentials");
+      });
+    });
+
+    it("leaves MEMORY.md untouched when total stays within memoryFileMaxChars", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
+          "Notes",
+          "",
+          "A short snippet that fits comfortably.",
+        ]);
+
+        const memoryPath = path.join(workspaceDir, "MEMORY.md");
+        const seeded = "# Long-Term Memory\n\nSome small existing content.\n";
+        await fs.writeFile(memoryPath, seeded, "utf-8");
+
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "tiny note",
+          nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
+          results: [
+            {
+              path: "memory/2026-04-29.md",
+              startLine: 3,
+              endLine: 3,
+              score: 0.92,
+              snippet: "A short snippet that fits comfortably.",
+              source: "memory",
+            },
+          ],
+        });
+
+        const ranked = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+        });
+
+        const applied = await applyShortTermPromotions({
+          workspaceDir,
+          candidates: ranked,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          memoryFileMaxChars: 10_000,
+        });
+
+        expect(applied.compactedSections).toBe(0);
+        expect(applied.compactedDates).toEqual([]);
+        const memoryText = await fs.readFile(memoryPath, "utf-8");
+        expect(memoryText).toContain("Some small existing content.");
+      });
+    });
+  });
 });

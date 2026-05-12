@@ -257,10 +257,15 @@ export function parseChannelsListRouteArgs(argv: string[]) {
 
 export function parseChannelsStatusRouteArgs(argv: string[]) {
   const timeout = parseOptionalFlagValue(argv, "--timeout");
+  const channel = parseOptionalFlagValue(argv, "--channel");
   if (!timeout.ok) {
     return null;
   }
+  if (!channel.ok) {
+    return null;
+  }
   return {
+    channel: channel.value,
     json: hasFlag(argv, "--json"),
     probe: hasFlag(argv, "--probe"),
     timeout: timeout.value,

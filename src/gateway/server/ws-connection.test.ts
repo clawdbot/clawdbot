@@ -158,7 +158,7 @@ describe("attachGatewayWsConnectionHandler", () => {
 
     currentAuth = createResolvedAuth("token-after");
 
-    expect(handlerParams.getResolvedAuth()).toMatchObject({ token: "token-after" });
+    expect(handlerParams.getResolvedAuth().token).toBe("token-after");
     expect(handlerParams.getRequiredSharedGatewaySessionGeneration?.()).toBe(
       resolveSharedGatewaySessionGeneration(currentAuth),
     );

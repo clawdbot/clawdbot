@@ -55,6 +55,7 @@ const createGroupMessage = (params: {
 
 async function startWebInboxMonitor(params: {
   config?: Record<string, unknown>;
+  loadConfig?: () => Record<string, unknown>;
   sendReadReceipts?: boolean;
 }) {
   const monitorWebInbox = getMonitorWebInbox();
@@ -64,6 +65,7 @@ async function startWebInboxMonitor(params: {
   const onMessage = vi.fn();
   const base = {
     cfg: (params.config ?? mockLoadConfig()) as never,
+    ...(params.loadConfig ? { loadConfig: params.loadConfig as never } : {}),
     verbose: false,
     accountId: DEFAULT_ACCOUNT_ID,
     authDir: getAuthDir(),
@@ -116,6 +118,52 @@ describe("web monitor inbox", () => {
     // Should NOT call onMessage for unauthorized senders
     expect(onMessage).not.toHaveBeenCalled();
     // Should NOT send read receipts for blocked senders (privacy + avoids Baileys Bad MAC churn).
+    expect(sock.readMessages).not.toHaveBeenCalled();
+
+    await listener.close();
+  });
+
+  it("applies hot-reloaded dmPolicy allowlist to the active listener", async () => {
+    const startupConfig = {
+      channels: {
+        whatsapp: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+      messages: DEFAULT_MESSAGES_CFG,
+    };
+    const reloadedConfig = {
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          allowFrom: ["+111"],
+        },
+      },
+      messages: DEFAULT_MESSAGES_CFG,
+    };
+    mockLoadConfig.mockReturnValue(startupConfig);
+
+    const { onMessage, listener, sock } = await startWebInboxMonitor({
+      config: startupConfig,
+      loadConfig: () => mockLoadConfig() as Record<string, unknown>,
+    });
+    mockLoadConfig.mockReturnValue(reloadedConfig);
+
+    sock.ev.emit(
+      "messages.upsert",
+      createNotifyUpsert(
+        createDmMessage({
+          id: "hot-reload-block",
+          remoteJid: "999@s.whatsapp.net",
+          conversation: "should be blocked after reload",
+        }),
+      ),
+    );
+    await settleInboundWork();
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(sock.sendMessage).not.toHaveBeenCalled();
     expect(sock.readMessages).not.toHaveBeenCalled();
 
     await listener.close();

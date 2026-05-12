@@ -236,7 +236,8 @@ describe("diffs tool", () => {
         mode: "file",
       });
       const filePath = (result?.details as Record<string, unknown>).filePath as string;
-      await expect(fs.stat(filePath)).resolves.toBeDefined();
+      const stat = await fs.stat(filePath);
+      expect(stat.isFile()).toBe(true);
 
       vi.setSystemTime(new Date(now.getTime() + 61_000));
       await store.cleanupExpired();

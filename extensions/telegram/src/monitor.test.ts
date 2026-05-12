@@ -445,17 +445,16 @@ describe("monitorTelegramProvider (grammY)", () => {
 
     await monitorWithAutoAbort();
 
-    expect(runSpy).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        sink: { concurrency: 3 },
-        runner: expect.objectContaining({
-          silent: true,
-          maxRetryTime: 60 * 60 * 1000,
-          retryInterval: "exponential",
-        }),
-      }),
-    );
+    type RunOptions = {
+      sink?: { concurrency?: number };
+      runner?: { silent?: boolean; maxRetryTime?: number; retryInterval?: string };
+    };
+    const runCall = runSpy.mock.calls.at(-1) as unknown as [unknown, RunOptions] | undefined;
+    const runOptions = runCall?.[1];
+    expect(runOptions?.sink?.concurrency).toBe(3);
+    expect(runOptions?.runner?.silent).toBe(true);
+    expect(runOptions?.runner?.maxRetryTime).toBe(60 * 60 * 1000);
+    expect(runOptions?.runner?.retryInterval).toBe("exponential");
   });
 
   it("requires mention in groups by default", async () => {
@@ -848,12 +847,12 @@ describe("monitorTelegramProvider (grammY)", () => {
       },
     });
 
-    expect(startTelegramWebhookSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        host: "0.0.0.0",
-        setStatus,
-      }),
-    );
+    const webhookCall = startTelegramWebhookSpy.mock.calls.at(-1) as
+      | [{ host?: string; setStatus?: unknown }]
+      | undefined;
+    const webhookOptions = webhookCall?.[0];
+    expect(webhookOptions?.host).toBe("0.0.0.0");
+    expect(webhookOptions?.setStatus).toBe(setStatus);
     expect(runSpy).not.toHaveBeenCalled();
   });
 
@@ -1019,11 +1018,10 @@ describe("monitorTelegramProvider (grammY)", () => {
       },
     });
 
-    expect(startTelegramWebhookSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        secret: "secret-from-config",
-      }),
-    );
+    const webhookCall = startTelegramWebhookSpy.mock.calls.at(-1) as
+      | [{ secret?: string }]
+      | undefined;
+    expect(webhookCall?.[0]?.secret).toBe("secret-from-config");
     expect(runSpy).not.toHaveBeenCalled();
   });
 });

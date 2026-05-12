@@ -117,7 +117,10 @@ describe("resolveSessionKeyFromResolveParams", () => {
       key: canonicalKey,
     });
 
-    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledWith(storePath, expect.any(Function));
+    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(1);
+    const updateSessionStoreCall = hoisted.updateSessionStoreMock.mock.calls[0];
+    expect(updateSessionStoreCall?.[0]).toBe(storePath);
+    expect(typeof updateSessionStoreCall?.[1]).toBe("function");
     expect(hoisted.listSessionsFromStoreMock).toHaveBeenCalledWith({
       cfg: {},
       storePath,
@@ -218,12 +221,16 @@ describe("resolveSessionKeyFromResolveParams", () => {
       throw new Error("session rows should not be materialized for exact sessionId lookup");
     });
 
+    const cfg = {};
     const result = await resolveSessionKeyFromResolveParams({
-      cfg: {},
-      p: { sessionId: "sess-target" },
+      cfg,
+      p: { sessionId: "sess-target", agentId: "main" },
     });
 
     expect(result).toEqual({ ok: true, key: "agent:main:target" });
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
+      agentId: "main",
+    });
     expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -238,11 +245,15 @@ describe("resolveSessionKeyFromResolveParams", () => {
     });
     hoisted.listAgentIdsMock.mockReturnValue(["main"]);
 
+    const cfg = {};
     const result = await resolveSessionKeyFromResolveParams({
-      cfg: {},
-      p: { label: "my-label" },
+      cfg,
+      p: { label: "my-label", agentId: "main" },
     });
 
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
+      agentId: "main",
+    });
     expect(result).toEqual({
       ok: false,
       error: {

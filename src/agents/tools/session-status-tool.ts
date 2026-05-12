@@ -28,12 +28,11 @@ import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import {
-  buildConfiguredModelCatalog,
   buildModelAliasIndex,
   modelKey,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
-  resolveThinkingDefault,
+  resolveThinkingDefaultWithRuntimeCatalog,
 } from "../model-selection.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
 import {
@@ -713,32 +712,13 @@ export function createSessionStatusTool(opts?: {
         resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
         resolvedReasoningLevel: (statusSessionEntry.reasoningLevel ?? "off") as ReasoningLevel,
         resolvedElevatedLevel: statusSessionEntry.elevatedLevel as ElevatedLevel | undefined,
-        resolveDefaultThinkingLevel: async () => {
-          const configuredCatalog = buildConfiguredModelCatalog({ cfg });
-          const configuredSelectedEntry = configuredCatalog.find(
-            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,
-          );
-          const shouldHydrateRuntimeCatalog =
-            configuredCatalog.length === 0 ||
-            !configuredSelectedEntry ||
-            configuredSelectedEntry.reasoning === undefined;
-          const runtimeCatalog = shouldHydrateRuntimeCatalog
-            ? await loadModelCatalog({ config: cfg })
-            : undefined;
-          const runtimeSelectedEntry = runtimeCatalog?.find(
-            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,
-          );
-          const catalog =
-            runtimeSelectedEntry || configuredCatalog.length === 0
-              ? (runtimeCatalog ?? configuredCatalog)
-              : configuredCatalog;
-          return resolveThinkingDefault({
+        resolveDefaultThinkingLevel: () =>
+          resolveThinkingDefaultWithRuntimeCatalog({
             cfg,
             provider: providerForCard,
             model: defaultModelForCard,
-            catalog,
-          });
-        },
+            loadModelCatalog: () => loadModelCatalog({ config: cfg }),
+          }),
         isGroup,
         defaultGroupActivation: () => "mention",
         taskLineOverride: taskLine,

@@ -143,8 +143,22 @@ async function runValidateJsonAndGetPayload() {
   };
 }
 
+function firstWrittenConfig(): OpenClawConfig {
+  const written = mockWriteConfigFile.mock.calls.at(0)?.[0];
+  if (!written) {
+    throw new Error("expected written config");
+  }
+  return written;
+}
+
+function firstWriteConfigOptions():
+  | { unsetPaths?: string[][]; explicitSetPaths?: string[][] }
+  | undefined {
+  return mockWriteConfigFile.mock.calls.at(0)?.[1];
+}
+
 function requireWriteOptions(): { unsetPaths?: string[][]; explicitSetPaths?: string[][] } {
-  const options = mockWriteConfigFile.mock.calls[0]?.[1];
+  const options = firstWriteConfigOptions();
   if (!options) {
     throw new Error("expected write options");
   }
@@ -251,7 +265,7 @@ describe("config cli", () => {
       await runConfigCommand(["config", "set", "gateway.auth.mode", "token"]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.gateway?.auth).toEqual({ mode: "token" });
       expect(written.gateway?.port).toBe(18789);
       expect(written.agents).toEqual(resolved.agents);
@@ -339,7 +353,7 @@ describe("config cli", () => {
       await runConfigCommand(["config", "set", "gateway.auth.mode", "token"]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written).not.toHaveProperty("agents.defaults.model");
       expect(written).not.toHaveProperty("agents.defaults.contextWindow");
       expect(written).not.toHaveProperty("agents.defaults.maxTokens");
@@ -370,7 +384,7 @@ describe("config cli", () => {
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.agents?.defaults?.model).toBe("openai/gpt-5.4");
       expect(written.agents?.defaults?.imageGenerationModel).toEqual({
         primary: "openai/gpt-image-1",
@@ -403,7 +417,7 @@ describe("config cli", () => {
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.agents?.defaults?.model).toEqual({
         primary: "google/gemini-3.1-pro-preview",
         fallbacks: ["google/gemini-3.1-pro-preview"],
@@ -433,7 +447,7 @@ describe("config cli", () => {
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.agents?.defaults?.models).toEqual({
         "google/gemini-3.1-pro-preview": { alias: "gemini" },
       });
@@ -508,7 +522,7 @@ describe("config cli", () => {
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.agents?.defaults?.models).toEqual({
         "openai/gpt-5.4": { alias: "GPT" },
         "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
@@ -541,7 +555,7 @@ describe("config cli", () => {
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.models?.providers?.ollama?.models).toEqual([
         { id: "llama3.2", name: "Llama 3.2 latest", contextWindow: 131072 },
         { id: "qwen3", name: "Qwen 3" },
@@ -565,7 +579,7 @@ describe("config cli", () => {
       await runConfigCommand(["config", "set", "gateway.auth.mode", "token"]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.gateway?.auth).toEqual({
         mode: "token",
         token: "token-keep",
@@ -589,7 +603,7 @@ describe("config cli", () => {
       await runConfigCommand(["config", "set", "gateway.auth.mode", "password"]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.gateway?.auth).toEqual({
         mode: "password",
         password: "password-keep", // pragma: allowlist secret
@@ -617,7 +631,7 @@ describe("config cli", () => {
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.gateway?.auth).toEqual({
         mode: "token",
         token: "token-keep",
@@ -824,7 +838,7 @@ describe("config cli", () => {
       await runConfigCommand(["config", "set", "gateway.auth.mode", "{bad"]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.gateway?.auth).toEqual({ mode: "{bad" });
     });
 
@@ -870,7 +884,7 @@ describe("config cli", () => {
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.gateway?.auth).toEqual({ mode: "token" });
     });
 
@@ -926,7 +940,7 @@ describe("config cli", () => {
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.channels?.discord?.token).toEqual({
         source: "env",
         provider: "default",
@@ -1000,7 +1014,7 @@ describe("config cli", () => {
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.secrets?.providers?.vaultfile).toEqual({
         source: "file",
         path: "/tmp/vault.json",
@@ -1358,7 +1372,7 @@ describe("config cli", () => {
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.channels?.googlechat?.serviceAccountRef).toEqual({
         source: "file",
         provider: "vaultfile",
@@ -1424,7 +1438,7 @@ describe("config cli", () => {
       }
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.gateway?.auth).toEqual({ mode: "token" });
     });
 
@@ -1467,7 +1481,7 @@ describe("config cli", () => {
       }
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.agents?.defaults?.models).toEqual(resolved.agents?.defaults?.models);
       expect(written.agents?.defaults?.model).toEqual(resolved.agents?.defaults?.model);
       expect(written.agents?.defaults?.memorySearch).toEqual({
@@ -1553,7 +1567,7 @@ describe("config cli", () => {
       }
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+      const written = firstWrittenConfig() as Record<string, unknown>;
       expect(
         ((written.agents as Record<string, unknown>).defaults as Record<string, unknown>).models,
       ).toEqual({
@@ -1601,7 +1615,7 @@ describe("config cli", () => {
         fs.rmSync(pathname, { force: true });
       }
 
-      const written = mockWriteConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+      const written = firstWrittenConfig() as Record<string, unknown>;
       expect(
         ((written.agents as Record<string, unknown>).defaults as Record<string, unknown>).models,
       ).toEqual({
@@ -1632,7 +1646,7 @@ describe("config cli", () => {
         fs.rmSync(pathname, { force: true });
       }
 
-      const written = mockWriteConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+      const written = firstWrittenConfig() as Record<string, unknown>;
       expect((written.channels as Record<string, unknown>).slack).toEqual({
         enabled: true,
         mode: "socket",
@@ -1838,7 +1852,7 @@ describe("config cli", () => {
         fs.rmSync(pathname, { force: true });
       }
 
-      const written = mockWriteConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+      const written = firstWrittenConfig() as Record<string, unknown>;
       const channels = (written.channels as Record<string, unknown>).discord as Record<
         string,
         unknown
@@ -2060,8 +2074,7 @@ describe("config cli", () => {
       const errorKinds = (payload.errors ?? []).map((entry) => entry.kind);
       expect(errorKinds).toContain("resolvability");
       const errorRefs = (payload.errors ?? []).map((entry) => entry.ref ?? "");
-      const discordTokenRefs = errorRefs.filter((ref) => ref.includes("default:DISCORD_BOT_TOKEN"));
-      expect(discordTokenRefs.length).toBeGreaterThan(0);
+      expect(errorRefs).toContain("env:default:DISCORD_BOT_TOKEN");
     });
 
     it("keeps distinct resolvability failures when messages are identical but refs differ", async () => {
@@ -2138,8 +2151,7 @@ describe("config cli", () => {
       expect(errorKinds).toContain("schema");
       expect(errorKinds).toContain("resolvability");
       const errorRefs = (payload.errors ?? []).map((entry) => entry.ref ?? "");
-      const discordTokenRefs = errorRefs.filter((ref) => ref.includes("default:DISCORD_BOT_TOKEN"));
-      expect(discordTokenRefs.length).toBeGreaterThan(0);
+      expect(errorRefs).toContain("env:default:DISCORD_BOT_TOKEN");
     });
 
     it("fails dry-run when provider updates make existing refs unresolvable", async () => {
@@ -2278,14 +2290,14 @@ describe("config cli", () => {
       await runConfigCommand(["config", "unset", "tools.alsoAllow"]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.tools).not.toHaveProperty("alsoAllow");
       expect(written.agents).not.toHaveProperty("defaults");
       expect(written.agents?.list).toEqual(resolved.agents?.list);
       expect(written.gateway).toEqual(resolved.gateway);
       expect(written.tools?.profile).toBe("coding");
       expect(written.logging).toEqual(resolved.logging);
-      expect(mockWriteConfigFile.mock.calls[0]?.[1]).toEqual({
+      expect(firstWriteConfigOptions()).toEqual({
         unsetPaths: [["tools", "alsoAllow"]],
       });
     });
@@ -2304,9 +2316,9 @@ describe("config cli", () => {
       await runConfigCommand(["config", "unset", "agents.list[1]"]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.agents?.list).toEqual([{ id: "agent-a" }, { id: "agent-c" }]);
-      expect(mockWriteConfigFile.mock.calls[0]?.[1]).toBeUndefined();
+      expect(firstWriteConfigOptions()).toBeUndefined();
     });
 
     it("preserves write-level unset handling for numeric object keys", async () => {
@@ -2325,13 +2337,13 @@ describe("config cli", () => {
       await runConfigCommand(["config", "unset", "channels.discord.guilds.123"]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0] as {
+      const written = firstWrittenConfig() as {
         channels?: { discord?: { guilds?: Record<string, unknown> } };
       };
       expect(written.channels?.discord?.guilds).toEqual({
         "456": { channels: ["alerts"] },
       });
-      expect(mockWriteConfigFile.mock.calls[0]?.[1]).toEqual({
+      expect(firstWriteConfigOptions()).toEqual({
         unsetPaths: [["channels", "discord", "guilds", "123"]],
       });
     });

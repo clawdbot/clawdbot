@@ -199,6 +199,20 @@ describe("createDiscordGatewayPlugin", () => {
     };
   }
 
+  type MockWithCalls = { mock: { calls: unknown[][] } };
+
+  function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
+    const call = mock.mock.calls.at(0);
+    if (!call) {
+      throw new Error(`expected ${label} call`);
+    }
+    return call;
+  }
+
+  function firstMockArg(mock: MockWithCalls, label: string, index = 0) {
+    return firstMockCall(mock, label)[index];
+  }
+
   function createProxyTestingOverrides() {
     return {
       HttpsProxyAgentCtor:
@@ -279,7 +293,7 @@ describe("createDiscordGatewayPlugin", () => {
       "wss://gateway.discord.gg/",
     );
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    expect(String(runtime.log.mock.calls[0]?.[0])).toContain(
+    expect(String(firstMockArg(runtime.log, "runtime.log"))).toContain(
       "discord: gateway metadata lookup failed transiently",
     );
   }
@@ -328,10 +342,12 @@ describe("createDiscordGatewayPlugin", () => {
     await registerGatewayClientWithMetadata({ plugin, fetchMock: globalFetchMock });
 
     expect(globalFetchMock).toHaveBeenCalledTimes(1);
-    const fetchInit = globalFetchMock.mock.calls[0]?.[1] as
+    const fetchInit = firstMockArg(globalFetchMock, "globalFetchMock", 1) as
       | { headers?: Record<string, string>; signal?: unknown }
       | undefined;
-    expect(globalFetchMock.mock.calls[0]?.[0]).toBe("https://discord.com/api/v10/gateway/bot");
+    expect(firstMockArg(globalFetchMock, "globalFetchMock")).toBe(
+      "https://discord.com/api/v10/gateway/bot",
+    );
     expect(fetchInit?.headers).toEqual({ Authorization: "Bot token-123" });
     expect(fetchInit?.signal).toBeInstanceOf(AbortSignal);
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
@@ -349,7 +365,9 @@ describe("createDiscordGatewayPlugin", () => {
     createWebSocket("wss://gateway.discord.gg");
 
     expect(httpsAgentSpy).toHaveBeenCalledTimes(1);
-    const httpsAgentOptions = httpsAgentSpy.mock.calls[0]?.[0] as { lookup?: unknown } | undefined;
+    const httpsAgentOptions = firstMockArg(httpsAgentSpy, "httpsAgentSpy") as
+      | { lookup?: unknown }
+      | undefined;
     expect(Object.keys(httpsAgentOptions ?? {})).toEqual(["lookup"]);
     expect(typeof httpsAgentOptions?.lookup).toBe("function");
     expect(webSocketSpy).toHaveBeenCalledWith("wss://gateway.discord.gg", {
@@ -499,10 +517,12 @@ describe("createDiscordGatewayPlugin", () => {
     await registerGatewayClientWithMetadata({ plugin, fetchMock: globalFetchMock });
 
     expect(globalFetchMock).toHaveBeenCalledTimes(1);
-    const fetchInit = globalFetchMock.mock.calls[0]?.[1] as
+    const fetchInit = firstMockArg(globalFetchMock, "globalFetchMock", 1) as
       | { headers?: Record<string, string>; signal?: unknown }
       | undefined;
-    expect(globalFetchMock.mock.calls[0]?.[0]).toBe("https://discord.com/api/v10/gateway/bot");
+    expect(firstMockArg(globalFetchMock, "globalFetchMock")).toBe(
+      "https://discord.com/api/v10/gateway/bot",
+    );
     expect(fetchInit?.headers).toEqual({ Authorization: "Bot token-123" });
     expect(fetchInit?.signal).toBeInstanceOf(AbortSignal);
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
@@ -548,7 +568,7 @@ describe("createDiscordGatewayPlugin", () => {
 
     expect(Object.getPrototypeOf(plugin)).not.toBe(GatewayPlugin.prototype);
     expect(runtime.error).toHaveBeenCalledTimes(1);
-    expect(String(runtime.error.mock.calls[0]?.[0])).toContain("loopback host");
+    expect(String(firstMockArg(runtime.error, "runtime.error"))).toContain("loopback host");
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
@@ -580,7 +600,7 @@ describe("createDiscordGatewayPlugin", () => {
       "wss://gateway.discord.gg/",
     );
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    expect(String(runtime.log.mock.calls[0]?.[0])).toContain(
+    expect(String(firstMockArg(runtime.log, "runtime.log"))).toContain(
       "discord: gateway metadata lookup failed transiently",
     );
   });

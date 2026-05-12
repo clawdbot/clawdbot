@@ -91,5 +91,5 @@ export function spyRuntimeJson(runtime: Pick<OutputRuntimeEnv, "writeJson">) {
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets callers ascribe captured JSON shape.
 export function firstWrittenJsonArg<T>(writeJson: MockCallsWithFirstArg): T | null {
-  return (writeJson.mock.calls[0]?.[0] ?? null) as T | null;
+  return (writeJson.mock.calls.at(0)?.[0] ?? null) as T | null;
 }

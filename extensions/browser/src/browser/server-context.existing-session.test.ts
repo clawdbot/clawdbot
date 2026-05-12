@@ -29,6 +29,12 @@ vi.mock("./chrome-mcp.runtime.js", () => ({
 const { createBrowserRouteContext } = await import("./server-context.js");
 const chromeMcp = chromeMcpMock;
 
+type ChromeLiveProfile = {
+  driver?: string;
+  name?: string;
+  userDataDir?: string;
+};
+
 function makeState(): BrowserServerState {
   return {
     server: null,
@@ -74,14 +80,6 @@ function makeState(): BrowserServerState {
   };
 }
 
-function expectChromeLiveProfile() {
-  return expect.objectContaining({
-    name: "chrome-live",
-    driver: "existing-session",
-    userDataDir: "/tmp/brave-profile",
-  });
-}
-
 beforeEach(() => {
   for (const key of [
     "ALL_PROXY",
@@ -111,27 +109,32 @@ describe("browser server-context existing-session profile", () => {
     vi.mocked(chromeMcp.listChromeMcpTabs).mockRejectedValueOnce(new Error("No page selected"));
 
     const profiles = await ctx.listProfiles();
-    expect(profiles).toEqual([
-      expect.objectContaining({
-        name: "chrome-live",
-        transport: "chrome-mcp",
-        running: true,
-        tabCount: 0,
-      }),
-    ]);
+    expect(profiles).toHaveLength(1);
+    expect(profiles[0]?.name).toBe("chrome-live");
+    expect(profiles[0]?.transport).toBe("chrome-mcp");
+    expect(profiles[0]?.running).toBe(true);
+    expect(profiles[0]?.tabCount).toBe(0);
 
-    expect(chromeMcp.ensureChromeMcpAvailable).toHaveBeenCalledWith(
-      "chrome-live",
-      expectChromeLiveProfile(),
-      { ephemeral: true, timeoutMs: 300 },
-    );
-    expect(chromeMcp.listChromeMcpTabs).toHaveBeenCalledWith(
-      "chrome-live",
-      expectChromeLiveProfile(),
-      {
-        ephemeral: true,
-      },
-    );
+    const [, ensuredProfile, ensureOptions] =
+      (
+        vi.mocked(chromeMcp.ensureChromeMcpAvailable).mock.calls as unknown as Array<
+          [string, ChromeLiveProfile, { ephemeral?: boolean; timeoutMs?: number }]
+        >
+      )[0] ?? [];
+    expect(ensuredProfile?.name).toBe("chrome-live");
+    expect(ensuredProfile?.driver).toBe("existing-session");
+    expect(ensuredProfile?.userDataDir).toBe("/tmp/brave-profile");
+    expect(ensureOptions).toEqual({ ephemeral: true, timeoutMs: 300 });
+    const [, listedProfile, listOptions] =
+      (
+        vi.mocked(chromeMcp.listChromeMcpTabs).mock.calls as unknown as Array<
+          [string, ChromeLiveProfile, { ephemeral?: boolean }]
+        >
+      )[0] ?? [];
+    expect(listedProfile?.name).toBe("chrome-live");
+    expect(listedProfile?.driver).toBe("existing-session");
+    expect(listedProfile?.userDataDir).toBe("/tmp/brave-profile");
+    expect(listOptions).toEqual({ ephemeral: true });
   });
 
   it("keeps the next real attach on the normal sticky session path after an idle status probe", async () => {
@@ -142,13 +145,11 @@ describe("browser server-context existing-session profile", () => {
 
     vi.mocked(chromeMcp.listChromeMcpTabs).mockRejectedValueOnce(new Error("No page selected"));
 
-    await expect(ctx.listProfiles()).resolves.toEqual([
-      expect.objectContaining({
-        name: "chrome-live",
-        running: true,
-        tabCount: 0,
-      }),
-    ]);
+    const profiles = await ctx.listProfiles();
+    expect(profiles).toHaveLength(1);
+    expect(profiles[0]?.name).toBe("chrome-live");
+    expect(profiles[0]?.running).toBe(true);
+    expect(profiles[0]?.tabCount).toBe(0);
 
     vi.mocked(chromeMcp.listChromeMcpTabs).mockClear();
 
@@ -156,20 +157,24 @@ describe("browser server-context existing-session profile", () => {
     const tabs = await live.listTabs();
 
     expect(tabs.map((tab) => tab.targetId)).toEqual(["7"]);
-    expect(chromeMcp.ensureChromeMcpAvailable).toHaveBeenLastCalledWith(
-      "chrome-live",
-      expectChromeLiveProfile(),
-    );
-    expect(chromeMcp.listChromeMcpTabs).toHaveBeenNthCalledWith(
-      1,
-      "chrome-live",
-      expectChromeLiveProfile(),
-    );
-    expect(chromeMcp.listChromeMcpTabs).toHaveBeenNthCalledWith(
-      2,
-      "chrome-live",
-      expectChromeLiveProfile(),
-    );
+    const ensureCalls = vi.mocked(chromeMcp.ensureChromeMcpAvailable).mock
+      .calls as unknown as Array<[string, ChromeLiveProfile]>;
+    const lastEnsureCall = ensureCalls.at(-1);
+    expect(lastEnsureCall?.[0]).toBe("chrome-live");
+    expect(lastEnsureCall?.[1]?.name).toBe("chrome-live");
+    expect(lastEnsureCall?.[1]?.driver).toBe("existing-session");
+    expect(lastEnsureCall?.[1]?.userDataDir).toBe("/tmp/brave-profile");
+    const listCalls = vi.mocked(chromeMcp.listChromeMcpTabs).mock.calls as unknown as Array<
+      [string, ChromeLiveProfile]
+    >;
+    expect(listCalls[0]?.[0]).toBe("chrome-live");
+    expect(listCalls[0]?.[1]?.name).toBe("chrome-live");
+    expect(listCalls[0]?.[1]?.driver).toBe("existing-session");
+    expect(listCalls[0]?.[1]?.userDataDir).toBe("/tmp/brave-profile");
+    expect(listCalls[1]?.[0]).toBe("chrome-live");
+    expect(listCalls[1]?.[1]?.name).toBe("chrome-live");
+    expect(listCalls[1]?.[1]?.driver).toBe("existing-session");
+    expect(listCalls[1]?.[1]?.userDataDir).toBe("/tmp/brave-profile");
   });
 
   it("routes tab operations through the Chrome MCP backend", async () => {
@@ -211,24 +216,31 @@ describe("browser server-context existing-session profile", () => {
     await live.focusTab("7");
     await live.stopRunningBrowser();
 
-    expect(chromeMcp.ensureChromeMcpAvailable).toHaveBeenCalledWith(
-      "chrome-live",
-      expectChromeLiveProfile(),
-    );
-    expect(chromeMcp.listChromeMcpTabs).toHaveBeenCalledWith(
-      "chrome-live",
-      expectChromeLiveProfile(),
-    );
-    expect(chromeMcp.openChromeMcpTab).toHaveBeenCalledWith(
-      "chrome-live",
-      "about:blank",
-      expectChromeLiveProfile(),
-    );
-    expect(chromeMcp.focusChromeMcpTab).toHaveBeenCalledWith(
-      "chrome-live",
-      "7",
-      expectChromeLiveProfile(),
-    );
+    const [ensureCall] = vi.mocked(chromeMcp.ensureChromeMcpAvailable).mock
+      .calls as unknown as Array<[string, ChromeLiveProfile]>;
+    expect(ensureCall?.[0]).toBe("chrome-live");
+    expect(ensureCall?.[1]?.name).toBe("chrome-live");
+    expect(ensureCall?.[1]?.driver).toBe("existing-session");
+    const [listCall] = vi.mocked(chromeMcp.listChromeMcpTabs).mock.calls as unknown as Array<
+      [string, ChromeLiveProfile]
+    >;
+    expect(listCall?.[0]).toBe("chrome-live");
+    expect(listCall?.[1]?.name).toBe("chrome-live");
+    expect(listCall?.[1]?.driver).toBe("existing-session");
+    const [openCall] = vi.mocked(chromeMcp.openChromeMcpTab).mock.calls as unknown as Array<
+      [string, string, ChromeLiveProfile]
+    >;
+    expect(openCall?.[0]).toBe("chrome-live");
+    expect(openCall?.[1]).toBe("about:blank");
+    expect(openCall?.[2]?.name).toBe("chrome-live");
+    expect(openCall?.[2]?.driver).toBe("existing-session");
+    const [focusCall] = vi.mocked(chromeMcp.focusChromeMcpTab).mock.calls as unknown as Array<
+      [string, string, ChromeLiveProfile]
+    >;
+    expect(focusCall?.[0]).toBe("chrome-live");
+    expect(focusCall?.[1]).toBe("7");
+    expect(focusCall?.[2]?.name).toBe("chrome-live");
+    expect(focusCall?.[2]?.driver).toBe("existing-session");
     expect(chromeMcp.closeChromeMcpSession).toHaveBeenCalledWith("chrome-live");
   });
 

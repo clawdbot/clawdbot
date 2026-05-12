@@ -68,11 +68,15 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
 function requireEmbeddedPiAgentCall(runEmbeddedPiAgent: {
   mock: { calls: unknown[][] };
 }): RunEmbeddedPiAgentParams {
-  const call = runEmbeddedPiAgent.mock.calls[0]?.[0] as RunEmbeddedPiAgentParams | undefined;
+  const [call] = runEmbeddedPiAgent.mock.calls;
   if (!call) {
     throw new Error("Expected embedded PI agent call");
   }
-  return call;
+  const [params] = call;
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("Expected embedded PI agent params to be an object");
+  }
+  return params as RunEmbeddedPiAgentParams;
 }
 
 function expectPositiveTimestamp(value: unknown) {

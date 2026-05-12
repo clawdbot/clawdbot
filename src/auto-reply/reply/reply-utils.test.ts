@@ -673,8 +673,8 @@ describe("createTypingSignaler", () => {
     await signaler.signalReasoningDelta();
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
     await signaler.signalTextDelta("hi");
-    expect(typing.startTypingLoop).toHaveBeenCalled();
-    expect(typing.refreshTypingTtl).toHaveBeenCalled();
+    expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
+    expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
   });
 
@@ -702,15 +702,15 @@ describe("createTypingSignaler", () => {
 
     await signaler.signalToolStart();
 
-    expect(typing.startTypingLoop).toHaveBeenCalled();
-    expect(typing.refreshTypingTtl).toHaveBeenCalled();
+    expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
+    expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
     (typing.isActive as ReturnType<typeof vi.fn>).mockReturnValue(true);
     (typing.startTypingLoop as ReturnType<typeof vi.fn>).mockClear();
     (typing.refreshTypingTtl as ReturnType<typeof vi.fn>).mockClear();
     await signaler.signalToolStart();
 
-    expect(typing.refreshTypingTtl).toHaveBeenCalled();
+    expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
   });
 

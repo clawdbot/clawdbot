@@ -544,7 +544,7 @@ function expectToolText(result: unknown, text: string): void {
 }
 
 function firstImageRequest(mock: { mock: { calls: unknown[][] } }): ImageDescriptionRequest {
-  const request = mock.mock.calls[0]?.[0];
+  const request = mock.mock.calls.at(0)?.[0];
   if (!request) {
     throw new Error("expected describeImage call");
   }
@@ -1192,7 +1192,7 @@ describe("image tool implicit imageModel config", () => {
       });
 
       expect(fetch).toHaveBeenCalledTimes(1);
-      const [url, init] = fetch.mock.calls[0] as [unknown, { body?: unknown }];
+      const [url, init] = fetchCallAt(fetch, 0) as [unknown, { body?: unknown }];
       expect(String(url)).toBe("https://api.moonshot.ai/v1/chat/completions");
       expect(typeof init?.body).toBe("string");
       const bodyRaw = typeof init?.body === "string" ? init.body : "";
@@ -1608,7 +1608,7 @@ describe("image tool data URL support", () => {
     const out = __testing.decodeDataUrl(`data:image/png;base64,${pngB64}`);
     expect(out.kind).toBe("image");
     expect(out.mimeType).toBe("image/png");
-    expect(out.buffer.length).toBeGreaterThan(0);
+    expect(out.buffer).toEqual(Buffer.from(pngB64, "base64"));
   });
 
   it("rejects non-image data URLs", () => {
@@ -1670,7 +1670,10 @@ describe("image tool MiniMax VLM routing", () => {
     });
 
     expect(fetch).toHaveBeenCalledTimes(1);
-    const [url, init] = fetch.mock.calls[0];
+    const [url, init] = fetchCallAt(fetch, 0) as [
+      unknown,
+      { body?: unknown; headers?: unknown; method?: unknown },
+    ];
     expect(String(url)).toBe("https://api.minimax.io/v1/coding_plan/vlm");
     expect(init?.method).toBe("POST");
     expect((init?.headers as Record<string, string>)?.Authorization).toBe("Bearer minimax-test");

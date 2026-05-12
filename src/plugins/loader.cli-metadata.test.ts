@@ -26,6 +26,58 @@ afterAll(() => {
 });
 
 describe("plugin loader CLI metadata", () => {
+  it.each([
+    {
+      id: "wrong-cli-channel-entry",
+      kind: "bundled-channel-entry",
+      error: "bundled channel entry requires setup-runtime loader",
+    },
+    {
+      id: "wrong-cli-channel-setup-entry",
+      kind: "bundled-channel-setup-entry",
+      error: "bundled channel setup entry requires setup-runtime loader",
+    },
+  ])(
+    "reports $kind loaded through CLI metadata legacy plugin path",
+    async ({ id, kind, error }) => {
+      useNoBundledPlugins();
+      const plugin = writePlugin({
+        id,
+        filename: `${id}.cjs`,
+        body: `module.exports = { id: ${JSON.stringify(id)}, kind: ${JSON.stringify(kind)} };`,
+      });
+      const errors: string[] = [];
+
+      const registry = await loadOpenClawPluginCliRegistry({
+        cache: false,
+        logger: {
+          info: () => {},
+          warn: () => {},
+          error: (msg: string) => errors.push(msg),
+          debug: () => {},
+        },
+        config: {
+          plugins: {
+            load: { paths: [plugin.file] },
+            allow: [id],
+          },
+        },
+      });
+
+      const loaded = registry.plugins.find((entry) => entry.id === id);
+      expect(loaded?.status).toBe("error");
+      expect(loaded?.error).toBe(error);
+      expect(
+        registry.diagnostics.some(
+          (diag) => diag.level === "error" && diag.pluginId === id && diag.message === error,
+        ),
+      ).toBe(true);
+      expect(errors).toEqual([
+        `[plugins] ${id} ${error}; ensure plugin is loaded via bundled channel discovery, not legacy plugin loader`,
+      ]);
+    },
+  );
+
   it("suppresses trust warning logs during CLI metadata loads", async () => {
     useNoBundledPlugins();
     const stateDir = makeTempDir();

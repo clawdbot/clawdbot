@@ -211,7 +211,9 @@ describe("resolveConfigIncludes", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(CircularIncludeError);
       const circular = err as CircularIncludeError;
-      expect(circular.chain).toEqual(expect.arrayContaining([DEFAULT_BASE_PATH, aPath, bPath]));
+      expect(circular.chain).toContain(DEFAULT_BASE_PATH);
+      expect(circular.chain).toContain(aPath);
+      expect(circular.chain).toContain(bPath);
       expect(circular.message).toMatch(/Circular include detected/);
       expect(circular.message).toContain("a.json");
       expect(circular.message).toContain("b.json");

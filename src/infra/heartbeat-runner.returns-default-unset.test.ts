@@ -834,7 +834,7 @@ describe("runHeartbeatOnce", () => {
         replySpy,
         0,
         {
-          Body: expect.stringMatching(/Ops check[\s\S]*Current time: /),
+          Body: /Ops check[\s\S]*Current time: /,
           SessionKey: sessionKey,
           From: "120363401234567890@g.us",
           To: "120363401234567890@g.us",

@@ -56,18 +56,15 @@ describe("resolveQueueSettings", () => {
   });
 
   it("keeps legacy queue mode distinct from steer", () => {
-    expect(
-      resolveQueueSettings({
-        cfg: {
-          messages: {
-            queue: {
-              mode: "queue",
-            },
+    const settings = resolveQueueSettings({
+      cfg: {
+        messages: {
+          queue: {
+            mode: "queue",
           },
-        } as OpenClawConfig,
-      }),
-    ).toMatchObject({
-      mode: "queue",
+        },
+      } as OpenClawConfig,
     });
+    expect(settings.mode).toBe("queue");
   });
 });

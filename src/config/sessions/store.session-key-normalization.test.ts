@@ -78,12 +78,8 @@ describe("session store key normalization", () => {
 
     const store = loadSessionStore(storePath, { skipCache: true });
     expect(Object.keys(store)).toEqual([CANONICAL_KEY]);
-    expect(store[CANONICAL_KEY]).toEqual(
-      expect.objectContaining({
-        lastChannel: "webchat",
-        lastTo: "webchat:user-1",
-      }),
-    );
+    expect(store[CANONICAL_KEY]?.lastChannel).toBe("webchat");
+    expect(store[CANONICAL_KEY]?.lastTo).toBe("webchat:user-1");
   });
 
   it("migrates legacy mixed-case entries to the canonical key on update", async () => {

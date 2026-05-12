@@ -111,12 +111,13 @@ describe("cron schedule error isolation", () => {
     recomputeNextRuns(state);
 
     expect(state.deps.log.warn).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
         jobId: "bad-job",
         name: "Bad Job",
         errorCount: 1,
-      }),
-      expect.stringContaining("failed to compute next run"),
+        err: "TypeError: CronPattern: invalid configuration format ('not valid'), exactly five, six, or seven space separated parts are required.",
+      },
+      "cron: failed to compute next run for job (skipping)",
     );
   });
 
@@ -135,12 +136,13 @@ describe("cron schedule error isolation", () => {
     expect(badJob.enabled).toBe(false);
     expect(badJob.state.scheduleErrorCount).toBe(3);
     expect(state.deps.log.error).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
         jobId: "bad-job",
         name: "Bad Job",
         errorCount: 3,
-      }),
-      expect.stringContaining("auto-disabled job"),
+        err: "TypeError: CronPattern: invalid configuration format ('garbage'), exactly five, six, or seven space separated parts are required.",
+      },
+      "cron: auto-disabled job after repeated schedule errors",
     );
   });
 

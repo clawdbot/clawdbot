@@ -241,8 +241,10 @@ function mockCallArg<T>(
   _type?: (value: unknown) => value is T,
 ): T {
   const call = mock.mock.calls[callIndex];
-  expect(call).toBeDefined();
-  return call?.[argIndex] as T;
+  if (!call) {
+    throw new Error(`Expected mock call at index ${callIndex}`);
+  }
+  return call[argIndex] as T;
 }
 
 type FeishuRoutePeer = { id: string; kind: "direct" | "group" };
@@ -971,7 +973,7 @@ describe("handleFeishuMessage command authorization", () => {
     await dispatchMessage({ cfg, event });
     const after = Date.now();
 
-    const call = mockFinalizeInboundContext.mock.calls[0]?.[0] as { Timestamp: number };
+    const call = mockFinalizeInboundContext.mock.calls.at(0)?.[0] as { Timestamp: number };
     expect(call.Timestamp).toBeGreaterThanOrEqual(before);
     expect(call.Timestamp).toBeLessThanOrEqual(after);
   });
@@ -1280,7 +1282,6 @@ describe("handleFeishuMessage command authorization", () => {
     expect(finalized.OriginatingTo).toBe("chat:oc-group");
     expect(finalized.SenderId).toBe("ou-allowed");
     const groupSessionKey = resolveGroupSessionKey(finalized as never);
-    expect(groupSessionKey).not.toBeNull();
     if (!groupSessionKey) {
       throw new Error("Expected group session key");
     }

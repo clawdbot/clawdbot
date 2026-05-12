@@ -103,11 +103,10 @@ describe("qa run config", () => {
     defaultQaRuntimeModelForMode.mockReturnValue("openai/gpt-5.5");
     defaultQaRuntimeModelForMode.mockClear();
 
-    expect(createIdleQaRunnerSnapshot(scenarios).selection).toMatchObject({
-      providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
-    });
+    const selection = createIdleQaRunnerSnapshot(scenarios).selection;
+    expect(selection.providerMode).toBe("live-frontier");
+    expect(selection.primaryModel).toBe("openai/gpt-5.5");
+    expect(selection.alternateModel).toBe("openai/gpt-5.5");
     expect(defaultQaRuntimeModelForMode).not.toHaveBeenCalled();
   });
 

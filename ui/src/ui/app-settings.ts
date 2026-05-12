@@ -3,7 +3,9 @@ import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
 import {
   startLogsPolling,
+  startNodesPolling,
   stopLogsPolling,
+  stopNodesPolling,
   startDebugPolling,
   stopDebugPolling,
 } from "./app-polling.ts";
@@ -106,6 +108,7 @@ type SettingsHost = {
   controlUiTabPaintSeq?: number;
   controlUiOverviewRefreshSeq?: number;
   controlUiCronRefreshSeq?: number;
+  sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
   dreamingStatusLoading: boolean;
   dreamingStatusError: string | null;
   dreamingStatus: import("./controllers/dreaming.js").DreamingStatus | null;
@@ -549,6 +552,14 @@ export function setTabFromRoute(host: SettingsHost, next: Tab) {
   applyTabSelection(host, next, { refreshPolicy: "connected" });
 }
 
+function clearPendingSessionsChangedReload(host: SettingsHost) {
+  if (host.sessionsChangedReloadTimer == null) {
+    return;
+  }
+  globalThis.clearTimeout(host.sessionsChangedReloadTimer);
+  host.sessionsChangedReloadTimer = null;
+}
+
 function updateBrowserHistory(url: URL, replace: boolean) {
   const history = typeof window === "undefined" ? undefined : window.history;
   if (!history) {
@@ -569,6 +580,7 @@ function applyTabSelection(
   host.tab = next;
   if (prev !== next) {
     scheduleControlUiTabVisibleTiming(host, prev, next);
+    clearPendingSessionsChangedReload(host);
   }
 
   // Cleanup chat module state when navigating away from chat
@@ -581,6 +593,9 @@ function applyTabSelection(
   }
   (next === "logs" ? startLogsPolling : stopLogsPolling)(
     host as unknown as Parameters<typeof startLogsPolling>[0],
+  );
+  (next === "nodes" ? startNodesPolling : stopNodesPolling)(
+    host as unknown as Parameters<typeof startNodesPolling>[0],
   );
   (next === "debug" ? startDebugPolling : stopDebugPolling)(
     host as unknown as Parameters<typeof startDebugPolling>[0],
@@ -839,7 +854,6 @@ export async function loadChannelsTab(host: SettingsHost) {
   const app = host as unknown as SettingsAppHost;
   void loadConfigSchema(app).finally(() => host.requestUpdate?.());
   await Promise.all([loadChannels(app, false), loadConfig(app)]);
-  void loadChannels(app, true).finally(() => host.requestUpdate?.());
 }
 
 export async function loadCron(host: SettingsHost) {

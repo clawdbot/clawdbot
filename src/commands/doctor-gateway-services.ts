@@ -381,15 +381,12 @@ export async function maybeRepairGatewayServiceConfig(
     note(`Gateway service invokes ${OPENCLAW_WRAPPER_ENV_KEY}: ${serviceWrapperPath}`, "Gateway");
   }
   const serviceLayout = await summarizeGatewayServiceLayout(command);
-  if (serviceLayout?.entrypointSourceCheckout) {
-    note(
-      [
+  const sourceCheckoutWarning = serviceLayout?.entrypointSourceCheckout
+    ? [
         `Gateway service entrypoint resolves to a source checkout: ${serviceLayout.packageRootReal ?? serviceLayout.packageRoot ?? serviceLayout.entrypointReal ?? serviceLayout.entrypoint}.`,
         "Run `openclaw doctor --fix` from the intended package install, or reinstall the gateway service with `openclaw gateway install --force`.",
-      ].join("\n"),
-      "Gateway service config",
-    );
-  }
+      ].join("\n")
+    : null;
 
   const tokenRefConfigured = Boolean(
     resolveSecretInputRef({
@@ -483,21 +480,34 @@ export async function maybeRepairGatewayServiceConfig(
     issues: audit.issues,
   });
 
+  const hasEntrypointMismatch = audit.issues.some(
+    (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
+  );
+  const showSourceCheckoutWarning = sourceCheckoutWarning !== null && !hasEntrypointMismatch;
+
   if (audit.issues.length === 0) {
+    if (sourceCheckoutWarning !== null && !hasEntrypointMismatch) {
+      note(sourceCheckoutWarning, "Gateway service config");
+    }
     return;
   }
 
   const serviceRepairPolicy = resolveServiceRepairPolicy();
   const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
 
-  note(
-    audit.issues
-      .map((issue) =>
-        issue.detail ? `- ${issue.message} (${issue.detail})` : `- ${issue.message}`,
-      )
-      .join("\n"),
-    "Gateway service config",
+  const consolidatedLines: string[] = [];
+  let emittedSourceCheckoutWarning = false;
+  if (sourceCheckoutWarning !== null && showSourceCheckoutWarning) {
+    consolidatedLines.push(sourceCheckoutWarning);
+    consolidatedLines.push("");
+    emittedSourceCheckoutWarning = true;
+  }
+  consolidatedLines.push(
+    ...audit.issues.map((issue) =>
+      issue.detail ? `- ${issue.message} (${issue.detail})` : `- ${issue.message}`,
+    ),
   );
+  note(consolidatedLines.join("\n"), "Gateway service config");
 
   const aggressiveIssues = audit.issues.filter((issue) => issue.level === "aggressive");
   const needsAggressive = aggressiveIssues.length > 0;
@@ -555,10 +565,12 @@ export async function maybeRepairGatewayServiceConfig(
         requiresInteractiveConfirmation: true,
       });
   if (!repair) {
-    note(
-      "Run `openclaw gateway install --force` when you want to replace the gateway service definition.",
-      "Gateway service config",
-    );
+    if (!emittedSourceCheckoutWarning) {
+      note(
+        "Run `openclaw gateway install --force` when you want to replace the gateway service definition.",
+        "Gateway service config",
+      );
+    }
     return;
   }
   const serviceEmbeddedToken = readEmbeddedGatewayToken(command);

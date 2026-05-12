@@ -77,15 +77,12 @@ describe("createPersistCronSessionEntry", () => {
       async (_storePath, update: (store: Record<string, SessionEntry>) => void) => {
         const store: Record<string, SessionEntry> = {};
         update(store);
-        expect(store["agent:main:cron:shell-only"]).toEqual(
-          expect.objectContaining({
-            label: "Cron: shell-only",
-            status: "running",
-            updatedAt: 1000,
-          }),
-        );
-        expect(store["agent:main:cron:shell-only"]?.sessionId).toBeUndefined();
-        expect(store["agent:main:cron:shell-only"]?.sessionFile).toBeUndefined();
+        expect(store["agent:main:cron:shell-only"]).toEqual({
+          label: "Cron: shell-only",
+          status: "running",
+          updatedAt: 1000,
+          systemSent: true,
+        });
       },
     );
 
@@ -119,10 +116,12 @@ describe("createPersistCronSessionEntry", () => {
         async (_storePath, update: (store: Record<string, SessionEntry>) => void) => {
           const store: Record<string, SessionEntry> = {};
           update(store);
-          expect(store["agent:main:cron:completed"]).toMatchObject({
+          expect(store["agent:main:cron:completed"]).toEqual({
             sessionId: "run-session-id",
             sessionFile: transcriptPath,
             label: "Cron: completed",
+            updatedAt: 1000,
+            systemSent: true,
           });
         },
       ),
@@ -130,9 +129,12 @@ describe("createPersistCronSessionEntry", () => {
 
     await persist();
 
-    expect(cronSession.store["agent:main:cron:completed"]).toMatchObject({
+    expect(cronSession.store["agent:main:cron:completed"]).toEqual({
       sessionId: "run-session-id",
       sessionFile: transcriptPath,
+      label: "Cron: completed",
+      updatedAt: 1000,
+      systemSent: true,
     });
   });
 

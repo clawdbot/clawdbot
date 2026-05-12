@@ -18,9 +18,10 @@ describe("resolveReplyRoutingDecision", () => {
         originatingTo: "telegram:123",
         isRoutableChannel,
       }),
-    ).toMatchObject({
+    ).toEqual({
       originatingChannel: "telegram",
       currentSurface: "slack",
+      isInternalWebchatTurn: false,
       shouldRouteToOriginating: true,
       shouldSuppressTyping: true,
     });
@@ -36,10 +37,12 @@ describe("resolveReplyRoutingDecision", () => {
         originatingTo: "telegram:123",
         isRoutableChannel,
       }),
-    ).toMatchObject({
+    ).toEqual({
+      originatingChannel: "telegram",
       currentSurface: "webchat",
       isInternalWebchatTurn: true,
       shouldRouteToOriginating: false,
+      shouldSuppressTyping: false,
     });
   });
 
@@ -53,8 +56,10 @@ describe("resolveReplyRoutingDecision", () => {
         suppressDirectUserDelivery: true,
         isRoutableChannel,
       }),
-    ).toMatchObject({
+    ).toEqual({
+      originatingChannel: "telegram",
       currentSurface: "discord",
+      isInternalWebchatTurn: false,
       shouldRouteToOriginating: false,
       shouldSuppressTyping: true,
     });

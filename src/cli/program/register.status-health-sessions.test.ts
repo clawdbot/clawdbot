@@ -51,14 +51,19 @@ type MockCalls = {
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value, label).toBe("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
 function expectCommandOptions(command: MockCalls, expected: Record<string, unknown>) {
   expect(command.mock.calls).toHaveLength(1);
-  const [options, actualRuntime] = command.mock.calls[0] ?? [];
+  const call = command.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected command call");
+  }
+  const [options, actualRuntime] = call;
   expect(actualRuntime).toBe(runtime);
   const optionsRecord = requireRecord(options, "command options");
   for (const [key, value] of Object.entries(expected)) {

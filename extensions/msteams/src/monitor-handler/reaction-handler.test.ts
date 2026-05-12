@@ -66,6 +66,30 @@ function createReactionTestHarness() {
   return { handler, enqueue };
 }
 
+function firstEnqueueCall(enqueue: ReturnType<typeof vi.fn>): unknown[] {
+  const [call] = enqueue.mock.calls;
+  if (!call) {
+    throw new Error("Expected enqueueSystemEvent call");
+  }
+  return call;
+}
+
+function firstEnqueueLabel(enqueue: ReturnType<typeof vi.fn>): string {
+  const [label] = firstEnqueueCall(enqueue);
+  if (typeof label !== "string") {
+    throw new Error("Expected enqueueSystemEvent label");
+  }
+  return label;
+}
+
+function firstEnqueueMeta(enqueue: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const [, meta] = firstEnqueueCall(enqueue);
+  if (!meta || typeof meta !== "object") {
+    throw new Error("Expected enqueueSystemEvent metadata");
+  }
+  return meta as Record<string, unknown>;
+}
+
 async function invokeReactionEvent(
   handler: ReturnType<typeof createMSTeamsReactionHandler>,
   activity: Record<string, unknown>,
@@ -117,7 +141,7 @@ describe("createMSTeamsReactionHandler", () => {
 
       const enqueue = mockRuntime.system.enqueueSystemEvent as ReturnType<typeof vi.fn>;
       expect(enqueue).toHaveBeenCalledOnce();
-      const label: string = enqueue.mock.calls[0][0];
+      const label = firstEnqueueLabel(enqueue);
       expect(label).toContain("👍");
       expect(label).toContain("Alice");
       expect(label).toContain("msg-123");
@@ -158,7 +182,7 @@ describe("createMSTeamsReactionHandler", () => {
         );
 
         const enqueue = mockRuntime.system.enqueueSystemEvent as ReturnType<typeof vi.fn>;
-        const label: string = enqueue.mock.calls[0][0];
+        const label = firstEnqueueLabel(enqueue);
         expect(label).toContain(expectedEmoji);
       }
     });
@@ -178,7 +202,8 @@ describe("createMSTeamsReactionHandler", () => {
       );
 
       expect(enqueue).toHaveBeenCalledOnce();
-      const [label, meta] = enqueue.mock.calls[0];
+      const label = firstEnqueueLabel(enqueue);
+      const meta = firstEnqueueMeta(enqueue);
       expect(label).toContain("added");
       expect(meta.sessionKey).toBe("test-session");
       expect(meta.contextKey).toContain("added");
@@ -197,7 +222,7 @@ describe("createMSTeamsReactionHandler", () => {
       );
 
       expect(enqueue).toHaveBeenCalledOnce();
-      const [label] = enqueue.mock.calls[0];
+      const label = firstEnqueueLabel(enqueue);
       expect(label).toContain("removed");
       expect(label).toContain("❤️");
     });

@@ -45,6 +45,8 @@ vi.mock("./models-config.providers.js", async () => {
     }) => providers,
     normalizeProviders: ({ providers }: { providers: Record<string, ModelsProviderConfig> }) =>
       providers,
+    normalizeProviderCatalogModelsForConfig: (providers: Record<string, ModelsProviderConfig>) =>
+      providers,
     resolveImplicitProviders: async ({ env }: { env?: NodeJS.ProcessEnv }) => {
       const providers: Record<string, ModelsProviderConfig> = {
         chutes: {
@@ -164,7 +166,12 @@ describe("models-config", () => {
         const parsed = JSON.parse(raw) as { providers: Record<string, ParsedProviderConfig> };
 
         expect(result.wrote).toBe(true);
-        expect(Object.keys(parsed.providers).length).toBeGreaterThan(0);
+        expect(Object.keys(parsed.providers)).toStrictEqual([
+          "chutes",
+          "deepseek",
+          "mistral",
+          "xai",
+        ]);
         expect(parsed.providers["openai"]).toBeUndefined();
         expect(parsed.providers["minimax"]).toBeUndefined();
         expect(parsed.providers["synthetic"]).toBeUndefined();

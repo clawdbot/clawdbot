@@ -39,7 +39,8 @@ openclaw --update
 - `--dry-run`: preview planned update actions (channel/tag/target/restart flow) without writing config, installing, syncing plugins, or restarting.
 - `--json`: print machine-readable `UpdateRunResult` JSON, including
   `postUpdate.plugins.warnings` when corrupt or unloadable managed plugins need
-  repair after the core update succeeds, and `postUpdate.plugins.integrityDrifts`
+  repair after the core update succeeds, beta-channel plugin fallback details
+  when a plugin has no beta release, and `postUpdate.plugins.integrityDrifts`
   when npm plugin artifact drift is detected during post-update plugin sync.
 - `--timeout <seconds>`: per-step timeout (default is 1800s).
 - `--yes`: skip confirmation prompts (for example downgrade confirmation).
@@ -173,16 +174,20 @@ manually.
 
 On the beta update channel, tracked npm and ClawHub plugin installs that follow
 the default/latest line try a plugin `@beta` release first. If the plugin has no
-beta release, OpenClaw falls back to the recorded default/latest spec. For npm
-plugins, OpenClaw also falls back when the beta package exists but fails install
-validation. Exact versions and explicit tags are not rewritten.
+beta release, OpenClaw falls back to the recorded default/latest spec and reports
+that as a warning. For npm plugins, OpenClaw also falls back when the beta
+package exists but fails install validation. These plugin fallback warnings do
+not make the core update fail. Exact versions and explicit tags are not
+rewritten.
 
 <Warning>
 If an exact pinned npm plugin update resolves to an artifact whose integrity differs from the stored install record, `openclaw update` aborts that plugin artifact update instead of installing it. Reinstall or update the plugin explicitly only after verifying that you trust the new artifact.
 </Warning>
 
 <Note>
-Post-update plugin sync failures that are scoped to a managed plugin are reported as warnings after the core update succeeds. The JSON result keeps the top-level update `status: "ok"` and reports `postUpdate.plugins.status: "warning"` with `openclaw doctor --fix` and `openclaw plugins inspect <id> --runtime --json` guidance. Unexpected updater or sync exceptions still fail the update result. Fix the plugin install or update error, then rerun `openclaw doctor --fix` or `openclaw update`.
+Post-update plugin sync failures that are scoped to a managed plugin and that the sync path can route around (e.g. an unreachable npm registry for a non-essential plugin) are reported as warnings after the core update succeeds. The JSON result keeps the top-level update `status: "ok"` and reports `postUpdate.plugins.status: "warning"` with `openclaw doctor --fix` and `openclaw plugins inspect <id> --runtime --json` guidance. Unexpected updater or sync exceptions still fail the update result. Fix the plugin install or update error, then rerun `openclaw doctor --fix` or `openclaw update`.
+
+After the per-plugin sync step, `openclaw update` runs a mandatory **post-core convergence** pass before the gateway is restarted: it repairs missing configured plugin payloads, validates each _active_ tracked install record on disk, and statically verifies its `package.json` is parseable (and any explicitly-declared `main` exists). Failures from this pass — and an invalid OpenClaw config snapshot — return `postUpdate.plugins.status: "error"` and flip the top-level update `status` to `"error"`, so `openclaw update` exits non-zero and the gateway is _not_ restarted with an unverified plugin set. The error includes structured `postUpdate.plugins.warnings[].guidance` lines pointing at `openclaw doctor --fix` and `openclaw plugins inspect <id> --runtime --json` for follow-up. Disabled plugin entries and records that are not trusted-source-linked official sync targets are skipped here, mirroring the `skipDisabledPlugins` policy used by the missing-payload check, so a stale disabled plugin record cannot block an otherwise valid update.
 
 When the updated Gateway starts, plugin loading is verify-only: startup does not run package managers or mutate dependency trees. Package-manager `update.run` restarts bypass the normal idle deferral and restart cooldown after the package tree has been swapped, so the old process cannot keep lazy-loading removed chunks.
 

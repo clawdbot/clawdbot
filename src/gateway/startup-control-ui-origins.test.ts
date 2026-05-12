@@ -16,7 +16,9 @@ describe("maybeSeedControlUiAllowedOriginsAtStartup", () => {
     const expectedOrigins = ["http://localhost:3000", "http://127.0.0.1:3000"];
     expect(result.seededAllowedOrigins).toBe(true);
     expect(result.config.gateway?.controlUi?.allowedOrigins).toEqual(expectedOrigins);
-    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("for bind=lan"));
+    expect(log.info).toHaveBeenCalledWith(
+      'gateway: seeded gateway.controlUi.allowedOrigins ["http://localhost:3000","http://127.0.0.1:3000"] for bind=lan (required since v2026.2.26; see issue #29385). Applied for this runtime without writing config; add other origins to gateway.controlUi.allowedOrigins if needed.',
+    );
     expect(log.warn).not.toHaveBeenCalled();
   });
 

@@ -11,6 +11,7 @@ export const ConnectErrorDetailCodes = {
   AUTH_PASSWORD_NOT_CONFIGURED: "AUTH_PASSWORD_NOT_CONFIGURED", // pragma: allowlist secret
   AUTH_BOOTSTRAP_TOKEN_INVALID: "AUTH_BOOTSTRAP_TOKEN_INVALID",
   AUTH_DEVICE_TOKEN_MISMATCH: "AUTH_DEVICE_TOKEN_MISMATCH",
+  AUTH_SCOPE_MISMATCH: "AUTH_SCOPE_MISMATCH",
   AUTH_RATE_LIMITED: "AUTH_RATE_LIMITED",
   AUTH_TAILSCALE_IDENTITY_MISSING: "AUTH_TAILSCALE_IDENTITY_MISSING",
   AUTH_TAILSCALE_PROXY_MISSING: "AUTH_TAILSCALE_PROXY_MISSING",
@@ -158,6 +159,8 @@ export function resolveAuthConnectErrorDetailCode(
       return ConnectErrorDetailCodes.AUTH_RATE_LIMITED;
     case "device_token_mismatch":
       return ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH;
+    case "scope_mismatch":
+      return ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH;
     case undefined:
       return ConnectErrorDetailCodes.AUTH_REQUIRED;
     default:

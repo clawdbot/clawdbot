@@ -453,9 +453,12 @@ describe("bundled plugin metadata", () => {
 
   it("keeps config schemas on all bundled plugin manifests", () => {
     for (const entry of listRepoBundledPluginMetadata()) {
-      expect(entry.manifest.configSchema).not.toBeNull();
-      expect(typeof entry.manifest.configSchema).toBe("object");
-      expect(Array.isArray(entry.manifest.configSchema)).toBe(false);
+      const { configSchema } = entry.manifest;
+      if (configSchema === null) {
+        throw new Error(`expected ${entry.manifest.id} config schema`);
+      }
+      expect(typeof configSchema).toBe("object");
+      expect(Array.isArray(configSchema)).toBe(false);
     }
   });
 
@@ -479,8 +482,8 @@ describe("bundled plugin metadata", () => {
       ({ manifest }) => manifest.id === "voice-call",
     );
 
-    expect(entry?.manifest.commandAliases).toContainEqual({ name: "voicecall" });
-    expect(entry?.manifest.activation?.onCommands).toContain("voicecall");
+    expect(entry?.manifest.commandAliases).toStrictEqual([{ name: "voicecall" }]);
+    expect(entry?.manifest.activation?.onCommands).toStrictEqual(["voicecall"]);
   });
 
   it("keeps empty-config Gateway startup narrower than declared startup sidecars", () => {

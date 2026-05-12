@@ -77,10 +77,12 @@ describe("msteams directory", () => {
       limit: undefined,
       runtime: runtimeEnv,
     });
-    expect(peers).toContainEqual({ kind: "user", id: "user:alice" });
-    expect(peers).toContainEqual({ kind: "user", id: "user:Bob" });
-    expect(peers).toContainEqual({ kind: "user", id: "user:carol" });
-    expect(peers).toContainEqual({ kind: "user", id: "user:bob" });
+    expect(peers).toStrictEqual([
+      { kind: "user", id: "user:alice" },
+      { kind: "user", id: "user:Bob" },
+      { kind: "user", id: "user:carol" },
+      { kind: "user", id: "user:bob" },
+    ]);
 
     const groups = await directory.listGroups({
       cfg,
@@ -88,8 +90,10 @@ describe("msteams directory", () => {
       limit: undefined,
       runtime: runtimeEnv,
     });
-    expect(groups).toContainEqual({ kind: "group", id: "conversation:chan1" });
-    expect(groups).toContainEqual({ kind: "group", id: "conversation:chan2" });
+    expect(groups).toStrictEqual([
+      { kind: "group", id: "conversation:chan1" },
+      { kind: "group", id: "conversation:chan2" },
+    ]);
   });
 
   it("normalizes spaced allowlist and dm entries", async () => {
@@ -110,10 +114,12 @@ describe("msteams directory", () => {
       limit: undefined,
       runtime: runtimeEnv,
     });
-    expect(peers).toContainEqual({ kind: "user", id: "user:Bob" });
-    expect(peers).toContainEqual({ kind: "user", id: "user:Alice" });
-    expect(peers).toContainEqual({ kind: "user", id: "user:Carol" });
-    expect(peers).toContainEqual({ kind: "user", id: "user:Dave" });
+    expect(peers).toStrictEqual([
+      { kind: "user", id: "user:Bob" },
+      { kind: "user", id: "user:Alice" },
+      { kind: "user", id: "user:Carol" },
+      { kind: "user", id: "user:Dave" },
+    ]);
   });
 });
 

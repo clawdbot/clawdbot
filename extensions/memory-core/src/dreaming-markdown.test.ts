@@ -7,7 +7,12 @@ import { createMemoryCoreTestHarness } from "./test-helpers.js";
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  const error = await fs.access(targetPath).then(
+    () => undefined,
+    (accessError: unknown) => accessError,
+  );
+  expect(error).toBeInstanceOf(Error);
+  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
 function requireInlinePath(result: { inlinePath?: string }): string {

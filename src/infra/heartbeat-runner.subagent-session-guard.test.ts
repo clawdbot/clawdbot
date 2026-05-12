@@ -8,6 +8,14 @@ import { withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 
 installHeartbeatRunnerTestRuntime();
 
+function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 describe("runHeartbeatOnce", () => {
   it("falls back to the main session when a subagent session key is forced", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
@@ -68,15 +76,14 @@ describe("runHeartbeatOnce", () => {
       });
 
       expect(replySpy).toHaveBeenCalledTimes(1);
-      expect(replySpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          SessionKey: mainSessionKey,
-          OriginatingChannel: undefined,
-          OriginatingTo: undefined,
-        }),
-        expect.anything(),
-        cfg,
-      );
+      const [replyParams, _replyRuntime, replyConfig] = requireFirstMockCall(
+        replySpy,
+        "reply",
+      ) as Parameters<typeof replySpy>;
+      expect(replyParams?.SessionKey).toBe(mainSessionKey);
+      expect(replyParams?.OriginatingChannel).toBeUndefined();
+      expect(replyParams?.OriginatingTo).toBeUndefined();
+      expect(replyConfig).toBe(cfg);
     });
   });
 });

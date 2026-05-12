@@ -11,7 +11,7 @@ describeLive("openai tts live", () => {
     const speechProvider = buildOpenAISpeechProvider();
 
     const voices = await speechProvider.listVoices?.({});
-    expect(voices).toEqual(expect.arrayContaining([expect.objectContaining({ id: "alloy" })]));
+    expect(voices?.some((voice) => voice.id === "alloy")).toBe(true);
 
     const providerConfig = {
       apiKey: OPENAI_API_KEY,

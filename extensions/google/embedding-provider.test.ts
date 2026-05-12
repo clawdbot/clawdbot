@@ -37,6 +37,14 @@ function fetchJsonBody(fetchMock: ReturnType<typeof vi.fn>, index: number): unkn
   return JSON.parse(body) as unknown;
 }
 
+function requireFirstFetchInput(fetchMock: ReturnType<typeof vi.fn>): RequestInfo | URL {
+  const [call] = fetchMock.mock.calls;
+  if (!call) {
+    throw new Error("expected Gemini embedding fetch call");
+  }
+  return call[0] as RequestInfo | URL;
+}
+
 describe("Gemini embedding request helpers", () => {
   it("builds requests and resolves model settings", () => {
     expect(
@@ -153,7 +161,7 @@ describe("Gemini embedding provider", () => {
       [0, 0, 1],
     ]);
 
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+    expect(requireFirstFetchInput(fetchMock)).toBe(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent",
     );
     expect(fetchJsonBody(fetchMock, 0)).toEqual({

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { stripAnsi } from "../terminal/ansi.js";
 import { formatAgentModelStartupDetails, logGatewayStartup } from "./server-startup-log.js";
 
 describe("gateway startup log", () => {
@@ -25,12 +26,11 @@ describe("gateway startup log", () => {
       isNixMode: false,
     });
 
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("dangerous config flags enabled"));
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("gateway.controlUi.dangerouslyDisableDeviceAuth=true"),
-    );
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("openclaw security audit"));
+    expect(warn.mock.calls).toEqual([
+      [
+        "security warning: dangerous config flags enabled: gateway.controlUi.dangerouslyDisableDeviceAuth=true. Run `openclaw security audit`.",
+      ],
+    ]);
   });
 
   it("does not warn when dangerous config flags are disabled", () => {
@@ -77,13 +77,11 @@ describe("gateway startup log", () => {
       isNixMode: false,
     });
 
-    expect(info).toHaveBeenCalledWith(
+    expect(info.mock.calls[0]?.[0]).toBe(
       "agent model: openai-codex/gpt-5.5 (thinking=medium, fast=on)",
-      expect.objectContaining({
-        consoleMessage: expect.stringContaining(
-          "agent model: openai-codex/gpt-5.5 (thinking=medium, fast=on)",
-        ),
-      }),
+    );
+    expect(stripAnsi(String(info.mock.calls[0]?.[1]?.consoleMessage))).toBe(
+      "agent model: openai-codex/gpt-5.5 (thinking=medium, fast=on)",
     );
   });
 

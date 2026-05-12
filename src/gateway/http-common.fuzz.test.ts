@@ -318,7 +318,8 @@ describe("fuzz: readJsonBodyOrError", () => {
       }
 
       const maxBytes = randInt(rng, 1, 1 << 20);
-      const result = await readJsonBodyOrError(makeRequest(), res, maxBytes);
+      const req = makeRequest();
+      const result = await readJsonBodyOrError(req, res, maxBytes);
       if (pick === 0) {
         expect(result).toEqual(expectedValue);
       } else {
@@ -326,7 +327,7 @@ describe("fuzz: readJsonBodyOrError", () => {
         expect(res.statusCode).toBe(expectedStatus);
         expect(end).toHaveBeenCalledWith(expectedBody);
       }
-      expect(readJsonBodyMock).toHaveBeenLastCalledWith(expect.anything(), maxBytes);
+      expect(readJsonBodyMock).toHaveBeenLastCalledWith(req, maxBytes);
     }
   });
 });

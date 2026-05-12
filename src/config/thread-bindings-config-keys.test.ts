@@ -15,12 +15,10 @@ describe("thread binding config keys", () => {
     if (result.ok) {
       return;
     }
-    expect(result.issues).toContainEqual(
-      expect.objectContaining({
-        path: "session.threadBindings",
-        message: expect.stringContaining("ttlHours"),
-      }),
+    const threadBindingIssue = result.issues.find(
+      (issue) => issue.path === "session.threadBindings",
     );
+    expect(threadBindingIssue?.message).toContain("ttlHours");
   });
 
   it("accepts channel-level thread binding ttlHours compatibility", () => {

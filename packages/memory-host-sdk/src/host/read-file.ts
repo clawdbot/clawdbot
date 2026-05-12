@@ -7,8 +7,10 @@ import {
   type OpenClawConfig,
 } from "./config-utils.js";
 import {
+  assertNoSymlinkParents,
   isFileMissingError,
   isPathInside,
+  isPathInsideWithRealpath,
   readRegularFile,
   root,
   statRegularFile,
@@ -19,6 +21,29 @@ import {
   DEFAULT_MEMORY_READ_LINES,
   type MemoryReadResult,
 } from "./read-file-shared.js";
+
+async function isAllowedAdditionalDirectoryPath(
+  additionalPath: string,
+  absPath: string,
+): Promise<boolean> {
+  if (!isPathInside(additionalPath, absPath)) {
+    return false;
+  }
+  try {
+    await assertNoSymlinkParents({ rootDir: additionalPath, targetPath: absPath });
+  } catch {
+    return false;
+  }
+  if (!isPathInsideWithRealpath(additionalPath, absPath)) {
+    try {
+      await fs.lstat(absPath);
+    } catch (err) {
+      return isFileMissingError(err);
+    }
+    return false;
+  }
+  return true;
+}
 
 export async function readMemoryFile(params: {
   workspaceDir: string;
@@ -49,7 +74,7 @@ export async function readMemoryFile(params: {
           continue;
         }
         if (stat.isDirectory()) {
-          if (isPathInside(additionalPath, absPath)) {
+          if (await isAllowedAdditionalDirectoryPath(additionalPath, absPath)) {
             const candidateStat = await fs.lstat(absPath).catch(() => null);
             if (candidateStat?.isSymbolicLink()) {
               continue;

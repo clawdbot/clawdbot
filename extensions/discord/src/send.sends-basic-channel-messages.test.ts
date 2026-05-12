@@ -78,8 +78,29 @@ function expectRecordFields(value: unknown, label: string, expected: Record<stri
   }
 }
 
+function requireMockCall(mock: ReturnType<typeof vi.fn>, label: string, callIndex = 0): unknown[] {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex + 1}`);
+  }
+  return call;
+}
+
+function requireMockArg(
+  mock: ReturnType<typeof vi.fn>,
+  label: string,
+  callIndex: number,
+  argIndex: number,
+): unknown {
+  return requireMockCall(mock, label, callIndex)[argIndex];
+}
+
+function expectRestRoute(mock: ReturnType<typeof vi.fn>, callIndex: number, expected: string) {
+  expect(requireMockArg(mock, "Discord REST", callIndex, 0)).toBe(expected);
+}
+
 function requireRestOptions(mock: ReturnType<typeof vi.fn>, callIndex: number) {
-  return requireRecord(mock.mock.calls[callIndex]?.[1], "Discord REST options");
+  return requireRecord(requireMockArg(mock, "Discord REST", callIndex, 1), "Discord REST options");
 }
 
 function requireRestBody(mock: ReturnType<typeof vi.fn>, callIndex = 0) {
@@ -155,8 +176,8 @@ describe("sendMessageDiscord", () => {
     });
     expect(postMock).toHaveBeenCalledTimes(2);
     return {
-      firstBody: postMock.mock.calls[0]?.[1]?.body as { message_reference?: unknown } | undefined,
-      secondBody: postMock.mock.calls[1]?.[1]?.body as { message_reference?: unknown } | undefined,
+      firstBody: requireRestBody(postMock, 0) as { message_reference?: unknown },
+      secondBody: requireRestBody(postMock, 1) as { message_reference?: unknown },
     };
   }
 
@@ -192,7 +213,7 @@ describe("sendMessageDiscord", () => {
       platformMessageIds: ["msg1"],
     });
     expectSingleReceiptPart(res.receipt, { platformMessageId: "msg1", kind: "text" });
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.channelMessages("789"));
+    expectRestRoute(postMock, 0, Routes.channelMessages("789"));
     expect(requireRestBody(postMock).content).toBe("hello world");
   });
 
@@ -214,7 +235,7 @@ describe("sendMessageDiscord", () => {
       cfg: DISCORD_TEST_CFG,
       accountId: "default",
     });
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.channelMessages("789"));
+    expectRestRoute(postMock, 0, Routes.channelMessages("789"));
     expect(requireRestBody(postMock).content).toBe("ping <@123456789012345678>");
   });
 
@@ -240,7 +261,7 @@ describe("sendMessageDiscord", () => {
       } as never,
       accountId: "default",
     });
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.channelMessages("789"));
+    expectRestRoute(postMock, 0, Routes.channelMessages("789"));
     expect(requireRestBody(postMock).content).toBe("ping <@123456789012345678>");
   });
 
@@ -272,7 +293,7 @@ describe("sendMessageDiscord", () => {
         },
       } as never,
     });
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.channelMessages("789"));
+    expectRestRoute(postMock, 0, Routes.channelMessages("789"));
     expect(requireRestBody(postMock).content).toBe("ping <@222333444555666777>");
   });
 
@@ -297,7 +318,7 @@ describe("sendMessageDiscord", () => {
     });
     expectSingleReceiptPart(res.receipt, { platformMessageId: "starter1", kind: "text" });
     // Should POST to threads route, not channelMessages.
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.threads("forum1"));
+    expectRestRoute(postMock, 0, Routes.threads("forum1"));
     expect(requireRestBody(postMock)).toEqual({
       name: "Discussion topic",
       message: { content: "Discussion topic\nBody of the post" },
@@ -319,12 +340,12 @@ describe("sendMessageDiscord", () => {
       platformMessageIds: ["starter1"],
     });
     expectSingleReceiptPart(res.receipt, { platformMessageId: "starter1", kind: "media" });
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.threads("forum1"));
+    expectRestRoute(postMock, 0, Routes.threads("forum1"));
     expect(requireRestBody(postMock, 0)).toEqual({
       name: "Topic",
       message: { content: "Topic" },
     });
-    expect(postMock.mock.calls[1]?.[0]).toBe(Routes.channelMessages("thread1"));
+    expectRestRoute(postMock, 1, Routes.channelMessages("thread1"));
     expectBodyFileName(requireRestBody(postMock, 1), "photo.jpg");
   });
 
@@ -336,10 +357,10 @@ describe("sendMessageDiscord", () => {
       token: "t",
       cfg: DISCORD_TEST_CFG,
     });
-    const firstBody = postMock.mock.calls[0]?.[1]?.body as {
+    const firstBody = requireRestBody(postMock, 0) as {
       message?: { content?: string };
     };
-    const secondBody = postMock.mock.calls[1]?.[1]?.body as { content?: string };
+    const secondBody = requireRestBody(postMock, 1) as { content?: string };
     expect(firstBody?.message?.content).toHaveLength(2000);
     expect(secondBody?.content).toBe("a");
   });
@@ -354,9 +375,9 @@ describe("sendMessageDiscord", () => {
       token: "t",
       cfg: DISCORD_TEST_CFG,
     });
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.userChannels());
+    expectRestRoute(postMock, 0, Routes.userChannels());
     expect(requireRestBody(postMock, 0).recipient_id).toBe("123");
-    expect(postMock.mock.calls[1]?.[0]).toBe(Routes.channelMessages("chan1"));
+    expectRestRoute(postMock, 1, Routes.channelMessages("chan1"));
     expect(requireRestBody(postMock, 1).content).toBe("hiya");
     expect(res.channelId).toBe("chan1");
   });
@@ -464,7 +485,7 @@ describe("sendMessageDiscord", () => {
       mediaUrl: "file:///tmp/photo.jpg",
     });
     expect(res.messageId).toBe("msg");
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.channelMessages("789"));
+    expectRestRoute(postMock, 0, Routes.channelMessages("789"));
     expectBodyFileName(requireRestBody(postMock), "photo.jpg");
     expect(loadWebMedia).toHaveBeenCalledWith("file:///tmp/photo.jpg", {
       maxBytes: 100 * 1024 * 1024,
@@ -486,7 +507,7 @@ describe("sendMessageDiscord", () => {
     });
 
     const mediaOptions = requireRecord(
-      vi.mocked(loadWebMedia).mock.calls[0]?.[1],
+      requireMockArg(vi.mocked(loadWebMedia), "loadWebMedia", 0, 1),
       "media load options",
     );
     expect(mediaOptions.workspaceDir).toBe("/tmp/agent-workspace");
@@ -504,7 +525,7 @@ describe("sendMessageDiscord", () => {
       filename: "renderable.png",
     });
 
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.channelMessages("789"));
+    expectRestRoute(postMock, 0, Routes.channelMessages("789"));
     expectBodyFileName(requireRestBody(postMock), "renderable.png");
   });
 
@@ -540,7 +561,7 @@ describe("sendMessageDiscord", () => {
       mediaUrl: "file:///tmp/photo.jpg",
     });
     expect(res.messageId).toBe("msg");
-    const body = postMock.mock.calls[0]?.[1]?.body;
+    const body = requireRestBody(postMock);
     expect(body).not.toHaveProperty("content");
     expect(body).toHaveProperty("files");
   });
@@ -554,7 +575,7 @@ describe("sendMessageDiscord", () => {
       cfg: DISCORD_TEST_CFG,
       mediaUrl: "file:///tmp/photo.jpg",
     });
-    const body = postMock.mock.calls[0]?.[1]?.body;
+    const body = requireRestBody(postMock);
     expect(body).toHaveProperty("content", "  spaced  ");
   });
 
@@ -567,7 +588,7 @@ describe("sendMessageDiscord", () => {
       cfg: DISCORD_TEST_CFG,
       replyTo: "orig-123",
     });
-    const body = postMock.mock.calls[0]?.[1]?.body;
+    const body = requireRestBody(postMock);
     expect(body?.message_reference).toEqual({
       message_id: "orig-123",
       fail_if_not_exists: false,
@@ -873,8 +894,10 @@ describe("readMessagesDiscord", () => {
       { limit: 5, before: "10" },
       { rest, token: "t", cfg: DISCORD_TEST_CFG },
     );
-    const call = getMock.mock.calls[0];
-    const options = call?.[1] as Record<string, unknown>;
+    const options = requireRecord(
+      requireMockArg(getMock, "Discord REST GET", 0, 1),
+      "Discord REST GET options",
+    );
     expect(options).toEqual({ limit: 5, before: "10" });
   });
 });
@@ -893,7 +916,7 @@ describe("edit/delete message helpers", () => {
       { content: "hello" },
       { rest, token: "t", cfg: DISCORD_TEST_CFG },
     );
-    expect(patchMock.mock.calls[0]?.[0]).toBe(Routes.channelMessage("chan1", "m1"));
+    expectRestRoute(patchMock, 0, Routes.channelMessage("chan1", "m1"));
     expect(requireRestBody(patchMock).content).toBe("hello");
   });
 
@@ -933,8 +956,9 @@ describe("searchMessagesDiscord", () => {
       { guildId: "g1", content: "hello", limit: 5 },
       { rest, token: "t", cfg: DISCORD_TEST_CFG },
     );
-    const call = getMock.mock.calls[0];
-    expect(call?.[0]).toBe("/guilds/g1/messages/search?content=hello&limit=5");
+    expect(requireMockArg(getMock, "Discord REST GET", 0, 0)).toBe(
+      "/guilds/g1/messages/search?content=hello&limit=5",
+    );
   });
 
   it("supports channel/author arrays and clamps limit", async () => {
@@ -950,8 +974,7 @@ describe("searchMessagesDiscord", () => {
       },
       { rest, token: "t", cfg: DISCORD_TEST_CFG },
     );
-    const call = getMock.mock.calls[0];
-    expect(call?.[0]).toBe(
+    expect(requireMockArg(getMock, "Discord REST GET", 0, 0)).toBe(
       "/guilds/g1/messages/search?content=hello&channel_id=c1&channel_id=c2&author_id=u1&limit=25",
     );
   });

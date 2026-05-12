@@ -184,8 +184,10 @@ vi.mock("./restart-health.js", () => ({
 
 function callArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
   const call = mock.mock.calls[index];
-  expect(call).toBeDefined();
-  return call?.[0];
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  return call[0];
 }
 
 describe("gatherDaemonStatus", () => {

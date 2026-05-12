@@ -156,7 +156,9 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
   const auth = buildAgentRuntimeAuthPlan({
     provider: params.provider,
     authProfileProvider: params.authProfileProvider,
+    authProfileMode: params.authProfileMode,
     sessionAuthProfileId: params.sessionAuthProfileId,
+    sessionAuthProfileCandidateIds: params.sessionAuthProfileCandidateIds,
     config,
     workspaceDir: params.workspaceDir,
     harnessId: params.harnessId,

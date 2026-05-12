@@ -401,6 +401,12 @@ export function resolveUnauthorizedHandshakeContext(params: {
         canRetryWithDeviceToken,
         recommendedNextStep: "update_auth_credentials",
       });
+    case "scope_mismatch":
+      return buildUnauthorizedHandshakeContext({
+        authProvided,
+        canRetryWithDeviceToken,
+        recommendedNextStep: "review_auth_configuration",
+      });
     case "rate_limited":
       return buildUnauthorizedHandshakeContext({
         authProvided,

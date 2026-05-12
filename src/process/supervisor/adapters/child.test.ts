@@ -76,6 +76,36 @@ async function createAdapterHarness(params?: {
   return { adapter, killMock };
 }
 
+type SpawnWithFallbackParams = {
+  argv?: string[];
+  options?: {
+    detached?: boolean;
+    env?: NodeJS.ProcessEnv | Record<string, string>;
+    stdio?: string[];
+  };
+  fallbacks?: Array<{ options?: { detached?: boolean } }>;
+};
+
+function firstSpawnWithFallbackParams(): SpawnWithFallbackParams {
+  const [call] = spawnWithFallbackMock.mock.calls;
+  if (!call) {
+    throw new Error("expected spawnWithFallback call");
+  }
+  const [params] = call;
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("expected spawnWithFallback params to be an object");
+  }
+  return params;
+}
+
+function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }, label: string): unknown {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call[0];
+}
+
 describe("createChildAdapter", () => {
   const originalServiceMarker = process.env.OPENCLAW_SERVICE_MARKER;
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -121,10 +151,7 @@ describe("createChildAdapter", () => {
   it("uses process-tree kill for default SIGKILL", async () => {
     const { adapter, killMock } = await createAdapterHarness({ pid: 4321 });
 
-    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
-      options?: { detached?: boolean };
-      fallbacks?: Array<{ options?: { detached?: boolean } }>;
-    };
+    const spawnArgs = firstSpawnWithFallbackParams();
     // On Windows, detached defaults to false (headless Scheduled Task compat);
     // on POSIX, detached is true with a no-detach fallback.
     if (process.platform === "win32") {
@@ -198,9 +225,7 @@ describe("createChildAdapter", () => {
       argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
     });
 
-    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
-      options?: { stdio?: Array<string> };
-    };
+    const spawnArgs = firstSpawnWithFallbackParams();
     expect(spawnArgs.options?.stdio?.[0]).toBe("inherit");
     expect(adapter.stdin).toBeUndefined();
   });
@@ -217,7 +242,7 @@ describe("createChildAdapter", () => {
 
     const writeCallback = vi.fn();
     adapter.stdin?.write("late", writeCallback);
-    expect(writeCallback.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    expect(firstMockArg(writeCallback, "write callback")).toBeInstanceOf(Error);
 
     adapter.stdin?.destroy?.();
     expect(adapter.stdin?.destroyed).toBe(true);
@@ -312,10 +337,7 @@ describe("createChildAdapter", () => {
 
     await createAdapterHarness({ pid: 7777 });
 
-    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
-      options?: { detached?: boolean };
-      fallbacks?: Array<{ options?: { detached?: boolean } }>;
-    };
+    const spawnArgs = firstSpawnWithFallbackParams();
     expect(spawnArgs.options?.detached).toBe(false);
     expect(spawnArgs.fallbacks ?? []).toStrictEqual([]);
   });
@@ -328,10 +350,7 @@ describe("createChildAdapter", () => {
       argv: ["node", "-e", "process.exit(0)"],
     });
 
-    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
-      argv?: string[];
-      options?: { env?: NodeJS.ProcessEnv };
-    };
+    const spawnArgs = firstSpawnWithFallbackParams();
     expect(spawnArgs.argv).toEqual(["node", "-e", "process.exit(0)"]);
     expect(spawnArgs.options?.env).toBeUndefined();
   });
@@ -367,10 +386,7 @@ describe("createChildAdapter", () => {
       }
     }
 
-    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
-      argv?: string[];
-      options?: { env?: NodeJS.ProcessEnv };
-    };
+    const spawnArgs = firstSpawnWithFallbackParams();
     expect(spawnArgs.argv?.slice(0, 4)).toEqual([
       "/bin/sh",
       "-c",
@@ -393,9 +409,7 @@ describe("createChildAdapter", () => {
       env: { FOO: "bar", COUNT: "12", DROP_ME: undefined },
     });
 
-    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
-      options?: { env?: Record<string, string> };
-    };
+    const spawnArgs = firstSpawnWithFallbackParams();
     expect(spawnArgs.options?.env).toEqual({ FOO: "bar", COUNT: "12" });
   });
 

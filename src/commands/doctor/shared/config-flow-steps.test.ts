@@ -65,11 +65,11 @@ describe("doctor config flow steps", () => {
       warnings: [],
     } satisfies DoctorConfigPreflightResult["snapshot"]);
 
-    expect(result.issueLines).toEqual([expect.stringContaining("- heartbeat:")]);
+    expect(result.issueLines).toEqual(["- heartbeat: use agents.defaults.heartbeat"]);
     expect(result.changeLines).not.toStrictEqual([]);
-    expect(result.state.fixHints).toContain(
+    expect(result.state.fixHints).toStrictEqual([
       'Run "openclaw doctor --fix" to migrate legacy config keys.',
-    );
+    ]);
     expect(result.state.pendingChanges).toBe(true);
   });
 
@@ -96,9 +96,9 @@ describe("doctor config flow steps", () => {
 
     expect(result.changeLines).toStrictEqual([]);
     expect(result.state.pendingChanges).toBe(true);
-    expect(result.state.fixHints).toContain(
+    expect(result.state.fixHints).toStrictEqual([
       'Run "openclaw doctor --fix" to migrate legacy config keys.',
-    );
+    ]);
   });
 
   it("commits migration even when post-migration validation has unrelated issues (#76798)", () => {
@@ -158,7 +158,9 @@ describe("doctor config flow steps", () => {
 
     expect(result.removed).toEqual(["bogus"]);
     expect(result.state.candidate).toStrictEqual({});
-    expect(result.state.fixHints).toContain('Run "openclaw doctor --fix" to remove these keys.');
+    expect(result.state.fixHints).toStrictEqual([
+      'Run "openclaw doctor --fix" to remove these keys.',
+    ]);
   });
 
   it("repairs active malformed auth profile metadata after unknown-key cleanup", () => {

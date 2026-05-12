@@ -650,6 +650,31 @@ describe("overflow compaction in run loop", () => {
     ).toBe(false);
   });
 
+  it("preserves tool media payloads and appends an explicit timeout error", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        aborted: true,
+        timedOut: true,
+        timedOutDuringCompaction: false,
+        assistantTexts: [],
+        toolMediaUrls: ["https://example.test/tool-output.png"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(result.payloads).toEqual([
+      expect.objectContaining({
+        mediaUrl: "https://example.test/tool-output.png",
+        mediaUrls: ["https://example.test/tool-output.png"],
+      }),
+      expect.objectContaining({
+        isError: true,
+        text: expect.stringContaining("timed out"),
+      }),
+    ]);
+  });
+
   it("sets promptTokens from the latest model call usage, not accumulated attempt usage", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({

@@ -106,12 +106,28 @@ function buildCostTotals(overrides: Partial<CostUsageTotals> = {}): CostUsageTot
 
 function expectSessionCostArgs(): Record<string, unknown> {
   expect(loadSessionCostSummaryMock).toHaveBeenCalledTimes(1);
-  return (loadSessionCostSummaryMock.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+  const call = loadSessionCostSummaryMock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected loadSessionCostSummary call");
+  }
+  const args = call.at(0);
+  if (!args || typeof args !== "object") {
+    throw new Error("expected loadSessionCostSummary args");
+  }
+  return args as Record<string, unknown>;
 }
 
 function expectFastModeArgs(): Record<string, unknown> {
   expect(resolveFastModeStateMock).toHaveBeenCalledTimes(1);
-  return (resolveFastModeStateMock.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+  const call = resolveFastModeStateMock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected resolveFastModeState call");
+  }
+  const args = call.at(0);
+  if (!args || typeof args !== "object") {
+    throw new Error("expected resolveFastModeState args");
+  }
+  return args as Record<string, unknown>;
 }
 
 describe("handleUsageCommand", () => {

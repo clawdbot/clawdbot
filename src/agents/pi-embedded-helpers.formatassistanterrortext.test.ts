@@ -441,8 +441,9 @@ describe("raw API error payload helpers", () => {
       'Ollama API error: {"type":"error","error":{"type":"server_error","message":"Boom"},"request_id":"req_123"}';
 
     expect(isRawApiErrorPayload(raw)).toBe(true);
-    expect(getApiErrorPayloadFingerprint(raw)).toContain("server_error");
-    expect(getApiErrorPayloadFingerprint(raw)).toContain("req_123");
+    expect(getApiErrorPayloadFingerprint(raw)).toBe(
+      '{"error":{"message":"Boom","type":"server_error"},"request_id":"req_123","type":"error"}',
+    );
   });
 
   it("recognizes flat JSON payloads with string error code and message (#74079)", () => {

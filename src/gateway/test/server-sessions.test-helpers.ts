@@ -415,7 +415,9 @@ export function expectActiveRunCleanup(
   const clearedKeys = (
     sessionCleanupMocks.clearSessionQueues.mock.calls as unknown as Array<[string[]]>
   )[0]?.[0];
-  expect(clearedKeys).toEqual(expect.arrayContaining(expectedQueueKeys));
+  for (const key of expectedQueueKeys) {
+    expect(clearedKeys).toContain(key);
+  }
   expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
   expect(embeddedRunMock.waitCalls).toEqual([sessionId]);
 }

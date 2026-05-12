@@ -245,7 +245,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expected: Record<string, unknown>,
   ): Record<string, unknown> {
     const start = streamingInstances[instanceIndex]?.start;
-    expect(start, "streaming instance must exist").toBeDefined();
+    if (!start) {
+      throw new Error(`Expected streaming instance ${instanceIndex}`);
+    }
     expect(start.mock.calls[0]?.[0]).toBe("oc_chat");
     expect(start.mock.calls[0]?.[1]).toBe("chat_id");
     return expectRecordFields(start.mock.calls[0]?.[2], "streaming start options", expected);

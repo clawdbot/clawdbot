@@ -37,7 +37,7 @@ describe("status daemon summary", () => {
     });
 
     const summary = await getDaemonStatusSummary();
-    expect(summary.runtimeShort).toContain("running");
+    expect(summary.runtimeShort).toBe("running (pid 1234)");
     expect(summary.layout?.execStart).toBe("/usr/bin/node /opt/openclaw/dist/entry.js gateway");
     expect(summary.layout?.sourceScope).toBe("system");
     expect(summary.layout?.entrypointSourceCheckout).toBe(false);

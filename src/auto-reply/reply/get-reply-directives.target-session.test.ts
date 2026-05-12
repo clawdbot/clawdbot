@@ -115,10 +115,13 @@ function parseInlineDirectivesForTest(body: string) {
 
 function mockCallInput(mock: { mock: { calls: unknown[][] } }, index = 0): Record<string, unknown> {
   const call = mock.mock.calls[index];
-  expect(call).toBeDefined();
-  const input = call?.[0];
-  expect(typeof input).toBe("object");
-  expect(input).not.toBeNull();
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  const input = call[0];
+  if (!input || typeof input !== "object") {
+    throw new Error(`expected mock input ${index}`);
+  }
   return input as Record<string, unknown>;
 }
 

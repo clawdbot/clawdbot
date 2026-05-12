@@ -53,6 +53,7 @@ type ReadTruncationDetails = {
   firstLineExceedsLimit: boolean;
 };
 
+const OFFSET_BEYOND_EOF_RE = /^Offset \d+ is beyond end of file \(\d+ lines total\)$/;
 const READ_CONTINUATION_NOTICE_RE =
   /\n\n\[(?:Showing lines [^\]]*?Use offset=\d+ to continue\.|\d+ more lines in file\. Use offset=\d+ to continue\.)\]\s*$/;
 
@@ -197,6 +198,38 @@ function stripReadTruncationContentDetails(
   };
 }
 
+function isOffsetBeyondEof(error: unknown, args: Record<string, unknown>): boolean {
+  const offset = args.offset;
+  return (
+    typeof offset === "number" &&
+    Number.isFinite(offset) &&
+    offset > 0 &&
+    error instanceof Error &&
+    OFFSET_BEYOND_EOF_RE.test(error.message)
+  );
+}
+
+function emptyReadResult(): AgentToolResult<unknown> {
+  const textBlock = { type: "text", text: "" } satisfies TextContentBlock;
+  return { content: [textBlock], details: undefined };
+}
+
+async function executeReadPage(params: {
+  base: AnyAgentTool;
+  toolCallId: string;
+  args: Record<string, unknown>;
+  signal?: AbortSignal;
+}): Promise<AgentToolResult<unknown>> {
+  try {
+    return await params.base.execute(params.toolCallId, params.args, params.signal);
+  } catch (error) {
+    if (isOffsetBeyondEof(error, params.args)) {
+      return emptyReadResult();
+    }
+    throw error;
+  }
+}
+
 async function executeReadWithAdaptivePaging(params: {
   base: AnyAgentTool;
   toolCallId: string;
@@ -208,7 +241,7 @@ async function executeReadWithAdaptivePaging(params: {
   const hasExplicitLimit =
     typeof userLimit === "number" && Number.isFinite(userLimit) && userLimit > 0;
   if (hasExplicitLimit) {
-    return await params.base.execute(params.toolCallId, params.args, params.signal);
+    return await executeReadPage(params);
   }
 
   const offsetRaw = params.args.offset;
@@ -224,7 +257,12 @@ async function executeReadWithAdaptivePaging(params: {
 
   for (let page = 0; page < MAX_ADAPTIVE_READ_PAGES; page += 1) {
     const pageArgs = { ...params.args, offset: nextOffset };
-    const pageResult = await params.base.execute(params.toolCallId, pageArgs, params.signal);
+    const pageResult = await executeReadPage({
+      base: params.base,
+      toolCallId: params.toolCallId,
+      args: pageArgs,
+      signal: params.signal,
+    });
     firstResult ??= pageResult;
 
     const rawText = getToolResultText(pageResult);
@@ -239,7 +277,7 @@ async function executeReadWithAdaptivePaging(params: {
       (truncation?.outputLines ?? 0) > 0 &&
       page < MAX_ADAPTIVE_READ_PAGES - 1;
     const pageText = canContinue ? stripReadContinuationNotice(rawText) : rawText;
-    const delimiter = aggregatedText ? "\n\n" : "";
+    const delimiter = aggregatedText && pageText ? "\n\n" : "";
     const nextBytes = Buffer.byteLength(`${delimiter}${pageText}`, "utf-8");
 
     if (aggregatedText && aggregatedBytes + nextBytes > params.maxBytes) {
@@ -265,7 +303,7 @@ async function executeReadWithAdaptivePaging(params: {
   }
 
   if (!firstResult) {
-    return await params.base.execute(params.toolCallId, params.args, params.signal);
+    return await executeReadPage(params);
   }
 
   let finalText = aggregatedText;

@@ -99,10 +99,11 @@ describe("ensureSkillSnapshot", () => {
         },
       },
     });
-    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledWith(
-      "/tmp/workspace",
-      expect.objectContaining({ agentId: "writer" }),
-    );
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
+    const [[workspaceDir, snapshotParams]] = buildWorkspaceSkillSnapshotMock.mock
+      .calls as unknown as Array<[string, { agentId?: string }]>;
+    expect(workspaceDir).toBe("/tmp/workspace");
+    expect(snapshotParams.agentId).toBe("writer");
     expect(resolveAgentIdFromSessionKeyMock).not.toHaveBeenCalled();
   });
 });

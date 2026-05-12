@@ -5,10 +5,31 @@ type SlackPayload = {
   text: string;
   blocks?: unknown;
 };
+type ChatUpdatePayload = {
+  channel?: string;
+  ts?: string;
+  text?: string;
+  blocks?: unknown;
+};
 const SLACK_CHAT_UPDATE_TEXT_LIMIT = 4000;
 
 function findSlackActionsBlock(blocks: Array<{ type?: string; elements?: unknown[] }>) {
   return blocks.find((block) => block.type === "actions");
+}
+
+function readChatUpdatePayload(
+  chatUpdate: { mock: { calls: unknown[][] } },
+  index: number,
+): ChatUpdatePayload {
+  const call = chatUpdate.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected Slack chat.update call #${index + 1}`);
+  }
+  const [payload] = call;
+  if (!payload || typeof payload !== "object") {
+    throw new Error(`Expected Slack chat.update payload #${index + 1}`);
+  }
+  return payload as ChatUpdatePayload;
 }
 
 describe("slackApprovalNativeRuntime", () => {
@@ -167,24 +188,17 @@ describe("slackApprovalNativeRuntime", () => {
       phase: "resolved",
     });
 
-    expect(chatUpdate).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        channel: "C123",
-        ts: "1712345678.999999",
-        text: "a".repeat(SLACK_CHAT_UPDATE_TEXT_LIMIT),
-        blocks,
-      }),
-    );
-    expect(chatUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "C123",
-        ts: "1712345678.999999",
-        text: expect.stringMatching(/…$/),
-        blocks,
-      }),
-    );
-    expect(chatUpdate.mock.calls[1]?.[0].text).toHaveLength(SLACK_CHAT_UPDATE_TEXT_LIMIT);
+    const firstUpdate = readChatUpdatePayload(chatUpdate, 0);
+    const secondUpdate = readChatUpdatePayload(chatUpdate, 1);
+    expect(firstUpdate.channel).toBe("C123");
+    expect(firstUpdate.ts).toBe("1712345678.999999");
+    expect(firstUpdate.text).toBe("a".repeat(SLACK_CHAT_UPDATE_TEXT_LIMIT));
+    expect(firstUpdate.blocks).toBe(blocks);
+    expect(secondUpdate.channel).toBe("C123");
+    expect(secondUpdate.ts).toBe("1712345678.999999");
+    expect(secondUpdate.text).toMatch(/…$/);
+    expect(secondUpdate.blocks).toBe(blocks);
+    expect(secondUpdate.text).toHaveLength(SLACK_CHAT_UPDATE_TEXT_LIMIT);
   });
 
   it("keeps pending metadata context within Slack Block Kit limits", async () => {

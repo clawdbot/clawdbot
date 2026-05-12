@@ -283,6 +283,30 @@ async function createSignaledLoopHarness(exitCallOrder?: string[]) {
   return { close, start, runtime, exited, loopPromise };
 }
 
+function expectRestartHandoffCall(expected: {
+  restartKind: "full-process" | "update-process";
+  reason: string | undefined;
+  supervisorMode: "external" | "launchd";
+}) {
+  expect(writeGatewayRestartHandoffSync).toHaveBeenCalledTimes(1);
+  const [handoff] = writeGatewayRestartHandoffSync.mock.calls.at(0) ?? [];
+  if (!handoff || typeof handoff !== "object" || Array.isArray(handoff)) {
+    throw new Error("expected restart handoff options object");
+  }
+  const processInstanceId = (handoff as { processInstanceId?: unknown }).processInstanceId;
+  expect(typeof processInstanceId).toBe("string");
+  if (typeof processInstanceId !== "string") {
+    throw new Error("expected restart handoff processInstanceId string");
+  }
+  expect(processInstanceId).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  );
+  expect(handoff).toEqual({
+    ...expected,
+    processInstanceId,
+  });
+}
+
 describe("runGatewayLoop", () => {
   it("exits 0 on SIGTERM after graceful close", async () => {
     vi.clearAllMocks();
@@ -405,9 +429,7 @@ describe("runGatewayLoop", () => {
       expect(waitForActiveEmbeddedRuns).not.toHaveBeenCalled();
       expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "all" });
       expect(gatewayLog.warn).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "restart blocked by active background task run(s): taskId=task-force",
-        ),
+        "restart blocked by active background task run(s): taskId=task-force runId=run-force status=running runtime=cron label=forced",
       );
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "forced restart requested; skipping active work drain",
@@ -633,7 +655,7 @@ describe("runGatewayLoop", () => {
       sigusr1();
 
       await exited;
-      expect(lockRelease).toHaveBeenCalled();
+      expect(lockRelease).toHaveBeenCalledTimes(1);
       expect(runtime.exit).toHaveBeenCalledWith(0);
       expect(exitCallOrder).toEqual(["lockRelease", "exit"]);
       expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
@@ -662,10 +684,9 @@ describe("runGatewayLoop", () => {
 
         await expect(exited).resolves.toBe(0);
         expect(runtime.exit).toHaveBeenCalledWith(0);
-        expect(writeGatewayRestartHandoffSync).toHaveBeenCalledWith({
+        expectRestartHandoffCall({
           restartKind: "full-process",
           reason: undefined,
-          processInstanceId: expect.any(String),
           supervisorMode: "launchd",
         });
       });
@@ -741,7 +762,7 @@ describe("runGatewayLoop", () => {
       expect(acquireGatewayLock).toHaveBeenCalledTimes(2);
       expect(start).toHaveBeenCalledTimes(1);
       expect(gatewayLog.error).toHaveBeenCalledWith(
-        expect.stringContaining("failed to reacquire gateway lock for in-process restart"),
+        "failed to reacquire gateway lock for in-process restart: Error: lock timeout",
       );
     });
   });
@@ -791,10 +812,9 @@ describe("runGatewayLoop", () => {
 
         await expect(exited).resolves.toBe(0);
         expect(runtime.exit).toHaveBeenCalledWith(0);
-        expect(writeGatewayRestartHandoffSync).toHaveBeenCalledWith({
+        expectRestartHandoffCall({
           restartKind: "update-process",
           reason: "update.run",
-          processInstanceId: expect.any(String),
           supervisorMode: "external",
         });
       });

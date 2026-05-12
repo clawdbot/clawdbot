@@ -146,7 +146,7 @@ describe("gateway register option collisions", () => {
       argv: ["gateway", "call", "health", "--token", "tok_call", "--json"],
       assert: () => {
         expect(callGatewayCli).toHaveBeenCalledTimes(1);
-        const [method, opts, params] = callGatewayCli.mock.calls[0] ?? [];
+        const [method, opts, params] = callGatewayCli.mock.calls.at(0) ?? [];
         expect(method).toBe("health");
         expect((opts as { token?: string } | undefined)?.token).toBe("tok_call");
         expect(params).toEqual({});
@@ -157,7 +157,7 @@ describe("gateway register option collisions", () => {
       argv: ["gateway", "probe", "--token", "tok_probe", "--json"],
       assert: () => {
         expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
-        const [opts, runtime] = gatewayStatusCommand.mock.calls[0] ?? [];
+        const [opts, runtime] = gatewayStatusCommand.mock.calls.at(0) ?? [];
         expect((opts as { token?: string } | undefined)?.token).toBe("tok_probe");
         expect(runtime).toBe(defaultRuntime);
       },

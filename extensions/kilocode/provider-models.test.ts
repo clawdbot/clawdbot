@@ -26,6 +26,18 @@ type MockKilocodeFetch = ((
   mock: { calls: unknown[][] };
 };
 
+const EXPECTED_STATIC_KILOCODE_MODELS = [
+  {
+    id: "kilo/auto",
+    name: "Kilo Auto",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1000000,
+    maxTokens: 128000,
+  },
+];
+
 function requireModelById(
   models: Awaited<ReturnType<typeof discoverKilocodeModels>>,
   id: string,
@@ -42,6 +54,14 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
     throw new Error(`expected ${label} to be a record`);
   }
   return value as Record<string, unknown>;
+}
+
+function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call;
 }
 
 function makeGatewayModel(overrides: Record<string, unknown> = {}) {
@@ -127,8 +147,7 @@ afterAll(() => {
 describe("discoverKilocodeModels", () => {
   it("returns static catalog in test environment", async () => {
     const models = await discoverKilocodeModels();
-    expect(models.length).toBeGreaterThan(0);
-    expect(requireModelById(models, "kilo/auto").id).toBe("kilo/auto");
+    expect(models).toStrictEqual(EXPECTED_STATIC_KILOCODE_MODELS);
   });
 
   it("static catalog has correct defaults for kilo/auto", async () => {
@@ -156,10 +175,11 @@ describe("discoverKilocodeModels (fetch path)", () => {
       const models = await discoverKilocodeModels();
 
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
-      const guardedFetch = requireRecord(
-        fetchWithSsrFGuardMock.mock.calls[0]?.[0],
-        "guarded fetch params",
+      const [guardedFetchParams] = requireFirstMockCall(
+        fetchWithSsrFGuardMock,
+        "guarded fetch call",
       );
+      const guardedFetch = requireRecord(guardedFetchParams, "guarded fetch params");
       expect(guardedFetch.url).toBe(KILOCODE_MODELS_URL);
       const guardedInit = requireRecord(guardedFetch.init, "guarded fetch init");
       expect(guardedInit.headers).toEqual({ Accept: "application/json" });
@@ -168,8 +188,9 @@ describe("discoverKilocodeModels (fetch path)", () => {
       expect(guardedFetch.auditContext).toBe("kilocode.model_discovery");
 
       expect(mockFetch).toHaveBeenCalledOnce();
-      expect(mockFetch.mock.calls[0]?.[0]).toBe(KILOCODE_MODELS_URL);
-      const fetchInit = requireRecord(mockFetch.mock.calls[0]?.[1], "mock fetch init");
+      const [fetchUrl, fetchOptions] = requireFirstMockCall(mockFetch, "mock fetch call");
+      expect(fetchUrl).toBe(KILOCODE_MODELS_URL);
+      const fetchInit = requireRecord(fetchOptions, "mock fetch init");
       expect(fetchInit.headers).toEqual({ Accept: "application/json" });
 
       expect(models.length).toBe(2);
@@ -190,8 +211,7 @@ describe("discoverKilocodeModels (fetch path)", () => {
     const mockFetch = vi.fn().mockRejectedValue(new Error("network error"));
     await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
-      expect(models.length).toBeGreaterThan(0);
-      expect(requireModelById(models, "kilo/auto").id).toBe("kilo/auto");
+      expect(models).toStrictEqual(EXPECTED_STATIC_KILOCODE_MODELS);
     });
   });
 
@@ -202,8 +222,7 @@ describe("discoverKilocodeModels (fetch path)", () => {
     });
     await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
-      expect(models.length).toBeGreaterThan(0);
-      expect(requireModelById(models, "kilo/auto").id).toBe("kilo/auto");
+      expect(models).toStrictEqual(EXPECTED_STATIC_KILOCODE_MODELS);
     });
   });
 

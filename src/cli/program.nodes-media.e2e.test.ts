@@ -8,7 +8,7 @@ installBaseProgramMocks();
 let registerNodesCli: typeof import("./nodes-cli.js").registerNodesCli;
 
 function getFirstRuntimeLogLine(): string {
-  const first = runtime.log.mock.calls[0]?.[0];
+  const first = runtime.log.mock.calls.at(0)?.[0];
   if (typeof first !== "string") {
     throw new Error(`Expected runtime.log first arg to be string, got ${typeof first}`);
   }
@@ -73,9 +73,12 @@ function latestNodeInvokeCall() {
   return call;
 }
 
-function expectNonEmptyString(value: unknown) {
-  expect(typeof value).toBe("string");
-  expect((value as string).length).toBeGreaterThan(0);
+function expectUuidString(value: unknown) {
+  expect(value).toEqual(
+    expect.stringMatching(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    ),
+  );
 }
 
 describe("cli program (nodes media)", () => {
@@ -102,10 +105,7 @@ describe("cli program (nodes media)", () => {
     runtime.error.mockClear();
 
     await expect(parseProgram.parseAsync(args, { from: "user" })).rejects.toThrow(/exit/i);
-    const matchingErrors = runtime.error.mock.calls
-      .map(([msg]) => String(msg))
-      .filter((msg) => expectedError.test(msg));
-    expect(matchingErrors.length).toBeGreaterThan(0);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringMatching(expectedError));
   }
 
   async function runAndExpectUrlPayloadMediaFile(params: {
@@ -178,7 +178,7 @@ describe("cli program (nodes media)", () => {
     expect(invoke.params.nodeId).toBe("ios-node");
     expect(invoke.params.command).toBe("camera.clip");
     expect(invoke.params.timeoutMs).toBe(90000);
-    expectNonEmptyString(invoke.params.idempotencyKey);
+    expectUuidString(invoke.params.idempotencyKey);
     expect(invoke.commandParams.facing).toBe("front");
     expect(invoke.commandParams.durationMs).toBe(3000);
     expect(invoke.commandParams.includeAudio).toBe(true);
@@ -215,7 +215,7 @@ describe("cli program (nodes media)", () => {
     expect(invoke.params.nodeId).toBe("ios-node");
     expect(invoke.params.command).toBe("camera.snap");
     expect(invoke.params.timeoutMs).toBe(20000);
-    expectNonEmptyString(invoke.params.idempotencyKey);
+    expectUuidString(invoke.params.idempotencyKey);
     expect(invoke.commandParams.facing).toBe("front");
     expect(invoke.commandParams.maxWidth).toBe(640);
     expect(invoke.commandParams.quality).toBe(0.8);
@@ -251,7 +251,7 @@ describe("cli program (nodes media)", () => {
     expect(invoke.params.nodeId).toBe("ios-node");
     expect(invoke.params.command).toBe("camera.clip");
     expect(invoke.params.timeoutMs).toBe(90000);
-    expectNonEmptyString(invoke.params.idempotencyKey);
+    expectUuidString(invoke.params.idempotencyKey);
     expect(invoke.commandParams.includeAudio).toBe(false);
     expect(invoke.commandParams.deviceId).toBe("cam-123");
 

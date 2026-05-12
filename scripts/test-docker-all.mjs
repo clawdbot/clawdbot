@@ -1244,7 +1244,7 @@ async function main() {
 
   if (buildEnabled) {
     const buildEntries = [];
-    if (scheduledLanes.some((poolLane) => poolLane.live)) {
+    if (scheduledLanes.some((poolLane) => poolLane.needsLiveImage)) {
       buildEntries.push({
         command: liveDockerHarnessScriptCommand("test-live-build-docker.sh"),
         label: "shared live-test image once",

@@ -90,7 +90,7 @@ function expectFields(
 }
 
 function gatewayCall(index: number) {
-  const call = callGatewayFromCli.mock.calls[index];
+  const call = callGatewayFromCli.mock.calls.at(index);
   if (!call) {
     throw new Error(`Expected gateway call ${index + 1}`);
   }
@@ -105,7 +105,7 @@ function expectGatewayCall(index: number, method: string, params: unknown) {
 }
 
 function writtenJson(): Record<string, unknown> {
-  const value = vi.mocked(defaultRuntime.writeJson).mock.calls[0]?.[0];
+  const value = vi.mocked(defaultRuntime.writeJson).mock.calls.at(0)?.[0];
   return requireRecord(value, "written json");
 }
 
@@ -521,11 +521,11 @@ describe("exec approvals CLI", () => {
     expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "exec.approvals.set")).toBe(
       false,
     );
-    expect(saveExecApprovals).toHaveBeenCalledWith(
-      requireRecord(saveExecApprovals.mock.calls[0]?.[0], "saved approvals"),
-    );
-    const saved = requireRecord(saveExecApprovals.mock.calls[0]?.[0], "saved approvals");
-    expect(requireRecord(saved.agents, "saved agents")["*"]).toBeDefined();
+    const saved = requireRecord(saveExecApprovals.mock.calls.at(0)?.[0], "saved approvals");
+    expect(saveExecApprovals).toHaveBeenCalledWith(saved);
+    if (requireRecord(saved.agents, "saved agents")["*"] === undefined) {
+      throw new Error("Expected wildcard exec approval agent entry");
+    }
   });
 
   it("removes wildcard allowlist entry and prunes empty agent", async () => {
@@ -543,10 +543,9 @@ describe("exec approvals CLI", () => {
 
     await runApprovalsCommand(["approvals", "allowlist", "remove", "/usr/bin/uname"]);
 
-    expect(saveExecApprovals).toHaveBeenCalledWith(
-      requireRecord(saveExecApprovals.mock.calls[0]?.[0], "saved approvals"),
-    );
-    expectFields(saveExecApprovals.mock.calls[0]?.[0], "saved approvals", {
+    const saved = requireRecord(saveExecApprovals.mock.calls.at(0)?.[0], "saved approvals");
+    expect(saveExecApprovals).toHaveBeenCalledWith(saved);
+    expectFields(saved, "saved approvals", {
       version: 1,
       agents: undefined,
     });

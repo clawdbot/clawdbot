@@ -50,6 +50,16 @@ function createShellHarness(params?: {
   };
 }
 
+function requireSpawnOptions(spawnCommand: ReturnType<typeof vi.fn>): {
+  env?: Record<string, string>;
+} {
+  const call = spawnCommand.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected spawn command call");
+  }
+  return call[1] as { env?: Record<string, string> };
+}
+
 describe("createLocalShellRunner", () => {
   it("logs denial on subsequent ! attempts without re-prompting", async () => {
     const harness = createShellHarness();
@@ -96,7 +106,7 @@ describe("createLocalShellRunner", () => {
 
     expect(harness.createSelectorSpy).toHaveBeenCalledTimes(1);
     expect(spawnCommand).toHaveBeenCalledTimes(1);
-    const spawnOptions = spawnCommand.mock.calls[0]?.[1] as { env?: Record<string, string> };
+    const spawnOptions = requireSpawnOptions(spawnCommand);
     expect(spawnOptions.env?.OPENCLAW_SHELL).toBe("tui-local");
     expect(spawnOptions.env?.PATH).toBe("/tmp/bin");
     expect(harness.messages).toContain("local shell: enabled for this session");

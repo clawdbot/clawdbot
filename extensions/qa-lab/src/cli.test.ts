@@ -74,6 +74,24 @@ const { listQaRunnerCliContributions } = vi.hoisted(() => ({
   ]),
 }));
 
+function requireQaTelegramOptions() {
+  const [call] = runQaTelegramCommand.mock.calls;
+  if (!call) {
+    throw new Error("expected qa telegram command call");
+  }
+  const [options] = call;
+  return options;
+}
+
+function requireQaSuiteOptions() {
+  const [call] = runQaSuiteCommand.mock.calls;
+  if (!call) {
+    throw new Error("expected qa suite command call");
+  }
+  const [options] = call;
+  return options;
+}
+
 vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({
   listQaRunnerCliContributions,
 }));
@@ -501,21 +519,21 @@ describe("qa cli registration", () => {
   it("forwards --list-scenarios for telegram runs", async () => {
     await program.parseAsync(["node", "openclaw", "qa", "telegram", "--list-scenarios"]);
 
-    const [options] = runQaTelegramCommand.mock.calls[0] ?? [];
+    const options = requireQaTelegramOptions();
     expect(options.listScenarios).toBe(true);
   });
 
   it("forwards --allow-failures for telegram runs", async () => {
     await program.parseAsync(["node", "openclaw", "qa", "telegram", "--allow-failures"]);
 
-    const [options] = runQaTelegramCommand.mock.calls[0] ?? [];
+    const options = requireQaTelegramOptions();
     expect(options.allowFailures).toBe(true);
   });
 
   it("forwards --allow-failures for suite runs", async () => {
     await program.parseAsync(["node", "openclaw", "qa", "suite", "--allow-failures"]);
 
-    const [options] = runQaSuiteCommand.mock.calls[0] ?? [];
+    const options = requireQaSuiteOptions();
     expect(options.allowFailures).toBe(true);
   });
 

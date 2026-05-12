@@ -105,7 +105,11 @@ function createMattermostActionContext(
 
 function expectSingleMattermostSend(to: string, text: string): Record<string, unknown> {
   expect(sendMessageMattermostMock).toHaveBeenCalledTimes(1);
-  const [actualTo, actualText, options] = sendMessageMattermostMock.mock.calls[0] ?? [];
+  const [call] = sendMessageMattermostMock.mock.calls;
+  if (!call) {
+    throw new Error("expected Mattermost send call");
+  }
+  const [actualTo, actualText, options] = call;
   expect(actualTo).toBe(to);
   expect(actualText).toBe(text);
   if (!options || typeof options !== "object" || Array.isArray(options)) {

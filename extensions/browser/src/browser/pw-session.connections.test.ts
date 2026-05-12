@@ -154,16 +154,14 @@ describe("pw-session connection scoping", () => {
     await vi.waitFor(() => {
       expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
     });
-    expect(connectOverCdpSpy).toHaveBeenNthCalledWith(
-      1,
-      "http://127.0.0.1:9222",
-      expect.any(Object),
-    );
-    expect(connectOverCdpSpy).toHaveBeenNthCalledWith(
-      2,
-      "http://127.0.0.1:9333",
-      expect.any(Object),
-    );
+    expect(connectOverCdpSpy).toHaveBeenNthCalledWith(1, "http://127.0.0.1:9222", {
+      timeout: 5000,
+      headers: {},
+    });
+    expect(connectOverCdpSpy).toHaveBeenNthCalledWith(2, "http://127.0.0.1:9333", {
+      timeout: 5000,
+      headers: {},
+    });
 
     resolveA?.(browserA.browser);
     const [pagesA, pagesB] = await Promise.all([pendingA, pendingB]);

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/diagnostics-otel",
-  "version": "2026.5.10-beta.1",
+  "version": "2026.5.12-beta.1",
   "description": "OpenClaw diagnostics OpenTelemetry exporter",
   "repository": {
     "type": "git",
@@ -8,17 +8,17 @@
   },
   "type": "module",
   "dependencies": {
-    "@opentelemetry/api": "^1.9.1",
-    "@opentelemetry/api-logs": "^0.217.0",
-    "@opentelemetry/exporter-logs-otlp-proto": "^0.217.0",
-    "@opentelemetry/exporter-metrics-otlp-proto": "^0.217.0",
-    "@opentelemetry/exporter-trace-otlp-proto": "^0.217.0",
-    "@opentelemetry/resources": "^2.7.1",
-    "@opentelemetry/sdk-logs": "^0.217.0",
-    "@opentelemetry/sdk-metrics": "^2.7.1",
-    "@opentelemetry/sdk-node": "^0.217.0",
-    "@opentelemetry/sdk-trace-base": "^2.7.1",
-    "@opentelemetry/semantic-conventions": "^1.40.0"
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/api-logs": "0.217.0",
+    "@opentelemetry/exporter-logs-otlp-proto": "0.217.0",
+    "@opentelemetry/exporter-metrics-otlp-proto": "0.217.0",
+    "@opentelemetry/exporter-trace-otlp-proto": "0.217.0",
+    "@opentelemetry/resources": "2.7.1",
+    "@opentelemetry/sdk-logs": "0.217.0",
+    "@opentelemetry/sdk-metrics": "2.7.1",
+    "@opentelemetry/sdk-node": "0.217.0",
+    "@opentelemetry/sdk-trace-base": "2.7.1",
+    "@opentelemetry/semantic-conventions": "1.40.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -34,10 +34,10 @@
       "minHostVersion": ">=2026.4.25"
     },
     "compat": {
-      "pluginApi": ">=2026.5.10-beta.1"
+      "pluginApi": ">=2026.5.12-beta.1"
     },
     "build": {
-      "openclawVersion": "2026.5.10-beta.1"
+      "openclawVersion": "2026.5.12-beta.1"
     },
     "release": {
       "publishToClawHub": true,

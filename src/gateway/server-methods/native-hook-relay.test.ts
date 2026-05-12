@@ -55,14 +55,13 @@ describe("native hook relay gateway method", () => {
       context: {} as never,
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("not found"),
-      }),
-    );
+    const call = respond.mock.calls[0] as
+      | [boolean, unknown, { code?: string; message?: string }]
+      | undefined;
+    expect(call?.[0]).toBe(false);
+    expect(call?.[1]).toBeUndefined();
+    expect(call?.[2]?.code).toBe("INVALID_REQUEST");
+    expect(call?.[2]?.message).toContain("not found");
   });
 });
 

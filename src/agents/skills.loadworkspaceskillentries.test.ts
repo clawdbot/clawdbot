@@ -368,7 +368,7 @@ describe("loadWorkspaceSkillEntries", () => {
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-skill");
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-file-skill");
       expect(entries.map((entry) => entry.skill.name)).not.toContain("symlink-target");
-      const [line] = warn.mock.calls[0] ?? [];
+      const [line] = warn.mock.calls.at(0) ?? [];
       const warningLine = String(line);
       expect(warningLine).toContain("Skipping escaped skill path outside its configured root:");
       expect(warningLine).toContain("reason=symlink-escape");
@@ -427,7 +427,7 @@ describe("loadWorkspaceSkillEntries", () => {
       });
 
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-bundled-skill");
-      const [line] = warn.mock.calls[0] ?? [];
+      const [line] = warn.mock.calls.at(0) ?? [];
       const warningLine = String(line);
       expect(warningLine).toContain("Skipping escaped skill path outside its configured root:");
       expect(warningLine).toContain("source=openclaw-bundled");
@@ -451,7 +451,7 @@ describe("loadWorkspaceSkillEntries", () => {
         bundledSkillsDir: bundledDir,
       });
 
-      const [line] = warn.mock.calls[0] ?? [];
+      const [line] = warn.mock.calls.at(0) ?? [];
       const warningLine = String(line);
       expect(warningLine).toContain("root=~/workspace/.bundled");
       expect(warningLine).toContain("requested=~/workspace/.bundled/escaped-bundled-skill");

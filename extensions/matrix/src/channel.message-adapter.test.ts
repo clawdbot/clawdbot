@@ -52,7 +52,6 @@ describe("matrix channel message adapter", () => {
 
   it("backs declared durable-final capabilities with runtime outbound proofs", async () => {
     const adapter = matrixPlugin.message;
-    expect(adapter).toBeDefined();
     if (!adapter?.send?.text || !adapter.send.media) {
       throw new Error("Expected Matrix message adapter send capabilities.");
     }
@@ -67,11 +66,9 @@ describe("matrix channel message adapter", () => {
         text: "hello",
         accountId: "default",
       });
-      expect(mocks.sendMessageMatrix).toHaveBeenLastCalledWith(
-        "room:!room:example",
-        "hello",
-        expect.any(Object),
-      );
+      expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(1);
+      expect(mocks.sendMessageMatrix.mock.lastCall?.[0]).toBe("room:!room:example");
+      expect(mocks.sendMessageMatrix.mock.lastCall?.[1]).toBe("hello");
       const options = lastMatrixSendOptions();
       expect(options.cfg).toBe(cfg);
       expect(options.accountId).toBe("default");
@@ -90,11 +87,9 @@ describe("matrix channel message adapter", () => {
         accountId: "default",
         audioAsVoice: true,
       });
-      expect(mocks.sendMessageMatrix).toHaveBeenLastCalledWith(
-        "room:!room:example",
-        "caption",
-        expect.any(Object),
-      );
+      expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(1);
+      expect(mocks.sendMessageMatrix.mock.lastCall?.[0]).toBe("room:!room:example");
+      expect(mocks.sendMessageMatrix.mock.lastCall?.[1]).toBe("caption");
       const options = lastMatrixSendOptions();
       expect(options.cfg).toBe(cfg);
       expect(options.mediaUrl).toBe("file:///tmp/cat.png");
@@ -113,11 +108,9 @@ describe("matrix channel message adapter", () => {
         replyToId: "$reply",
         threadId: "$thread",
       });
-      expect(mocks.sendMessageMatrix).toHaveBeenLastCalledWith(
-        "room:!room:example",
-        "threaded",
-        expect.any(Object),
-      );
+      expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(1);
+      expect(mocks.sendMessageMatrix.mock.lastCall?.[0]).toBe("room:!room:example");
+      expect(mocks.sendMessageMatrix.mock.lastCall?.[1]).toBe("threaded");
       const options = lastMatrixSendOptions();
       expect(options.cfg).toBe(cfg);
       expect(options.replyToId).toBe("$reply");
@@ -188,11 +181,9 @@ describe("matrix channel message adapter", () => {
       threadId: "$thread",
     });
 
-    expect(mocks.sendMessageMatrix).toHaveBeenLastCalledWith(
-      "room:!room:example",
-      rendered?.text,
-      expect.any(Object),
-    );
+    expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(1);
+    expect(mocks.sendMessageMatrix.mock.lastCall?.[0]).toBe("room:!room:example");
+    expect(mocks.sendMessageMatrix.mock.lastCall?.[1]).toBe(rendered?.text);
     const options = lastMatrixSendOptions();
     expect(options.cfg).toBe(cfg);
     expect(options.accountId).toBe("default");

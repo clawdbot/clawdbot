@@ -408,7 +408,7 @@ describe("createGatewayPluginRequestHandler", () => {
     const { res, setHeader, end } = makeMockHttpResponse();
     const handled = await handler({ url: "/boom" } as IncomingMessage, res);
     expect(handled).toBe(true);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("boom"));
+    expect(log.warn).toHaveBeenCalledWith("plugin http route failed (route): Error: boom");
     expect(res.statusCode).toBe(500);
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
     expect(end).toHaveBeenCalledWith("Internal Server Error");

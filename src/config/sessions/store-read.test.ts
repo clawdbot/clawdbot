@@ -13,12 +13,9 @@ describe("readSessionStoreReadOnly", () => {
       expect(readSessionStoreReadOnly(storePath)).toStrictEqual({});
 
       await fs.writeFile(storePath, '{"session-1":{"sessionId":"s1","updatedAt":1}}\n', "utf8");
-      expect(readSessionStoreReadOnly(storePath)).toMatchObject({
-        "session-1": {
-          sessionId: "s1",
-          updatedAt: 1,
-        },
-      });
+      const store = readSessionStoreReadOnly(storePath);
+      expect(store["session-1"]?.sessionId).toBe("s1");
+      expect(store["session-1"]?.updatedAt).toBe(1);
     });
   });
 });

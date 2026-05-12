@@ -267,6 +267,7 @@ export type AgentRuntimeAuthPlan = {
   authProfileProviderForAuth: string;
   harnessAuthProvider?: string;
   forwardedAuthProfileId?: string;
+  forwardedAuthProfileCandidateIds?: string[];
 };
 
 export type AgentRuntimePromptPlan = {
@@ -389,7 +390,9 @@ export type BuildAgentRuntimePlanParams = {
   harnessRuntime?: string;
   allowHarnessAuthProfileForwarding?: boolean;
   authProfileProvider?: string;
+  authProfileMode?: string;
   sessionAuthProfileId?: string;
+  sessionAuthProfileCandidateIds?: string[];
   agentId?: string;
   thinkingLevel?: AgentRuntimeThinkLevel;
   extraParamsOverride?: Record<string, unknown>;

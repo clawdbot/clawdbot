@@ -2,11 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import {
-  createAgentSession,
-  DefaultResourceLoader,
-  SessionManager,
-} from "@earendil-works/pi-coding-agent";
+import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
@@ -223,6 +219,7 @@ import {
   validateReplayTurns,
 } from "../replay-history.js";
 import { observeReplayMetadata, replayMetadataFromState } from "../replay-state.js";
+import { createEmbeddedPiResourceLoader } from "../resource-loader.js";
 import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
@@ -1040,7 +1037,7 @@ export async function runEmbeddedAttempt(
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,
             includeCoreTools: toolConstructionPlan.includeCoreTools,
-            includeToolSearchControls: true,
+            includeToolSearchControls: toolSearchControlsEnabledForRun,
             toolSearchCatalogExecutor: (toolParams) => {
               if (!toolSearchCatalogExecutor) {
                 throw new Error("Tool Search catalog executor is unavailable for this run.");
@@ -1715,7 +1712,7 @@ export async function runEmbeddedAttempt(
         modelId: params.modelId,
         model: params.model,
       });
-      const resourceLoader = new DefaultResourceLoader({
+      const resourceLoader = createEmbeddedPiResourceLoader({
         cwd: resolvedWorkspace,
         agentDir,
         settingsManager,
@@ -2581,10 +2578,9 @@ export async function runEmbeddedAttempt(
         await flushPendingToolResultsAfterIdle({
           agent: activeSession?.agent,
           sessionManager,
-          clearPendingOnTimeout: true,
           // PERF: If the run was aborted during the setup,
-          // skip the idle wait and clear pending results synchronously so we can
-          // immediately dispose the session and throw the error without blocking.
+          // skip the idle wait and flush pending results synchronously so we can
+          // immediately dispose the session without orphaning tool calls.
           ...(params.abortSignal?.aborted ? { timeoutMs: 0 } : {}),
         });
         activeSession.dispose();
@@ -4163,6 +4159,8 @@ export async function runEmbeddedAttempt(
           bundleMcpRuntime,
           bundleLspRuntime,
           sessionLock,
+          // PERF: If the run was aborted (user stop, timeout, etc.), skip the idle wait
+          // and flush pending results synchronously so we can release the session lock ASAP.
           aborted: cleanupAborted,
           abortSettlePromise: cleanupAborted ? buildAbortSettlePromise() : null,
           runId: params.runId,

@@ -84,8 +84,6 @@ function makeSpawnEvent(
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
   if (typeof value !== "object" || value === null) {
     throw new Error(`${label} was not an object`);
   }
@@ -114,7 +112,6 @@ function requireBindCallWithTarget(targetSessionKey: string) {
     const record = params as { targetSessionKey?: string };
     return record.targetSessionKey === targetSessionKey;
   });
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error(`missing bind call for ${targetSessionKey}`);
   }

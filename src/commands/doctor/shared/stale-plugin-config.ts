@@ -249,7 +249,8 @@ function collectDependentChannelConfigHits(
       surface: "heartbeat",
     });
   }
-  for (const [index, agent] of (cfg.agents?.list ?? []).entries()) {
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  for (const [index, agent] of agents.entries()) {
     const target = agent?.heartbeat?.target;
     if (typeof target !== "string" || !staleChannelIds.has(normalizePluginId(target))) {
       continue;
@@ -476,7 +477,8 @@ function removeDanglingChannelReferences(config: OpenClawConfig, channelIds: rea
   ) {
     delete defaultsHeartbeat.target;
   }
-  for (const agent of config.agents?.list ?? []) {
+  const agents = Array.isArray(config.agents?.list) ? config.agents.list : [];
+  for (const agent of agents) {
     const heartbeat = agent.heartbeat;
     if (
       heartbeat &&

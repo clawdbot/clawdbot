@@ -12,6 +12,14 @@ vi.mock("../process/exec.js", () => ({
 
 let runCliEntry: typeof import("./runner.entries.js").runCliEntry;
 
+function requireFirstRunExecCall(): unknown[] {
+  const [call] = runExecMock.mock.calls;
+  if (!call) {
+    throw new Error("expected runExec call");
+  }
+  return call;
+}
+
 describe("media-understanding CLI audio entry", () => {
   beforeAll(async () => {
     ({ runCliEntry } = await import("./runner.entries.js"));
@@ -65,7 +73,7 @@ describe("media-understanding CLI audio entry", () => {
     });
 
     expect(runExecMock).toHaveBeenCalledTimes(1);
-    const [command, args, options] = runExecMock.mock.calls[0] ?? [];
+    const [command, args, options] = requireFirstRunExecCall();
     expect(command).toBe("mock-transcriber");
     expect(args).toEqual(["--prompt", "Focus on names", "--language", "en", "--file", mediaPath]);
     expect(options).toEqual({

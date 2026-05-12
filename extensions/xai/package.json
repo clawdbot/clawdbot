@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/xai-plugin",
-  "version": "2026.5.10-beta.1",
+  "version": "2026.5.12-beta.1",
   "private": true,
   "description": "OpenClaw xAI plugin",
   "type": "module",
@@ -10,7 +10,7 @@
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "ws": "^8.20.0"
+    "ws": "8.20.0"
   },
   "openclaw": {
     "extensions": [

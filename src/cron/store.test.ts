@@ -66,7 +66,13 @@ async function captureRenameDestinations(action: () => Promise<void>): Promise<s
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  try {
+    await fs.stat(targetPath);
+  } catch (err) {
+    expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected path to be missing: ${targetPath}`);
 }
 
 describe("resolveCronStorePath", () => {
@@ -123,10 +129,11 @@ describe("cron store", () => {
       "utf-8",
     );
 
-    await expect(loadCronStore(store.storePath)).resolves.toMatchObject({
-      version: 1,
-      jobs: [{ id: "job-1", enabled: true }],
-    });
+    const loaded = await loadCronStore(store.storePath);
+    expect(loaded.version).toBe(1);
+    expect(loaded.jobs).toHaveLength(1);
+    expect(loaded.jobs[0]?.id).toBe("job-1");
+    expect(loaded.jobs[0]?.enabled).toBe(true);
   });
 
   it("loads split cron state synchronously for task reconciliation", async () => {
@@ -135,11 +142,10 @@ describe("cron store", () => {
 
     const loaded = loadCronStoreSync(storePath);
 
-    expect(loaded.jobs[0]).toMatchObject({
-      id: "job-sync",
-      state: expect.any(Object),
-      updatedAtMs: expect.any(Number),
-    });
+    expect(loaded.jobs).toHaveLength(1);
+    expect(loaded.jobs[0]?.id).toBe("job-sync");
+    expect(loaded.jobs[0]?.state).toStrictEqual({});
+    expect(loaded.jobs[0]?.updatedAtMs).toBeTypeOf("number");
   });
 
   it("compares split state identity for flat legacy cron rows", async () => {

@@ -437,7 +437,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    const secondCall = mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as { prompt?: string };
+    const secondCall = mockedRunEmbeddedAttempt.mock.calls.at(1)?.[0] as { prompt?: string };
     expect(secondCall.prompt).toContain(REASONING_ONLY_RETRY_INSTRUCTION);
     expectWarnMessageWith("reasoning-only assistant turn detected");
   });
@@ -472,7 +472,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    const onlyCall = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as { prompt?: string };
+    const onlyCall = mockedRunEmbeddedAttempt.mock.calls.at(0)?.[0] as { prompt?: string };
     expect(onlyCall.prompt).not.toContain(REASONING_ONLY_RETRY_INSTRUCTION);
     expect(onlyCall.prompt).not.toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expectNoWarnMessageWith("reasoning-only assistant turn detected");
@@ -641,7 +641,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    const secondCall = mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as { prompt?: string };
+    const secondCall = mockedRunEmbeddedAttempt.mock.calls.at(1)?.[0] as { prompt?: string };
     expect(secondCall.prompt).toContain(REASONING_ONLY_RETRY_INSTRUCTION);
     expectWarnMessageWith("reasoning-only assistant turn detected");
   });
@@ -681,7 +681,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    const secondCall = mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as { prompt?: string };
+    const secondCall = mockedRunEmbeddedAttempt.mock.calls.at(1)?.[0] as { prompt?: string };
     expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expectWarnMessageWith("empty response detected");
   });
@@ -735,7 +735,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    const secondCall = mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as { prompt?: string };
+    const secondCall = mockedRunEmbeddedAttempt.mock.calls.at(1)?.[0] as { prompt?: string };
     expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expectWarnMessageWith("empty response detected");
   });
@@ -804,7 +804,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    const secondCall = mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as { prompt?: string };
+    const secondCall = mockedRunEmbeddedAttempt.mock.calls.at(1)?.[0] as { prompt?: string };
     expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expectWarnMessageWith("empty response detected");
   });
@@ -1923,7 +1923,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    const onlyCall = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as { prompt?: string };
+    const onlyCall = mockedRunEmbeddedAttempt.mock.calls.at(0)?.[0] as { prompt?: string };
     expect(onlyCall.prompt).not.toContain(REASONING_ONLY_RETRY_INSTRUCTION);
     expect(onlyCall.prompt).not.toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);

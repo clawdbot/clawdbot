@@ -18,6 +18,22 @@ afterAll(() => {
 
 import { resolveSTTConfig, transcribeAudio } from "./stt.js";
 
+function requireFirstSsrfRequest(): {
+  url?: unknown;
+  auditContext?: unknown;
+  init?: RequestInit;
+} {
+  const [call] = ssrfRuntimeMocks.fetchWithSsrFGuard.mock.calls;
+  if (!call) {
+    throw new Error("expected QQBot STT fetch call");
+  }
+  return call[0] as {
+    url?: unknown;
+    auditContext?: unknown;
+    init?: RequestInit;
+  };
+}
+
 describe("engine/utils/stt", () => {
   beforeEach(() => {
     ssrfRuntimeMocks.fetchWithSsrFGuard.mockReset();
@@ -118,16 +134,21 @@ describe("engine/utils/stt", () => {
     });
 
     expect(transcript).toBe("hello from audio");
-    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.example.test/v1/audio/transcriptions",
-        auditContext: "qqbot-stt",
-        init: expect.objectContaining({
-          method: "POST",
-          headers: { Authorization: "Bearer secret" },
-          body: expect.any(FormData),
-        }),
-      }),
+    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+    const request = requireFirstSsrfRequest();
+    expect(request.url).toBe("https://api.example.test/v1/audio/transcriptions");
+    expect(request.auditContext).toBe("qqbot-stt");
+    expect(request.init?.method).toBe("POST");
+    expect(request.init?.headers).toEqual({ Authorization: "Bearer secret" });
+    expect(request.init?.body).toBeInstanceOf(FormData);
+    const body = request.init?.body as FormData;
+    expect(body.get("model")).toBe("whisper-1");
+    const file = body.get("file");
+    expect(file).toBeInstanceOf(File);
+    expect((file as File).name).toBe("voice.wav");
+    expect((file as File).type).toBe("audio/wav");
+    expect(new Uint8Array(await (file as File).arrayBuffer())).toEqual(
+      new Uint8Array([1, 2, 3, 4]),
     );
     expect(release).toHaveBeenCalledTimes(1);
   });

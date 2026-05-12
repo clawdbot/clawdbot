@@ -619,6 +619,7 @@
       "groupId": "google",
       "groupLabel": "Google",
       "groupHint": "Gemini API key + OAuth",
+      "onboardingFeatured": true,
       "optionKey": "geminiApiKey",
       "cliFlag": "--gemini-api-key",
       "cliOption": "--gemini-api-key <key>",
@@ -632,7 +633,8 @@
       "choiceHint": "Google OAuth with project-aware token payload",
       "groupId": "google",
       "groupLabel": "Google",
-      "groupHint": "Gemini API key + OAuth"
+      "groupHint": "Gemini API key + OAuth",
+      "onboardingFeatured": true
     }
   ],
   "uiHints": {

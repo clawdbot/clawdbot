@@ -46,6 +46,7 @@
       "groupId": "xai",
       "groupLabel": "xAI (Grok)",
       "groupHint": "API key",
+      "onboardingFeatured": true,
       "optionKey": "xaiApiKey",
       "cliFlag": "--xai-api-key",
       "cliOption": "--xai-api-key <key>",

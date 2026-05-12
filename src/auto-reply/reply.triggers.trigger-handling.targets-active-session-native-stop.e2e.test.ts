@@ -233,9 +233,15 @@ async function expectNextRunUsesTargetSession(
   );
 
   expect(params.runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-  expect(params.runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toEqual(
-    expect.objectContaining(expected),
-  );
+  const runParams = params.runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
+    | Record<string, unknown>
+    | undefined;
+  if (!runParams) {
+    throw new Error("expected embedded PI agent call params");
+  }
+  for (const [key, value] of Object.entries(expected)) {
+    expect(runParams[key]).toEqual(value);
+  }
 }
 
 async function writeStoredModelOverride(cfg: ReturnType<typeof makeCfg>): Promise<void> {

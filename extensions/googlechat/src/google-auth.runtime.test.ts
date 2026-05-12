@@ -447,19 +447,19 @@ describe("googlechat google auth runtime", () => {
         "utf8",
       );
 
-      await expect(
-        resolveValidatedGoogleChatCredentials({
-          accountId: "default",
-          config: {},
-          credentialSource: "file",
-          credentialsFile: credentialsPath,
-          enabled: true,
-        }),
-      ).resolves.toMatchObject({
-        client_email: "bot@example.iam.gserviceaccount.com",
-        token_uri: "https://oauth2.googleapis.com/token",
-        type: "service_account",
+      const credentials = await resolveValidatedGoogleChatCredentials({
+        accountId: "default",
+        config: {},
+        credentialSource: "file",
+        credentialsFile: credentialsPath,
+        enabled: true,
       });
+      if (!credentials) {
+        throw new Error("expected validated credentials");
+      }
+      expect(credentials.client_email).toBe("bot@example.iam.gserviceaccount.com");
+      expect(credentials.token_uri).toBe("https://oauth2.googleapis.com/token");
+      expect(credentials.type).toBe("service_account");
     } finally {
       await fs.rm(tempDir, { force: true, recursive: true });
     }
@@ -492,19 +492,19 @@ describe("googlechat google auth runtime", () => {
         throw error;
       }
 
-      await expect(
-        resolveValidatedGoogleChatCredentials({
-          accountId: "default",
-          config: {},
-          credentialSource: "file",
-          credentialsFile: symlinkPath,
-          enabled: true,
-        }),
-      ).resolves.toMatchObject({
-        client_email: "bot@example.iam.gserviceaccount.com",
-        token_uri: "https://oauth2.googleapis.com/token",
-        type: "service_account",
+      const credentials = await resolveValidatedGoogleChatCredentials({
+        accountId: "default",
+        config: {},
+        credentialSource: "file",
+        credentialsFile: symlinkPath,
+        enabled: true,
       });
+      if (!credentials) {
+        throw new Error("expected validated credentials");
+      }
+      expect(credentials.client_email).toBe("bot@example.iam.gserviceaccount.com");
+      expect(credentials.token_uri).toBe("https://oauth2.googleapis.com/token");
+      expect(credentials.type).toBe("service_account");
     } finally {
       await fs.rm(tempDir, { force: true, recursive: true });
     }

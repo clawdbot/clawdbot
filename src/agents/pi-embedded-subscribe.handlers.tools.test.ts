@@ -109,13 +109,6 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value;
 }
 
-function requireArray(value: unknown, label: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an array`);
-  }
-  return value;
-}
-
 function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
   const record = requireRecord(value, label);
   for (const [key, expectedValue] of Object.entries(expected)) {
@@ -133,6 +126,15 @@ function requireNestedRecord(value: unknown, label: string, path: string[]) {
     current = requireRecord(current, label)[key];
   }
   return requireRecord(current, label);
+}
+
+function expectInteractiveApprovalButtons(
+  result: Record<string, unknown>,
+  expectedButtons: readonly Record<string, unknown>[],
+) {
+  expect(requireNestedRecord(result, "interactive payload", ["interactive"])).toEqual({
+    blocks: [{ type: "buttons", buttons: expectedButtons }],
+  });
 }
 
 function requireSingleMessagingTarget(ctx: ToolHandlerContext) {
@@ -177,7 +179,7 @@ describe("handleToolExecutionStart read path checks", () => {
     await handleToolExecutionStart(ctx, evt);
 
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("read tool called without path");
+    expect(String(warn.mock.calls.at(0)?.[0] ?? "")).toContain("read tool called without path");
   });
 
   it("awaits onBlockReplyFlush before continuing tool start processing", async () => {
@@ -568,12 +570,23 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
         allowedDecisions: ["allow-once", "allow-always", "deny"],
       },
     );
-    expect(
-      requireArray(
-        requireNestedRecord(result, "interactive payload", ["interactive"]).blocks,
-        "interactive blocks",
-      ).length,
-    ).toBeGreaterThan(0);
+    expectInteractiveApprovalButtons(result, [
+      {
+        label: "Allow Once",
+        value: "/approve 12345678-1234-1234-1234-123456789012 allow-once",
+        style: "success",
+      },
+      {
+        label: "Allow Always",
+        value: "/approve 12345678-1234-1234-1234-123456789012 allow-always",
+        style: "primary",
+      },
+      {
+        label: "Deny",
+        value: "/approve 12345678-1234-1234-1234-123456789012 deny",
+        style: "danger",
+      },
+    ]);
     expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
   });
 
@@ -615,12 +628,18 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
         allowedDecisions: ["allow-once", "deny"],
       },
     );
-    expect(
-      requireArray(
-        requireNestedRecord(result, "interactive payload", ["interactive"]).blocks,
-        "interactive blocks",
-      ).length,
-    ).toBeGreaterThan(0);
+    expectInteractiveApprovalButtons(result, [
+      {
+        label: "Allow Once",
+        value: "/approve 12345678-1234-1234-1234-123456789012 allow-once",
+        style: "success",
+      },
+      {
+        label: "Deny",
+        value: "/approve 12345678-1234-1234-1234-123456789012 deny",
+        style: "danger",
+      },
+    ]);
   });
 
   it("emits a deterministic unavailable payload when the initiating surface cannot approve", async () => {
@@ -1356,7 +1375,7 @@ describe("control UI credential redaction (issue #72283)", () => {
     const commandOutputCalls = onAgentEvent.mock.calls
       .map((call) => call[0])
       .filter((arg: unknown) => (arg as { stream?: string })?.stream === "command_output");
-    expect(commandOutputCalls.length).toBeGreaterThan(0);
+    expect(commandOutputCalls).toHaveLength(1);
     const lastOutput = commandOutputCalls.at(-1) as { data?: { output?: string } } | undefined;
     const output = requireString(lastOutput?.data?.output, "command output");
     expect(output).not.toContain("sk-or-v1-abcdef0123456789");

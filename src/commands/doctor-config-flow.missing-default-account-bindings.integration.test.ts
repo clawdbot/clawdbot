@@ -20,7 +20,7 @@ describe("doctor missing default account binding warning", () => {
     } as OpenClawConfig);
 
     expect(warnings).toEqual([
-      expect.stringContaining("channels.telegram: accounts.default is missing"),
+      '- channels.telegram: accounts.default is missing and no valid account-scoped binding exists for configured accounts (alerts, work). Channel-only bindings (no accountId) match only default. Add bindings[].match.accountId for one of these accounts (or "*"), or add channels.telegram.accounts.default.',
     ]);
   });
 
@@ -37,9 +37,7 @@ describe("doctor missing default account binding warning", () => {
     } as OpenClawConfig);
 
     expect(warnings).toEqual([
-      expect.stringContaining(
-        "channels.telegram: multiple accounts are configured but no explicit default is set",
-      ),
+      "- channels.telegram: multiple accounts are configured but no explicit default is set. Set channels.telegram.defaultAccount or add channels.telegram.accounts.default to avoid fallback routing.",
     ]);
   });
 
@@ -57,9 +55,7 @@ describe("doctor missing default account binding warning", () => {
     } as OpenClawConfig);
 
     expect(warnings).toEqual([
-      expect.stringContaining(
-        'channels.telegram: defaultAccount is set to "missing" but does not match configured accounts',
-      ),
+      '- channels.telegram: defaultAccount is set to "missing" but does not match configured accounts (alerts, work). Set channels.telegram.defaultAccount to one of these accounts, or add channels.telegram.accounts.default to avoid fallback routing.',
     ]);
   });
 });

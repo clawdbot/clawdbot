@@ -52,18 +52,17 @@ let resolveModelAsync: typeof import("./model.js").resolveModelAsync;
 
 function expectWorkspaceHookCall(mock: { mock: { calls: unknown[][] } }) {
   expect(mock.mock.calls).toHaveLength(1);
-  const [arg] = mock.mock.calls[0] ?? [];
-  expect(arg).toBeTruthy();
+  const [arg] = mock.mock.calls.at(0) ?? [];
   if (!arg || typeof arg !== "object") {
     throw new Error("Expected runtime hook call argument");
   }
   const call = arg as { context?: unknown; workspaceDir?: unknown };
   expect(call.workspaceDir).toBe("/tmp/workspace");
-  expect(call.context).toBeTruthy();
   if (!call.context || typeof call.context !== "object") {
     throw new Error("Expected runtime hook context");
   }
-  expect((call.context as { workspaceDir?: unknown }).workspaceDir).toBe("/tmp/workspace");
+  const context = call.context as { workspaceDir?: unknown };
+  expect(context.workspaceDir).toBe("/tmp/workspace");
 }
 
 beforeEach(async () => {
@@ -79,7 +78,6 @@ describe("resolveModelAsync skipPiDiscovery runtime hooks", () => {
     });
 
     expect(result.error).toBeUndefined();
-    expect(result.model).toBeDefined();
     if (!result.model) {
       throw new Error("Expected resolved model");
     }

@@ -144,7 +144,7 @@ describe("cdp internal", () => {
           return;
         }
         if (msg.method === "Page.captureScreenshot") {
-          expect(msg.params).toMatchObject({ format: "png" });
+          expect(msg.params?.format).toBe("png");
           expect(msg.params).not.toHaveProperty("captureBeyondViewport");
           socket.send(
             JSON.stringify({

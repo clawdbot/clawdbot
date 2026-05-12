@@ -38,11 +38,11 @@ type ProviderResolutionParams = {
 };
 
 function firstRunWebSearchParams(): RunWebSearchParams | undefined {
-  return mocks.runWebSearch.mock.calls[0]?.[0] as RunWebSearchParams | undefined;
+  return mocks.runWebSearch.mock.calls.at(0)?.[0] as RunWebSearchParams | undefined;
 }
 
 function firstProviderResolutionParams(): ProviderResolutionParams | undefined {
-  return mocks.resolveManifestContractOwnerPluginId.mock.calls[0]?.[0] as
+  return mocks.resolveManifestContractOwnerPluginId.mock.calls.at(0)?.[0] as
     | ProviderResolutionParams
     | undefined;
 }

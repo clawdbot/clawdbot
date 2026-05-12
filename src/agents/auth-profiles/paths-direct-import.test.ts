@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
+import { AUTH_STORE_VERSION } from "./constants.js";
 import {
   resolveAuthStatePath,
   resolveAuthStatePathForDisplay,
@@ -84,19 +85,13 @@ describe("path-resolve helpers (direct-import coverage attribution)", () => {
     // tilde path back instead of expanding it via resolveUserPath.
     const tildeAgentDir = "~fake-openclaw-no-expand";
     const resolved = resolveAuthStorePathForDisplay(tildeAgentDir);
-    // Either the path itself starts with `~`, or the display variant
-    // happened to resolve through the user-path branch. Both branches are
-    // valid; the point is just that the function returned a string and
-    // the branch was executed.
-    expect(typeof resolved).toBe("string");
-    expect(resolved.length).toBeGreaterThan(0);
+    expect(resolved).toBe(path.resolve(tildeAgentDir, "auth-profiles.json"));
   });
 
-  it("resolveAuthStatePathForDisplay returns a string", () => {
+  it("resolveAuthStatePathForDisplay returns the auth-state path for a non-tilde input", () => {
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     const resolved = resolveAuthStatePathForDisplay(agentDir);
-    expect(typeof resolved).toBe("string");
-    expect(resolved.length).toBeGreaterThan(0);
+    expect(resolved).toBe(path.join(agentDir, "auth-state.json"));
   });
 });
 
@@ -119,7 +114,7 @@ describe("ensureAuthStoreFile (direct-import coverage attribution)", () => {
     ensureAuthStoreFile(target);
     const raw = await fs.readFile(target, "utf8");
     const parsed = JSON.parse(raw) as { version: number; profiles: Record<string, unknown> };
-    expect(parsed.version).toBeGreaterThanOrEqual(1);
+    expect(parsed.version).toBe(AUTH_STORE_VERSION);
     expect(parsed.profiles).toStrictEqual({});
   });
 

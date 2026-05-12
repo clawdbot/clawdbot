@@ -64,7 +64,9 @@ describe("msteams sso token store (fs)", () => {
         connectionName: "conn",
         userId: "user-1",
       }),
-    ).toMatchObject({
+    ).toEqual({
+      connectionName: "conn",
+      userId: "user-1",
       token: "token-1",
       updatedAt: "2026-04-10T00:00:00.000Z",
     });

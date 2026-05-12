@@ -102,7 +102,8 @@ function pushConfiguredModelRuntimeIds(config: OpenClawConfig, runtimes: Set<str
     }
   };
   pushModelMapRuntimeIds(config.agents?.defaults?.models);
-  for (const agent of config.agents?.list ?? []) {
+  const agents = Array.isArray(config.agents?.list) ? config.agents.list : [];
+  for (const agent of agents) {
     pushModelMapRuntimeIds(agent.models);
   }
 }
@@ -116,7 +117,8 @@ function pushLegacyAgentRuntimeIds(config: OpenClawConfig, runtimes: Set<string>
   };
 
   pushRuntimeId(config.agents?.defaults?.agentRuntime?.id);
-  for (const agent of config.agents?.list ?? []) {
+  const agents = Array.isArray(config.agents?.list) ? config.agents.list : [];
+  for (const agent of agents) {
     pushRuntimeId(agent.agentRuntime?.id);
   }
 }

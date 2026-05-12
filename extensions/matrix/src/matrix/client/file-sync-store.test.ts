@@ -81,10 +81,11 @@ describe("FileBackedMatrixSyncStore", () => {
 
   it("persists sync data so restart resumes from the saved cursor", async () => {
     const storagePath = createStoragePath();
+    const syncResponse = createSyncResponse("s123");
 
     const firstStore = new FileBackedMatrixSyncStore(storagePath);
     expect(firstStore.hasSavedSync()).toBe(false);
-    await firstStore.setSyncData(createSyncResponse("s123"));
+    await firstStore.setSyncData(syncResponse);
     await firstStore.flush();
 
     const secondStore = new FileBackedMatrixSyncStore(storagePath);
@@ -92,22 +93,40 @@ describe("FileBackedMatrixSyncStore", () => {
     await expect(secondStore.getSavedSyncToken()).resolves.toBe("s123");
 
     const savedSync = await secondStore.getSavedSync();
-    expect(savedSync?.nextBatch).toBe("s123");
-    expect(savedSync?.accountData).toEqual([
-      {
-        content: { theme: "dark" },
-        type: "com.openclaw.test",
-      },
-    ]);
-    expect(savedSync?.roomsData.join?.["!room:example.org"]).toMatchObject({
-      timeline: {
-        events: [
-          {
-            event_id: "$message",
-            sender: "@user:example.org",
-            type: "m.room.message",
+    expect(savedSync).toEqual({
+      nextBatch: "s123",
+      accountData: syncResponse.account_data.events,
+      roomsData: {
+        join: {
+          "!room:example.org": {
+            summary: {
+              "m.heroes": [],
+            },
+            state: { events: [] },
+            "org.matrix.msc4222.state_after": { events: [] },
+            timeline: {
+              events: [
+                {
+                  content: {
+                    body: "hello",
+                    msgtype: "m.text",
+                  },
+                  event_id: "$message",
+                  origin_server_ts: 1,
+                  sender: "@user:example.org",
+                  type: "m.room.message",
+                },
+              ],
+              prev_batch: "t0",
+            },
+            ephemeral: { events: [] },
+            account_data: { events: [] },
+            unread_notifications: {},
           },
-        ],
+        },
+        invite: {},
+        leave: {},
+        knock: {},
       },
     });
     expect(secondStore.hasSavedSyncFromCleanShutdown()).toBe(false);
@@ -195,17 +214,66 @@ describe("FileBackedMatrixSyncStore", () => {
     await vi.advanceTimersByTimeAsync(1);
     await Promise.resolve();
     expect(writeSpy).toHaveBeenCalledTimes(1);
-    expect(writeSpy).toHaveBeenCalledWith(
+    expect(writeSpy.mock.calls.at(0)).toEqual([
       storagePath,
-      expect.objectContaining({
-        savedSync: expect.objectContaining({
+      {
+        version: 1,
+        savedSync: {
           nextBatch: "s222",
-        }),
+          accountData: createSyncResponse("s222").account_data.events,
+          roomsData: {
+            join: {
+              "!room:example.org": {
+                summary: {
+                  "m.heroes": [],
+                  "m.invited_member_count": undefined,
+                  "m.joined_member_count": undefined,
+                },
+                state: { events: [] },
+                "org.matrix.msc4222.state_after": { events: [] },
+                timeline: {
+                  events: [
+                    {
+                      content: {
+                        body: "hello",
+                        msgtype: "m.text",
+                      },
+                      event_id: "$message",
+                      origin_server_ts: 1,
+                      sender: "@user:example.org",
+                      type: "m.room.message",
+                    },
+                    {
+                      content: {
+                        body: "hello",
+                        msgtype: "m.text",
+                      },
+                      event_id: "$message",
+                      origin_server_ts: 1,
+                      sender: "@user:example.org",
+                      type: "m.room.message",
+                    },
+                  ],
+                  prev_batch: "t0",
+                },
+                ephemeral: { events: [] },
+                account_data: { events: [] },
+                unread_notifications: {},
+                unread_thread_notifications: undefined,
+                msc4354_sticky: undefined,
+              },
+            },
+            invite: {},
+            leave: {},
+            knock: {},
+          },
+        },
+        cleanShutdown: false,
         clientOptions: {
           lazyLoadMembers: true,
         },
-      }),
-    );
+      },
+    ]);
 
     await store.flush();
   });
@@ -267,10 +335,13 @@ describe("FileBackedMatrixSyncStore", () => {
     const store = new FileBackedMatrixSyncStore(storagePath);
     expect(store.hasSavedSync()).toBe(true);
     await expect(store.getSavedSyncToken()).resolves.toBe("legacy-token");
-    await expect(store.getSavedSync()).resolves.toMatchObject({
+    await expect(store.getSavedSync()).resolves.toEqual({
       nextBatch: "legacy-token",
       roomsData: {
         join: {},
+        invite: {},
+        leave: {},
+        knock: {},
       },
       accountData: [],
     });

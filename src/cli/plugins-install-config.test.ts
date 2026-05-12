@@ -115,7 +115,7 @@ describe("loadConfigForInstall", () => {
     );
 
     const result = await loadConfigForInstall(discordNpmRequest);
-    expect(readConfigFileSnapshotMock).toHaveBeenCalled();
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
     expect(collectChannelDoctorStaleConfigMutationsMock).toHaveBeenCalledWith(snapshotCfg);
     expect(result).toEqual({ config: snapshotCfg, baseHash: "abc" });
   });
@@ -142,10 +142,8 @@ describe("loadConfigForInstall", () => {
       throw new Error(request.error);
     }
 
-    expect(request.request).toMatchObject({
-      bundledPluginId: "discord",
-      allowInvalidConfigRecovery: true,
-    });
+    expect(request.request.bundledPluginId).toBe("discord");
+    expect(request.request.allowInvalidConfigRecovery).toBe(true);
     const result = await loadConfigForInstall(request.request);
     expect(collectChannelDoctorStaleConfigMutationsMock).toHaveBeenCalledWith(snapshotCfg);
     expect(result).toEqual({ config: snapshotCfg, baseHash: "abc" });

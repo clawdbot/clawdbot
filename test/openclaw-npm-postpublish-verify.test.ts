@@ -350,9 +350,10 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       mkdirSync(join(packageRoot, "dist"), { recursive: true });
       writeFileSync(join(packageRoot, "package.json"), "{not-json\n", "utf8");
 
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
-        expect.stringMatching(/^installed package\.json could not be parsed:/u),
-      ]);
+      const errors = collectInstalledRootDependencyManifestErrors(packageRoot);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.startsWith("installed package.json could not be parsed:")).toBe(true);
+      expect(errors[0]?.endsWith(".")).toBe(true);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }

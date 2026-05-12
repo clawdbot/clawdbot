@@ -163,16 +163,10 @@ async function expectRePairingRequest(params: {
       JSON.stringify(lastNodes),
     ).toEqual(params.expectedVisibleCommands);
 
-    await expect(listNodePairing()).resolves.toEqual(
-      expect.objectContaining({
-        pending: [
-          expect.objectContaining({
-            nodeId: pairedNode.identity.deviceId,
-            commands: params.reconnectCommands,
-          }),
-        ],
-      }),
-    );
+    const pairing = await listNodePairing();
+    const pending = pairing.pending?.find((entry) => entry.nodeId === pairedNode.identity.deviceId);
+    expect(pending?.nodeId).toBe(pairedNode.identity.deviceId);
+    expect(pending?.commands).toEqual(params.reconnectCommands);
   } finally {
     controlWs?.close();
     await firstClient?.stopAndWait();
@@ -239,11 +233,8 @@ describe("gateway node pairing authorization", () => {
       expect(approve.payload?.requestId).toBe(request.request.requestId);
       expect(approve.payload?.node?.nodeId).toBe("node-approve-target");
 
-      await expect(getPairedNode("node-approve-target")).resolves.toEqual(
-        expect.objectContaining({
-          nodeId: "node-approve-target",
-        }),
-      );
+      const pairedNode = await getPairedNode("node-approve-target");
+      expect(pairedNode?.nodeId).toBe("node-approve-target");
     } finally {
       pairingWs?.close();
       started.ws.close();

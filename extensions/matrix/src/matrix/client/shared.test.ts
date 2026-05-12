@@ -37,6 +37,20 @@ function authFor(accountId: string): MatrixAuth {
   };
 }
 
+async function expectMatrixStartupAbort(promise: Promise<unknown>): Promise<void> {
+  let rejection: unknown;
+  try {
+    await promise;
+  } catch (error) {
+    rejection = error;
+  }
+
+  expect(rejection).toBeInstanceOf(Error);
+  const error = rejection as Error;
+  expect(error.name).toBe("AbortError");
+  expect(error.message).toBe("Matrix startup aborted");
+}
+
 function createMockClient(name: string) {
   const client = {
     name,
@@ -306,10 +320,7 @@ describe("resolveSharedMatrixClient", () => {
     });
     abortController.abort();
 
-    await expect(canceledWaiter).rejects.toMatchObject({
-      message: "Matrix startup aborted",
-      name: "AbortError",
-    });
+    await expectMatrixStartupAbort(canceledWaiter);
 
     resolveStartup();
     await expect(ownerPromise).resolves.toBe(mainClient);
@@ -330,10 +341,7 @@ describe("resolveSharedMatrixClient", () => {
       abortSignal: abortController.signal,
     });
     abortController.abort();
-    await expect(abortedWaiter).rejects.toMatchObject({
-      message: "Matrix startup aborted",
-      name: "AbortError",
-    });
+    await expectMatrixStartupAbort(abortedWaiter);
 
     const followerPromise = resolveSharedMatrixClient({ cfg: TEST_CFG, accountId: "main" });
     expect(mainClient.start).toHaveBeenCalledTimes(1);

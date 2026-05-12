@@ -3,9 +3,6 @@ import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { createWikiApplyTool } from "./tool.js";
 
 function asSchemaObject(value: unknown): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
-  expect(Array.isArray(value)).toBe(false);
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("Expected JSON schema object");
   }

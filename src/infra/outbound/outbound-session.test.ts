@@ -3,12 +3,32 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 import { setMinimalOutboundSessionPluginRegistryForTests } from "./outbound-session.test-helpers.js";
 
+type InboundMetadataParams = {
+  sessionKey?: string;
+  storePath?: string;
+};
+
 const mocks = vi.hoisted(() => ({
-  recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
+  recordSessionMetaFromInbound: vi.fn(async (_params: InboundMetadataParams) => ({ ok: true })),
   resolveStorePath: vi.fn(
     (_store: unknown, params?: { agentId?: string }) => `/stores/${params?.agentId ?? "main"}.json`,
   ),
 }));
+
+function firstMockArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error(`expected ${label} params to be an object`);
+  }
+  return arg as Record<string, unknown>;
+}
 
 vi.mock("../../config/sessions/inbound.runtime.js", () => ({
   recordSessionMetaFromInbound: mocks.recordSessionMetaFromInbound,
@@ -394,7 +414,9 @@ describe("resolveOutboundSessionRoute", () => {
       resolvedTarget,
     });
 
-    expect(route).toMatchObject(expected);
+    for (const [key, value] of Object.entries(expected)) {
+      expect((route as Record<string, unknown>)[key]).toEqual(value);
+    }
   });
 
   it("rejects bare numeric GuildChat targets when the caller has no kind hint", async () => {
@@ -436,11 +458,12 @@ describe("ensureOutboundSessionEntry", () => {
     expect(mocks.resolveStorePath).toHaveBeenCalledWith("/stores/{agentId}.json", {
       agentId: "main",
     });
-    expect(mocks.recordSessionMetaFromInbound).toHaveBeenCalledWith(
-      expect.objectContaining({
-        storePath: "/stores/main.json",
-        sessionKey: "agent:main:workspace:channel:c1",
-      }),
+    expect(mocks.recordSessionMetaFromInbound).toHaveBeenCalledOnce();
+    const metadata = firstMockArg(
+      mocks.recordSessionMetaFromInbound,
+      "recordSessionMetaFromInbound",
     );
+    expect(metadata.storePath).toBe("/stores/main.json");
+    expect(metadata.sessionKey).toBe("agent:main:workspace:channel:c1");
   });
 });

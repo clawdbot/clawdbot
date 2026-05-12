@@ -19,6 +19,7 @@ import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   resolveNodeCommandAllowlist,
 } from "./node-command-policy.js";
+import type { SerializedEventPayload } from "./node-registry.js";
 import type { RequestFrame } from "./protocol/index.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createChatRunRegistry } from "./server-chat.js";
@@ -26,6 +27,7 @@ import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
 import type { GatewayClient as GatewayMethodClient } from "./server-methods/types.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
+import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
 import { formatError, normalizeVoiceWakeTriggers } from "./server-utils.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -110,9 +112,10 @@ describe("GatewayClient", () => {
     const client = new GatewayClient({ url: "ws://127.0.0.1:1" });
     client.start();
     const last = wsMockState.last as { url: unknown; opts: unknown } | null;
+    const opts = last?.opts as { maxPayload?: number } | undefined;
 
     expect(last?.url).toBe("ws://127.0.0.1:1");
-    expect(last?.opts).toEqual(expect.objectContaining({ maxPayload: 25 * 1024 * 1024 }));
+    expect(opts?.maxPayload).toBe(25 * 1024 * 1024);
   });
 
   test("does not pass an explicit direct agent for loopback control-plane WebSocket connections", () => {
@@ -571,6 +574,47 @@ describe("gateway broadcaster", () => {
     ]);
   });
 
+  it("reuses the same payload shape while assigning per-client seq values", () => {
+    const firstSocket = makeRecordingSocket();
+    const secondSocket = makeRecordingSocket();
+    const thirdSocket = makeRecordingSocket();
+    const clients = new Set<GatewayWsClient>([
+      makeGatewayWsClient("c-1", firstSocket, {
+        role: "operator",
+        scopes: ["operator.read"],
+      } as GatewayWsClient["connect"]),
+      makeGatewayWsClient("c-2", secondSocket, {
+        role: "operator",
+        scopes: ["operator.write"],
+      } as GatewayWsClient["connect"]),
+      makeGatewayWsClient("c-3", thirdSocket, {
+        role: "operator",
+        scopes: ["operator.admin"],
+      } as GatewayWsClient["connect"]),
+    ]);
+    const payloadKeys: string[] = [];
+    const payload = {
+      toJSON(key: string) {
+        payloadKeys.push(key);
+        return { foo: key };
+      },
+    };
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+    broadcast("talk.mode", { enabled: true });
+    broadcast("chat", payload);
+
+    expect(payloadKeys).toEqual(["payload"]);
+    expect(firstSocket.sent.at(-1)?.payload).toEqual({ foo: "payload" });
+    expect(secondSocket.sent.at(-1)?.payload).toEqual({ foo: "payload" });
+    expect(thirdSocket.sent.at(-1)?.payload).toEqual({ foo: "payload" });
+    expect([
+      firstSocket.sent.at(-1)?.seq,
+      secondSocket.sent.at(-1)?.seq,
+      thirdSocket.sent.at(-1)?.seq,
+    ]).toEqual([1, 2, 2]);
+  });
+
   it("preserves seq gaps when dropIfSlow skips an eligible broadcast", () => {
     const slowReadSocket = makeRecordingSocket();
     slowReadSocket.bufferedAmount = Number.MAX_SAFE_INTEGER;
@@ -621,16 +665,13 @@ describe("gateway broadcaster", () => {
       broadcast("chat", { sessionKey: "agent:main:main", message: "secret" }, { dropIfSlow: true });
       broadcast("heartbeat", { ts: 1 });
 
-      expect(events).toContainEqual(
-        expect.objectContaining({
-          type: "payload.large",
-          surface: "gateway.ws.outbound_buffer",
-          action: "rejected",
-          bytes: MAX_BUFFERED_BYTES + 1,
-          limitBytes: MAX_BUFFERED_BYTES,
-          reason: "ws_send_buffer_drop",
-        }),
-      );
+      const payloadEvent = events.find((event) => event.type === "payload.large");
+      expect(payloadEvent?.type).toBe("payload.large");
+      expect(payloadEvent?.surface).toBe("gateway.ws.outbound_buffer");
+      expect(payloadEvent?.action).toBe("rejected");
+      expect(payloadEvent?.bytes).toBe(MAX_BUFFERED_BYTES + 1);
+      expect(payloadEvent?.limitBytes).toBe(MAX_BUFFERED_BYTES);
+      expect(payloadEvent?.reason).toBe("ws_send_buffer_drop");
       expect(
         events.reduce((count, event) => count + (event.type === "payload.large" ? 1 : 0), 0),
       ).toBe(1);
@@ -710,10 +751,13 @@ describe("node subscription manager", () => {
     const sent: Array<{
       nodeId: string;
       event: string;
-      payloadJSON?: string | null;
+      payloadJSON?: SerializedEventPayload | null;
     }> = [];
-    const sendEvent = (evt: { nodeId: string; event: string; payloadJSON?: string | null }) =>
-      sent.push(evt);
+    const sendEvent = (evt: {
+      nodeId: string;
+      event: string;
+      payloadJSON?: SerializedEventPayload | null;
+    }) => sent.push(evt);
 
     manager.subscribe("node-a", "main");
     manager.subscribe("node-b", "main");
@@ -722,6 +766,45 @@ describe("node subscription manager", () => {
     expect(sent).toHaveLength(2);
     expect(sent.map((s) => s.nodeId).toSorted()).toEqual(["node-a", "node-b"]);
     expect(sent[0].event).toBe("chat");
+  });
+
+  test("runtime forwards subscribed node payload json without parsing it again", () => {
+    const frames: string[] = [];
+    const socket: TestSocket = {
+      bufferedAmount: 0,
+      send: vi.fn((payload: string) => frames.push(payload)),
+      close: vi.fn(),
+    };
+    const parseSpy = vi.spyOn(JSON, "parse");
+    try {
+      const runtime = createGatewayNodeSessionRuntime({ broadcast: vi.fn() });
+      runtime.nodeRegistry.register(
+        makeGatewayWsClient("conn-node-a", socket, {
+          role: "node",
+          scopes: [],
+          client: {
+            id: "node-client",
+            version: "1.0.0",
+            platform: "darwin",
+            mode: "node",
+          },
+          device: { id: "node-a" },
+        } as unknown as GatewayWsClient["connect"]),
+        {},
+      );
+      runtime.nodeSubscribe("node-a", "main");
+
+      runtime.nodeSendToSession("main", "chat", { ok: true });
+
+      expect(parseSpy).not.toHaveBeenCalled();
+    } finally {
+      parseSpy.mockRestore();
+    }
+    expect(JSON.parse(frames[0] ?? "{}")).toEqual({
+      type: "event",
+      event: "chat",
+      payload: { ok: true },
+    });
   });
 
   test("unsubscribeAll clears session mappings", () => {

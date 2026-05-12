@@ -40,16 +40,30 @@ function createStubPty(pid = 1234) {
 }
 
 function expectSpawnEnv() {
-  const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: Record<string, string> };
-  return spawnOptions?.env;
+  const options = firstSpawnCall()[2];
+  if (options === undefined) {
+    return undefined;
+  }
+  if (typeof options !== "object" || options === null || Array.isArray(options)) {
+    throw new Error("expected spawn options to be an object");
+  }
+  return (options as { env?: Record<string, string> }).env;
 }
 
 function expectSpawnCommand() {
-  return spawnMock.mock.calls[0]?.[0] as string | undefined;
+  return firstSpawnCall()[0] as string;
 }
 
 function expectSpawnArgs() {
-  return spawnMock.mock.calls[0]?.[1] as string[] | undefined;
+  return firstSpawnCall()[1] as string[];
+}
+
+function firstSpawnCall(): unknown[] {
+  const [call] = spawnMock.mock.calls;
+  if (!call) {
+    throw new Error("expected spawn call");
+  }
+  return call;
 }
 
 describe("createPtyAdapter", () => {

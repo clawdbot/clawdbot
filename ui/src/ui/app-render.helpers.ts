@@ -1,6 +1,11 @@
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
-import { refreshChat, refreshChatAvatar } from "./app-chat.ts";
+import {
+  CHAT_SESSIONS_ACTIVE_MINUTES,
+  CHAT_SESSIONS_REFRESH_LIMIT,
+  refreshChat,
+  refreshChatAvatar,
+} from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import {
@@ -642,8 +647,8 @@ export async function createChatSession(state: AppViewState) {
       emitCommandHooks: parentSessionKey !== undefined ? true : undefined,
     },
     {
-      activeMinutes: 0,
-      limit: 0,
+      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+      limit: CHAT_SESSIONS_REFRESH_LIMIT,
       includeGlobal: true,
       includeUnknown: true,
       showArchived: state.sessionsShowArchived,
@@ -674,8 +679,8 @@ export async function createChatSession(state: AppViewState) {
 
 async function refreshSessionOptions(state: AppViewState) {
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
-    activeMinutes: 0,
-    limit: 0,
+    activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+    limit: CHAT_SESSIONS_REFRESH_LIMIT,
     includeGlobal: true,
     includeUnknown: true,
     showArchived: state.sessionsShowArchived,

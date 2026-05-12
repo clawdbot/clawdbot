@@ -173,9 +173,9 @@ function createMockClient() {
 
 function sentContentAt(callIndex: number): Record<string, unknown> {
   const content = sendMessageMock.mock.calls[callIndex]?.[1];
-  expect(content).toBeDefined();
-  expect(typeof content).toBe("object");
-  expect(content).not.toBeNull();
+  if (!content || typeof content !== "object") {
+    throw new Error(`Expected sent content at call ${callIndex}`);
+  }
   return content as Record<string, unknown>;
 }
 

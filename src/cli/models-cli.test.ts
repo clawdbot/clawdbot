@@ -111,13 +111,14 @@ describe("models cli", () => {
     expected: Record<string, unknown>,
   ) {
     expect(command).toHaveBeenCalledTimes(1);
-    const options = command.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
-    const context = command.mock.calls[0]?.[1];
+    const [options, context] = command.mock.calls.at(0) ?? [];
+    const optionRecord = options as Record<string, unknown> | undefined;
     for (const [key, value] of Object.entries(expected)) {
-      expect(options?.[key]).toEqual(value);
+      expect(optionRecord?.[key]).toEqual(value);
     }
-    expect(typeof context).toBe("object");
-    expect(context).not.toBeNull();
+    if (!context || typeof context !== "object") {
+      throw new Error("expected command context");
+    }
   }
 
   it("registers github-copilot login command", async () => {
@@ -189,6 +190,23 @@ describe("models cli", () => {
     await runModelsCommand(args);
 
     expectCommandOptions(command, expected);
+  });
+
+  it("passes --method through models auth login", async () => {
+    await runModelsCommand([
+      "models",
+      "auth",
+      "login",
+      "--provider",
+      "openai",
+      "--method",
+      "api-key",
+    ]);
+
+    expectCommandOptions(modelsAuthLoginCommand, {
+      provider: "openai",
+      method: "api-key",
+    });
   });
 
   it("passes list-specific --agent and --json to models auth list", async () => {

@@ -20,7 +20,6 @@ describe("image asset helpers", () => {
       base64: buffer.toString("base64"),
     });
     const asset = generatedImageAssetFromDataUrl({ dataUrl, index: 1 });
-    expect(asset).toBeDefined();
     if (!asset) {
       throw new Error("Expected generated image asset");
     }

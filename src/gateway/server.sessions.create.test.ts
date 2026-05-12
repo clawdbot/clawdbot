@@ -69,22 +69,19 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
     }
   >;
   const key = created.payload?.key as string;
-  expect(rawStore[key]).toMatchObject({
-    sessionId: created.payload?.sessionId,
-    label: "Dashboard Chat",
-    providerOverride: "openai",
-    modelOverride: "gpt-test-a",
-    parentSessionKey: "agent:main:main",
-  });
+  expect(rawStore[key]?.sessionId).toBe(created.payload?.sessionId);
+  expect(rawStore[key]?.label).toBe("Dashboard Chat");
+  expect(rawStore[key]?.providerOverride).toBe("openai");
+  expect(rawStore[key]?.modelOverride).toBe("gpt-test-a");
+  expect(rawStore[key]?.parentSessionKey).toBe("agent:main:main");
   expect(sessionFile).toBe(rawStore[key]?.sessionFile);
 
   const transcriptPath = path.join(dir, `${created.payload?.sessionId}.jsonl`);
   const transcript = await fs.readFile(transcriptPath, "utf-8");
   const [headerLine] = transcript.trim().split(/\r?\n/, 1);
-  expect(JSON.parse(headerLine) as { type?: string; id?: string }).toMatchObject({
-    type: "session",
-    id: created.payload?.sessionId,
-  });
+  const header = JSON.parse(headerLine) as { type?: string; id?: string };
+  expect(header.type).toBe("session");
+  expect(header.id).toBe(created.payload?.sessionId);
 });
 
 test("sessions.create accepts an explicit key for persistent dashboard sessions", async () => {

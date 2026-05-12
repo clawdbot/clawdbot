@@ -314,7 +314,9 @@ See [ClawDock](/install/clawdock) for the full helper guide.
 
     The script mounts `docker.sock` only after sandbox prerequisites pass. If
     sandbox setup cannot complete, the script resets `agents.defaults.sandbox.mode`
-    to `off`.
+    to `off`. Codex code-mode turns are still constrained to Codex
+    `workspace-write` while the OpenClaw sandbox is active; do not mount the
+    host Docker socket into agent sandbox containers.
 
   </Accordion>
 

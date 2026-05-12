@@ -123,15 +123,38 @@ OpenClaw **pins the chosen auth profile per session** to keep provider caches wa
 Manual selection via `/model …@<profileId>` sets a **user override** for that session and is not auto-rotated until a new session starts.
 
 <Note>
-Auto-pinned profiles (selected by the session router) are treated as a **preference**: they are tried first, but OpenClaw may rotate to another profile on rate limits/timeouts. User-pinned profiles stay locked to that profile; if it fails and model fallbacks are configured, OpenClaw moves to the next model instead of switching profiles.
+Auto-pinned profiles (selected by the session router) are treated as a **preference**: they are tried first, but OpenClaw may rotate to another profile on rate limits/timeouts. When the original profile becomes available again, new runs can prefer it again without changing the selected model or runtime. User-pinned profiles stay locked to that profile; if it fails and model fallbacks are configured, OpenClaw moves to the next model instead of switching profiles.
 </Note>
 
-### Why OAuth can "look lost"
+### OpenAI Codex subscription plus API-key backup
 
-If you have both an OAuth profile and an API key profile for the same provider, round-robin can switch between them across messages unless pinned. To force a single profile:
+For OpenAI agent models, auth and runtime are separate. `openai/gpt-*` stays on
+the Codex harness while auth can rotate between a Codex subscription profile and
+an OpenAI API-key backup.
 
-- Pin with `auth.order[provider] = ["provider:profileId"]`, or
-- Use a per-session override via `/model …` with a profile override (when supported by your UI/chat surface).
+Use `auth.order.openai` for the user-facing order:
+
+```json5
+{
+  auth: {
+    order: {
+      openai: ["openai-codex:user@example.com", "openai:api-key-backup"],
+    },
+  },
+}
+```
+
+Existing Codex subscription profiles may still use the legacy
+`openai-codex:*` profile id. The ordered API-key backup can be a normal
+`openai:*` API-key profile. When the subscription hits a Codex usage limit,
+OpenClaw records the exact reset time when Codex provides one, tries the next
+ordered auth profile, and keeps the run inside the Codex harness. Once the reset
+time passes, the subscription profile is eligible again and the next automatic
+selection can return to it.
+
+Use a user-pinned profile only when you want to force one account/key for that
+session. User-pinned profiles are intentionally strict and do not silently jump
+to another profile.
 
 ## Cooldowns
 
@@ -229,7 +252,7 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
     - The requested model is always first.
     - Explicit configured fallbacks are deduplicated but not filtered by the model allowlist. They are treated as explicit operator intent.
     - If the current run is already on a configured fallback in the same provider family, OpenClaw keeps using the full configured chain.
-    - If the current run is on a different provider than config and that current model is not already part of the configured fallback chain, OpenClaw does not append unrelated configured fallbacks from another provider.
+    - When no explicit fallback override is supplied, configured fallbacks are tried before the configured primary even if the requested model uses a different provider.
     - When no explicit fallback override is supplied to the fallback runner, the configured primary is appended at the end so the chain can settle back onto the normal default once earlier candidates are exhausted.
     - When a caller supplies `fallbacksOverride`, the runner uses exactly the requested model plus that override list. An empty list disables model fallback and prevents the configured primary from being appended as a hidden retry target.
 

@@ -386,16 +386,15 @@ describe("agent wait dedupe helper", () => {
       payload: { runId, status: "ok" },
     });
 
-    await expect(first).resolves.toEqual(
-      expect.objectContaining({
-        status: "ok",
-      }),
-    );
-    await expect(second).resolves.toEqual(
-      expect.objectContaining({
-        status: "ok",
-      }),
-    );
+    const firstResult = await first;
+    const secondResult = await second;
+    if (!firstResult || !secondResult) {
+      throw new Error("expected waiters to resolve");
+    }
+    expect(firstResult.status).toBe("ok");
+    expect(firstResult.error).toBeUndefined();
+    expect(secondResult.status).toBe("ok");
+    expect(secondResult.error).toBeUndefined();
     expect(__testing.getWaiterCount(runId)).toBe(0);
   });
 

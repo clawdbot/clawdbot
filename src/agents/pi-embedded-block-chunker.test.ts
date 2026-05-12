@@ -161,7 +161,12 @@ describe("EmbeddedBlockChunker", () => {
     chunker.append(`\`\`\`txt\n${"a".repeat(80)}\n\`\`\``);
     const chunks = drainChunks(chunker, true);
 
-    expect(chunks.length).toBeGreaterThan(2);
+    expect(chunks).toStrictEqual([
+      `\`\`\`txt\n${"a".repeat(23)}\n\`\`\`\n`,
+      `\`\`\`txt\n${"a".repeat(30)}\n\`\`\`\n`,
+      `\`\`\`txt\n${"a".repeat(27)}\n\`\`\`\n`,
+      "```txt\n```",
+    ]);
     for (const chunk of chunks) {
       expect(chunk.startsWith("```txt")).toBe(true);
       expect(chunk.match(/```/g)?.length ?? 0).toBeGreaterThanOrEqual(2);

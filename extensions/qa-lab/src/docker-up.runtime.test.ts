@@ -82,7 +82,7 @@ describe("runQaDockerUp", () => {
       expect(calls).toEqual([
         `pnpm qa:lab:build @${repoRoot}`,
         `docker compose -f ${composeFile} down --remove-orphans @${repoRoot}`,
-        expect.stringContaining(`docker compose -f ${composeFile} up --build -d @${repoRoot}`),
+        `docker compose -f ${composeFile} up --build -d @${repoRoot}`,
         `docker compose -f ${composeFile} ps --format json openclaw-qa-gateway @${repoRoot}`,
       ]);
       expect(fetchCalls).toEqual([

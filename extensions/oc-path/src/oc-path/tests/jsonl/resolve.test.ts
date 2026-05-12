@@ -87,19 +87,19 @@ describe("resolveJsonlToUniversal — file-relative line metadata (regression)",
   it("resolves L2/event with line=2 (not 1)", () => {
     const { ast } = parseJsonl(log);
     const m = resolveOcPath(ast, parseOcPath("oc://session.jsonl/L2/event"));
-    expect(m).not.toBeNull();
-    if (m !== null) {
-      expect(m.line).toBe(2);
+    if (m === null) {
+      throw new Error("expected L2/event match");
     }
+    expect(m.line).toBe(2);
   });
 
   it("resolves L4/event with line=4", () => {
     const { ast } = parseJsonl(log);
     const m = resolveOcPath(ast, parseOcPath("oc://session.jsonl/L4/event"));
-    expect(m).not.toBeNull();
-    if (m !== null) {
-      expect(m.line).toBe(4);
+    if (m === null) {
+      throw new Error("expected L4/event match");
     }
+    expect(m.line).toBe(4);
   });
 
   it("findOcPaths over wildcard surfaces correct file-relative lines", () => {

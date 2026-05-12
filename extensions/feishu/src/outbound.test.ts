@@ -77,19 +77,12 @@ import { feishuOutbound } from "./outbound.js";
 import { createFeishuSendReceipt } from "./send-result.js";
 
 async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<"pending">((resolve) => {
-        timer = setTimeout(() => resolve("pending"), 0);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  return await Promise.race([
+    promise,
+    new Promise<"pending">((resolve) => {
+      setImmediate(() => resolve("pending"));
+    }),
+  ]);
 }
 
 type FeishuSendText = NonNullable<typeof feishuOutbound.sendText>;
@@ -808,8 +801,11 @@ describe("feishuOutbound comment-thread routing", () => {
 
     expect(status).toBe("done");
     expect(deliverCommentThreadTextMock).toHaveBeenCalled();
-    expect(cleanupReactionCall()?.client).toBeDefined();
-    expect(cleanupReactionCall()?.deliveryContext).toEqual({
+    const cleanupCall = cleanupReactionCall();
+    if (!cleanupCall?.client) {
+      throw new Error("Expected cleanup reaction client");
+    }
+    expect(cleanupCall.deliveryContext).toEqual({
       channel: "feishu",
       to: "comment:docx:doxcn123:7623358762119646411",
       threadId: "reply_ambient_1",

@@ -46,6 +46,24 @@ describe("applyFinalEffectiveToolPolicy", () => {
     expect(filtered.map((tool) => tool.name)).toEqual(["mcp__bundle__fs_read"]);
   });
 
+  it("applies channel-normalized per-sender policy to bundled tools", () => {
+    const filtered = applyFinalEffectiveToolPolicy({
+      bundledTools: [makeTool("mcp__bundle__exec"), makeTool("mcp__bundle__read")],
+      config: {
+        tools: {
+          toolsBySender: {
+            "channel:msteams:alice": { deny: ["mcp__bundle__exec"] },
+          },
+        },
+      },
+      messageProvider: "teams",
+      senderId: "alice",
+      warn: () => {},
+    });
+
+    expect(filtered.map((tool) => tool.name)).toEqual(["mcp__bundle__read"]);
+  });
+
   it("applies owner-only filtering to bundled tools", () => {
     const filtered = applyFinalEffectiveToolPolicy({
       bundledTools: [makeTool("mcp__bundle__read"), makeTool("mcp__bundle__admin", true)],

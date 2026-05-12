@@ -468,6 +468,22 @@ export function resolveIMessageMessageId(
   return trimmed;
 }
 
+export function isKnownFromMeIMessageMessageId(
+  messageId: string | undefined,
+  ctx: IMessageChatContext & { accountId?: string },
+): boolean {
+  const trimmed = normalizeOptionalString(messageId);
+  if (!trimmed || !ctx.accountId || !hasChatScope(ctx)) {
+    return false;
+  }
+  hydrateFromDiskOnce();
+  const cached = imessageReplyCacheByMessageId.get(trimmed);
+  if (!cached || cached.isFromMe !== true || cached.accountId !== ctx.accountId) {
+    return false;
+  }
+  return isPositiveChatMatch(cached, ctx);
+}
+
 function buildFromMeError(inputId: string, inputKind: "short" | "uuid"): Error {
   return new Error(
     `iMessage message id ${describeMessageIdForError(inputId, inputKind)} is not one this agent sent. ` +

@@ -111,8 +111,6 @@ function requireMockCall<T extends unknown[]>(call: T | undefined, label: string
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
   if (typeof value !== "object" || value === null) {
     throw new Error(`expected ${label}`);
   }
@@ -127,7 +125,9 @@ function expectMediaSendCall(
 ): void {
   const [actualChatId, media, actualParams] = requireMockCall(call, label);
   expect(actualChatId).toBe(chatId);
-  expect(media).toBeDefined();
+  if (media === undefined) {
+    throw new Error(`expected ${label} media`);
+  }
   expect(actualParams).toEqual(expectedParams);
 }
 
@@ -1072,7 +1072,9 @@ describe("sendMessageTelegram", () => {
 
       const [, media, videoParams] = requireMockCall(sendVideo.mock.calls[0], "send video call");
       expect(sendVideo.mock.calls[0]?.[0]).toBe(chatId);
-      expect(media).toBeDefined();
+      if (media === undefined) {
+        throw new Error("expected send video media");
+      }
       const params = requireRecord(videoParams, "send video params");
       expect(typeof params.caption).toBe("string");
       expect(params.parse_mode).toBe("HTML");
@@ -1385,6 +1387,13 @@ describe("sendMessageTelegram", () => {
       fileName: "fun.gif",
       mediaUrl: "https://example.com/fun.gif",
     },
+    {
+      name: "videos",
+      buffer: Buffer.from("fake-video"),
+      contentType: "video/mp4",
+      fileName: "clip.mp4",
+      mediaUrl: "https://example.com/clip.mp4",
+    },
   ])("sends $name as documents when forceDocument is true", async (testCase) => {
     const chatId = "123";
     const sendAnimation = vi.fn();
@@ -1393,10 +1402,12 @@ describe("sendMessageTelegram", () => {
       chat: { id: chatId },
     });
     const sendPhoto = vi.fn();
-    const api = { sendAnimation, sendDocument, sendPhoto } as unknown as {
+    const sendVideo = vi.fn();
+    const api = { sendAnimation, sendDocument, sendPhoto, sendVideo } as unknown as {
       sendAnimation: typeof sendAnimation;
       sendDocument: typeof sendDocument;
       sendPhoto: typeof sendPhoto;
+      sendVideo: typeof sendVideo;
     };
 
     mockLoadedMedia({
@@ -1420,6 +1431,8 @@ describe("sendMessageTelegram", () => {
     });
     expect(sendPhoto, testCase.name).not.toHaveBeenCalled();
     expect(sendAnimation, testCase.name).not.toHaveBeenCalled();
+    expect(sendVideo, testCase.name).not.toHaveBeenCalled();
+    expect(probeVideoDimensions, testCase.name).not.toHaveBeenCalled();
     expect(res.messageId).toBe("10");
   });
 

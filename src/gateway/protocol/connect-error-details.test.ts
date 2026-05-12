@@ -13,6 +13,7 @@ import {
   readConnectPairingRequiredDetails,
   readConnectPairingRequiredMessage,
   readPairingConnectErrorDetails,
+  resolveAuthConnectErrorDetailCode,
 } from "./connect-error-details.js";
 
 describe("readConnectErrorDetailCode", () => {
@@ -49,6 +50,12 @@ describe("readConnectErrorRecoveryAdvice", () => {
         recommendedNextStep: "retry_with_magic",
       }),
     ).toEqual({ canRetryWithDeviceToken: true, recommendedNextStep: undefined });
+  });
+});
+
+describe("resolveAuthConnectErrorDetailCode", () => {
+  it("maps device token scope mismatches to a dedicated auth detail", () => {
+    expect(resolveAuthConnectErrorDetailCode("scope_mismatch")).toBe("AUTH_SCOPE_MISMATCH");
   });
 });
 

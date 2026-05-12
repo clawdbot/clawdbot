@@ -414,13 +414,12 @@ describe("mattermost inbound user posts", () => {
 
     expect(mockState.enqueueSystemEvent).not.toHaveBeenCalled();
     expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-    expect(mockState.dispatchReplyFromConfig.mock.calls[0]?.[0].ctx).toMatchObject({
-      BodyForAgent: "hello from mattermost",
-      ConversationLabel: "Town Square id:chan-1",
-      MessageSid: "post-1",
-      OriginatingChannel: "mattermost",
-      Provider: "mattermost",
-    });
+    const ctx = mockState.dispatchReplyFromConfig.mock.calls[0]?.[0].ctx;
+    expect(ctx?.BodyForAgent).toBe("hello from mattermost");
+    expect(ctx?.ConversationLabel).toBe("Town Square id:chan-1");
+    expect(ctx?.MessageSid).toBe("post-1");
+    expect(ctx?.OriginatingChannel).toBe("mattermost");
+    expect(ctx?.Provider).toBe("mattermost");
   });
 
   it("pins direct-message main route updates to the configured owner", async () => {

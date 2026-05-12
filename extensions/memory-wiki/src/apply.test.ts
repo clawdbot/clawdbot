@@ -47,31 +47,36 @@ describe("applyMemoryWikiMutation", () => {
     const page = await fs.readFile(path.join(rootDir, result.pagePath), "utf8");
     const parsed = parseWikiMarkdown(page);
 
-    expect(parsed.frontmatter).toMatchObject({
-      pageType: "synthesis",
-      id: "synthesis.alpha-synthesis",
-      title: "Alpha Synthesis",
-      sourceIds: ["source.alpha", "source.beta"],
-      claims: [
-        {
-          id: "claim.alpha.postgres",
-          text: "Alpha uses PostgreSQL for production writes.",
-          status: "supported",
-          confidence: 0.86,
-          evidence: [
-            {
-              sourceId: "source.alpha",
-              lines: "12-18",
-              weight: 0.9,
-            },
-          ],
-        },
-      ],
-      contradictions: ["Needs a better primary source"],
-      questions: ["What changed after launch?"],
-      confidence: 0.7,
-      status: "active",
-    });
+    expect(parsed.frontmatter.pageType).toBe("synthesis");
+    expect(parsed.frontmatter.id).toBe("synthesis.alpha-synthesis");
+    expect(parsed.frontmatter.title).toBe("Alpha Synthesis");
+    expect(parsed.frontmatter.sourceIds).toEqual(["source.alpha", "source.beta"]);
+    expect(parsed.frontmatter.claims).toHaveLength(1);
+    const claims = parsed.frontmatter.claims as
+      | Array<{
+          confidence?: number;
+          evidence?: Array<Record<string, unknown>>;
+          id?: string;
+          status?: string;
+          text?: string;
+        }>
+      | undefined;
+    const claim = claims?.[0];
+    expect(claim?.id).toBe("claim.alpha.postgres");
+    expect(claim?.text).toBe("Alpha uses PostgreSQL for production writes.");
+    expect(claim?.status).toBe("supported");
+    expect(claim?.confidence).toBe(0.86);
+    expect(claim?.evidence).toEqual([
+      {
+        sourceId: "source.alpha",
+        lines: "12-18",
+        weight: 0.9,
+      },
+    ]);
+    expect(parsed.frontmatter.contradictions).toEqual(["Needs a better primary source"]);
+    expect(parsed.frontmatter.questions).toEqual(["What changed after launch?"]);
+    expect(parsed.frontmatter.confidence).toBe(0.7);
+    expect(parsed.frontmatter.status).toBe("active");
     expect(parsed.body).toContain("## Summary");
     expect(parsed.body).toContain("<!-- openclaw:wiki:generated:start -->");
     expect(parsed.body).toContain("Alpha summary body.");
@@ -138,23 +143,27 @@ keep this note
     const updated = await fs.readFile(targetPath, "utf8");
     const parsed = parseWikiMarkdown(updated);
 
-    expect(parsed.frontmatter).toMatchObject({
-      pageType: "entity",
-      id: "entity.alpha",
-      title: "Alpha",
-      sourceIds: ["source.new"],
-      claims: [
-        {
-          id: "claim.alpha.status",
-          text: "Alpha is still active for existing tenants.",
-          status: "contested",
-          evidence: [{ sourceId: "source.new", lines: "4-9" }],
-        },
-      ],
-      contradictions: ["Conflicts with source.beta"],
-      questions: ["Is Alpha still active?"],
-      status: "review",
-    });
+    expect(parsed.frontmatter.pageType).toBe("entity");
+    expect(parsed.frontmatter.id).toBe("entity.alpha");
+    expect(parsed.frontmatter.title).toBe("Alpha");
+    expect(parsed.frontmatter.sourceIds).toEqual(["source.new"]);
+    expect(parsed.frontmatter.claims).toHaveLength(1);
+    const claims = parsed.frontmatter.claims as
+      | Array<{
+          evidence?: Array<Record<string, unknown>>;
+          id?: string;
+          status?: string;
+          text?: string;
+        }>
+      | undefined;
+    const claim = claims?.[0];
+    expect(claim?.id).toBe("claim.alpha.status");
+    expect(claim?.text).toBe("Alpha is still active for existing tenants.");
+    expect(claim?.status).toBe("contested");
+    expect(claim?.evidence).toEqual([{ sourceId: "source.new", lines: "4-9" }]);
+    expect(parsed.frontmatter.contradictions).toEqual(["Conflicts with source.beta"]);
+    expect(parsed.frontmatter.questions).toEqual(["Is Alpha still active?"]);
+    expect(parsed.frontmatter.status).toBe("review");
     expect(parsed.frontmatter).not.toHaveProperty("confidence");
     expect(parsed.body).toContain("keep this note");
     expect(parsed.body).toContain("<!-- openclaw:human:start -->");

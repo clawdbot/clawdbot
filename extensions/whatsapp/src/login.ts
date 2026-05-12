@@ -22,7 +22,7 @@ export async function loginWeb(
   const restoredFromBackup = await restoreCredsFromBackupIfNeeded(account.authDir);
   const onQr = (qr: string) => {
     runtime.log("Open the WhatsApp app, go to Linked Devices, then scan this QR:");
-    void renderQrTerminal(qr, { small: true })
+    void renderQrTerminal(qr)
       .then((output) => {
         runtime.log(output.endsWith("\n") ? output.slice(0, -1) : output);
       })

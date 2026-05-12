@@ -137,27 +137,24 @@ describe("buildOpenAISpeechProvider", () => {
   it("preserves talk responseFormat overrides", () => {
     const provider = buildOpenAISpeechProvider();
 
-    expect(
-      provider.resolveTalkConfig?.({
-        cfg: {} as never,
-        timeoutMs: 30_000,
-        baseTtsConfig: {
-          providers: {
-            openai: {
-              apiKey: "sk-base",
-              responseFormat: "mp3",
-            },
+    const resolvedConfig = provider.resolveTalkConfig?.({
+      cfg: {} as never,
+      timeoutMs: 30_000,
+      baseTtsConfig: {
+        providers: {
+          openai: {
+            apiKey: "sk-base",
+            responseFormat: "mp3",
           },
         },
-        talkProviderConfig: {
-          apiKey: "sk-talk",
-          responseFormat: " WAV ",
-        },
-      }),
-    ).toMatchObject({
-      apiKey: "sk-talk",
-      responseFormat: "wav",
+      },
+      talkProviderConfig: {
+        apiKey: "sk-talk",
+        responseFormat: " WAV ",
+      },
     });
+    expect(resolvedConfig?.apiKey).toBe("sk-talk");
+    expect(resolvedConfig?.responseFormat).toBe("wav");
   });
 
   it("maps Talk speak params onto OpenAI speech overrides", () => {
@@ -240,12 +237,10 @@ describe("buildOpenAISpeechProvider", () => {
     const provider = buildOpenAISpeechProvider();
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const body = parseRequestBody(init);
-      expect(body).toMatchObject({
-        model: "tts-1",
-        voice: "nova",
-        speed: 1.25,
-        response_format: "pcm",
-      });
+      expect(body.model).toBe("tts-1");
+      expect(body.voice).toBe("nova");
+      expect(body.speed).toBe(1.25);
+      expect(body.response_format).toBe("pcm");
       return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -298,12 +293,10 @@ describe("buildOpenAISpeechProvider", () => {
     const provider = buildOpenAISpeechProvider();
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const body = parseRequestBody(init);
-      expect(body).toMatchObject({
-        model: "custom-tts",
-        voice: "custom-voice",
-        lang: "en-US",
-        response_format: "mp3",
-      });
+      expect(body.model).toBe("custom-tts");
+      expect(body.voice).toBe("custom-voice");
+      expect(body.lang).toBe("en-US");
+      expect(body.response_format).toBe("mp3");
       return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;

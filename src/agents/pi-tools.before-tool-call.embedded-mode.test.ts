@@ -36,7 +36,7 @@ function requireApprovalRequestCall(label: string): {
   request: Record<string, unknown>;
   options: Record<string, unknown>;
 } {
-  const call = mockCallGatewayTool.mock.calls[0];
+  const call = mockCallGatewayTool.mock.calls.at(0);
   if (!call) {
     throw new Error(`expected ${label}`);
   }
@@ -52,7 +52,7 @@ function requireBeforeToolCall(
   mock: ReturnType<typeof vi.fn<HookRunner["runBeforeToolCall"]>>,
   label: string,
 ): Parameters<HookRunner["runBeforeToolCall"]> {
-  const call = mock.mock.calls[0];
+  const call = mock.mock.calls.at(0);
   if (!call) {
     throw new Error(`expected ${label}`);
   }

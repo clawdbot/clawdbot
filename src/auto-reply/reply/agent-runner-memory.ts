@@ -30,7 +30,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
-import type { GetReplyOptions } from "../types.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
@@ -44,6 +44,7 @@ import {
 } from "./memory-flush.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
+import { isRenderablePayload } from "./reply-payloads-base.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
@@ -155,6 +156,23 @@ function resolveMemoryFlushModelFallbackOptions(
     ...options,
     model: override,
     fallbacksOverride: [],
+  };
+}
+
+function resolveVisibleMemoryFlushErrorPayloads(payloads?: ReplyPayload[]): ReplyPayload[] {
+  return (payloads ?? []).filter(
+    (payload) => payload.isError === true && isRenderablePayload(payload),
+  );
+}
+
+function buildRestrictedMemoryFlushErrorPayload(err: unknown): ReplyPayload | undefined {
+  const message = normalizeOptionalString(err instanceof Error ? err.message : String(err));
+  if (!message || !message.includes("Memory flush writes are restricted to ")) {
+    return undefined;
+  }
+  return {
+    text: message.startsWith("⚠️") ? message : `⚠️ ${message}`,
+    isError: true,
   };
 }
 
@@ -691,6 +709,7 @@ export async function runMemoryFlushIfNeeded(params: {
   storePath?: string;
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
+  onVisibleErrorPayloads?: (payloads: ReplyPayload[]) => void;
 }): Promise<SessionEntry | undefined> {
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
   if (!memoryFlushPlan) {
@@ -956,6 +975,10 @@ export async function runMemoryFlushIfNeeded(params: {
             }
           },
         });
+        const visibleErrorPayloads = resolveVisibleMemoryFlushErrorPayloads(result.payloads);
+        if (visibleErrorPayloads.length > 0) {
+          params.onVisibleErrorPayloads?.(visibleErrorPayloads);
+        }
         if (result.meta?.agentMeta?.sessionId) {
           postCompactionSessionId = result.meta.agentMeta.sessionId;
         }
@@ -1026,6 +1049,10 @@ export async function runMemoryFlushIfNeeded(params: {
     }
   } catch (err) {
     logVerbose(`memory flush run failed: ${String(err)}`);
+    const visibleErrorPayload = buildRestrictedMemoryFlushErrorPayload(err);
+    if (visibleErrorPayload) {
+      params.onVisibleErrorPayloads?.([visibleErrorPayload]);
+    }
   }
 
   return activeSessionEntry;

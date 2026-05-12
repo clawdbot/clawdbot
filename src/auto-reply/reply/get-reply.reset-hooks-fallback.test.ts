@@ -75,12 +75,11 @@ describe("getReplyFromConfig reset-hook fallback", () => {
     await getReplyFromConfig(buildNativeResetContext(), undefined, {});
 
     expect(mocks.emitResetCommandHooks).toHaveBeenCalledTimes(1);
-    expect(mocks.emitResetCommandHooks).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "new",
-        sessionKey: "agent:main:telegram:direct:123",
-      }),
-    );
+    const [[hookParams]] = mocks.emitResetCommandHooks.mock.calls as unknown as Array<
+      [{ action?: string; sessionKey?: string }]
+    >;
+    expect(hookParams.action).toBe("new");
+    expect(hookParams.sessionKey).toBe("agent:main:telegram:direct:123");
   });
 
   it("does not emit fallback hooks when resetHookTriggered is already set", async () => {

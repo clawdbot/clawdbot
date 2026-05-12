@@ -584,7 +584,7 @@ describe("handleMessageUpdate commentary phase", () => {
     );
 
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
-    const event = onAgentEvent.mock.calls[0]?.[0] as
+    const event = onAgentEvent.mock.calls.at(0)?.[0] as
       | { stream?: string; data?: { text?: string; delta?: string } }
       | undefined;
     expect(event?.stream).toBe("assistant");
@@ -629,7 +629,7 @@ describe("handleMessageEnd", () => {
       },
     } as never);
 
-    const warnCall = warn.mock.calls[0];
+    const warnCall = warn.mock.calls.at(0);
     expect(warnCall?.[0]).toBe(
       "Assistant reply looks like a tool call, but no structured tool invocation was emitted; treating it as text.",
     );
@@ -839,7 +839,7 @@ describe("handleMessageEnd", () => {
     } as never);
 
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
-    const event = onAgentEvent.mock.calls[0]?.[0] as
+    const event = onAgentEvent.mock.calls.at(0)?.[0] as
       | { stream?: string; data?: { text?: string; delta?: string; replace?: boolean } }
       | undefined;
     expect(event?.stream).toBe("assistant");

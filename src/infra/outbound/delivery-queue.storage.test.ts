@@ -58,37 +58,35 @@ describe("delivery-queue storage", () => {
       expect(queueJsonFiles()).toEqual([`${id}.json`]);
 
       const entry = readQueuedEntry(tmpDir(), id);
-      expect(entry).toMatchObject({
-        id,
-        channel: "directchat",
-        to: "+1555",
-        renderedBatchPlan: {
-          payloadCount: 1,
-          textCount: 1,
-          mediaCount: 0,
-          voiceCount: 0,
-          presentationCount: 0,
-          interactiveCount: 0,
-          channelDataCount: 0,
-          items: [{ index: 0, kinds: ["text"] as const, text: "hello", mediaUrls: [] }],
-        },
-        bestEffort: true,
-        gifPlayback: true,
-        silent: true,
-        gatewayClientScopes: ["operator.write"],
-        mirror: {
-          sessionKey: "agent:main:main",
-          text: "hello",
-          mediaUrls: ["https://example.com/file.png"],
-        },
-        session: {
-          key: "agent:main:main",
-          agentId: "agent-main",
-          requesterAccountId: "acct-1",
-          requesterSenderId: "sender-1",
-        },
-        retryCount: 0,
+      expect(entry.id).toBe(id);
+      expect(entry.channel).toBe("directchat");
+      expect(entry.to).toBe("+1555");
+      expect(entry.renderedBatchPlan).toEqual({
+        payloadCount: 1,
+        textCount: 1,
+        mediaCount: 0,
+        voiceCount: 0,
+        presentationCount: 0,
+        interactiveCount: 0,
+        channelDataCount: 0,
+        items: [{ index: 0, kinds: ["text"] as const, text: "hello", mediaUrls: [] }],
       });
+      expect(entry.bestEffort).toBe(true);
+      expect(entry.gifPlayback).toBe(true);
+      expect(entry.silent).toBe(true);
+      expect(entry.gatewayClientScopes).toEqual(["operator.write"]);
+      expect(entry.mirror).toEqual({
+        sessionKey: "agent:main:main",
+        text: "hello",
+        mediaUrls: ["https://example.com/file.png"],
+      });
+      expect(entry.session).toEqual({
+        key: "agent:main:main",
+        agentId: "agent-main",
+        requesterAccountId: "acct-1",
+        requesterSenderId: "sender-1",
+      });
+      expect(entry.retryCount).toBe(0);
       expect(entry.payloads).toEqual([{ text: "hello" }]);
 
       await ackDelivery(id, tmpDir());

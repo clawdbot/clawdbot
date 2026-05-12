@@ -478,40 +478,23 @@ function scopeSchemaSections(
   const include = params.include;
   const exclude = params.exclude;
   const nextProps: Record<string, JsonSchema> = {};
-  for (const [key, value] of Object.entries(schema.properties)) {
+  for (const key of Object.keys(schema.properties)) {
     if (include && include.size > 0 && !include.has(key)) {
       continue;
     }
     if (exclude && exclude.size > 0 && exclude.has(key)) {
       continue;
     }
-    nextProps[key] = value;
+    nextProps[key] = schema.properties[key];
   }
   return { ...schema, properties: nextProps };
 }
 
-function scopeUnsupportedPaths(
-  unsupportedPaths: string[],
-  params: { include?: ReadonlySet<string> | null; exclude?: ReadonlySet<string> | null },
-): string[] {
-  const include = params.include;
-  const exclude = params.exclude;
-  if ((!include || include.size === 0) && (!exclude || exclude.size === 0)) {
-    return unsupportedPaths;
+function asConfigSchema(value: unknown): JsonSchema | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
   }
-  return unsupportedPaths.filter((entry) => {
-    if (entry === "<root>") {
-      return true;
-    }
-    const [top] = entry.split(".");
-    if (include && include.size > 0) {
-      return include.has(top);
-    }
-    if (exclude && exclude.size > 0) {
-      return !exclude.has(top);
-    }
-    return true;
-  });
+  return value as JsonSchema;
 }
 
 function resolveSectionMeta(
@@ -1177,11 +1160,8 @@ export function renderConfig(props: ConfigProps) {
   const includeVirtualSections = props.includeVirtualSections ?? true;
   const include = props.includeSections?.length ? new Set(props.includeSections) : null;
   const exclude = props.excludeSections?.length ? new Set(props.excludeSections) : null;
-  const rawAnalysis = analyzeConfigSchema(props.schema);
-  const analysis = {
-    schema: scopeSchemaSections(rawAnalysis.schema, { include, exclude }),
-    unsupportedPaths: scopeUnsupportedPaths(rawAnalysis.unsupportedPaths, { include, exclude }),
-  };
+  const scopedSchema = scopeSchemaSections(asConfigSchema(props.schema), { include, exclude });
+  const analysis = analyzeConfigSchema(scopedSchema);
   const formUnsafe = analysis.schema ? analysis.unsupportedPaths.length > 0 : false;
   const rawAvailable = props.rawAvailable ?? true;
   const formMode = showModeToggle && rawAvailable ? props.formMode : "form";

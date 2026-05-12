@@ -91,7 +91,7 @@ async function expectSkippedRecovery(store: ReturnType<typeof sessions.loadSessi
 }
 
 function getResumeMessage() {
-  const call = vi.mocked(gateway.callGateway).mock.calls[0];
+  const call = vi.mocked(gateway.callGateway).mock.calls.at(0);
   if (call === undefined) {
     throw new Error("expected resume gateway call");
   }
@@ -150,7 +150,10 @@ describe("subagent-orphan-recovery", () => {
 
     // Should have called callGateway to resume the session
     expect(gateway.callGateway).toHaveBeenCalledOnce();
-    const callArgs = vi.mocked(gateway.callGateway).mock.calls[0];
+    const callArgs = vi.mocked(gateway.callGateway).mock.calls.at(0);
+    if (callArgs === undefined) {
+      throw new Error("expected gateway resume call");
+    }
     const opts = callArgs[0];
     expect(opts.method).toBe("agent");
     const params = opts.params as Record<string, unknown>;
@@ -369,7 +372,14 @@ describe("subagent-orphan-recovery", () => {
       getActiveRuns: () => createActiveRuns(createTestRunRecord()),
     });
 
-    const [, updater] = vi.mocked(sessions.updateSessionStore).mock.calls[0];
+    const updateCall = vi.mocked(sessions.updateSessionStore).mock.calls.at(0);
+    if (updateCall === undefined) {
+      throw new Error("expected update session store call");
+    }
+    const updater = updateCall[1];
+    if (typeof updater !== "function") {
+      throw new Error("expected update session store callback");
+    }
     const mockStore: ReturnType<typeof sessions.loadSessionStore> = {
       "agent:main:subagent:test-session-1": {
         sessionId: "session-abc",
@@ -414,7 +424,14 @@ describe("subagent-orphan-recovery", () => {
     expect(gateway.callGateway).not.toHaveBeenCalled();
     expect(sessions.updateSessionStore).toHaveBeenCalledOnce();
 
-    const [, updater] = vi.mocked(sessions.updateSessionStore).mock.calls[0];
+    const updateCall = vi.mocked(sessions.updateSessionStore).mock.calls.at(0);
+    if (updateCall === undefined) {
+      throw new Error("expected update session store call");
+    }
+    const updater = updateCall[1];
+    if (typeof updater !== "function") {
+      throw new Error("expected update session store callback");
+    }
     const mockStore: ReturnType<typeof sessions.loadSessionStore> = {
       "agent:main:subagent:test-session-1": {
         sessionId: "session-abc",

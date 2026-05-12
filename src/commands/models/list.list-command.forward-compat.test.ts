@@ -136,15 +136,17 @@ function expectRowFields(
 
 function modelRegistryOptions(index = 0): Record<string, unknown> {
   const options = mocks.loadModelRegistry.mock.calls[index]?.[1];
-  expect(options).toBeTypeOf("object");
-  expect(options).not.toBeNull();
+  if (!options || typeof options !== "object") {
+    throw new Error(`expected model registry options ${index}`);
+  }
   return options as Record<string, unknown>;
 }
 
 function providerCatalogOptions(index = 0): Record<string, unknown> {
   const options = mocks.loadProviderCatalogModelsForList.mock.calls[index]?.[0];
-  expect(options).toBeTypeOf("object");
-  expect(options).not.toBeNull();
+  if (!options || typeof options !== "object") {
+    throw new Error(`expected provider catalog options ${index}`);
+  }
   return options as Record<string, unknown>;
 }
 

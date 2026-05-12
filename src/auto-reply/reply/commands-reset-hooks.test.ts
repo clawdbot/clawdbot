@@ -108,13 +108,16 @@ function buildResetParams(
 function mockCall(mock: unknown, index = 0): Array<unknown> {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
   const call = calls.at(index);
-  expect(call, `mock call ${index + 1}`).toBeDefined();
-  return call as Array<unknown>;
+  if (!call) {
+    throw new Error(`Expected mock call ${index + 1}`);
+  }
+  return call;
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -227,8 +230,9 @@ describe("handleCommands reset hooks", () => {
       mockCall(resetMocks.resetConfiguredBindingTargetInPlace)[0],
       "reset args",
     );
-    expect(resetArgs.cfg).toBeTypeOf("object");
-    expect(resetArgs.cfg).not.toBeNull();
+    if (!resetArgs.cfg || typeof resetArgs.cfg !== "object") {
+      throw new Error("expected reset config");
+    }
     expectObjectFields(resetArgs, {
       sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
       reason: "reset",

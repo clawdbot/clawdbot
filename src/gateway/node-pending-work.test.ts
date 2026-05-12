@@ -14,13 +14,12 @@ describe("node pending work", () => {
 
   it("returns a baseline status request even when no explicit work is queued", () => {
     const drained = drainNodePendingWork("node-1");
-    expect(drained.items).toEqual([
-      expect.objectContaining({
-        id: "baseline-status",
-        type: "status.request",
-        priority: "default",
-      }),
-    ]);
+    expect(drained.items).toHaveLength(1);
+    expect(drained.items[0]?.id).toBe("baseline-status");
+    expect(drained.items[0]?.type).toBe("status.request");
+    expect(drained.items[0]?.priority).toBe("default");
+    expect(typeof drained.items[0]?.createdAtMs).toBe("number");
+    expect(drained.items[0]?.expiresAtMs).toBeNull();
     expect(drained.hasMore).toBe(false);
   });
 

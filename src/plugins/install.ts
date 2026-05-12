@@ -537,7 +537,10 @@ async function installPluginFromManagedNpmRoot(
     }
   }
   try {
-    await relinkOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot, logger });
+    await relinkOpenClawPeerDependenciesInManagedNpmRoot({
+      npmRoot,
+      logger,
+    });
   } catch (error) {
     await rollbackManagedNpmPluginInstall({
       npmRoot,
@@ -1213,11 +1216,17 @@ async function scanAndLinkInstalledPackage(params: {
   if (scanResult) {
     return scanResult;
   }
-  await linkOpenClawPeerDependencies({
+  const peerLinkRepair = await linkOpenClawPeerDependencies({
     installedDir: params.installedDir,
     peerDependencies: params.peerDependencies,
     logger: params.logger,
   });
+  if (peerLinkRepair.skipped > 0) {
+    return {
+      ok: false,
+      error: formatUnresolvedOpenClawPeerLinkError(params.pluginId),
+    };
+  }
   return null;
 }
 

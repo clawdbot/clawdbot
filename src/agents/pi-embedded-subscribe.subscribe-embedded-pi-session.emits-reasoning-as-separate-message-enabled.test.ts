@@ -26,8 +26,8 @@ describe("subscribeEmbeddedPiSession", () => {
 
   function expectReasoningAndAnswerCalls(onBlockReply: ReturnType<typeof vi.fn>) {
     expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expect(onBlockReply.mock.calls[0][0].text).toBe("Because it helps");
-    expect(onBlockReply.mock.calls[1][0].text).toBe("Final answer");
+    expect(onBlockReply.mock.calls.at(0)?.[0].text).toBe("Because it helps");
+    expect(onBlockReply.mock.calls.at(1)?.[0].text).toBe("Final answer");
   }
 
   it("emits reasoning as a separate message when enabled", () => {
@@ -46,7 +46,7 @@ describe("subscribeEmbeddedPiSession", () => {
     emit({ type: "message_end", message: createReasoningFinalAnswerMessage() });
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0][0].text).toBe("Final answer");
+    expect(onBlockReply.mock.calls.at(0)?.[0].text).toBe("Final answer");
   });
 
   it.each(THINKING_TAG_CASES)(

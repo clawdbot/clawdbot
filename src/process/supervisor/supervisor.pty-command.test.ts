@@ -4,6 +4,18 @@ const { createPtyAdapterMock } = vi.hoisted(() => ({
   createPtyAdapterMock: vi.fn(),
 }));
 
+function firstPtyAdapterParams(): { args?: string[] } {
+  const [call] = createPtyAdapterMock.mock.calls;
+  if (!call) {
+    throw new Error("expected createPtyAdapter call");
+  }
+  const [params] = call;
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("expected createPtyAdapter params to be an object");
+  }
+  return params;
+}
+
 vi.mock("../../agents/shell-utils.js", () => ({
   getShellConfig: () => ({ shell: "sh", args: ["-c"] }),
 }));
@@ -59,7 +71,7 @@ describe("process supervisor PTY command contract", () => {
 
     expect(exit.reason).toBe("exit");
     expect(createPtyAdapterMock).toHaveBeenCalledTimes(1);
-    const params = createPtyAdapterMock.mock.calls[0]?.[0] as { args?: string[] };
+    const params = firstPtyAdapterParams();
     expect(params.args).toEqual(["-c", command]);
   });
 

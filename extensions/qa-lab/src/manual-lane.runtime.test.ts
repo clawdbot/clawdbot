@@ -90,13 +90,10 @@ describe("runQaManualLane", () => {
     });
 
     expect(startQaProviderServer).toHaveBeenCalledWith("mock-openai");
-    expect(startQaGatewayChild).toHaveBeenCalledWith(
-      expect.objectContaining({
-        repoRoot: "/tmp/openclaw-repo",
-        providerMode: "mock-openai",
-        providerBaseUrl: "http://127.0.0.1:44080/v1",
-      }),
-    );
+    const [gatewayOptions] = startQaGatewayChild.mock.calls[0] ?? [];
+    expect(gatewayOptions?.repoRoot).toBe("/tmp/openclaw-repo");
+    expect(gatewayOptions?.providerMode).toBe("mock-openai");
+    expect(gatewayOptions?.providerBaseUrl).toBe("http://127.0.0.1:44080/v1");
     expect(startQaLabServer).toHaveBeenCalledWith({
       repoRoot: "/tmp/openclaw-repo",
       embeddedGateway: "disabled",
@@ -123,12 +120,9 @@ describe("runQaManualLane", () => {
       repoRoot: "/tmp/openclaw-repo",
       embeddedGateway: "disabled",
     });
-    expect(startQaGatewayChild).toHaveBeenCalledWith(
-      expect.objectContaining({
-        providerMode: "live-frontier",
-        providerBaseUrl: undefined,
-      }),
-    );
+    const [gatewayOptions] = startQaGatewayChild.mock.calls[0] ?? [];
+    expect(gatewayOptions?.providerMode).toBe("live-frontier");
+    expect(gatewayOptions?.providerBaseUrl).toBeUndefined();
     expect(result.reply).toBe("Protocol note: mock reply.");
   });
 });

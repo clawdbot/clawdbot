@@ -159,8 +159,12 @@ describe("createTelegramDraftStream", () => {
 
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
     expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("message thread not found"));
-    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("retrying without thread"));
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview failed: 400: Bad Request: message thread not found",
+    );
+    expect(
+      warn.mock.calls.some(([message]) => String(message).includes("retrying without thread")),
+    ).toBe(false);
   });
 
   it("keeps allow_sending_without_reply on message previews that target a reply", async () => {
@@ -318,12 +322,16 @@ describe("createTelegramDraftStream", () => {
     resolveFirstSend?.({ message_id: 17 });
     await stream.flush();
 
-    expect(onSupersededPreview).toHaveBeenCalledWith({
+    expect(onSupersededPreview).toHaveBeenCalledTimes(1);
+    const [supersededPreview] = onSupersededPreview.mock.calls[0] ?? [];
+    expect(supersededPreview).toEqual({
       messageId: 17,
       textSnapshot: "Message A partial",
       parseMode: undefined,
-      visibleSinceMs: expect.any(Number),
+      visibleSinceMs: supersededPreview.visibleSinceMs,
     });
+    expect(typeof supersededPreview.visibleSinceMs).toBe("number");
+    expect(Number.isFinite(supersededPreview.visibleSinceMs)).toBe(true);
     expect(api.sendMessage).toHaveBeenCalledTimes(2);
     expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Message B partial", undefined);
     expect(api.editMessageText).not.toHaveBeenCalledWith(123, 17, "Message B partial");
@@ -434,13 +442,17 @@ describe("createTelegramDraftStream", () => {
     stream.update("Hello world foo bar baz qux");
     await stream.flush();
 
-    expect(onSupersededPreview).toHaveBeenCalledWith({
+    expect(onSupersededPreview).toHaveBeenCalledTimes(1);
+    const [supersededPreview] = onSupersededPreview.mock.calls[0] ?? [];
+    expect(supersededPreview).toEqual({
       messageId: 17,
       textSnapshot: "Hello world",
       parseMode: undefined,
-      visibleSinceMs: expect.any(Number),
+      visibleSinceMs: supersededPreview.visibleSinceMs,
       retain: true,
     });
+    expect(typeof supersededPreview.visibleSinceMs).toBe("number");
+    expect(Number.isFinite(supersededPreview.visibleSinceMs)).toBe(true);
   });
 
   it("enforces maxChars after renderText expansion", async () => {
@@ -459,9 +471,7 @@ describe("createTelegramDraftStream", () => {
 
     expect(api.sendMessage).not.toHaveBeenCalled();
     expect(api.editMessageText).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("telegram stream preview stopped (text length 127 > 100)"),
-    );
+    expect(warn).toHaveBeenCalledWith("telegram stream preview stopped (text length 127 > 100)");
   });
 });
 

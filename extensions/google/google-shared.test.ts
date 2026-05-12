@@ -198,10 +198,9 @@ describe("google-shared convertMessages", () => {
     const contents = convertMessagesForTest(model, context);
     expect(contents).toHaveLength(1);
     expect(contents[0].role).toBe("model");
-    expect(contents[0].parts?.[0]).toMatchObject({
-      thought: true,
-      thoughtSignature: "c2ln",
-    });
+    const part = asRecord(contents[0].parts?.[0]);
+    expect(part.thought).toBe(true);
+    expect(part.thoughtSignature).toBe("c2ln");
   });
 
   it("keeps thought signatures for Claude models", () => {
@@ -221,10 +220,9 @@ describe("google-shared convertMessages", () => {
     const contents = convertMessagesForTest(model, context);
     const parts = contents?.[0]?.parts ?? [];
     expect(parts).toHaveLength(1);
-    expect(parts[0]).toMatchObject({
-      thought: true,
-      thoughtSignature: "c2ln",
-    });
+    const part = asRecord(parts[0]);
+    expect(part.thought).toBe(true);
+    expect(part.thoughtSignature).toBe("c2ln");
   });
 
   it("does not merge consecutive user messages for Gemini", () => {
@@ -303,9 +301,7 @@ describe("google-shared convertMessages", () => {
       (part) => typeof part === "object" && part !== null && "functionResponse" in part,
     );
     const toolResponse = asRecord(toolResponsePart);
-    expect(requireRecordProperty(toolResponse, "functionResponse")).toMatchObject({
-      name: "myTool",
-    });
+    expect(requireRecordProperty(toolResponse, "functionResponse").name).toBe("myTool");
     expect(contents[3].role).toBe("user");
   });
 
@@ -335,9 +331,7 @@ describe("google-shared convertMessages", () => {
       (part) => typeof part === "object" && part !== null && "functionCall" in part,
     );
     const toolCall = asRecord(toolCallPart);
-    expect(requireRecordProperty(toolCall, "functionCall")).toMatchObject({
-      name: "myTool",
-    });
+    expect(requireRecordProperty(toolCall, "functionCall").name).toBe("myTool");
   });
 
   it("strips tool call and response ids for google-gemini-cli", () => {

@@ -51,8 +51,6 @@ function withConfig(fileTransfer: Record<string, unknown> | undefined) {
 }
 
 function expectResultFields(result: unknown, fields: Record<string, unknown>) {
-  expect(typeof result).toBe("object");
-  expect(result).not.toBeNull();
   if (typeof result !== "object" || result === null) {
     throw new Error("policy result was not an object");
   }

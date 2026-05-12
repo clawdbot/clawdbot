@@ -17,8 +17,6 @@ function parseLastJsonLine(raw: string): unknown {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
   if (typeof value !== "object" || value === null) {
     throw new Error(`${label} was not an object`);
   }
@@ -43,7 +41,6 @@ function expectAuditRecord(
 
 function requireFirstMockCall(mock: unknown, label: string): unknown[] {
   const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.[0];
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error(`missing ${label} call`);
   }

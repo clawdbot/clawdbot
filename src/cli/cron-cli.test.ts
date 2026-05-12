@@ -513,6 +513,14 @@ describe("cron cli", () => {
     expect(listCall?.[2]).toEqual({ includeDisabled: false, agentId: "ops" });
   });
 
+  it("routes cron get to cron.get with the provided id", async () => {
+    await runCronCommand(["cron", "get", "job-1"]);
+
+    const getCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.get");
+    expect(getCall?.[2]).toEqual({ id: "job-1" });
+    expect(stdoutText()).toContain('"id": "job-1"');
+  });
+
   it("paginates cron show lookups", async () => {
     resetGatewayMock();
     callGatewayFromCli.mockImplementation(

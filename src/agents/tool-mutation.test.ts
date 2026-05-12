@@ -24,14 +24,10 @@ describe("tool mutation helpers", () => {
       { path: "/tmp/demo.txt", id: 42 },
       "write /tmp/demo.txt",
     );
-    expect(writeFingerprint).toContain("tool=write");
-    expect(writeFingerprint).toContain("path=/tmp/demo.txt");
-    expect(writeFingerprint).toContain("id=42");
-    expect(writeFingerprint).not.toContain("meta=write /tmp/demo.txt");
+    expect(writeFingerprint).toBe("tool=write|path=/tmp/demo.txt|id=42");
 
     const metaOnlyFingerprint = buildToolActionFingerprint("exec", { command: "ls -la" }, "ls -la");
-    expect(metaOnlyFingerprint).toContain("tool=exec");
-    expect(metaOnlyFingerprint).toContain("meta=ls -la");
+    expect(metaOnlyFingerprint).toBe("tool=exec|meta=ls -la");
 
     const readFingerprint = buildToolActionFingerprint("read", { path: "/tmp/demo.txt" });
     expect(readFingerprint).toBeUndefined();

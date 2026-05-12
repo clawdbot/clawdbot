@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  pinActivePluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildCommandText,
@@ -82,12 +86,27 @@ function installOllamaThinkingProvider() {
   setActivePluginRegistry(registry);
 }
 
+function createNativeCommandsRegistry(id: "discord" | "slack") {
+  return createTestRegistry([
+    {
+      pluginId: id,
+      plugin: createChannelTestPluginBase({
+        id,
+        capabilities: { nativeCommands: true, chatTypes: ["direct"] },
+      }),
+      source: "test",
+    },
+  ]);
+}
+
 beforeEach(() => {
   vi.doUnmock("../channels/plugins/index.js");
+  resetPluginRuntimeStateForTest();
   setActivePluginRegistry(createTestRegistry([]));
 });
 
 afterEach(() => {
+  resetPluginRuntimeStateForTest();
   setActivePluginRegistry(createTestRegistry([]));
 });
 
@@ -455,6 +474,61 @@ describe("commands registry", () => {
     ).toBe(true);
   });
 
+  it("refreshes dock commands when pinned-empty fallback active registry changes", () => {
+    const pinnedEmptyRegistry = createTestRegistry([]);
+    setActivePluginRegistry(pinnedEmptyRegistry);
+    pinActivePluginChannelRegistry(pinnedEmptyRegistry);
+
+    setActivePluginRegistry(createNativeCommandsRegistry("discord"));
+    const discordCommandKeys = commandKeySet(listChatCommands());
+    expect(discordCommandKeys.has("dock:discord")).toBe(true);
+    expect(discordCommandKeys.has("dock:slack")).toBe(false);
+
+    setActivePluginRegistry(createNativeCommandsRegistry("slack"));
+    const slackCommandKeys = commandKeySet(listChatCommands());
+    expect(slackCommandKeys.has("dock:discord")).toBe(false);
+    expect(slackCommandKeys.has("dock:slack")).toBe(true);
+  });
+
+  it("refreshes text-command gating when pinned-empty fallback active registry changes", () => {
+    const cfg = { commands: { text: false } };
+    const pinnedEmptyRegistry = createTestRegistry([]);
+    setActivePluginRegistry(pinnedEmptyRegistry);
+    pinActivePluginChannelRegistry(pinnedEmptyRegistry);
+
+    setActivePluginRegistry(createNativeCommandsRegistry("discord"));
+    expect(
+      shouldHandleTextCommands({
+        cfg,
+        surface: "discord",
+        commandSource: "text",
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandleTextCommands({
+        cfg,
+        surface: "slack",
+        commandSource: "text",
+      }),
+    ).toBe(true);
+
+    setActivePluginRegistry(createNativeCommandsRegistry("slack"));
+    expect(
+      shouldHandleTextCommands({
+        cfg,
+        surface: "discord",
+        commandSource: "text",
+      }),
+    ).toBe(true);
+    expect(
+      shouldHandleTextCommands({
+        cfg,
+        surface: "slack",
+        commandSource: "text",
+      }),
+    ).toBe(false);
+  });
+
   it("normalizes telegram-style command mentions for the current bot", () => {
     expect(normalizeCommandBody("/help@openclaw", { botUsername: "openclaw" })).toBe("/help");
     expect(
@@ -518,7 +592,6 @@ describe("commands registry args", () => {
     };
 
     const args = parseCommandArgs(command, "set foo bar baz");
-    expect(args).toBeDefined();
     if (!args) {
       throw new Error("Expected parsed command args");
     }
@@ -623,8 +696,10 @@ describe("commands registry args", () => {
     const seenChoice = requireSeenChoice(seen);
     expect(seenChoice.commandKey).toBe("think");
     expect(seenChoice.argName).toBe("level");
-    expect(seenChoice.provider).toEqual(expect.stringMatching(/\S/));
-    expect(seenChoice.model).toEqual(expect.stringMatching(/\S/));
+    expect(typeof seenChoice.provider).toBe("string");
+    expect(seenChoice.provider?.trim().length).toBeGreaterThan(0);
+    expect(typeof seenChoice.model).toBe("string");
+    expect(seenChoice.model?.trim().length).toBeGreaterThan(0);
     expect(seenChoice.catalogLength).toBe(0);
   });
 

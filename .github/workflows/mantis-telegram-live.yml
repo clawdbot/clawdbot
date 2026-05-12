@@ -33,13 +33,10 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: write
   issues: write
   pull-requests: write
-
-concurrency:
-  group: mantis-telegram-live-${{ github.event.issue.number || inputs.pr_number || inputs.candidate_ref || github.run_id }}-${{ github.run_attempt }}
-  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -253,6 +250,31 @@ jobs:
       comparison_status: ${{ steps.run_mantis.outputs.comparison_status }}
       output_dir: ${{ steps.run_mantis.outputs.output_dir }}
     steps:
+      - name: Wait for older Mantis Telegram account run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_created="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq .created_at)"
+          while true; do
+            blockers="$(
+              for workflow in mantis-telegram-desktop-proof.yml mantis-telegram-live.yml; do
+                gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --limit 100 --json databaseId,status,createdAt,url \
+                  | jq -r \
+                    --argjson current_id "$GITHUB_RUN_ID" \
+                    --arg current_created "$current_created" \
+                    '.[] | select(.databaseId != $current_id) | select(.createdAt < $current_created or (.createdAt == $current_created and .databaseId < $current_id)) | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending" or .status == "requested") | "\(.createdAt)\t#\(.databaseId)\t\(.status)\t\(.url)"'
+              done | sort -u
+            )"
+            if [[ -z "$blockers" ]]; then
+              break
+            fi
+            echo "Waiting for older Mantis Telegram account run:"
+            printf '%s\n' "$blockers" | head -n 10
+            sleep 60
+          done
+
       - name: Checkout harness ref
         uses: actions/checkout@v6
         with:

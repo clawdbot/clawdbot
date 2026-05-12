@@ -335,7 +335,7 @@ Each work package records:
 - compatibility code is isolated to SDK/core seams
 - bundled plugins consume ingress projections or generic outcomes directly
 - plugin production LOC is at least 1,500 net negative against `origin/main`
-- core production LOC is <= +1,500, or any excess is paid for while total stays
-  <= +2,000
+- core production LOC is `<= +1,500`, or any excess is paid for while total
+  stays `<= +2,000`
 - representative tests cover redaction, route, command/event, activation,
   access-group, and channel-specific fallback behavior

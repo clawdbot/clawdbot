@@ -52,13 +52,15 @@ function fetchRequest(fetchMock: ReturnType<typeof vi.fn>): {
   method?: string;
   url: string;
 } {
-  const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit | undefined];
+  const [url, init] = fetchMock.mock.calls.at(0) as [string, RequestInit | undefined];
   expect(typeof url).toBe("string");
-  expect(init).toBeDefined();
+  if (!init) {
+    throw new Error("Expected fetch init");
+  }
   return {
-    body: typeof init?.body === "string" ? init.body : undefined,
-    headers: init?.headers,
-    method: init?.method,
+    body: typeof init.body === "string" ? init.body : undefined,
+    headers: init.headers,
+    method: init.method,
     url,
   };
 }
@@ -69,7 +71,9 @@ function postJsonRequestOptions(spy: unknown): {
   ssrfPolicy?: { allowRfc2544BenchmarkRange?: boolean };
 } {
   const options = (spy as { mock?: { calls?: Array<[unknown]> } }).mock?.calls?.[0]?.[0];
-  expect(options).toBeDefined();
+  if (!options) {
+    throw new Error("Expected postJsonRequest options");
+  }
   return options as {
     allowPrivateNetwork?: boolean;
     pinDns?: boolean;

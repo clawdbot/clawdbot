@@ -115,7 +115,6 @@ describe("detectLinuxSdBackedStateDir", () => {
       },
     });
 
-    expect(result).not.toBeNull();
     if (result === null) {
       throw new Error("Expected Linux state storage warning details");
     }

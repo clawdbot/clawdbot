@@ -67,6 +67,10 @@ const DEFAULT_MAX_MESSAGES = 5000;
 const COMPACT_THRESHOLD_RATIO = 2;
 const persistedMessageCacheBuckets = new Map<string, TelegramMessageCacheBucket>();
 
+export function resetTelegramMessageCacheBucketsForTest(): void {
+  persistedMessageCacheBuckets.clear();
+}
+
 function telegramMessageCacheKey(params: {
   accountId: string;
   chatId: string | number;

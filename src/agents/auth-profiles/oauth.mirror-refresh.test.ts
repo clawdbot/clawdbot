@@ -32,11 +32,11 @@ function expectPersistedOpenAICodexProfileWithoutInlineTokens(
   credential: AuthProfileStore["profiles"][string],
   metadata: Record<string, unknown> = {},
 ): void {
-  expect(credential).toMatchObject({
-    type: "oauth",
-    provider: "openai-codex",
-    ...metadata,
-  });
+  expect(credential?.type).toBe("oauth");
+  expect(credential?.provider).toBe("openai-codex");
+  for (const [key, value] of Object.entries(metadata)) {
+    expect((credential as Record<string, unknown> | undefined)?.[key]).toEqual(value);
+  }
   expect(credential).not.toHaveProperty("access");
   expect(credential).not.toHaveProperty("refresh");
   expect(credential).not.toHaveProperty("idToken");

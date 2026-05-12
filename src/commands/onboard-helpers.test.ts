@@ -48,6 +48,19 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+type RunCommandCall = [
+  argv: string[],
+  options?: { timeoutMs?: number; windowsVerbatimArguments?: boolean },
+];
+
+function requireFirstRunCommandCall(): RunCommandCall {
+  const [call] = mocks.runCommandWithTimeout.mock.calls;
+  if (!call) {
+    throw new Error("expected browser open command call");
+  }
+  return call as RunCommandCall;
+}
+
 describe("handleReset", () => {
   it("uses active profile paths for destructive reset targets", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-profile-"));
@@ -102,7 +115,7 @@ describe("openUrl", () => {
     expect(ok).toBe(true);
 
     expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(1);
-    const [argv, options] = mocks.runCommandWithTimeout.mock.calls[0] ?? [];
+    const [argv, options] = requireFirstRunCommandCall();
     expect(argv).toEqual([rundll32, "url.dll,FileProtocolHandler", url]);
     expect(options?.timeoutMs).toBe(5_000);
     expect(options?.windowsVerbatimArguments).toBeUndefined();

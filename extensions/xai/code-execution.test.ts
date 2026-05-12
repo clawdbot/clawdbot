@@ -31,9 +31,37 @@ function installCodeExecutionFetch(payload?: Record<string, unknown>) {
   return mockFetch;
 }
 
+function firstFetchCall(mockFetch: ReturnType<typeof installCodeExecutionFetch>) {
+  const [call] = mockFetch.mock.calls;
+  if (!call) {
+    throw new Error("expected code_execution fetch call");
+  }
+  return call;
+}
+
+function firstFetchUrl(mockFetch: ReturnType<typeof installCodeExecutionFetch>) {
+  const [url] = firstFetchCall(mockFetch);
+  return String(url);
+}
+
+function firstFetchInit(mockFetch: ReturnType<typeof installCodeExecutionFetch>): RequestInit {
+  const [, init] = firstFetchCall(mockFetch);
+  if (!init || typeof init !== "object" || Array.isArray(init)) {
+    throw new Error("expected code_execution fetch init");
+  }
+  return init as RequestInit;
+}
+
+function firstAuthorizationHeader(mockFetch: ReturnType<typeof installCodeExecutionFetch>) {
+  const headers = firstFetchInit(mockFetch).headers;
+  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
+    throw new Error("expected code_execution request headers");
+  }
+  return (headers as Record<string, string>).Authorization;
+}
+
 function parseFirstRequestBody(mockFetch: ReturnType<typeof installCodeExecutionFetch>) {
-  const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
-  const requestBody = request?.body;
+  const requestBody = firstFetchInit(mockFetch).body;
   return JSON.parse(typeof requestBody === "string" ? requestBody : "{}") as Record<
     string,
     unknown
@@ -81,10 +109,7 @@ describe("xai code_execution tool", () => {
       task: "Sum [20, 22]",
     });
 
-    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
-    expect((request?.headers as Record<string, string> | undefined)?.Authorization).toBe(
-      "Bearer xai-profile-key",
-    );
+    expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-profile-key");
   });
 
   it("uses the xAI Responses code_interpreter tool", async () => {
@@ -115,7 +140,7 @@ describe("xai code_execution tool", () => {
     });
 
     expect(mockFetch).toHaveBeenCalled();
-    expect(String(mockFetch.mock.calls[0]?.[0])).toContain("api.x.ai/v1/responses");
+    expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
     const body = parseFirstRequestBody(mockFetch);
     expect(body.model).toBe("grok-4-1-fast");
     expect(body.max_turns).toBe(2);
@@ -147,10 +172,7 @@ describe("xai code_execution tool", () => {
       task: "Compute the standard deviation of [1, 2, 3]",
     });
 
-    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
-    expect((request?.headers as Record<string, string> | undefined)?.Authorization).toBe(
-      "Bearer xai-plugin-key",
-    );
+    expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-plugin-key");
   });
 
   it("reuses the legacy grok web search key for code_execution requests", async () => {
@@ -173,9 +195,6 @@ describe("xai code_execution tool", () => {
       task: "Count rows in a two-column table",
     });
 
-    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
-    expect((request?.headers as Record<string, string> | undefined)?.Authorization).toBe(
-      "Bearer xai-legacy-key",
-    );
+    expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-legacy-key");
   });
 });

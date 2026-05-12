@@ -89,7 +89,7 @@ describe("ssh subprocess env sanitization", () => {
       remoteCommand: "true",
     });
 
-    const spawnOptions = spawnMock.mock.calls[0]?.[2] as SpawnOptions | undefined;
+    const spawnOptions = spawnMock.mock.calls.at(0)?.[2] as SpawnOptions | undefined;
     const env = spawnOptions?.env;
     expect(env?.OPENAI_API_KEY).toBeUndefined();
     expect(env?.LANG).toBe("en_US.UTF-8");
@@ -113,7 +113,7 @@ describe("ssh subprocess env sanitization", () => {
       remoteDir: "/remote/workspace",
     });
 
-    const sshSpawnOptions = spawnMock.mock.calls[1]?.[2] as SpawnOptions | undefined;
+    const sshSpawnOptions = spawnMock.mock.calls.at(1)?.[2] as SpawnOptions | undefined;
     const env = sshSpawnOptions?.env;
     expect(env?.ANTHROPIC_API_KEY).toBeUndefined();
     expect(env?.NODE_ENV).toBe("test");

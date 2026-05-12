@@ -153,7 +153,35 @@ function expectPendingUploadFields(uploadId: string): void {
 }
 
 function expectUploadUrlCall(url: string): void {
-  expect(fileConsentMockState.uploadToConsentUrl.mock.calls[0]?.[0]?.url).toBe(url);
+  const [call] = fileConsentMockState.uploadToConsentUrl.mock.calls;
+  if (!call) {
+    throw new Error("expected uploadToConsentUrl call");
+  }
+  const [payload] = call;
+  if (!payload || typeof payload !== "object" || !("url" in payload)) {
+    throw new Error("expected uploadToConsentUrl payload");
+  }
+  expect(payload.url).toBe(url);
+}
+
+function readUpdatedActivity(updateActivity: ReturnType<typeof vi.fn>): {
+  id?: unknown;
+  type?: unknown;
+  attachments?: Array<{ contentType?: unknown }>;
+} {
+  const [call] = updateActivity.mock.calls;
+  if (!call) {
+    throw new Error("expected updateActivity call");
+  }
+  const [activity] = call;
+  if (!activity || typeof activity !== "object") {
+    throw new Error("expected updated activity payload");
+  }
+  return activity as {
+    id?: unknown;
+    type?: unknown;
+    attachments?: Array<{ contentType?: unknown }>;
+  };
 }
 
 describe("msteams file consent invoke authz", () => {
@@ -195,13 +223,11 @@ describe("msteams file consent invoke authz", () => {
 
     // Should replace the original consent card with the file info card
     expect(updateActivity).toHaveBeenCalledTimes(1);
-    const updatedActivity = updateActivity.mock.calls[0]?.[0] as
-      | { id?: unknown; type?: unknown; attachments?: Array<{ contentType?: unknown }> }
-      | undefined;
-    expect(updatedActivity?.id).toBe("consent-card-activity-id-123");
-    expect(updatedActivity?.type).toBe("message");
+    const updatedActivity = readUpdatedActivity(updateActivity);
+    expect(updatedActivity.id).toBe("consent-card-activity-id-123");
+    expect(updatedActivity.type).toBe("message");
     expect(
-      updatedActivity?.attachments?.some(
+      updatedActivity.attachments?.some(
         (attachment) => attachment.contentType === "application/vnd.microsoft.teams.card.file.info",
       ),
     ).toBe(true);

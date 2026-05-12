@@ -1320,9 +1320,9 @@ describe("run-node script", () => {
         execPath: process.execPath,
       });
 
-      while (spawn.mock.calls.length === 0) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
+      await vi.waitFor(() => {
+        expect(spawn).toHaveBeenCalled();
+      });
       fakeProcess.emit("SIGTERM");
       const exitCode = await exitCodePromise;
 

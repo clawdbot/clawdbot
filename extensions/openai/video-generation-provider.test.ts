@@ -34,6 +34,18 @@ function fetchWithTimeoutCall(index: number): [string, RequestInit | undefined, 
   return call;
 }
 
+function providerHttpConfigRequest(): Record<string, unknown> {
+  const [call] = resolveProviderHttpRequestConfigMock.mock.calls;
+  if (!call) {
+    throw new Error("expected provider HTTP config request");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected provider HTTP config request");
+  }
+  return request as Record<string, unknown>;
+}
+
 describe("openai video generation provider", () => {
   it("declares the openai-codex alias for default-model ordering", () => {
     const provider = buildOpenAIVideoGenerationProvider();
@@ -179,10 +191,7 @@ describe("openai video generation provider", () => {
       },
     });
 
-    const configRequest = resolveProviderHttpRequestConfigMock.mock.calls[0]?.[0] as
-      | Record<string, unknown>
-      | undefined;
-    expect(configRequest?.baseUrl).toBe("http://127.0.0.1:44080/v1");
+    expect(providerHttpConfigRequest().baseUrl).toBe("http://127.0.0.1:44080/v1");
     const createRequest = postJsonRequest();
     expect(createRequest.url).toBe("http://127.0.0.1:44080/v1/videos");
     expect(createRequest.allowPrivateNetwork).toBe(false);

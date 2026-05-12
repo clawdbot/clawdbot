@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommitmentRecord } from "../commitments/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { stripAnsi } from "../terminal/ansi.js";
 import { commitmentsListCommand } from "./commitments.js";
 
 const mocks = vi.hoisted(() => ({
@@ -74,9 +75,12 @@ describe("commitments command", () => {
 
     await commitmentsListCommand({}, runtime);
 
-    const output = logs.join("\n");
-    expect(output).not.toContain("\u001b");
-    expect(output).not.toContain("\u0007");
-    expect(output).toContain("\\nspoofed");
+    expect(logs.map(stripAnsi)).toEqual([
+      "Commitments: 1",
+      "Store: /tmp/openclaw-commitments.json",
+      "Status filter: pending",
+      "ID               Status     Kind             Due                      Scope                        Suggested text",
+      "cm_escape        pending    event_check_in   2026-04-30T17:00:00.000Z main/telegram/+15551234567   How did it go?\\nspoofed",
+    ]);
   });
 });

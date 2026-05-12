@@ -10,6 +10,14 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
+function requireFirstGuardedFetchCall(): unknown {
+  const [call] = fetchWithSsrFGuardMock.mock.calls;
+  if (!call) {
+    throw new Error("expected Volcengine guarded fetch call");
+  }
+  return call[0];
+}
+
 function makeProviderConfig(overrides?: Record<string, unknown>) {
   return {
     apiKey: "test-api-key",
@@ -148,7 +156,7 @@ describe("Volcengine speech provider", () => {
     expect(result.fileExtension).toBe(".opus");
     expect(result.voiceCompatible).toBe(true);
 
-    const call = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+    const call = requireFirstGuardedFetchCall();
     expect(call).toEqual({
       url: "https://voice.ap-southeast-1.bytepluses.com/api/v3/tts/unidirectional",
       init: {

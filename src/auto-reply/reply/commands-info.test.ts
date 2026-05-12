@@ -53,7 +53,7 @@ vi.mock("../status.js", async () => {
 
 function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
   expect(mock.mock.calls).toHaveLength(1);
-  const [arg] = mock.mock.calls[0] ?? [];
+  const [arg] = mock.mock.calls.at(0) ?? [];
   if (!arg) {
     throw new Error(`expected ${label} to receive arguments`);
   }

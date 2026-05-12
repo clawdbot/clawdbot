@@ -236,13 +236,12 @@ describe("models.list", () => {
       } as never,
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.UNAVAILABLE,
-        message: "Error: catalog failed",
-      }),
-    );
+    const call = respond.mock.calls[0] as
+      | [boolean, unknown, { code?: number; message?: string }]
+      | undefined;
+    expect(call?.[0]).toBe(false);
+    expect(call?.[1]).toBeUndefined();
+    expect(call?.[2]?.code).toBe(ErrorCodes.UNAVAILABLE);
+    expect(call?.[2]?.message).toBe("Error: catalog failed");
   });
 });

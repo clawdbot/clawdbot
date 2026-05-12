@@ -129,7 +129,11 @@ describe("createTelegramBot command menu", () => {
       command: normalizeTelegramCommandName(command.name),
       description: command.description,
     }));
-    expect(registered.slice(0, native.length)).toEqual(native);
+    expect(registered).toStrictEqual([
+      ...native,
+      { command: "custom_backup", description: "Git backup" },
+      { command: "custom_generate", description: "Create an image" },
+    ]);
   });
 
   it("ignores custom commands that collide with native commands", async () => {
@@ -170,7 +174,7 @@ describe("createTelegramBot command menu", () => {
 
     await commandsSynced;
 
-    const registered = setMyCommandsSpy.mock.calls[0]?.[0] as Array<{
+    const registered = setMyCommandsSpy.mock.calls.at(-1)?.[0] as Array<{
       command: string;
       description: string;
     }>;
@@ -183,8 +187,10 @@ describe("createTelegramBot command menu", () => {
     if (!nativeStatus) {
       throw new Error("expected native Telegram status command");
     }
-    expect(registered).toContainEqual({ command: "custom_backup", description: "Git backup" });
-    expect(registered).not.toContainEqual({ command: "status", description: "Custom status" });
+    expect(registered).toStrictEqual([
+      ...native,
+      { command: "custom_backup", description: "Git backup" },
+    ]);
     expect(registered.find((command) => command.command === "status")).toEqual(nativeStatus);
     expect(countMatching(registered, (command) => command.command === "status")).toBe(1);
     expect(errorSpy).toHaveBeenCalled();

@@ -15,7 +15,7 @@ function expectFirstBlockReplyText(params: EmbeddedRunAttemptParams): string {
   if (onBlockReply === undefined) {
     throw new Error("Expected onBlockReply callback");
   }
-  const payload = vi.mocked(onBlockReply).mock.calls[0]?.[0];
+  const payload = vi.mocked(onBlockReply).mock.calls.at(0)?.[0];
   if (typeof payload?.text !== "string") {
     throw new Error("Expected first block reply text");
   }

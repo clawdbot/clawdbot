@@ -46,6 +46,14 @@ describe("CronService - armTimer tight loop prevention", () => {
       .filter((d: unknown): d is number => typeof d === "number");
   }
 
+  function latestTimeoutHandle(timeoutSpy: ReturnType<typeof vi.spyOn>) {
+    const result = timeoutSpy.mock.results.at(-1);
+    if (!result || result.type !== "return") {
+      throw new Error("Expected setTimeout to return a timer handle");
+    }
+    return result.value;
+  }
+
   function createTimerState(params: {
     storePath: string;
     now: number;
@@ -90,7 +98,7 @@ describe("CronService - armTimer tight loop prevention", () => {
 
     armTimer(state);
 
-    expect(state.timer).toEqual(expect.anything());
+    expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
     const delays = extractTimeoutDelays(timeoutSpy);
 
     // Before the fix, delay would be 0 (tight loop).
@@ -171,7 +179,7 @@ describe("CronService - armTimer tight loop prevention", () => {
 
     armTimer(state);
 
-    expect(state.timer).toEqual(expect.anything());
+    expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
     const delays = extractTimeoutDelays(timeoutSpy);
     expect(delays).toContain(60_000);
 
@@ -208,7 +216,7 @@ describe("CronService - armTimer tight loop prevention", () => {
     await onTimer(state);
 
     expect(state.running).toBe(false);
-    expect(state.timer).toEqual(expect.anything());
+    expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
 
     // The re-armed timer must NOT use delay=0. It should use at least
     // MIN_REFIRE_GAP_MS to prevent the hot-loop.

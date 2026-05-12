@@ -205,32 +205,18 @@ describe("discord live qa runtime", () => {
       { statusReactionsToolOnly: true },
     );
 
-    expect(next.messages).toMatchObject({
-      ackReaction: "👀",
-      ackReactionScope: "all",
-      groupChat: { visibleReplies: "message_tool" },
-      statusReactions: {
-        enabled: true,
-        timing: { debounceMs: 0 },
-      },
-    });
-    expect(next.channels?.discord).toMatchObject({
-      accounts: {
-        sut: {
-          allowBots: true,
-          guilds: {
-            "123456789012345678": {
-              requireMention: false,
-              channels: {
-                "223456789012345678": {
-                  requireMention: false,
-                },
-              },
-            },
-          },
-        },
-      },
-    });
+    expect(next.messages?.ackReaction).toBe("👀");
+    expect(next.messages?.ackReactionScope).toBe("all");
+    expect(next.messages?.groupChat?.visibleReplies).toBe("message_tool");
+    expect(next.messages?.statusReactions?.enabled).toBe(true);
+    expect(next.messages?.statusReactions?.timing?.debounceMs).toBe(0);
+    const discordAccount = next.channels?.discord?.accounts?.sut;
+    expect(discordAccount?.allowBots).toBe(true);
+    expect(discordAccount?.guilds?.["123456789012345678"]?.requireMention).toBe(false);
+    expect(
+      discordAccount?.guilds?.["123456789012345678"]?.channels?.["223456789012345678"]
+        ?.requireMention,
+    ).toBe(false);
   });
 
   it("normalizes observed Discord messages", () => {
@@ -539,15 +525,12 @@ describe("discord live qa runtime", () => {
       ),
     );
 
-    await expect(
-      __testing.resolveDiscordQaVoiceChannel({
-        token: "token",
-        guildId: "123456789012345678",
-      }),
-    ).resolves.toMatchObject({
-      id: "523456789012345678",
-      name: "qa-voice",
+    const voiceChannel = await __testing.resolveDiscordQaVoiceChannel({
+      token: "token",
+      guildId: "123456789012345678",
     });
+    expect(voiceChannel.id).toBe("523456789012345678");
+    expect(voiceChannel.name).toBe("qa-voice");
   });
 
   it("normalizes missing current Discord voice state to null", async () => {

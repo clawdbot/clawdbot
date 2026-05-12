@@ -85,11 +85,10 @@ describe("handleDockCommand", () => {
       shouldContinue: false,
       reply: { text: "Docked replies to discord." },
     });
-    expect(params.sessionStore?.[params.sessionKey]).toMatchObject({
-      lastChannel: "discord",
-      lastTo: "UserCase123",
-      lastAccountId: "default",
-    });
+    const updatedEntry = params.sessionStore?.[params.sessionKey];
+    expect(updatedEntry?.lastChannel).toBe("discord");
+    expect(updatedEntry?.lastTo).toBe("UserCase123");
+    expect(updatedEntry?.lastAccountId).toBe("default");
   });
 
   it("accepts generated underscore aliases such as Telegram native /dock_discord", async () => {

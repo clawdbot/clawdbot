@@ -7,6 +7,7 @@ public enum GatewayConnectAuthDetailCode: String, Sendable {
     case authTokenMismatch = "AUTH_TOKEN_MISMATCH"
     case authBootstrapTokenInvalid = "AUTH_BOOTSTRAP_TOKEN_INVALID"
     case authDeviceTokenMismatch = "AUTH_DEVICE_TOKEN_MISMATCH"
+    case authScopeMismatch = "AUTH_SCOPE_MISMATCH"
     case authTokenMissing = "AUTH_TOKEN_MISSING"
     case authTokenNotConfigured = "AUTH_TOKEN_NOT_CONFIGURED"
     case authPasswordMissing = "AUTH_PASSWORD_MISSING"
@@ -160,6 +161,7 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
              .authPasswordMismatch,
              .authPasswordNotConfigured,
              .authRateLimited,
+             .authScopeMismatch,
              .pairingRequired,
              .controlUiDeviceIdentityRequired,
              .deviceIdentityRequired:

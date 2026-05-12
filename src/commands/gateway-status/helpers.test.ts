@@ -217,10 +217,9 @@ describe("resolveAuthForTarget", () => {
           {},
         );
 
-        expect(auth.diagnostics).toContain(
+        expect(auth.diagnostics).toStrictEqual([
           "gateway.auth.token SecretRef is unresolved (env:default:MISSING_GATEWAY_TOKEN).",
-        );
-        expect(auth.diagnostics?.join("\n")).not.toContain("missing or empty");
+        ]);
       },
     );
   });
@@ -247,8 +246,9 @@ describe("probe reachability classification", () => {
 
     expect(isScopeLimitedProbeFailure(probe)).toBe(true);
     expect(isProbeReachable(probe)).toBe(true);
-    expect(renderProbeSummaryLine(probe, false)).toContain("Capability: write-capable");
-    expect(renderProbeSummaryLine(probe, false)).toContain("Read probe: limited");
+    expect(renderProbeSummaryLine(probe, false)).toBe(
+      "Connect: ok (51ms) · Capability: write-capable · Read probe: limited - missing scope: operator.read",
+    );
   });
 
   it("treats post-connect read failures as reachable with failed diagnostics", () => {
@@ -272,8 +272,9 @@ describe("probe reachability classification", () => {
     expect(isScopeLimitedProbeFailure(probe)).toBe(false);
     expect(isPostConnectProbeFailure(probe)).toBe(true);
     expect(isProbeReachable(probe)).toBe(true);
-    expect(renderProbeSummaryLine(probe, false)).toContain("Capability: connect-only");
-    expect(renderProbeSummaryLine(probe, false)).toContain("Read probe: failed");
+    expect(renderProbeSummaryLine(probe, false)).toBe(
+      "Connect: ok (43ms) · Capability: connect-only · Read probe: failed - unknown method: status",
+    );
   });
 
   it("keeps failed-before-connect probes unreachable", () => {
