@@ -164,6 +164,52 @@ export function buildMemorySearchUnavailableResult(
   };
 }
 
+const DEFAULT_SUPPLEMENT_SEARCH_TIMEOUT_MS = 10_000;
+
+function resolveSupplementSearchTimeoutMs(): number {
+  const raw = process.env.OPENCLAW_MEMORY_SUPPLEMENT_SEARCH_TIMEOUT_MS;
+  if (typeof raw !== "string" || raw.length === 0) {
+    return DEFAULT_SUPPLEMENT_SEARCH_TIMEOUT_MS;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_SUPPLEMENT_SEARCH_TIMEOUT_MS;
+  }
+  return parsed;
+}
+
+export class SupplementSearchTimeoutError extends Error {
+  constructor(pluginId: string, timeoutMs: number) {
+    super(`supplement "${pluginId}" search did not settle within ${timeoutMs}ms`);
+    this.name = "SupplementSearchTimeoutError";
+  }
+}
+
+async function searchSupplementWithTimeout(
+  pluginId: string,
+  search: Promise<MemoryCorpusSearchResult[]>,
+  timeoutMs: number,
+): Promise<MemoryCorpusSearchResult[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race<MemoryCorpusSearchResult[]>([
+      search,
+      new Promise<MemoryCorpusSearchResult[]>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new SupplementSearchTimeoutError(pluginId, timeoutMs));
+        }, timeoutMs);
+        if (typeof timer?.unref === "function") {
+          timer.unref();
+        }
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 export async function searchMemoryCorpusSupplements(params: {
   query: string;
   maxResults?: number;
@@ -179,10 +225,18 @@ export async function searchMemoryCorpusSupplements(params: {
   if (supplements.length === 0) {
     return [];
   }
-  // Use allSettled so a single misbehaving supplement does not discard sibling
-  // results. Invariant: result ⊇ ⋃_{s succeeds} s.search(params).
+  // Use allSettled with a per-supplement timeout so a single misbehaving or
+  // hung supplement does not discard sibling results or block the whole call
+  // indefinitely. Invariant: result ⊇ ⋃_{s settles in time} s.search(params).
+  const timeoutMs = resolveSupplementSearchTimeoutMs();
   const settled = await Promise.allSettled(
-    supplements.map(async (registration) => await registration.supplement.search(params)),
+    supplements.map((registration) =>
+      searchSupplementWithTimeout(
+        registration.pluginId,
+        Promise.resolve().then(() => registration.supplement.search(params)),
+        timeoutMs,
+      ),
+    ),
   );
   const results: MemoryCorpusSearchResult[] = [];
   for (let i = 0; i < settled.length; i++) {
