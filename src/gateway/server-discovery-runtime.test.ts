@@ -54,6 +54,15 @@ const makeDiscoveryService = (params: {
   },
 });
 
+function latestZoneParams(): Parameters<WriteWideAreaGatewayZone>[0] {
+  const calls = mocks.writeWideAreaGatewayZone.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error("Expected wide-area gateway zone to be written");
+  }
+  return call[0];
+}
+
 describe("startGatewayDiscovery", () => {
   const prevEnv = { ...process.env };
 
@@ -220,10 +229,7 @@ describe("startGatewayDiscovery", () => {
 
     expect(service.service.advertise).not.toHaveBeenCalled();
     expect(mocks.resolveTailnetDnsHint).toHaveBeenCalledWith({ enabled: true });
-    const [zoneParams] = mocks.writeWideAreaGatewayZone.mock.calls.at(-1) ?? [];
-    if (zoneParams === undefined) {
-      throw new Error("Expected wide-area gateway zone to be written");
-    }
+    const zoneParams = latestZoneParams();
     expect(zoneParams.domain).toBe("openclaw.internal.");
     expect(zoneParams.gatewayPort).toBe(18789);
     expect(zoneParams.displayName).toBe("Lab Mac (OpenClaw)");
@@ -253,10 +259,7 @@ describe("startGatewayDiscovery", () => {
       logDiscovery: logs,
     });
 
-    const [zoneParams] = mocks.writeWideAreaGatewayZone.mock.calls.at(-1) ?? [];
-    if (zoneParams === undefined) {
-      throw new Error("Expected wide-area gateway zone to be written");
-    }
+    const zoneParams = latestZoneParams();
     expect(zoneParams.cliPath).toBeUndefined();
     expect(mocks.resolveBonjourCliPath).not.toHaveBeenCalled();
   });

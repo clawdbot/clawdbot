@@ -12,6 +12,7 @@ import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticRunProgressForTest,
+  markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
   markDiagnosticToolStartedForTest,
 } from "./diagnostic-run-activity.js";
@@ -115,11 +116,11 @@ function loggerMessages(spy: unknown): string[] {
 }
 
 function expectLoggerMessageContaining(spy: unknown, text: string): void {
-  expect(loggerMessages(spy).some((message) => message.includes(text))).toBe(true);
+  expect(loggerMessages(spy).join("\n")).toContain(text);
 }
 
 function expectNoLoggerMessageContaining(spy: unknown, text: string): void {
-  expect(loggerMessages(spy).some((message) => message.includes(text))).toBe(false);
+  expect(loggerMessages(spy).join("\n")).not.toContain(text);
 }
 
 function expectRecoveryCall(
@@ -245,6 +246,32 @@ describe("diagnostic session activity aliases", () => {
     expect(getDiagnosticSessionActivitySnapshot({ sessionId: "s1" }).activeWorkKind).toBe(
       "embedded_run",
     );
+  });
+
+  it("keeps embedded diagnostic work active until every owner ends", () => {
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+    markDiagnosticEmbeddedRunStarted({
+      sessionId: "s1",
+      sessionKey: "main",
+      workKey: "reply:main",
+    });
+
+    markDiagnosticEmbeddedRunEnded({
+      sessionId: "s1",
+      sessionKey: "main",
+      workKey: "reply:main",
+      clearRunActivity: false,
+    });
+
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId: "s1", sessionKey: "main" })).toEqual(
+      expect.objectContaining({ activeWorkKind: "embedded_run" }),
+    );
+
+    markDiagnosticEmbeddedRunEnded({ sessionId: "s1", sessionKey: "main" });
+
+    expect(
+      getDiagnosticSessionActivitySnapshot({ sessionId: "s1", sessionKey: "main" }).activeWorkKind,
+    ).toBeUndefined();
   });
 });
 
@@ -641,6 +668,47 @@ describe("stuck session diagnostics threshold", () => {
       events,
       { type: "session.recovery.completed", status: "released", action: "release_lane" },
       "released recovery event",
+    );
+  });
+
+  it("clears queued diagnostic state after no-active-work recovery", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn().mockResolvedValue({
+      status: "noop",
+      action: "none",
+      reason: "no_active_work",
+      sessionId: "s1",
+      sessionKey: "main",
+    });
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+
+      vi.advanceTimersByTime(61_000);
+      await Promise.resolve();
+    } finally {
+      unsubscribe();
+    }
+
+    const state = getDiagnosticSessionState({ sessionId: "s1", sessionKey: "main" });
+    expect(state.state).toBe("idle");
+    expect(state.queueDepth).toBe(0);
+    requireMatchingRecord(
+      events,
+      { type: "session.state", state: "idle", reason: "stuck_recovery:noop", queueDepth: 0 },
+      "noop state clear event",
     );
   });
 

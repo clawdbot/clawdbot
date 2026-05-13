@@ -67,6 +67,10 @@ function resolveThinkingLevelsConsumerSide(
   return resolvedLabels;
 }
 
+function firstResponseResult(respond: ReturnType<typeof vi.fn>) {
+  return respond.mock.calls[0]?.[1];
+}
+
 test("e2e #76482: session with different model gets its own thinking levels through gateway row + consumer fallback", async () => {
   await createSessionStoreDir();
   testState.agentConfig = {
@@ -106,7 +110,7 @@ test("e2e #76482: session with different model gets its own thinking levels thro
     } as never,
   });
 
-  const result = respond.mock.calls.at(0)?.[1];
+  const result = firstResponseResult(respond);
   const session = result?.sessions?.find((s: { key: string }) => s.key === "agent:main:main");
   const defaults = result?.defaults;
 
@@ -151,7 +155,7 @@ test("e2e #76482: Anthropic session does not leak DeepSeek thinking levels from 
     context: { getRuntimeConfig, loadGatewayModelCatalog: async () => [] } as never,
   });
 
-  const result = respond.mock.calls.at(0)?.[1];
+  const result = firstResponseResult(respond);
   const session = result?.sessions?.find((s: { key: string }) => s.key === "agent:main:main");
   const defaults = result?.defaults;
 
@@ -194,7 +198,7 @@ test("e2e #76482: session matching default model inherits default thinking level
     context: { getRuntimeConfig, loadGatewayModelCatalog: async () => [] } as never,
   });
 
-  const result = respond.mock.calls.at(0)?.[1];
+  const result = firstResponseResult(respond);
   const session = result?.sessions?.find((s: { key: string }) => s.key === "agent:main:main");
   const defaults = result?.defaults;
 

@@ -578,8 +578,9 @@ describe("Google speech provider", () => {
     const provider = buildGoogleSpeechProvider();
 
     const voices = await provider.listVoices?.({ providerConfig: {} });
-    expect(voices?.some((voice) => voice.id === "Kore" && voice.name === "Kore")).toBe(true);
-    expect(voices?.some((voice) => voice.id === "Puck" && voice.name === "Puck")).toBe(true);
+    const voiceLabels = voices?.map((voice) => `${voice.id}:${voice.name}`);
+    expect(voiceLabels).toContain("Kore:Kore");
+    expect(voiceLabels).toContain("Puck:Puck");
   });
 
   it("formats Google TTS HTTP errors with provider details", async () => {

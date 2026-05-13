@@ -407,7 +407,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
-    const ttsCall = maybeApplyTtsToPayloadMock.mock.calls.at(0);
+    const ttsCall = maybeApplyTtsToPayloadMock.mock.calls[0];
     if (!ttsCall) {
       throw new Error("expected TTS payload call");
     }

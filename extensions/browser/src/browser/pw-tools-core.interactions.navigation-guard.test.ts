@@ -133,6 +133,61 @@ describe("pw-tools-core interaction navigation guard", () => {
     }
   });
 
+  it("runs the post-select navigation guard when navigation starts shortly after the select resolves", async () => {
+    vi.useFakeTimers();
+    try {
+      const listeners = new Set<() => void>();
+      let currentUrl = "https://example.com/form";
+      const selectOption = vi.fn(async () => {
+        setTimeout(() => {
+          currentUrl = "http://127.0.0.1:9222/private-target";
+          for (const listener of listeners) {
+            listener();
+          }
+        }, 10);
+      });
+      const page = {
+        on: vi.fn((event: string, listener: () => void) => {
+          if (event === "framenavigated") {
+            listeners.add(listener);
+          }
+        }),
+        off: vi.fn((event: string, listener: () => void) => {
+          if (event === "framenavigated") {
+            listeners.delete(listener);
+          }
+        }),
+        url: vi.fn(() => currentUrl),
+      };
+      setPwToolsCoreCurrentRefLocator({ selectOption });
+      setPwToolsCoreCurrentPage(page);
+
+      const task = mod.selectOptionViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "1",
+        values: ["go"],
+        ssrfPolicy: { allowPrivateNetwork: false },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(10);
+      await task;
+
+      expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
+        {
+          cdpUrl: "http://127.0.0.1:18792",
+          page,
+          response: null,
+          ssrfPolicy: { allowPrivateNetwork: false },
+          targetId: "T1",
+        },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("checks subframe navigations before a later main-frame navigation", async () => {
     vi.useFakeTimers();
     try {
@@ -500,7 +555,20 @@ describe("pw-tools-core interaction navigation guard", () => {
       await rejection;
       expect(
         getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
-      ).not.toHaveBeenCalled();
+      ).toHaveBeenCalledTimes(1);
+      expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
+        {
+          cdpUrl: "http://127.0.0.1:18792",
+          page,
+          response: null,
+          ssrfPolicy: { allowPrivateNetwork: false },
+          targetId: "T1",
+        },
+      );
+      expect(
+        getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely.mock
+          .invocationCallOrder[0],
+      ).toBeLessThan(page.evaluate.mock.invocationCallOrder[0]);
     } finally {
       vi.useRealTimers();
     }
@@ -1040,7 +1108,7 @@ describe("pw-tools-core interaction navigation guard", () => {
     });
   });
 
-  it("does not run the post-evaluate navigation guard when the url is unchanged", async () => {
+  it("checks the current page before evaluate and skips the post-evaluate guard when the url is unchanged", async () => {
     const page = {
       evaluate: vi.fn(async () => "ok"),
       url: vi.fn(() => "http://127.0.0.1:9222/json/version"),
@@ -1055,7 +1123,19 @@ describe("pw-tools-core interaction navigation guard", () => {
     });
 
     expect(result).toBe("ok");
-    expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).not.toHaveBeenCalled();
+    expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      page,
+      response: null,
+      ssrfPolicy: { allowPrivateNetwork: false },
+      targetId: "T1",
+    });
+    expect(
+      getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely.mock.invocationCallOrder[0],
+    ).toBeLessThan(page.evaluate.mock.invocationCallOrder[0]);
   });
 
   it("propagates the SSRF policy through batch interaction actions", async () => {
@@ -1112,9 +1192,9 @@ describe("pw-tools-core interaction navigation guard", () => {
       setPwToolsCoreCurrentPage(page);
 
       const blocked = new Error("blocked interaction navigation");
-      getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely.mockRejectedValueOnce(
-        blocked,
-      );
+      getPwToolsCoreSessionMocks()
+        .assertPageNavigationCompletedSafely.mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(blocked);
 
       const task = mod.evaluateViaPlaywright({
         cdpUrl: "http://127.0.0.1:18792",

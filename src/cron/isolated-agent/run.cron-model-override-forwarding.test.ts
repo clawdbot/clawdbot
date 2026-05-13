@@ -88,7 +88,7 @@ function requireRecord(value: unknown): Record<string, unknown> {
 }
 
 function firstMockArg(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
-  return requireRecord(mock.mock.calls.at(0)?.[0]);
+  return requireRecord(mock.mock.calls[0]?.[0]);
 }
 
 function hasPhaseWithFields(phases: unknown[], fields: Record<string, unknown>): boolean {

@@ -334,12 +334,15 @@ describe("uploadToConsentUrl", () => {
     expect(mockFetch).toHaveBeenCalledOnce();
     const [url, opts] = firstFetchCall(mockFetch);
     expect(url).toBe("https://contoso.sharepoint.com/sites/uploads/file.pdf");
-    expect(opts?.method).toBe("PUT");
-    expect(opts?.headers).toEqual(
-      expect.objectContaining({
+    expect(opts).toEqual({
+      method: "PUT",
+      headers: {
+        "User-Agent": buildUserAgent(),
         "Content-Type": "application/pdf",
-      }),
-    );
+        "Content-Range": "bytes 0-11/12",
+      },
+      body: new Uint8Array(buffer),
+    });
   });
 
   it("throws on non-OK response after passing validation", async () => {

@@ -29,6 +29,25 @@ const MEMORY_EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.memoryEmbeddingProvi
 const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
 const QMD_EMBED_QUEUE_KEY = Symbol.for("openclaw.qmdEmbedQueueTail");
 
+type WatchOptions = {
+  ignored?: (watchPath: string) => boolean;
+};
+
+type EmbedLockCall = [
+  string,
+  {
+    retries: {
+      retries: number;
+      factor: number;
+      minTimeout: number;
+      maxTimeout: number;
+      randomize: boolean;
+    };
+    stale: number;
+  },
+  () => Promise<unknown>,
+];
+
 interface MockChild extends EventEmitter {
   stdout: EventEmitter;
   stderr: EventEmitter;
@@ -81,6 +100,22 @@ function isMcporterCommand(cmd: unknown): boolean {
     return false;
   }
   return /(^|[\\/])mcporter(?:\.cmd)?$/i.test(cmd);
+}
+
+function firstWatchOptions(): WatchOptions {
+  const call = watchMock.mock.calls[0] as unknown as [string[], WatchOptions] | undefined;
+  if (!call) {
+    throw new Error("Expected watch call");
+  }
+  return call[1];
+}
+
+function firstEmbedLockCall(): EmbedLockCall {
+  const call = withFileLockMock.mock.calls[0] as EmbedLockCall | undefined;
+  if (!call) {
+    throw new Error("Expected qmd embed lock call");
+  }
+  return call;
 }
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async () => {
@@ -183,11 +218,11 @@ describe("QmdMemoryManager", () => {
   }
 
   function expectMockMessageContains(mock: Mock, text: string): void {
-    expect(mockMessages(mock).some((message) => message.includes(text))).toBe(true);
+    expect(mockMessages(mock).join("\n")).toContain(text);
   }
 
   function expectMockMessageNotContains(mock: Mock, text: string): void {
-    expect(mockMessages(mock).every((message) => !message.includes(text))).toBe(true);
+    expect(mockMessages(mock).join("\n")).not.toContain(text);
   }
 
   async function expectPathMissing(targetPath: string): Promise<void> {
@@ -457,10 +492,7 @@ describe("QmdMemoryManager", () => {
     };
     const initialUpdateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(initialUpdateCalls).toHaveLength(0);
-    const [, watchOptions] = watchMock.mock.calls.at(0) as unknown as [
-      string[],
-      { ignored?: (watchPath: string) => boolean },
-    ];
+    const watchOptions = firstWatchOptions();
     expect(watchOptions.ignored?.(path.join(workspaceDir, "node_modules", "pkg", "note.md"))).toBe(
       true,
     );
@@ -3719,26 +3751,7 @@ describe("QmdMemoryManager", () => {
     const firstSync = first.manager.sync({ reason: "manual", force: true });
     await vi.advanceTimersByTimeAsync(0);
     expect(embedChildren).toHaveLength(1);
-    const lockCall = withFileLockMock.mock.calls.at(0) as
-      | [
-          string,
-          {
-            retries: {
-              retries: number;
-              factor: number;
-              minTimeout: number;
-              maxTimeout: number;
-              randomize: boolean;
-            };
-            stale: number;
-          },
-          () => Promise<unknown>,
-        ]
-      | undefined;
-    if (!lockCall) {
-      throw new Error("Expected qmd embed lock call");
-    }
-    const [lockPath, lockOptions, lockTask] = lockCall;
+    const [lockPath, lockOptions, lockTask] = firstEmbedLockCall();
     expect(lockPath.endsWith(path.join("qmd", "embed.lock"))).toBe(true);
     expect(lockOptions).toEqual({
       retries: {

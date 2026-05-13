@@ -495,7 +495,9 @@ describe("doctor state integrity oauth dir checks", () => {
         await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
         expect(fs.existsSync(transcriptPath)).toBe(true);
-        expect(fs.readdirSync(sessionsDir).some((name) => name.includes(".deleted."))).toBe(false);
+        expect(fs.readdirSync(sessionsDir).filter((name) => name.includes(".deleted."))).toEqual(
+          [],
+        );
         expect(stateIntegrityText()).not.toContain("These .jsonl files are no longer referenced");
       } finally {
         fs.rmSync(symlinkHome, { force: true, recursive: true });
@@ -628,7 +630,7 @@ describe("doctor state integrity oauth dir checks", () => {
     const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
     const store = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
     expect(store["agent:main:main"]?.sessionId).toBe("mixed-session");
-    expect(Object.keys(store).some((key) => key.includes("heartbeat-recovered"))).toBe(false);
+    expect(Object.keys(store).filter((key) => key.includes("heartbeat-recovered"))).toEqual([]);
     expect(hasRepairPromptMessage(confirmRuntimeRepair, "Move heartbeat-owned main session")).toBe(
       false,
     );

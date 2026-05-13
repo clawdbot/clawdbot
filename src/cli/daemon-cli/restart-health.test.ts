@@ -8,6 +8,7 @@ const classifyPortListener = vi.hoisted(() =>
   vi.fn<(_listener: unknown, _port: number) => PortListenerKind>(() => "gateway"),
 );
 const probeGateway = vi.hoisted(() => vi.fn());
+const createConfigIO = vi.hoisted(() => vi.fn());
 const readBestEffortConfig = vi.hoisted(() => vi.fn(async () => ({})));
 const resolveGatewayProbeAuthSafeWithSecretInputs = vi.hoisted(() =>
   vi.fn<(_opts: unknown) => Promise<{ auth: { token?: string; password?: string } }>>(async () => ({
@@ -26,9 +27,7 @@ vi.mock("../../gateway/probe.js", () => ({
 }));
 
 vi.mock("../../config/io.js", () => ({
-  createConfigIO: () => ({
-    readBestEffortConfig: () => readBestEffortConfig(),
-  }),
+  createConfigIO: (opts: unknown) => createConfigIO(opts),
 }));
 
 vi.mock("../../gateway/probe-auth.js", () => ({
@@ -55,7 +54,7 @@ function makeGatewayService(
 }
 
 function firstCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
-  const call = mock.mock.calls.at(0);
+  const call = mock.mock.calls[0];
   if (!call) {
     throw new Error("Expected first mock call");
   }
@@ -139,6 +138,10 @@ describe("inspectGatewayRestart", () => {
     inspectPortUsage.mockReset();
     readBestEffortConfig.mockReset();
     readBestEffortConfig.mockResolvedValue({});
+    createConfigIO.mockReset();
+    createConfigIO.mockReturnValue({
+      readBestEffortConfig: () => readBestEffortConfig(),
+    });
     resolveGatewayProbeAuthSafeWithSecretInputs.mockReset();
     resolveGatewayProbeAuthSafeWithSecretInputs.mockResolvedValue({ auth: {} });
     inspectPortUsage.mockResolvedValue({
@@ -442,6 +445,13 @@ describe("inspectGatewayRestart", () => {
     expect(authResolveInput.cfg?.gateway?.auth?.mode).toBe("token");
     expect(authResolveInput.cfg?.gateway?.auth?.token).toBe("probe-token");
     expect(authResolveInput.mode).toBe("local");
+    expect(createConfigIO).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: serviceEnv,
+        pluginValidation: "skip",
+        suppressFutureVersionWarning: true,
+      }),
+    );
     const probeInput = firstCallArg(probeGateway) as {
       auth?: { token?: string; password?: string };
       env?: NodeJS.ProcessEnv;
@@ -637,6 +647,8 @@ describe("inspectGatewayRestart", () => {
   });
 
   it("annotates stopped-free early exits with the actual elapsed time", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+
     const snapshot = await waitForStoppedFreeGatewayRestart();
 
     expect(snapshot.healthy).toBe(false);

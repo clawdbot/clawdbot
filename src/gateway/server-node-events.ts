@@ -365,7 +365,7 @@ export const handleNodeEvent = async (
   ctx: NodeEventContext,
   nodeId: string,
   evt: NodeEvent,
-  opts?: { deviceId?: string },
+  opts?: { connId?: string; deviceId?: string },
 ): Promise<NodeEventHandleResult | undefined> => {
   switch (evt.event) {
     case "voice.transcript": {
@@ -695,9 +695,27 @@ export const handleNodeEvent = async (
       }
       const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
 
+      const cfg = getRuntimeConfig();
+      const runId = normalizeOptionalString(obj.runId) ?? "";
+      if (
+        !ctx.authorizeNodeSystemRunEvent({
+          nodeId,
+          connId: opts?.connId,
+          ...(runId ? { runId } : {}),
+          // Match the key sent in system.run params; canonicalization below is for routing.
+          sessionKey: sessionKeyRaw,
+          terminal: evt.event === "exec.finished" || evt.event === "exec.denied",
+        })
+      ) {
+        return {
+          ok: true,
+          event: evt.event,
+          handled: false,
+          reason: "unmatched_exec_event",
+        };
+      }
       // Respect tools.exec.notifyOnExit setting (default: true)
       // When false, skip system event notifications for node exec events.
-      const cfg = getRuntimeConfig();
       const notifyOnExit = cfg.tools?.exec?.notifyOnExit !== false;
       if (!notifyOnExit) {
         return undefined;
@@ -705,8 +723,6 @@ export const handleNodeEvent = async (
       if (obj.suppressNotifyOnExit === true) {
         return undefined;
       }
-
-      const runId = normalizeOptionalString(obj.runId) ?? "";
       const command = sanitizeInboundSystemTags(normalizeOptionalString(obj.command) ?? "");
       const exitCode =
         typeof obj.exitCode === "number" && Number.isFinite(obj.exitCode)

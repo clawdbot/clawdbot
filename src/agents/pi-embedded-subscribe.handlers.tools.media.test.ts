@@ -72,6 +72,15 @@ function createMockContext(overrides?: {
   } as unknown as EmbeddedPiSubscribeContext;
 }
 
+function firstEmitToolOutputCall(ctx: EmbeddedPiSubscribeContext) {
+  expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
+  const call = vi.mocked(ctx.emitToolOutput).mock.calls[0];
+  if (!call) {
+    throw new Error("expected emitToolOutput call");
+  }
+  return call;
+}
+
 async function emitPngMediaToolResult(
   ctx: EmbeddedPiSubscribeContext,
   opts?: { isError?: boolean },
@@ -408,9 +417,7 @@ describe("handleToolExecutionEnd media emission", () => {
       },
     });
 
-    expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
-    const emitToolOutput = vi.mocked(ctx.emitToolOutput);
-    const [toolName, summary, output, options] = emitToolOutput.mock.calls.at(0) ?? [];
+    const [toolName, summary, output, options] = firstEmitToolOutputCall(ctx);
     expect(toolName).toBe("tts");
     expect(summary).toBeUndefined();
     expect(output).toBe("remote tool output");
@@ -484,9 +491,7 @@ describe("handleToolExecutionEnd media emission", () => {
         shouldEmitToolOutput: true,
       });
 
-      expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
-      const emitToolOutput = vi.mocked(ctx.emitToolOutput);
-      const [calledToolName, summary, output, options] = emitToolOutput.mock.calls.at(0) ?? [];
+      const [calledToolName, summary, output, options] = firstEmitToolOutputCall(ctx);
       expect(calledToolName).toBe(toolName);
       expect(summary).toBeUndefined();
       expect(output).toBe(providerInventoryText);

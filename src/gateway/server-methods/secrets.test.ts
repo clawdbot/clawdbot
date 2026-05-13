@@ -64,7 +64,7 @@ function expectRespondError(
 }
 
 function expectWarnMessageWith(warn: ReturnType<typeof vi.fn>, text: string): void {
-  expect(warn.mock.calls.some(([message]) => String(message).includes(text))).toBe(true);
+  expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(text);
 }
 
 describe("secrets handlers", () => {

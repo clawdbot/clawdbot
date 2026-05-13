@@ -55,6 +55,7 @@ import {
   type StreamingEvent,
   type Usage,
 } from "./open-responses.schema.js";
+import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
 import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
@@ -396,7 +397,7 @@ async function runResponsesAgentCommand(params: {
   clientTools: ClientToolDefinition[];
   extraSystemPrompt: string;
   modelOverride?: string;
-  streamParams: { maxTokens: number } | undefined;
+  streamParams: { maxTokens?: number; temperature?: number; topP?: number } | undefined;
   sessionKey: string;
   runId: string;
   messageChannel: string;
@@ -673,9 +674,18 @@ export async function handleOpenResponsesHttpRequest(
   const outputItemId = `msg_${randomUUID()}`;
   const deps = createDefaultDeps();
   const abortController = new AbortController();
+  const streamMaxTokens =
+    typeof payload.max_output_tokens === "number" ? payload.max_output_tokens : undefined;
+  const streamTemperature =
+    typeof payload.temperature === "number" ? payload.temperature : undefined;
+  const streamTopP = typeof payload.top_p === "number" ? payload.top_p : undefined;
   const streamParams =
-    typeof payload.max_output_tokens === "number"
-      ? { maxTokens: payload.max_output_tokens }
+    streamMaxTokens !== undefined || streamTemperature !== undefined || streamTopP !== undefined
+      ? {
+          ...(streamMaxTokens !== undefined ? { maxTokens: streamMaxTokens } : {}),
+          ...(streamTemperature !== undefined ? { temperature: streamTemperature } : {}),
+          ...(streamTopP !== undefined ? { topP: streamTopP } : {}),
+        }
       : undefined;
 
   if (!stream) {
@@ -801,6 +811,22 @@ export async function handleOpenResponsesHttpRequest(
         output: [],
         error: { code: "api_error", message: "internal error" },
       });
+      const mapped = resolveOpenAiCompatError(err);
+      if (mapped) {
+        const mappedResponse = createResponseResource({
+          id: responseId,
+          model,
+          status: "failed",
+          output: [],
+          error: {
+            code: mapped.error.type,
+            message: mapped.error.message,
+          },
+        });
+        rememberResponseSession();
+        sendJson(res, mapped.status, mappedResponse);
+        return true;
+      }
       rememberResponseSession();
       sendJson(res, 500, response);
     } finally {
@@ -1155,6 +1181,28 @@ export async function handleOpenResponsesHttpRequest(
         usage: finalUsage,
       });
 
+      const mapped = resolveOpenAiCompatError(err);
+      if (mapped) {
+        const mappedResponse = createResponseResource({
+          id: responseId,
+          model,
+          status: "failed",
+          output: [],
+          error: {
+            code: mapped.error.type,
+            message: mapped.error.message,
+          },
+          usage: finalUsage,
+        });
+        rememberResponseSession();
+        writeSseEvent(res, { type: "response.failed", response: mappedResponse });
+        emitAgentEvent({
+          runId: responseId,
+          stream: "lifecycle",
+          data: { phase: "error" },
+        });
+        return;
+      }
       rememberResponseSession();
       writeSseEvent(res, { type: "response.failed", response: errorResponse });
       emitAgentEvent({

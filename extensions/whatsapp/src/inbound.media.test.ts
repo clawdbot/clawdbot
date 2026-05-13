@@ -153,7 +153,15 @@ async function waitForMessage(onMessage: ReturnType<typeof vi.fn>) {
     interval: 1,
     timeout: 250,
   });
-  return onMessage.mock.calls.at(0)?.[0];
+  return onMessage.mock.calls[0]?.[0];
+}
+
+function latestSaveMediaBufferCall() {
+  const call = saveMediaBufferSpy.mock.calls[saveMediaBufferSpy.mock.calls.length - 1];
+  if (!call) {
+    throw new Error("expected saveMediaBuffer call");
+  }
+  return call;
 }
 
 function requireMediaPath(value: unknown): string {
@@ -239,8 +247,8 @@ describe("web inbound media saves with extension", () => {
     const second = await waitForMessage(onMessage);
     expect(second.mediaFileName).toBe(fileName);
     expect(saveMediaBufferSpy).toHaveBeenCalled();
-    const lastCall = saveMediaBufferSpy.mock.calls.at(-1);
-    expect(lastCall?.[4]).toBe(fileName);
+    const lastCall = latestSaveMediaBufferCall();
+    expect(lastCall[4]).toBe(fileName);
 
     await listener.close();
   });
@@ -287,8 +295,8 @@ describe("web inbound media saves with extension", () => {
     const mediaPath = requireMediaPath(inbound.mediaPath);
     expect(path.extname(mediaPath)).toBe(".jpg");
     expect(saveMediaBufferSpy).toHaveBeenCalled();
-    const lastCall = saveMediaBufferSpy.mock.calls.at(-1);
-    expect(lastCall?.[1]).toBe("image/jpeg");
+    const lastCall = latestSaveMediaBufferCall();
+    expect(lastCall[1]).toBe("image/jpeg");
 
     await listener.close();
   });
@@ -323,8 +331,8 @@ describe("web inbound media saves with extension", () => {
 
     await waitForMessage(onMessage);
     expect(saveMediaBufferSpy).toHaveBeenCalled();
-    const lastCall = saveMediaBufferSpy.mock.calls.at(-1);
-    expect(lastCall?.[3]).toBe(1 * 1024 * 1024);
+    const lastCall = latestSaveMediaBufferCall();
+    expect(lastCall[3]).toBe(1 * 1024 * 1024);
 
     await listener.close();
   });

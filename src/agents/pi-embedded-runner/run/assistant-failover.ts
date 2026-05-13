@@ -98,7 +98,8 @@ export async function handleAssistantFailover(params: {
 
   if (decision.action === "rotate_profile") {
     const failedProfileId = params.lastProfileId;
-    const failureReason = params.timedOut ? "timeout" : params.assistantProfileFailureReason;
+    const timeoutFailure = params.timedOut || params.idleTimedOut;
+    const failureReason = timeoutFailure ? "timeout" : params.assistantProfileFailureReason;
     const markFailedProfile = async () => {
       if (!failedProfileId || !failureReason || failureReason === "timeout") {
         return;
@@ -154,8 +155,9 @@ export async function handleAssistantFailover(params: {
 
     const rotated = await params.advanceAuthProfile();
     const markFailedProfilePromise = markFailedProfile();
-    if (params.timedOut && !params.isProbeSession && failedProfileId) {
-      params.warn(`Profile ${failedProfileId} timed out. Trying next account...`);
+    if (timeoutFailure && !params.isProbeSession && failedProfileId) {
+      const timeoutLabel = params.idleTimedOut ? "idle timeout (model silent)" : "timed out";
+      params.warn(`Profile ${failedProfileId} ${timeoutLabel}. Trying next account...`);
     }
     if (params.cloudCodeAssistFormatError && failedProfileId) {
       params.warn(
@@ -172,7 +174,7 @@ export async function handleAssistantFailover(params: {
         lastRetryFailoverReason: mergeRetryFailoverReason({
           previous: params.previousRetryFailoverReason,
           failoverReason: params.failoverReason,
-          timedOut: params.timedOut,
+          timedOut: params.timedOut || params.idleTimedOut,
         }),
       };
     }
@@ -190,6 +192,7 @@ export async function handleAssistantFailover(params: {
       failoverFailure: params.failoverFailure,
       failoverReason: params.failoverReason,
       timedOut: params.timedOut,
+      idleTimedOut: params.idleTimedOut,
       timedOutDuringCompaction: params.timedOutDuringCompaction,
       timedOutDuringToolExecution: params.timedOutDuringToolExecution,
       profileRotated: true,
@@ -279,10 +282,12 @@ function resolveAssistantFailoverErrorMessage(params: {
   sessionKey?: string;
   activeErrorContext: { provider: string; model: string };
   timedOut: boolean;
+  idleTimedOut: boolean;
   rateLimitFailure: boolean;
   billingFailure: boolean;
   authFailure: boolean;
 }): string {
+  const timeoutFailure = params.timedOut || params.idleTimedOut;
   return (
     (params.lastAssistant
       ? formatAssistantErrorText(params.lastAssistant, {
@@ -293,7 +298,7 @@ function resolveAssistantFailoverErrorMessage(params: {
         })
       : undefined) ||
     params.lastAssistant?.errorMessage?.trim() ||
-    (params.timedOut
+    (timeoutFailure
       ? "LLM request timed out."
       : params.rateLimitFailure
         ? "LLM request rate limited."

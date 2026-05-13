@@ -8,6 +8,24 @@ import {
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 describe("subscribeEmbeddedPiSession reply tags", () => {
+  type ReplyPayload = { text?: string; replyToCurrent?: boolean; replyToTag?: boolean };
+
+  function replyPayloadAt(mock: ReturnType<typeof vi.fn>, index: number): ReplyPayload {
+    const call = mock.mock.calls[index];
+    if (!call) {
+      throw new Error(`expected reply payload at index ${index}`);
+    }
+    return call[0] as ReplyPayload;
+  }
+
+  function replyTexts(mock: ReturnType<typeof vi.fn>): string[] {
+    return mock.mock.calls.map(([payload]) => (payload as ReplyPayload).text ?? "");
+  }
+
+  function lastReplyPayload(mock: ReturnType<typeof vi.fn>): ReplyPayload {
+    return replyPayloadAt(mock, mock.mock.calls.length - 1);
+  }
+
   function createBlockReplyHarness() {
     const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();
@@ -41,10 +59,10 @@ describe("subscribeEmbeddedPiSession reply tags", () => {
     emit({ type: "message_end", message: assistantMessage });
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    const payload = onBlockReply.mock.calls.at(0)?.[0];
-    expect(payload?.text).toBe("Hello");
-    expect(payload?.replyToCurrent).toBe(true);
-    expect(payload?.replyToTag).toBe(true);
+    const payload = replyPayloadAt(onBlockReply, 0);
+    expect(payload.text).toBe("Hello");
+    expect(payload.replyToCurrent).toBe(true);
+    expect(payload.replyToTag).toBe(true);
   });
 
   it("flushes trailing directive tails on stream end", () => {
@@ -61,8 +79,7 @@ describe("subscribeEmbeddedPiSession reply tags", () => {
     emit({ type: "message_end", message: assistantMessage });
 
     expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expect(onBlockReply.mock.calls.at(0)?.[0]?.text).toBe("Hello");
-    expect(onBlockReply.mock.calls.at(1)?.[0]?.text).toBe("[[");
+    expect(replyTexts(onBlockReply)).toEqual(["Hello", "[["]);
   });
 
   it("streams partial replies past reply_to tags split across chunks", () => {
@@ -82,8 +99,7 @@ describe("subscribeEmbeddedPiSession reply tags", () => {
     emitAssistantTextDelta({ emit, delta: " world" });
     emitAssistantTextEnd({ emit });
 
-    const lastPayload = onPartialReply.mock.calls.at(-1)?.[0];
-    expect(lastPayload?.text).toBe("Hello world");
+    expect(lastReplyPayload(onPartialReply).text).toBe("Hello world");
     for (const call of onPartialReply.mock.calls) {
       expect(call[0]?.text?.includes("[[reply_to")).toBe(false);
     }

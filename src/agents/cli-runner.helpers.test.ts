@@ -68,7 +68,7 @@ describe("loadPromptRefImages", () => {
       sandbox,
     });
 
-    const [ref, workspaceDir, options] = loadImageFromRefSpy.mock.calls.at(0) ?? [];
+    const [ref, workspaceDir, options] = loadImageFromRefSpy.mock.calls[0] ?? [];
     expect(ref?.resolved).toBe("/tmp/photo.png");
     expect(ref?.type).toBe("path");
     expect(workspaceDir).toBe("/workspace");

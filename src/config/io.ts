@@ -52,6 +52,7 @@ import {
 } from "./io.audit.js";
 import { persistBoundedClobberedConfigSnapshot } from "./io.clobber-snapshot.js";
 import { throwInvalidConfig } from "./io.invalid-config.js";
+import { stampConfigWriteMetadata } from "./io.meta.js";
 import {
   promoteConfigSnapshotToLastKnownGood as promoteConfigSnapshotToLastKnownGoodWithDeps,
   recoverConfigFromLastKnownGood as recoverConfigFromLastKnownGoodWithDeps,
@@ -877,6 +878,7 @@ export type ConfigIoDeps = {
   configPath?: string;
   logger?: Pick<typeof console, "error" | "warn">;
   measure?: ConfigSnapshotReadMeasure;
+  suppressFutureVersionWarning?: boolean;
 };
 
 function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">): void {
@@ -895,15 +897,7 @@ function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">)
 }
 
 function stampConfigVersion(cfg: OpenClawConfig): OpenClawConfig {
-  const now = new Date().toISOString();
-  return {
-    ...cfg,
-    meta: {
-      ...cfg.meta,
-      lastTouchedVersion: VERSION,
-      lastTouchedAt: now,
-    },
-  };
+  return stampConfigWriteMetadata(cfg);
 }
 
 function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console, "warn">): void {
@@ -943,6 +937,7 @@ function normalizeDeps(overrides: ConfigIoDeps = {}): Required<ConfigIoDeps> {
     configPath: overrides.configPath ?? "",
     logger: overrides.logger ?? console,
     measure: overrides.measure ?? (async (_name, run) => await run()),
+    suppressFutureVersionWarning: overrides.suppressFutureVersionWarning ?? false,
   };
 }
 
@@ -1616,7 +1611,9 @@ export function createConfigIO(
           .join("\n");
         deps.logger.warn(`Config warnings:\n${details}`);
       }
-      warnIfConfigFromFuture(validated.config, deps.logger);
+      if (!deps.suppressFutureVersionWarning) {
+        warnIfConfigFromFuture(validated.config, deps.logger);
+      }
       const cfg = retainRuntimeOnlyShippedPluginInstallConfigRecords(
         materializeRuntimeConfig(validated.config, "load", {
           manifestRegistry: pluginMetadataSnapshot?.manifestRegistry,
@@ -1823,7 +1820,9 @@ export function createConfigIO(
         });
       }
 
-      warnIfConfigFromFuture(validated.config, deps.logger);
+      if (!deps.suppressFutureVersionWarning) {
+        warnIfConfigFromFuture(validated.config, deps.logger);
+      }
       const snapshotConfig = await deps.measure("config.snapshot.read.materialize", () =>
         retainRuntimeOnlyShippedPluginInstallConfigRecords(
           materializeRuntimeConfig(validated.config, "snapshot", {

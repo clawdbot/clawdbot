@@ -38,7 +38,7 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
-  const call = mock.mock.calls.at(index);
+  const call = mock.mock.calls[index];
   if (!call) {
     throw new Error(`expected mock call ${index}`);
   }

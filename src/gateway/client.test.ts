@@ -164,6 +164,14 @@ function expectRecordFields(
   return record;
 }
 
+function firstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
+  const [arg] = mock.mock.calls[0] ?? [];
+  if (arg === undefined) {
+    throw new Error(`expected ${label}`);
+  }
+  return arg;
+}
+
 async function expectGatewayRequestError(
   promise: Promise<unknown>,
   expected: Record<string, unknown>,
@@ -198,7 +206,7 @@ function expectSecurityConnectError(
   onConnectError: ReturnType<typeof vi.fn>,
   params?: { expectTailscaleHint?: boolean },
 ) {
-  const error = onConnectError.mock.calls.at(0)?.[0] as Error;
+  const error = firstMockArg(onConnectError, "connect error") as Error;
   expect(error.message).toContain("SECURITY ERROR");
   expect(error.message).toContain("openclaw doctor --fix");
   if (params?.expectTailscaleHint) {
@@ -905,7 +913,7 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
 
     await vi.waitFor(() => {
-      const error = onConnectError.mock.calls.at(0)?.[0] as Error | undefined;
+      const error = firstMockArg(onConnectError, "connect error") as Error;
       expect(error?.message).toBe("gateway client stopped");
     });
     expect(logDebugMock).toHaveBeenCalledWith(
@@ -1018,7 +1026,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectChallenge(ws);
 
     const loadTokenParams = expectRecordFields(
-      loadDeviceAuthTokenMock.mock.calls.at(0)?.[0],
+      firstMockArg(loadDeviceAuthTokenMock, "load device token params"),
       {
         role: "operator",
         env,
@@ -1196,7 +1204,7 @@ describe("GatewayClient connect auth payload", () => {
       failureDetails: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
     });
     const clearTokenParams = expectRecordFields(
-      clearDeviceAuthTokenMock.mock.calls.at(0)?.[0],
+      firstMockArg(clearDeviceAuthTokenMock, "clear device token params"),
       { role: "operator" },
       "clear device token params",
     );

@@ -45,7 +45,7 @@ const CACHE_BOUNDARY_PROMPT = `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynam
 type PayloadHook = (payload: unknown, payloadModel: unknown) => Promise<unknown>;
 
 function streamAnthropicCall(streamAnthropicMock: ReturnType<typeof vi.fn>): unknown[] {
-  const call = streamAnthropicMock.mock.calls.at(0);
+  const call = streamAnthropicMock.mock.calls[0];
   if (!call) {
     throw new Error("Expected streamAnthropic call");
   }
@@ -55,7 +55,7 @@ function streamAnthropicCall(streamAnthropicMock: ReturnType<typeof vi.fn>): unk
 function streamTransportOptions(
   streamAnthropicMock: ReturnType<typeof vi.fn>,
 ): Record<string, unknown> {
-  const options = streamAnthropicCall(streamAnthropicMock).at(2);
+  const options = streamAnthropicCall(streamAnthropicMock)[2];
   if (!options || typeof options !== "object") {
     throw new Error("Expected streamAnthropic transport options");
   }

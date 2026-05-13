@@ -18,7 +18,9 @@ export function buildCodexMigrationProvider(
     description:
       "Inventory and promote Codex CLI skills while keeping Codex native plugins and hooks explicit.",
     async detect(ctx) {
-      const source = await discoverCodexSource(ctx.source);
+      const source = await discoverCodexSource({
+        input: ctx.source,
+      });
       const found = hasCodexSource(source);
       return {
         found,

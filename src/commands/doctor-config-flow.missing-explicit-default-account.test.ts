@@ -121,7 +121,8 @@ describe("collectMissingExplicitDefaultAccountWarnings", () => {
 
     const warnings = collectMissingExplicitDefaultAccountWarnings(cfg);
     expect(warnings).toHaveLength(2);
-    expect(warnings.some((warning) => warning.includes("channels.telegram"))).toBe(true);
-    expect(warnings.some((warning) => warning.includes("channels.slack"))).toBe(true);
+    const warningOutput = warnings.join("\n");
+    expect(warningOutput).toContain("channels.telegram");
+    expect(warningOutput).toContain("channels.slack");
   });
 });

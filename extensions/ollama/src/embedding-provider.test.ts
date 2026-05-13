@@ -47,11 +47,11 @@ function mockEmbeddingFetch(embedding: number[]) {
 }
 
 function firstFetchInit(fetchMock: ReturnType<typeof mockEmbeddingFetch>): RequestInit | undefined {
-  const call = fetchMock.mock.calls.at(0);
+  const call = fetchMock.mock.calls[0] as unknown[] | undefined;
   if (!call) {
     throw new Error("expected embedding fetch call");
   }
-  return call.at(1) as RequestInit | undefined;
+  return call[1] as RequestInit | undefined;
 }
 
 function readEmbeddingRequestBody(init: RequestInit | undefined): { input?: unknown } {

@@ -134,7 +134,9 @@ sub-agents. It supports:
 
 `sessions_spawn` creates an isolated session for a background task by default.
 It is always non-blocking -- it returns immediately with a `runId` and
-`childSessionKey`.
+`childSessionKey`. Native sub-agent runs receive the delegated task in the
+child session's first visible `[Subagent Task]` message, while the system
+prompt carries only sub-agent runtime rules and routing context.
 
 Key options:
 

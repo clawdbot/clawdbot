@@ -1012,14 +1012,19 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 publicKey: devicePublicKey,
               });
             }
-            const allowSilentLocalPairing = shouldAllowSilentLocalPairing({
-              locality: pairingLocality,
-              hasBrowserOriginHeader,
-              isControlUi,
-              isWebchat,
-              isNativeAppUi,
-              reason,
-            });
+            const allowSilentExistingNonOperatorPairing = !(
+              existingPairedDevice && role !== "operator"
+            );
+            const allowSilentLocalPairing =
+              allowSilentExistingNonOperatorPairing &&
+              shouldAllowSilentLocalPairing({
+                locality: pairingLocality,
+                hasBrowserOriginHeader,
+                isControlUi,
+                isWebchat,
+                isNativeAppUi,
+                reason,
+              });
             const allowSilentTrustedCidrsNodePairing = shouldAutoApproveNodePairingFromTrustedCidrs(
               {
                 existingPairedDevice: Boolean(existingPairedDevice),

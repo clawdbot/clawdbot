@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { noteStartupOptimizationHints } from "./doctor-platform-notes.js";
 
+function firstNoteCall(noteFn: ReturnType<typeof vi.fn>) {
+  return noteFn.mock.calls[0] ?? [];
+}
+
 describe("noteStartupOptimizationHints", () => {
   it("does not warn when compile cache and no-respawn are configured", () => {
     const noteFn = vi.fn();
@@ -27,7 +31,7 @@ describe("noteStartupOptimizationHints", () => {
     );
 
     expect(noteFn).toHaveBeenCalledTimes(1);
-    const [message, title] = noteFn.mock.calls.at(0) ?? [];
+    const [message, title] = firstNoteCall(noteFn);
     expect(title).toBe("Startup optimization");
     expect(message).toBe(
       [
@@ -54,7 +58,7 @@ describe("noteStartupOptimizationHints", () => {
     );
 
     expect(noteFn).toHaveBeenCalledTimes(1);
-    const [message] = noteFn.mock.calls.at(0) ?? [];
+    const [message] = firstNoteCall(noteFn);
     expect(message).toBe(
       [
         "- NODE_DISABLE_COMPILE_CACHE is set; startup compile cache is disabled.",

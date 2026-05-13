@@ -1269,7 +1269,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.onIdle?.();
 
     const updateTexts = streamingUpdateTexts();
-    expect(updateTexts.some((text) => text.includes("🔎 Web Search"))).toBe(true);
+    expect(updateTexts.join("\n")).toContain("🔎 Web Search");
     expect(streamingInstances[0].close).toHaveBeenCalledWith("final answer", {
       note: "Agent: agent",
     });
@@ -1300,9 +1300,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.onIdle?.();
 
     const updateTexts = streamingUpdateTexts();
-    expect(
-      updateTexts.some((text) => text.includes("🛠️ run tests, `pnpm test -- --watch=false`")),
-    ).toBe(true);
+    expect(updateTexts.join("\n")).toContain("🛠️ run tests, `pnpm test -- --watch=false`");
   });
 
   it("omits message-like tools from streaming card status", async () => {
@@ -1326,7 +1324,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.onIdle?.();
 
     const updateTexts = streamingUpdateTexts();
-    expect(updateTexts.some((text) => text.includes("Message"))).toBe(false);
+    expect(updateTexts.join("\n")).not.toContain("Message");
   });
 
   it("does not suppress a later final after error closeout", async () => {
@@ -1484,12 +1482,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
       // Wait for the async error to propagate
       await vi.waitFor(() => {
-        expect(
-          errorMock.mock.calls.some(
-            ([message]) =>
-              typeof message === "string" && message.includes("streaming start failed"),
-          ),
-        ).toBe(true);
+        expect(errorMock.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
+          "streaming start failed",
+        );
       });
       expect(streamingInstances).toHaveLength(1);
       expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);

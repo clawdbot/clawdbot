@@ -17,7 +17,7 @@ describe("cron tool flat-params", () => {
   });
 
   function firstGatewayToolCall<TParams>(): [string, unknown, TParams] {
-    const call = callGatewayToolMock.mock.calls.at(0);
+    const call = callGatewayToolMock.mock.calls[0];
     if (!call) {
       throw new Error("expected callGatewayTool to be called");
     }

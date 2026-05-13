@@ -1311,7 +1311,7 @@ describe("doctor.memory.remHarness", () => {
     await invokeDoctorMemoryRemHarness(respond);
 
     expectRecordFields(mockCallArg(previewRemHarness), { candidateLimit: 25 });
-    const payload = respond.mock.calls.at(0)?.[1] as {
+    const payload = respondPayload(respond) as {
       ok: boolean;
       deep: { candidateLimit: number; truncated: boolean; candidates: unknown[] };
     };
@@ -1327,7 +1327,7 @@ describe("doctor.memory.remHarness", () => {
     await invokeDoctorMemoryRemHarness(respond, { limit: 500 });
 
     expectRecordFields(mockCallArg(previewRemHarness), { candidateLimit: 100 });
-    const payload = respond.mock.calls.at(0)?.[1] as {
+    const payload = respondPayload(respond) as {
       deep: { candidateLimit: number };
     };
     expect(payload.deep.candidateLimit).toBe(100);

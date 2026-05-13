@@ -125,30 +125,43 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(header.parentSession).toBe(sessionFile);
     expect(header.cwd).toBe(dir);
     const messages = successor.buildSessionContext().messages;
-    expect(messages.map((message) => message.role)).toStrictEqual([
-      "compactionSummary",
-      "user",
-      "assistant",
-      "user",
-      "assistant",
+    expect(
+      messages.map((message) => {
+        if (message.role === "compactionSummary") {
+          return {
+            role: message.role,
+            summary: message.summary,
+            tokensBefore: message.tokensBefore,
+          };
+        }
+        if (!("content" in message)) {
+          throw new Error(`expected ${message.role} message content`);
+        }
+        return {
+          role: message.role,
+          content: message.content,
+          timestamp: message.timestamp,
+        };
+      }),
+    ).toEqual([
+      {
+        role: "compactionSummary",
+        summary: "Summary of old user and old assistant.",
+        tokensBefore: 5000,
+      },
+      { role: "user", content: "kept user", timestamp: 3 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "kept assistant" }],
+        timestamp: 4,
+      },
+      { role: "user", content: "post user", timestamp: 5 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "post assistant" }],
+        timestamp: 6,
+      },
     ]);
-    expect(messages[0]).toMatchObject({
-      role: "compactionSummary",
-      summary: "Summary of old user and old assistant.",
-      tokensBefore: 5000,
-    });
-    expect(messages[1]).toMatchObject({ role: "user", content: "kept user", timestamp: 3 });
-    expect(messages[2]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "kept assistant" }],
-      timestamp: 4,
-    });
-    expect(messages[3]).toMatchObject({ role: "user", content: "post user", timestamp: 5 });
-    expect(messages[4]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "post assistant" }],
-      timestamp: 6,
-    });
   });
 
   it("creates a compacted successor transcript and leaves the archive untouched", async () => {

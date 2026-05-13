@@ -91,6 +91,36 @@ export type AllowlistResolution = {
 
 export const DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY = "__openclaw_default_plugin_tools__";
 
+export function hasRestrictiveAllowPolicy(policy?: { allow?: string[] }): boolean {
+  return (
+    Array.isArray(policy?.allow) &&
+    policy.allow.some((entry) => {
+      const normalized = normalizeToolName(entry);
+      return (
+        Boolean(normalized) &&
+        normalized !== "*" &&
+        normalized !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY
+      );
+    })
+  );
+}
+
+export function replaceWithEffectiveToolAllowlist(
+  target: string[],
+  tools: Array<{ name: string }>,
+): void {
+  target.length = 0;
+  const seen = new Set<string>();
+  for (const tool of tools) {
+    const normalized = normalizeToolName(tool.name);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    target.push(normalized);
+  }
+}
+
 export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefined>): string[] {
   const entries: string[] = [];
   for (const policy of policies) {

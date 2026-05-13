@@ -14,7 +14,7 @@ function jsonResponse(payload: unknown, status = 200) {
 type FetchMock = { mock: { calls: Parameters<typeof fetch>[] } };
 
 function fetchCall(fetchImpl: FetchMock, index = 0): Parameters<typeof fetch> {
-  const call = fetchImpl.mock.calls.at(index);
+  const call = fetchImpl.mock.calls[index];
   if (!call) {
     throw new Error(`expected fetch call ${index}`);
   }

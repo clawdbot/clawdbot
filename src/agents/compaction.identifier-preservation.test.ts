@@ -57,8 +57,16 @@ describe("compaction identifier-preservation instructions", () => {
     });
   }
 
+  function summaryCall(index: number): unknown[] | undefined {
+    return mockGenerateSummary.mock.calls[index];
+  }
+
+  function latestSummaryCall(): unknown[] | undefined {
+    return mockGenerateSummary.mock.calls[mockGenerateSummary.mock.calls.length - 1];
+  }
+
   function firstSummaryInstructions() {
-    return extractSummaryInstructions(mockGenerateSummary.mock.calls.at(0));
+    return extractSummaryInstructions(summaryCall(0));
   }
 
   it("injects identifier-preservation guidance even without custom instructions", async () => {
@@ -112,7 +120,7 @@ describe("compaction identifier-preservation instructions", () => {
     });
 
     expect(mockGenerateSummary).toHaveBeenCalledTimes(3);
-    const mergedCall = mockGenerateSummary.mock.calls.at(-1);
+    const mergedCall = latestSummaryCall();
     const instructions = extractSummaryInstructions(mergedCall);
     expect(instructions).toContain("Merge these partial summaries into a single cohesive summary.");
     expect(instructions).toContain("Prioritize customer-visible regressions.");

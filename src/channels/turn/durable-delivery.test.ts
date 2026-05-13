@@ -26,36 +26,34 @@ import {
   resolveDurableInboundReplyToId,
 } from "./durable-delivery.js";
 
-function latestSendDurableMessageBatchRequest(): {
+type SendDurableMessageBatchRequest = {
   cfg?: unknown;
   channel?: string;
   to?: string;
   threadId?: string | number | null;
   durability?: string;
-} {
-  const [request] = mocks.sendDurableMessageBatch.mock.calls.at(-1) as unknown as [
-    {
-      cfg?: unknown;
-      channel?: string;
-      to?: string;
-      threadId?: string | number | null;
-      durability?: string;
-    },
-  ];
-  return request;
+};
+
+type DeliverySupportRequest = {
+  requirements?: Record<string, boolean>;
+};
+
+function latestSendDurableMessageBatchRequest(): SendDurableMessageBatchRequest {
+  const calls = mocks.sendDurableMessageBatch.mock.calls;
+  const request = calls[calls.length - 1]?.[0];
+  if (!request || typeof request !== "object") {
+    throw new Error("expected sendDurableMessageBatch request");
+  }
+  return request as SendDurableMessageBatchRequest;
 }
 
-function latestDeliverySupportRequest(): {
-  requirements?: Record<string, boolean>;
-} {
-  const [request] = mocks.resolveOutboundDurableFinalDeliverySupport.mock.calls.at(
-    -1,
-  ) as unknown as [
-    {
-      requirements?: Record<string, boolean>;
-    },
-  ];
-  return request;
+function latestDeliverySupportRequest(): DeliverySupportRequest {
+  const calls = mocks.resolveOutboundDurableFinalDeliverySupport.mock.calls;
+  const request = calls[calls.length - 1]?.[0];
+  if (!request || typeof request !== "object") {
+    throw new Error("expected delivery support request");
+  }
+  return request as DeliverySupportRequest;
 }
 
 describe("durable inbound reply delivery", () => {

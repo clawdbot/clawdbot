@@ -200,7 +200,7 @@ async function createFailedQmdSearchHarness(params: { agentId: string; errorMess
 }
 
 function qmdCreateParams(index = 0): Record<string, unknown> {
-  const call = createQmdManagerMock.mock.calls.at(index);
+  const call = createQmdManagerMock.mock.calls[index];
   if (!call) {
     throw new Error(`expected QMD manager create call ${index}`);
   }

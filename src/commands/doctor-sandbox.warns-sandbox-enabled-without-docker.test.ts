@@ -81,15 +81,20 @@ describe("maybeRepairSandboxImages", () => {
     await maybeRepairSandboxImages(createSandboxConfig(params.mode), mockRuntime, mockPrompter);
   }
 
+  function firstNoteCall() {
+    const noteCall = note.mock.calls[0];
+    if (noteCall === undefined) {
+      throw new Error("expected sandbox warning note");
+    }
+    return noteCall;
+  }
+
   it("warns when sandbox mode is enabled but Docker is not available", async () => {
     await runSandboxRepair({ mode: "non-main", dockerAvailable: false });
 
     // The warning should clearly indicate sandbox is enabled but won't work
     expect(note).toHaveBeenCalled();
-    const noteCall = note.mock.calls.at(0);
-    if (noteCall === undefined) {
-      throw new Error("expected sandbox warning note");
-    }
+    const noteCall = firstNoteCall();
     const message = noteCall[0] as string;
 
     // The message should warn that sandbox mode won't function, not just "skipping checks"
@@ -102,10 +107,7 @@ describe("maybeRepairSandboxImages", () => {
     await runSandboxRepair({ mode: "all", dockerAvailable: false });
 
     expect(note).toHaveBeenCalled();
-    const noteCall = note.mock.calls.at(0);
-    if (noteCall === undefined) {
-      throw new Error("expected sandbox warning note");
-    }
+    const noteCall = firstNoteCall();
     const message = noteCall[0] as string;
 
     // Should warn about the impact on sandbox functionality

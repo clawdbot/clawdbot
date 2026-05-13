@@ -424,8 +424,8 @@ describe("qa-lab server", () => {
     ).json()) as {
       messages: Array<{ text: string }>;
     };
-    expect(autoSnapshot.messages.some((message) => message.text.includes("QA mission:"))).toBe(
-      true,
+    expect(autoSnapshot.messages.map((message) => message.text).join("\n")).toContain(
+      "QA mission:",
     );
 
     const manualLab = await startQaLabServerForTest({
@@ -447,9 +447,9 @@ describe("qa-lab server", () => {
     ).json()) as {
       messages: Array<{ text: string }>;
     };
-    expect(
-      manualSnapshot.messages.some((message) => message.text.includes("Lobster Invaders")),
-    ).toBe(true);
+    expect(manualSnapshot.messages.map((message) => message.text).join("\n")).toContain(
+      "Lobster Invaders",
+    );
   });
 
   it("proxies control-ui paths through /control-ui", async () => {
@@ -701,7 +701,7 @@ describe("qa-lab server", () => {
     const snapshot = (await (await fetchWithRetry(`${lab.baseUrl}/api/state`)).json()) as {
       messages: Array<{ direction: string }>;
     };
-    expect(snapshot.messages.some((message) => message.direction === "outbound")).toBe(false);
+    expect(snapshot.messages.filter((message) => message.direction === "outbound")).toEqual([]);
   });
 
   it("exposes structured outcomes and can attach control-ui after startup", async () => {

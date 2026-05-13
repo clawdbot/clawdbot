@@ -33,7 +33,9 @@ function seedRunningProfileState(
 
 async function expectOldManagedTabClose(fetchMock: ReturnType<typeof vi.fn>): Promise<void> {
   await vi.waitFor(() => {
-    expect(fetchCallUrls(fetchMock).some((url) => url.includes("/json/close/OLD1"))).toBe(true);
+    expect(fetchCallUrls(fetchMock).filter((url) => url.includes("/json/close/OLD1"))).not.toEqual(
+      [],
+    );
   });
 }
 
@@ -257,7 +259,7 @@ describe("browser server-context tab selection state", () => {
     const opened = await openManagedTabWithRunningProfile({ fetchMock });
     expect(opened.targetId).toBe("NEW");
     await expectOldManagedTabClose(fetchMock);
-    expect(fetchCallUrls(fetchMock).some((url) => url.includes("/json/close/NEW"))).toBe(false);
+    expect(fetchCallUrls(fetchMock).filter((url) => url.includes("/json/close/NEW"))).toEqual([]);
   });
 
   it("does not fail tab open when managed-tab cleanup list fails", async () => {
@@ -315,7 +317,7 @@ describe("browser server-context tab selection state", () => {
 
     const opened = await openclaw.openTab("http://127.0.0.1:3009");
     expect(opened.targetId).toBe("NEW");
-    expect(fetchCallUrls(fetchMock).some((url) => url.includes("/json/close/"))).toBe(false);
+    expect(fetchCallUrls(fetchMock).filter((url) => url.includes("/json/close/"))).toEqual([]);
   });
 
   it("does not block openTab on slow best-effort cleanup closes", async () => {

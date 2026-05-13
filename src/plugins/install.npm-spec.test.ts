@@ -1043,6 +1043,89 @@ describe("installPluginFromNpmSpec", () => {
     ).rejects.toHaveProperty("code", "ENOENT");
   });
 
+  it("retries without npm alias overrides when npm rejects alias comparators", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const hostRoot = suiteTempRootTracker.makeTempDir();
+    fs.writeFileSync(
+      path.join(hostRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          name: "openclaw",
+          overrides: {
+            axios: "1.16.0",
+            "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+            nested: {
+              alias: "npm:@scope/alias@1.0.0",
+              semver: "1.2.3",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    resolveOpenClawPackageRootSyncMock.mockReturnValue(hostRoot);
+    mockNpmViewAndInstall({
+      spec: "@openclaw/voice-call@0.0.1",
+      packageName: "@openclaw/voice-call",
+      version: "0.0.1",
+      pluginId: "voice-call",
+      npmRoot,
+    });
+    const baseImplementation = runCommandWithTimeoutMock.getMockImplementation();
+    let installAttempts = 0;
+    runCommandWithTimeoutMock.mockImplementation(
+      async (argv: string[], options?: { cwd?: string }) => {
+        if (argv[0] === "npm" && argv[1] === "install") {
+          installAttempts += 1;
+          const manifest = JSON.parse(
+            fs.readFileSync(path.join(npmRoot, "package.json"), "utf8"),
+          ) as { overrides?: Record<string, unknown>; openclaw?: { managedOverrides?: string[] } };
+          if (installAttempts === 1) {
+            expect(manifest.overrides?.["node-domexception"]).toBe(
+              "npm:@nolyfill/domexception@1.0.28",
+            );
+            expect(manifest.openclaw?.managedOverrides).toEqual([
+              "axios",
+              "nested",
+              "node-domexception",
+            ]);
+            return {
+              code: 1,
+              stdout: "",
+              stderr: "npm ERR! Invalid comparator: npm:@nolyfill/domexception@1.0.28",
+              signal: null,
+              killed: false,
+              termination: "exit" as const,
+            };
+          }
+          expect(manifest.overrides).toEqual({
+            axios: "1.16.0",
+            nested: {
+              semver: "1.2.3",
+            },
+          });
+          expect(manifest.openclaw?.managedOverrides).toEqual(["axios", "nested"]);
+        }
+        return await baseImplementation?.(argv, options);
+      },
+    );
+
+    const warnings: string[] = [];
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/voice-call@0.0.1",
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: (message) => warnings.push(message) },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(installAttempts).toBe(2);
+    expect(warnings).toContain(
+      "npm rejected managed npm alias overrides; retrying plugin install without alias overrides for this npm version.",
+    );
+  });
+
   it("rolls back installed npm package debris when security scan blocks the plugin", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     mockNpmViewAndInstall({
@@ -1158,7 +1241,7 @@ describe("installPluginFromNpmSpec", () => {
         return;
       }
       expect(result.pluginId).toBe(pluginId);
-      expect(warnings.some((warning) => warning.includes("installation blocked"))).toBe(false);
+      expect(warnings.join("\n")).not.toContain("installation blocked");
       expectNpmInstallIntoRoot({
         calls: runCommandWithTimeoutMock.mock.calls,
         npmRoot,

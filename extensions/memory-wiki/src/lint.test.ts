@@ -47,7 +47,7 @@ describe("lintMemoryWikiVault", () => {
 
     const result = await lintMemoryWikiVault(config);
 
-    expect(result.issues.some((issue) => issue.code === "broken-wikilink")).toBe(false);
+    expect(result.issues.map((issue) => issue.code)).not.toContain("broken-wikilink");
   });
 
   it("detects duplicate ids, provenance gaps, contradictions, and open questions", async () => {
@@ -142,18 +142,16 @@ describe("lintMemoryWikiVault", () => {
     expect(result.issues.map((issue) => issue.code)).toContain("claim-low-confidence");
     expect(result.issues.map((issue) => issue.code)).toContain("stale-page");
     expect(result.issues.map((issue) => issue.code)).toContain("stale-claim");
-    expect(
-      result.issuesByCategory.contradictions.some((issue) => issue.code === "claim-conflict"),
-    ).toBe(true);
+    expect(result.issuesByCategory.contradictions.map((issue) => issue.code)).toContain(
+      "claim-conflict",
+    );
     expect(result.issuesByCategory["open-questions"].length).toBeGreaterThanOrEqual(2);
-    expect(
-      result.issuesByCategory.provenance.some(
-        (issue) => issue.code === "missing-import-provenance",
-      ),
-    ).toBe(true);
-    expect(
-      result.issuesByCategory.provenance.some((issue) => issue.code === "claim-missing-evidence"),
-    ).toBe(true);
+    expect(result.issuesByCategory.provenance.map((issue) => issue.code)).toContain(
+      "missing-import-provenance",
+    );
+    expect(result.issuesByCategory.provenance.map((issue) => issue.code)).toContain(
+      "claim-missing-evidence",
+    );
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Errors");
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Contradictions");
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Open Questions");

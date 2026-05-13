@@ -161,7 +161,7 @@ describe("discord plugin-sdk facade", () => {
     });
 
     expect(mocks.runtimeModule.autoBindSpawnedDiscordSubagent).toHaveBeenCalledTimes(1);
-    const callParams = mocks.runtimeModule.autoBindSpawnedDiscordSubagent.mock.calls.at(0)?.[0];
+    const callParams = mocks.runtimeModule.autoBindSpawnedDiscordSubagent.mock.calls[0]?.[0];
     expect(callParams.agentId).toBe("agent");
     expect(callParams.cfg).toBe(mocks.runtimeConfig);
     expect(callParams.childSessionKey).toBe("child");

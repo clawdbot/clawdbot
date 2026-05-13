@@ -71,6 +71,10 @@ type DrainActiveSessionsForShutdown = NonNullable<
   GatewayCloseHandlerParams["drainActiveSessionsForShutdown"]
 >;
 
+function firstMockCall<T extends readonly unknown[]>(mock: { mock: { calls: readonly T[] } }) {
+  return mock.mock.calls[0];
+}
+
 function createGatewayCloseTestDeps(
   overrides: Partial<GatewayCloseHandlerParams> = {},
 ): GatewayCloseHandlerParams {
@@ -201,7 +205,7 @@ describe("createGatewayCloseHandler", () => {
     await close({ reason: "SIGTERM" });
 
     expect(drainActiveSessionsForShutdown).toHaveBeenCalledTimes(1);
-    expect(drainActiveSessionsForShutdown.mock.calls.at(0)?.[0]?.reason).toBe("shutdown");
+    expect(firstMockCall(drainActiveSessionsForShutdown)?.[0]?.reason).toBe("shutdown");
   });
 
   it("drains the active-session tracker with reason=restart when restartExpectedMs is set", async () => {
@@ -216,7 +220,7 @@ describe("createGatewayCloseHandler", () => {
     await close({ reason: "gateway restarting", restartExpectedMs: 1234 });
 
     expect(drainActiveSessionsForShutdown).toHaveBeenCalledTimes(1);
-    expect(drainActiveSessionsForShutdown.mock.calls.at(0)?.[0]?.reason).toBe("restart");
+    expect(firstMockCall(drainActiveSessionsForShutdown)?.[0]?.reason).toBe("restart");
   });
 
   it("records a warning and continues shutdown when the session-end drain reports a timeout", async () => {

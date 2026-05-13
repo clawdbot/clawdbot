@@ -49,7 +49,7 @@ describe("cron main job passes heartbeat target=last", () => {
   function requireRunHeartbeatOnceCall(
     runHeartbeatOnce: ReturnType<typeof vi.fn<RunHeartbeatOnce>>,
   ) {
-    const callArgs = runHeartbeatOnce.mock.calls.at(0)?.[0];
+    const callArgs = runHeartbeatOnce.mock.calls[0]?.[0];
     const heartbeat = callArgs?.heartbeat;
     if (!callArgs || !heartbeat) {
       throw new Error("expected runHeartbeatOnce call with heartbeat config");
@@ -58,7 +58,7 @@ describe("cron main job passes heartbeat target=last", () => {
   }
 
   function requireRequestHeartbeatCall(requestHeartbeat: ReturnType<typeof vi.fn>) {
-    const callArgs = requestHeartbeat.mock.calls.at(0)?.[0];
+    const callArgs = requestHeartbeat.mock.calls[0]?.[0];
     if (!callArgs) {
       throw new Error("expected requestHeartbeat call");
     }

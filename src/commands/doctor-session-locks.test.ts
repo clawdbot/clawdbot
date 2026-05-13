@@ -23,6 +23,14 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   }
 }
 
+function firstNoteCall(): [string, string] {
+  const call = note.mock.calls[0];
+  if (!call) {
+    throw new Error("expected note call");
+  }
+  return call as [string, string];
+}
+
 describe("noteSessionLockHealth", () => {
   let state: OpenClawTestState;
 
@@ -55,7 +63,7 @@ describe("noteSessionLockHealth", () => {
     });
 
     expect(note).toHaveBeenCalledTimes(1);
-    const [message, title] = note.mock.calls.at(0) as [string, string];
+    const [message, title] = firstNoteCall();
     expect(title).toBe("Session locks");
     expect(message).toContain("Found 1 session lock file");
     expect(message).toContain(`pid=${process.pid} (alive)`);
@@ -88,7 +96,7 @@ describe("noteSessionLockHealth", () => {
     });
 
     expect(note).toHaveBeenCalledTimes(1);
-    const [message] = note.mock.calls.at(0) as [string, string];
+    const [message] = firstNoteCall();
     expect(message).toContain("[removed]");
     expect(message).toContain("Removed 1 stale session lock file");
 
@@ -114,7 +122,7 @@ describe("noteSessionLockHealth", () => {
     });
 
     expect(note).toHaveBeenCalledTimes(1);
-    const [message] = note.mock.calls.at(0) as [string, string];
+    const [message] = firstNoteCall();
     expect(message).toContain("stale=yes (non-openclaw-owner)");
     expect(message).toContain("[removed]");
     expect(message).toContain("Removed 1 stale session lock file");

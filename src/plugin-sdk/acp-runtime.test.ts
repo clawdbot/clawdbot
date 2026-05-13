@@ -52,7 +52,7 @@ const ctx = {
 
 function expectDispatchPayloadFields(expected: Record<string, unknown>): void {
   expect(dispatchMock).toHaveBeenCalledTimes(1);
-  const [payload] = dispatchMock.mock.calls.at(0) ?? [];
+  const [payload] = dispatchMock.mock.calls[0] ?? [];
   expect(payload).toBeTypeOf("object");
   for (const [key, value] of Object.entries(expected)) {
     expect((payload as Record<string, unknown>)[key]).toBe(value);

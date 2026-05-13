@@ -73,7 +73,7 @@ type DeliveryArgs = {
 };
 
 function deliveryArgs(deliver: ReturnType<typeof vi.fn>): DeliveryArgs | undefined {
-  return deliver.mock.calls.at(0)?.at(0) as DeliveryArgs | undefined;
+  return deliver.mock.calls[0]?.at(0) as DeliveryArgs | undefined;
 }
 
 function firstDeliveredPayload(deliver: ReturnType<typeof vi.fn>) {

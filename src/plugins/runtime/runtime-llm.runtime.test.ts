@@ -88,7 +88,7 @@ function expectSingleCallFirstArg(
   label = "mock first argument",
 ): Record<string, unknown> {
   expect(mock.mock.calls).toHaveLength(1);
-  const [firstArg] = mock.mock.calls.at(0) ?? [];
+  const [firstArg] = mock.mock.calls[0] ?? [];
   const record = requireRecord(firstArg, label);
   expectFields(record, expected);
   return record;
@@ -100,7 +100,7 @@ function expectSingleLogPayload(
   expected: Record<string, unknown>,
 ): Record<string, unknown> {
   expect(loggerMethod.mock.calls).toHaveLength(1);
-  const [actualMessage, payload] = loggerMethod.mock.calls.at(0) ?? [];
+  const [actualMessage, payload] = loggerMethod.mock.calls[0] ?? [];
   expect(actualMessage).toBe(message);
   const payloadRecord = requireRecord(payload, "log payload");
   expectFields(payloadRecord, expected);

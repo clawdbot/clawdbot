@@ -40,7 +40,8 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 }
 
 function readLastJsonWrite(): Record<string, unknown> {
-  const [payload, space] = mocks.defaultRuntime.writeJson.mock.calls.at(-1) ?? [];
+  const calls = mocks.defaultRuntime.writeJson.mock.calls;
+  const [payload, space] = calls[calls.length - 1] ?? [];
   expect(space).toBe(0);
   if (!payload || typeof payload !== "object") {
     throw new Error("expected JSON write payload object");
@@ -59,11 +60,11 @@ function readFirstPolicyScope(payload: Record<string, unknown>): Record<string, 
 }
 
 function readFirstReplaceConfigArg(): Record<string, unknown> {
-  const call = mocks.replaceConfigFile.mock.calls.at(0);
+  const call = mocks.replaceConfigFile.mock.calls[0];
   if (!call) {
     throw new Error("expected replaceConfigFile call");
   }
-  const arg = call.at(0);
+  const arg = call[0];
   if (!arg || typeof arg !== "object") {
     throw new Error("expected replaceConfigFile argument");
   }

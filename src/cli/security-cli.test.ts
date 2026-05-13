@@ -76,13 +76,13 @@ function primeDeepAuditConfig(sourceConfig = { gateway: { mode: "local" } }) {
 }
 
 function lastSecretResolverOptions(): Record<string, unknown> | undefined {
-  return resolveCommandSecretRefsViaGateway.mock.calls.at(-1)?.[0] as
-    | Record<string, unknown>
-    | undefined;
+  const calls = resolveCommandSecretRefsViaGateway.mock.calls;
+  return calls[calls.length - 1]?.[0] as Record<string, unknown> | undefined;
 }
 
 function lastSecurityAuditOptions(): Record<string, unknown> | undefined {
-  return runSecurityAudit.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined;
+  const calls = runSecurityAudit.mock.calls;
+  return calls[calls.length - 1]?.[0] as Record<string, unknown> | undefined;
 }
 
 describe("security CLI", () => {

@@ -9,7 +9,7 @@ function requireSpawnCall(
   spawnSync: ReturnType<typeof vi.fn>,
   index: number,
 ): [string, string[], unknown?] {
-  const call = spawnSync.mock.calls.at(index);
+  const call = spawnSync.mock.calls[index];
   if (!call) {
     throw new Error(`Expected spawnSync call ${index}`);
   }

@@ -9,17 +9,22 @@ import {
 type TelegramChunk = ReturnType<typeof markdownToTelegramChunks>[number];
 
 function expectHtmlChunkLengthsAtMost(chunks: TelegramChunk[], limit: number) {
-  expect(chunks.some((chunk) => chunk.html.length > limit)).toBe(false);
+  for (const chunk of chunks) {
+    expect(chunk.html.length).toBeLessThanOrEqual(limit);
+  }
 }
 
 function expectNonBlankTextChunks(chunks: TelegramChunk[]) {
-  expect(chunks.some((chunk) => chunk.text.trim().length === 0)).toBe(false);
+  for (const chunk of chunks) {
+    expect(chunk.text.trim().length).toBeGreaterThan(0);
+  }
 }
 
 function expectHtmlChunksWrappedWith(chunks: TelegramChunk[], prefix: string, suffix: string) {
-  expect(
-    chunks.every((chunk) => chunk.html.startsWith(prefix) && chunk.html.endsWith(suffix)),
-  ).toBe(true);
+  for (const chunk of chunks) {
+    expect(chunk.html.startsWith(prefix)).toBe(true);
+    expect(chunk.html.endsWith(suffix)).toBe(true);
+  }
 }
 
 describe("wrapFileReferencesInHtml", () => {

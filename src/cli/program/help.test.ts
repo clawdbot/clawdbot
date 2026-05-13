@@ -135,7 +135,7 @@ describe("configureProgramHelp", () => {
 
     const help = captureHelpOutput(program);
     expect(help).toContain("BANNER-LINE");
-    const [version, options] = (formatCliBannerLineMock.mock.calls.at(0) as unknown as
+    const [version, options] = (formatCliBannerLineMock.mock.calls[0] as unknown as
       | [string, { mode?: string }]
       | undefined) ?? [undefined, undefined];
     expect(version).toBe(testProgramContext.programVersion);

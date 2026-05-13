@@ -137,6 +137,39 @@ describe("applyProviderAuthConfigPatch", () => {
     });
   });
 
+  it("normalizes retired Google Gemini per-agent refs from provider config patches", () => {
+    const patch = {
+      agents: {
+        list: [
+          {
+            id: "ops",
+            model: {
+              primary: "google/gemini-3-pro-preview",
+              fallbacks: ["google/gemini-3-pro-preview"],
+            },
+            models: {
+              "google/gemini-3-pro-preview": {
+                alias: "ops-gemini",
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const next = applyProviderAuthConfigPatch({}, patch);
+
+    expect(next.agents?.list?.[0]?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview"],
+    });
+    expect(next.agents?.list?.[0]?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {
+        alias: "ops-gemini",
+      },
+    });
+  });
+
   it("normalizes retired Google Gemini keys when replacing provider model maps", () => {
     const patch = {
       agents: {

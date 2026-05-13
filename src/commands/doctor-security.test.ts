@@ -65,7 +65,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     }
   });
 
-  const lastMessage = () => String(note.mock.calls.at(-1)?.[0] ?? "");
+  const lastMessage = () => String(note.mock.calls[note.mock.calls.length - 1]?.[0] ?? "");
 
   async function withExecApprovalsFile(
     file: Record<string, unknown>,

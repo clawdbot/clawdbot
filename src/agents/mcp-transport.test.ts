@@ -39,7 +39,10 @@ function redirectWithoutLocationResponse(status = 302): Response {
 }
 
 function latestStreamableTransportOptions(): StreamableTransportOptions {
-  const options = streamableTransportConstructorMock.mock.calls.at(-1)?.[1];
+  const latestCall = streamableTransportConstructorMock.mock.calls[
+    streamableTransportConstructorMock.mock.calls.length - 1
+  ] as unknown[] | undefined;
+  const options = latestCall?.[1];
   if (!options || typeof options !== "object") {
     throw new Error("Expected streamable HTTP transport options");
   }
@@ -54,8 +57,14 @@ function latestStreamableFetch() {
   return fetch;
 }
 
-function runtimeFetchCall(index: number) {
-  return runtimeFetchMock.mock.calls.at(index);
+function runtimeFetchCall(index: number): [RequestInfo | URL, RequestInit | undefined] {
+  const call = runtimeFetchMock.mock.calls[index] as
+    | [RequestInfo | URL, RequestInit | undefined]
+    | undefined;
+  if (!call) {
+    throw new Error(`Expected runtime fetch call ${index}`);
+  }
+  return call;
 }
 
 describe("resolveMcpTransport", () => {

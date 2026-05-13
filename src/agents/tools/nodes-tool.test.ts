@@ -152,7 +152,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
     });
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
-    const call = gatewayMocks.callGatewayTool.mock.calls.at(0) as
+    const call = gatewayMocks.callGatewayTool.mock.calls[0] as
       | [string, unknown, { params?: { durationMs?: unknown } }]
       | undefined;
     if (!call) {

@@ -153,18 +153,32 @@ async function applyDefaultModelFromAuthChoice(params: {
     preserveExistingPrimary: params.preserveExistingDefaultModel === true,
   });
   if (!preservesDifferentPrimary) {
-    const { ensureCodexRuntimePluginForModelSelection } =
+    const { CODEX_RUNTIME_PLUGIN_ID, ensureCodexRuntimePluginForModelSelection } =
       await import("../commands/codex-runtime-plugin-install.js");
-    nextConfig = (
-      await ensureCodexRuntimePluginForModelSelection({
-        cfg: nextConfig,
-        model: params.selectedModel,
-        prompter: params.prompter,
-        runtime: params.runtime,
-        ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-      })
-    ).cfg;
+    const codexInstall = await ensureCodexRuntimePluginForModelSelection({
+      cfg: nextConfig,
+      model: params.selectedModel,
+      prompter: params.prompter,
+      runtime: params.runtime,
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+    });
+    nextConfig = codexInstall.cfg;
     await params.runSelectedModelHook(nextConfig);
+    if (codexInstall.installed) {
+      // Offer Codex CLI state migration whenever the harness is in place for
+      // the selected model, regardless of whether this run was a fresh install
+      // or a repair against an already-present harness. The user can always
+      // decline the prompt; surfacing it again costs nothing if there is no
+      // migratable state to find.
+      const { offerPostInstallMigrations } =
+        await import("../wizard/setup.post-install-migration.js");
+      await offerPostInstallMigrations({
+        config: nextConfig,
+        runtime: params.runtime,
+        prompter: params.prompter,
+        installedPluginIds: [CODEX_RUNTIME_PLUGIN_ID],
+      });
+    }
   }
   await noteDefaultModelResult({
     previousPrimary,

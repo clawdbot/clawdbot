@@ -84,7 +84,7 @@ function expectErrorContaining(errorFn: unknown, text: string): void {
   const messages = ((errorFn as { mock?: { calls?: unknown[][] } }).mock?.calls ?? []).map((call) =>
     typeof call[0] === "string" ? call[0] : call[0] instanceof Error ? call[0].message : "",
   );
-  expect(messages.some((message) => message.includes(text))).toBe(true);
+  expect(messages.join("\n")).toContain(text);
 }
 
 function mockStringMessages(mocked: unknown): string[] {
@@ -365,8 +365,8 @@ describe("web auto-reply connection", () => {
       expect(getActiveWebListener(accountId)).toBeNull();
       await expectPathMissing(authDir);
       expect(
-        statuses.some((entry) => entry.connected === false && entry.healthState === healthState),
-      ).toBe(true);
+        statuses.filter((entry) => entry.connected === false && entry.healthState === healthState),
+      ).not.toEqual([]);
       const finalStatus = statuses.at(-1);
       expect(finalStatus?.running).toBe(false);
       expect(finalStatus?.connected).toBe(false);
@@ -451,41 +451,35 @@ describe("web auto-reply connection", () => {
       await Promise.resolve();
       await run;
 
+      expect(mockStringMessages(runtime.log).join("\n")).toContain(
+        "WhatsApp Web watchdog is recovering a stale connection",
+      );
+      expect(mockStringMessages(runtime.error).join("\n")).not.toContain("status 499");
       expect(
-        mockStringMessages(runtime.log).some((message) =>
-          message.includes("WhatsApp Web watchdog is recovering a stale connection"),
-        ),
-      ).toBe(true);
-      expect(
-        mockStringMessages(runtime.error).some((message) => message.includes("status 499")),
-      ).toBe(false);
-      expect(
-        statuses.some(
+        statuses.filter(
           (status) =>
             status.healthState === "reconnecting" &&
             status.reconnectAttempts === 1 &&
             (status.lastDisconnect as { status?: number } | null)?.status === 499,
         ),
-      ).toBe(true);
+      ).not.toEqual([]);
       expect(
-        statuses.every(
+        statuses.filter(
           (status) =>
-            !(
-              status.lastDisconnect &&
-              typeof status.lastDisconnect === "object" &&
-              "expected" in status.lastDisconnect
-            ),
+            status.lastDisconnect &&
+            typeof status.lastDisconnect === "object" &&
+            "expected" in status.lastDisconnect,
         ),
-      ).toBe(true);
+      ).toEqual([]);
       expect(
-        statuses.some(
+        statuses.filter(
           (status) =>
             status.connected === true &&
             status.healthState === "healthy" &&
             status.reconnectAttempts === 0 &&
             status.lastDisconnect === null,
         ),
-      ).toBe(true);
+      ).not.toEqual([]);
     } finally {
       vi.useRealTimers();
     }

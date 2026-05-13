@@ -156,11 +156,19 @@ function resultDetails(result: { details?: unknown }): Record<string, unknown> {
 }
 
 function firstMockCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
-  const firstCall = mock.mock.calls.at(0);
+  const firstCall = mock.mock.calls[0];
   if (!firstCall) {
     throw new Error("Expected first mock call");
   }
   return firstCall[0];
+}
+
+function firstMockCall(mock: { mock: { calls: unknown[][] } }): unknown[] {
+  const firstCall = mock.mock.calls[0];
+  if (!firstCall) {
+    throw new Error("Expected first mock call");
+  }
+  return firstCall;
 }
 
 function resetVideoGenerateMocks() {
@@ -1059,7 +1067,7 @@ describe("createVideoGenerateTool", () => {
     });
 
     expect(generateSpy).toHaveBeenCalledTimes(1);
-    const call = generateSpy.mock.calls.at(0)?.[0] as {
+    const call = firstMockCallArg(generateSpy) as {
       inputImages?: Array<{ role?: string }>;
     };
     expect(call.inputImages).toHaveLength(2);
@@ -1096,7 +1104,7 @@ describe("createVideoGenerateTool", () => {
       image: "/tmp/reference.png",
     });
 
-    const loadCall = vi.mocked(webMedia.loadWebMedia).mock.calls.at(0);
+    const loadCall = firstMockCall(vi.mocked(webMedia.loadWebMedia));
     expect(loadCall?.[0]).toBe("/tmp/reference.png");
     const loadOptions = loadCall?.[1] as { ssrfPolicy?: unknown } | undefined;
     expect(loadOptions?.ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });

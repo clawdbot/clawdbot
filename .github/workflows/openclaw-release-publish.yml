@@ -401,6 +401,33 @@ jobs:
             echo "- GitHub release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" >> "$GITHUB_STEP_SUMMARY"
           }
 
+          upload_dependency_evidence_release_asset() {
+            local release_version download_dir asset_path asset_name
+            release_version="${RELEASE_TAG#v}"
+            download_dir="${RUNNER_TEMP}/openclaw-release-dependency-evidence-asset"
+            asset_name="openclaw-${release_version}-dependency-evidence.zip"
+            asset_path="${RUNNER_TEMP}/${asset_name}"
+
+            rm -rf "${download_dir}" "${asset_path}"
+            mkdir -p "${download_dir}"
+            gh run download "${PREFLIGHT_RUN_ID}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --name "openclaw-npm-preflight-${RELEASE_TAG}" \
+              --dir "${download_dir}"
+
+            if [[ ! -d "${download_dir}/dependency-evidence" ]]; then
+              echo "Dependency evidence is missing from OpenClaw npm preflight artifact." >&2
+              find "${download_dir}" -maxdepth 2 -type f -print >&2 || true
+              exit 1
+            fi
+
+            (cd "${download_dir}" && zip -qr "${asset_path}" dependency-evidence)
+            gh release upload "${RELEASE_TAG}" "${asset_path}#${asset_name}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber
+            echo "- Dependency evidence asset: \`${asset_name}\`" >> "$GITHUB_STEP_SUMMARY"
+          }
+
           {
             echo "### Publish sequence"
             echo
@@ -491,4 +518,5 @@ jobs:
 
           if [[ -n "${openclaw_npm_run_id}" ]]; then
             create_or_update_github_release
+            upload_dependency_evidence_release_asset
           fi

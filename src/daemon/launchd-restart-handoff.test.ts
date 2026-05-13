@@ -16,7 +16,7 @@ import { scheduleDetachedLaunchdRestartHandoff } from "./launchd-restart-handoff
 type SpawnCall = [string, string[], { env: Record<string, string | undefined> }];
 
 function requireSpawnCall(callIndex = 0): SpawnCall {
-  const call = spawnMock.mock.calls.at(callIndex);
+  const call = spawnMock.mock.calls[callIndex];
   if (!call) {
     throw new Error(`expected spawn call ${callIndex}`);
   }

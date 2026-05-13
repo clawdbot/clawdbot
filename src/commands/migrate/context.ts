@@ -31,6 +31,7 @@ export function buildMigrationContext(params: {
   source?: string;
   includeSecrets?: boolean;
   overwrite?: boolean;
+  providerOptions?: Record<string, unknown>;
   backupPath?: string;
   runtime: RuntimeEnv;
   reportDir?: string;
@@ -44,6 +45,7 @@ export function buildMigrationContext(params: {
     source: params.source,
     includeSecrets: Boolean(params.includeSecrets),
     overwrite: Boolean(params.overwrite),
+    providerOptions: params.providerOptions,
     backupPath: params.backupPath,
     reportDir: params.reportDir,
     logger: createMigrationLogger(params.runtime, { json: params.json }),

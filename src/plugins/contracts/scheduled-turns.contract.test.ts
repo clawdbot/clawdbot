@@ -130,7 +130,7 @@ function mockCronAdd(response: CronJob) {
 }
 
 function getCronAddBody() {
-  const addCall = workflowMocks.cronAdd.mock.calls.at(0);
+  const addCall = workflowMocks.cronAdd.mock.calls[0];
   if (!addCall) {
     throw new Error("Expected cron add call");
   }

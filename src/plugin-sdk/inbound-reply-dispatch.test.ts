@@ -39,7 +39,7 @@ import {
 } from "./inbound-reply-dispatch.js";
 
 function readFirstMockArg(fn: unknown): unknown {
-  return (fn as { mock: { calls: unknown[][] } }).mock.calls.at(0)?.[0];
+  return (fn as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0];
 }
 
 describe("recordInboundSessionAndDispatchReply", () => {

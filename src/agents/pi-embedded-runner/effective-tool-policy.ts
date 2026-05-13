@@ -3,6 +3,7 @@ import { getPluginToolMeta } from "../../plugins/tools.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
+  resolveInheritedToolPolicyForSession,
   resolveTrustedGroupId,
   resolveSubagentToolPolicyForSession,
 } from "../pi-tools.policy.js";
@@ -136,6 +137,13 @@ export function applyFinalEffectiveToolPolicy(
           store: subagentStore,
         })
       : undefined;
+  const inheritedToolPolicy = resolveInheritedToolPolicyForSession(
+    params.config,
+    params.sessionKey,
+    {
+      store: subagentStore,
+    },
+  );
   const ownerFiltered = applyOwnerOnlyToolPolicy(
     params.bundledTools,
     params.senderIsOwner === true,
@@ -169,6 +177,7 @@ export function applyFinalEffectiveToolPolicy(
     }),
     { policy: params.sandboxToolPolicy, label: "sandbox tools.allow" },
     { policy: subagentPolicy, label: "subagent tools.allow" },
+    { policy: inheritedToolPolicy, label: "inherited tools" },
   ].map((step) => Object.assign({}, step, { suppressUnavailableCoreToolWarning: true }));
   return applyToolPolicyPipeline({
     tools: ownerFiltered,

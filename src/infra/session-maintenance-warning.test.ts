@@ -62,6 +62,14 @@ function expectedMaintenanceWarning(reasonText: string): string {
   );
 }
 
+function firstDeliveryParams(): DeliveryCall | undefined {
+  return mocks.deliverOutboundPayloads.mock.calls[0]?.[0];
+}
+
+function firstSystemEventCall() {
+  return mocks.enqueueSystemEvent.mock.calls[0];
+}
+
 describe("deliverSessionMaintenanceWarning", () => {
   let prevVitest: string | undefined;
   let prevNodeEnv: string | undefined;
@@ -121,7 +129,7 @@ describe("deliverSessionMaintenanceWarning", () => {
 
     await deliverSessionMaintenanceWarning(params);
 
-    const [deliveryParams] = mocks.deliverOutboundPayloads.mock.calls.at(0) ?? [];
+    const deliveryParams = firstDeliveryParams();
     expect(deliveryParams?.channel).toBe("mobilechat");
     expect(deliveryParams?.to).toBe("+15550001");
     expect(deliveryParams?.session).toEqual({
@@ -162,7 +170,7 @@ describe("deliverSessionMaintenanceWarning", () => {
 
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    expect(mocks.enqueueSystemEvent.mock.calls.at(0)).toEqual([
+    expect(firstSystemEventCall()).toEqual([
       expectedMaintenanceWarning("not in the most recent 10 sessions"),
       { sessionKey: params.sessionKey },
     ]);
@@ -185,7 +193,7 @@ describe("deliverSessionMaintenanceWarning", () => {
     await deliverSessionMaintenanceWarning(params);
 
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    expect(mocks.enqueueSystemEvent.mock.calls.at(0)).toEqual([
+    expect(firstSystemEventCall()).toEqual([
       expectedMaintenanceWarning("older than 1 second"),
       { sessionKey: params.sessionKey },
     ]);

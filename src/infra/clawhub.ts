@@ -62,14 +62,14 @@ export type ClawHubArtifactScanState =
   | "not-run"
   | (string & {});
 export type ClawHubArtifactModerationState = "approved" | "quarantined" | "revoked" | (string & {});
-export type ClawHubPackageSecurityState =
-  | "pending"
-  | "approved"
-  | "limited"
-  | "quarantined"
-  | "rejected"
-  | "revoked"
-  | (string & {});
+export type ClawHubPackageSecurityTrust = {
+  scanStatus?: ClawHubArtifactScanState | null;
+  moderationState?: ClawHubArtifactModerationState | null;
+  blockedFromDownload: boolean;
+  reasons: string[];
+  pending: boolean;
+  stale: boolean;
+};
 export type ClawHubResolvedArtifact =
   | {
       source: "clawhub";
@@ -116,15 +116,16 @@ export type ClawHubPackageArtifactResolverResponse = {
   artifact?: ClawHubResolvedArtifact | null;
 };
 export type ClawHubPackageSecurityResponse = {
-  packageId?: string | null;
-  releaseId?: string | null;
-  state: ClawHubPackageSecurityState;
-  reasonCode?: string | null;
-  moderatorNote?: string | null;
-  actorId?: string | null;
-  createdAt?: number | null;
-  scanState?: ClawHubArtifactScanState | null;
-  moderationState?: ClawHubArtifactModerationState | null;
+  package?: {
+    name?: string | null;
+    displayName?: string | null;
+    family?: ClawHubPackageFamily | (string & {}) | null;
+  } | null;
+  release?: {
+    id?: string | null;
+    version?: string | null;
+  } | null;
+  trust: ClawHubPackageSecurityTrust;
 };
 export type ClawHubPackageClawPackSummary = {
   available: boolean;
@@ -636,6 +637,126 @@ async function fetchJson<T>(params: ClawHubRequestParams): Promise<T> {
   return (await response.json()) as T;
 }
 
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function optionalStringField(
+  source: Record<string, unknown>,
+  field: string,
+  context: string,
+): string | null | undefined {
+  const value = source[field];
+  if (value === undefined || value === null || typeof value === "string") {
+    return value;
+  }
+  throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a string or null.`);
+}
+
+function requiredBooleanField(
+  source: Record<string, unknown>,
+  field: string,
+  context: string,
+): boolean {
+  const value = source[field];
+  if (typeof value === "boolean") {
+    return value;
+  }
+  throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a boolean.`);
+}
+
+function requiredStringArrayField(
+  source: Record<string, unknown>,
+  field: string,
+  context: string,
+): string[] {
+  const value = source[field];
+  if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
+    return value;
+  }
+  throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a string array.`);
+}
+
+function parseOptionalSecurityPackage(value: unknown): ClawHubPackageSecurityResponse["package"] {
+  if (value === undefined || value === null) {
+    return value;
+  }
+  if (!isJsonObject(value)) {
+    throw new Error(
+      "Malformed ClawHub security response: expected package to be an object or null.",
+    );
+  }
+  const result: NonNullable<ClawHubPackageSecurityResponse["package"]> = {};
+  const name = optionalStringField(value, "name", "security package");
+  const displayName = optionalStringField(value, "displayName", "security package");
+  const family = optionalStringField(value, "family", "security package");
+  if (name !== undefined) {
+    result.name = name;
+  }
+  if (displayName !== undefined) {
+    result.displayName = displayName;
+  }
+  if (family !== undefined) {
+    result.family = family;
+  }
+  return result;
+}
+
+function parseOptionalSecurityRelease(value: unknown): ClawHubPackageSecurityResponse["release"] {
+  if (value === undefined || value === null) {
+    return value;
+  }
+  if (!isJsonObject(value)) {
+    throw new Error(
+      "Malformed ClawHub security response: expected release to be an object or null.",
+    );
+  }
+  const result: NonNullable<ClawHubPackageSecurityResponse["release"]> = {};
+  const id = optionalStringField(value, "id", "security release");
+  const version = optionalStringField(value, "version", "security release");
+  if (id !== undefined) {
+    result.id = id;
+  }
+  if (version !== undefined) {
+    result.version = version;
+  }
+  return result;
+}
+
+function parseClawHubPackageSecurityResponse(value: unknown): ClawHubPackageSecurityResponse {
+  if (!isJsonObject(value)) {
+    throw new Error("Malformed ClawHub security response: expected an object.");
+  }
+  const trust = value.trust;
+  if (!isJsonObject(trust)) {
+    throw new Error("Malformed ClawHub security response: expected trust to be an object.");
+  }
+  const parsedTrust: ClawHubPackageSecurityTrust = {
+    blockedFromDownload: requiredBooleanField(trust, "blockedFromDownload", "security trust"),
+    reasons: requiredStringArrayField(trust, "reasons", "security trust"),
+    pending: requiredBooleanField(trust, "pending", "security trust"),
+    stale: requiredBooleanField(trust, "stale", "security trust"),
+  };
+  const scanStatus = optionalStringField(trust, "scanStatus", "security trust");
+  const moderationState = optionalStringField(trust, "moderationState", "security trust");
+  if (scanStatus !== undefined) {
+    parsedTrust.scanStatus = scanStatus;
+  }
+  if (moderationState !== undefined) {
+    parsedTrust.moderationState = moderationState;
+  }
+  const result: ClawHubPackageSecurityResponse = { trust: parsedTrust };
+  const parsedPackage = parseOptionalSecurityPackage(value.package);
+  const parsedRelease = parseOptionalSecurityRelease(value.release);
+  if (parsedPackage !== undefined) {
+    result.package = parsedPackage;
+  }
+  if (parsedRelease !== undefined) {
+    result.release = parsedRelease;
+  }
+  return result;
+}
+
 export function resolveClawHubBaseUrl(baseUrl?: string): string {
   return normalizeBaseUrl(baseUrl);
 }
@@ -768,7 +889,7 @@ export async function fetchClawHubPackageSecurity(params: {
   timeoutMs?: number;
   fetchImpl?: FetchLike;
 }): Promise<ClawHubPackageSecurityResponse> {
-  return await fetchJson<ClawHubPackageSecurityResponse>({
+  const response = await fetchJson<unknown>({
     baseUrl: params.baseUrl,
     path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
       params.version,
@@ -777,6 +898,7 @@ export async function fetchClawHubPackageSecurity(params: {
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
   });
+  return parseClawHubPackageSecurityResponse(response);
 }
 
 export async function fetchClawHubPackageReadiness(params: {

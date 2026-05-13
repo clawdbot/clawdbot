@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { FailoverError } from "../agents/failover-error.js";
 import {
   createStubSessionHarness,
   emitAssistantTextDelta,
@@ -111,7 +112,7 @@ type FirstAgentCommandOptions = {
   model?: string;
   senderIsOwner?: boolean;
   sessionKey?: string;
-  streamParams?: { maxTokens?: number };
+  streamParams?: { maxTokens?: number; temperature?: number; topP?: number };
 };
 
 function firstAgentCommandOptions() {
@@ -1321,6 +1322,112 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       expect(getFirstAgentMaxTokens()).toBeUndefined();
       await res.text();
     }
+  });
+
+  it("forwards inbound temperature and top_p into streamParams", async () => {
+    const port = enabledPort;
+    const mockAgentOnce = (payloads: Array<{ text: string }>) => {
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({ payloads } as never);
+    };
+    const getStreamParams = () => firstAgentCommandOptions()?.streamParams;
+
+    {
+      mockAgentOnce([{ text: "hello" }]);
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        temperature: 0.3,
+        top_p: 0.95,
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      expect(getStreamParams()).toMatchObject({ temperature: 0.3, topP: 0.95 });
+      await res.text();
+    }
+
+    {
+      mockAgentOnce([{ text: "hello" }]);
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        temperature: 0,
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      const params = getStreamParams();
+      expect(params?.temperature).toBe(0);
+      expect(params?.topP).toBeUndefined();
+      await res.text();
+    }
+
+    {
+      mockAgentOnce([{ text: "hello" }]);
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      expect(getStreamParams()).toBeUndefined();
+      await res.text();
+    }
+
+    {
+      agentCommand.mockClear();
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        temperature: 999,
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as { error?: { type?: string; message?: string } };
+      expect(json.error?.type).toBe("invalid_request_error");
+      expect(json.error?.message).toMatch(/temperature/);
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+    }
+
+    {
+      agentCommand.mockClear();
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        top_p: 5,
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as { error?: { type?: string; message?: string } };
+      expect(json.error?.type).toBe("invalid_request_error");
+      expect(json.error?.message).toMatch(/top_p/);
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+    }
+  });
+
+  it("maps provider format failures to OpenAI-compatible 400 errors", async () => {
+    const port = enabledPort;
+
+    agentCommand.mockClear();
+    agentCommand.mockRejectedValueOnce(
+      new FailoverError(
+        "LLM request failed: provider rejected the request schema or tool payload.",
+        {
+          reason: "format",
+          status: 400,
+          code: "decimal_above_max_value",
+          rawError:
+            "400 Invalid 'temperature': decimal above maximum value. Expected a value <= 2, but got 999 instead.",
+        },
+      ) as never,
+    );
+
+    const res = await postChatCompletions(port, {
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as {
+      error?: { type?: string; code?: string; message?: string };
+    };
+    expect(json.error?.type).toBe("invalid_request_error");
+    expect(json.error?.code).toBe("decimal_above_max_value");
+    expect(json.error?.message).toContain("Invalid 'temperature'");
+    expect(agentCommand).toHaveBeenCalledTimes(1);
   });
 
   it("returns 429 for repeated failed auth when gateway.auth.rateLimit is configured", async () => {

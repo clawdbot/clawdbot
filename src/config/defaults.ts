@@ -55,6 +55,10 @@ const MISTRAL_SAFE_MAX_TOKENS_BY_MODEL = {
 type ModelDefinitionLike = Partial<ModelDefinitionConfig> &
   Pick<ModelDefinitionConfig, "id" | "name">;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 function isPositiveNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
@@ -258,9 +262,43 @@ export function applyModelDefaults(
     }
   }
 
-  const existingAgent = nextCfg.agents?.defaults;
+  let nextAgents = nextCfg.agents;
+  const rawAgentList = nextAgents?.list;
+  if (Array.isArray(rawAgentList)) {
+    let listMutated = false;
+    const agentList = rawAgentList.map((agent) => {
+      if (!isRecord(agent)) {
+        return agent;
+      }
+      let nextAgent = agent;
+      if (Object.prototype.hasOwnProperty.call(agent, "model")) {
+        const normalizedModel = normalizeAgentModelConfigForDefaults(agent.model);
+        if (normalizedModel !== agent.model) {
+          nextAgent = { ...nextAgent, model: normalizedModel as typeof agent.model };
+          listMutated = true;
+        }
+      }
+      if (isRecord(agent.models)) {
+        const normalizedModels = normalizeAgentModelMapForConfig(agent.models);
+        if (normalizedModels !== agent.models) {
+          nextAgent = { ...nextAgent, models: normalizedModels };
+          listMutated = true;
+        }
+      }
+      return nextAgent;
+    });
+    if (listMutated) {
+      nextAgents = { ...nextAgents, list: agentList };
+      mutated = true;
+    }
+  }
+
+  const existingAgent = nextAgents?.defaults;
   if (!existingAgent) {
-    return mutated ? nextCfg : cfg;
+    if (!mutated) {
+      return cfg;
+    }
+    return nextAgents === nextCfg.agents ? nextCfg : { ...nextCfg, agents: nextAgents };
   }
 
   let nextAgent = existingAgent;
@@ -280,7 +318,7 @@ export function applyModelDefaults(
       ? {
           ...nextCfg,
           agents: {
-            ...nextCfg.agents,
+            ...nextAgents,
             defaults: nextAgent,
           },
         }
@@ -310,7 +348,7 @@ export function applyModelDefaults(
   return {
     ...nextCfg,
     agents: {
-      ...nextCfg.agents,
+      ...nextAgents,
       defaults: { ...nextAgent, models: nextModels },
     },
   };

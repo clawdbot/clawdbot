@@ -210,11 +210,11 @@ function requireFirstCallArg(
   mock: ReturnType<typeof vi.fn>,
   label: string,
 ): Record<string, unknown> {
-  const firstCall = mock.mock.calls.at(0);
+  const firstCall = mock.mock.calls[0];
   if (!firstCall) {
     throw new Error(`expected ${label} call`);
   }
-  return requireRecord(firstCall.at(0), label);
+  return requireRecord(firstCall[0], label);
 }
 
 function requireFirstPayload(deliver: ReturnType<typeof vi.fn>): ReplyPayload {

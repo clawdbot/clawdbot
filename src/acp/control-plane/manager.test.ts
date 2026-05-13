@@ -1548,10 +1548,12 @@ describe("AcpSessionManager", () => {
       },
     });
 
-    expect(extractRuntimeOptionsFromUpserts()).toContainEqual({
-      model: "openai-codex/gpt-5.4",
-      thinking: "high",
-    });
+    expect(extractRuntimeOptionsFromUpserts()).toEqual([
+      {
+        model: "openai-codex/gpt-5.4",
+        thinking: "high",
+      },
+    ]);
     expectRecordFields(mockCallArg(runtimeState.ensureSession), {
       sessionKey: "agent:codex:acp:session-a",
       model: "openai-codex/gpt-5.4",
@@ -1591,9 +1593,11 @@ describe("AcpSessionManager", () => {
       sessionKey: "agent:codex:acp:session-cwd-runtime-options",
       cwd: "/workspace/from-runtime-options",
     });
-    expect(extractRuntimeOptionsFromUpserts()).toContainEqual({
-      cwd: "/workspace/from-runtime-options",
-    });
+    expect(extractRuntimeOptionsFromUpserts()).toEqual([
+      {
+        cwd: "/workspace/from-runtime-options",
+      },
+    ]);
   });
 
   it("drops cached runtime handles after tolerated close failures", async () => {

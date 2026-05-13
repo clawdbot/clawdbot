@@ -19,6 +19,10 @@ async function runExtractedArchiveFailureCase(configureArchive: () => void) {
   });
 }
 
+function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T | undefined {
+  return mock.mock.calls[0];
+}
+
 describe("resolveExistingInstallPath", () => {
   it("returns resolved path and stat for existing files", async () => {
     await withTempDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
@@ -76,11 +80,11 @@ describe("withExtractedArchiveRoot", () => {
     });
 
     expect(withTempDirSpy).toHaveBeenCalledTimes(1);
-    const withTempDirCall = withTempDirSpy.mock.calls.at(0);
+    const withTempDirCall = firstMockCall(withTempDirSpy);
     expect(withTempDirCall?.[0]).toBe("openclaw-plugin-");
     expect(typeof withTempDirCall?.[1]).toBe("function");
     expect(extractSpy).toHaveBeenCalledOnce();
-    expect(extractSpy.mock.calls.at(0)?.[0]?.archivePath).toBe(archivePath);
+    expect(firstMockCall(extractSpy)?.[0]?.archivePath).toBe(archivePath);
     expect(resolveRootSpy).toHaveBeenCalledWith(extractDir, {
       rootMarkers: ["package.json"],
     });

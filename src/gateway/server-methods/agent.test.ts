@@ -368,7 +368,9 @@ async function runMainAgentAndCaptureEntry(idempotencyKey: string) {
 }
 
 function readLastAgentCommandCall(): AgentCommandCall | undefined {
-  return mocks.agentCommand.mock.calls.at(-1)?.[0] as AgentCommandCall | undefined;
+  const calls = mocks.agentCommand.mock.calls;
+  const call = calls[calls.length - 1];
+  return call?.[0] as AgentCommandCall | undefined;
 }
 
 function backendGatewayClient(): AgentHandlerArgs["client"] {
@@ -605,12 +607,11 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.groupId).toBe("C123");
     expect(capturedEntry?.groupChannel).toBe("#trusted");
     expect(capturedEntry?.space).toBe("TTRUSTED");
-    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+    const callArgs = await waitForAgentCommandCall<{
       groupChannel?: string;
       groupSpace?: string;
       runContext?: { groupChannel?: string; groupSpace?: string };
-    };
+    }>();
     expect(callArgs.groupChannel).toBe("#trusted");
     expect(callArgs.groupSpace).toBe("TTRUSTED");
     expect(callArgs.runContext?.groupChannel).toBe("#trusted");
@@ -657,12 +658,11 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.groupId).toBe("C123");
     expect(capturedEntry?.groupChannel).toBe("#general");
     expect(capturedEntry?.space).toBe("TWORKSPACE");
-    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+    const callArgs = await waitForAgentCommandCall<{
       groupChannel?: string;
       groupSpace?: string;
       runContext?: { groupChannel?: string; groupSpace?: string };
-    };
+    }>();
     expect(callArgs.groupChannel).toBe("#general");
     expect(callArgs.groupSpace).toBe("TWORKSPACE");
     expect(callArgs.runContext?.groupChannel).toBe("#general");

@@ -41,16 +41,12 @@ import {
 import { markAuthProfileBlockedUntil, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
-import {
-  buildCodexAppInventoryCacheKey,
-  defaultCodexAppInventoryCache,
-} from "./app-inventory-cache.js";
+import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import {
   refreshCodexAppServerAuthTokens,
   resolveCodexAppServerAuthAccountCacheKey,
   resolveCodexAppServerEnvApiKeyCacheKey,
-  resolveCodexAppServerHomeDir,
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
 } from "./auth-bridge.js";
@@ -87,6 +83,7 @@ import {
   buildCodexNativeHookRelayConfig,
   CODEX_NATIVE_HOOK_RELAY_EVENTS,
 } from "./native-hook-relay.js";
+import { buildCodexPluginAppCacheKey } from "./plugin-app-cache-key.js";
 import {
   buildCodexPluginThreadConfig,
   buildCodexPluginThreadConfigInputFingerprint,
@@ -391,50 +388,6 @@ function toCodexTextInput(text: string): CodexUserInput {
   return { type: "text", text, text_elements: [] };
 }
 
-function resolveCodexPluginAppCacheEndpoint(appServer: CodexAppServerRuntimeOptions): string {
-  return JSON.stringify({
-    transport: appServer.start.transport,
-    command: appServer.start.command,
-    args: appServer.start.args,
-    url: appServer.start.url ?? null,
-    credentialFingerprint: fingerprintCodexPluginAppCacheCredentials(appServer.start),
-  });
-}
-
-function fingerprintCodexPluginAppCacheCredentials(
-  startOptions: CodexAppServerRuntimeOptions["start"],
-): string | null {
-  const authToken = startOptions.authToken ?? "";
-  const headers = Object.entries(startOptions.headers)
-    .map(([key, value]) => [key.toLowerCase(), value] as const)
-    .toSorted(([left], [right]) => left.localeCompare(right));
-  if (!authToken && headers.length === 0) {
-    return null;
-  }
-  const hash = createHash("sha256");
-  hash.update("openclaw:codex:plugin-app-cache-credentials:v1");
-  hash.update("\0");
-  hash.update(authToken);
-  for (const [key, value] of headers) {
-    hash.update("\0");
-    hash.update(key);
-    hash.update("\0");
-    hash.update(value);
-  }
-  return `sha256:${hash.digest("hex")}`;
-}
-
-function resolveCodexPluginAppCacheCodexHome(
-  appServer: CodexAppServerRuntimeOptions,
-  agentDir: string,
-): string | undefined {
-  const configuredCodexHome = appServer.start.env?.CODEX_HOME?.trim();
-  if (configuredCodexHome) {
-    return configuredCodexHome;
-  }
-  return appServer.start.transport === "stdio" ? resolveCodexAppServerHomeDir(agentDir) : undefined;
-}
-
 function restrictCodexAppServerSandboxForOpenClawSandbox(
   appServer: CodexAppServerRuntimeOptions,
   sandbox: Awaited<ReturnType<typeof resolveSandboxContext>>,
@@ -734,9 +687,9 @@ export async function runCodexAppServerAttempt(
         : undefined;
     const threadConfig = nativeHookRelayConfig;
     const pluginThreadConfigEnabled = shouldBuildCodexPluginThreadConfig(pluginConfig);
-    const pluginAppCacheKey = buildCodexAppInventoryCacheKey({
-      codexHome: resolveCodexPluginAppCacheCodexHome(appServer, agentDir),
-      endpoint: resolveCodexPluginAppCacheEndpoint(appServer),
+    const pluginAppCacheKey = buildCodexPluginAppCacheKey({
+      appServer,
+      agentDir,
       authProfileId: startupAuthProfileId,
       accountId: startupAuthAccountCacheKey,
       envApiKeyFingerprint: startupEnvApiKeyCacheKey,
@@ -3156,7 +3109,6 @@ export const __testing = {
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
   resolveDynamicToolCallTimeoutMs,
-  resolveCodexPluginAppCacheEndpoint,
   restrictCodexAppServerSandboxForOpenClawSandbox,
   resolveOpenClawCodingToolsSessionKeys,
   shouldForceMessageTool,

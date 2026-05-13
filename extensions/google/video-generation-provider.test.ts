@@ -287,7 +287,7 @@ describe("google video generation provider", () => {
       durationSeconds: 3,
     });
 
-    const [{ downloadPath }] = downloadMock.mock.calls.at(0) ?? [{}];
+    const [{ downloadPath }] = downloadMock.mock.calls[0] ?? [{}];
     const downloadBaseName = path.basename(String(downloadPath));
     expect(downloadBaseName).toContain("video-1.mp4");
     expect(downloadBaseName).toMatch(/\.part$/);

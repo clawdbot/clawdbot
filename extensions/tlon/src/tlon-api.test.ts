@@ -63,7 +63,7 @@ function createGuardedResult(response: Response, finalUrl: string) {
 }
 
 function guardedFetchCall(index: number): Parameters<typeof fetchWithSsrFGuard>[0] {
-  const call = mockGuardedFetch.mock.calls.at(index)?.at(0);
+  const call = mockGuardedFetch.mock.calls[index]?.at(0);
   if (call === undefined) {
     throw new Error(`expected guarded fetch call ${index}`);
   }

@@ -78,6 +78,7 @@ type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> & { id?
 
 type BaseStreamOptions = {
   temperature?: number;
+  topP?: number;
   maxTokens?: number;
   signal?: AbortSignal;
   apiKey?: string;
@@ -1267,6 +1268,7 @@ const OPENAI_CODEX_RESPONSES_UNSUPPORTED_PARAMS = [
   "prompt_cache_retention",
   "service_tier",
   "temperature",
+  "top_p",
 ] as const;
 
 function sanitizeOpenAICodexResponsesParams<T extends Record<string, unknown>>(
@@ -1349,6 +1351,9 @@ export function buildOpenAIResponsesParams(
   }
   if (options?.temperature !== undefined) {
     params.temperature = options.temperature;
+  }
+  if (options?.topP !== undefined) {
+    params.top_p = options.topP;
   }
   if (options?.serviceTier !== undefined && payloadPolicy.allowsServiceTier) {
     params.service_tier = options.serviceTier;
@@ -2180,6 +2185,7 @@ type OpenAIResponsesRequestParams = {
   store?: boolean;
   max_output_tokens?: number;
   temperature?: number;
+  top_p?: number;
   service_tier?: ResponseCreateParamsStreaming["service_tier"];
   tools?: FunctionTool[];
   reasoning?:
@@ -2410,6 +2416,9 @@ export function buildOpenAICompletionsParams(
   }
   if (options?.temperature !== undefined) {
     params.temperature = options.temperature;
+  }
+  if (options?.topP !== undefined) {
+    params.top_p = options.topP;
   }
   if (context.tools) {
     params.tools = convertTools(context.tools, compat, model);

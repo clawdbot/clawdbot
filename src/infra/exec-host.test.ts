@@ -16,7 +16,7 @@ type JsonlSocketCall = {
 };
 
 function requireJsonlSocketCall(): JsonlSocketCall {
-  const call = requestJsonlSocketMock.mock.calls.at(0)?.[0];
+  const call = requestJsonlSocketMock.mock.calls[0]?.[0];
   if (!call) {
     throw new Error("expected requestJsonlSocket call");
   }

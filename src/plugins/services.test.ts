@@ -79,7 +79,7 @@ function expectServiceLifecycleState(params: {
 }
 
 function requireLoggerErrorMessage(index = 0): string {
-  const call = mockedLogger.error.mock.calls.at(index);
+  const call = mockedLogger.error.mock.calls[index];
   if (!call) {
     throw new Error(`expected logger error call ${index}`);
   }

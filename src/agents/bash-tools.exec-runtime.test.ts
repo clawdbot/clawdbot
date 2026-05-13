@@ -64,7 +64,7 @@ function expectExecTarget(
 }
 
 function requireSystemEventCall(): [string, Record<string, unknown>] {
-  const call = enqueueSystemEventMock.mock.calls.at(0);
+  const call = enqueueSystemEventMock.mock.calls[0];
   if (!call) {
     throw new Error("expected system event call");
   }
@@ -72,7 +72,7 @@ function requireSystemEventCall(): [string, Record<string, unknown>] {
 }
 
 function requireHeartbeatCall(): Record<string, unknown> {
-  const call = requestHeartbeatMock.mock.calls.at(0);
+  const call = requestHeartbeatMock.mock.calls[0];
   if (!call) {
     throw new Error("expected heartbeat call");
   }
@@ -537,7 +537,7 @@ describe("emitExecSystemEvent", () => {
     expect(heartbeatParams.agentId).toBe("ops");
     expect(heartbeatParams.coalesceMs).toBe(0);
     expect(heartbeatParams.reason).toBe("exec-event");
-    expect(requestHeartbeatMock.mock.calls.at(0)?.[0]).not.toHaveProperty("sessionKey");
+    expect(requireHeartbeatCall()).not.toHaveProperty("sessionKey");
   });
 
   it("keeps wake unscoped for non-agent session keys", () => {

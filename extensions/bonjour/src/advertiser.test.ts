@@ -47,7 +47,7 @@ function warnMessages(): string[] {
 }
 
 function expectWarnContaining(fragment: string) {
-  expect(warnMessages().some((message) => message.includes(fragment))).toBe(true);
+  expect(warnMessages().join("\n")).toContain(fragment);
 }
 
 function mockCall(mock: ReturnType<typeof vi.fn>, index = 0): unknown[] {
@@ -379,7 +379,7 @@ describe("gateway bonjour advertiser", () => {
       ([event]) => event === "unhandledRejection",
     );
     expect(unhandledRejectionRegistration?.[1]).toBeTypeOf("function");
-    expect(processOn.mock.calls.some(([event]) => event === "uncaughtException")).toBe(false);
+    expect(processOn.mock.calls.map(([event]) => event)).not.toContain("uncaughtException");
 
     await started.stop();
   });
@@ -496,7 +496,7 @@ describe("gateway bonjour advertiser", () => {
     });
 
     expectWarnContaining("suppressing ciao cancellation");
-    expect(warnMessages().some((message) => message.includes("restarting advertiser"))).toBe(true);
+    expectWarnContaining("restarting advertiser");
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(advertise).toHaveBeenCalledTimes(2);
 
@@ -524,7 +524,7 @@ describe("gateway bonjour advertiser", () => {
 
     // allow promise rejection handler to run
     await Promise.resolve();
-    expect(warnMessages().some((message) => message.includes("advertise failed"))).toBe(true);
+    expectWarnContaining("advertise failed");
 
     // watchdog first retries, then recreates the advertiser after the service
     // stays unhealthy across multiple 5s ticks.
@@ -553,7 +553,7 @@ describe("gateway bonjour advertiser", () => {
     });
 
     expect(advertise).toHaveBeenCalledTimes(1);
-    expect(warnMessages().some((message) => message.includes("advertise threw"))).toBe(true);
+    expectWarnContaining("advertise threw");
 
     await started.stop();
   });
@@ -687,7 +687,7 @@ describe("gateway bonjour advertiser", () => {
 
     await vi.advanceTimersByTimeAsync(25_000);
 
-    expect(warnMessages().some((message) => message.includes("restarting advertiser"))).toBe(true);
+    expectWarnContaining("restarting advertiser");
     expect(createService).toHaveBeenCalledTimes(2);
     expect(advertise).toHaveBeenCalledTimes(2);
     expect(destroy).toHaveBeenCalledTimes(1);
@@ -756,11 +756,8 @@ describe("gateway bonjour advertiser", () => {
 
     expect(advertise).toHaveBeenCalledTimes(1);
     expect(createService).toHaveBeenCalledTimes(1);
-    expect(
-      warnMessages().every(
-        (message) =>
-          !message.includes("watchdog detected non-announced service; attempting re-advertise"),
-      ),
+    expect(warnMessages().join("\n")).not.toContain(
+      "watchdog detected non-announced service; attempting re-advertise",
     );
 
     await vi.advanceTimersByTimeAsync(10_000);

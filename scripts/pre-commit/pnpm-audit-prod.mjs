@@ -552,6 +552,26 @@ export function collectProdResolvedPackagesFromLockfile(lockfileText) {
   return versionsByPackage;
 }
 
+export function collectAllResolvedPackagesFromLockfile(lockfileText) {
+  const lockfile = parsePnpmLockfileSections(lockfileText);
+  if (!lockfile.hasSnapshotsSection) {
+    throw new Error("pnpm-lock.yaml is missing the snapshots section.");
+  }
+
+  const versionsByPackage = new Map();
+  for (const snapshotKey of Object.keys(lockfile.snapshots)) {
+    const resolved = parseSnapshotKey(snapshotKey);
+    let versions = versionsByPackage.get(resolved.packageName);
+    if (!versions) {
+      versions = new Set();
+      versionsByPackage.set(resolved.packageName, versions);
+    }
+    versions.add(resolved.version);
+  }
+
+  return versionsByPackage;
+}
+
 export function createBulkAdvisoryPayload(versionsByPackage) {
   return Object.fromEntries(
     [...versionsByPackage.entries()]

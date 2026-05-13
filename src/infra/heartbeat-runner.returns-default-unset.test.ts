@@ -221,7 +221,8 @@ function replyBody(
   replySpy: ReturnType<typeof vi.fn>,
   index = 0,
 ): { Body?: string; ForceSenderIsOwnerFalse?: boolean; Provider?: string } {
-  return requireRecord(replySpy.mock.calls.at(index)?.at(0), `reply call ${index} body`) as {
+  const call = replySpy.mock.calls[index];
+  return requireRecord(call?.[0], `reply call ${index} body`) as {
     Body?: string;
     ForceSenderIsOwnerFalse?: boolean;
     Provider?: string;

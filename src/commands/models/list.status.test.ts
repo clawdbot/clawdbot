@@ -264,7 +264,7 @@ function createRuntime() {
 }
 
 function parseFirstJsonLog(runtimeLike: { log: Mock }) {
-  return JSON.parse(String(runtimeLike.log.mock.calls.at(0)?.[0]));
+  return JSON.parse(String(runtimeLike.log.mock.calls[0]?.[0]));
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {

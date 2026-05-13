@@ -95,7 +95,7 @@ describe("shell env fallback", () => {
   }
 
   function requireExecCall(exec: ReturnType<typeof vi.fn>): unknown[] {
-    const call = exec.mock.calls.at(0);
+    const call = exec.mock.calls[0];
     if (!call) {
       throw new Error("expected shell env exec call");
     }

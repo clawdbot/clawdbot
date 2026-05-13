@@ -4,6 +4,10 @@ import {
   emitAssistantTextDeltaAndEnd,
 } from "./pi-embedded-subscribe.e2e-harness.js";
 
+function blockReplyTexts(onBlockReply: ReturnType<typeof vi.fn>): string[] {
+  return onBlockReply.mock.calls.map(([payload]) => (payload as { text?: string }).text ?? "");
+}
+
 describe("subscribeEmbeddedPiSession", () => {
   it("streams soft chunks with paragraph preference", () => {
     const onBlockReply = vi.fn();
@@ -20,8 +24,7 @@ describe("subscribeEmbeddedPiSession", () => {
     emitAssistantTextDeltaAndEnd({ emit, text });
 
     expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expect(onBlockReply.mock.calls.at(0)?.[0]?.text).toBe("First block line");
-    expect(onBlockReply.mock.calls.at(1)?.[0]?.text).toBe("Second block line");
+    expect(blockReplyTexts(onBlockReply)).toEqual(["First block line", "Second block line"]);
     expect(subscription.assistantTexts).toEqual(["First block line", "Second block line"]);
   });
   it("avoids splitting inside fenced code blocks", () => {
@@ -39,8 +42,6 @@ describe("subscribeEmbeddedPiSession", () => {
     emitAssistantTextDeltaAndEnd({ emit, text });
 
     expect(onBlockReply).toHaveBeenCalledTimes(3);
-    expect(onBlockReply.mock.calls.at(0)?.[0]?.text).toBe("Intro");
-    expect(onBlockReply.mock.calls.at(1)?.[0]?.text).toBe("```bash\nline1\nline2\n```");
-    expect(onBlockReply.mock.calls.at(2)?.[0]?.text).toBe("Outro");
+    expect(blockReplyTexts(onBlockReply)).toEqual(["Intro", "```bash\nline1\nline2\n```", "Outro"]);
   });
 });

@@ -9,6 +9,14 @@ import {
 } from "./provider-test-helpers.test.js";
 import { buildVydraVideoGenerationProvider } from "./video-generation-provider.js";
 
+function fetchCall(fetchMock: ReturnType<typeof vi.fn>, index: number) {
+  const call = fetchMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected fetch call ${index}`);
+  }
+  return call;
+}
+
 describe("vydra video-generation provider", () => {
   installPinnedHostnameTestHooks();
 
@@ -41,14 +49,14 @@ describe("vydra video-generation provider", () => {
       cfg: {},
     });
 
-    const createCall = fetchMock.mock.calls.at(0);
-    expect(createCall?.[0]).toBe("https://www.vydra.ai/api/v1/models/veo3");
-    const createInit = createCall?.[1] as { method?: string; body?: unknown } | undefined;
+    const createCall = fetchCall(fetchMock, 0);
+    expect(createCall[0]).toBe("https://www.vydra.ai/api/v1/models/veo3");
+    const createInit = createCall[1] as { method?: string; body?: unknown } | undefined;
     expect(createInit?.method).toBe("POST");
     expect(createInit?.body).toBe(JSON.stringify({ prompt: "tiny city at sunrise" }));
-    const pollCall = fetchMock.mock.calls.at(1);
-    expect(pollCall?.[0]).toBe("https://www.vydra.ai/api/v1/jobs/job-123");
-    const pollInit = pollCall?.[1] as { method?: string } | undefined;
+    const pollCall = fetchCall(fetchMock, 1);
+    expect(pollCall[0]).toBe("https://www.vydra.ai/api/v1/jobs/job-123");
+    const pollInit = pollCall[1] as { method?: string } | undefined;
     expect(pollInit?.method).toBe("GET");
     expect(result.videos).toHaveLength(1);
     const [video] = result.videos;
@@ -101,9 +109,9 @@ describe("vydra video-generation provider", () => {
       inputImages: [{ url: "https://example.com/reference.png" }],
     });
 
-    const createCall = fetchMock.mock.calls.at(0);
-    expect(createCall?.[0]).toBe("https://www.vydra.ai/api/v1/models/kling");
-    const createInit = createCall?.[1] as { method?: string; body?: unknown } | undefined;
+    const createCall = fetchCall(fetchMock, 0);
+    expect(createCall[0]).toBe("https://www.vydra.ai/api/v1/models/kling");
+    const createInit = createCall[1] as { method?: string; body?: unknown } | undefined;
     expect(createInit?.method).toBe("POST");
     expect(createInit?.body).toBe(
       JSON.stringify({

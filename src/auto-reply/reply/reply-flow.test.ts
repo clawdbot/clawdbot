@@ -8,7 +8,7 @@ type DeliverPayload = Parameters<Parameters<typeof createReplyDispatcher>[0]["de
 type DeliverMock = { mock: { calls: unknown[][] } };
 
 function deliveredText(deliver: DeliverMock, index = 0) {
-  const payload = deliver.mock.calls.at(index)?.at(0) as DeliverPayload | undefined;
+  const payload = deliver.mock.calls[index]?.[0] as DeliverPayload | undefined;
   return payload?.text;
 }
 

@@ -20,7 +20,7 @@ SGLang serves open-weight models via an OpenAI-compatible HTTP API. OpenClaw con
 | Streaming usage           | Yes (`supportsStreamingUsage: true`)                         |
 | Pricing                   | Marked external-free (`modelPricing.external: false`)        |
 
-OpenClaw also **auto-discovers** available models from SGLang when you opt in with `SGLANG_API_KEY` and you do not define an explicit `models.providers.sglang` entry — see [Model discovery (implicit provider)](#model-discovery-implicit-provider) below.
+OpenClaw also **auto-discovers** available models from SGLang when you opt in with `SGLANG_API_KEY`. Use `sglang/*` in `agents.defaults.models` to keep discovery dynamic when you also configure a custom SGLang base URL. See [Model discovery (implicit provider)](#model-discovery-implicit-provider) below.
 
 ## Getting started
 
@@ -71,8 +71,10 @@ define `models.providers.sglang`, OpenClaw will query:
 and convert the returned IDs into model entries.
 
 <Note>
-If you set `models.providers.sglang` explicitly, auto-discovery is skipped and
-you must define models manually.
+If you set `models.providers.sglang` explicitly, OpenClaw uses your declared
+models by default. Add `"sglang/*": {}` to `agents.defaults.models` when you
+want OpenClaw to query that configured provider's `/models` endpoint and include
+all advertised SGLang models.
 </Note>
 
 ## Explicit configuration (manual models)

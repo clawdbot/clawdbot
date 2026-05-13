@@ -5,7 +5,7 @@ import {
 } from "./host-hook-cleanup-timeout.js";
 
 function requireSetTimeoutCall(callIndex: number): unknown[] {
-  const call = vi.mocked(globalThis.setTimeout).mock.calls.at(callIndex);
+  const call = vi.mocked(globalThis.setTimeout).mock.calls[callIndex];
   if (!call) {
     throw new Error(`expected setTimeout call ${callIndex}`);
   }

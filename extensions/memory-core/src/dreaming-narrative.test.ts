@@ -1015,7 +1015,7 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(updatedStore).toHaveProperty("agent:main:kept-session");
     expect(updatedStore).toHaveProperty("agent:main:telegram:group:dreaming-narrative-room");
     const sessionFiles = await fs.readdir(sessionsDir);
-    expect(sessionFiles.some((file) => file.startsWith("orphan.jsonl.deleted."))).toBe(true);
+    expect(sessionFiles.filter((file) => file.startsWith("orphan.jsonl.deleted."))).not.toEqual([]);
     expect(sessionFiles).toContain("still-live.jsonl");
     expectLogIncludes(logger.info, "dreaming cleanup scrubbed");
   });

@@ -81,7 +81,7 @@ function createCapturingStreamFn(result = "stream") {
 }
 
 function callArg(mock: { mock: { calls: unknown[][] } }, callIndex: number, argIndex: number) {
-  const call = mock.mock.calls.at(callIndex);
+  const call = mock.mock.calls[callIndex];
   if (!call) {
     throw new Error(`Expected mock call ${callIndex}`);
   }
@@ -97,6 +97,10 @@ function fetchInit(fetchMock: { mock: { calls: unknown[][] } }, callIndex = 0): 
     throw new Error(`expected fetch init for call ${callIndex}`);
   }
   return init as RequestInit;
+}
+
+function fetchUrl(fetchMock: { mock: { calls: unknown[][] } }, callIndex = 0): string {
+  return String(callArg(fetchMock, callIndex, 0));
 }
 
 function streamContext(streamFn: { mock: { calls: unknown[][] } }, callIndex = 0) {
@@ -300,7 +304,7 @@ describe("google prompt cache", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(String(fetchMock.mock.calls.at(0)?.[0])).toBe(
+    expect(fetchUrl(fetchMock)).toBe(
       "https://generativelanguage.googleapis.com/v1beta/cachedContents/system-cache-3?updateMask=ttl",
     );
     expect(fetchInit(fetchMock).method).toBe("PATCH");

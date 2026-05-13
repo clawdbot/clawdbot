@@ -27,15 +27,14 @@ function expectIssueListContainsFields(
   issues: StatusIssue[],
   expected: Partial<StatusIssue>,
 ): void {
-  expect(
-    issues.some((issue) =>
-      Object.entries(expected).every(([key, value]) => issue[key as keyof StatusIssue] === value),
-    ),
-  ).toBe(true);
+  const match = issues.find((issue) =>
+    Object.entries(expected).every(([key, value]) => issue[key as keyof StatusIssue] === value),
+  );
+  expectIssueFields(match, expected);
 }
 
 function expectIssueMessageContains(issues: StatusIssue[], text: string): void {
-  expect(issues.some((issue) => issue.message.includes(text))).toBe(true);
+  expect(issues.map((issue) => issue.message).join("\n")).toContain(text);
 }
 
 describe("collectTelegramStatusIssues", () => {

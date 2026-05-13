@@ -48,7 +48,7 @@ function requestCalls(
 }
 
 function expectRequestMethodNotCalled(request: CodexComputerUseRequest, method: string): void {
-  expect(requestCalls(request).some(([calledMethod]) => calledMethod === method)).toBe(false);
+  expect(requestCalls(request).map(([calledMethod]) => calledMethod)).not.toContain(method);
 }
 
 describe("Codex Computer Use setup", () => {

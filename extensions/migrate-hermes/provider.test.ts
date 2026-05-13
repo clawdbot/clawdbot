@@ -136,10 +136,9 @@ describe("Hermes migration provider", () => {
     expect(secret?.sensitive).toBe(true);
     expect(secret?.status).toBe("skipped");
     expect(secret?.reason).toBe(HERMES_REASON_INCLUDE_SECRETS);
-    const warnings = plan.warnings ?? [];
-    expect(warnings.some((warning) => warning.includes("Secrets were detected but skipped"))).toBe(
-      true,
-    );
-    expect(warnings.some((warning) => warning.includes("Conflicts were found"))).toBe(true);
+    expect(plan.warnings).toEqual([
+      "Secrets were detected but skipped. Re-run with --include-secrets to import supported API keys.",
+      "Conflicts were found. Re-run with --overwrite to replace conflicting targets after item-level backups.",
+    ]);
   });
 });

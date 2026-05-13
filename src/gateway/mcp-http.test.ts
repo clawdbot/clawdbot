@@ -24,6 +24,7 @@ type ScopedToolsCall = {
   messageProvider?: string;
   senderIsOwner?: boolean;
   surface?: string;
+  excludeToolNames?: Iterable<string>;
 };
 
 type BeforeToolCallHookInput = {
@@ -180,6 +181,14 @@ describe("mcp loopback server", () => {
     expect(call.messageProvider).toBe("telegram");
     expect(call.senderIsOwner).toBe(false);
     expect(call.surface).toBe("loopback");
+    expect(Array.from(call.excludeToolNames ?? [])).toEqual([
+      "read",
+      "write",
+      "edit",
+      "apply_patch",
+      "exec",
+      "process",
+    ]);
   });
 
   it("adds empty properties for object schemas that omit properties", async () => {

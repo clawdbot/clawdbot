@@ -66,6 +66,22 @@ describe("formatAssistantErrorText", () => {
       "The AI service is temporarily overloaded. Please try again in a moment.",
     );
   });
+  it("rewrites generic provider internal errors without support request ids", () => {
+    const msg = makeAssistantError(
+      "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID synthetic-provider-request-001 in your message.",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service returned an internal error. Please try again in a moment.",
+    );
+  });
+  it("rewrites request-id-only generic provider internal errors without exposing the id", () => {
+    const msg = makeAssistantError(
+      "An error occurred while processing your request. Please include request ID req_synthetic_provider_request_001 in your message.",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service returned an internal error. Please try again in a moment.",
+    );
+  });
   it("returns a model-switch hint for OpenAI model capacity errors", () => {
     const msg = makeAssistantError("Selected model is at capacity. Please try a different model.");
     expect(formatAssistantErrorText(msg)).toBe(
@@ -405,6 +421,14 @@ describe("formatRawAssistantErrorForUi", () => {
 
   it("formats colon-delimited HTTP status lines", () => {
     expect(formatRawAssistantErrorForUi("HTTP 410: No body")).toBe("HTTP 410: No body");
+  });
+
+  it("formats plain provider internal errors without request ids", () => {
+    expect(
+      formatRawAssistantErrorForUi(
+        "An error occurred while processing your request. Please include the request ID synthetic-provider-request-001 in your message.",
+      ),
+    ).toBe("The AI service returned an internal error. Please try again in a moment.");
   });
 
   it("sanitizes HTML error pages into a clean unavailable message", () => {

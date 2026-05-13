@@ -144,7 +144,7 @@ function expectVerboseLogContains(expected: string): void {
   const messages = vi
     .mocked(logVerbose)
     .mock.calls.map((call) => (typeof call[0] === "string" ? call[0] : ""));
-  expect(messages.some((message) => message.includes(expected))).toBe(true);
+  expect(messages.join("\n")).toContain(expected);
 }
 
 function getRequestHeader(callIndex: number, headerName: string): string | null {

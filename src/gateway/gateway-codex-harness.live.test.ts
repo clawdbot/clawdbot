@@ -162,6 +162,31 @@ async function createLiveWorkspace(tempDir: string): Promise<string> {
   return workspace;
 }
 
+async function removeLiveTempDir(dir: string): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      await fs.rm(dir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      const code = (error as { code?: unknown } | null)?.code;
+      if (code !== "EBUSY" && code !== "ENOTEMPTY" && code !== "EPERM" && code !== "EACCES") {
+        throw error;
+      }
+      await delay(100);
+    }
+  }
+  if (process.platform === "win32") {
+    logCodexLiveStep("temp-cleanup-deferred", {
+      dir,
+      error: lastError instanceof Error ? lastError.message : String(lastError),
+    });
+    return;
+  }
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
 function parseModelKey(modelKey: string): { provider: string; modelId: string } {
   const [provider, ...modelParts] = modelKey.split("/");
   const modelId = modelParts.join("/");
@@ -935,8 +960,15 @@ describeLive("gateway live (Codex harness)", () => {
         clearRuntimeConfigSnapshot();
         await client.stopAndWait();
         await server.close();
+        const [{ resetTaskRegistryForTests }, { resetTaskFlowRegistryForTests }] =
+          await Promise.all([
+            import("../tasks/runtime-internal.js"),
+            import("../tasks/task-flow-runtime-internal.js"),
+          ]);
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
         restoreEnv(previousEnv);
-        await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        await removeLiveTempDir(tempDir);
       }
     },
     CODEX_HARNESS_TIMEOUT_MS,

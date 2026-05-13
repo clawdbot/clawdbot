@@ -1,4 +1,9 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store.js";
+import {
+  createProviderApiKeyResolver,
+  createProviderAuthResolver,
+} from "../../agents/models-config.providers.secrets.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -14,6 +19,7 @@ import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
   resolveRuntimePluginDiscoveryProviders,
+  runProviderCatalog,
   runProviderStaticCatalog,
 } from "../../plugins/provider-discovery.js";
 import {
@@ -247,16 +253,32 @@ export async function loadProviderCatalogModelsForList(params: {
       if (!providerFilter && SELF_HOSTED_DISCOVERY_PROVIDER_IDS.has(provider.id)) {
         continue;
       }
-      let result: Awaited<ReturnType<typeof runProviderStaticCatalog>> | null;
+      let result: Awaited<ReturnType<typeof runProviderCatalog>> | null;
       try {
-        result = await runProviderStaticCatalog({
-          provider,
-          config: params.cfg,
-          agentDir: params.agentDir,
-          env,
-        });
+        if (params.staticOnly === true || typeof provider.staticCatalog?.run === "function") {
+          result = await runProviderStaticCatalog({
+            provider,
+            config: params.cfg,
+            agentDir: params.agentDir,
+            env,
+          });
+        } else {
+          const authStore = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir);
+          const resolveProviderApiKey = createProviderApiKeyResolver(env, authStore, params.cfg);
+          const resolveProviderAuth = createProviderAuthResolver(env, authStore, params.cfg);
+          result = await runProviderCatalog({
+            provider,
+            config: params.cfg,
+            agentDir: params.agentDir,
+            env,
+            resolveProviderApiKey: (providerId) =>
+              resolveProviderApiKey(providerId?.trim() || provider.id),
+            resolveProviderAuth: (providerId, options) =>
+              resolveProviderAuth(providerId?.trim() || provider.id, options),
+          });
+        }
       } catch (error) {
-        log.warn(`provider static catalog failed for ${provider.id}: ${formatErrorMessage(error)}`);
+        log.warn(`provider catalog failed for ${provider.id}: ${formatErrorMessage(error)}`);
         result = null;
       }
       const normalized = normalizePluginDiscoveryResult({ provider, result });

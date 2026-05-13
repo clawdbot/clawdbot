@@ -135,7 +135,7 @@ describe("statusJsonCommand", () => {
     await statusJsonCommand({ all: true }, runtime);
 
     expect(mocks.runSecurityAudit).toHaveBeenCalledOnce();
-    const auditInput = mocks.runSecurityAudit.mock.calls.at(0)?.[0] as
+    const auditInput = mocks.runSecurityAudit.mock.calls[0]?.[0] as
       | {
           config?: unknown;
           sourceConfig?: unknown;

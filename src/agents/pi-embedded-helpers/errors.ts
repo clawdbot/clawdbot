@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
+  isGenericProviderInternalError,
 } from "../../shared/assistant-error-format.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -13,6 +14,7 @@ export {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
   isCloudflareOrHtmlErrorPage,
+  isGenericProviderInternalError,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import { classifyOAuthRefreshFailure } from "../auth-profiles/oauth-refresh-failure.js";
@@ -843,6 +845,9 @@ function classifyFailoverClassificationFromMessage(
     }
     return toReasonClassification("timeout");
   }
+  if (isGenericProviderInternalError(raw)) {
+    return toReasonClassification("timeout");
+  }
   // Billing and auth classifiers run before the broad isJsonApiInternalServerError
   // check so that provider errors like {"type":"api_error","message":"insufficient
   // balance"} are correctly classified as "billing"/"auth" rather than "timeout".
@@ -1126,6 +1131,10 @@ export function formatAssistantErrorText(
   const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
   if (transientCopy) {
     return transientCopy;
+  }
+
+  if (isGenericProviderInternalError(raw)) {
+    return formatRawAssistantErrorForUi(raw);
   }
 
   const transportCopy = formatTransportErrorCopy(raw);

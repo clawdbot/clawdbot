@@ -461,7 +461,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     const result = await applyAuthChoiceLoadedPluginProvider(buildParams());
 
     expect(ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
-    const [installParams] = ensureOnboardingPluginInstalled.mock.calls.at(0) ?? [];
+    const [installParams] = ensureOnboardingPluginInstalled.mock.calls[0] ?? [];
     if (installParams === undefined) {
       throw new Error("expected plugin install params");
     }

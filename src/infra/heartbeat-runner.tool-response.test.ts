@@ -82,7 +82,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
   }
 
   function replyCall(replySpy: ReturnType<typeof vi.fn>): unknown[] {
-    const call = replySpy.mock.calls.at(0);
+    const call = replySpy.mock.calls[0];
     if (!call) {
       throw new Error("Expected reply call");
     }
@@ -90,7 +90,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
   }
 
   function replyContext(replySpy: ReturnType<typeof vi.fn>): { Body?: string } {
-    const context = replyCall(replySpy).at(0);
+    const context = replyCall(replySpy)[0];
     if (!context || typeof context !== "object") {
       throw new Error("Expected reply context");
     }
@@ -102,7 +102,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     forceHeartbeatTool?: boolean;
     sourceReplyDeliveryMode?: string;
   } {
-    const options = replyCall(replySpy).at(1);
+    const options = replyCall(replySpy)[1];
     if (!options || typeof options !== "object") {
       throw new Error("Expected reply options");
     }

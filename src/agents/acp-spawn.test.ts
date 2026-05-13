@@ -341,6 +341,26 @@ function expectRecordFields(
   return actual;
 }
 
+function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`Expected ${label} to be called`);
+  }
+  return call;
+}
+
+function latestMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls[mock.mock.calls.length - 1];
+  if (!call) {
+    throw new Error(`Expected ${label} to be called`);
+  }
+  return call;
+}
+
+function latestBindingInput(): Record<string, unknown> {
+  return expectRecordFields(latestMockCall(hoisted.sessionBindingBindMock, "session bind")[0], {});
+}
+
 function gatewayRequests(): Array<{ method?: string; params?: Record<string, unknown> }> {
   return hoisted.callGatewayMock.mock.calls.map(
     (call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> },
@@ -364,7 +384,10 @@ function expectSessionPatchFields(expected: Record<string, unknown>): void {
 }
 
 function expectInitializeSessionFields(expected: Record<string, unknown>): Record<string, unknown> {
-  return expectRecordFields(hoisted.initializeSessionMock.mock.calls.at(0)?.[0], expected);
+  return expectRecordFields(
+    firstMockCall(hoisted.initializeSessionMock, "session initialization")[0],
+    expected,
+  );
 }
 
 function expectBindingCallFields(expected: {
@@ -373,7 +396,7 @@ function expectBindingCallFields(expected: {
   placement?: string;
   targetKind?: string;
 }): Record<string, unknown> {
-  const input = expectRecordFields(hoisted.sessionBindingBindMock.mock.calls.at(-1)?.[0], {
+  const input = expectRecordFields(latestBindingInput(), {
     ...(expected.placement ? { placement: expected.placement } : {}),
     ...(expected.targetKind ? { targetKind: expected.targetKind } : {}),
   });
@@ -1942,11 +1965,14 @@ describe("spawnAcpDirect", () => {
     expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
     if (expectTranscriptPersistence) {
-      expectRecordFields(hoisted.resolveSessionTranscriptFileMock.mock.calls.at(0)?.[0], {
-        sessionId: "sess-123",
-        storePath: "/tmp/codex-sessions.json",
-        agentId: "codex",
-      });
+      expectRecordFields(
+        firstMockCall(hoisted.resolveSessionTranscriptFileMock, "transcript file resolution")[0],
+        {
+          sessionId: "sess-123",
+          storePath: "/tmp/codex-sessions.json",
+          agentId: "codex",
+        },
+      );
     }
     expectAgentGatewayCall(expectedAgentCall);
   });
@@ -2162,7 +2188,7 @@ describe("spawnAcpDirect", () => {
     expect(relayRuns).toContain(agentCall?.params?.idempotencyKey);
     expect(relayRuns).toContain(accepted.runId);
     const streamPathInput = expectRecordFields(
-      hoisted.resolveAcpSpawnStreamLogPathMock.mock.calls.at(0)?.[0],
+      firstMockCall(hoisted.resolveAcpSpawnStreamLogPathMock, "stream log path resolution")[0],
       {},
     );
     expect(streamPathInput.childSessionKey).toMatch(/^agent:codex:acp:/);
@@ -2630,10 +2656,9 @@ describe("spawnAcpDirect", () => {
         conversationId: "6098642967",
       },
     });
-    const bindCall = hoisted.sessionBindingBindMock.mock.calls.at(-1)?.[0] as
-      | { conversation?: { parentConversationId?: string } }
-      | undefined;
-    expect(bindCall?.conversation?.parentConversationId).toBeUndefined();
+    const bindCall = latestBindingInput();
+    const conversation = expectRecordFields(bindCall.conversation, {});
+    expect(conversation.parentConversationId).toBeUndefined();
   });
 
   it("preserves topic-qualified Telegram targets without a separate threadId", async () => {

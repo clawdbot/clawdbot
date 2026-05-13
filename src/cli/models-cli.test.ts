@@ -111,7 +111,7 @@ describe("models cli", () => {
     expected: Record<string, unknown>,
   ) {
     expect(command).toHaveBeenCalledTimes(1);
-    const [options, context] = command.mock.calls.at(0) ?? [];
+    const [options, context] = command.mock.calls[0] ?? [];
     const optionRecord = options as Record<string, unknown> | undefined;
     for (const [key, value] of Object.entries(expected)) {
       expect(optionRecord?.[key]).toEqual(value);

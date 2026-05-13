@@ -786,16 +786,18 @@ describe("google-meet plugin", () => {
   it("advertises only the googlemeet CLI descriptor", () => {
     const { cliRegistrations } = setup();
 
-    expect(cliRegistrations).toContainEqual({
-      commands: ["googlemeet"],
-      descriptors: [
-        {
-          name: "googlemeet",
-          description: "Join and manage Google Meet calls",
-          hasSubcommands: true,
-        },
-      ],
-    });
+    expect(cliRegistrations).toEqual([
+      {
+        commands: ["googlemeet"],
+        descriptors: [
+          {
+            name: "googlemeet",
+            description: "Join and manage Google Meet calls",
+            hasSubcommands: true,
+          },
+        ],
+      },
+    ]);
   });
 
   it("registers the node-host command used by chrome-node transport", () => {

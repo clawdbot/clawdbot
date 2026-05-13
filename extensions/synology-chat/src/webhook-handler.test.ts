@@ -28,7 +28,7 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
 
 function deliveredMessage(deliver: ReturnType<typeof vi.fn>) {
   expect(deliver).toHaveBeenCalledTimes(1);
-  const message = deliver.mock.calls.at(0)?.[0] as
+  const message = deliver.mock.calls[0]?.[0] as
     | {
         accountId?: unknown;
         body?: unknown;

@@ -105,11 +105,11 @@ describe("config observe recovery", () => {
   }
 
   function expectWarnContaining(warn: ReturnType<typeof vi.fn>, expected: string) {
-    expect(warnMessages(warn).some((message) => message.includes(expected))).toBe(true);
+    expect(warnMessages(warn).join("\n")).toContain(expected);
   }
 
   function expectWarnNotContaining(warn: ReturnType<typeof vi.fn>, expected: string) {
-    expect(warnMessages(warn).some((message) => message.includes(expected))).toBe(false);
+    expect(warnMessages(warn).join("\n")).not.toContain(expected);
   }
 
   function observeSuspicious(observe: Record<string, unknown> | undefined): string[] {

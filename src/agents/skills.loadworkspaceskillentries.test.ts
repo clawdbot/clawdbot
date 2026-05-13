@@ -90,6 +90,11 @@ function captureWarningLogger() {
   return warn;
 }
 
+function firstWarningLine(warn: ReturnType<typeof vi.fn>): string {
+  const [line] = warn.mock.calls[0] ?? [];
+  return String(line);
+}
+
 function loadTestWorkspaceSkillEntries(
   workspaceDir: string,
   opts?: Parameters<typeof loadWorkspaceSkillEntries>[1],
@@ -368,8 +373,7 @@ describe("loadWorkspaceSkillEntries", () => {
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-skill");
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-file-skill");
       expect(entries.map((entry) => entry.skill.name)).not.toContain("symlink-target");
-      const [line] = warn.mock.calls.at(0) ?? [];
-      const warningLine = String(line);
+      const warningLine = firstWarningLine(warn);
       expect(warningLine).toContain("Skipping escaped skill path outside its configured root:");
       expect(warningLine).toContain("reason=symlink-escape");
       expect(warningLine).toContain("source=openclaw-workspace");
@@ -427,8 +431,7 @@ describe("loadWorkspaceSkillEntries", () => {
       });
 
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-bundled-skill");
-      const [line] = warn.mock.calls.at(0) ?? [];
-      const warningLine = String(line);
+      const warningLine = firstWarningLine(warn);
       expect(warningLine).toContain("Skipping escaped skill path outside its configured root:");
       expect(warningLine).toContain("source=openclaw-bundled");
       expect(warningLine).toContain("reason=bundled-symlink-escape");
@@ -451,8 +454,7 @@ describe("loadWorkspaceSkillEntries", () => {
         bundledSkillsDir: bundledDir,
       });
 
-      const [line] = warn.mock.calls.at(0) ?? [];
-      const warningLine = String(line);
+      const warningLine = firstWarningLine(warn);
       expect(warningLine).toContain("root=~/workspace/.bundled");
       expect(warningLine).toContain("requested=~/workspace/.bundled/escaped-bundled-skill");
       expect(warningLine).toContain("resolved=~/outside/outside-bundled-skill");

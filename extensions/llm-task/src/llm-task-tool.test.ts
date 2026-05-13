@@ -88,7 +88,7 @@ function resetRunnerMocks() {
 async function executeEmbeddedRun(input: Record<string, unknown>) {
   const tool = createLlmTaskTool(fakeApi());
   await tool.execute("id", input);
-  return (runEmbeddedPiAgent as any).mock.calls.at(0)?.[0];
+  return (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
 }
 
 describe("llm-task tool (json-only)", () => {
@@ -238,7 +238,7 @@ describe("llm-task tool (json-only)", () => {
 
     await tool.execute("id", { prompt: "x", model: "gemini-flash" });
 
-    const call = (runEmbeddedPiAgent as any).mock.calls.at(0)?.[0];
+    const call = (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
     expect(call.provider).toBe("google");
     expect(call.model).toBe("gemini-3-flash-preview");
   });

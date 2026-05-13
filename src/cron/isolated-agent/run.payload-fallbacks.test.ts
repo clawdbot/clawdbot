@@ -20,7 +20,7 @@ function requireModelFallbackRequest(): {
   provider?: string;
   model?: string;
 } {
-  const request = runWithModelFallbackMock.mock.calls.at(0)?.[0] as
+  const request = runWithModelFallbackMock.mock.calls[0]?.[0] as
     | {
         fallbacksOverride?: string[];
         provider?: string;

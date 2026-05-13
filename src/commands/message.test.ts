@@ -17,7 +17,7 @@ type RunMessageActionParams = {
 
 function readOnlyMessageActionCall(): RunMessageActionParams {
   expect(runMessageActionMock).toHaveBeenCalledOnce();
-  const call = runMessageActionMock.mock.calls.at(0)?.[0];
+  const call = runMessageActionMock.mock.calls[0]?.[0];
   if (!call) {
     throw new Error("Expected message action call");
   }
@@ -208,7 +208,7 @@ describe("messageCommand", () => {
     expect(actionCall.gateway?.clientName).toBe("cli");
     expect(actionCall.gateway?.mode).toBe("cli");
     expect(actionCall.cfg).not.toBe(rawConfig);
-    const configResolutionCall = resolveCommandConfigWithSecrets.mock.calls.at(0)?.[0] as {
+    const configResolutionCall = resolveCommandConfigWithSecrets.mock.calls[0]?.[0] as {
       commandName?: string;
       config?: unknown;
       targetIds?: Set<string>;

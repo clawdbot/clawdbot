@@ -73,7 +73,7 @@ function readHeader(init: unknown, name: string): string | null {
 }
 
 function fetchCall(mockFetch: { mock: { calls: Array<Array<unknown>> } }, index = 0) {
-  const call = mockFetch.mock.calls.at(index);
+  const call = mockFetch.mock.calls[index];
   if (!call) {
     throw new Error(`Expected fetch call ${index + 1}`);
   }

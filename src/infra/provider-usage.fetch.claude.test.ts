@@ -41,7 +41,7 @@ async function expectMissingScopeWithoutFallback(mockFetch: ScopeFallbackFetch) 
   expectMissingScopeError(result);
   const calledUrls = mockFetch.mock.calls.map(([input]) => toRequestUrl(input));
   expect(calledUrls.length).toBeGreaterThan(0);
-  expect(calledUrls.every((url) => url.includes("/api/oauth/usage"))).toBe(true);
+  expect(calledUrls.filter((url) => !url.includes("/api/oauth/usage"))).toEqual([]);
 }
 
 function makeOrgAResponse() {

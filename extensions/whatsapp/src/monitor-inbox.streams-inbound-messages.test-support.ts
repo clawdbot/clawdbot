@@ -69,12 +69,9 @@ async function primeInboundReplyHandle(params: {
   );
   await waitForMessageCalls(params.onMessage, 1);
 
-  const inbound = params.onMessage.mock.calls.at(0)?.at(0) as
-    | {
-        reply: (text: string) => Promise<void>;
-      }
-    | undefined;
-  expect(inbound).toBeDefined();
+  const inbound = inboundMessage(params.onMessage) as {
+    reply: (text: string) => Promise<void>;
+  };
 
   return { listener, sock, inbound };
 }
@@ -267,7 +264,7 @@ describe("web monitor inbox", () => {
     expect(inbound.groupSubject).toBe("Recovered Group");
     expect(inbound.senderE164).toBe("+444");
     expect(inbound.chatType).toBe("group");
-    expect(onMessage.mock.calls.at(0)?.[0].groupParticipants).toBeUndefined();
+    expect(inbound.groupParticipants).toBeUndefined();
 
     await second.listener.close();
   });
@@ -348,14 +345,11 @@ describe("web monitor inbox", () => {
     );
     await waitForMessageCalls(onMessage, 1);
 
-    const inbound = onMessage.mock.calls.at(0)?.at(0) as
-      | {
-          reply: (text: string) => Promise<void>;
-          sendMedia: (payload: Record<string, unknown>) => Promise<void>;
-          sendComposing: () => Promise<void>;
-        }
-      | undefined;
-    expect(inbound).toBeDefined();
+    const inbound = inboundMessage(onMessage) as {
+      reply: (text: string) => Promise<void>;
+      sendMedia: (payload: Record<string, unknown>) => Promise<void>;
+      sendComposing: () => Promise<void>;
+    };
 
     const replacementSock = {
       sendMessage: vi.fn(async () => undefined),
@@ -365,9 +359,9 @@ describe("web monitor inbox", () => {
       InboxMonitorOptions["socketRef"]
     >["current"];
 
-    await inbound?.reply("pong");
-    await inbound?.sendMedia({ text: "after-reconnect" });
-    await inbound?.sendComposing();
+    await inbound.reply("pong");
+    await inbound.sendMedia({ text: "after-reconnect" });
+    await inbound.sendComposing();
 
     expect(replacementSock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
       text: "pong",
@@ -454,6 +448,112 @@ describe("web monitor inbox", () => {
       await vi.advanceTimersByTimeAsync(50);
       await waitForMessageCalls(onMessage, 1);
       expect(inboundMessage(onMessage).body).toBe("first\nsecond");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a drained debounced inbound reply before closing the socket", async () => {
+    vi.useFakeTimers();
+    try {
+      const onMessage = vi.fn(async (msg) => {
+        await msg.reply("pong");
+        await msg.sendMedia({ text: "media" });
+      });
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+        debounceMs: 50,
+      });
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-close-reply-1"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "first",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
+        }),
+      );
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-close-reply-2"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "second",
+          timestamp: 1_700_000_001,
+          pushName: "Tester",
+        }),
+      );
+
+      await listener.close();
+
+      expect(onMessage).toHaveBeenCalledTimes(1);
+      expect(inboundMessage(onMessage).body).toBe("first\nsecond");
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
+        text: "pong",
+      });
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
+        text: "media",
+      });
+      expect(sock.end).toHaveBeenCalledTimes(1);
+      expect(sock.sendMessage.mock.invocationCallOrder.at(-1)).toBeLessThan(
+        sock.end.mock.invocationCallOrder.at(0),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for in-flight inbound handlers before draining on close", async () => {
+    vi.useFakeTimers();
+    try {
+      const onMessage = vi.fn(async (msg) => {
+        await msg.reply("pong");
+      });
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+        debounceMs: 50,
+      });
+      let releaseRead: (() => void) | undefined;
+      const readGate = new Promise<void>((resolve) => {
+        releaseRead = resolve;
+      });
+      const readStarted = new Promise<void>((resolve) => {
+        sock.readMessages.mockImplementationOnce(async () => {
+          resolve();
+          await readGate;
+        });
+      });
+
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-close-inflight"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "first",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
+        }),
+      );
+
+      await readStarted;
+      const closePromise = listener.close();
+      await Promise.resolve();
+
+      expect(sock.end).not.toHaveBeenCalled();
+
+      if (!releaseRead) {
+        throw new Error("Expected read receipt release callback to be initialized");
+      }
+      releaseRead();
+      await closePromise;
+
+      expect(onMessage).toHaveBeenCalledTimes(1);
+      expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
+        text: "pong",
+      });
+      expect(sock.end).toHaveBeenCalledTimes(1);
+      expect(sock.sendMessage.mock.invocationCallOrder.at(0)).toBeLessThan(
+        sock.end.mock.invocationCallOrder.at(0),
+      );
     } finally {
       vi.useRealTimers();
     }

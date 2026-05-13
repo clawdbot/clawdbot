@@ -187,7 +187,7 @@ describe("installPluginFromPath", () => {
 
     expect(result.ok).toBe(true);
     expect(handler).toHaveBeenCalledTimes(1);
-    const [installContext, installMetadata] = handler.mock.calls.at(0) ?? [];
+    const [installContext, installMetadata] = handler.mock.calls[0] ?? [];
     expect(installContext).toEqual({
       targetName: "payload",
       targetType: "plugin",

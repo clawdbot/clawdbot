@@ -11,9 +11,19 @@ import {
 } from "./bot.media.test-utils.js";
 
 type ReplyPayload = { Body: string; MediaPaths?: string[] } & Record<string, unknown>;
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function mockCall(mock: MockWithCalls, index: number): unknown[] {
+  const resolvedIndex = index < 0 ? mock.mock.calls.length + index : index;
+  const call = mock.mock.calls[resolvedIndex];
+  if (!call) {
+    throw new Error(`expected mock call ${index}`);
+  }
+  return call;
+}
 
 function replyPayload(replySpy: ReturnType<typeof vi.fn>, index = 0): ReplyPayload {
-  const payload = replySpy.mock.calls.at(index)?.at(0);
+  const payload = mockCall(replySpy, index)[0];
   if (typeof payload !== "object" || payload === null) {
     throw new Error(`expected reply payload ${index}`);
   }
@@ -27,7 +37,7 @@ function downloadRequest(
   filePathHint?: string;
   url?: string;
 } {
-  const request = fetchSpy.mock.calls.at(index)?.at(0);
+  const request = mockCall(fetchSpy, index)[0];
   if (typeof request !== "object" || request === null) {
     throw new Error(`expected download request ${index}`);
   }
@@ -64,11 +74,9 @@ describe("telegram inbound media", () => {
             runtimeError: ReturnType<typeof vi.fn>;
           }) => {
             expect(params.runtimeError).not.toHaveBeenCalled();
-            const downloadRequest = params.fetchSpy.mock.calls.at(-1)?.[0] as
-              | { filePathHint?: string; url?: string }
-              | undefined;
-            expect(downloadRequest?.url).toBe("https://api.telegram.org/file/bottok/photos/1.jpg");
-            expect(downloadRequest?.filePathHint).toBe("photos/1.jpg");
+            const request = downloadRequest(params.fetchSpy, -1);
+            expect(request.url).toBe("https://api.telegram.org/file/bottok/photos/1.jpg");
+            expect(request.filePathHint).toBe("photos/1.jpg");
             expect(params.replySpy).toHaveBeenCalledTimes(1);
             const payload = replyPayload(params.replySpy);
             expect(payload.Body).toContain("<media:image>");
@@ -185,9 +193,9 @@ describe("telegram inbound media", () => {
     });
 
     expect(runtimeError).not.toHaveBeenCalled();
-    const proxyCall = proxyFetch.mock.calls.at(-1);
-    expect(proxyCall?.[0]).toBe("https://api.telegram.org/file/bottok/photos/2.jpg");
-    expect((proxyCall?.[1] as RequestInit | undefined)?.redirect).toBe("manual");
+    const proxyCall = mockCall(proxyFetch, -1);
+    expect(proxyCall[0]).toBe("https://api.telegram.org/file/bottok/photos/2.jpg");
+    expect((proxyCall[1] as RequestInit | undefined)?.redirect).toBe("manual");
 
     globalFetchSpy.mockRestore();
   });

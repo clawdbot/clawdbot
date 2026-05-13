@@ -97,7 +97,7 @@ describe("task-registry store runtime", () => {
     });
 
     expect(saveSnapshot).toHaveBeenCalled();
-    const latestSnapshot = saveSnapshot.mock.calls.at(-1)?.[0] as {
+    const latestSnapshot = saveSnapshot.mock.calls[saveSnapshot.mock.calls.length - 1]?.[0] as {
       tasks: ReadonlyMap<string, TaskRecord>;
     };
     expect(latestSnapshot.tasks.size).toBe(2);

@@ -79,6 +79,83 @@ describe("pw-tools-core browser SSRF guards", () => {
     });
   });
 
+  it("re-checks select-triggered navigations with the session safety helper", async () => {
+    let currentUrl = "https://example.com";
+    pageState.page = { url: vi.fn(() => currentUrl) };
+    pageState.locator = {
+      selectOption: vi.fn(async () => {
+        currentUrl = "https://target.example";
+      }),
+    };
+
+    await interactions.selectOptionViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "tab-1",
+      ref: "1",
+      values: ["go"],
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+
+    expect(sessionMocks.assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      page: pageState.page,
+      response: null,
+      ssrfPolicy: { allowPrivateNetwork: false },
+      targetId: "tab-1",
+    });
+  });
+
+  it("re-checks form fill-triggered navigations with the session safety helper", async () => {
+    let currentUrl = "https://example.com";
+    pageState.page = { url: vi.fn(() => currentUrl) };
+    pageState.locator = {
+      fill: vi.fn(async () => {
+        currentUrl = "https://target.example";
+      }),
+    };
+
+    await interactions.fillFormViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "tab-1",
+      fields: [{ ref: "1", type: "text", value: "go" }],
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+
+    expect(sessionMocks.assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      page: pageState.page,
+      response: null,
+      ssrfPolicy: { allowPrivateNetwork: false },
+      targetId: "tab-1",
+    });
+  });
+
+  it("re-checks the current page before evaluating page content", async () => {
+    const evaluate = vi.fn(async () => "ok");
+    pageState.page = {
+      evaluate,
+      url: vi.fn(() => "https://example.com"),
+    };
+
+    await interactions.evaluateViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "tab-1",
+      fn: "() => document.body.innerText",
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+
+    expect(sessionMocks.assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      page: pageState.page,
+      response: null,
+      ssrfPolicy: { allowPrivateNetwork: false },
+      targetId: "tab-1",
+    });
+    expect(
+      sessionMocks.assertPageNavigationCompletedSafely.mock.invocationCallOrder[0],
+    ).toBeLessThan(evaluate.mock.invocationCallOrder[0]);
+  });
+
   it("preserves helper compatibility when no ssrfPolicy is provided", async () => {
     pageState.page = { url: vi.fn(() => "https://example.com") };
     pageState.locator = { click: vi.fn(async () => {}) };

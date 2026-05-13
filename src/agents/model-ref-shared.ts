@@ -60,7 +60,17 @@ export function normalizeConfiguredProviderCatalogModelId(provider: string, mode
   const providerModel = normalizeStaticProviderModelId(provider, model);
   const googlePrefix = "google/";
   if (!providerModel.startsWith(googlePrefix)) {
-    return providerModel;
+    const slash = providerModel.indexOf("/");
+    if (slash <= 0 || slash >= providerModel.length - 1) {
+      return providerModel;
+    }
+    const prefix = providerModel.slice(0, slash + 1);
+    const suffix = providerModel.slice(slash + 1);
+    if (!suffix.startsWith(googlePrefix)) {
+      return providerModel;
+    }
+    const normalizedSuffix = normalizeGooglePreviewModelId(suffix);
+    return normalizedSuffix === suffix ? providerModel : `${prefix}${normalizedSuffix}`;
   }
   const modelId = providerModel.slice(googlePrefix.length);
   const normalizedModelId = normalizeGooglePreviewModelId(modelId);

@@ -100,6 +100,14 @@ const XAI_FAST_MODEL_IDS = new Map<string, string>([
   ["grok-4-0709", "grok-4-fast"],
 ]);
 
+function firstTransportHookCall(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
+  const call = mock.mock.calls[0]?.[0];
+  if (!call || typeof call !== "object" || Array.isArray(call)) {
+    throw new Error("expected provider transport hook call");
+  }
+  return call as Record<string, unknown>;
+}
+
 function createTestXaiFastModeWrapper(
   baseStreamFn: StreamFn | undefined,
   fastMode: boolean,
@@ -2268,22 +2276,20 @@ describe("applyExtraParamsToAgent", () => {
     expect(effectiveExtraParams.transport).toBe("websocket");
     expect(effectiveExtraParams.hookApplied).toBe(true);
     expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(1);
-    const hookCall = resolveProviderExtraParamsForTransport.mock.calls.at(0)?.[0] as
+    const hookCall = firstTransportHookCall(resolveProviderExtraParamsForTransport);
+    const hookContext = hookCall.context as
       | {
-          provider?: string;
-          context?: {
-            model?: unknown;
-            transport?: string;
-            agentDir?: string;
-            workspaceDir?: string;
-          };
+          model?: unknown;
+          transport?: string;
+          agentDir?: string;
+          workspaceDir?: string;
         }
       | undefined;
-    expect(hookCall?.provider).toBe("openai");
-    expect(hookCall?.context?.model).toBe(model);
-    expect(hookCall?.context?.transport).toBe("websocket");
-    expect(hookCall?.context?.agentDir).toBe("/tmp/agent");
-    expect(hookCall?.context?.workspaceDir).toBe("/tmp/workspace");
+    expect(hookCall.provider).toBe("openai");
+    expect(hookContext?.model).toBe(model);
+    expect(hookContext?.transport).toBe("websocket");
+    expect(hookContext?.agentDir).toBe("/tmp/agent");
+    expect(hookContext?.workspaceDir).toBe("/tmp/workspace");
   });
 
   it("keys prepared extra-param memoization by resolved model transport inputs", () => {
@@ -2394,10 +2400,9 @@ describe("applyExtraParamsToAgent", () => {
     expect(effectiveExtraParams.transport).toBe("auto");
     expect(effectiveExtraParams.hookApplied).toBe(true);
     expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(1);
-    const hookCall = resolveProviderExtraParamsForTransport.mock.calls.at(0)?.[0] as
-      | { context?: { transport?: string } }
-      | undefined;
-    expect(hookCall?.context?.transport).toBe("websocket");
+    const hookCall = firstTransportHookCall(resolveProviderExtraParamsForTransport);
+    const hookContext = hookCall.context as { transport?: string } | undefined;
+    expect(hookContext?.transport).toBe("websocket");
   });
 
   it("applies transport hook parallel_tool_calls patches to request payloads", () => {

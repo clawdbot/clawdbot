@@ -35,6 +35,14 @@ async function createFixture() {
   return { storePath, sessionKey, sessionStore, entry, transcriptPath };
 }
 
+function firstSessionEndCall() {
+  return hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
+}
+
+function firstSessionStartCall() {
+  return hookRunnerMocks.runSessionStart.mock.calls[0] ?? [];
+}
+
 describe("session-updates lifecycle hooks", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -80,8 +88,8 @@ describe("session-updates lifecycle hooks", () => {
     expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1);
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
 
-    const [endEvent, endContext] = hookRunnerMocks.runSessionEnd.mock.calls.at(0) ?? [];
-    const [startEvent, startContext] = hookRunnerMocks.runSessionStart.mock.calls.at(0) ?? [];
+    const [endEvent, endContext] = firstSessionEndCall();
+    const [startEvent, startContext] = firstSessionStartCall();
 
     expect(endEvent?.sessionId).toBe("s1");
     expect(endEvent?.sessionKey).toBe(sessionKey);

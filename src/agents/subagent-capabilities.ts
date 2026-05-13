@@ -7,6 +7,10 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import {
+  normalizeInheritedToolAllowlist,
+  normalizeInheritedToolDenylist,
+} from "./inherited-tool-deny.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { normalizeSubagentSessionKey } from "./subagent-session-key.js";
 
@@ -26,6 +30,8 @@ type SessionCapabilityEntry = {
   subagentRole?: unknown;
   subagentControlScope?: unknown;
   spawnedBy?: unknown;
+  inheritedToolAllow?: unknown;
+  inheritedToolDeny?: unknown;
 };
 
 export type SessionCapabilityStore = Record<
@@ -36,6 +42,8 @@ export type SessionCapabilityStore = Record<
     subagentRole?: unknown;
     subagentControlScope?: unknown;
     spawnedBy?: unknown;
+    inheritedToolAllow?: unknown;
+    inheritedToolDeny?: unknown;
   }
 >;
 
@@ -292,4 +300,44 @@ export function resolveStoredSubagentCapabilities(
     canSpawn: role === "main" || role === "orchestrator",
     canControlChildren: controlScope === "children",
   };
+}
+
+export function resolveStoredSubagentInheritedToolDenylist(
+  sessionKey: string | undefined | null,
+  opts?: {
+    cfg?: OpenClawConfig;
+    store?: SessionCapabilityStore;
+  },
+): string[] {
+  const normalizedSessionKey = normalizeSubagentSessionKey(sessionKey);
+  if (!normalizedSessionKey || !shouldInspectStoredSubagentEnvelope(normalizedSessionKey)) {
+    return [];
+  }
+  const store = resolveSubagentCapabilityStore(normalizedSessionKey, opts);
+  const entry = resolveSessionCapabilityEntry({
+    sessionKey: normalizedSessionKey,
+    cfg: opts?.cfg,
+    store,
+  });
+  return normalizeInheritedToolDenylist(entry?.inheritedToolDeny);
+}
+
+export function resolveStoredSubagentInheritedToolAllowlist(
+  sessionKey: string | undefined | null,
+  opts?: {
+    cfg?: OpenClawConfig;
+    store?: SessionCapabilityStore;
+  },
+): string[] {
+  const normalizedSessionKey = normalizeSubagentSessionKey(sessionKey);
+  if (!normalizedSessionKey || !shouldInspectStoredSubagentEnvelope(normalizedSessionKey)) {
+    return [];
+  }
+  const store = resolveSubagentCapabilityStore(normalizedSessionKey, opts);
+  const entry = resolveSessionCapabilityEntry({
+    sessionKey: normalizedSessionKey,
+    cfg: opts?.cfg,
+    store,
+  });
+  return normalizeInheritedToolAllowlist(entry?.inheritedToolAllow);
 }

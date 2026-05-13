@@ -51,6 +51,7 @@ import {
   validateNodePairVerifyParams,
   validateNodeRenameParams,
 } from "../protocol/index.js";
+import type { NodeEventContext } from "../server-node-events-types.js";
 import {
   NODE_WAKE_RECONNECT_POLL_MS,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
@@ -1299,7 +1300,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
     await respondUnavailableOnThrow(respond, async () => {
       const { handleNodeEvent } = await import("../server-node-events.js");
       const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "node";
-      const nodeContext = {
+      const nodeContext: NodeEventContext = {
         deps: context.deps,
         broadcast: context.broadcast,
         nodeSendToSession: context.nodeSendToSession,
@@ -1317,6 +1318,14 @@ export const nodeHandlers: GatewayRequestHandlers = {
         getHealthCache: context.getHealthCache,
         refreshHealthSnapshot: context.refreshHealthSnapshot,
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+        authorizeNodeSystemRunEvent: (eventParams) =>
+          context.nodeRegistry.authorizeSystemRunEvent({
+            nodeId: eventParams.nodeId,
+            connId: eventParams.connId,
+            runId: eventParams.runId,
+            sessionKey: eventParams.sessionKey,
+            terminal: eventParams.terminal,
+          }),
         logGateway: { warn: context.logGateway.warn },
       };
       const result = await handleNodeEvent(
@@ -1326,7 +1335,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
           event: p.event,
           payloadJSON,
         },
-        { deviceId: client?.connect?.device?.id },
+        { connId: client?.connId, deviceId: client?.connect?.device?.id },
       );
       respond(true, result ?? { ok: true }, undefined);
     });

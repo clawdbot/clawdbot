@@ -166,11 +166,11 @@ describe("serveAcpGateway startup", () => {
   }
 
   function getGatewayBootstrapParams(): { env?: unknown; gatewayUrl?: unknown } {
-    const firstCall = mockState.resolveGatewayClientBootstrap.mock.calls.at(0);
+    const firstCall = mockState.resolveGatewayClientBootstrap.mock.calls[0];
     if (!firstCall) {
       throw new Error("Expected gateway bootstrap resolution call");
     }
-    const params = firstCall.at(0);
+    const params = firstCall[0];
     if (!params || typeof params !== "object") {
       throw new Error("Expected gateway bootstrap params");
     }

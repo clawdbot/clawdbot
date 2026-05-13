@@ -42,7 +42,7 @@ describe("plugins cli policy mutations", () => {
   }
 
   function requireFirstWrittenConfig(): OpenClawConfig {
-    const call = writeConfigFile.mock.calls.at(0);
+    const call = writeConfigFile.mock.calls[0];
     if (!call) {
       throw new Error("expected writeConfigFile to be called");
     }

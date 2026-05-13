@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { FailoverError } from "../agents/failover-error.js";
 import { createClientToolNameConflictError } from "../agents/pi-tool-definition-adapter.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
@@ -162,7 +163,7 @@ function requireSessionKey(value: string | undefined, label: string): string {
 }
 
 function firstAgentOpts(callIndex = 0): Record<string, unknown> {
-  const call = agentCommand.mock.calls.at(callIndex);
+  const call = agentCommand.mock.calls[callIndex];
   if (!call) {
     throw new Error(`expected agentCommand call #${callIndex + 1}`);
   }
@@ -650,6 +651,49 @@ describe("OpenResponses HTTP API (e2e)", () => {
       ).toBe(123);
       await ensureResponseConsumed(resMaxTokens);
 
+      mockAgentOnce([{ text: "ok" }]);
+      const resSampling = await postResponses(port, {
+        model: "openclaw",
+        input: "hi",
+        temperature: 0.2,
+        top_p: 0.9,
+      });
+      expect(resSampling.status).toBe(200);
+      const samplingStreamParams = (
+        firstAgentOpts() as { streamParams?: { temperature?: number; topP?: number } } | undefined
+      )?.streamParams;
+      expect(samplingStreamParams?.temperature).toBe(0.2);
+      expect(samplingStreamParams?.topP).toBe(0.9);
+      await ensureResponseConsumed(resSampling);
+
+      agentCommand.mockClear();
+      const resInvalidTemperature = await postResponses(port, {
+        model: "openclaw",
+        input: "hi",
+        temperature: 999,
+      });
+      expect(resInvalidTemperature.status).toBe(400);
+      const invalidTemperatureJson = (await resInvalidTemperature.json()) as {
+        error?: { type?: string; message?: string };
+      };
+      expect(invalidTemperatureJson.error?.type).toBe("invalid_request_error");
+      expect(invalidTemperatureJson.error?.message ?? "").toMatch(/temperature/i);
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+
+      agentCommand.mockClear();
+      const resInvalidTopP = await postResponses(port, {
+        model: "openclaw",
+        input: "hi",
+        top_p: 5,
+      });
+      expect(resInvalidTopP.status).toBe(400);
+      const invalidTopPJson = (await resInvalidTopP.json()) as {
+        error?: { type?: string; message?: string };
+      };
+      expect(invalidTopPJson.error?.type).toBe("invalid_request_error");
+      expect(invalidTopPJson.error?.message ?? "").toMatch(/top_p/i);
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+
       mockAgentOnce([{ text: "ok" }], {
         agentMeta: {
           usage: { input: 3, output: 5, cacheRead: 1, cacheWrite: 1 },
@@ -795,6 +839,38 @@ describe("OpenResponses HTTP API (e2e)", () => {
     } finally {
       // shared server
     }
+  });
+
+  it("maps provider format failures to OpenResponses 400 failed responses", async () => {
+    const port = enabledPort;
+
+    agentCommand.mockClear();
+    agentCommand.mockRejectedValueOnce(
+      new FailoverError(
+        "LLM request failed: provider rejected the request schema or tool payload.",
+        {
+          reason: "format",
+          status: 400,
+          code: "decimal_above_max_value",
+          rawError:
+            "400 Invalid 'top_p': decimal above maximum value. Expected a value <= 1, but got 5 instead.",
+        },
+      ) as never,
+    );
+
+    const res = await postResponses(port, {
+      model: "openclaw",
+      input: "hi",
+    });
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as {
+      status?: string;
+      error?: { code?: string; message?: string };
+    };
+    expect(json.status).toBe("failed");
+    expect(json.error?.code).toBe("invalid_request_error");
+    expect(json.error?.message).toContain("Invalid 'top_p'");
+    expect(agentCommand).toHaveBeenCalledTimes(1);
   });
 
   it("treats write-scoped HTTP callers as non-owner and admin-scoped callers as owner", async () => {
@@ -1148,7 +1224,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       input: [{ type: "function_call_output", call_id: "call_1", output: "Sunny, 70F." }],
     });
     expect(secondResponse.status).toBe(200);
-    const secondOpts = agentCommand.mock.calls.at(1)?.[0] as { sessionKey?: string } | undefined;
+    const secondOpts = firstAgentOpts(1) as { sessionKey?: string } | undefined;
     expect(secondOpts?.sessionKey).toBe(firstSessionKey);
     await ensureResponseConsumed(secondResponse);
   });
@@ -1183,7 +1259,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       input: "hello again",
     });
     expect(secondResponse.status).toBe(200);
-    const secondOpts = agentCommand.mock.calls.at(1)?.[0] as { sessionKey?: string } | undefined;
+    const secondOpts = firstAgentOpts(1) as { sessionKey?: string } | undefined;
     expect(secondOpts?.sessionKey).toBe(firstOpts?.sessionKey);
     await ensureResponseConsumed(secondResponse);
   });

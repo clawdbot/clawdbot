@@ -27,6 +27,7 @@ export type ChatSenderAllowParams = {
   chatId?: number | null;
   chatGuid?: string | null;
   chatIdentifier?: string | null;
+  allowConversationTargets?: boolean | null;
 };
 
 export function isAllowedParsedChatSender(params: {
@@ -35,6 +36,7 @@ export function isAllowedParsedChatSender(params: {
   chatId?: number | null;
   chatGuid?: string | null;
   chatIdentifier?: string | null;
+  allowConversationTargets?: boolean | null;
   normalizeSender: (sender: string) => string;
   parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
 }): boolean {
@@ -47,9 +49,12 @@ export function isAllowedParsedChatSender(params: {
   }
 
   const senderNormalized = params.normalizeSender(params.sender);
-  const chatId = params.chatId ?? undefined;
-  const chatGuid = normalizeOptionalString(params.chatGuid);
-  const chatIdentifier = normalizeOptionalString(params.chatIdentifier);
+  const allowConversationTargets = params.allowConversationTargets === true;
+  const chatId = allowConversationTargets ? (params.chatId ?? undefined) : undefined;
+  const chatGuid = allowConversationTargets ? normalizeOptionalString(params.chatGuid) : undefined;
+  const chatIdentifier = allowConversationTargets
+    ? normalizeOptionalString(params.chatIdentifier)
+    : undefined;
 
   for (const entry of allowFrom) {
     if (!entry) {
@@ -227,6 +232,7 @@ export function resolveServicePrefixedOrChatAllowTarget<
 export function createAllowedChatSenderMatcher(params: {
   normalizeSender: (sender: string) => string;
   parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
+  allowConversationTargets?: boolean;
 }): (input: ChatSenderAllowParams) => boolean {
   return (input) =>
     isAllowedParsedChatSender({
@@ -235,6 +241,8 @@ export function createAllowedChatSenderMatcher(params: {
       chatId: input.chatId,
       chatGuid: input.chatGuid,
       chatIdentifier: input.chatIdentifier,
+      allowConversationTargets:
+        input.allowConversationTargets ?? params.allowConversationTargets ?? false,
       normalizeSender: params.normalizeSender,
       parseAllowTarget: params.parseAllowTarget,
     });

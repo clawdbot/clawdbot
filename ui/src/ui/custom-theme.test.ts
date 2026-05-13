@@ -101,6 +101,18 @@ function createResponse(
   } as unknown as Response;
 }
 
+function firstFetchCall(
+  fetchImpl: typeof fetch,
+): [string, { headers?: unknown; redirect?: unknown; signal?: unknown }] {
+  const call = vi.mocked(fetchImpl).mock.calls[0] as
+    | [string, { headers?: unknown; redirect?: unknown; signal?: unknown }]
+    | undefined;
+  if (!call) {
+    throw new Error("expected fetch call");
+  }
+  return call;
+}
+
 describe("custom theme import helpers", () => {
   it("normalizes tweakcn share links and raw registry links", () => {
     expect(
@@ -181,10 +193,7 @@ describe("custom theme import helpers", () => {
     expect(imported.label).toBe("Light Green");
     const fetchMock = vi.mocked(fetchImpl);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [fetchUrl, fetchOptions] = fetchMock.mock.calls.at(0) as [
-      string,
-      { headers?: unknown; redirect?: unknown; signal?: unknown },
-    ];
+    const [fetchUrl, fetchOptions] = firstFetchCall(fetchImpl);
     expect(fetchUrl).toBe("https://tweakcn.com/r/themes/cmlhfpjhw000004l4f4ax3m7z");
     expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
     expect(fetchOptions).toEqual({

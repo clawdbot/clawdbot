@@ -5,6 +5,15 @@ import {
 } from "./browser-cli-manage.test-helpers.js";
 import { getBrowserCliRuntime, getBrowserCliRuntimeCapture } from "./browser-cli.test-support.js";
 
+function lastRuntimeLog(): string {
+  const calls = getBrowserCliRuntime().log.mock.calls;
+  const value = calls[calls.length - 1]?.[0];
+  if (typeof value !== "string") {
+    throw new Error("expected browser CLI runtime log");
+  }
+  return value;
+}
+
 describe("browser manage output", () => {
   beforeEach(() => {
     getBrowserManageCallBrowserRequestMock().mockClear();
@@ -42,7 +51,7 @@ describe("browser manage output", () => {
       from: "user",
     });
 
-    const output = getBrowserCliRuntime().log.mock.calls.at(-1)?.[0] as string;
+    const output = lastRuntimeLog();
     expect(output).toContain("transport: chrome-mcp");
     expect(output).toContain("headless: false (default)");
     expect(output).not.toContain("cdpPort:");
@@ -79,7 +88,7 @@ describe("browser manage output", () => {
       from: "user",
     });
 
-    const output = getBrowserCliRuntime().log.mock.calls.at(-1)?.[0] as string;
+    const output = lastRuntimeLog();
     expect(output).toContain(
       "userDataDir: /Users/test/Library/Application Support/BraveSoftware/Brave-Browser",
     );
@@ -110,7 +119,7 @@ describe("browser manage output", () => {
     const program = createBrowserManageProgram();
     await program.parseAsync(["browser", "profiles"], { from: "user" });
 
-    const output = getBrowserCliRuntime().log.mock.calls.at(-1)?.[0] as string;
+    const output = lastRuntimeLog();
     expect(output).toContain("chrome-live: running (2 tabs) [existing-session]");
     expect(output).toContain("transport: chrome-mcp");
     expect(output).not.toContain("port: 0");
@@ -138,7 +147,7 @@ describe("browser manage output", () => {
       { from: "user" },
     );
 
-    const output = getBrowserCliRuntime().log.mock.calls.at(-1)?.[0] as string;
+    const output = lastRuntimeLog();
     expect(output).toContain('Created profile "chrome-live"');
     expect(output).toContain("transport: chrome-mcp");
     expect(output).not.toContain("port: 0");
@@ -175,7 +184,7 @@ describe("browser manage output", () => {
       from: "user",
     });
 
-    const output = getBrowserCliRuntime().log.mock.calls.at(-1)?.[0] as string;
+    const output = lastRuntimeLog();
     expect(output).toContain("cdpUrl: https://example.com/chrome?token=supers…7890");
     expect(output).not.toContain("alice");
     expect(output).not.toContain("supersecretpasswordvalue1234");
@@ -228,7 +237,7 @@ describe("browser manage output", () => {
     const program = createBrowserManageProgram();
     await program.parseAsync(["browser", "doctor"], { from: "user" });
 
-    const output = getBrowserCliRuntime().log.mock.calls.at(-1)?.[0] as string;
+    const output = lastRuntimeLog();
     expect(output).toContain("OK gateway: browser control endpoint reachable");
     expect(output).toContain("OK tabs: 1 visible, use target t1");
   });

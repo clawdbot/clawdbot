@@ -32,6 +32,14 @@ function configureFastJsonStatus() {
   });
 }
 
+function firstCallArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
+  const arg = mock.mock.calls[0]?.[0];
+  if (arg === undefined) {
+    throw new Error(`expected ${label}`);
+  }
+  return arg;
+}
+
 beforeAll(async () => {
   configureFastJsonStatus();
   ({ scanStatusJsonFast } = await loadStatusScanModuleForTest(mocks, { fastJson: true }));
@@ -105,10 +113,10 @@ describe("scanStatusJsonFast", () => {
     await scanStatusJsonFast({}, {} as never);
 
     expect(mocks.getStatusSummary).toHaveBeenCalledOnce();
-    const summaryOptions = mocks.getStatusSummary.mock.calls.at(0)?.[0] as
-      | { includeChannelSummary?: unknown }
-      | undefined;
-    expect(summaryOptions?.includeChannelSummary).toBe(false);
+    const summaryOptions = firstCallArg(mocks.getStatusSummary, "status summary options") as {
+      includeChannelSummary?: unknown;
+    };
+    expect(summaryOptions.includeChannelSummary).toBe(false);
   });
 
   it("skips memory inspection for the lean status --json fast path", async () => {
@@ -135,7 +143,9 @@ describe("scanStatusJsonFast", () => {
     });
     expect(mocks.resolveMemorySearchConfig).toHaveBeenCalled();
     expect(mocks.getMemorySearchManager).toHaveBeenCalledOnce();
-    expect(mocks.getMemorySearchManager.mock.calls.at(0)?.[0]).toStrictEqual({
+    expect(
+      firstCallArg(mocks.getMemorySearchManager, "memory search manager options"),
+    ).toStrictEqual({
       cfg: createStatusMemorySearchConfig(),
       agentId: "main",
       purpose: "status",

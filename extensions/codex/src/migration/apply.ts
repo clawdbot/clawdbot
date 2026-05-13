@@ -22,13 +22,21 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache.js";
 import {
+  resolveCodexAppServerAuthAccountCacheKey,
+  resolveCodexAppServerAuthProfileIdForAgent,
+  resolveCodexAppServerEnvApiKeyCacheKey,
+} from "../app-server/auth-bridge.js";
+import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
+  readCodexPluginConfig,
+  resolveCodexAppServerRuntimeOptions,
   type ResolvedCodexPluginPolicy,
 } from "../app-server/config.js";
 import {
   ensureCodexPluginActivation,
   type CodexPluginActivationResult,
 } from "../app-server/plugin-activation.js";
+import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
 import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import { buildCodexMigrationPlan } from "./plan.js";
@@ -40,6 +48,7 @@ import {
   readCodexPluginMigrationConfigEntry,
   type CodexPluginMigrationConfigEntry,
 } from "./plan.js";
+import { resolveCodexMigrationTargets } from "./targets.js";
 
 const CODEX_PLUGIN_AUTH_REQUIRED_REASON = "auth_required";
 const CODEX_PLUGIN_NOT_SELECTED_REASON = "not selected for migration";
@@ -104,6 +113,8 @@ async function applyCodexPluginInstallItem(
     };
   }
   try {
+    const appCacheKey = await buildTargetCodexPluginAppCacheKey(ctx);
+    const appServer = resolveTargetCodexAppServer(ctx);
     const result = await ensureCodexPluginActivation({
       identity: policy,
       installEvenIfActive: true,
@@ -112,10 +123,14 @@ async function applyCodexPluginInstallItem(
           method,
           requestParams,
           timeoutMs: 60_000,
+          startOptions: appServer.start,
+          agentDir: resolveCodexMigrationTargets(ctx).agentDir,
           config: ctx.config,
+          isolated: true,
         }),
+      appCache: defaultCodexAppInventoryCache,
+      appCacheKey,
     });
-    defaultCodexAppInventoryCache.clear();
     const baseDetails = {
       ...item.details,
       code: result.reason,
@@ -160,6 +175,38 @@ async function applyCodexPluginInstallItem(
       },
     };
   }
+}
+
+function resolveTargetCodexAppServer(ctx: MigrationProviderContext) {
+  return resolveCodexAppServerRuntimeOptions({
+    pluginConfig: readCodexPluginConfig(ctx.config),
+  });
+}
+
+async function buildTargetCodexPluginAppCacheKey(ctx: MigrationProviderContext): Promise<string> {
+  const targets = resolveCodexMigrationTargets(ctx);
+  const appServer = resolveTargetCodexAppServer(ctx);
+  const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
+    agentDir: targets.agentDir,
+    config: ctx.config,
+  });
+  const accountId = await resolveCodexAppServerAuthAccountCacheKey({
+    authProfileId,
+    agentDir: targets.agentDir,
+    config: ctx.config,
+  });
+  const envApiKeyFingerprint = authProfileId
+    ? undefined
+    : resolveCodexAppServerEnvApiKeyCacheKey({
+        startOptions: appServer.start,
+      });
+  return buildCodexPluginAppCacheKey({
+    appServer,
+    agentDir: targets.agentDir,
+    authProfileId,
+    accountId,
+    envApiKeyFingerprint,
+  });
 }
 
 async function applyCodexPluginConfigItem(

@@ -87,6 +87,18 @@ function runtimeMessageCalls(fn: RuntimeEnv["log"]) {
   return calls.map((call) => sanitizeTerminalText(String(call[0])));
 }
 
+function createWaSocketCall(index: number) {
+  const call = createWaSocketMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected createWaSocket call ${index}`);
+  }
+  return call;
+}
+
+function createWaSocketOptions(index: number): { onQr?: (qr: string) => void } | undefined {
+  return createWaSocketCall(index)[2] as { onQr?: (qr: string) => void } | undefined;
+}
+
 describe("loginWeb coverage", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -136,13 +148,9 @@ describe("loginWeb coverage", () => {
     await loginWeb(false, waitForWaConnectionMock as never, runtime);
 
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
-    expect(createWaSocketMock.mock.calls.at(0)?.[0]).toBe(false);
-    const initialOpts = createWaSocketMock.mock.calls.at(0)?.[2] as
-      | { onQr?: (qr: string) => void }
-      | undefined;
-    const restartOpts = createWaSocketMock.mock.calls.at(1)?.[2] as
-      | { onQr?: (qr: string) => void }
-      | undefined;
+    expect(createWaSocketCall(0)[0]).toBe(false);
+    const initialOpts = createWaSocketOptions(0);
+    const restartOpts = createWaSocketOptions(1);
     expect(initialOpts?.onQr).toBe(restartOpts?.onQr);
 
     initialOpts?.onQr?.("initial-qr");

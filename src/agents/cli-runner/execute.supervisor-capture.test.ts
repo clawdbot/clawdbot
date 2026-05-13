@@ -53,6 +53,14 @@ function buildPreparedCliRunContext(params: {
   };
 }
 
+function requireSupervisorSpawnInput(): SupervisorSpawnInput {
+  const call = supervisorSpawnMock.mock.calls[0];
+  if (!call) {
+    throw new Error("Expected supervisor spawn");
+  }
+  return call[0] as SupervisorSpawnInput;
+}
+
 beforeEach(() => {
   resetAgentEventsForTest();
   supervisorSpawnMock.mockReset();
@@ -78,7 +86,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     });
 
     const result = await executePreparedCliRun(buildPreparedCliRunContext({ output: "text" }));
-    const spawnInput = supervisorSpawnMock.mock.calls.at(0)?.[0] as SupervisorSpawnInput;
+    const spawnInput = requireSupervisorSpawnInput();
 
     expect(spawnInput.captureOutput).toBe(false);
     expect(result.rawText).toBe(fullText);
@@ -107,7 +115,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     await expect(
       executePreparedCliRun(buildPreparedCliRunContext({ output: "text" })),
     ).rejects.toThrow("CLI stdout exceeded");
-    const spawnInput = supervisorSpawnMock.mock.calls.at(0)?.[0] as SupervisorSpawnInput;
+    const spawnInput = requireSupervisorSpawnInput();
 
     expect(spawnInput.captureOutput).toBe(false);
   });
@@ -281,7 +289,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       const result = await executePreparedCliRun(
         buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" }),
       );
-      const spawnInput = supervisorSpawnMock.mock.calls.at(0)?.[0] as SupervisorSpawnInput;
+      const spawnInput = requireSupervisorSpawnInput();
 
       expect(spawnInput.captureOutput).toBe(false);
       expect(result.text).toBe("Hello world");

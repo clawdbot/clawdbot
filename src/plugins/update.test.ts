@@ -2397,6 +2397,54 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
+  it("forwards ClawHub risk acknowledgement inputs to dry-run and live ClawHub updates", async () => {
+    const onClawHubRisk = vi.fn(async () => true);
+    const config = createClawHubInstallConfig({
+      pluginId: "demo",
+      installPath: "/tmp/demo",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubPackage: "demo",
+      clawhubFamily: "code-plugin",
+      clawhubChannel: "official",
+    });
+    installPluginFromClawHubMock.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: "/tmp/demo",
+      version: "1.2.4",
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+        integrity: "sha256-next",
+        resolvedAt: "2026-03-22T00:00:00.000Z",
+      },
+    });
+
+    for (const dryRun of [true, false]) {
+      installPluginFromClawHubMock.mockClear();
+
+      await updateNpmInstalledPlugins({
+        config,
+        pluginIds: ["demo"],
+        acknowledgeClawHubRisk: true,
+        onClawHubRisk,
+        ...(dryRun ? { dryRun: true } : {}),
+      });
+
+      expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          spec: "clawhub:demo",
+          acknowledgeClawHubRisk: true,
+          onClawHubRisk,
+          ...(dryRun ? { dryRun: true } : {}),
+        }),
+      );
+    }
+  });
+
   it("migrates legacy unscoped install keys when a scoped npm package updates", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: true,
@@ -2947,9 +2995,12 @@ describe("syncPluginsForUpdateChannel", () => {
         clawhubPackage: "legacy-chat",
       }),
     );
+    const onClawHubRisk = vi.fn(async () => true);
 
     const result = await syncPluginsForUpdateChannel({
       channel: "stable",
+      acknowledgeClawHubRisk: true,
+      onClawHubRisk,
       externalizedBundledPluginBridges: [
         {
           bundledPluginId: "legacy-chat",
@@ -2983,6 +3034,8 @@ describe("syncPluginsForUpdateChannel", () => {
     expect(clawHubInstallCall()?.baseUrl).toBe("https://clawhub.ai");
     expect(clawHubInstallCall()?.mode).toBe("update");
     expect(clawHubInstallCall()?.expectedPluginId).toBe("legacy-chat");
+    expect(clawHubInstallCall()?.acknowledgeClawHubRisk).toBe(true);
+    expect(clawHubInstallCall()?.onClawHubRisk).toBe(onClawHubRisk);
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(true);
     expect(result.summary.switchedToClawHub).toEqual(["legacy-chat"]);

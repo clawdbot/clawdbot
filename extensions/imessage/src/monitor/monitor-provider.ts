@@ -75,6 +75,21 @@ import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
 const WATCH_SUBSCRIBE_MAX_ATTEMPTS = 3;
 const WATCH_SUBSCRIBE_RETRY_DELAY_MS = 1_000;
 
+function isIMessagePluginPayloadAttachment(attachment: {
+  original_path?: string | null;
+  transfer_name?: string | null;
+  uti?: string | null;
+}): boolean {
+  const attachmentPath = attachment.original_path?.trim().toLowerCase() ?? "";
+  const transferName = attachment.transfer_name?.trim().toLowerCase() ?? "";
+  const uti = attachment.uti?.trim().toLowerCase() ?? "";
+  return (
+    attachmentPath.endsWith(".pluginpayloadattachment") ||
+    transferName.endsWith(".pluginpayloadattachment") ||
+    uti === "com.apple.messages.pluginpayloadattachment"
+  );
+}
+
 async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | undefined> {
   try {
     const expanded = cliPath.startsWith("~")
@@ -172,11 +187,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const loopRateLimiter = createLoopRateLimiter();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
   const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
+  const configuredGroupAllowFrom = opts.groupAllowFrom ?? imessageCfg.groupAllowFrom;
   const groupAllowFrom = normalizeAllowList(
-    opts.groupAllowFrom ??
-      imessageCfg.groupAllowFrom ??
+    configuredGroupAllowFrom ??
       (imessageCfg.allowFrom && imessageCfg.allowFrom.length > 0 ? imessageCfg.allowFrom : []),
   );
+  const allowLegacyConversationAllowFromForGroup = configuredGroupAllowFrom == null;
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent: cfg.channels?.imessage !== undefined,
@@ -295,7 +311,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return shouldDebounceTextInbound({
         text: msg.text,
         cfg,
-        hasMedia: Boolean(msg.attachments && msg.attachments.length > 0),
+        hasMedia: Boolean(
+          msg.attachments?.some((attachment) => !isIMessagePluginPayloadAttachment(attachment)),
+        ),
       });
     },
     onFlush: async (entries) => {
@@ -336,6 +354,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
     const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
     const validAttachments = attachments.filter((entry) => {
+      if (isIMessagePluginPayloadAttachment(entry)) {
+        // Apple rich-link previews arrive as opaque .pluginPayloadAttachment
+        // files. The useful URL remains in message.text/attributedBody; treating
+        // the preview blob as media creates noisy phantom attachments and can
+        // keep split-send URL previews out of the text debounce path.
+        return false;
+      }
       const attachmentPath = entry?.original_path?.trim();
       if (!attachmentPath || entry?.missing) {
         return false;
@@ -374,6 +399,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       bodyText,
       allowFrom,
       groupAllowFrom,
+      allowLegacyConversationAllowFromForGroup,
       groupPolicy,
       dmPolicy,
       storeAllowFrom,

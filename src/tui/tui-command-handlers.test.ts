@@ -22,7 +22,8 @@ function expectSendChatFields(
   sendChat: ReturnType<typeof vi.fn>,
   expected: { message: string; sessionId?: string; sessionKey?: string },
 ) {
-  const call = sendChat.mock.calls.at(-1);
+  const calls = sendChat.mock.calls;
+  const call = calls[calls.length - 1];
   if (!call) {
     throw new Error("expected gateway sendChat call");
   }
@@ -39,7 +40,7 @@ function expectSendChatFields(
 type MockWithCalls = { mock: { calls: unknown[][] } };
 
 function firstMockArg(mock: MockWithCalls, label: string) {
-  const call = mock.mock.calls.at(0);
+  const call = mock.mock.calls[0];
   if (!call) {
     throw new Error(`expected ${label} call`);
   }

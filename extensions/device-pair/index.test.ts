@@ -484,7 +484,7 @@ describe("device-pair /pair qr", () => {
     const text = requireText(result);
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    const [target, caption, opts] = sendMessage.mock.calls.at(0) as [
+    const [target, caption, opts] = sendMessage.mock.calls[0] as [
       string,
       string,
       {

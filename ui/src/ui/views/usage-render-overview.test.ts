@@ -82,11 +82,13 @@ describe("renderUsageInsights", () => {
       container,
     );
 
-    expect(getSummaryCards(container)).toContainEqual({
-      title: "Cache Hit Rate",
-      value: "30.0%",
-      sub: "300 cached · 1.0K prompt",
-    });
+    expect(getSummaryCards(container).filter((card) => card.title === "Cache Hit Rate")).toEqual([
+      {
+        title: "Cache Hit Rate",
+        value: "30.0%",
+        sub: "300 cached · 1.0K prompt",
+      },
+    ]);
   });
 });
 

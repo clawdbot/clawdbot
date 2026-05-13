@@ -5,6 +5,8 @@ type IMessageAttachment = {
   original_path?: string | null;
   mime_type?: string | null;
   missing?: boolean | null;
+  transfer_name?: string | null;
+  uti?: string | null;
 };
 
 export type IMessagePayload = {

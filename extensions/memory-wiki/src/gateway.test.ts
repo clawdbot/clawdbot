@@ -92,13 +92,13 @@ function readGatewayMethodOptions(
 }
 
 function readRespondPayload(respond: { mock: { calls: Array<Array<unknown>> } }): unknown {
-  const call = respond.mock.calls.at(0);
+  const call = respond.mock.calls[0];
   expect(call?.[0]).toBe(true);
   return call?.[1];
 }
 
 function readRespondError(respond: { mock: { calls: Array<Array<unknown>> } }): unknown {
-  const call = respond.mock.calls.at(0);
+  const call = respond.mock.calls[0];
   expect(call?.[0]).toBe(false);
   expect(call?.[1]).toBeUndefined();
   return call?.[2];

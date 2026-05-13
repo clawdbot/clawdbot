@@ -132,6 +132,29 @@ function resolveHostOverrideReferences(value: unknown, manifest: HostPackageMani
   return resolved;
 }
 
+function isUnsupportedManagedNpmOverride(value: unknown): boolean {
+  return typeof value === "string" && value.trim().startsWith("npm:");
+}
+
+function filterUnsupportedManagedNpmRootOverrides(value: unknown): Record<string, unknown> {
+  const overrides = readOverrideRecord(value);
+  const filtered: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(overrides)) {
+    if (isUnsupportedManagedNpmOverride(raw)) {
+      continue;
+    }
+    if (isRecord(raw)) {
+      const nested = filterUnsupportedManagedNpmRootOverrides(raw);
+      if (Object.keys(nested).length > 0) {
+        filtered[key] = nested;
+      }
+      continue;
+    }
+    filtered[key] = raw;
+  }
+  return filtered;
+}
+
 export async function readOpenClawManagedNpmRootOverrides(params?: {
   argv1?: string;
   cwd?: string;
@@ -180,12 +203,15 @@ export async function upsertManagedNpmRootDependency(params: {
   packageName: string;
   dependencySpec: string;
   managedOverrides?: Record<string, unknown>;
+  omitUnsupportedManagedOverrides?: boolean;
 }): Promise<void> {
   await fs.mkdir(params.npmRoot, { recursive: true });
   const manifestPath = path.join(params.npmRoot, "package.json");
   const manifest = await readManagedNpmRootManifest(manifestPath);
   const dependencies = readDependencyRecord(manifest.dependencies);
-  const managedOverrides = readOverrideRecord(params.managedOverrides);
+  const managedOverrides = params.omitUnsupportedManagedOverrides
+    ? filterUnsupportedManagedNpmRootOverrides(params.managedOverrides)
+    : readOverrideRecord(params.managedOverrides);
   const managedOverrideKeys = Object.keys(managedOverrides).toSorted();
   const overrides = readOverrideRecord(manifest.overrides);
   for (const key of readManagedOverrideKeys(manifest.openclaw)) {

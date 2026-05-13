@@ -42,7 +42,7 @@ describe("handleControlUiHttpRequest", () => {
   }
 
   function responseBody(end: ReturnType<typeof makeMockHttpResponse>["end"]) {
-    return String(end.mock.calls.at(0)?.[0] ?? "");
+    return String(end.mock.calls[0]?.[0] ?? "");
   }
 
   function responseJson(end: ReturnType<typeof makeMockHttpResponse>["end"]) {
@@ -50,7 +50,7 @@ describe("handleControlUiHttpRequest", () => {
   }
 
   function firstEndCallLength(end: ReturnType<typeof makeMockHttpResponse>["end"]) {
-    return end.mock.calls.at(0)?.length ?? -1;
+    return end.mock.calls[0]?.length ?? -1;
   }
 
   function expectNotFoundResponse(params: {

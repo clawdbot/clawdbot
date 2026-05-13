@@ -10,6 +10,7 @@ import {
   isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
+  resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "../../agents/pi-tools.policy.js";
 import {
@@ -760,6 +761,9 @@ export async function dispatchReplyFromConfig(
           store: subagentStore,
         })
       : undefined;
+  const inheritedToolPolicy = resolveInheritedToolPolicyForSession(cfg, acpDispatchSessionKey, {
+    store: subagentStore,
+  });
   const messageToolAvailable = isToolAllowedByPolicies("message", [
     profilePolicy,
     providerProfilePolicy,
@@ -769,6 +773,7 @@ export async function dispatchReplyFromConfig(
     agentPolicy,
     groupPolicy,
     subagentPolicy,
+    inheritedToolPolicy,
   ]);
   const sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
     cfg,

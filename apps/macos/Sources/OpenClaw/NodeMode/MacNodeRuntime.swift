@@ -521,7 +521,8 @@ actor MacNodeRuntime {
         let sessionKey = (params.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
             ? params.sessionKey!.trimmingCharacters(in: .whitespacesAndNewlines)
             : self.mainSessionKey
-        let runId = UUID().uuidString
+        let providedRunId = params.runId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let runId = providedRunId.isEmpty ? UUID().uuidString : providedRunId
         let envOverrideDiagnostics = HostEnvSanitizer.inspectOverrides(
             overrides: params.env,
             blockPathOverrides: true)

@@ -44,17 +44,34 @@ let sendComponents: typeof import("../send.components.js");
 
 let lastDispatchCtx: Record<string, unknown> | undefined;
 
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function mockCall(mock: MockWithCalls, index: number, label: string): unknown[] {
+  const resolvedIndex = index < 0 ? mock.mock.calls.length + index : index;
+  const call = mock.mock.calls[resolvedIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
+function mockCallArg(mock: MockWithCalls, index: number, label: string): unknown {
+  return mockCall(mock, index, label)[0];
+}
+
 function getLastRecordedCtx(): Record<string, unknown> | undefined {
-  const params = recordInboundSessionMock.mock.calls.at(-1)?.[0] as
-    | { ctx?: Record<string, unknown> }
-    | undefined;
+  const params = mockCallArg(recordInboundSessionMock, -1, "recordInboundSession") as {
+    ctx?: Record<string, unknown>;
+  };
   return params?.ctx;
 }
 
 function getLastPluginDispatchCtx(): Record<string, unknown> | undefined {
-  const params = dispatchPluginInteractiveHandlerMock.mock.calls.at(-1)?.[0] as
-    | { ctx?: Record<string, unknown> }
-    | undefined;
+  const params = mockCallArg(
+    dispatchPluginInteractiveHandlerMock,
+    -1,
+    "dispatchPluginInteractiveHandler",
+  ) as { ctx?: Record<string, unknown> };
   return params?.ctx;
 }
 
@@ -65,14 +82,8 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-type MockWithCalls = { mock: { calls: unknown[][] } };
-
 function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
-  const call = mock.mock.calls.at(0);
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
+  return mockCall(mock, 0, label);
 }
 
 function firstMockArg(mock: MockWithCalls, label: string) {

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
+import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import { createTranscriptFixtureSync } from "./chat.test-helpers.js";
 
@@ -90,6 +91,37 @@ describe("gateway chat.inject transcript writes", () => {
       expect(last).toHaveProperty("message");
       expect(Object.prototype.hasOwnProperty.call(last, "parentId")).toBe(false);
     } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("emits and returns the redacted injected assistant message", async () => {
+    const { dir, transcriptPath } = createTranscriptFixtureSync({
+      prefix: "openclaw-chat-inject-redact-",
+      sessionId: "sess-redact",
+    });
+    const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
+    const updates: Array<{ message?: unknown }> = [];
+    const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
+
+    try {
+      const appended = await appendInjectedAssistantMessageToTranscript({
+        transcriptPath,
+        message: `Here is your key: ${fakeApiKey}`,
+        config: { logging: { redactSensitive: "tools" } },
+      });
+
+      expect(appended.ok).toBe(true);
+      expect(JSON.stringify(appended.message)).not.toContain(fakeApiKey);
+      expect(updates).toHaveLength(1);
+
+      const lines = readTranscriptLines(transcriptPath);
+      const last = JSON.parse(lines.at(-1) as string) as { message?: unknown };
+      expect(JSON.stringify(last.message)).not.toContain(fakeApiKey);
+      expect(updates[0]?.message).toEqual(last.message);
+      expect(JSON.stringify(updates[0]?.message)).not.toContain(fakeApiKey);
+    } finally {
+      unsubscribe();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

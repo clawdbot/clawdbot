@@ -63,6 +63,16 @@ async function waitForSpawnCount(count: number) {
   await Promise.resolve();
 }
 
+function firstSpawnCall(): unknown[] | undefined {
+  return spawnMock.mock.calls[0];
+}
+
+function firstGatewayCall(
+  gatewayCall: ReturnType<typeof vi.fn>,
+): [string, unknown, unknown] | undefined {
+  return gatewayCall.mock.calls[0] as [string, unknown, unknown] | undefined;
+}
+
 describe("qa suite runtime agent process helpers", () => {
   beforeEach(() => {
     spawnMock.mockReset();
@@ -94,7 +104,7 @@ describe("qa suite runtime agent process helpers", () => {
     child.emit("exit", 0);
 
     await expect(pending).resolves.toBe("ok");
-    const spawnCall = spawnMock.mock.calls.at(0);
+    const spawnCall = firstSpawnCall();
     expect(spawnCall?.[0]).toBe("/usr/bin/node");
     expect(spawnCall?.[1]).toEqual([path.join("/repo", "dist", "index.js"), "qa", "suite"]);
     expect((spawnCall?.[2] as { cwd?: string; env?: unknown } | undefined)?.cwd).toBe(
@@ -132,7 +142,7 @@ describe("qa suite runtime agent process helpers", () => {
     child.emit("exit", 0);
 
     await expect(pending).resolves.toBe("ok");
-    const spawnCall = spawnMock.mock.calls.at(0);
+    const spawnCall = firstSpawnCall();
     expect(spawnCall?.[0]).toBe("/usr/bin/node");
     expect(spawnCall?.[1]).toEqual([
       path.join("/repo", "dist", "index.js"),
@@ -253,9 +263,7 @@ describe("qa suite runtime agent process helpers", () => {
         message: "hello",
       }),
     ).resolves.toEqual({ runId: "run-1" });
-    const gatewayArgs = gatewayCall.mock.calls.at(0) as unknown as
-      | [string, unknown, unknown]
-      | undefined;
+    const gatewayArgs = firstGatewayCall(gatewayCall);
     expect(gatewayArgs?.[0]).toBe("agent");
     const agentPayload = gatewayArgs?.[1] as
       | {

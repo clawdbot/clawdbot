@@ -18,6 +18,14 @@ type SentMediaParams = {
   mediaUrl?: string;
 };
 
+function latestMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
+  const call = mock.mock.calls[mock.mock.calls.length - 1];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call[0];
+}
+
 vi.mock("./bridge/gateway.js", () => ({}));
 vi.mock("./engine/messaging/outbound.js", () => ({
   sendText: sendTextMock,
@@ -48,9 +56,9 @@ describe("qqbot message adapter", () => {
             to: "qqbot:c2c:user-1",
             text: "hello",
           });
-          const sent = sendTextMock.mock.calls.at(-1)?.[0] as SentTextParams | undefined;
-          expect(sent?.to).toBe("qqbot:c2c:user-1");
-          expect(sent?.text).toBe("hello");
+          const sent = latestMockArg(sendTextMock, "sendText") as SentTextParams;
+          expect(sent.to).toBe("qqbot:c2c:user-1");
+          expect(sent.text).toBe("hello");
           expect(result?.receipt.platformMessageIds).toEqual(["qq-text-1"]);
         },
         media: async () => {
@@ -60,10 +68,10 @@ describe("qqbot message adapter", () => {
             text: "image",
             mediaUrl: "https://example.com/image.png",
           });
-          const sent = sendMediaMock.mock.calls.at(-1)?.[0] as SentMediaParams | undefined;
-          expect(sent?.to).toBe("qqbot:c2c:user-1");
-          expect(sent?.text).toBe("image");
-          expect(sent?.mediaUrl).toBe("https://example.com/image.png");
+          const sent = latestMockArg(sendMediaMock, "sendMedia") as SentMediaParams;
+          expect(sent.to).toBe("qqbot:c2c:user-1");
+          expect(sent.text).toBe("image");
+          expect(sent.mediaUrl).toBe("https://example.com/image.png");
           expect(result?.receipt.platformMessageIds).toEqual(["qq-media-1"]);
         },
         replyTo: async () => {
@@ -73,10 +81,10 @@ describe("qqbot message adapter", () => {
             text: "reply",
             replyToId: "msg-1",
           });
-          const sent = sendTextMock.mock.calls.at(-1)?.[0] as SentTextParams | undefined;
-          expect(sent?.to).toBe("qqbot:group:group-1");
-          expect(sent?.text).toBe("reply");
-          expect(sent?.replyToId).toBe("msg-1");
+          const sent = latestMockArg(sendTextMock, "sendText") as SentTextParams;
+          expect(sent.to).toBe("qqbot:group:group-1");
+          expect(sent.text).toBe("reply");
+          expect(sent.replyToId).toBe("msg-1");
           expect(result?.receipt.platformMessageIds).toEqual(["qq-text-1"]);
         },
       },

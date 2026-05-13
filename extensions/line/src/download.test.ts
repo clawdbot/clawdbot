@@ -40,7 +40,7 @@ async function* chunks(parts: Buffer[]): AsyncGenerator<Buffer> {
 }
 
 function saveMediaBufferCall(): unknown[] {
-  const call = saveMediaBufferMock.mock.calls.at(0);
+  const call = saveMediaBufferMock.mock.calls[0];
   if (!call) {
     throw new Error("Expected saveMediaBuffer call");
   }

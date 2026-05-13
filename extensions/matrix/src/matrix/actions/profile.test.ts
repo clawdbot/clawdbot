@@ -22,6 +22,22 @@ vi.mock("./client.js", () => ({
 
 const { updateMatrixOwnProfile } = await import("./profile.js");
 
+function mockCallAt(
+  mock: { mock: { calls: Array<readonly unknown[]> } },
+  index: number,
+  label: string,
+): readonly unknown[] {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
+function firstMockArg(mock: { mock: { calls: Array<readonly unknown[]> } }, label: string) {
+  return mockCallAt(mock, 0, label)[0];
+}
+
 describe("matrix profile actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -56,7 +72,11 @@ describe("matrix profile actions", () => {
     });
 
     expect(withResolvedActionClientMock).toHaveBeenCalledTimes(1);
-    const [wrapperOpts, run, mode] = withResolvedActionClientMock.mock.calls.at(0) ?? [];
+    const [wrapperOpts, run, mode] = mockCallAt(
+      withResolvedActionClientMock,
+      0,
+      "Matrix action client wrapper",
+    );
     expect(wrapperOpts).toEqual({
       accountId: "ops",
       displayName: "  Ops Bot  ",
@@ -67,7 +87,7 @@ describe("matrix profile actions", () => {
     expect(mode).toBe("persist");
 
     expect(syncMatrixOwnProfileMock).toHaveBeenCalledTimes(1);
-    const syncCall = syncMatrixOwnProfileMock.mock.calls.at(0)?.[0] as
+    const syncCall = firstMockArg(syncMatrixOwnProfileMock, "Matrix profile sync") as
       | {
           client: unknown;
           userId: string;
@@ -105,7 +125,7 @@ describe("matrix profile actions", () => {
       avatarPath: "/tmp/avatar.png",
     });
 
-    const call = syncMatrixOwnProfileMock.mock.calls.at(0)?.[0] as
+    const call = firstMockArg(syncMatrixOwnProfileMock, "Matrix profile sync") as
       | {
           loadAvatarFromUrl: (url: string, maxBytes: number) => Promise<unknown>;
           loadAvatarFromPath: (path: string, maxBytes: number) => Promise<unknown>;

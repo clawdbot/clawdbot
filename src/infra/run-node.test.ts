@@ -123,6 +123,10 @@ function createFakeProcess() {
   }) as unknown as NodeJS.Process;
 }
 
+function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T | undefined {
+  return mock.mock.calls[0];
+}
+
 async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
   const pluginSdkAliasPath = path.join(tmp, "src", "plugin-sdk", "root-alias.cjs");
   await fs.mkdir(path.dirname(pluginSdkAliasPath), { recursive: true });
@@ -847,7 +851,7 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(0);
       expect(runRuntimePostBuild).toHaveBeenCalledTimes(1);
-      const postBuildParams = runRuntimePostBuild.mock.calls.at(0)?.[0] as
+      const postBuildParams = firstMockCall(runRuntimePostBuild)?.[0] as
         | { cwd?: string; env?: Record<string, string | undefined> }
         | undefined;
       expect(postBuildParams?.cwd).toBe(tmp);
@@ -1328,9 +1332,7 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(143);
       expect(spawn).toHaveBeenCalledTimes(1);
-      const spawnCall = spawn.mock.calls.at(0) as
-        | [string, string[], { stdio?: unknown }]
-        | undefined;
+      const spawnCall = firstMockCall(spawn) as [string, string[], { stdio?: unknown }] | undefined;
       expect(spawnCall?.[0]).toBe(process.execPath);
       expect(spawnCall?.[1]).toEqual(["openclaw.mjs", "status"]);
       expect(spawnCall?.[2].stdio).toBe("inherit");

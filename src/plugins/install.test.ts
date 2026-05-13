@@ -11,6 +11,7 @@ import * as installSecurityScan from "./install-security-scan.js";
 import {
   installPluginFromArchive,
   installPluginFromDir,
+  installPluginFromInstalledPackageDir,
   PLUGIN_INSTALL_ERROR_CODE,
   resolvePluginInstallDir,
 } from "./install.js";
@@ -309,11 +310,11 @@ function expectFailedInstallResult<
 }
 
 function expectWarningIncludes(warnings: readonly string[], fragment: string) {
-  expect(warnings.some((warning) => warning.includes(fragment))).toBe(true);
+  expect(warnings.join("\n")).toContain(fragment);
 }
 
 function expectWarningExcludes(warnings: readonly string[], fragment: string) {
-  expect(warnings.some((warning) => warning.includes(fragment))).toBe(false);
+  expect(warnings.join("\n")).not.toContain(fragment);
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -323,8 +324,12 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function firstMockCall(mock: { mock: { calls: unknown[][] } }): unknown[] | undefined {
+  return mock.mock.calls[0];
+}
+
 function requireHookPayload(handler: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  const payload = handler.mock.calls.at(0)?.[0];
+  const payload = firstMockCall(handler)?.[0];
   return requireRecord(payload, "before_install hook payload");
 }
 
@@ -664,7 +669,9 @@ describe("installPluginFromArchive", () => {
     });
 
     expect(result.ok).toBe(true);
-    const commandRun = vi.mocked(runCommandWithTimeout).mock.calls.at(0);
+    const commandRun = firstMockCall(vi.mocked(runCommandWithTimeout)) as
+      | Parameters<typeof runCommandWithTimeout>
+      | undefined;
     expect(commandRun?.[0]).toContain("npm");
     expect(commandRun?.[0]).toContain("install");
     const commandOptions = commandRun?.[1];
@@ -803,6 +810,211 @@ describe("installPluginFromArchive", () => {
 
     expect(result.ok).toBe(true);
     expect(warnings).toStrictEqual([]);
+  });
+
+  it("blocks archive installs when dependency install materializes dangerous runtime code", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const extensionsDir = path.join(stateDir, "extensions");
+    fs.mkdirSync(extensionsDir, { recursive: true });
+
+    const archivePath = await ensureDynamicArchiveTemplate({
+      outName: "dependency-runtime-code-plugin.tgz",
+      packageJson: {
+        name: "dependency-runtime-code-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["./dist/index.js"] },
+        dependencies: {
+          "telemetry-helper": "1.0.0",
+        },
+      },
+      withDistIndex: true,
+      distIndexJsContent: `const telemetry = require("telemetry-helper");\nmodule.exports = telemetry;\n`,
+    });
+
+    const run = vi.mocked(runCommandWithTimeout);
+    run.mockImplementationOnce(async (_cmd, options) => {
+      if (!options || typeof options === "number" || !options.cwd) {
+        throw new Error("expected npm install cwd");
+      }
+      const dependencyDir = path.join(options.cwd, "node_modules", "telemetry-helper");
+      fs.mkdirSync(dependencyDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dependencyDir, "package.json"),
+        JSON.stringify({ name: "telemetry-helper", version: "1.0.0", main: "index.cjs" }),
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(dependencyDir, "index.cjs"),
+        `const childProcess = require("node:child_process");\nchildProcess.execSync("node -v", { encoding: "utf8" });\nmodule.exports = {};\n`,
+        "utf-8",
+      );
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      };
+    });
+
+    const { result, warnings } = await installFromArchiveWithWarnings({
+      archivePath,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain(
+        'Plugin "dependency-runtime-code-plugin" installation blocked',
+      );
+      expect(result.error).toContain("dangerous code patterns detected");
+      expect(result.error).toContain("node_modules/telemetry-helper/index.cjs");
+    }
+    expectWarningIncludes(warnings, "installed tree contains dangerous code patterns");
+  });
+
+  it("blocks archive installs when dependency runtime code is loaded from a hidden directory", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const extensionsDir = path.join(stateDir, "extensions");
+    fs.mkdirSync(extensionsDir, { recursive: true });
+
+    const archivePath = await ensureDynamicArchiveTemplate({
+      outName: "hidden-dependency-runtime-code-plugin.tgz",
+      packageJson: {
+        name: "hidden-dependency-runtime-code-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["./dist/index.js"] },
+        dependencies: {
+          "hidden-telemetry-helper": "1.0.0",
+        },
+      },
+      withDistIndex: true,
+      distIndexJsContent: `const telemetry = require("hidden-telemetry-helper");\nmodule.exports = telemetry;\n`,
+    });
+
+    const run = vi.mocked(runCommandWithTimeout);
+    run.mockImplementationOnce(async (_cmd, options) => {
+      if (!options || typeof options === "number" || !options.cwd) {
+        throw new Error("expected npm install cwd");
+      }
+      const dependencyDir = path.join(options.cwd, "node_modules", "hidden-telemetry-helper");
+      const hiddenPayloadDir = path.join(dependencyDir, ".payload");
+      fs.mkdirSync(hiddenPayloadDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dependencyDir, "package.json"),
+        JSON.stringify({
+          name: "hidden-telemetry-helper",
+          version: "1.0.0",
+          main: "index.cjs",
+        }),
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(dependencyDir, "index.cjs"),
+        `module.exports = require("./.payload/runtime.cjs");\n`,
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(hiddenPayloadDir, "runtime.cjs"),
+        `const childProcess = require("node:child_process");\nchildProcess.execSync("node -v", { encoding: "utf8" });\nmodule.exports = {};\n`,
+        "utf-8",
+      );
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      };
+    });
+
+    const { result, warnings } = await installFromArchiveWithWarnings({
+      archivePath,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain(
+        'Plugin "hidden-dependency-runtime-code-plugin" installation blocked',
+      );
+      expect(result.error).toContain("dangerous code patterns detected");
+      expect(result.error).toContain("node_modules/hidden-telemetry-helper/.payload/runtime.cjs");
+    }
+    expectWarningIncludes(warnings, "installed tree contains dangerous code patterns");
+  });
+
+  it("fails archive installs when installed runtime code scan reaches its file cap", async () => {
+    vi.stubEnv("OPENCLAW_INSTALL_SCAN_MAX_CODE_FILES", "1");
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const extensionsDir = path.join(stateDir, "extensions");
+    fs.mkdirSync(extensionsDir, { recursive: true });
+
+    const archivePath = await ensureDynamicArchiveTemplate({
+      outName: "capped-dependency-runtime-code-plugin.tgz",
+      packageJson: {
+        name: "capped-dependency-runtime-code-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["./dist/index.js"] },
+        dependencies: {
+          "capped-telemetry-helper": "1.0.0",
+        },
+      },
+      withDistIndex: true,
+      distIndexJsContent: `const telemetry = require("capped-telemetry-helper");\nmodule.exports = telemetry;\n`,
+    });
+
+    const run = vi.mocked(runCommandWithTimeout);
+    run.mockImplementationOnce(async (_cmd, options) => {
+      if (!options || typeof options === "number" || !options.cwd) {
+        throw new Error("expected npm install cwd");
+      }
+      const dependencyDir = path.join(options.cwd, "node_modules", "capped-telemetry-helper");
+      fs.mkdirSync(dependencyDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dependencyDir, "package.json"),
+        JSON.stringify({
+          name: "capped-telemetry-helper",
+          version: "1.0.0",
+          main: "index.cjs",
+        }),
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(dependencyDir, "index.cjs"),
+        `module.exports = require("./runtime.cjs");\n`,
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(dependencyDir, "runtime.cjs"),
+        `const childProcess = require("node:child_process");\nchildProcess.execSync("node -v", { encoding: "utf8" });\nmodule.exports = {};\n`,
+        "utf-8",
+      );
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      };
+    });
+
+    const { result } = await installFromArchiveWithWarnings({
+      archivePath,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED);
+      expect(result.error).toContain("code safety scan failed");
+      expect(result.error).toContain("code safety scan reached file limit (1)");
+    }
   });
 
   it("installs flat-root plugin archives from ClawHub-style downloads", async () => {
@@ -2412,7 +2624,7 @@ describe("installPluginFromArchive", () => {
       version: "1.0.0",
       extensions: ["index.js"],
     });
-    expect(handler.mock.calls.at(0)?.[1]).toEqual({
+    expect(firstMockCall(handler)?.[1]).toEqual({
       origin: "plugin-package",
       targetType: "plugin",
       requestKind: "plugin-dir",
@@ -2848,6 +3060,297 @@ describe("installPluginFromDir", () => {
       expect(result.error).toContain("node_modules/plain-crypto-js/package.json");
     }
     expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+  });
+
+  it("does not scan pre-existing sibling packages from a managed npm root", async () => {
+    const caseDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(caseDir, "npm-root");
+    const newPluginDir = path.join(npmRoot, "node_modules", "new-managed-plugin");
+    const existingPluginDir = path.join(npmRoot, "node_modules", "existing-official-plugin");
+    fs.mkdirSync(newPluginDir, { recursive: true });
+    fs.mkdirSync(existingPluginDir, { recursive: true });
+    writeMinimalPackagePlugin(newPluginDir, "new-managed-plugin");
+    writeMinimalPackagePlugin(existingPluginDir, "existing-official-plugin");
+    fs.writeFileSync(
+      path.join(existingPluginDir, "index.js"),
+      `const childProcess = require("node:child_process");\nchildProcess.spawn("node", ["-v"]);\nmodule.exports = {};\n`,
+      "utf-8",
+    );
+
+    const result = await installPluginFromInstalledPackageDir({
+      packageDir: newPluginDir,
+      dependencyScanRootDir: npmRoot,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.pluginId).toBe("new-managed-plugin");
+    }
+  });
+
+  it("scans flattened managed npm dependencies reachable from the installed package", async () => {
+    const caseDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(caseDir, "npm-root");
+    const pluginDir = path.join(npmRoot, "node_modules", "managed-plugin-with-dep");
+    const dependencyDir = path.join(npmRoot, "node_modules", "flattened-runtime-helper");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.mkdirSync(dependencyDir, { recursive: true });
+    writeMinimalPackagePlugin(pluginDir, "managed-plugin-with-dep");
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "managed-plugin-with-dep",
+        version: "1.0.0",
+        dependencies: {
+          "flattened-runtime-helper": "1.0.0",
+        },
+        openclaw: { extensions: ["index.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(dependencyDir, "package.json"),
+      JSON.stringify({
+        name: "flattened-runtime-helper",
+        version: "1.0.0",
+        main: "index.cjs",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(dependencyDir, "index.cjs"),
+      `const childProcess = require("node:child_process");\nchildProcess.execSync("node -v", { encoding: "utf8" });\nmodule.exports = {};\n`,
+      "utf-8",
+    );
+
+    const result = await installPluginFromInstalledPackageDir({
+      packageDir: pluginDir,
+      dependencyScanRootDir: npmRoot,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain("flattened-runtime-helper/index.cjs");
+    }
+  });
+
+  it("scans installed managed npm peer dependencies reachable from the installed package", async () => {
+    const caseDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(caseDir, "npm-root");
+    const pluginDir = path.join(npmRoot, "node_modules", "managed-plugin-with-peer");
+    const peerDependencyDir = path.join(npmRoot, "node_modules", "peer-runtime-helper");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.mkdirSync(peerDependencyDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "managed-plugin-with-peer",
+        version: "1.0.0",
+        peerDependencies: {
+          "peer-runtime-helper": "^1.0.0",
+        },
+        openclaw: { extensions: ["index.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n", "utf-8");
+    fs.writeFileSync(
+      path.join(peerDependencyDir, "package.json"),
+      JSON.stringify({
+        name: "peer-runtime-helper",
+        version: "1.0.0",
+        main: "index.cjs",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(peerDependencyDir, "index.cjs"),
+      `const childProcess = require("node:child_process");\nchildProcess.execSync("node -v", { encoding: "utf8" });\nmodule.exports = {};\n`,
+      "utf-8",
+    );
+
+    const result = await installPluginFromInstalledPackageDir({
+      packageDir: pluginDir,
+      dependencyScanRootDir: npmRoot,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain("peer-runtime-helper/index.cjs");
+    }
+  });
+
+  it("scans installed dependency runtime entrypoints with test-like paths", async () => {
+    const caseDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(caseDir, "npm-root");
+    const pluginDir = path.join(npmRoot, "node_modules", "managed-plugin-with-test-entry-dep");
+    const dependencyDir = path.join(npmRoot, "node_modules", "test-entry-helper");
+    const dependencyTestsDir = path.join(dependencyDir, "tests");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.mkdirSync(dependencyTestsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "managed-plugin-with-test-entry-dep",
+        version: "1.0.0",
+        dependencies: {
+          "test-entry-helper": "1.0.0",
+        },
+        openclaw: { extensions: ["index.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n", "utf-8");
+    fs.writeFileSync(
+      path.join(dependencyDir, "package.json"),
+      JSON.stringify({
+        name: "test-entry-helper",
+        version: "1.0.0",
+        main: "tests/runtime.test.cjs",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(dependencyTestsDir, "runtime.test.cjs"),
+      `const childProcess = require("node:child_process");\nchildProcess.execSync("node -v", { encoding: "utf8" });\nmodule.exports = {};\n`,
+      "utf-8",
+    );
+
+    const result = await installPluginFromInstalledPackageDir({
+      packageDir: pluginDir,
+      dependencyScanRootDir: npmRoot,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain("test-entry-helper/tests/runtime.test.cjs");
+    }
+  });
+
+  it("keeps plugin-root test files excluded during installed tree scans", async () => {
+    const caseDir = suiteTempRootTracker.makeTempDir();
+    const pluginDir = path.join(caseDir, "plugin-with-test-files");
+    const testsDir = path.join(pluginDir, "tests");
+    fs.mkdirSync(testsDir, { recursive: true });
+    writeMinimalPackagePlugin(pluginDir, "plugin-with-test-files");
+    fs.writeFileSync(
+      path.join(testsDir, "dangerous.test.cjs"),
+      `const childProcess = require("node:child_process");\nchildProcess.execSync("node -v", { encoding: "utf8" });\nmodule.exports = {};\n`,
+      "utf-8",
+    );
+
+    const result = await installPluginFromInstalledPackageDir({
+      packageDir: pluginDir,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.pluginId).toBe("plugin-with-test-files");
+    }
+  });
+
+  it("prefers nested managed npm dependencies over pre-existing root fallbacks", async () => {
+    const caseDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(caseDir, "npm-root");
+    const pluginDir = path.join(npmRoot, "node_modules", "managed-plugin-with-nested-dep");
+    const nestedDependencyDir = path.join(pluginDir, "node_modules", "shared-runtime-helper");
+    const rootFallbackDir = path.join(npmRoot, "node_modules", "shared-runtime-helper");
+    fs.mkdirSync(nestedDependencyDir, { recursive: true });
+    fs.mkdirSync(rootFallbackDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "managed-plugin-with-nested-dep",
+        version: "1.0.0",
+        dependencies: {
+          "shared-runtime-helper": "2.0.0",
+        },
+        openclaw: { extensions: ["index.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n", "utf-8");
+    fs.writeFileSync(
+      path.join(nestedDependencyDir, "package.json"),
+      JSON.stringify({
+        name: "shared-runtime-helper",
+        version: "2.0.0",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(nestedDependencyDir, "index.cjs"),
+      "module.exports = {};\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(rootFallbackDir, "package.json"),
+      JSON.stringify({
+        name: "shared-runtime-helper",
+        version: "1.0.0",
+        main: "index.cjs",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(rootFallbackDir, "index.cjs"),
+      `const childProcess = require("node:child_process");\nchildProcess.execSync("node -v", { encoding: "utf8" });\nmodule.exports = {};\n`,
+      "utf-8",
+    );
+
+    const result = await installPluginFromInstalledPackageDir({
+      packageDir: pluginDir,
+      dependencyScanRootDir: npmRoot,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.pluginId).toBe("managed-plugin-with-nested-dep");
+    }
+  });
+
+  it("does not double-count nested dependency files against the installed tree scan cap", async () => {
+    vi.stubEnv("OPENCLAW_INSTALL_SCAN_MAX_CODE_FILES", "4");
+    const caseDir = suiteTempRootTracker.makeTempDir();
+    const pluginDir = path.join(caseDir, "isolated-plugin");
+    const dependencyDir = path.join(pluginDir, "node_modules", "nested-runtime-helper");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.mkdirSync(dependencyDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "isolated-plugin",
+        version: "1.0.0",
+        dependencies: {
+          "nested-runtime-helper": "1.0.0",
+        },
+        openclaw: { extensions: ["index.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n", "utf-8");
+    fs.writeFileSync(
+      path.join(dependencyDir, "package.json"),
+      JSON.stringify({
+        name: "nested-runtime-helper",
+        version: "1.0.0",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(dependencyDir, "first.cjs"), "module.exports = 1;\n", "utf-8");
+    fs.writeFileSync(path.join(dependencyDir, "second.cjs"), "module.exports = 2;\n", "utf-8");
+
+    const result = await installPluginFromInstalledPackageDir({
+      packageDir: pluginDir,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.pluginId).toBe("isolated-plugin");
+    }
   });
 
   it.each([

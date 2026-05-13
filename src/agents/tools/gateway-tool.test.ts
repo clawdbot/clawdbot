@@ -67,7 +67,8 @@ vi.mock("./gateway.js", () => ({
 }));
 
 function requireRestartSentinelPayload(): RestartSentinelPayload {
-  const payload = writeRestartSentinelMock.mock.calls.at(-1)?.[0];
+  const calls = writeRestartSentinelMock.mock.calls;
+  const payload = calls[calls.length - 1]?.[0];
   if (!payload) {
     throw new Error("expected restart sentinel payload");
   }
@@ -75,7 +76,8 @@ function requireRestartSentinelPayload(): RestartSentinelPayload {
 }
 
 function requireScheduledRestartArgs(): NonNullable<ScheduleGatewayRestartArgs> {
-  const args = scheduleGatewaySigusr1RestartMock.mock.calls.at(-1)?.[0];
+  const calls = scheduleGatewaySigusr1RestartMock.mock.calls;
+  const args = calls[calls.length - 1]?.[0];
   if (!args) {
     throw new Error("expected scheduled restart args");
   }
@@ -138,8 +140,7 @@ describe("gateway tool restart continuation", () => {
     });
 
     expect(writeRestartSentinelMock).not.toHaveBeenCalled();
-    const scheduledArgs = scheduleGatewaySigusr1RestartMock.mock.calls.at(-1)?.[0];
-    await scheduledArgs?.emitHooks?.beforeEmit?.();
+    await requireScheduledRestartArgs().emitHooks?.beforeEmit?.();
 
     const payload = requireRestartSentinelPayload();
     expect(payload.kind).toBe("restart");
@@ -176,8 +177,7 @@ describe("gateway tool restart continuation", () => {
       continuationMessage: "Reply after restart",
     });
 
-    const scheduledArgs = scheduleGatewaySigusr1RestartMock.mock.calls.at(-1)?.[0];
-    await scheduledArgs?.emitHooks?.beforeEmit?.();
+    await requireScheduledRestartArgs().emitHooks?.beforeEmit?.();
 
     expect(requireRestartSentinelPayload().continuation).toEqual({
       kind: "agentTurn",
@@ -199,8 +199,7 @@ describe("gateway tool restart continuation", () => {
       reason: "restart requested",
     });
 
-    const scheduledArgs = scheduleGatewaySigusr1RestartMock.mock.calls.at(-1)?.[0];
-    await scheduledArgs?.emitHooks?.beforeEmit?.();
+    await requireScheduledRestartArgs().emitHooks?.beforeEmit?.();
 
     const payload = requireRestartSentinelPayload();
     expect(payload.sessionKey).toBe("agent:main:main");
@@ -220,9 +219,9 @@ describe("gateway tool restart continuation", () => {
       action: "restart",
     });
 
-    const scheduledArgs = scheduleGatewaySigusr1RestartMock.mock.calls.at(-1)?.[0];
-    await scheduledArgs?.emitHooks?.beforeEmit?.();
-    await scheduledArgs?.emitHooks?.afterEmitRejected?.();
+    const scheduledArgs = requireScheduledRestartArgs();
+    await scheduledArgs.emitHooks?.beforeEmit?.();
+    await scheduledArgs.emitHooks?.afterEmitRejected?.();
 
     expect(removeRestartSentinelFileMock).toHaveBeenCalledWith("/tmp/restart");
   });

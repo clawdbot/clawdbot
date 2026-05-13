@@ -99,7 +99,7 @@ describe("synology-chat core", () => {
   });
 
   it("keeps the schema open for plugin-specific passthrough fields", () => {
-    expect([true, {}]).toContainEqual(SynologyChatChannelConfigSchema.schema.additionalProperties);
+    expect(SynologyChatChannelConfigSchema.schema.additionalProperties).toEqual({});
   });
 
   it("isolates direct-message sessions by account and user", () => {

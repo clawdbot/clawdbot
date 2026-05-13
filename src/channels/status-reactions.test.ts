@@ -57,7 +57,7 @@ const createSetOnlyController = () => {
 };
 
 function expectSetEmojiCall(calls: Array<{ method: string; emoji: string }>, emoji: string) {
-  expect(calls).toContainEqual({ method: "set", emoji });
+  expect(collectEmojisForMethod(calls, "set")).toContain(emoji);
 }
 
 function collectEmojisForMethod(

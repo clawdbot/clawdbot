@@ -610,7 +610,7 @@ describe("ensureSandboxBrowser create args", () => {
       ["rm", "-f", "openclaw-sbx-browser-session-test-0661d10a"],
       { allowFailure: true },
     );
-    expect(findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create")).toBeDefined();
+    requireDockerCreateArgs();
   });
 
   it("does not inject a source range for network=none by default", async () => {

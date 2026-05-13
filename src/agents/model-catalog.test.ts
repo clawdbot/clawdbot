@@ -137,7 +137,7 @@ function requireMockCallParam(
   mock: ReturnType<typeof vi.fn>,
   label: string,
 ): Record<string, unknown> {
-  const first = mock.mock.calls.at(0)?.[0];
+  const first = mock.mock.calls[0]?.[0];
   if (!first || typeof first !== "object" || Array.isArray(first)) {
     throw new Error(`expected ${label}`);
   }

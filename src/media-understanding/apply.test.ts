@@ -850,7 +850,7 @@ describe("applyMediaUnderstanding", () => {
     expect(ffmpegArgs.slice(0, 2)).toEqual(["-y", "-i"]);
     expect(String(ffmpegArgs[2]).endsWith("telegram-voice.ogg")).toBe(true);
     expect(ffmpegArgs.slice(3, 9)).toEqual(["-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le"]);
-    expect(String(ffmpegArgs[9]).includes("telegram-voice.wav")).toBe(true);
+    expect(String(ffmpegArgs[9])).toContain("telegram-voice.wav");
     expect(String(ffmpegArgs[9]).endsWith(".part")).toBe(true);
 
     const [command, args, options] = getRunExecCall();

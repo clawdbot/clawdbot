@@ -108,7 +108,8 @@ function createRuntime() {
 }
 
 function lastPrintedRows<T>() {
-  return (mocks.printModelTable.mock.calls.at(-1)?.[0] ?? []) as T[];
+  const calls = mocks.printModelTable.mock.calls;
+  return (calls[calls.length - 1]?.[0] ?? []) as T[];
 }
 
 function requireRow<T extends { key: string }>(rows: T[], key: string): T {

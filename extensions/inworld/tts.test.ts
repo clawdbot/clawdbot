@@ -29,7 +29,8 @@ function queueGuardedResponse(response: Response): { release: ReturnType<typeof 
 }
 
 function lastGuardRequest(): GuardRequest {
-  const call = fetchWithSsrFGuardMock.mock.calls.at(-1);
+  const calls = fetchWithSsrFGuardMock.mock.calls;
+  const call = calls[calls.length - 1];
   if (!call) {
     throw new Error("fetchWithSsrFGuard was not called");
   }

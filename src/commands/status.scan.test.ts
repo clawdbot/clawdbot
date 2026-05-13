@@ -72,7 +72,7 @@ function configureScanStatus(
 }
 
 function firstCallArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
-  const arg = mock.mock.calls.at(0)?.at(0);
+  const arg = mock.mock.calls[0]?.[0];
   if (arg === undefined) {
     throw new Error(`expected ${label}`);
   }
@@ -80,7 +80,7 @@ function firstCallArg(mock: { mock: { calls: unknown[][] } }, label: string): un
 }
 
 function firstBuildChannelsTableCall(): unknown[] {
-  const call = mocks.buildChannelsTable.mock.calls.at(0);
+  const call = mocks.buildChannelsTable.mock.calls[0];
   if (!call) {
     throw new Error("expected buildChannelsTable call");
   }

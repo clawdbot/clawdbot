@@ -182,7 +182,7 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 function mockArg(source: MockCallSource, callIndex: number, argIndex: number, label: string) {
-  const call = source.mock.calls.at(callIndex);
+  const call = source.mock.calls[callIndex];
   if (!call) {
     throw new Error(`expected mock call: ${label}`);
   }
@@ -617,7 +617,7 @@ describe("promptDefaultModel", () => {
     expect(result.model).toBe("openai-codex/gpt-5.5-pro");
     expect(loadModelCatalog).toHaveBeenCalledOnce();
     expect(select).toHaveBeenCalledTimes(2);
-    expect(select.mock.calls.at(1)?.[0]?.searchable).toBe(true);
+    expect(select.mock.calls[1]?.[0]?.searchable).toBe(true);
   });
 
   it("supports configuring vLLM during setup", async () => {

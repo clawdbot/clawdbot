@@ -6717,14 +6717,14 @@ module.exports = {
       const untrustedPlugin = registry.plugins.find((entry) => entry.id === "untrusted-plugin");
       expect(untrustedPlugin?.status).toBe("disabled");
       expect(untrustedPlugin?.error).toBe("not in allowlist");
-      expect(warnings.some((message) => message.includes("plugins.allow is empty"))).toBe(false);
+      expect(warnings.join("\n")).not.toContain("plugins.allow is empty");
       expect(
-        warnings.some(
+        warnings.filter(
           (message) =>
             message.includes("trusted-plugin") &&
             message.includes("loaded without install/load-path provenance"),
         ),
-      ).toBe(false);
+      ).toEqual([]);
     });
   });
 

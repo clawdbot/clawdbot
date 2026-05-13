@@ -33,7 +33,7 @@ function createRuntime(): RuntimeEnv {
 }
 
 function requireBackupVerifyCall(): [RuntimeEnv, Record<string, unknown>] {
-  const call = backupVerifyCommandMock.mock.calls.at(0);
+  const call = backupVerifyCommandMock.mock.calls[0];
   if (!call) {
     throw new Error("expected backup verify command call");
   }

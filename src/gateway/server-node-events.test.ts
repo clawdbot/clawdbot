@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { NodeRegistry } from "./node-registry.js";
+import { PROTOCOL_VERSION } from "./protocol/index.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
 
 const buildSessionLookup = (
@@ -159,7 +162,9 @@ const loadSessionEntryMock = runtimeMocks.loadSessionEntry;
 const registerApnsRegistrationVi = runtimeMocks.registerApnsRegistration;
 const normalizeChannelIdVi = runtimeMocks.normalizeChannelId;
 
-function buildCtx(): NodeEventContext {
+function buildCtx(
+  opts: { authorizeNodeSystemRunEvent?: NodeEventContext["authorizeNodeSystemRunEvent"] } = {},
+): NodeEventContext {
   return {
     deps: {} as CliDeps,
     broadcast: () => {},
@@ -178,7 +183,43 @@ function buildCtx(): NodeEventContext {
     getHealthCache: () => null,
     refreshHealthSnapshot: async () => ({}) as HealthSummary,
     loadGatewayModelCatalog: async () => [],
+    authorizeNodeSystemRunEvent: opts.authorizeNodeSystemRunEvent ?? (() => false),
     logGateway: { warn: () => {} },
+  };
+}
+
+function buildExecCtx() {
+  return buildCtx({ authorizeNodeSystemRunEvent: () => true });
+}
+
+function makeNodeClient(connId: string, nodeId: string, sent: string[] = []): GatewayWsClient {
+  return {
+    connId,
+    usesSharedGatewayAuth: false,
+    socket: {
+      send(frame: unknown) {
+        if (typeof frame === "string") {
+          sent.push(frame);
+        }
+      },
+    } as unknown as GatewayWsClient["socket"],
+    connect: {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "node-host",
+        version: "1.0.0",
+        platform: "linux",
+        mode: "node",
+      },
+      device: {
+        id: nodeId,
+        publicKey: "public-key",
+        signature: "signature",
+        signedAt: 1,
+        nonce: "nonce",
+      },
+    } as GatewayWsClient["connect"],
   };
 }
 
@@ -231,7 +272,7 @@ describe("node exec events", () => {
   });
 
   it("enqueues exec.started events", async () => {
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-1", {
       event: "exec.started",
       payloadJSON: JSON.stringify({
@@ -251,8 +292,112 @@ describe("node exec events", () => {
     });
   });
 
-  it("enqueues exec.finished events with output", async () => {
+  it("rejects exec lifecycle events without a pending node run", async () => {
     const ctx = buildCtx();
+    const result = await handleNodeEvent(
+      ctx,
+      "node-1",
+      {
+        event: "exec.finished",
+        payloadJSON: JSON.stringify({
+          sessionKey: "agent:main:main",
+          runId: "forged-run",
+          exitCode: 0,
+          output: "done",
+        }),
+      },
+      { connId: "conn-1" },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      event: "exec.finished",
+      handled: false,
+      reason: "unmatched_exec_event",
+    });
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a node run authorized from exec.started through exec.finished", async () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(makeNodeClient("conn-1", "node-1", frames), {});
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "run-seq", sessionKey: "agent:main:main" },
+      timeoutMs: 1_000,
+    });
+    const invokeSettled = invoke.catch(() => {});
+    const ctx = buildCtx({
+      authorizeNodeSystemRunEvent: (params) => registry.authorizeSystemRunEvent(params),
+    });
+
+    await handleNodeEvent(
+      ctx,
+      "node-1",
+      {
+        event: "exec.started",
+        payloadJSON: JSON.stringify({
+          sessionKey: "agent:main:main",
+          runId: "run-seq",
+          command: "printf ok",
+        }),
+      },
+      { connId: "conn-1" },
+    );
+    await handleNodeEvent(
+      ctx,
+      "node-1",
+      {
+        event: "exec.finished",
+        payloadJSON: JSON.stringify({
+          sessionKey: "agent:main:main",
+          runId: "run-seq",
+          command: "printf ok",
+          exitCode: 0,
+          timedOut: false,
+          output: "done",
+        }),
+      },
+      { connId: "conn-1" },
+    );
+
+    expect(enqueueSystemEventMock).toHaveBeenNthCalledWith(
+      1,
+      "Exec started (node=node-1 id=run-seq): printf ok",
+      { sessionKey: "agent:main:main", contextKey: "exec:run-seq", trusted: false },
+    );
+    expect(enqueueSystemEventMock).toHaveBeenNthCalledWith(
+      2,
+      "Exec finished (node=node-1 id=run-seq, code 0)\ndone",
+      { sessionKey: "agent:main:main", contextKey: "exec:run-seq", trusted: false },
+    );
+    expect(requestHeartbeatMock).toHaveBeenNthCalledWith(1, {
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+    });
+    expect(requestHeartbeatMock).toHaveBeenNthCalledWith(2, {
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+    });
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: "run-seq",
+        sessionKey: "agent:main:main",
+        terminal: false,
+      }),
+    ).toBe(false);
+
+    registry.unregister("conn-1");
+    await invokeSettled;
+  });
+
+  it("enqueues exec.finished events with output", async () => {
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-2", {
       event: "exec.finished",
       payloadJSON: JSON.stringify({
@@ -270,8 +415,42 @@ describe("node exec events", () => {
     expect(requestHeartbeatMock).toHaveBeenCalledWith({ reason: "exec-event" });
   });
 
+  it("accepts legacy exec.finished events when authorization matches without runId", async () => {
+    const authorizeNodeSystemRunEvent = vi.fn(() => true);
+    const ctx = buildCtx({ authorizeNodeSystemRunEvent });
+    await handleNodeEvent(
+      ctx,
+      "node-2",
+      {
+        event: "exec.finished",
+        payloadJSON: JSON.stringify({
+          sessionKey: "agent:main:main",
+          exitCode: 0,
+          timedOut: false,
+          output: "done",
+        }),
+      },
+      { connId: "conn-1" },
+    );
+
+    expect(authorizeNodeSystemRunEvent).toHaveBeenCalledWith({
+      nodeId: "node-2",
+      connId: "conn-1",
+      sessionKey: "agent:main:main",
+      terminal: true,
+    });
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec finished (node=node-2, code 0)\ndone",
+      { sessionKey: "agent:main:main", contextKey: "exec", trusted: false },
+    );
+    expect(requestHeartbeatMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+    });
+  });
+
   it("dedupes duplicate exec.finished events for the same runId on the same session", async () => {
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     const payloadJSON = JSON.stringify({
       sessionKey: "agent:main:main",
       runId: "run-dup-finished",
@@ -306,7 +485,7 @@ describe("node exec events", () => {
       ...buildSessionLookup("node-node-2"),
       canonicalKey: "agent:main:node-node-2",
     });
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-2", {
       event: "exec.finished",
       payloadJSON: JSON.stringify({
@@ -329,7 +508,7 @@ describe("node exec events", () => {
   });
 
   it("suppresses noisy exec.finished success events with empty output", async () => {
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-2", {
       event: "exec.finished",
       payloadJSON: JSON.stringify({
@@ -345,7 +524,7 @@ describe("node exec events", () => {
   });
 
   it("truncates long exec.finished output in system events", async () => {
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-2", {
       event: "exec.finished",
       payloadJSON: JSON.stringify({
@@ -365,7 +544,7 @@ describe("node exec events", () => {
   });
 
   it("enqueues exec.denied events with reason", async () => {
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-3", {
       event: "exec.denied",
       payloadJSON: JSON.stringify({
@@ -394,7 +573,7 @@ describe("node exec events", () => {
       session: { mainKey: string };
       tools: { exec: { notifyOnExit: boolean } };
     });
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-1", {
       event: "exec.started",
       payloadJSON: JSON.stringify({
@@ -416,7 +595,7 @@ describe("node exec events", () => {
       session: { mainKey: string };
       tools: { exec: { notifyOnExit: boolean } };
     });
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-2", {
       event: "exec.finished",
       payloadJSON: JSON.stringify({
@@ -439,7 +618,7 @@ describe("node exec events", () => {
       session: { mainKey: string };
       tools: { exec: { notifyOnExit: boolean } };
     });
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-3", {
       event: "exec.denied",
       payloadJSON: JSON.stringify({
@@ -455,7 +634,7 @@ describe("node exec events", () => {
   });
 
   it("sanitizes remote exec event content before enqueue", async () => {
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-4", {
       event: "exec.denied",
       payloadJSON: JSON.stringify({

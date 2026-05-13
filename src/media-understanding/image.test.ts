@@ -53,7 +53,7 @@ function requireMockCallAt<const Calls extends readonly unknown[][]>(
   index: number,
   label: string,
 ): Calls[number] {
-  const call = mock.mock.calls.at(index);
+  const call = mock.mock.calls[index];
   if (!call) {
     throw new Error(`Expected ${label} call ${index}`);
   }

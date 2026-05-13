@@ -355,6 +355,39 @@ function normalizeAgentDefaultModelRefsForWrite(config: unknown): unknown {
   return next;
 }
 
+function normalizeAgentListModelRefsForWrite(config: unknown): unknown {
+  const list = getPathValue(config, ["agents", "list"]);
+  if (!Array.isArray(list)) {
+    return config;
+  }
+
+  let mutated = false;
+  const nextList = list.map((agent) => {
+    if (!isRecord(agent)) {
+      return agent;
+    }
+
+    let nextAgent = agent;
+    if (Object.prototype.hasOwnProperty.call(agent, "model")) {
+      const normalizedModel = normalizeAgentModelConfigForWrite(agent.model);
+      if (normalizedModel !== agent.model) {
+        nextAgent = { ...nextAgent, model: normalizedModel };
+        mutated = true;
+      }
+    }
+    if (isRecord(agent.models)) {
+      const normalizedModels = normalizeAgentModelMapForConfig(agent.models);
+      if (normalizedModels !== agent.models) {
+        nextAgent = { ...nextAgent, models: normalizedModels };
+        mutated = true;
+      }
+    }
+    return nextAgent;
+  });
+
+  return mutated ? setPathValue(config, ["agents", "list"], nextList) : config;
+}
+
 function normalizeModelProviderCatalogRefsForWrite(config: unknown): unknown {
   const providers = getPathValue(config, ["models", "providers"]);
   if (!isRecord(providers)) {
@@ -395,7 +428,9 @@ function normalizeModelProviderCatalogRefsForWrite(config: unknown): unknown {
 }
 
 function normalizeModelRefsForWrite(config: unknown): unknown {
-  return normalizeModelProviderCatalogRefsForWrite(normalizeAgentDefaultModelRefsForWrite(config));
+  return normalizeModelProviderCatalogRefsForWrite(
+    normalizeAgentListModelRefsForWrite(normalizeAgentDefaultModelRefsForWrite(config)),
+  );
 }
 
 function preserveUntouchedIncludes(params: {

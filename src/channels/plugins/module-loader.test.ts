@@ -29,7 +29,7 @@ function createTempDir(): string {
 function requireCreateJitiCall(
   createJiti: ReturnType<typeof vi.fn>,
 ): [string, { tryNative?: boolean }] {
-  const call = createJiti.mock.calls.at(0);
+  const call = createJiti.mock.calls[0];
   if (!call) {
     throw new Error("expected createJiti call");
   }

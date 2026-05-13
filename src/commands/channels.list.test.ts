@@ -97,7 +97,7 @@ function createCatalogEntry(id: string, label: string): ChannelPluginCatalogEntr
 }
 
 function loggedText(runtime: ReturnType<typeof createTestRuntime>): string {
-  const value = runtime.log.mock.calls.at(0)?.[0];
+  const value = runtime.log.mock.calls[0]?.[0];
   if (typeof value !== "string") {
     throw new Error("expected runtime log text");
   }

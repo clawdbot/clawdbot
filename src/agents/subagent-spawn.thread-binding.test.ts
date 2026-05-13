@@ -18,6 +18,24 @@ const hoisted = vi.hoisted(() => ({
   },
 }));
 
+function firstRegisteredSubagentRun(): {
+  requesterOrigin?: { channel?: string; accountId?: string; to?: string };
+  expectsCompletionMessage?: boolean;
+  spawnMode?: string;
+} {
+  const call = hoisted.registerSubagentRunMock.mock.calls[0]?.[0] as
+    | {
+        requesterOrigin?: { channel?: string; accountId?: string; to?: string };
+        expectsCompletionMessage?: boolean;
+        spawnMode?: string;
+      }
+    | undefined;
+  if (!call) {
+    throw new Error("expected registered subagent run");
+  }
+  return call;
+}
+
 describe("spawnSubagentDirect thread binding delivery", () => {
   type SpawnModule = Awaited<ReturnType<typeof loadSubagentSpawnModuleForTest>>;
   type SessionBindingService = NonNullable<
@@ -161,13 +179,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     expect(agentCall?.params?.to).toBe(`room:${boundRoom}`);
     expect(agentCall?.params?.threadId).toBe("$thread-root");
     expect(agentCall?.params?.deliver).toBe(true);
-    const registeredRun = hoisted.registerSubagentRunMock.mock.calls.at(0)?.[0] as
-      | {
-          requesterOrigin?: { channel?: string; accountId?: string; to?: string };
-          expectsCompletionMessage?: boolean;
-          spawnMode?: string;
-        }
-      | undefined;
+    const registeredRun = firstRegisteredSubagentRun();
     expect(registeredRun?.requesterOrigin?.channel).toBe("matrix");
     expect(registeredRun?.requesterOrigin?.accountId).toBe("bot-beta");
     expect(registeredRun?.requesterOrigin?.to).toBe(`room:${boundRoom}`);
@@ -222,12 +234,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     expect(agentCall?.params?.accountId).toBe("sut");
     expect(agentCall?.params?.to).toBe("room:!parent:example");
     expect(agentCall?.params?.deliver).toBe(false);
-    const registeredRun = hoisted.registerSubagentRunMock.mock.calls.at(0)?.[0] as
-      | {
-          requesterOrigin?: { channel?: string; accountId?: string; to?: string };
-          expectsCompletionMessage?: boolean;
-        }
-      | undefined;
+    const registeredRun = firstRegisteredSubagentRun();
     expect(registeredRun?.expectsCompletionMessage).toBe(true);
     expect(registeredRun?.requesterOrigin?.channel).toBe("matrix");
     expect(registeredRun?.requesterOrigin?.accountId).toBe("sut");

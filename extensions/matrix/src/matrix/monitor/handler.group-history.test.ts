@@ -158,11 +158,11 @@ function finalizeInboundContextCall(
 }
 
 function expectSomeBodyContaining(bodies: readonly string[], fragment: string) {
-  expect(bodies.some((body) => body.includes(fragment))).toBe(true);
+  expect(bodies.join("\n")).toContain(fragment);
 }
 
 function expectNoBodyContaining(bodies: readonly string[], fragment: string) {
-  expect(bodies.some((body) => body.includes(fragment))).toBe(false);
+  expect(bodies.join("\n")).not.toContain(fragment);
 }
 
 describe("matrix group chat history — scenario 1: basic accumulation", () => {

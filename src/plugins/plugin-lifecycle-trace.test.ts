@@ -9,7 +9,7 @@ describe("plugin lifecycle trace", () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
 
   function requireErrorMessage(index = 0): unknown {
-    const call = errorSpy.mock.calls.at(index);
+    const call = errorSpy.mock.calls[index];
     if (!call) {
       throw new Error(`expected console.error call ${index}`);
     }

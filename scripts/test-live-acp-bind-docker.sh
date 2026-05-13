@@ -232,7 +232,7 @@ openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
 cd "$tmp_dir"
 export OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND="${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}"
-pnpm test:live src/gateway/gateway-acp-bind.live.test.ts
+node scripts/test-live.mjs -- src/gateway/gateway-acp-bind.live.test.ts
 EOF
 
 openclaw_live_acp_bind_append_build_extension acpx

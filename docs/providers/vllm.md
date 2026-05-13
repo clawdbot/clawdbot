@@ -8,7 +8,7 @@ title: "vLLM"
 
 vLLM can serve open-source (and some custom) models via an **OpenAI-compatible** HTTP API. OpenClaw connects to vLLM using the `openai-completions` API.
 
-OpenClaw can also **auto-discover** available models from vLLM when you opt in with `VLLM_API_KEY` (any value works if your server does not enforce auth) and you do not define an explicit `models.providers.vllm` entry.
+OpenClaw can also **auto-discover** available models from vLLM when you opt in with `VLLM_API_KEY` (any value works if your server does not enforce auth). Use `vllm/*` in `agents.defaults.models` to keep discovery dynamic when you also configure a custom vLLM base URL.
 
 OpenClaw treats `vllm` as a local OpenAI-compatible provider that supports
 streamed usage accounting, so status/context token counts can update from
@@ -72,7 +72,7 @@ GET http://127.0.0.1:8000/v1/models
 and converts the returned IDs into model entries.
 
 <Note>
-If you set `models.providers.vllm` explicitly, auto-discovery is skipped and you must define models manually.
+If you set `models.providers.vllm` explicitly, OpenClaw uses your declared models by default. Add `"vllm/*": {}` to `agents.defaults.models` when you want OpenClaw to query that configured provider's `/models` endpoint and include all advertised vLLM models.
 </Note>
 
 ## Explicit configuration (manual models)
@@ -105,6 +105,21 @@ Use explicit config when:
             maxTokens: 8192,
           },
         ],
+      },
+    },
+  },
+}
+```
+
+To keep this provider dynamic without manually listing every model, add a provider
+wildcard to the visible model catalog:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "vllm/*": {},
       },
     },
   },
@@ -331,7 +346,7 @@ Use explicit config when:
   </Accordion>
 
   <Accordion title="No models discovered">
-    Auto-discovery requires `VLLM_API_KEY` to be set **and** no explicit `models.providers.vllm` config entry. If you have defined the provider manually, OpenClaw skips discovery and uses only your declared models.
+    Auto-discovery requires `VLLM_API_KEY` to be set. If you have defined `models.providers.vllm`, OpenClaw uses only your declared models unless `agents.defaults.models` includes `"vllm/*": {}`.
   </Accordion>
 
   <Accordion title="Tools render as raw text">

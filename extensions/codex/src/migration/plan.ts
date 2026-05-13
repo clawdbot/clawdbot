@@ -15,6 +15,7 @@ import type {
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { exists, sanitizeName } from "./helpers.js";
 import {
+  codexPluginMigrationSubscriptionWarning,
   discoverCodexSource,
   hasCodexSource,
   type CodexPluginSource,
@@ -33,11 +34,19 @@ const CODEX_PLUGIN_NATIVE_CONFIG_PATH = [
   "codexPlugins",
 ] as const;
 const MIGRATION_REASON_PLUGIN_EXISTS = "plugin exists";
+const CODEX_PLUGIN_SOURCE_APP_VERIFICATION_UNVERIFIED = "not_run";
 
 export type CodexPluginMigrationConfigEntry = {
   configKey: string;
   pluginName: string;
   enabled: boolean;
+};
+
+type CodexPluginMigrationBlockSkipDetails = {
+  pluginName: string;
+  marketplaceName: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
+  apps?: NonNullable<CodexPluginSource["migrationBlock"]>["apps"];
+  error?: string;
 };
 
 function uniqueSkillName(skill: CodexSkillSource, counts: Map<string, number>): string {
@@ -173,6 +182,9 @@ function buildPluginItems(
             pluginName: plugin.pluginName,
             sourceInstalled: plugin.installed === true,
             sourceEnabled: plugin.enabled === true,
+            ...(plugin.apps && plugin.apps.length > 0 && !shouldVerifyPluginApps(ctx)
+              ? { sourceAppVerification: CODEX_PLUGIN_SOURCE_APP_VERIFICATION_UNVERIFIED }
+              : {}),
           },
         }),
       );
@@ -180,6 +192,29 @@ function buildPluginItems(
     }
 
     manualIndex += 1;
+    if (plugin.migrationBlock && plugin.pluginName) {
+      const details: CodexPluginMigrationBlockSkipDetails = {
+        pluginName: plugin.pluginName,
+        marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+        ...(plugin.migrationBlock.apps ? { apps: plugin.migrationBlock.apps } : {}),
+        ...(plugin.migrationBlock.error ? { error: plugin.migrationBlock.error } : {}),
+      };
+      items.push(
+        createMigrationItem({
+          id: `plugin:${sanitizeName(plugin.name) || sanitizeName(path.basename(plugin.source))}:${manualIndex}`,
+          kind: "manual",
+          action: "manual",
+          source: plugin.source,
+          status: "skipped",
+          reason: plugin.migrationBlock.code,
+          message:
+            plugin.message ??
+            `Codex native plugin "${plugin.name}" was found but not activated automatically.`,
+          details: { ...details },
+        }),
+      );
+      continue;
+    }
     items.push(
       createMigrationManualItem({
         id: `plugin:${sanitizeName(plugin.name) || sanitizeName(path.basename(plugin.source))}:${manualIndex}`,
@@ -193,6 +228,10 @@ function buildPluginItems(
     );
   }
   return items;
+}
+
+function shouldVerifyPluginApps(ctx: MigrationProviderContext): boolean {
+  return ctx.providerOptions?.verifyPluginApps === true;
 }
 
 export function readCodexPluginMigrationConfigEntry(
@@ -345,13 +384,17 @@ function buildPluginConfigItem(
 export async function buildCodexMigrationPlan(
   ctx: MigrationProviderContext,
 ): Promise<MigrationPlan> {
-  const source = await discoverCodexSource(ctx.source);
+  const targets = resolveCodexMigrationTargets(ctx);
+  const source = await discoverCodexSource({
+    input: ctx.source,
+    evaluatePluginMigrationEligibility: true,
+    verifyPluginApps: shouldVerifyPluginApps(ctx),
+  });
   if (!hasCodexSource(source)) {
     throw new Error(
       `Codex state was not found at ${source.root}. Pass --from <path> if it lives elsewhere.`,
     );
   }
-  const targets = resolveCodexMigrationTargets(ctx);
   const items: MigrationItem[] = [];
   items.push(
     ...(await buildSkillItems({
@@ -386,15 +429,30 @@ export async function buildCodexMigrationPlan(
           "Conflicts were found. Re-run with --overwrite to replace conflicting migration targets after item-level backups.",
         ]
       : []),
-    ...(source.plugins.length > 0
+    ...(source.plugins.some((plugin) => plugin.migratable)
       ? [
           "Codex source-installed openai-curated plugins are planned for native activation; cached plugin bundles remain manual-review only.",
         ]
+      : []),
+    ...(source.plugins.some(
+      (plugin) => plugin.migratable && plugin.apps && plugin.apps.length > 0,
+    ) && !shouldVerifyPluginApps(ctx)
+      ? [
+          "Codex app-backed plugins were planned without source app accessibility verification. Re-run with --verify-plugin-apps to force a fresh source app/list check before planning native plugin activation.",
+        ]
+      : []),
+    ...(source.plugins.some((plugin) => plugin.sourceKind === "cache")
+      ? ["Codex cached plugin bundles remain manual-review only."]
       : []),
     ...(source.pluginDiscoveryError
       ? [
           `Codex app-server plugin inventory discovery failed: ${source.pluginDiscoveryError}. Cached plugin bundles, if any, are advisory only.`,
         ]
+      : []),
+    ...(source.plugins.some(
+      (plugin) => plugin.migrationBlock?.code === "codex_subscription_required",
+    )
+      ? [codexPluginMigrationSubscriptionWarning()]
       : []),
     ...(source.archivePaths.length > 0
       ? [

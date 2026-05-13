@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 
 const TELEGRAM_POLLING_LEASES_KEY = Symbol.for("openclaw.telegram.pollingLeases");
 const DEFAULT_TELEGRAM_POLLING_LEASE_WAIT_MS = 5_000;
@@ -36,10 +36,6 @@ function pollingLeaseRegistry(): TelegramPollingLeaseRegistry {
   };
   proc[TELEGRAM_POLLING_LEASES_KEY] ??= new Map();
   return proc[TELEGRAM_POLLING_LEASES_KEY];
-}
-
-function tokenFingerprint(token: string): string {
-  return createHash("sha256").update(token).digest("hex").slice(0, 16);
 }
 
 function createDuplicatePollingError(params: {
@@ -132,7 +128,7 @@ export async function acquireTelegramPollingLease(
   opts: AcquireTelegramPollingLeaseOpts,
 ): Promise<TelegramPollingLease> {
   const registry = pollingLeaseRegistry();
-  const fingerprint = tokenFingerprint(opts.token);
+  const fingerprint = fingerprintTelegramBotToken(opts.token);
   const waitMs = opts.waitMs ?? DEFAULT_TELEGRAM_POLLING_LEASE_WAIT_MS;
   let waitedForPrevious = false;
 

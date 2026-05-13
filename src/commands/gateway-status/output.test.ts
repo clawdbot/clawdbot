@@ -34,7 +34,7 @@ function createRuntimeCapture(): RuntimeEnv {
 }
 
 function requireRuntimeJsonPayload(runtime: RuntimeEnv, index = 0): unknown {
-  const call = mocks.writeRuntimeJson.mock.calls.at(index);
+  const call = mocks.writeRuntimeJson.mock.calls[index];
   if (!call) {
     throw new Error(`expected writeRuntimeJson call ${index}`);
   }

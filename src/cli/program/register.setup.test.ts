@@ -17,11 +17,13 @@ const setupWizardCommandMock = mocks.setupWizardCommandMock;
 const runtime = mocks.runtime;
 
 function lastSetupOptions(): Record<string, unknown> | undefined {
-  return setupCommandMock.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined;
+  const calls = setupCommandMock.mock.calls;
+  return calls[calls.length - 1]?.[0] as Record<string, unknown> | undefined;
 }
 
 function lastWizardOptions(): Record<string, unknown> | undefined {
-  return setupWizardCommandMock.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined;
+  const calls = setupWizardCommandMock.mock.calls;
+  return calls[calls.length - 1]?.[0] as Record<string, unknown> | undefined;
 }
 
 vi.mock("../../commands/setup.js", () => ({

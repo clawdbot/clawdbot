@@ -89,6 +89,19 @@ async function postEmbeddings(body: unknown, headers?: Record<string, string>) {
   });
 }
 
+function latestCreateEmbeddingProviderOptions(): {
+  agentDir?: string;
+  model?: string;
+  provider?: string;
+} {
+  const calls = createEmbeddingProviderMock.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error("expected embedding provider create call");
+  }
+  return call[0];
+}
+
 describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   it("embeds string and array inputs", async () => {
     const single = await postEmbeddings({
@@ -127,11 +140,9 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     expect(qualified.status).toBe(200);
     const qualifiedJson = (await qualified.json()) as { model?: string };
     expect(qualifiedJson.model).toBe("openclaw/default");
-    const lastCall = createEmbeddingProviderMock.mock.calls.at(-1)?.[0] as
-      | { provider?: string; model?: string }
-      | undefined;
-    expect(lastCall?.provider).toBe("openai");
-    expect(lastCall?.model).toBe("text-embedding-3-small");
+    const lastCall = latestCreateEmbeddingProviderOptions();
+    expect(lastCall.provider).toBe("openai");
+    expect(lastCall.model).toBe("text-embedding-3-small");
   });
 
   it("supports base64 encoding and agent-scoped auth/config resolution", async () => {
@@ -147,11 +158,9 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     const json = (await res.json()) as { data?: Array<{ embedding?: string }> };
     expect(typeof json.data?.[0]?.embedding).toBe("string");
     expect(createEmbeddingProviderMock).toHaveBeenCalled();
-    const lastCall = createEmbeddingProviderMock.mock.calls.at(-1)?.[0] as
-      | { provider?: string; model?: string; agentDir?: string }
-      | undefined;
-    expect(typeof lastCall?.model).toBe("string");
-    expect(lastCall?.agentDir).toBe(resolveAgentDir({}, "beta"));
+    const lastCall = latestCreateEmbeddingProviderOptions();
+    expect(typeof lastCall.model).toBe("string");
+    expect(lastCall.agentDir).toBe(resolveAgentDir({}, "beta"));
   });
 
   it("rejects invalid input shapes", async () => {

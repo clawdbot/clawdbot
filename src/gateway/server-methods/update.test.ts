@@ -162,6 +162,17 @@ function readCapturedPayload(): RestartSentinelPayload {
   return capturedPayload;
 }
 
+function firstMockCall(
+  mock: { mock: { calls: Array<readonly unknown[]> } },
+  label: string,
+): readonly unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 describe("update.run sentinel deliveryContext", () => {
   it("includes deliveryContext in sentinel payload when sessionKey is provided", async () => {
     capturedPayload = undefined;
@@ -233,10 +244,9 @@ describe("update.run timeout normalization", () => {
     await invokeUpdateRun({ timeoutMs: 1 });
 
     expect(runGatewayUpdateMock).toHaveBeenCalledTimes(1);
-    const updateCall = runGatewayUpdateMock.mock.calls.at(0) as unknown as
-      | [{ timeoutMs?: number }]
-      | undefined;
-    const updateParams = updateCall?.[0];
+    const [updateParams] = firstMockCall(runGatewayUpdateMock, "gateway update") as [
+      { timeoutMs?: number },
+    ];
     expect(updateParams?.timeoutMs).toBe(1000);
   });
 });
@@ -328,10 +338,10 @@ describe("update.run restart scheduling", () => {
 
     expect(runGatewayUpdateMock).toHaveBeenCalledTimes(1);
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
-    const restartCall = scheduleGatewaySigusr1RestartMock.mock.calls.at(0) as unknown as
-      | [{ delayMs?: number; reason?: string; skipCooldown?: boolean; skipDeferral?: boolean }]
-      | undefined;
-    const restartParams = restartCall?.[0];
+    const [restartParams] = firstMockCall(
+      scheduleGatewaySigusr1RestartMock,
+      "gateway restart schedule",
+    ) as [{ delayMs?: number; reason?: string; skipCooldown?: boolean; skipDeferral?: boolean }];
     expect(restartParams?.delayMs).toBe(0);
     expect(restartParams?.reason).toBe("update.run");
     expect(restartParams?.skipCooldown).toBe(true);
@@ -385,10 +395,11 @@ describe("update.status", () => {
     } as never);
 
     expect(respond).toHaveBeenCalledTimes(1);
-    const response = respond.mock.calls.at(0)?.[1] as
-      | { sentinel?: { kind?: string; status?: string } }
-      | undefined;
-    expect(respond.mock.calls.at(0)?.[0]).toBe(true);
+    const [ok, response] = firstMockCall(respond, "update status response") as [
+      boolean,
+      { sentinel?: { kind?: string; status?: string } } | undefined,
+    ];
+    expect(ok).toBe(true);
     expect(response?.sentinel?.kind).toBe("update");
     expect(response?.sentinel?.status).toBe("ok");
   });

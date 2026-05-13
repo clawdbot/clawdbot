@@ -44,7 +44,7 @@ describe("buildEmbeddedRunPayloads", () => {
     payloads: ReturnType<typeof buildPayloads>,
     needle: string,
   ) => {
-    expect(payloads.some((payload) => (payload.text ?? "").includes(needle))).toBe(false);
+    expect(payloads.map((payload) => payload.text ?? "").join("\n")).not.toContain(needle);
   };
 
   function expectSinglePayloadSummary(
@@ -135,6 +135,24 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expectOverloadedFallback(payloads);
     expectNoPayloadTextContaining(payloads, "request_id");
+  });
+
+  it("does not expose provider request ids from generic internal errors", () => {
+    const rawError =
+      "An error occurred while processing your request. Please include request ID req_synthetic_provider_request_001 in your message.";
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        errorMessage: rawError,
+        content: [{ type: "text", text: rawError }],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "The AI service returned an internal error. Please try again in a moment.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "request ID");
+    expectNoPayloadTextContaining(payloads, "req_synthetic_provider_request_001");
   });
 
   it("surfaces OpenAI model capacity errors instead of generic empty-response copy", () => {

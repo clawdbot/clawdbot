@@ -213,6 +213,13 @@ function mockCallArg(
   return call[argIndex];
 }
 
+function latestMockCallArg(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  argIndex = 0,
+): unknown {
+  return mockCallArg(mock, mock.mock.calls.length - 1, argIndex);
+}
+
 function requireRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object") {
     throw new Error("expected record");
@@ -1416,13 +1423,15 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const result = (await compactionHandler(event, mockContext)) as { cancel?: boolean };
 
     expect(result.cancel).not.toBe(true);
-    const summaryCall = mockSummarizeInStages.mock.calls.at(-1)?.[0];
-    expect(summaryCall?.headers?.["Copilot-Integration-Id"]).toBe("vscode-chat");
-    expect(summaryCall?.headers?.["Editor-Plugin-Version"]).toBe("copilot-chat/0.35.0");
-    expect(summaryCall?.headers?.["Openai-Organization"]).toBe("github-copilot");
-    expect(summaryCall?.headers?.["User-Agent"]).toBe("GitHubCopilotChat/0.26.7");
-    expect(summaryCall?.headers?.["X-Test"]).toBe("1");
-    expect(summaryCall?.headers?.["x-initiator"]).toBe("user");
+    const summaryCall = latestMockCallArg(mockSummarizeInStages) as {
+      headers?: Record<string, string>;
+    };
+    expect(summaryCall.headers?.["Copilot-Integration-Id"]).toBe("vscode-chat");
+    expect(summaryCall.headers?.["Editor-Plugin-Version"]).toBe("copilot-chat/0.35.0");
+    expect(summaryCall.headers?.["Openai-Organization"]).toBe("github-copilot");
+    expect(summaryCall.headers?.["User-Agent"]).toBe("GitHubCopilotChat/0.26.7");
+    expect(summaryCall.headers?.["X-Test"]).toBe("1");
+    expect(summaryCall.headers?.["x-initiator"]).toBe("user");
   });
 
   it("does not retry summaries unless quality guard is explicitly enabled", async () => {
@@ -1565,9 +1574,11 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(result.cancel).not.toBe(true);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
-    const secondCall = mockSummarizeInStages.mock.calls.at(1)?.[0];
-    expect(secondCall?.customInstructions).toContain("Quality check feedback");
-    expect(secondCall?.customInstructions).toContain("missing_section:## Decisions");
+    const secondCall = mockCallArg(mockSummarizeInStages, 1) as {
+      customInstructions?: string;
+    };
+    expect(secondCall.customInstructions).toContain("Quality check feedback");
+    expect(secondCall.customInstructions).toContain("missing_section:## Decisions");
   });
 
   it("does not treat preserved latest asks as satisfying overlap checks", async () => {
@@ -1652,8 +1663,10 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(result.cancel).not.toBe(true);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
-    const secondCall = mockSummarizeInStages.mock.calls.at(1)?.[0];
-    expect(secondCall?.customInstructions).toContain("latest_user_ask_not_reflected");
+    const secondCall = mockCallArg(mockSummarizeInStages, 1) as {
+      customInstructions?: string;
+    };
+    expect(secondCall.customInstructions).toContain("latest_user_ask_not_reflected");
   });
 
   it("preserves split-turn and recent-turn suffixes when retry fallback is capped", async () => {
@@ -2228,21 +2241,25 @@ describe("compaction-safeguard double-compaction guard", () => {
     const compaction = expectCompactionResult(result);
     expect(compaction.summary).toContain("branch summary");
     expect(compaction.summary).not.toContain("No prior history.");
-    expect(mockSummarizeInStages).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messages: expect.arrayContaining([
-          expect.objectContaining({
-            role: "custom",
-            customType: "cron-request",
-            content: "prepare the daily report",
-          }),
-          expect.objectContaining({
-            role: "toolResult",
-            toolName: "read",
-          }),
-        ]),
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
+    const messages = requireArray(summarizeCall.messages);
+    expect(
+      messages.some((message) => {
+        const record = requireRecord(message);
+        return (
+          record.role === "custom" &&
+          record.customType === "cron-request" &&
+          record.content === "prepare the daily report"
+        );
       }),
-    );
+    ).toBe(true);
+    expect(
+      messages.some((message) => {
+        const record = requireRecord(message);
+        return record.role === "toolResult" && record.toolName === "read";
+      }),
+    ).toBe(true);
   });
 
   it("continues when messages include real conversation content", async () => {

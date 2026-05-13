@@ -79,13 +79,13 @@ function setupDefaultMocks() {
 }
 
 function expectLogContains(runtime: ReturnType<typeof createMockRuntime>, text: string) {
-  const loggedMessages = runtime.log.mock.calls.map(([message]) => String(message));
-  expect(loggedMessages.some((message) => message.includes(text))).toBe(true);
+  const loggedOutput = runtime.log.mock.calls.map(([message]) => String(message)).join("\n");
+  expect(loggedOutput).toContain(text);
 }
 
 function expectErrorContains(runtime: ReturnType<typeof createMockRuntime>, text: string) {
-  const errorMessages = runtime.error.mock.calls.map(([message]) => String(message));
-  expect(errorMessages.some((message) => message.includes(text))).toBe(true);
+  const errorOutput = runtime.error.mock.calls.map(([message]) => String(message)).join("\n");
+  expect(errorOutput).toContain(text);
 }
 
 // --- Tests ---
@@ -152,7 +152,7 @@ describe("sandboxListCommand", () => {
 
       await sandboxListCommand({ browser: false, json: true }, runtime as never);
 
-      const loggedJson = runtime.log.mock.calls.at(0)?.[0];
+      const loggedJson = runtime.log.mock.calls[0]?.[0];
       const parsed = JSON.parse(loggedJson);
 
       expect(parsed).toStrictEqual({

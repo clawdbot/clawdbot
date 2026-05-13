@@ -100,6 +100,23 @@ function evaluateMentionGateForMessage(params: { cfg: OpenClawConfig; threadRoot
   return { account, resolver, decision };
 }
 
+function mockCall(mock: { mock: { calls: unknown[][] } }, index: number, label: string): unknown[] {
+  const resolvedIndex = index < 0 ? mock.mock.calls.length + index : index;
+  const call = mock.mock.calls[resolvedIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call ${index}`);
+  }
+  return call;
+}
+
+function mockCallArg(
+  mock: { mock: { calls: unknown[][] } },
+  index: number,
+  label: string,
+): unknown {
+  return mockCall(mock, index, label)[0];
+}
+
 describe("mattermost mention gating", () => {
   it("accepts unmentioned root channel posts in onmessage mode", () => {
     const cfg: OpenClawConfig = {
@@ -114,7 +131,7 @@ describe("mattermost mention gating", () => {
     expect(decision.dropReason).toBeNull();
     expect(decision.shouldRequireMention).toBe(false);
     expect(resolver).toHaveBeenCalledTimes(1);
-    const [resolverCall] = resolver.mock.calls.at(0) ?? [];
+    const resolverCall = mockCallArg(resolver, 0, "resolveRequireMention");
     expect(resolverCall).toStrictEqual({
       cfg,
       channel: "mattermost",
@@ -139,9 +156,11 @@ describe("mattermost mention gating", () => {
     });
     expect(decision.dropReason).toBeNull();
     expect(decision.shouldRequireMention).toBe(false);
-    const resolverCall = resolver.mock.calls.at(-1)?.[0];
-    expect(resolverCall?.groupId).toBe("chan-1");
-    expect(resolverCall?.groupId).not.toBe("thread-root-1");
+    const resolverCall = mockCallArg(resolver, -1, "resolveRequireMention") as {
+      groupId?: string;
+    };
+    expect(resolverCall.groupId).toBe("chan-1");
+    expect(resolverCall.groupId).not.toBe("thread-root-1");
   });
 
   it("rejects unmentioned channel posts in oncall mode", () => {
@@ -493,8 +512,11 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
 
     expect(updateMattermostPostSpy).toHaveBeenCalledTimes(1);
-    const [updateClient, updatePostId, updateParams] =
-      updateMattermostPostSpy.mock.calls.at(0) ?? [];
+    const [updateClient, updatePostId, updateParams] = mockCall(
+      updateMattermostPostSpy,
+      0,
+      "updateMattermostPost",
+    );
     expect(updateClient).toBe(client);
     expect(updatePostId).toBe("preview-post-1");
     expect(updateParams).toStrictEqual({ message: "Final answer" });

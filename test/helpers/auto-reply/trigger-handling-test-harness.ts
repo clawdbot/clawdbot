@@ -354,7 +354,8 @@ export async function expectInlineCommandHandledAndStripped(params: {
   expect(blockReplies.length).toBe(1);
   expect(blockReplies[0]?.text).toContain(params.blockReplyContains);
   expect(runEmbeddedPiAgentMock).toHaveBeenCalled();
-  const prompt = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
+  const lastCall = runEmbeddedPiAgentMock.mock.calls[runEmbeddedPiAgentMock.mock.calls.length - 1];
+  const prompt = lastCall?.[0]?.prompt ?? "";
   expect(prompt).not.toContain(params.stripToken);
   expect(text).toBe("ok");
 }

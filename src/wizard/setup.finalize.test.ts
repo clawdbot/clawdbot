@@ -179,7 +179,8 @@ function createWebSearchProviderEntry(
 
 function expectFirstOnboardingInstallPlanCallOmitsToken() {
   const [firstArg] =
-    (buildGatewayInstallPlan.mock.calls.at(0) as [Record<string, unknown>] | undefined) ?? [];
+    (buildGatewayInstallPlan.mock.calls[0] as unknown as [Record<string, unknown>] | undefined) ??
+    [];
   if (!firstArg) {
     throw new Error("expected first onboarding install plan call");
   }
@@ -253,7 +254,7 @@ function expectNoteContains(
   title: string,
 ): void {
   const calls = vi.mocked(prompter.note).mock.calls;
-  expect(calls.some((call) => call[0].includes(expected) && call[1] === title)).toBe(true);
+  expect(calls.filter((call) => call[0].includes(expected) && call[1] === title)).not.toEqual([]);
 }
 
 function expectNoteTitleNotCalled(
@@ -261,7 +262,7 @@ function expectNoteTitleNotCalled(
   title: string,
 ): void {
   const calls = vi.mocked(prompter.note).mock.calls;
-  expect(calls.every((call) => call[1] !== title)).toBe(true);
+  expect(calls.filter((call) => call[1] === title)).toEqual([]);
 }
 
 describe("finalizeSetupWizard", () => {
@@ -833,6 +834,6 @@ describe("finalizeSetupWizard", () => {
       runtime: createRuntime(),
     });
 
-    expect(note.mock.calls.every((call) => call[1] !== "Codex native search")).toBe(true);
+    expect(note.mock.calls.filter((call) => call[1] === "Codex native search")).toEqual([]);
   });
 });

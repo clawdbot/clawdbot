@@ -173,6 +173,20 @@ function expectReplyText(result: unknown, text: string): void {
   expectRecordFields(result, { text }, "reply result");
 }
 
+type MockCallSource = {
+  mock: {
+    calls: ReadonlyArray<ReadonlyArray<unknown>>;
+  };
+};
+
+function firstMockCallArg(mock: MockCallSource, label: string): unknown {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} to have at least one call`);
+  }
+  return call[0];
+}
+
 beforeEach(() => {
   clearRuntimeConfigSnapshot();
   resetDiagnosticEventsForTest();
@@ -618,7 +632,7 @@ describe("runReplyAgent block streaming", () => {
     });
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls.at(0)?.[0].text).toBe("Hello");
+    expect((firstMockCallArg(onBlockReply, "block reply") as { text?: string }).text).toBe("Hello");
     expect(result).toBeUndefined();
   });
 
@@ -1962,7 +1976,7 @@ describe("runReplyAgent claude-cli routing", () => {
 
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     expectRecordFields(
-      runCliAgentMock.mock.calls.at(0)?.[0],
+      firstMockCallArg(runCliAgentMock, "CLI run params"),
       { provider: "claude-cli" },
       "CLI run params",
     );
@@ -2406,8 +2420,8 @@ describe("runReplyAgent fallback reasoning tags", () => {
 
     await createRun();
 
-    const call = runEmbeddedPiAgentMock.mock.calls.at(0)?.[0] as EmbeddedPiAgentParams | undefined;
-    expect(call?.enforceFinalTag).toBe(true);
+    const call = firstMockCallArg(runEmbeddedPiAgentMock, "PI run params") as EmbeddedPiAgentParams;
+    expect(call.enforceFinalTag).toBe(true);
   });
 
   it("enforces <final> during memory flush on fallback providers", async () => {

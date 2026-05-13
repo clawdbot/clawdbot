@@ -123,7 +123,7 @@ function requireLoadWebMediaOptions(): Record<string, unknown> {
 }
 
 function requireLoadWebMediaCall(): readonly unknown[] {
-  const call = vi.mocked(loadWebMedia).mock.calls.at(0);
+  const call = vi.mocked(loadWebMedia).mock.calls[0];
   if (!call) {
     throw new Error("Expected loadWebMedia to be called");
   }

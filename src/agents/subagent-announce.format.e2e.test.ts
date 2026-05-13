@@ -89,7 +89,7 @@ function expectInputProvenance(
 }
 
 function getAgentCall(index = 0): AgentCallRequest {
-  const call = agentSpy.mock.calls.at(index)?.[0];
+  const call = agentSpy.mock.calls[index]?.[0];
   if (!call) {
     throw new Error(`Expected agent call at index ${index}`);
   }
@@ -2879,7 +2879,7 @@ describe("subagent announce formatting", () => {
     const childCall = getAgentCall() as { params?: { message?: string } };
     expect(childCall?.params?.message ?? "").toContain("grandchild final output");
 
-    const parentCall = agentSpy.mock.calls.at(1)?.[0] as { params?: { message?: string } };
+    const parentCall = getAgentCall(1);
     expect(parentCall?.params?.message ?? "").toContain("child synthesized output from grandchild");
   });
 
@@ -3404,7 +3404,7 @@ describe("subagent announce formatting", () => {
       expect(parentAnnounced).toBe(true);
       expect(agentSpy).toHaveBeenCalledTimes(2);
 
-      const parentCall = agentSpy.mock.calls.at(1)?.[0] as { params?: { message?: string } };
+      const parentCall = getAgentCall(1);
       expect(parentCall?.params?.message ?? "").toContain("middle synthesized output from A and B");
     });
 
@@ -3620,7 +3620,7 @@ describe("subagent announce formatting", () => {
 
       const childCall = getAgentCall() as { params?: { message?: string } };
       expect(childCall?.params?.message ?? "").toContain("grandchild settled output");
-      const parentCall = agentSpy.mock.calls.at(1)?.[0] as { params?: { message?: string } };
+      const parentCall = getAgentCall(1);
       expect(parentCall?.params?.message ?? "").toContain("child synthesized from grandchild");
     });
   });

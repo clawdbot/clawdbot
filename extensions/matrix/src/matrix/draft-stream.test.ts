@@ -180,7 +180,7 @@ function sentContentAt(callIndex: number): Record<string, unknown> {
 }
 
 function expectLogContaining(log: ReturnType<typeof vi.fn>, fragment: string): void {
-  expect(log.mock.calls.some((call) => String(call[0]).includes(fragment))).toBe(true);
+  expect(log.mock.calls.map((call) => String(call[0])).join("\n")).toContain(fragment);
 }
 
 beforeAll(async () => {

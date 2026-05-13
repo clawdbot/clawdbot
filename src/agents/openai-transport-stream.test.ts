@@ -1374,6 +1374,35 @@ describe("openai transport stream", () => {
     expect(params.reasoning).toEqual({ effort: "high" });
   });
 
+  it("forwards temperature and top_p to chat completions request params", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        temperature: 0.4,
+        topP: 0.9,
+      },
+    );
+
+    expect(params.temperature).toBe(0.4);
+    expect(params.top_p).toBe(0.9);
+  });
+
   it("does not build OpenRouter reasoning params for Hunter Alpha when reasoning is disabled", () => {
     const params = buildOpenAICompletionsParams(
       {
@@ -1502,6 +1531,7 @@ describe("openai transport stream", () => {
         serviceTier: "auto",
         sessionId: "session-123",
         temperature: 0.2,
+        topP: 0.85,
       },
       {
         openclaw_session_id: "session-123",
@@ -1525,6 +1555,7 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("prompt_cache_retention");
     expect(params).not.toHaveProperty("service_tier");
     expect(params).not.toHaveProperty("temperature");
+    expect(params).not.toHaveProperty("top_p");
   });
 
   it("sanitizes Codex responses params after payload hooks mutate them without stripping cache identity", () => {
@@ -1538,6 +1569,7 @@ describe("openai transport stream", () => {
       prompt_cache_retention: "24h",
       service_tier: "auto",
       temperature: 0.2,
+      top_p: 0.85,
     };
 
     const sanitized = __testing.sanitizeOpenAICodexResponsesParams(
@@ -1562,6 +1594,7 @@ describe("openai transport stream", () => {
     expect(sanitized).not.toHaveProperty("prompt_cache_retention");
     expect(sanitized).not.toHaveProperty("service_tier");
     expect(sanitized).not.toHaveProperty("temperature");
+    expect(sanitized).not.toHaveProperty("top_p");
   });
 
   it("preserves custom Codex-compatible responses params", () => {
@@ -1588,6 +1621,7 @@ describe("openai transport stream", () => {
         maxTokens: 1024,
         sessionId: "session-123",
         temperature: 0.2,
+        topP: 0.85,
       },
       {
         openclaw_session_id: "session-123",
@@ -1603,6 +1637,7 @@ describe("openai transport stream", () => {
     });
     expect(params.max_output_tokens).toBe(1024);
     expect(params.temperature).toBe(0.2);
+    expect(params.top_p).toBe(0.85);
   });
 
   it("preserves custom Codex-compatible responses params after payload hooks mutate them", () => {

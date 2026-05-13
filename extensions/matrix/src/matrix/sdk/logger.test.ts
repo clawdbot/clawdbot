@@ -16,7 +16,7 @@ describe("ConsoleLogger", () => {
       "Authorization: Bearer 123456:abcdefghijklmnopqrstuvwxyzABCDEFG",
     );
 
-    const message = spy.mock.calls.at(0)?.[0];
+    const message = spy.mock.calls[0]?.[0];
     expect(message).toBe(
       "[MatrixHttpClient] Authorization: Bearer ***:abcdefghijklmnopqrstuvwxyzABCDEFG",
     );

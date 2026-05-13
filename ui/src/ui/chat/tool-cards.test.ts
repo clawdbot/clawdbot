@@ -162,9 +162,18 @@ describe("tool-cards", () => {
     expect(rawToggle!.getAttribute("aria-expanded")).toBe("true");
     expect(rawBody!.hidden).toBe(false);
     expect(rawBody!.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Tool output");
-    expect(JSON.parse(rawBody!.querySelector("code")?.textContent ?? "{}")).toMatchObject({
+    expect(JSON.parse(rawBody!.querySelector("code")?.textContent ?? "{}")).toEqual({
       kind: "canvas",
-      view: { id: "cv_counter", title: "Counter demo" },
+      presentation: {
+        target: "tool_card",
+      },
+      view: {
+        backend: "canvas",
+        id: "cv_counter",
+        preferred_height: 480,
+        title: "Counter demo",
+        url: "/__openclaw__/canvas/documents/cv_counter/index.html",
+      },
     });
   });
 

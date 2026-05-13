@@ -253,7 +253,7 @@ if ! "$NPM_CONFIG_PREFIX/bin/codex" exec \
   cat "$codex_preflight_log" >&2
   exit 1
 fi
-pnpm test:live ${OPENCLAW_LIVE_CODEX_TEST_FILES:-src/gateway/gateway-codex-harness.live.test.ts}
+node scripts/test-live.mjs -- ${OPENCLAW_LIVE_CODEX_TEST_FILES:-src/gateway/gateway-codex-harness.live.test.ts}
 EOF
 
 openclaw_live_codex_harness_append_build_extension codex

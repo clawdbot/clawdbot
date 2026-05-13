@@ -64,13 +64,21 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
   function latestFinalizedReplyContext(
     finalizeInboundContext: MatrixHandlerHarness["finalizeInboundContext"],
   ) {
-    return vi.mocked(finalizeInboundContext).mock.calls.at(-1)?.[0] as FinalizedReplyContext;
+    const calls = vi.mocked(finalizeInboundContext).mock.calls;
+    const call = calls[calls.length - 1];
+    if (!call) {
+      throw new Error("expected finalizeInboundContext call");
+    }
+    return call[0] as FinalizedReplyContext;
   }
 
   function latestSessionKey(recordInboundSession: MatrixHandlerHarness["recordInboundSession"]) {
-    const context = vi.mocked(recordInboundSession).mock.calls.at(-1)?.[0] as
-      | { sessionKey?: string }
-      | undefined;
+    const calls = vi.mocked(recordInboundSession).mock.calls;
+    const call = calls[calls.length - 1];
+    if (!call) {
+      throw new Error("expected recordInboundSession call");
+    }
+    const context = call[0] as { sessionKey?: string };
     return context?.sessionKey;
   }
 
@@ -355,11 +363,7 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
       }),
     );
 
-    const finalized = vi.mocked(finalizeInboundContext).mock.calls.at(-1)?.[0] as {
-      ReplyToBody?: string;
-      ReplyToSender?: string;
-      ThreadStarterBody?: string;
-    };
+    const finalized = latestFinalizedReplyContext(finalizeInboundContext);
     expect(finalized.ThreadStarterBody).toBeUndefined();
     expect(finalized.ReplyToBody).toBeUndefined();
     expect(finalized.ReplyToSender).toBeUndefined();

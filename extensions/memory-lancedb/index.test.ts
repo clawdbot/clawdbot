@@ -101,7 +101,7 @@ function expectHookRegistered(on: ReturnType<typeof vi.fn>, hookName: string) {
 }
 
 function expectHookNotRegistered(on: ReturnType<typeof vi.fn>, hookName: string) {
-  expect(on.mock.calls.some(([name]) => name === hookName)).toBe(false);
+  expect(on.mock.calls.map(([name]) => name)).not.toContain(hookName);
 }
 
 function expectToolExecute(tool: unknown, name?: string) {
@@ -448,7 +448,7 @@ describe("memory plugin e2e", () => {
       expect(providerOptions.provider).toBe("openai");
       expect(providerOptions.fallback).toBe("none");
       expect(providerOptions.model).toBe("text-embedding-3-small");
-      expect(createProvider.mock.calls.at(0)?.[0]).not.toHaveProperty("remote");
+      expect(providerOptions).not.toHaveProperty("remote");
       expect(embedQuery).toHaveBeenCalledWith("project memory");
     } finally {
       vi.doUnmock("openclaw/plugin-sdk/memory-core-host-engine-embeddings");
@@ -1758,11 +1758,9 @@ describe("memory plugin e2e", () => {
 
       expect(embeddingsCreate).toHaveBeenCalledTimes(2);
       expect(harness.add).toHaveBeenCalledTimes(1);
-      expect(
-        harness.logger.warn.mock.calls.some(([message]) =>
-          String(message).includes("memory-lancedb: capture failed:"),
-        ),
-      ).toBe(true);
+      expect(harness.logger.warn.mock.calls.map(([message]) => String(message))).toEqual([
+        "memory-lancedb: capture failed: Error: temporary embedding failure",
+      ]);
     } finally {
       await cleanupAutoCaptureCursorHarness();
     }

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { promises as fsPromises } from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
@@ -9,6 +10,7 @@ import {
   formatConfigOverwriteLogMessage,
   redactConfigAuditArgv,
   resolveConfigAuditLogPath,
+  scrubConfigAuditLog,
 } from "./io.audit.js";
 
 function createAuditRecordBase(configPath: string) {
@@ -474,5 +476,258 @@ describe("config io audit helpers", () => {
     expect(written.event).toBe("config.write");
     expect(written.result).toBe("rename");
     expect(written.nextHash).toBe("next-hash");
+  });
+
+  it("rewrites historical config-audit entries through redactConfigAuditArgv and preserves 0600 mode", async () => {
+    const home = await suiteRootTracker.make("scrub-historical");
+    const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
+    fs.mkdirSync(path.dirname(auditPath), { recursive: true, mode: 0o700 });
+    const unredactedRecord = {
+      ts: "2026-05-02T00:03:48.471Z",
+      source: "config-io",
+      event: "config.write",
+      configPath: path.join(home, ".openclaw", "openclaw.json"),
+      pid: 1590563,
+      ppid: 1590548,
+      cwd: home,
+      argv: [
+        "/usr/bin/node",
+        "/usr/local/bin/openclaw.mjs",
+        "config",
+        "set",
+        "channels.slack.botToken",
+        "xoxb-real-bot-token-1234567890abcdef0123456789abcdef",
+      ],
+      execArgv: ["--disable-warning=ExperimentalWarning"],
+      suspicious: [],
+      result: "rename",
+    };
+    const alreadyRedactedRecord = {
+      ts: "2026-05-08T12:00:00.000Z",
+      source: "config-io",
+      event: "config.write",
+      configPath: path.join(home, ".openclaw", "openclaw.json"),
+      pid: 1,
+      ppid: 1,
+      cwd: home,
+      argv: ["/usr/bin/node", "/usr/local/bin/openclaw.mjs", "config", "set", "ui.theme", "dark"],
+      execArgv: ["--disable-warning=ExperimentalWarning"],
+      suspicious: [],
+      result: "rename",
+    };
+    fs.writeFileSync(
+      auditPath,
+      `${JSON.stringify(unredactedRecord)}\n${JSON.stringify(alreadyRedactedRecord)}\n`,
+      { encoding: "utf-8", mode: 0o600 },
+    );
+
+    const env = {} as NodeJS.ProcessEnv;
+    const result = await scrubConfigAuditLog({
+      fs: { promises: fsPromises },
+      env,
+      homedir: () => home,
+    });
+
+    expect(result).toEqual({ scanned: 2, rewritten: 1, skipped: 0, aborted: false });
+    const after = readAuditLog(home);
+    expect(after).toHaveLength(2);
+    const firstAfter = requireAuditRecord(after[0]);
+    const secondAfter = requireAuditRecord(after[1]);
+    const firstArgv = firstAfter.argv as string[];
+    expect(firstArgv).toHaveLength(unredactedRecord.argv.length);
+    expect(firstArgv.slice(0, 5)).toEqual(unredactedRecord.argv.slice(0, 5));
+    expect(firstArgv[5]).not.toContain("real-bot-token");
+    expect(JSON.stringify(firstAfter)).not.toContain("xoxb-real-bot-token");
+    expect(firstAfter.ts).toBe(unredactedRecord.ts);
+    expect(firstAfter.suspicious).toEqual([]);
+    expect(secondAfter.argv).toEqual(alreadyRedactedRecord.argv);
+
+    const stat = fs.statSync(auditPath);
+    expect(stat.mode & 0o777).toBe(0o600);
+
+    const second = await scrubConfigAuditLog({
+      fs: { promises: fsPromises },
+      env,
+      homedir: () => home,
+    });
+    expect(second).toEqual({ scanned: 2, rewritten: 0, skipped: 0, aborted: false });
+  });
+
+  it("returns zero counts and does not create the audit file when none exists", async () => {
+    const home = await suiteRootTracker.make("scrub-missing");
+    const result = await scrubConfigAuditLog({
+      fs: { promises: fsPromises },
+      env: {} as NodeJS.ProcessEnv,
+      homedir: () => home,
+    });
+    expect(result).toEqual({ scanned: 0, rewritten: 0, skipped: 0, aborted: false });
+    const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
+    expect(fs.existsSync(auditPath)).toBe(false);
+  });
+
+  it("preserves malformed lines verbatim and counts them as skipped", async () => {
+    const home = await suiteRootTracker.make("scrub-malformed");
+    const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
+    fs.mkdirSync(path.dirname(auditPath), { recursive: true, mode: 0o700 });
+    const malformed = "{this is not valid json";
+    const validUnredacted = {
+      ts: "2026-05-02T00:03:48.471Z",
+      argv: ["node", "openclaw.mjs", "config", "set", "x", "xoxb-bad-token-1234567890abcdef"],
+    };
+    fs.writeFileSync(auditPath, `${malformed}\n${JSON.stringify(validUnredacted)}\n`, {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
+
+    const result = await scrubConfigAuditLog({
+      fs: { promises: fsPromises },
+      env: {} as NodeJS.ProcessEnv,
+      homedir: () => home,
+    });
+
+    expect(result).toEqual({ scanned: 2, rewritten: 1, skipped: 1, aborted: false });
+    const text = fs.readFileSync(auditPath, "utf-8");
+    expect(text.split("\n")[0]).toBe(malformed);
+    expect(text).not.toContain("xoxb-bad-token");
+  });
+
+  it("does not write when dryRun is true even if records would change", async () => {
+    const home = await suiteRootTracker.make("scrub-dryrun");
+    const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
+    fs.mkdirSync(path.dirname(auditPath), { recursive: true, mode: 0o700 });
+    const unredacted = {
+      ts: "2026-05-02T00:03:48.471Z",
+      argv: [
+        "node",
+        "openclaw.mjs",
+        "config",
+        "set",
+        "channels.slack.appToken",
+        "xapp-1-A1B2C3-1234567890-abcdef0123456789abcdef0123456789",
+      ],
+      execArgv: [],
+    };
+    const original = `${JSON.stringify(unredacted)}\n`;
+    fs.writeFileSync(auditPath, original, { encoding: "utf-8", mode: 0o600 });
+
+    const result = await scrubConfigAuditLog({
+      fs: { promises: fsPromises },
+      env: {} as NodeJS.ProcessEnv,
+      homedir: () => home,
+      dryRun: true,
+    });
+
+    expect(result).toEqual({ scanned: 1, rewritten: 1, skipped: 0, aborted: false });
+    const text = fs.readFileSync(auditPath, "utf-8");
+    expect(text).toBe(original);
+    expect(text).toContain("xapp-1-A1B2C3");
+  });
+
+  it("aborts without overwriting when the audit log was appended to mid-scrub", async () => {
+    const home = await suiteRootTracker.make("scrub-race-abort");
+    const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
+    fs.mkdirSync(path.dirname(auditPath), { recursive: true, mode: 0o700 });
+    const unredacted = {
+      ts: "2026-05-02T00:03:48.471Z",
+      argv: [
+        "node",
+        "openclaw.mjs",
+        "config",
+        "set",
+        "channels.slack.botToken",
+        "xoxb-real-bot-token-1234567890abcdef0123456789abcdef",
+      ],
+      execArgv: [],
+    };
+    const original = `${JSON.stringify(unredacted)}\n`;
+    fs.writeFileSync(auditPath, original, { encoding: "utf-8", mode: 0o600 });
+
+    // Mock fs whose .stat() reports a larger size than what readFile returns,
+    // simulating an appendConfigAuditRecord call that fired after the initial
+    // read but before the rename. The scrub should refuse to rename and leave
+    // the file untouched.
+    const raceFs = {
+      promises: {
+        readFile: fsPromises.readFile,
+        stat: async (p: string) => {
+          const realStat = await fsPromises.stat(p);
+          return { size: realStat.size + 200 };
+        },
+        writeFile: fsPromises.writeFile,
+        rename: fsPromises.rename,
+        unlink: fsPromises.unlink,
+      },
+    };
+    const result = await scrubConfigAuditLog({
+      fs: raceFs,
+      env: {} as NodeJS.ProcessEnv,
+      homedir: () => home,
+    });
+
+    expect(result.aborted).toBe(true);
+    expect(result.rewritten).toBeGreaterThan(0);
+    const after = fs.readFileSync(auditPath, "utf-8");
+    expect(after).toBe(original);
+    expect(after).toContain("xoxb-real-bot-token");
+    expect(fs.existsSync(`${auditPath}.scrub.tmp`)).toBe(false);
+  });
+
+  it("aborts without overwriting when the audit log is appended to after temp write", async () => {
+    const home = await suiteRootTracker.make("scrub-race-after-temp-write");
+    const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
+    fs.mkdirSync(path.dirname(auditPath), { recursive: true, mode: 0o700 });
+    const unredacted = {
+      ts: "2026-05-02T00:03:48.471Z",
+      argv: [
+        "node",
+        "openclaw.mjs",
+        "config",
+        "set",
+        "channels.slack.botToken",
+        "xoxb-real-bot-token-1234567890abcdef0123456789abcdef",
+      ],
+      execArgv: [],
+    };
+    const appended = {
+      ts: "2026-05-02T00:04:00.000Z",
+      argv: ["node", "openclaw.mjs", "config", "set", "theme", "dark"],
+      execArgv: [],
+    };
+    const original = `${JSON.stringify(unredacted)}\n`;
+    const appendedLine = `${JSON.stringify(appended)}\n`;
+    fs.writeFileSync(auditPath, original, { encoding: "utf-8", mode: 0o600 });
+    let renameCalled = false;
+
+    const raceFs = {
+      promises: {
+        readFile: fsPromises.readFile,
+        stat: fsPromises.stat,
+        writeFile: async (
+          p: string,
+          data: string,
+          options?: { encoding?: BufferEncoding; mode?: number },
+        ) => {
+          await fsPromises.writeFile(p, data, options);
+          await fsPromises.appendFile(auditPath, appendedLine, "utf-8");
+        },
+        rename: async () => {
+          renameCalled = true;
+        },
+        unlink: fsPromises.unlink,
+      },
+    };
+    const result = await scrubConfigAuditLog({
+      fs: raceFs,
+      env: {} as NodeJS.ProcessEnv,
+      homedir: () => home,
+    });
+
+    expect(result.aborted).toBe(true);
+    expect(result.rewritten).toBeGreaterThan(0);
+    expect(renameCalled).toBe(false);
+    const after = fs.readFileSync(auditPath, "utf-8");
+    expect(after).toBe(`${original}${appendedLine}`);
+    expect(after).toContain("xoxb-real-bot-token");
+    expect(fs.existsSync(`${auditPath}.scrub.tmp`)).toBe(false);
   });
 });

@@ -49,34 +49,33 @@ describe("CodexNativeSubagentTaskMirror", () => {
       },
     });
 
-    expect(runtime.createRunningTaskRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtime: "subagent",
-        taskKind: "codex-native",
-        sourceId: "codex-thread:child-thread",
-        requesterSessionKey: "agent:main:main",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        agentId: "main",
-        runId: "codex-thread:child-thread",
-        label: "Poincare",
-        task: "write the Madrid wine script",
-        notifyPolicy: "silent",
-        deliveryStatus: "not_applicable",
-        startedAt: 10_000,
-        progressSummary: "Codex native subagent started.",
-      }),
-    );
+    expect(runtime.createRunningTaskRun).toHaveBeenCalledWith({
+      runtime: "subagent",
+      taskKind: "codex-native",
+      sourceId: "codex-thread:child-thread",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      agentId: "main",
+      runId: "codex-thread:child-thread",
+      label: "Poincare",
+      task: "write the Madrid wine script",
+      notifyPolicy: "silent",
+      deliveryStatus: "not_applicable",
+      preferMetadata: true,
+      startedAt: 10_000,
+      lastEventAt: 20_000,
+      progressSummary: "Codex native subagent started.",
+    });
     expect(vi.mocked(runtime.createRunningTaskRun).mock.calls.at(0)?.[0]).not.toHaveProperty(
       "childSessionKey",
     );
-    expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "codex-thread:child-thread",
-        runtime: "subagent",
-        progressSummary: "Codex native subagent is active.",
-      }),
-    );
+    expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith({
+      runId: "codex-thread:child-thread",
+      runtime: "subagent",
+      lastEventAt: 20_000,
+      progressSummary: "Codex native subagent is active.",
+    });
   });
 
   it("ignores subagent threads spawned by a different parent thread", () => {
@@ -169,24 +168,25 @@ describe("CodexNativeSubagentTaskMirror", () => {
       },
     });
 
-    expect(runtime.finalizeTaskRunByRunId).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        runId: codexNativeSubagentRunId("child-thread"),
-        runtime: "subagent",
-        status: "succeeded",
-        terminalSummary: "Codex native subagent finished.",
-      }),
-    );
-    expect(runtime.finalizeTaskRunByRunId).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        runId: codexNativeSubagentRunId("failed-child"),
-        runtime: "subagent",
-        status: "failed",
-        terminalSummary: "Codex native subagent failed.",
-      }),
-    );
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenNthCalledWith(1, {
+      runId: codexNativeSubagentRunId("child-thread"),
+      runtime: "subagent",
+      status: "succeeded",
+      endedAt: 30_000,
+      lastEventAt: 30_000,
+      progressSummary: "Codex native subagent is idle.",
+      terminalSummary: "Codex native subagent finished.",
+    });
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenNthCalledWith(2, {
+      runId: codexNativeSubagentRunId("failed-child"),
+      runtime: "subagent",
+      status: "failed",
+      endedAt: 30_000,
+      lastEventAt: 30_000,
+      error: "Codex app-server reported a system error for the native subagent thread.",
+      progressSummary: "Codex native subagent hit a system error.",
+      terminalSummary: "Codex native subagent failed.",
+    });
   });
 
   it("creates and updates tasks from Codex collab agent item state", () => {
@@ -236,39 +236,41 @@ describe("CodexNativeSubagentTaskMirror", () => {
       },
     });
 
-    expect(runtime.createRunningTaskRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtime: "subagent",
-        taskKind: "codex-native",
-        sourceId: "codex-thread:child-thread",
-        requesterSessionKey: "agent:main:main",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        runId: "codex-thread:child-thread",
-        label: "Codex subagent",
-        task: "write the proof file",
-        notifyPolicy: "silent",
-        deliveryStatus: "not_applicable",
-      }),
-    );
+    expect(runtime.createRunningTaskRun).toHaveBeenCalledWith({
+      runtime: "subagent",
+      taskKind: "codex-native",
+      sourceId: "codex-thread:child-thread",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      runId: "codex-thread:child-thread",
+      label: "Codex subagent",
+      task: "write the proof file",
+      notifyPolicy: "silent",
+      deliveryStatus: "not_applicable",
+      preferMetadata: true,
+      startedAt: 40_000,
+      lastEventAt: 40_000,
+      progressSummary: "Codex native subagent spawned.",
+    });
     expect(vi.mocked(runtime.createRunningTaskRun).mock.calls.at(0)?.[0]).not.toHaveProperty(
       "childSessionKey",
     );
-    expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "codex-thread:child-thread",
-        runtime: "subagent",
-        progressSummary: "Codex native subagent is initializing.",
-      }),
-    );
-    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "codex-thread:child-thread",
-        runtime: "subagent",
-        status: "succeeded",
-        terminalSummary: "done",
-      }),
-    );
+    expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith({
+      runId: "codex-thread:child-thread",
+      runtime: "subagent",
+      lastEventAt: 40_000,
+      progressSummary: "Codex native subagent is initializing.",
+    });
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith({
+      runId: "codex-thread:child-thread",
+      runtime: "subagent",
+      status: "succeeded",
+      endedAt: 40_000,
+      lastEventAt: 40_000,
+      progressSummary: "done",
+      terminalSummary: "done",
+    });
   });
 
   it("preserves a completed collab agent message when the thread later goes idle", () => {
@@ -309,13 +311,15 @@ describe("CodexNativeSubagentTaskMirror", () => {
     });
 
     expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledTimes(1);
-    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "codex-thread:child-thread",
-        status: "succeeded",
-        terminalSummary: "No user task is specified.",
-      }),
-    );
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith({
+      runId: "codex-thread:child-thread",
+      runtime: "subagent",
+      status: "succeeded",
+      endedAt: 50_000,
+      lastEventAt: 50_000,
+      progressSummary: "No user task is specified.",
+      terminalSummary: "No user task is specified.",
+    });
   });
 
   it("normalizes collab agent status spelling from alternate event surfaces", () => {
@@ -363,18 +367,20 @@ describe("CodexNativeSubagentTaskMirror", () => {
       },
     });
 
-    expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "codex-thread:child-thread",
-        progressSummary: "Codex native subagent is initializing.",
-      }),
-    );
-    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "codex-thread:child-thread",
-        status: "succeeded",
-        terminalSummary: "done",
-      }),
-    );
+    expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith({
+      runId: "codex-thread:child-thread",
+      runtime: "subagent",
+      lastEventAt: 60_000,
+      progressSummary: "Codex native subagent is initializing.",
+    });
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith({
+      runId: "codex-thread:child-thread",
+      runtime: "subagent",
+      status: "succeeded",
+      endedAt: 60_000,
+      lastEventAt: 60_000,
+      progressSummary: "done",
+      terminalSummary: "done",
+    });
   });
 });

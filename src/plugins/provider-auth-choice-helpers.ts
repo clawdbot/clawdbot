@@ -189,28 +189,69 @@ function normalizeModelProviderConfigsForWrite(cfg: OpenClawConfig): OpenClawCon
   };
 }
 
+function normalizeAgentListForWrite(value: unknown): unknown {
+  if (!Array.isArray(value)) {
+    return value;
+  }
+
+  let mutated = false;
+  const next = value.map((agent) => {
+    if (!isPlainRecord(agent)) {
+      return agent;
+    }
+
+    let nextAgent = agent;
+    if (Object.prototype.hasOwnProperty.call(agent, "model")) {
+      const normalizedModel = normalizeAgentModelConfigForWrite(agent.model);
+      if (normalizedModel !== agent.model) {
+        nextAgent = { ...nextAgent, model: normalizedModel };
+        mutated = true;
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(agent, "models")) {
+      const normalizedModels = normalizeAgentModelMapForWrite(agent.models);
+      if (normalizedModels !== agent.models) {
+        nextAgent = { ...nextAgent, models: normalizedModels };
+        mutated = true;
+      }
+    }
+    return nextAgent;
+  });
+
+  return mutated ? next : value;
+}
+
 function normalizeConfigModelRefsForWrite(cfg: OpenClawConfig): OpenClawConfig {
   const providerNormalized = normalizeModelProviderConfigsForWrite(cfg);
   const defaults = providerNormalized.agents?.defaults;
-  if (!defaults) {
-    return providerNormalized;
+  const agentsList = providerNormalized.agents?.list;
+
+  let nextDefaults = defaults;
+  if (defaults) {
+    nextDefaults = { ...defaults };
+    if (defaults.model !== undefined) {
+      nextDefaults.model = normalizeAgentModelConfigForWrite(
+        defaults.model,
+      ) as typeof defaults.model;
+    }
+    if (defaults.models !== undefined) {
+      nextDefaults.models = normalizeAgentModelMapForWrite(
+        defaults.models,
+      ) as typeof defaults.models;
+    }
   }
 
-  const nextDefaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> = {
-    ...defaults,
-  };
-  if (defaults.model !== undefined) {
-    nextDefaults.model = normalizeAgentModelConfigForWrite(defaults.model) as typeof defaults.model;
-  }
-  if (defaults.models !== undefined) {
-    nextDefaults.models = normalizeAgentModelMapForWrite(defaults.models) as typeof defaults.models;
+  const nextAgentsList = normalizeAgentListForWrite(agentsList);
+  if (nextDefaults === defaults && nextAgentsList === agentsList) {
+    return providerNormalized;
   }
 
   return {
     ...providerNormalized,
     agents: {
       ...providerNormalized.agents,
-      defaults: nextDefaults,
+      ...(nextDefaults ? { defaults: nextDefaults } : {}),
+      ...(nextAgentsList !== undefined ? { list: nextAgentsList as typeof agentsList } : {}),
     },
   };
 }

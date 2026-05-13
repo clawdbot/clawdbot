@@ -56,11 +56,16 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
 }
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
-  const call = mock.mock.calls[callIndex];
+  const resolvedIndex = callIndex < 0 ? mock.mock.calls.length + callIndex : callIndex;
+  const call = mock.mock.calls[resolvedIndex];
   if (!call) {
     throw new Error(`Expected mock call ${callIndex}`);
   }
   return call[argIndex];
+}
+
+function stdoutWriteArg(callIndex = -1) {
+  return mockCallArg(stdoutWriteMock, callIndex);
 }
 
 vi.mock("./matrix/actions/verification.js", () => ({
@@ -840,8 +845,9 @@ describe("matrix CLI verification commands", () => {
 
     await program.parseAsync(["matrix", "verify", "status"], { from: "user" });
 
-    expectRecordFields(mockCallArg(getMatrixVerificationStatusMock), { cfg: fakeCfg });
-    expect(getMatrixVerificationStatusMock.mock.calls.at(-1)?.[0]).not.toHaveProperty("readiness");
+    const statusArg = mockCallArg(getMatrixVerificationStatusMock, -1);
+    expectRecordFields(statusArg, { cfg: fakeCfg });
+    expect(statusArg).not.toHaveProperty("readiness");
   });
 
   it("allows verify status to use degraded local-state diagnostics", async () => {
@@ -1206,7 +1212,7 @@ describe("matrix CLI verification commands", () => {
     const statusArg = mockCallArg(getMatrixVerificationStatusMock) as Record<string, unknown>;
     expectRecordFields(statusArg, { accountId: "ops", readiness: "none" });
     expect(statusArg.cfg).toBeTypeOf("object");
-    const jsonOutput = stdoutWriteMock.mock.calls.at(-1)?.[0];
+    const jsonOutput = stdoutWriteArg();
     expect(typeof jsonOutput).toBe("string");
     const payload = JSON.parse(String(jsonOutput)) as Record<string, unknown>;
     expectRecordFields(payload, { accountId: "ops", encryptionChanged: false });
@@ -1367,7 +1373,7 @@ describe("matrix CLI verification commands", () => {
 
     expect(matrixRuntimeReplaceConfigFileMock).toHaveBeenCalled();
     expect(process.exitCode).toBeUndefined();
-    const jsonOutput = stdoutWriteMock.mock.calls.at(-1)?.[0];
+    const jsonOutput = stdoutWriteArg();
     expect(typeof jsonOutput).toBe("string");
     const payload = JSON.parse(String(jsonOutput)) as Record<string, unknown>;
     expect(payload.accountId).toBe("ops");
@@ -1512,7 +1518,7 @@ describe("matrix CLI verification commands", () => {
     });
 
     expect(process.exitCode).toBe(1);
-    expect(JSON.parse(String(stdoutWriteMock.mock.calls.at(0)?.[0]))).toEqual({
+    expect(JSON.parse(String(stdoutWriteArg(0)))).toEqual({
       error: "Matrix requires --homeserver",
     });
   });

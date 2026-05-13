@@ -106,6 +106,7 @@ describe("resolveRunFailoverDecision", () => {
         failoverFailure: false,
         failoverReason: "rate_limit",
         timedOut: false,
+        idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
         profileRotated: false,
@@ -126,6 +127,7 @@ describe("resolveRunFailoverDecision", () => {
         failoverFailure: true,
         failoverReason: "format",
         timedOut: false,
+        idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
         profileRotated: false,
@@ -147,6 +149,7 @@ describe("resolveRunFailoverDecision", () => {
         failoverFailure: true,
         failoverReason: "format",
         timedOut: false,
+        idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
         profileRotated: false,
@@ -167,6 +170,7 @@ describe("resolveRunFailoverDecision", () => {
         failoverFailure: false,
         failoverReason: "rate_limit",
         timedOut: false,
+        idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
         profileRotated: true,
@@ -187,6 +191,7 @@ describe("resolveRunFailoverDecision", () => {
         failoverFailure: false,
         failoverReason: null,
         timedOut: false,
+        idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
         profileRotated: false,
@@ -223,6 +228,7 @@ describe("resolveRunFailoverDecision", () => {
         failoverFailure: false,
         failoverReason: null,
         timedOut: true,
+        idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: true,
         profileRotated: false,
@@ -242,6 +248,7 @@ describe("resolveRunFailoverDecision", () => {
         failoverFailure: false,
         failoverReason: null,
         timedOut: true,
+        idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: true,
         profileRotated: true,
@@ -261,6 +268,7 @@ describe("resolveRunFailoverDecision", () => {
         failoverFailure: false,
         failoverReason: null,
         timedOut: true,
+        idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
         profileRotated: false,
@@ -268,6 +276,48 @@ describe("resolveRunFailoverDecision", () => {
     ).toEqual({
       action: "rotate_profile",
       reason: null,
+    });
+  });
+
+  it("treats idle watchdog timeouts during tool execution as model silence", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: true,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: false,
+        failoverReason: null,
+        timedOut: true,
+        idleTimedOut: true,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: true,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "rotate_profile",
+      reason: null,
+    });
+  });
+
+  it("falls back after idle watchdog timeout during tool execution exhausts profile rotation", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: true,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: false,
+        failoverReason: null,
+        timedOut: true,
+        idleTimedOut: true,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: true,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "timeout",
     });
   });
 
@@ -281,6 +331,91 @@ describe("resolveRunFailoverDecision", () => {
         failoverFailure: false,
         failoverReason: null,
         timedOut: true,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: null,
+    });
+  });
+
+  it("rotates profile on LLM idle timeout before falling back", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: false,
+        failoverReason: null,
+        timedOut: false,
+        idleTimedOut: true,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "rotate_profile",
+      reason: null,
+    });
+  });
+
+  it("escalates LLM idle timeout to fallback_model after profile rotation is exhausted", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: false,
+        failoverReason: null,
+        timedOut: false,
+        idleTimedOut: true,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "timeout",
+    });
+  });
+
+  it("surfaces error on LLM idle timeout when no fallback is configured and rotation is exhausted", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: false,
+        failoverFailure: false,
+        failoverReason: null,
+        timedOut: false,
+        idleTimedOut: true,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: null,
+    });
+  });
+
+  it("does not escalate LLM idle timeout after an external abort", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: false,
+        externalAbort: true,
+        fallbackConfigured: true,
+        failoverFailure: false,
+        failoverReason: null,
+        timedOut: false,
+        idleTimedOut: true,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
         profileRotated: false,

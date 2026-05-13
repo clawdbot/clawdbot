@@ -201,9 +201,10 @@ export const CreateResponseBodySchema = z
     max_output_tokens: z.number().int().positive().optional(),
     max_tool_calls: z.number().int().positive().optional(),
     user: z.string().optional(),
-    // Phase 1: ignore but accept these fields
-    temperature: z.number().optional(),
-    top_p: z.number().optional(),
+    // Sampling overrides forwarded to provider (best-effort; some backends like
+    // ChatGPT Codex Responses strip these — see openai-transport-stream.ts).
+    temperature: z.number().min(0).max(2).optional(),
+    top_p: z.number().min(0).max(1).optional(),
     metadata: z.record(z.string(), z.string()).optional(),
     store: z.boolean().optional(),
     previous_response_id: z.string().optional(),

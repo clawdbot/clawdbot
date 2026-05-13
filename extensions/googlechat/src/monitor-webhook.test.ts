@@ -151,11 +151,13 @@ describe("googlechat monitor webhook", () => {
         ],
       ],
     ]);
+    const webhookInFlightLimiter = {} as never;
+    const processEvent = vi.fn(async () => {});
     const handler = createGoogleChatWebhookRequestHandler({
       webhookTargets,
       webhookRateLimiter: rateLimiter,
-      webhookInFlightLimiter: {} as never,
-      processEvent: vi.fn(async () => {}),
+      webhookInFlightLimiter,
+      processEvent,
     });
     const req = createRequest({
       url: "/googlechat?ignored=1",
@@ -169,12 +171,17 @@ describe("googlechat monitor webhook", () => {
 
     await expect(handler(req, res)).resolves.toBe(true);
 
-    expect(withResolvedWebhookRequestPipeline).toHaveBeenCalledWith(
-      expect.objectContaining({
-        rateLimiter,
-        rateLimitKey: "/googlechat:198.51.100.7",
-      }),
-    );
+    expect(withResolvedWebhookRequestPipeline).toHaveBeenCalledWith({
+      req,
+      res,
+      targetsByPath: webhookTargets,
+      allowMethods: ["POST"],
+      requireJsonContentType: true,
+      rateLimiter,
+      rateLimitKey: "/googlechat:198.51.100.7",
+      inFlightLimiter: webhookInFlightLimiter,
+      handle: expect.any(Function),
+    });
   });
 
   it("uses the unknown rate-limit bucket when a trusted proxy omits client headers", async () => {
@@ -205,11 +212,13 @@ describe("googlechat monitor webhook", () => {
         ],
       ],
     ]);
+    const webhookInFlightLimiter = {} as never;
+    const processEvent = vi.fn(async () => {});
     const handler = createGoogleChatWebhookRequestHandler({
       webhookTargets,
       webhookRateLimiter: rateLimiter,
-      webhookInFlightLimiter: {} as never,
-      processEvent: vi.fn(async () => {}),
+      webhookInFlightLimiter,
+      processEvent,
     });
     const req = createRequest({ remoteAddress: "10.0.0.1" });
     const res = createResponse();
@@ -217,12 +226,17 @@ describe("googlechat monitor webhook", () => {
 
     await expect(handler(req, res)).resolves.toBe(true);
 
-    expect(withResolvedWebhookRequestPipeline).toHaveBeenCalledWith(
-      expect.objectContaining({
-        rateLimiter,
-        rateLimitKey: "/googlechat:unknown",
-      }),
-    );
+    expect(withResolvedWebhookRequestPipeline).toHaveBeenCalledWith({
+      req,
+      res,
+      targetsByPath: webhookTargets,
+      allowMethods: ["POST"],
+      requireJsonContentType: true,
+      rateLimiter,
+      rateLimitKey: "/googlechat:unknown",
+      inFlightLimiter: webhookInFlightLimiter,
+      handle: expect.any(Function),
+    });
   });
 
   it("accepts add-on payloads that carry systemIdToken in the body", async () => {

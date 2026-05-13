@@ -270,7 +270,10 @@ function expectCandidateSource(
   idHint: string,
   source: string,
 ) {
-  expect(findCandidateById(candidates, idHint)?.source).toBe(source);
+  const actualSource = findCandidateById(candidates, idHint)?.source;
+  const normalizeSource = (value: string | undefined) =>
+    value && fs.existsSync(value) ? fs.realpathSync(value) : value;
+  expect(normalizeSource(actualSource)).toBe(normalizeSource(source));
 }
 
 function expectEscapesPackageDiagnostic(diagnostics: Array<{ message: string }>) {
@@ -634,7 +637,9 @@ describe("discoverOpenClawPlugins", () => {
       discoverOpenClawPlugins({ env: buildDiscoveryEnv(stateDir) }),
     );
 
-    expect(result.diagnostics.some((entry) => entry.message.includes("pnpm install"))).toBe(false);
+    expect(result.diagnostics.map((entry) => entry.message).join("\n")).not.toContain(
+      "pnpm install",
+    );
   });
 
   it("does not treat repo-level live or test files as plugin entrypoints", () => {

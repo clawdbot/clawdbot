@@ -543,8 +543,10 @@ openclaw plugins install -l <path>         # link (no copy) for dev
 openclaw plugins install <plugin> --marketplace <source>
 openclaw plugins install <plugin> --marketplace https://github.com/<owner>/<repo>
 openclaw plugins install <spec> --pin      # record exact resolved npm spec
+openclaw plugins install <spec> --acknowledge-clawhub-risk
 openclaw plugins install <spec> --dangerously-force-unsafe-install
 openclaw plugins update <id-or-npm-spec> # update one plugin
+openclaw plugins update <id-or-npm-spec> --acknowledge-clawhub-risk
 openclaw plugins update <id-or-npm-spec> --dangerously-force-unsafe-install
 openclaw plugins update --all            # update all
 openclaw plugins uninstall <id>          # remove config and plugin index records
@@ -602,6 +604,14 @@ beta release exists. Exact versions and explicit tags stay pinned.
 
 `--pin` is npm-only. It is not supported with `--marketplace`, because
 marketplace installs persist marketplace source metadata instead of an npm spec.
+
+ClawHub-backed plugin installs and updates check the exact target release's
+ClawHub trust record before download. If ClawHub reports risk for that release,
+OpenClaw prints the package, version, scan status, moderation state, and reason
+codes, then requires confirmation before continuing. Non-interactive automation
+must pass `--acknowledge-clawhub-risk` after reviewing that warning. The flag
+acknowledges ClawHub registry risk only; it does not bypass plugin
+`before_install` hook policy blocks or the built-in dangerous-code scanner.
 
 `--dangerously-force-unsafe-install` is a break-glass override for false
 positives from the built-in dangerous-code scanner. It allows plugin installs

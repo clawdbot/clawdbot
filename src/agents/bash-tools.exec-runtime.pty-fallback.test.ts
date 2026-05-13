@@ -80,6 +80,14 @@ function runPtyFallback(warnings: string[] = []) {
   });
 }
 
+function spawnInput(index: number): SpawnInput {
+  const call = supervisorSpawnMock.mock.calls[index] as [SpawnInput] | undefined;
+  if (!call) {
+    throw new Error(`expected supervisor spawn call ${index}`);
+  }
+  return call[0];
+}
+
 test("exec falls back when PTY spawn fails", async () => {
   supervisorSpawnMock
     .mockRejectedValueOnce(new Error("pty spawn failed"))
@@ -92,10 +100,8 @@ test("exec falls back when PTY spawn fails", async () => {
   expect(outcome.status).toBe("completed");
   expect(outcome.aggregated).toContain("ok");
   expect(warnings.join("\n")).toContain("PTY spawn failed");
-  const firstSpawnInput = supervisorSpawnMock.mock.calls.at(0)?.[0] as SpawnInput | undefined;
-  const secondSpawnInput = supervisorSpawnMock.mock.calls.at(1)?.[0] as SpawnInput | undefined;
-  expect(firstSpawnInput?.mode).toBe("pty");
-  expect(secondSpawnInput?.mode).toBe("child");
+  expect(spawnInput(0).mode).toBe("pty");
+  expect(spawnInput(1).mode).toBe("child");
 });
 
 test("exec cleans session state when PTY fallback spawn also fails", async () => {

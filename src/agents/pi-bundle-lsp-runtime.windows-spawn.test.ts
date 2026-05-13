@@ -40,6 +40,14 @@ const FAKE_CHILD = {
   pid: 1234,
 } as unknown as import("node:child_process").ChildProcess;
 
+function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`Expected ${label} to be called`);
+  }
+  return call;
+}
+
 describe("spawnLspServerProcess Windows .cmd shim handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -66,7 +74,7 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
     });
 
     // Must use structured params so config.env entries are not dropped
-    const sanitizeParams = sanitizeHostExecEnvMock.mock.calls.at(0)?.[0] as
+    const sanitizeParams = firstMockCall(sanitizeHostExecEnvMock, "host env sanitization")[0] as
       | { baseEnv?: NodeJS.ProcessEnv; overrides?: Record<string, string> }
       | undefined;
     expect(sanitizeParams?.baseEnv).toBe(process.env);
@@ -87,9 +95,10 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
 
     spawnLspServerProcess({ command: "typescript-language-server", args: ["--stdio"] });
 
-    const resolveParams = resolveWindowsSpawnProgramMock.mock.calls.at(0)?.[0] as
-      | { env?: Record<string, string>; allowShellFallback?: boolean }
-      | undefined;
+    const resolveParams = firstMockCall(
+      resolveWindowsSpawnProgramMock,
+      "Windows spawn resolution",
+    )[0] as { env?: Record<string, string>; allowShellFallback?: boolean } | undefined;
     expect(resolveParams?.env).toBe(sanitizedEnv);
     expect(resolveParams?.allowShellFallback).toBe(true);
   });
@@ -108,7 +117,7 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
 
     spawnLspServerProcess({ command: "typescript-language-server", args: ["--stdio"] });
 
-    const spawnCall = spawnMock.mock.calls.at(0);
+    const spawnCall = firstMockCall(spawnMock, "child process spawn");
     expect(spawnCall?.[0]).toBe("cmd.exe");
     expect(spawnCall?.[1]).toEqual(["/c", "typescript-language-server.cmd", "--stdio"]);
     const spawnOptions = spawnCall?.[2] as

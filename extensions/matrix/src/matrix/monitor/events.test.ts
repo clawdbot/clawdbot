@@ -26,11 +26,11 @@ function getSentNoticeBodies(sendMessage: ReturnType<typeof vi.fn>): string[] {
 }
 
 function expectBodiesContain(bodies: string[], text: string) {
-  expect(bodies.some((body) => body.includes(text))).toBe(true);
+  expect(bodies.join("\n")).toContain(text);
 }
 
 function expectBodiesExclude(bodies: string[], text: string) {
-  expect(bodies.some((body) => body.includes(text))).toBe(false);
+  expect(bodies.join("\n")).not.toContain(text);
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {

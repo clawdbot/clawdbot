@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { startQaGatewayChild, startQaProviderServer } = vi.hoisted(() => ({
@@ -14,6 +15,13 @@ vi.mock("../../providers/server-runtime.js", () => ({
 }));
 
 import { startQaLiveLaneGateway } from "./live-gateway.runtime.js";
+
+type GatewayOptions = {
+  providerBaseUrl?: string;
+  providerMode?: string;
+  transportBaseUrl?: string;
+  mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
+};
 
 function createStubTransport(baseUrl = "http://127.0.0.1:43123") {
   return {
@@ -36,6 +44,10 @@ function createStubTransport(baseUrl = "http://127.0.0.1:43123") {
       },
     }),
   };
+}
+
+function firstGatewayOptions(): GatewayOptions | undefined {
+  return startQaGatewayChild.mock.calls[0]?.[0] as GatewayOptions | undefined;
 }
 
 describe("startQaLiveLaneGateway", () => {
@@ -81,9 +93,7 @@ describe("startQaLiveLaneGateway", () => {
     });
 
     expect(startQaProviderServer).toHaveBeenCalledWith("mock-openai");
-    const gatewayOptions = startQaGatewayChild.mock.calls.at(0)?.[0] as
-      | { providerBaseUrl?: string; providerMode?: string; transportBaseUrl?: string }
-      | undefined;
+    const gatewayOptions = firstGatewayOptions();
     expect(gatewayOptions?.transportBaseUrl).toBe("http://127.0.0.1:43123");
     expect(gatewayOptions?.providerBaseUrl).toBe("http://127.0.0.1:44080/v1");
     expect(gatewayOptions?.providerMode).toBe("mock-openai");
@@ -104,7 +114,7 @@ describe("startQaLiveLaneGateway", () => {
       controlUiEnabled: false,
     });
 
-    const [{ mutateConfig }] = startQaGatewayChild.mock.calls.at(0) ?? [];
+    const { mutateConfig } = firstGatewayOptions() ?? {};
     if (!mutateConfig) {
       throw new Error("expected gateway config mutator");
     }
@@ -173,9 +183,7 @@ describe("startQaLiveLaneGateway", () => {
     });
 
     expect(startQaProviderServer).toHaveBeenCalledWith("live-frontier");
-    const gatewayOptions = startQaGatewayChild.mock.calls.at(0)?.[0] as
-      | { providerBaseUrl?: string; providerMode?: string; transportBaseUrl?: string }
-      | undefined;
+    const gatewayOptions = firstGatewayOptions();
     expect(gatewayOptions?.transportBaseUrl).toBe("http://127.0.0.1:43123");
     expect(gatewayOptions?.providerBaseUrl).toBeUndefined();
     expect(gatewayOptions?.providerMode).toBe("live-frontier");

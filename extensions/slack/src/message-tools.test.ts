@@ -260,8 +260,9 @@ describe("Slack message tools", () => {
       : discovery.schema
         ? [discovery.schema]
         : [];
-    expect(schemas.some((entry) => "fileId" in entry.properties)).toBe(false);
-    expect(schemas.some((entry) => "messageId" in entry.properties)).toBe(false);
-    expect(schemas.some((entry) => "replyBroadcast" in entry.properties)).toBe(true);
+    const propertyNames = schemas.flatMap((entry) => Object.keys(entry.properties));
+    expect(propertyNames).not.toContain("fileId");
+    expect(propertyNames).not.toContain("messageId");
+    expect(propertyNames).toContain("replyBroadcast");
   });
 });

@@ -8,7 +8,7 @@ installBaseProgramMocks();
 let registerNodesCli: typeof import("./nodes-cli.js").registerNodesCli;
 
 function getFirstRuntimeLogLine(): string {
-  const first = runtime.log.mock.calls.at(0)?.[0];
+  const first = runtime.log.mock.calls[0]?.[0];
   if (typeof first !== "string") {
     throw new Error(`Expected runtime.log first arg to be string, got ${typeof first}`);
   }

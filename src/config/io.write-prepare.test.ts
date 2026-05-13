@@ -183,6 +183,20 @@ describe("config io write prepare", () => {
             },
           },
         },
+        list: [
+          {
+            id: "ops",
+            model: {
+              primary: "google/gemini-3-pro-preview",
+              fallbacks: ["google/gemini-3-pro-preview"],
+            },
+            models: {
+              "google/gemini-3-pro-preview": {
+                alias: "Ops Gemini",
+              },
+            },
+          },
+        ],
       },
       gateway: { port: 18789 },
     };
@@ -199,6 +213,20 @@ describe("config io write prepare", () => {
             },
           },
         },
+        list: [
+          {
+            id: "ops",
+            model: {
+              primary: "google/gemini-3.1-pro-preview",
+              fallbacks: ["google/gemini-3.1-pro-preview"],
+            },
+            models: {
+              "google/gemini-3.1-pro-preview": {
+                alias: "Ops Gemini",
+              },
+            },
+          },
+        ],
       },
       gateway: { port: 18789 },
     };
@@ -218,6 +246,15 @@ describe("config io write prepare", () => {
     expect(persisted.agents?.defaults?.models).toEqual({
       "google/gemini-3.1-pro-preview": {
         alias: "Gemini",
+      },
+    });
+    expect(persisted.agents?.list?.[0]?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview"],
+    });
+    expect(persisted.agents?.list?.[0]?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {
+        alias: "Ops Gemini",
       },
     });
     expect(persisted.gateway?.port).toBe(18888);

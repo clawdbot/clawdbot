@@ -53,7 +53,7 @@ function createShellHarness(params?: {
 function requireSpawnOptions(spawnCommand: ReturnType<typeof vi.fn>): {
   env?: Record<string, string>;
 } {
-  const call = spawnCommand.mock.calls.at(0);
+  const call = spawnCommand.mock.calls[0];
   if (!call) {
     throw new Error("expected spawn command call");
   }

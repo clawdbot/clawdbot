@@ -209,7 +209,8 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
         mockTexts: ["done"],
       });
 
-      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      const calls = vi.mocked(runEmbeddedPiAgent).mock.calls;
+      const callArgs = calls[calls.length - 1]?.[0];
       expect(callArgs?.thinkLevel).toBe("low");
     });
   });

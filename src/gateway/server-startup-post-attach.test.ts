@@ -210,7 +210,7 @@ function firstEnsureModelsJsonCall(): [
     providerDiscoveryProviderIds?: string[];
   },
 ] {
-  const call = hoisted.ensureOpenClawModelsJson.mock.calls.at(0);
+  const call = hoisted.ensureOpenClawModelsJson.mock.calls[0];
   if (!call || call.length < 3) {
     throw new Error("expected ensureOpenClawModelsJson call");
   }
@@ -227,13 +227,13 @@ function firstEnsureModelsJsonCall(): [
 function firstPrewarmCall(
   prewarmPrimaryModel: ReturnType<typeof vi.fn>,
 ): [{ workspaceDir?: string }] {
-  return prewarmPrimaryModel.mock.calls.at(0) as [{ workspaceDir?: string }];
+  return prewarmPrimaryModel.mock.calls[0] as [{ workspaceDir?: string }];
 }
 
 function firstGatewayStartCall(
   runGatewayStart: ReturnType<typeof vi.fn>,
 ): [PluginHookGatewayStartEvent, PluginHookGatewayContext] {
-  const call = runGatewayStart.mock.calls.at(0);
+  const call = runGatewayStart.mock.calls[0];
   if (!call) {
     throw new Error("gateway_start was not invoked");
   }

@@ -73,8 +73,8 @@ function createDispatcherWithPinnedOverride(lookup: PinnedHostname["lookup"]) {
     },
   });
 
-  return (agentCtor.mock.calls.at(-1)?.[0] as { connect?: { lookup?: PinnedHostname["lookup"] } })
-    ?.connect?.lookup;
+  const call = agentCtor.mock.calls[agentCtor.mock.calls.length - 1];
+  return (call?.[0] as { connect?: { lookup?: PinnedHostname["lookup"] } })?.connect?.lookup;
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {

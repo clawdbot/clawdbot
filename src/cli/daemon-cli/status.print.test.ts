@@ -74,7 +74,8 @@ vi.mock("./status.gather.js", () => ({
 
 describe("printDaemonStatus", () => {
   function expectMockLineContains(mock: typeof runtime.log, expected: string) {
-    expect(mock.mock.calls.some(([line]) => line.includes(expected))).toBe(true);
+    const output = mock.mock.calls.map(([line]) => line).join("\n");
+    expect(output).toContain(expected);
   }
 
   beforeEach(() => {

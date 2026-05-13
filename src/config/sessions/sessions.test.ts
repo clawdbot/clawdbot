@@ -26,7 +26,7 @@ function requireWriteTextAtomicCall(
   spy: { mock: { calls: WriteTextAtomicCall[] } },
   callIndex = 0,
 ): WriteTextAtomicCall {
-  const call = spy.mock.calls.at(callIndex);
+  const call = spy.mock.calls[callIndex];
   if (!call) {
     throw new Error(`expected writeTextAtomic call ${callIndex}`);
   }

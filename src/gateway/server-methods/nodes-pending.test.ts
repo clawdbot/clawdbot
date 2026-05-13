@@ -46,6 +46,10 @@ function makeContext(overrides?: Partial<Record<string, unknown>>) {
   };
 }
 
+function respondCall(respond: ReturnType<typeof vi.fn>): RespondCall | undefined {
+  return respond.mock.calls[0] as RespondCall | undefined;
+}
+
 describe("node.pending handlers", () => {
   beforeEach(() => {
     mocks.drainNodePendingWork.mockReset();
@@ -100,7 +104,7 @@ describe("node.pending handlers", () => {
       isWebchatConnect: () => false,
     });
 
-    const call = respond.mock.calls.at(0) as RespondCall | undefined;
+    const call = respondCall(respond);
     expect(call?.[0]).toBe(false);
     expect(call?.[2]?.message).toContain("connected device identity");
   });
@@ -166,7 +170,7 @@ describe("node.pending handlers", () => {
       timeoutMs: 3_000,
     });
     expect(mocks.maybeSendNodeWakeNudge).not.toHaveBeenCalled();
-    const call = respond.mock.calls.at(0) as
+    const call = respondCall(respond) as
       | [boolean, { nodeId?: string; revision?: number; wakeTriggered?: boolean }, unknown?]
       | undefined;
     expect(call?.[0]).toBe(true);

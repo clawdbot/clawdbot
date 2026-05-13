@@ -121,6 +121,18 @@ describe("subscribeEmbeddedPiSession", () => {
       .find((payload) => payload.text === text);
   }
 
+  function mockCallArg(mock: { mock: { calls: unknown[][] } }, callIndex = 0): unknown {
+    const call = mock.mock.calls[callIndex];
+    if (!call) {
+      throw new Error(`expected mock call ${callIndex + 1}`);
+    }
+    return call[0];
+  }
+
+  function latestMockCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
+    return mockCallArg(mock, mock.mock.calls.length - 1);
+  }
+
   function expectBlockReplyPayload(
     onBlockReply: { mock: { calls: unknown[][] } },
     expected: { text: string; mediaUrls?: string[] },
@@ -249,7 +261,7 @@ describe("subscribeEmbeddedPiSession", () => {
       await flushBlockReplyCallbacks();
 
       expect(onBlockReply).toHaveBeenCalledTimes(1);
-      expect(onBlockReply.mock.calls.at(0)?.[0].text).toBe("Final answer");
+      expect((mockCallArg(onBlockReply) as { text?: string }).text).toBe("Final answer");
 
       const streamTexts = onReasoningStream.mock.calls
         .map((call) => call[0]?.text)
@@ -340,11 +352,9 @@ describe("subscribeEmbeddedPiSession", () => {
     await vi.waitFor(() => {
       expect(onToolResult).toHaveBeenCalledTimes(2);
     });
-    const payload = onToolResult.mock.calls.at(-1)?.[0] as
-      | { text?: string; mediaUrls?: string[] }
-      | undefined;
-    expect(payload?.text ?? "").toContain("Fetched page");
-    expect(payload?.mediaUrls).toBeUndefined();
+    const payload = latestMockCallArg(onToolResult) as { text?: string; mediaUrls?: string[] };
+    expect(payload.text ?? "").toContain("Fetched page");
+    expect(payload.mediaUrls).toBeUndefined();
   });
 
   it("delivers generated image media once in markdown verbose output", async () => {
@@ -382,11 +392,12 @@ describe("subscribeEmbeddedPiSession", () => {
     await vi.waitFor(() => {
       expect(onToolResult).toHaveBeenCalledTimes(2);
     });
-    const toolPayload = onToolResult.mock.calls.at(-1)?.[0] as
-      | { text?: string; mediaUrls?: string[] }
-      | undefined;
-    expect(toolPayload?.text ?? "").toContain("Generated 1 image");
-    expect(toolPayload?.mediaUrls).toBeUndefined();
+    const toolPayload = latestMockCallArg(onToolResult) as {
+      text?: string;
+      mediaUrls?: string[];
+    };
+    expect(toolPayload.text ?? "").toContain("Generated 1 image");
+    expect(toolPayload.mediaUrls).toBeUndefined();
 
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta(emit, "Here is the image.");

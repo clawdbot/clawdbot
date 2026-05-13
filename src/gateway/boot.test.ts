@@ -79,6 +79,14 @@ describe("runBootOnce", () => {
     });
   };
 
+  const requireAgentCall = () => {
+    const [call] = agentCommand.mock.calls[0] ?? [];
+    if (!call || typeof call !== "object") {
+      throw new Error("expected agent command call");
+    }
+    return call as Record<string, unknown>;
+  };
+
   const expectMainSessionRestored = (params: {
     storePath: string;
     sessionKey: string;
@@ -135,12 +143,12 @@ describe("runBootOnce", () => {
       });
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      const call = agentCommand.mock.calls.at(0)?.[0];
-      expect(call?.deliver).toBe(false);
-      expect(call?.sessionKey).toBe(resolveMainSessionKey({}));
-      expect(call?.message).toContain("BOOT.md:");
-      expect(call?.message).toContain(content);
-      expect(call?.message).toContain("NO_REPLY");
+      const call = requireAgentCall();
+      expect(call.deliver).toBe(false);
+      expect(call.sessionKey).toBe(resolveMainSessionKey({}));
+      expect(call.message).toContain("BOOT.md:");
+      expect(call.message).toContain(content);
+      expect(call.message).toContain("NO_REPLY");
     });
   });
 
@@ -165,8 +173,7 @@ describe("runBootOnce", () => {
       });
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      const perAgentCall = agentCommand.mock.calls.at(0)?.[0];
-      expect(perAgentCall?.sessionKey).toBe(resolveAgentMainSessionKey({ cfg, agentId }));
+      expect(requireAgentCall().sessionKey).toBe(resolveAgentMainSessionKey({ cfg, agentId }));
     });
   });
 
@@ -180,10 +187,10 @@ describe("runBootOnce", () => {
       });
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      const call = agentCommand.mock.calls.at(0)?.[0];
+      const call = requireAgentCall();
 
       // Verify a boot-style session ID was generated (format: boot-YYYY-MM-DD_HH-MM-SS-xxx-xxxxxxxx)
-      expect(call?.sessionId).toMatch(
+      expect(call.sessionId).toMatch(
         /^boot-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{3}-[0-9a-f]{8}$/,
       );
     });
@@ -209,13 +216,13 @@ describe("runBootOnce", () => {
       });
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      const call = agentCommand.mock.calls.at(0)?.[0];
+      const call = requireAgentCall();
 
-      expect(call?.sessionId).not.toBe(existingSessionId);
-      expect(call?.sessionId).toMatch(
+      expect(call.sessionId).not.toBe(existingSessionId);
+      expect(call.sessionId).toMatch(
         /^boot-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{3}-[0-9a-f]{8}$/,
       );
-      expect(call?.sessionKey).toBe(sessionKey);
+      expect(call.sessionKey).toBe(sessionKey);
     });
   });
 

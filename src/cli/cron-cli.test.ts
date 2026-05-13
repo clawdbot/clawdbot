@@ -134,11 +134,11 @@ function runtimeErrorMessages(): string[] {
 }
 
 function expectRuntimeErrorContaining(text: string): void {
-  expect(runtimeErrorMessages().some((message) => message.includes(text))).toBe(true);
+  expect(runtimeErrorMessages().join("\n")).toContain(text);
 }
 
 function expectNoRuntimeErrorContaining(text: string): void {
-  expect(runtimeErrorMessages().some((message) => message.includes(text))).toBe(false);
+  expect(runtimeErrorMessages().join("\n")).not.toContain(text);
 }
 
 function stdoutText(): string {

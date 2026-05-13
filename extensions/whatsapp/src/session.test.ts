@@ -150,6 +150,17 @@ function mockLogWebSelfIdCreds(me: Record<string, string>) {
   };
 }
 
+function firstMockCall(
+  mock: { mock: { calls: Array<readonly unknown[]> } },
+  label: string,
+): readonly unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 function readLastSocketOptions(): {
   agent?: unknown;
   connectTimeoutMs?: number;
@@ -159,7 +170,10 @@ function readLastSocketOptions(): {
   printQRInTerminal?: boolean;
   logger?: { level?: string; trace?: unknown };
 } {
-  const options = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls.at(0)?.at(0);
+  const [options] = firstMockCall(
+    baileys.makeWASocket as ReturnType<typeof vi.fn>,
+    "Baileys socket creation",
+  );
   if (typeof options !== "object" || options === null) {
     throw new Error("expected Baileys socket options");
   }
@@ -181,12 +195,19 @@ function requireValue<T>(value: T | undefined, label: string): T {
   return value;
 }
 
+function requireString(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 function firstWriteFileCall(writeFileSpy: ReturnType<typeof vi.fn>): {
   data: unknown;
   options: { flag?: string; mode?: number };
   path: string;
 } {
-  const [filePath, data, options] = writeFileSpy.mock.calls.at(0) ?? [];
+  const [filePath, data, options] = firstMockCall(writeFileSpy, "fs.writeFile");
   expect(typeof filePath).toBe("string");
   return {
     data,
@@ -199,7 +220,7 @@ function expectRuntimeLogContaining(
   runtime: { log: ReturnType<typeof vi.fn> },
   text: string,
 ): void {
-  expect(runtime.log.mock.calls.some(([message]) => String(message).includes(text))).toBe(true);
+  expect(runtime.log.mock.calls.map(([message]) => String(message)).join("\n")).toContain(text);
 }
 
 describe("web session", () => {
@@ -522,9 +543,9 @@ describe("web session", () => {
     await waitForCredsSaveQueue();
 
     expect(creds.copySpy).toHaveBeenCalledTimes(1);
-    const args = creds.copySpy.mock.calls.at(0) ?? [];
-    expect(String(args[0] ?? "")).toContain(creds.credsSuffix);
-    expect(String(args[1] ?? "")).toContain(backupSuffix);
+    const [sourcePath, backupPath] = firstMockCall(creds.copySpy, "creds backup copy");
+    expect(requireString(sourcePath, "creds backup source path")).toContain(creds.credsSuffix);
+    expect(requireString(backupPath, "creds backup target path")).toContain(backupSuffix);
     expect(openMock.tempHandles).toHaveLength(1);
 
     creds.restore();
@@ -561,10 +582,10 @@ describe("web session", () => {
       expect(openMock.dirHandles).toHaveLength(1);
       expect(openMock.dirHandles[0]?.sync).toHaveBeenCalledTimes(1);
       const writePath = openMock.tempHandles[0]?.filePath;
-      const renameArgs = renameSpy.mock.calls.at(0) ?? [];
+      const [, renameTarget] = firstMockCall(renameSpy, "creds atomic rename");
       expect(typeof writePath).toBe("string");
       expect(writePath).toContain(".creds.");
-      expect(String(renameArgs[1] ?? "")).toContain(
+      expect(requireString(renameTarget, "creds rename target path")).toContain(
         path.join("/tmp", "openclaw-oauth", "whatsapp", "default", "creds.json"),
       );
     } finally {

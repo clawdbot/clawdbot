@@ -3,10 +3,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  collectSbomRiskCheckErrors,
-  collectSbomRiskReport,
+  collectDependencyOwnershipSurfaceCheckErrors,
+  collectDependencyOwnershipSurfaceReport,
   packageNameFromLockKey,
-} from "../../scripts/sbom-risk-report.mjs";
+  renderDependencyOwnershipSurfaceMarkdownReport,
+} from "../../scripts/dependency-ownership-surface-report.mjs";
 
 const tempDirs: string[] = [];
 
@@ -17,7 +18,7 @@ afterEach(() => {
 });
 
 function makeTempRepo() {
-  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-sbom-risk-"));
+  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-ownership-surface-"));
   tempDirs.push(dir);
   return dir;
 }
@@ -35,8 +36,8 @@ describe("packageNameFromLockKey", () => {
   });
 });
 
-describe("collectSbomRiskReport", () => {
-  it("reports root closure sizes, build-risk packages, and ownership gaps", () => {
+describe("collectDependencyOwnershipSurfaceReport", () => {
+  it("reports root dependency reachability, install-surface packages, and ownership metadata gaps", () => {
     const repoRoot = makeTempRepo();
     writeRepoFile(
       repoRoot,
@@ -98,7 +99,7 @@ snapshots:
     );
     writeRepoFile(repoRoot, "src/index.ts", 'import "core-lib";\n');
 
-    const report = collectSbomRiskReport({ repoRoot });
+    const report = collectDependencyOwnershipSurfaceReport({ repoRoot });
 
     expect(report.summary).toEqual({
       buildRiskPackageCount: 1,
@@ -123,9 +124,28 @@ snapshots:
       sourceSections: [],
       specifier: "1.0.0",
     });
-    expect(collectSbomRiskCheckErrors(report)).toEqual([
+    expect(collectDependencyOwnershipSurfaceCheckErrors(report)).toEqual([
       "root dependency 'missing-owner' is missing from scripts/lib/dependency-ownership.json",
     ]);
+
+    const markdown = renderDependencyOwnershipSurfaceMarkdownReport(report);
+    expect(markdown).toContain("# Dependency Ownership and Install Surface Report");
+    expect(markdown).toContain("## Target");
+    expect(markdown).toContain("## Scope");
+    expect(markdown).toContain("It does not query npm advisories");
+    expect(markdown).toContain("## Root Dependencies Missing Ownership Metadata");
+    expect(markdown).toContain("`missing-owner`");
+    expect(markdown).toContain("## Root Dependencies By Resolved Transitive Package Count");
+    expect(markdown).toContain("`core-lib`: 3 resolved transitive packages");
+    expect(markdown).toContain("## Workspace Packages With The Most Dependencies");
+    expect(markdown).toContain("3 direct dependencies");
+    expect(markdown).not.toContain("dependencys");
+    expect(markdown).toContain("## Packages With Install-Time Or Platform-Specific Behavior");
+    expect(markdown).toContain("`transitive-native@1.0.0`: requires build");
+    expect(markdown).not.toContain("# Dependency Risk Report");
+    expect(markdown).not.toContain("Ownership gaps");
+    expect(markdown).not.toContain("Largest root dependency cones");
+    expect(markdown).not.toContain("## Root Dependencies With The Most Transitive Packages");
   });
 
   it("does not mark plugin importer dependencies as stale ownership records", () => {
@@ -180,7 +200,7 @@ snapshots:
       }),
     );
 
-    const report = collectSbomRiskReport({ repoRoot });
+    const report = collectDependencyOwnershipSurfaceReport({ repoRoot });
 
     expect(report.ownershipGaps).toStrictEqual([]);
     expect(report.staleOwnershipRecords).toEqual(["removed-lib"]);

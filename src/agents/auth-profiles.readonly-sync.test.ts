@@ -29,7 +29,7 @@ let loadAuthProfileStoreForRuntime: typeof import("./auth-profiles.js").loadAuth
 type MockWithCalls = { mock: { calls: unknown[][] } };
 
 function firstMockArg(mock: MockWithCalls, label: string) {
-  const call = mock.mock.calls.at(0);
+  const call = mock.mock.calls[0];
   if (!call) {
     throw new Error(`expected ${label} call`);
   }

@@ -77,7 +77,7 @@ function requireRecord(value: unknown): Record<string, unknown> {
 }
 
 function requireFirstCallArg(mock: { mock: { calls: readonly (readonly unknown[])[] } }) {
-  const call = mock.mock.calls.at(0);
+  const call = mock.mock.calls[0];
   if (!call) {
     throw new Error("Expected first mock call");
   }
@@ -85,7 +85,7 @@ function requireFirstCallArg(mock: { mock: { calls: readonly (readonly unknown[]
 }
 
 function requireRespondPayload(respond: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  const call = respond.mock.calls.at(0);
+  const call = respond.mock.calls[0];
   if (!call) {
     throw new Error("Expected respond call");
   }

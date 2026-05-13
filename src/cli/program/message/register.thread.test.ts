@@ -17,6 +17,10 @@ function createHelpers(runMessageAction: MessageCliHelpers["runMessageAction"]):
   };
 }
 
+function firstMessageActionCall(runMessageAction: { mock: { calls: unknown[][] } }) {
+  return runMessageAction.mock.calls[0] as [string, Record<string, unknown>] | undefined;
+}
+
 describe("registerMessageThreadCommands", () => {
   const runMessageAction = vi.fn(
     async (_action: string, _opts: Record<string, unknown>) => undefined,
@@ -83,7 +87,7 @@ describe("registerMessageThreadCommands", () => {
       { from: "user" },
     );
 
-    const remappedCall = runMessageAction.mock.calls.at(0);
+    const remappedCall = firstMessageActionCall(runMessageAction);
     expect(remappedCall?.[0]).toBe("topic-create");
     expect(remappedCall?.[1]?.channel).toBe(" topic-chat ");
     expect(remappedCall?.[1]?.target).toBe("room-1");
@@ -112,7 +116,7 @@ describe("registerMessageThreadCommands", () => {
       { from: "user" },
     );
 
-    const defaultCall = runMessageAction.mock.calls.at(0);
+    const defaultCall = firstMessageActionCall(runMessageAction);
     expect(defaultCall?.[0]).toBe("thread-create");
     expect(defaultCall?.[1]?.channel).toBe("plain-chat");
     expect(defaultCall?.[1]?.target).toBe("channel:123");

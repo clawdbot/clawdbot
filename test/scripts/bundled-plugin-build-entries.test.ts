@@ -8,11 +8,11 @@ import {
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 
 function expectNoPrefixMatches(values: string[], prefix: string) {
-  expect(values.some((value) => value.startsWith(prefix))).toBe(false);
+  expect(values.filter((value) => value.startsWith(prefix))).toEqual([]);
 }
 
 function expectSomePrefixMatch(values: string[], prefix: string) {
-  expect(values.some((value) => value.startsWith(prefix))).toBe(true);
+  expect(values.filter((value) => value.startsWith(prefix))).not.toEqual([]);
 }
 
 function pickEntries(entries: Record<string, string>, keys: readonly string[]) {

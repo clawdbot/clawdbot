@@ -186,6 +186,19 @@ describe("redactSensitiveText", () => {
     expect(redactSensitiveFieldValue("amount", "4200")).toBe("4200");
   });
 
+  it("masks structured uppercase env-style field values by key", () => {
+    expect(redactSensitiveFieldValue("GITHUB_TOKEN", "abcdefghijklmnopqrstuvwx1234567890")).toBe(
+      "abcdef…7890",
+    );
+    expect(redactSensitiveFieldValue("github_token", "abcdefghijklmnopqrstuvwx1234567890")).toBe(
+      "abcdef…7890",
+    );
+    expect(redactSensitiveFieldValue("openai_api_key", "abcdefghijklmnopqrstuvwx1234567890")).toBe(
+      "abcdef…7890",
+    );
+    expect(redactSensitiveFieldValue("MONKEY", "banana")).toBe("banana");
+  });
+
   it("masks bearer tokens", () => {
     const input = "Authorization: Bearer abcdef1234567890ghij";
     const output = redactSensitiveText(input, {
@@ -193,6 +206,17 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe("Authorization: Bearer abcdef…ghij");
+  });
+
+  it("masks token prefixes embedded after adjacent text", () => {
+    const token = `ghp_${"a".repeat(5_000)}`;
+    const output = redactSensitiveText(`prefix-${token} suffix`, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("prefix-ghp_aa…aaaa suffix");
+    expect(output).not.toContain(token);
+    expect(output).not.toContain("a".repeat(100));
   });
 
   it("masks URL query tokens", () => {

@@ -112,7 +112,7 @@ function expectCatalogEntry(entries: unknown, id: string, expected: Record<strin
 
 function expectNoCatalogEntry(entries: unknown, id: string): void {
   expect(Array.isArray(entries)).toBe(true);
-  expect((entries as Array<Record<string, unknown>>).some((entry) => entry.id === id)).toBe(false);
+  expect((entries as Array<Record<string, unknown>>).map((entry) => entry.id)).not.toContain(id);
 }
 
 describe("buildOpenAIProvider", () => {
@@ -213,16 +213,16 @@ describe("buildOpenAIProvider", () => {
           provider: "openai",
           modelId: "gpt-5.4-mini",
         } as never)
-        ?.levels.some((level) => level.id === "xhigh"),
-    ).toBe(true);
+        ?.levels.map((level) => level.id),
+    ).toContain("xhigh");
     expect(
       provider
         .resolveThinkingProfile?.({
           provider: "openai",
           modelId: "gpt-5.4-nano",
         } as never)
-        ?.levels.some((level) => level.id === "xhigh"),
-    ).toBe(true);
+        ?.levels.map((level) => level.id),
+    ).toContain("xhigh");
 
     const entries = provider.augmentModelCatalog?.({
       env: process.env,
@@ -423,8 +423,8 @@ describe("buildOpenAIProvider", () => {
           provider: "openai",
           modelId: "gpt-5.5",
         } as never)
-        ?.levels.some((level) => level.id === "xhigh"),
-    ).toBe(true);
+        ?.levels.map((level) => level.id),
+    ).toContain("xhigh");
 
     const entries = provider.augmentModelCatalog?.({
       env: process.env,

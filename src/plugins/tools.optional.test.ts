@@ -173,7 +173,7 @@ function installConsoleMethodSpy(method: "log" | "warn") {
 }
 
 function requireConsoleMessage(spy: { mock: { calls: unknown[][] } }, index = 0): string {
-  const call = spy.mock.calls.at(index);
+  const call = spy.mock.calls[index];
   if (!call) {
     throw new Error(`expected console call ${index}`);
   }
@@ -389,7 +389,7 @@ function mockCallParams(
   mock: { mock: { calls: unknown[][] } },
   index = 0,
 ): Record<string, unknown> {
-  const call = mock.mock.calls.at(index);
+  const call = mock.mock.calls[index];
   if (!call) {
     throw new Error(`expected mock call ${index}`);
   }

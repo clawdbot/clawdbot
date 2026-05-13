@@ -18,7 +18,10 @@ import type {
 import type { RuntimeEnv } from "../../../runtime.js";
 import { createLazyRuntimeSurface } from "../../../shared/lazy-runtime.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
-import { ensureCodexRuntimePluginForModelSelection } from "../../codex-runtime-plugin-install.js";
+import {
+  CODEX_RUNTIME_PLUGIN_ID,
+  ensureCodexRuntimePluginForModelSelection,
+} from "../../codex-runtime-plugin-install.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
@@ -201,13 +204,27 @@ export async function applyNonInteractivePluginProviderChoice(params: {
   if (!selectedModel) {
     return result;
   }
-  return (
-    await ensureCodexRuntimePluginForModelSelection({
-      cfg: result,
-      model: selectedModel,
-      prompter: createNonInteractivePluginInstallPrompter(params.runtime),
+  const nonInteractivePrompter = createNonInteractivePluginInstallPrompter(params.runtime);
+  const codexInstall = await ensureCodexRuntimePluginForModelSelection({
+    cfg: result,
+    model: selectedModel,
+    prompter: nonInteractivePrompter,
+    runtime: params.runtime,
+    workspaceDir,
+  });
+  if (codexInstall.installed) {
+    // Non-interactive onboarding never auto-applies migration; emit a hint so
+    // the operator knows Codex CLI state is available to import deliberately.
+    // Gated on installed (not freshlyInstalled) so repair runs against an
+    // already-present harness still surface the hint.
+    const { offerPostInstallMigrations } =
+      await import("../../../wizard/setup.post-install-migration.js");
+    await offerPostInstallMigrations({
+      config: codexInstall.cfg,
       runtime: params.runtime,
-      workspaceDir,
-    })
-  ).cfg;
+      installedPluginIds: [CODEX_RUNTIME_PLUGIN_ID],
+      nonInteractive: true,
+    });
+  }
+  return codexInstall.cfg;
 }

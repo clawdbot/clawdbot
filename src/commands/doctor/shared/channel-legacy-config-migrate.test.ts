@@ -41,6 +41,10 @@ beforeEach(() => {
   getBootstrapChannelPlugin.mockReset();
 });
 
+function firstMigrationCall() {
+  return applyPluginDoctorCompatibilityMigrations.mock.calls[0];
+}
+
 describe("bundled channel legacy config migrations", () => {
   it("prefers bundled channel doctor contract normalizers before plugin registry fallback", () => {
     collectRelevantDoctorPluginIds.mockReturnValueOnce([]);
@@ -128,7 +132,7 @@ describe("bundled channel legacy config migrations", () => {
     });
 
     expect(applyPluginDoctorCompatibilityMigrations).toHaveBeenCalledOnce();
-    const migrationCall = applyPluginDoctorCompatibilityMigrations.mock.calls.at(0);
+    const migrationCall = firstMigrationCall();
     expect(typeof migrationCall?.[0]).toBe("object");
     expect(migrationCall?.[1]?.config).toStrictEqual({
       channels: {
@@ -198,7 +202,7 @@ describe("bundled channel legacy config migrations", () => {
     const result = applyChannelDoctorCompatibilityMigrations(config);
 
     expect(applyPluginDoctorCompatibilityMigrations).toHaveBeenCalledOnce();
-    const migrationCall = applyPluginDoctorCompatibilityMigrations.mock.calls.at(0);
+    const migrationCall = firstMigrationCall();
     expect(typeof migrationCall?.[0]).toBe("object");
     expect(migrationCall?.[1]).toStrictEqual({
       config,

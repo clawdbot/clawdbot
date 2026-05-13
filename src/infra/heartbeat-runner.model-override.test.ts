@@ -32,6 +32,10 @@ function expectReplyOptions(options: unknown, expected: Record<string, unknown>)
   return actual;
 }
 
+function firstReplyCall(replySpy: HeartbeatReplySpy) {
+  return replySpy.mock.calls[0] ?? [];
+}
+
 async function withHeartbeatFixture(
   run: (ctx: {
     tmpDir: string;
@@ -83,9 +87,10 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     });
 
     expect(params.replySpy).toHaveBeenCalledTimes(1);
+    const [ctx, opts] = firstReplyCall(params.replySpy);
     return {
-      ctx: params.replySpy.mock.calls.at(0)?.[0],
-      opts: params.replySpy.mock.calls.at(0)?.[1],
+      ctx,
+      opts,
       replySpy: params.replySpy,
     };
   }
@@ -167,7 +172,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
       });
 
       expect(result.replySpy).toHaveBeenCalledTimes(1);
-      const [ctx, opts, passedConfig] = result.replySpy.mock.calls.at(0) ?? [];
+      const [ctx, opts, passedConfig] = firstReplyCall(result.replySpy);
       if (!ctx || typeof ctx !== "object") {
         throw new Error("expected heartbeat reply context");
       }

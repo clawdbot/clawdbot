@@ -17,7 +17,7 @@ import {
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
 function requireFirstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
-  const arg = mock.mock.calls.at(0)?.[0];
+  const arg = mock.mock.calls[0]?.[0];
   if (arg === undefined) {
     throw new Error(`Expected ${label} to be called with a first argument`);
   }
@@ -121,9 +121,40 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     const runRequest = requireFirstMockArg(runCliAgentMock, "runCliAgentMock") as {
       sessionId?: string;
       sessionKey?: string;
+      senderIsOwner?: boolean;
     };
     expect(runRequest.sessionId).toBe("isolated-cli-run-1");
     expect(runRequest.sessionKey).toBe("agent:default:cron:cli-monitor:run:isolated-cli-run-1");
     expect(runRequest.sessionKey).not.toBe("agent:default:cron:cli-monitor");
+    expect(runRequest.senderIsOwner).toBe(true);
+  });
+
+  it("runs externally sourced CLI hook turns without owner tool authority", async () => {
+    isCliProviderMock.mockReturnValue(true);
+    mockRunCronFallbackPassthrough();
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        sessionKey: "hook:webhook:cli-monitor",
+        job: makeIsolatedAgentTurnJob({
+          payload: {
+            kind: "agentTurn",
+            message: "test",
+            externalContentSource: "webhook",
+          },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
+    const runRequest = requireFirstMockArg(runCliAgentMock, "runCliAgentMock") as {
+      senderIsOwner?: boolean;
+    };
+    expect(runRequest.senderIsOwner).toBe(false);
   });
 });

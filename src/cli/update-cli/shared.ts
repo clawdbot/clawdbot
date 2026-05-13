@@ -32,6 +32,7 @@ export type UpdateCommandOptions = {
   tag?: string;
   timeout?: string;
   yes?: boolean;
+  acknowledgeClawHubRisk?: boolean;
 };
 
 export type UpdateStatusOptions = {

@@ -42,7 +42,7 @@ type AuthProfileOrderConfig = Parameters<typeof resolveAuthProfileOrder>[0]["cfg
 export async function bridgeCodexAppServerStartOptions(params: {
   startOptions: CodexAppServerStartOptions;
   agentDir: string;
-  authProfileId?: string;
+  authProfileId?: string | null;
   config?: AuthProfileOrderConfig;
 }): Promise<CodexAppServerStartOptions> {
   if (params.startOptions.transport !== "stdio") {
@@ -52,6 +52,9 @@ export async function bridgeCodexAppServerStartOptions(params: {
     params.startOptions,
     params.agentDir,
   );
+  if (params.authProfileId === null) {
+    return isolatedStartOptions;
+  }
   const store = ensureCodexAppServerAuthProfileStore({
     agentDir: params.agentDir,
     authProfileId: params.authProfileId,
@@ -291,10 +294,13 @@ function withoutClearedCodexIsolationEnv(clearEnv: string[] | undefined): string
 export async function applyCodexAppServerAuthProfile(params: {
   client: CodexAppServerClient;
   agentDir: string;
-  authProfileId?: string;
+  authProfileId?: string | null;
   startOptions?: CodexAppServerStartOptions;
   config?: AuthProfileOrderConfig;
 }): Promise<void> {
+  if (params.authProfileId === null) {
+    return;
+  }
   const loginParams = await resolveCodexAppServerAuthProfileLoginParams({
     agentDir: params.agentDir,
     authProfileId: params.authProfileId,

@@ -36,6 +36,16 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 
 const { emitResetCommandHooks } = await import("./commands-reset-hooks.js");
 
+function firstBeforeResetCall() {
+  const call = hookRunnerMocks.runBeforeReset.mock.calls[0] as
+    | [Record<string, unknown>, Record<string, unknown>]
+    | undefined;
+  if (!call) {
+    throw new Error("expected before reset hook call");
+  }
+  return call;
+}
+
 describe("emitResetCommandHooks", () => {
   async function runBeforeResetContext(sessionKey?: string) {
     const command = {
@@ -60,7 +70,7 @@ describe("emitResetCommandHooks", () => {
     });
 
     expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1);
-    const [, ctx] = hookRunnerMocks.runBeforeReset.mock.calls.at(0) ?? [];
+    const [, ctx] = firstBeforeResetCall();
     return ctx;
   }
 
@@ -136,10 +146,7 @@ describe("emitResetCommandHooks", () => {
     });
 
     await vi.waitFor(() => expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1));
-    const [event, ctx] = hookRunnerMocks.runBeforeReset.mock.calls.at(0) as unknown as [
-      Record<string, unknown>,
-      Record<string, unknown>,
-    ];
+    const [event, ctx] = firstBeforeResetCall();
     expect(event.sessionFile).toBe("/tmp/prev-session.jsonl.reset.2026-02-16T22-26-33.000Z");
     expect(event.messages).toEqual([{ role: "user", content: "Recovered from archive" }]);
     expect(event.reason).toBe("new");

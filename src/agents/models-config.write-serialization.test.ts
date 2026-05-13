@@ -76,6 +76,24 @@ async function expectMissingPath(operation: Promise<unknown>) {
   expect(error?.code).toBe("ENOENT");
 }
 
+function planParamsAt(callIndex: number): {
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  providerDiscoveryProviderIds?: string[];
+  providerDiscoveryTimeoutMs?: number;
+  workspaceDir?: string;
+} {
+  const call = planOpenClawModelsJsonMock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected models planner call #${callIndex + 1}`);
+  }
+  return call[0] as {
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
+    providerDiscoveryProviderIds?: string[];
+    providerDiscoveryTimeoutMs?: number;
+    workspaceDir?: string;
+  };
+}
+
 beforeAll(async () => {
   vi.doMock("./models-config.plan.js", () => ({
     planOpenClawModelsJson: (...args: unknown[]) => planOpenClawModelsJsonMock(...args),
@@ -138,10 +156,8 @@ describe("models-config write serialization", () => {
 
       await ensureOpenClawModelsJson({}, agentDir);
 
-      const params = planOpenClawModelsJsonMock.mock.calls.at(0)?.[0] as
-        | { pluginMetadataSnapshot?: PluginMetadataSnapshot }
-        | undefined;
-      expect(params?.pluginMetadataSnapshot).not.toBe(snapshot);
+      const params = planParamsAt(0);
+      expect(params.pluginMetadataSnapshot).not.toBe(snapshot);
     });
   });
 
@@ -154,11 +170,9 @@ describe("models-config write serialization", () => {
 
       await ensureOpenClawModelsJson({}, agentDir, { workspaceDir });
 
-      const params = planOpenClawModelsJsonMock.mock.calls.at(0)?.[0] as
-        | { workspaceDir?: string; pluginMetadataSnapshot?: PluginMetadataSnapshot }
-        | undefined;
-      expect(params?.workspaceDir).toBe(workspaceDir);
-      expect(params?.pluginMetadataSnapshot).toBe(snapshot);
+      const params = planParamsAt(0);
+      expect(params.workspaceDir).toBe(workspaceDir);
+      expect(params.pluginMetadataSnapshot).toBe(snapshot);
     });
   });
 
@@ -194,14 +208,9 @@ describe("models-config write serialization", () => {
       });
 
       expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
-      const params = planOpenClawModelsJsonMock.mock.calls.at(1)?.[0] as
-        | {
-            providerDiscoveryProviderIds?: string[];
-            providerDiscoveryTimeoutMs?: number;
-          }
-        | undefined;
-      expect(params?.providerDiscoveryProviderIds).toEqual(["anthropic"]);
-      expect(params?.providerDiscoveryTimeoutMs).toBe(5000);
+      const params = planParamsAt(1);
+      expect(params.providerDiscoveryProviderIds).toEqual(["anthropic"]);
+      expect(params.providerDiscoveryTimeoutMs).toBe(5000);
     });
   });
 

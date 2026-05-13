@@ -52,6 +52,15 @@ describe("cli program (nodes basics)", () => {
     return callGateway.mock.calls.map(([request]) => request as GatewayCallRequest);
   }
 
+  function writeJsonArgAt(index: number): unknown {
+    const call =
+      runtime.writeJson.mock.calls[index < 0 ? runtime.writeJson.mock.calls.length + index : index];
+    if (!call) {
+      throw new Error(`expected writeJson call ${index}`);
+    }
+    return call[0];
+  }
+
   function expectGatewayRequest(method: string, params?: unknown): void {
     const request = gatewayRequests().find((candidate) => candidate.method === method);
     expect(request?.method).toBe(method);
@@ -140,7 +149,7 @@ describe("cli program (nodes basics)", () => {
 
     expectGatewayRequest("node.pair.list", {});
     expectGatewayRequest("node.list", {});
-    const json = runtime.writeJson.mock.calls.at(0)?.[0] as {
+    const json = writeJsonArgAt(0) as {
       pending?: unknown[];
       paired?: Array<Record<string, unknown>>;
     };
@@ -258,7 +267,7 @@ describe("cli program (nodes basics)", () => {
     runtime.log.mockClear();
     await runProgram(["nodes", "list", "--json"]);
 
-    const json = runtime.writeJson.mock.calls.at(-1)?.[0] as {
+    const json = writeJsonArgAt(-1) as {
       pending?: Array<Record<string, unknown>>;
       paired?: Array<Record<string, unknown>>;
     };

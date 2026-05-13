@@ -5,6 +5,14 @@ import {
 } from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
+function firstBlockReplyText(onBlockReply: ReturnType<typeof vi.fn>): string | undefined {
+  const firstCall = onBlockReply.mock.calls[0];
+  if (!firstCall) {
+    throw new Error("expected onBlockReply to be called");
+  }
+  return firstCall[0]?.text;
+}
+
 describe("subscribeEmbeddedPiSession", () => {
   it("calls onBlockReplyFlush before tool_execution_start to preserve message boundaries", () => {
     const { session, emit } = createStubSessionHarness();
@@ -83,7 +91,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls.at(0)?.[0]?.text).toBe("Short chunk.");
+    expect(firstBlockReplyText(onBlockReply)).toBe("Short chunk.");
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
   });
 
@@ -157,7 +165,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls.at(0)?.[0]?.text).toBe("Final reply before lifecycle end.");
+    expect(firstBlockReplyText(onBlockReply)).toBe("Final reply before lifecycle end.");
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
   });
 

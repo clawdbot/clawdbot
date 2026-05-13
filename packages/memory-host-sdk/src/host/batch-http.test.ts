@@ -33,7 +33,8 @@ function requirePostJsonParams(
   return params;
 }
 
-function requireRetryOptions(call: unknown[] | undefined): RetryOptions {
+function requireFirstRetryOptions(retryAsyncMock: ReturnType<typeof vi.fn>): RetryOptions {
+  const call = retryAsyncMock.mock.calls[0];
   const options = call?.[1] as RetryOptions | undefined;
   if (!options) {
     throw new Error("expected retry options");
@@ -78,7 +79,7 @@ describe("postJsonWithRetry", () => {
     expect(postJsonParams.errorPrefix).toBe("memory batch failed");
     expect(postJsonParams.attachStatus).toBe(true);
 
-    const retryOptions = requireRetryOptions(retryAsyncMock.mock.calls.at(0));
+    const retryOptions = requireFirstRetryOptions(retryAsyncMock);
     expect(retryOptions.attempts).toBe(3);
     expect(retryOptions.minDelayMs).toBe(300);
     expect(retryOptions.maxDelayMs).toBe(2000);

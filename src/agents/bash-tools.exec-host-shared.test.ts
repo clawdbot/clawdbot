@@ -66,6 +66,24 @@ describe("sendExecApprovalFollowupResult", () => {
     resetExecApprovalFollowupRuntimeHandoffsForTests();
   });
 
+  function firstExecApprovalFollowupCall():
+    | {
+        internalRuntimeHandoffId?: string;
+        idempotencyKey?: string;
+        execApprovalFollowupToken?: string;
+        bashElevated?: unknown;
+      }
+    | undefined {
+    return sendExecApprovalFollowup.mock.calls[0]?.[0] as
+      | {
+          internalRuntimeHandoffId?: string;
+          idempotencyKey?: string;
+          execApprovalFollowupToken?: string;
+          bashElevated?: unknown;
+        }
+      | undefined;
+  }
+
   it("logs repeated followup dispatch failures once per approval id and error message", async () => {
     sendExecApprovalFollowup.mockRejectedValue(new Error("Channel is required"));
 
@@ -131,14 +149,7 @@ describe("sendExecApprovalFollowupResult", () => {
       { sendExecApprovalFollowup, logWarn },
     );
 
-    const call = sendExecApprovalFollowup.mock.calls.at(0)?.[0] as
-      | {
-          internalRuntimeHandoffId?: string;
-          idempotencyKey?: string;
-          execApprovalFollowupToken?: string;
-          bashElevated?: unknown;
-        }
-      | undefined;
+    const call = firstExecApprovalFollowupCall();
     if (!call) {
       throw new Error("Expected elevated exec approval followup call");
     }
@@ -186,13 +197,7 @@ describe("sendExecApprovalFollowupResult", () => {
       { sendExecApprovalFollowup, logWarn },
     );
 
-    const call = sendExecApprovalFollowup.mock.calls.at(0)?.[0] as
-      | {
-          internalRuntimeHandoffId?: string;
-          idempotencyKey?: string;
-          bashElevated?: unknown;
-        }
-      | undefined;
+    const call = firstExecApprovalFollowupCall();
     expect(call).not.toHaveProperty("internalRuntimeHandoffId");
     expect(call).not.toHaveProperty("idempotencyKey");
     expect(call).not.toHaveProperty("bashElevated");

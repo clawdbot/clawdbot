@@ -90,11 +90,11 @@ function resolveEffectiveToolInventoryArg(callIndex = 0): Record<string, unknown
   const calls = runtimeMocks.resolveEffectiveToolInventory.mock.calls as unknown as Array<
     [Record<string, unknown>]
   >;
-  return calls.at(callIndex)?.[0];
+  return calls[callIndex]?.[0];
 }
 
 function firstRespondCall(respond: ReturnType<typeof vi.fn>): RespondCall | undefined {
-  return respond.mock.calls.at(0) as RespondCall | undefined;
+  return respond.mock.calls[0] as RespondCall | undefined;
 }
 
 describe("tools.effective handler", () => {

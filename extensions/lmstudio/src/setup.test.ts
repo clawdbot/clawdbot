@@ -204,6 +204,14 @@ function expectRecordFields(value: unknown, label: string, expected: Record<stri
   }
 }
 
+function firstMockArg(mock: { mock: { calls: Array<readonly unknown[]> } }, label: string) {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call[0];
+}
+
 function requirePathRecord(value: unknown, label: string, path: string[]): Record<string, unknown> {
   let current = value;
   for (const key of path) {
@@ -394,7 +402,7 @@ describe("lmstudio setup", () => {
     const result = await configureLmstudioNonInteractive(ctx);
 
     const setupCall = requireRecord(
-      configureSelfHostedNonInteractiveMock.mock.calls.at(0)?.[0],
+      firstMockArg(configureSelfHostedNonInteractiveMock, "self-hosted setup"),
       "self-hosted setup call",
     );
     const setupCtx = requireRecord(setupCall.ctx, "self-hosted setup context");
@@ -653,7 +661,7 @@ describe("lmstudio setup", () => {
 
     await configureLmstudioNonInteractive(ctx);
 
-    expectRecordFields(ctx.resolveApiKey.mock.calls.at(0)?.[0], "resolveApiKey options", {
+    expectRecordFields(firstMockArg(ctx.resolveApiKey, "resolveApiKey"), "resolveApiKey options", {
       flagValue: "new-lmstudio-key",
       flagName: "--lmstudio-api-key",
     });
@@ -831,7 +839,10 @@ describe("lmstudio setup", () => {
       prompter,
     });
 
-    const firstTextCall = requireRecord(text.mock.calls.at(0)?.[0], "first text prompt");
+    const firstTextCall = requireRecord(
+      firstMockArg(text, "first text prompt"),
+      "first text prompt",
+    );
     expectRecordFields(firstTextCall, "first text prompt", {
       initialValue: "http://host.docker.internal:1234",
       placeholder: "http://host.docker.internal:1234",

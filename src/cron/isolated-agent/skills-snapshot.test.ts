@@ -54,7 +54,7 @@ describe("resolveCronSkillsSnapshot", () => {
     });
 
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
-    const snapshotOptions = buildWorkspaceSkillSnapshotMock.mock.calls.at(0)?.[1] as
+    const snapshotOptions = buildWorkspaceSkillSnapshotMock.mock.calls[0]?.[1] as
       | { agentId?: string; snapshotVersion?: number }
       | undefined;
     expect(snapshotOptions?.agentId).toBe("writer");

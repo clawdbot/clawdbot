@@ -410,6 +410,10 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0
   return call[argIndex];
 }
 
+function latestMockCallArg(mock: ReturnType<typeof vi.fn>, argIndex = 0) {
+  return mockCallArg(mock, mock.mock.calls.length - 1, argIndex);
+}
+
 function getSessionStatusTool(
   agentSessionKey = "main",
   options?: { sandboxed?: boolean; activeModelProvider?: string; activeModelId?: string },
@@ -883,10 +887,7 @@ describe("session_status tool", () => {
     expect(details.modelProvider).toBe("anthropic");
     expect(details.modelOverride).toBe("anthropic/claude-sonnet-4-6");
     expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
-    const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
-      string,
-      Record<string, SessionEntry>,
-    ];
+    const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
     const saved = savedStore["agent:main:scope:scopy:direct:scopy"];
     expectRecordFields(saved, {
       providerOverride: "anthropic",
@@ -908,10 +909,7 @@ describe("session_status tool", () => {
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
     expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
-    const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
-      string,
-      Record<string, SessionEntry>,
-    ];
+    const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
     const saved = savedStore["agent:main:scope:scopy:direct:scopy"];
     expectRecordFields(saved, {
       providerOverride: "anthropic",
@@ -1981,10 +1979,7 @@ describe("session_status tool", () => {
     const details = result.details as { modelOverride?: string | null };
     expect(details.modelOverride).toBeNull();
     expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
-    const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
-      string,
-      Record<string, unknown>,
-    ];
+    const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, unknown>;
     const saved = savedStore.main as Record<string, unknown>;
     expect(saved.providerOverride).toBeUndefined();
     expect(saved.modelOverride).toBeUndefined();

@@ -1,0 +1,168 @@
+name: Dependency Change Awareness
+
+on:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] metadata-only workflow; no checkout or untrusted code execution
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  pull-requests: read
+  issues: write
+
+concurrency:
+  group: dependency-change-awareness-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-change-awareness:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Label and comment on dependency changes
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const marker = "<!-- openclaw:dependency-change-awareness -->";
+            const labelName = "dependencies-changed";
+            const maxListedFiles = 25;
+            const pullRequest = context.payload.pull_request;
+
+            if (!pullRequest) {
+              core.info("No pull_request payload found; skipping.");
+              return;
+            }
+
+            const isDependencyFile = (filename) =>
+              filename === "package.json" ||
+              filename === "pnpm-lock.yaml" ||
+              filename === "pnpm-workspace.yaml" ||
+              filename === "ui/package.json" ||
+              filename.startsWith("patches/") ||
+              /^packages\/[^/]+\/package\.json$/u.test(filename) ||
+              /^extensions\/[^/]+\/package\.json$/u.test(filename);
+
+            const sanitizeDisplayValue = (value) =>
+              String(value)
+                .replace(/[\u0000-\u001f\u007f]/gu, "?")
+                .slice(0, 240);
+            const markdownCode = (value) =>
+              `\`${sanitizeDisplayValue(value).replaceAll("`", "\\`")}\``;
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pullRequest.number,
+              per_page: 100,
+            });
+            const dependencyFiles = files
+              .map((file) => file.filename)
+              .filter((filename) => typeof filename === "string" && isDependencyFile(filename))
+              .sort((left, right) => left.localeCompare(right));
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pullRequest.number,
+              per_page: 100,
+            });
+            const existingComment = comments.find(
+              (comment) =>
+                comment.user?.login === "github-actions[bot]" && comment.body?.includes(marker),
+            );
+
+            const labels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pullRequest.number,
+              per_page: 100,
+            });
+            const hasLabel = labels.some((label) => label.name === labelName);
+
+            if (dependencyFiles.length === 0) {
+              if (hasLabel) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  name: labelName,
+                }).catch((error) => {
+                  if (error?.status !== 404) {
+                    throw error;
+                  }
+                });
+              }
+              if (existingComment) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existingComment.id,
+                });
+              }
+              await core.summary
+                .addHeading("Dependency Change Awareness")
+                .addRaw("No dependency-related file changes detected.")
+                .write();
+              core.info("No dependency-related file changes detected.");
+              return;
+            }
+
+            if (!hasLabel) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequest.number,
+                labels: [labelName],
+              }).catch((error) => {
+                if (error?.status === 404 || error?.status === 422) {
+                  core.warning(`Dependency change label "${labelName}" is missing or unavailable.`);
+                  return;
+                }
+                throw error;
+              });
+            }
+
+            const listedFiles = dependencyFiles.slice(0, maxListedFiles);
+            const omittedCount = dependencyFiles.length - listedFiles.length;
+            const fileLines = listedFiles.map((filename) => `- ${markdownCode(filename)}`);
+            if (omittedCount > 0) {
+              fileLines.push(`- ${omittedCount} additional dependency-related files not shown`);
+            }
+
+            const body = [
+              marker,
+              "",
+              "### Dependency Changes Detected",
+              "",
+              "This PR changes dependency-related files. Maintainers should confirm these changes are intentional.",
+              "",
+              "Changed files:",
+              ...fileLines,
+              "",
+              "Maintainer follow-up:",
+              "- Review whether the dependency changes are intentional.",
+              "- Inspect resolved package deltas when lockfile or workspace dependency policy changes are present.",
+              "- Run `pnpm deps:changes:report -- --base-ref origin/main --markdown /tmp/dependency-changes.md --json /tmp/dependency-changes.json` locally for detailed release-style evidence.",
+            ].join("\n");
+
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequest.number,
+                body,
+              });
+            }
+
+            await core.summary
+              .addHeading("Dependency Change Awareness")
+              .addRaw(`Detected ${dependencyFiles.length} dependency-related file change(s).`)
+              .addList(dependencyFiles.map((filename) => markdownCode(filename)))
+              .write();
+            core.notice(`Detected ${dependencyFiles.length} dependency-related file change(s).`);

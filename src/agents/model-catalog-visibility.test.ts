@@ -10,6 +10,14 @@ vi.mock("./model-provider-auth.js", () => ({
 
 const createProviderAuthCheckerMock = vi.mocked(createProviderAuthChecker);
 
+function firstAuthCheckerOptions(): unknown {
+  const call = createProviderAuthCheckerMock.mock.calls[0];
+  if (!call) {
+    throw new Error("Expected provider auth checker to be created");
+  }
+  return call[0];
+}
+
 describe("resolveVisibleModelCatalog", () => {
   beforeEach(() => {
     createProviderAuthCheckerMock.mockReset();
@@ -32,8 +40,7 @@ describe("resolveVisibleModelCatalog", () => {
     });
 
     expect(createProviderAuthCheckerMock).toHaveBeenCalledTimes(1);
-    const checkerOptions = createProviderAuthCheckerMock.mock.calls.at(0)?.[0];
-    expect(checkerOptions).toEqual({
+    expect(firstAuthCheckerOptions()).toEqual({
       cfg,
       workspaceDir: undefined,
       agentDir: undefined,
@@ -77,7 +84,7 @@ describe("resolveVisibleModelCatalog", () => {
     });
 
     expect(createProviderAuthCheckerMock).toHaveBeenCalledTimes(1);
-    expect(createProviderAuthCheckerMock.mock.calls.at(0)?.[0]).toEqual({
+    expect(firstAuthCheckerOptions()).toEqual({
       cfg,
       workspaceDir: undefined,
       agentDir: undefined,
@@ -118,7 +125,7 @@ describe("resolveVisibleModelCatalog", () => {
     });
 
     expect(createProviderAuthCheckerMock).toHaveBeenCalledTimes(1);
-    expect(createProviderAuthCheckerMock.mock.calls.at(0)?.[0]).toEqual({
+    expect(firstAuthCheckerOptions()).toEqual({
       cfg,
       workspaceDir: undefined,
       agentDir: undefined,

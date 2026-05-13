@@ -156,11 +156,11 @@ function mockStringMessages(mock: { mock: { calls: unknown[][] } }): string[] {
 }
 
 function expectLogContains(mock: { mock: { calls: unknown[][] } }, expected: string): void {
-  expect(mockStringMessages(mock).some((message) => message.includes(expected))).toBe(true);
+  expect(mockStringMessages(mock).join("\n")).toContain(expected);
 }
 
 function expectLogNotContains(mock: { mock: { calls: unknown[][] } }, expected: string): void {
-  expect(mockStringMessages(mock).every((message) => !message.includes(expected))).toBe(true);
+  expect(mockStringMessages(mock).join("\n")).not.toContain(expected);
 }
 
 function requireAddCall(harness: { addCalls: CronAddInput[] }, index: number): CronAddInput {
@@ -2249,7 +2249,7 @@ describe("short-term dreaming trigger", () => {
       const dreamsText = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
       expect(dreamsText).toContain("A diary entry.");
     });
-    expect(subagent.run.mock.calls.at(0)?.[0]?.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(subagent.run.mock.calls[0]?.[0]?.model).toBe("anthropic/claude-sonnet-4-6");
   });
 
   it("skips dreaming promotion cleanly when limit is zero", async () => {

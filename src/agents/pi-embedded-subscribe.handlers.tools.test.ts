@@ -179,7 +179,7 @@ describe("handleToolExecutionStart read path checks", () => {
     await handleToolExecutionStart(ctx, evt);
 
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls.at(0)?.[0] ?? "")).toContain("read tool called without path");
+    expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("read tool called without path");
   });
 
   it("awaits onBlockReplyFlush before continuing tool start processing", async () => {

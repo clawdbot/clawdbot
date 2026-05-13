@@ -19,7 +19,7 @@ import {
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
 function requireEmbeddedAgentCall(index: number): { prompt?: string } {
-  const call = runEmbeddedPiAgentMock.mock.calls.at(index)?.[0] as { prompt?: string } | undefined;
+  const call = runEmbeddedPiAgentMock.mock.calls[index]?.[0] as { prompt?: string } | undefined;
   if (!call) {
     throw new Error(`Expected embedded PI agent call ${index}`);
   }
@@ -30,7 +30,7 @@ function requireDeliveryRequest(): {
   skipHeartbeatDelivery?: boolean;
   deliveryPayloads?: unknown;
 } {
-  const request = dispatchCronDeliveryMock.mock.calls.at(0)?.[0] as
+  const request = dispatchCronDeliveryMock.mock.calls[0]?.[0] as
     | {
         skipHeartbeatDelivery?: boolean;
         deliveryPayloads?: unknown;

@@ -134,6 +134,19 @@ function requireFirstMockArg(
   return requireRecord(call[0], `${label} payload`);
 }
 
+function requireMockCallArg(
+  mock: ReturnType<typeof vi.fn>,
+  index: number,
+  label: string,
+): Record<string, unknown> {
+  const resolvedIndex = index < 0 ? mock.mock.calls.length + index : index;
+  const call = mock.mock.calls[resolvedIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call ${index}`);
+  }
+  return requireRecord(call[0], `${label} payload`);
+}
+
 function requireFirstSignCall(): [privateKey: string, payload: string] {
   const [call] = signDevicePayloadMock.mock.calls;
   if (!call) {
@@ -167,15 +180,15 @@ function expectLatestRequestTiming(
   onRequestTiming: ReturnType<typeof vi.fn>,
   expected: Partial<RequestTimingPayload>,
 ) {
-  const timing = onRequestTiming.mock.calls.at(-1)?.[0] as RequestTimingPayload | undefined;
+  const timing = requireMockCallArg(onRequestTiming, -1, "request timing") as RequestTimingPayload;
   for (const [key, value] of Object.entries(expected)) {
-    expect(timing?.[key as keyof RequestTimingPayload]).toBe(value);
+    expect(timing[key as keyof RequestTimingPayload]).toBe(value);
   }
-  expect(timing?.startedAtMs).toBeTypeOf("number");
-  expect(timing?.endedAtMs).toBeTypeOf("number");
-  expect(timing?.durationMs).toBeTypeOf("number");
+  expect(timing.startedAtMs).toBeTypeOf("number");
+  expect(timing.endedAtMs).toBeTypeOf("number");
+  expect(timing.durationMs).toBeTypeOf("number");
   if (
-    typeof timing?.startedAtMs === "number" &&
+    typeof timing.startedAtMs === "number" &&
     typeof timing.endedAtMs === "number" &&
     typeof timing.durationMs === "number"
   ) {
@@ -829,7 +842,8 @@ describe("GatewayBrowserClient", () => {
 
     const { connectFrame } = await continueConnect(secondWs, "nonce-current");
     expect(connectFrame.method).toBe("connect");
-    const signedPayload = signDevicePayloadMock.mock.calls.at(-1)?.[1];
+    const signedPayload =
+      signDevicePayloadMock.mock.calls[signDevicePayloadMock.mock.calls.length - 1]?.[1];
     expectSignedPayloadFields(signedPayload, {
       scopes: [...CONTROL_UI_OPERATOR_SCOPES],
       token: "shared-auth-token",

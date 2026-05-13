@@ -72,7 +72,7 @@ function createDispatch(
 }
 
 function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
-  const call = mock.mock.calls.at(0);
+  const call = mock.mock.calls[0];
   if (!call) {
     throw new Error(`expected ${label} call`);
   }
@@ -132,14 +132,22 @@ type TurnLogEvent = {
 };
 
 function latestDurableSendRequest(): DurableSendRequest {
-  const [request] = sendDurableMessageBatch.mock.calls.at(-1) as unknown as [DurableSendRequest];
+  const calls = sendDurableMessageBatch.mock.calls;
+  const call = calls[calls.length - 1] as unknown as [DurableSendRequest] | undefined;
+  if (!call) {
+    throw new Error("expected durable send request");
+  }
+  const [request] = call;
   return request;
 }
 
 function latestDurableSupportRequest(): DurableSupportRequest {
-  const [request] = resolveOutboundDurableFinalDeliverySupport.mock.calls.at(-1) as unknown as [
-    DurableSupportRequest,
-  ];
+  const calls = resolveOutboundDurableFinalDeliverySupport.mock.calls;
+  const call = calls[calls.length - 1] as unknown as [DurableSupportRequest] | undefined;
+  if (!call) {
+    throw new Error("expected durable support request");
+  }
+  const [request] = call;
   return request;
 }
 

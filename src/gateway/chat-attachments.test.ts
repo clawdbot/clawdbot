@@ -52,6 +52,10 @@ async function cleanupOffloadedRefs(refs: { id: string }[]) {
   await Promise.allSettled(refs.map((ref) => deleteMediaBufferMock(ref.id, "inbound")));
 }
 
+function savedMime() {
+  return saveMediaBufferMock.mock.calls[0]?.[1];
+}
+
 beforeEach(() => {
   saveMediaBufferMock.mockClear();
   deleteMediaBufferMock.mockClear();
@@ -142,7 +146,7 @@ describe("parseMessageWithAttachments", () => {
     // ctx.MediaPaths so the workspace stage surfaces a real path.
     expect(parsed.message).toBe("read this");
     expect(saveMediaBufferMock).toHaveBeenCalledOnce();
-    expect(saveMediaBufferMock.mock.calls.at(0)?.[1]).toBe("application/pdf");
+    expect(savedMime()).toBe("application/pdf");
     expect(logs).toHaveLength(0);
   });
 
@@ -155,7 +159,7 @@ describe("parseMessageWithAttachments", () => {
     ]);
     expect(parsed.offloadedRefs).toHaveLength(1);
     expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/octet-stream");
-    expect(saveMediaBufferMock.mock.calls.at(0)?.[1]).toBe("application/octet-stream");
+    expect(savedMime()).toBe("application/octet-stream");
     expect(parsed.message).toBe("take a look");
     expect(logs).toHaveLength(0);
   });

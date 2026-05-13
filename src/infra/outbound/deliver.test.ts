@@ -2014,7 +2014,7 @@ describe("deliverOutboundPayloads", () => {
     expect(firstChunkCall?.[0]).toBe("!room:example");
     expect(firstChunkCall?.[1]).toBe("Line one");
     expect((firstChunkCall?.[2] as { cfg?: unknown } | undefined)?.cfg).toBe(cfg);
-    const secondChunkCall = sendMatrix.mock.calls.at(1);
+    const secondChunkCall = sendMatrix.mock.calls[1];
     expect(secondChunkCall?.[0]).toBe("!room:example");
     expect(secondChunkCall?.[1]).toBe("Line two");
     expect((secondChunkCall?.[2] as { cfg?: unknown } | undefined)?.cfg).toBe(cfg);

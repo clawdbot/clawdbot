@@ -22,6 +22,7 @@ openclaw migrate claude --dry-run
 openclaw migrate codex --dry-run
 openclaw migrate codex --skill gog-vault77-google-workspace
 openclaw migrate codex --plugin google-calendar --dry-run
+openclaw migrate codex --plugin google-calendar --verify-plugin-apps --dry-run
 openclaw migrate hermes --dry-run
 openclaw migrate hermes
 openclaw migrate apply codex --yes --skill gog-vault77-google-workspace
@@ -58,6 +59,9 @@ openclaw onboard --import-from hermes --import-source ~/.hermes
 </ParamField>
 <ParamField path="--plugin <name>" type="string">
   Select one Codex plugin install item by plugin name or item id. Repeat the flag to migrate multiple Codex plugins. When omitted, interactive Codex migrations show a native Codex plugin checkbox selector and non-interactive migrations keep all planned plugins. This only applies to source-installed `openai-curated` Codex plugins discovered by the Codex app-server inventory.
+</ParamField>
+<ParamField path="--verify-plugin-apps" type="boolean">
+  Codex only. Force a fresh source Codex app-server `app/list` traversal before planning native plugin activation. Off by default to keep migration planning fast.
 </ParamField>
 <ParamField path="--no-backup" type="boolean">
   Skip the pre-apply backup. Requires `--force` when local OpenClaw state exists.
@@ -125,7 +129,8 @@ your personal Codex CLI state by default.
 Running `openclaw migrate codex` in an interactive terminal previews the full
 plan, then opens checkbox selectors before the final apply confirmation. Skill
 copy items are prompted first. Use `Toggle all on` or `Toggle all off` for bulk
-selection; planned skills start checked, conflict skills start unchecked, and
+selection. Press Space to toggle rows, or press Enter to activate the highlighted
+row and continue. Planned skills start checked, conflict skills start unchecked, and
 `Skip for now` skips skill copies for this run while still continuing to plugin
 selection. When source-installed curated Codex plugins are migratable and
 `--plugin` was not supplied, migration then prompts for native Codex plugin
@@ -156,17 +161,36 @@ openclaw migrate apply codex --yes --plugin google-calendar
 - Personal AgentSkills under `$HOME/.agents/skills`, copied into the current
   OpenClaw agent workspace when you want per-agent ownership.
 - Source-installed `openai-curated` Codex plugins discovered through Codex
-  app-server `plugin/list`. Apply calls app-server `plugin/install` for each
-  selected plugin, even if the target app-server already reports that plugin as
-  installed and enabled. Migrated Codex plugins are usable only in sessions that
-  select the native Codex harness; they are not exposed to Pi, normal OpenAI
-  provider runs, ACP conversation bindings, or other harnesses.
+  app-server `plugin/list`. Planning reads `plugin/read` for each enabled
+  installed plugin. App-backed plugins require the source Codex app-server
+  account response to be a ChatGPT subscription account; non-ChatGPT or missing
+  account responses are skipped with `codex_subscription_required`. By default,
+  migration does not call source `app/list`, so app-backed plugins that pass the
+  account gate are planned without source app accessibility verification, and
+  account lookup transport failures skip with `codex_account_unavailable`. Pass
+  `--verify-plugin-apps` when you want migration to force a fresh source
+  `app/list` snapshot and require every owned app to be present, enabled, and
+  accessible before planning native activation. In that mode, account lookup
+  transport failures fall through to source app inventory verification. The
+  source app inventory snapshot is kept in memory for the current process; it
+  is not written to migration output or target config. Disabled plugins,
+  unreadable plugin details, subscription-gated source accounts, and, when
+  verification is requested, missing apps, disabled apps, inaccessible apps, or
+  source app inventory failures become manual skipped items with typed reasons
+  instead of target config entries.
+  Apply calls app-server `plugin/install` for each selected eligible plugin,
+  even if the target app-server already reports that plugin as installed and
+  enabled. Migrated Codex plugins are usable only in sessions that select the
+  native Codex harness; they are not exposed to Pi, normal OpenAI provider runs,
+  ACP conversation bindings, or other harnesses.
 
 ### Manual-review Codex state
 
-Codex `config.toml`, native `hooks/hooks.json`, non-curated marketplaces, and
-cached plugin bundles that are not source-installed curated plugins are not
-activated automatically. They are copied or reported in the migration report for
+Codex `config.toml`, native `hooks/hooks.json`, non-curated marketplaces, cached
+plugin bundles that are not source-installed curated plugins, and source-installed
+plugins that fail the source subscription gate are not activated automatically.
+When `--verify-plugin-apps` is set, plugins that fail the source app-inventory
+gate are also skipped. They are copied or reported in the migration report for
 manual review.
 
 For migrated source-installed curated plugins, apply writes:
@@ -178,7 +202,13 @@ For migrated source-installed curated plugins, apply writes:
   `pluginName` for each selected plugin
 
 Migration never writes `plugins["*"]` and never stores local marketplace cache
-paths. Auth-required installs are reported on the affected plugin item with
+paths. Source-side subscription failures are reported on manual items with typed
+reasons such as `codex_subscription_required`, `codex_account_unavailable`,
+`plugin_disabled`, or `plugin_read_unavailable`. With `--verify-plugin-apps`,
+source app-inventory failures can also appear as `app_inaccessible`,
+`app_disabled`, `app_missing`, or `app_inventory_unavailable`. Skipped plugins
+are not written to target config.
+Target-side auth-required installs are reported on the affected plugin item with
 `status: "skipped"`, `reason: "auth_required"`, and sanitized app identifiers.
 Their explicit config entries are written disabled until you reauthorize and
 enable them. Other install failures are item-scoped `error` results.

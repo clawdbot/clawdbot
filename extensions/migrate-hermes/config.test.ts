@@ -99,7 +99,9 @@ describe("Hermes migration config mapping", () => {
         },
       },
     });
-    expect((plan.warnings ?? []).some((warning) => warning.includes("manual review"))).toBe(true);
+    expect(plan.warnings).toEqual([
+      "Some Hermes settings require manual review before they can be activated safely.",
+    ]);
   });
 
   it("applies mapped config items through the migration runtime config writer", async () => {

@@ -163,16 +163,34 @@ type MockCallSource = {
   };
 };
 
+function mockCall(source: MockCallSource, label: string, callIndex = 0) {
+  const calls = source.mock.calls;
+  const resolvedIndex = callIndex < 0 ? calls.length + callIndex : callIndex;
+  const call = calls[resolvedIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex}`);
+  }
+  return call;
+}
+
 function mockObjectArg(source: MockCallSource, label: string, callIndex = 0, argIndex = 0) {
-  const arg = source.mock.calls[callIndex]?.[argIndex];
+  const arg = mockCall(source, label, callIndex)[argIndex];
   if (!arg || typeof arg !== "object") {
     throw new Error(`expected ${label} object arg`);
   }
   return arg as Record<string, unknown>;
 }
 
+function lastMockObjectArg(source: MockCallSource, label: string, argIndex = 0) {
+  return mockObjectArg(source, label, -1, argIndex);
+}
+
 function mockMessageBody(source: MockCallSource, label: string, callIndex = 0) {
   return String(mockObjectArg(source, label, callIndex).body);
+}
+
+function lastMockMessageBody(source: MockCallSource, label: string) {
+  return mockMessageBody(source, label, -1);
 }
 
 function expectSentTextMessage(
@@ -640,7 +658,7 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.reactionEventId).toBe("$driver-approval-reaction");
     expect(artifacts.reactionTargetEventId).toBe(approvalEventId);
     expect(waitForRoomEvent).toHaveBeenCalledTimes(3);
-    expect(gatewayCall.mock.calls.at(-1)?.[0]).toBe("exec.approval.waitDecision");
+    expect(mockCall(gatewayCall, "gatewayCall", -1)[0]).toBe("exec.approval.waitDecision");
   });
 
   it("reuses observed Matrix approval events across channel and DM target=both waits", async () => {
@@ -741,10 +759,9 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.approvals?.[1]?.roomId).toBe("!driver-shared-dm:matrix-qa.test");
 
     expect(waitForRoomEvent).toHaveBeenCalledTimes(1);
-    expect(gatewayCall.mock.calls.at(-1)?.[0]).toBe("exec.approval.resolve");
-    expect((gatewayCall.mock.calls.at(-1)?.[2] as { expectFinal?: unknown }).expectFinal).toBe(
-      false,
-    );
+    const finalGatewayCall = mockCall(gatewayCall, "gatewayCall", -1);
+    expect(finalGatewayCall[0]).toBe("exec.approval.resolve");
+    expect((finalGatewayCall[2] as { expectFinal?: unknown }).expectFinal).toBe(false);
     expect(createMatrixQaClient).toHaveBeenCalledTimes(3);
   });
 
@@ -1421,7 +1438,7 @@ describe("matrix live qa scenarios", () => {
       since: `${params.roomId}:no-reply`,
     }));
     const waitForRoomEvent = vi.fn().mockImplementation(async (params) => {
-      const sentBody = String(sendTextMessage.mock.calls.at(-1)?.[0]?.body ?? "");
+      const sentBody = lastMockMessageBody(sendTextMessage, "sendTextMessage");
       const token = sentBody
         .replace("@sut:matrix-qa.test reply with only this exact marker: ", "")
         .replace("reply with only this exact marker: ", "");
@@ -1503,8 +1520,12 @@ describe("matrix live qa scenarios", () => {
       "@sut:matrix-qa.test",
     ]);
     expect(mockObjectArg(sendTextMessage, "sendTextMessage").roomId).toBe("!main:matrix-qa.test");
-    expect(sendTextMessage.mock.calls.at(1)?.[0]?.mentionUserIds).toEqual(["@sut:matrix-qa.test"]);
-    expect(sendTextMessage.mock.calls.at(1)?.[0]?.roomId).toBe("!main:matrix-qa.test");
+    expect(mockObjectArg(sendTextMessage, "sendTextMessage", 1).mentionUserIds).toEqual([
+      "@sut:matrix-qa.test",
+    ]);
+    expect(mockObjectArg(sendTextMessage, "sendTextMessage", 1).roomId).toBe(
+      "!main:matrix-qa.test",
+    );
   });
 
   it("queues a Matrix trigger during restart before proving incremental sync continues", async () => {
@@ -1515,7 +1536,7 @@ describe("matrix live qa scenarios", () => {
       return String(params.body).includes("CATCHUP") ? "$catchup-trigger" : "$incremental-trigger";
     });
     const waitForRoomEvent = vi.fn().mockImplementation(async () => {
-      const sentBody = String(sendTextMessage.mock.calls.at(-1)?.[0]?.body ?? "");
+      const sentBody = lastMockMessageBody(sendTextMessage, "sendTextMessage");
       const token = sentBody.replace("@sut:matrix-qa.test reply with only this exact marker: ", "");
       callOrder.push(`wait:${token.includes("CATCHUP") ? "catchup" : "incremental"}`);
       return {
@@ -1612,7 +1633,7 @@ describe("matrix live qa scenarios", () => {
       return kind === "fresh" ? "$fresh-trigger" : "$first-trigger";
     });
     const waitForRoomEvent = vi.fn().mockImplementation(async () => {
-      const sentBody = String(sendTextMessage.mock.calls.at(-1)?.[0]?.body ?? "");
+      const sentBody = lastMockMessageBody(sendTextMessage, "sendTextMessage");
       const token = sentBody.replace("@sut:matrix-qa.test reply with only this exact marker: ", "");
       const kind = token.includes("REPLAY_DEDUPE_FRESH") ? "fresh" : "first";
       callOrder.push(`wait:${kind}`);
@@ -1722,7 +1743,7 @@ describe("matrix live qa scenarios", () => {
         return kind === "fresh" ? "$fresh-trigger" : "$first-trigger";
       });
       const waitForRoomEvent = vi.fn().mockImplementation(async () => {
-        const sentBody = String(sendTextMessage.mock.calls.at(-1)?.[0]?.body ?? "");
+        const sentBody = lastMockMessageBody(sendTextMessage, "sendTextMessage");
         const token = sentBody.replace(
           "@sut:matrix-qa.test reply with only this exact marker: ",
           "",
@@ -2155,7 +2176,7 @@ describe("matrix live qa scenarios", () => {
         return "$after-trigger";
       });
       const waitForRoomEvent = vi.fn().mockImplementation(async (params) => {
-        const body = String(sendTextMessage.mock.calls.at(-1)?.[0]?.body ?? "");
+        const body = lastMockMessageBody(sendTextMessage, "sendTextMessage");
         const token = body.replace("@sut:matrix-qa.test reply with only this exact marker: ", "");
         return {
           event: {
@@ -3271,7 +3292,9 @@ describe("matrix live qa scenarios", () => {
     expect(body).toMatch(
       /reply with exactly this two-line body and no extra text:\nMATRIX_QA_BLOCK_ONE_[A-F0-9]{8}\nMATRIX_QA_BLOCK_TWO_[A-F0-9]{8}$/,
     );
-    expect(waitForRoomEvent.mock.calls.at(1)?.[0]?.since).toBe("driver-sync-block-one");
+    expect(mockObjectArg(waitForRoomEvent, "waitForRoomEvent", 1).since).toBe(
+      "driver-sync-block-one",
+    );
   });
 
   it("sends a real Matrix image attachment for image-understanding prompts", async () => {
@@ -3574,7 +3597,9 @@ describe("matrix live qa scenarios", () => {
       expect(mediaMessage?.kind).toBe(mediaCase.kind);
       expect(mediaMessage?.mentionUserIds).toEqual(["@sut:matrix-qa.test"]);
     }
-    const firstReplyWait = waitForRoomEvent.mock.calls.at(1)?.[0];
+    const firstReplyWait = mockObjectArg(waitForRoomEvent, "waitForRoomEvent", 1) as {
+      predicate: (event: MatrixQaObservedEvent) => boolean;
+    };
     const firstToken =
       mockMessageBody(sendMediaMessage, "sendMediaMessage").match(
         /MATRIX_QA_MEDIA_[A-Z]+_[A-Z0-9]+/,
@@ -4484,7 +4509,10 @@ describe("matrix live qa scenarios", () => {
         search: "",
       }),
     ).toBe(false);
-    const recoveryClientOptions = createMatrixQaE2eeScenarioClient.mock.calls.at(-1)?.[0];
+    const recoveryClientOptions = lastMockObjectArg(
+      createMatrixQaE2eeScenarioClient,
+      "createMatrixQaE2eeScenarioClient",
+    );
     expect(recoveryClientOptions?.accessToken).toBe("recovery-token");
     expect(recoveryClientOptions?.baseUrl).toBe("http://127.0.0.1:39877");
     expect(recoveryClientOptions?.deviceId).toBe("RECOVERYDEVICE");

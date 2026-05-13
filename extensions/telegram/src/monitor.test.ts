@@ -290,6 +290,14 @@ function expectRecoverableRetryState(
   expect(runSpy).toHaveBeenCalledTimes(expectedRunCalls);
 }
 
+function latestMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls[mock.mock.calls.length - 1];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 async function monitorWithAutoAbort(opts: Omit<MonitorTelegramOpts, "abortSignal"> = {}) {
   const abort = new AbortController();
   mockRunOnceAndAbort(abort);
@@ -367,6 +375,7 @@ vi.mock("./fetch.js", () => ({
 vi.mock("./update-offset-store.js", () => ({
   readTelegramUpdateOffset: readTelegramUpdateOffsetSpy,
   writeTelegramUpdateOffset: vi.fn(async () => undefined),
+  deleteTelegramUpdateOffset: vi.fn(async () => undefined),
 }));
 
 describe("monitorTelegramProvider (grammY)", () => {
@@ -449,8 +458,8 @@ describe("monitorTelegramProvider (grammY)", () => {
       sink?: { concurrency?: number };
       runner?: { silent?: boolean; maxRetryTime?: number; retryInterval?: string };
     };
-    const runCall = runSpy.mock.calls.at(-1) as unknown as [unknown, RunOptions] | undefined;
-    const runOptions = runCall?.[1];
+    const runCall = latestMockCall(runSpy, "run") as [unknown, RunOptions];
+    const runOptions = runCall[1];
     expect(runOptions?.sink?.concurrency).toBe(3);
     expect(runOptions?.runner?.silent).toBe(true);
     expect(runOptions?.runner?.maxRetryTime).toBe(60 * 60 * 1000);
@@ -847,10 +856,10 @@ describe("monitorTelegramProvider (grammY)", () => {
       },
     });
 
-    const webhookCall = startTelegramWebhookSpy.mock.calls.at(-1) as
-      | [{ host?: string; setStatus?: unknown }]
-      | undefined;
-    const webhookOptions = webhookCall?.[0];
+    const webhookCall = latestMockCall(startTelegramWebhookSpy, "startTelegramWebhook") as [
+      { host?: string; setStatus?: unknown },
+    ];
+    const webhookOptions = webhookCall[0];
     expect(webhookOptions?.host).toBe("0.0.0.0");
     expect(webhookOptions?.setStatus).toBe(setStatus);
     expect(runSpy).not.toHaveBeenCalled();
@@ -1018,10 +1027,10 @@ describe("monitorTelegramProvider (grammY)", () => {
       },
     });
 
-    const webhookCall = startTelegramWebhookSpy.mock.calls.at(-1) as
-      | [{ secret?: string }]
-      | undefined;
-    expect(webhookCall?.[0]?.secret).toBe("secret-from-config");
+    const webhookCall = latestMockCall(startTelegramWebhookSpy, "startTelegramWebhook") as [
+      { secret?: string },
+    ];
+    expect(webhookCall[0].secret).toBe("secret-from-config");
     expect(runSpy).not.toHaveBeenCalled();
   });
 });

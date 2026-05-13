@@ -160,7 +160,7 @@ function makeRuntime() {
 }
 
 function firstMockArg(mockFn: ReturnType<typeof vi.fn>, label: string): unknown {
-  const call = mockFn.mock.calls.at(0);
+  const call = mockFn.mock.calls[0];
   if (!call) {
     throw new Error(`Expected ${label} call`);
   }

@@ -92,13 +92,41 @@ export function collectDependencyPinViolations(cwd = process.cwd()) {
   return [...collectPackageJsonViolations(cwd), ...collectWorkspaceViolations(cwd)];
 }
 
+export function collectDependencyPinAudit(cwd = process.cwd()) {
+  const packageJsonFiles = listTrackedPackageJsonFiles(cwd);
+  let packageSpecCount = 0;
+  for (const relativePath of packageJsonFiles) {
+    const packageJson = readJson(path.join(cwd, relativePath));
+    for (const section of PACKAGE_DEPENDENCY_SECTIONS) {
+      packageSpecCount += Object.keys(packageJson[section] ?? {}).length;
+    }
+  }
+  const workspaceViolations = collectWorkspaceViolations(cwd);
+  const violations = [...collectPackageJsonViolations(cwd), ...workspaceViolations];
+  return {
+    packageManifestCount: packageJsonFiles.length,
+    packageSpecCount,
+    violations,
+  };
+}
+
 export async function main() {
-  const violations = collectDependencyPinViolations();
+  const audit = collectDependencyPinAudit();
+  const { violations } = audit;
   if (violations.length === 0) {
+    process.stdout.write(
+      `PASS direct dependency pin guard: checked ${audit.packageSpecCount} directly declared ` +
+        `dependency specs across ${audit.packageManifestCount} tracked package manifests; ` +
+        "0 violations.\n",
+    );
     return;
   }
 
-  console.error("Dependency specs must be pinned exactly outside peer dependency contracts:");
+  console.error(
+    `FAIL direct dependency pin guard: ${violations.length} unpinned directly declared ` +
+      "dependency specs found. Direct dependency specs must be pinned exactly outside peer " +
+      "dependency contracts:",
+  );
   for (const violation of violations) {
     console.error(
       `- ${violation.file}:${violation.section}:${violation.name} -> ${JSON.stringify(violation.spec)}`,

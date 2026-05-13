@@ -162,7 +162,7 @@ describe("buildXiaomiSpeechProvider", () => {
       expect(result.audioBuffer.toString()).toBe("fake-mp3-audio");
 
       expect(mockFetch).toHaveBeenCalledOnce();
-      const [url, init] = mockFetch.mock.calls.at(0) ?? [];
+      const [url, init] = mockFetch.mock.calls[0] ?? [];
       expect(url).toBe("https://api.xiaomimimo.com/v1/chat/completions");
       expect(init?.headers).toEqual({
         "api-key": "sk-test",

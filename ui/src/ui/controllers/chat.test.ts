@@ -883,7 +883,7 @@ describe("sendChatMessage", () => {
 
     expect(result).toMatch(UUID_V4_RE);
     expect(state.currentSessionId).toBe("session-before-reconnect");
-    const sendRequest = request.mock.calls.at(-1);
+    const sendRequest = request.mock.calls[request.mock.calls.length - 1];
     expect(sendRequest?.[0]).toBe("chat.send");
     const sendParams = requireRecord(sendRequest?.[1]);
     expect(sendParams.sessionKey).toBe("main");

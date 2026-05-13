@@ -50,7 +50,8 @@ vi.mock("./provider-request-config.js", () => ({
 }));
 
 function latestGuardedFetchParams(): Record<string, unknown> {
-  const params = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
+  const calls = fetchWithSsrFGuardMock.mock.calls;
+  const params = calls[calls.length - 1]?.[0];
   if (!params || typeof params !== "object") {
     throw new Error("Expected guarded fetch call");
   }
@@ -58,7 +59,8 @@ function latestGuardedFetchParams(): Record<string, unknown> {
 }
 
 function latestTrustedEnvProxyParams(): Record<string, unknown> {
-  const params = withTrustedEnvProxyGuardedFetchModeMock.mock.calls.at(-1)?.[0];
+  const calls = withTrustedEnvProxyGuardedFetchModeMock.mock.calls;
+  const params = calls[calls.length - 1]?.[0];
   if (!params || typeof params !== "object") {
     throw new Error("Expected trusted env proxy call");
   }
@@ -211,7 +213,7 @@ describe("buildGuardedModelFetch", () => {
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
 
-    const policy = fetchWithSsrFGuardMock.mock.calls.at(0)?.[0]?.policy;
+    const policy = latestGuardedFetchParams().policy as Record<string, unknown> | undefined;
     expect(policy).toEqual({
       allowRfc2544BenchmarkRange: true,
       allowIpv6UniqueLocalRange: true,
@@ -233,7 +235,7 @@ describe("buildGuardedModelFetch", () => {
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("https://uploads.openai.com/v1/files", { method: "POST" });
 
-    const policy = fetchWithSsrFGuardMock.mock.calls.at(0)?.[0]?.policy;
+    const policy = latestGuardedFetchParams().policy;
     expect(policy).toBeUndefined();
   });
 
@@ -249,7 +251,7 @@ describe("buildGuardedModelFetch", () => {
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("http://10.0.0.5:11434/api/chat", { method: "POST" });
 
-    const policy = fetchWithSsrFGuardMock.mock.calls.at(0)?.[0]?.policy;
+    const policy = latestGuardedFetchParams().policy;
     expect(policy).toEqual({
       allowRfc2544BenchmarkRange: true,
       allowIpv6UniqueLocalRange: true,

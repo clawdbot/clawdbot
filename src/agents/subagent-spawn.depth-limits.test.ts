@@ -131,6 +131,30 @@ describe("subagent spawn depth + child limits", () => {
     expect(typeof childSession?.spawnedWorkspaceDir).toBe("string");
   });
 
+  it("persists inherited tool denies on spawned child sessions", async () => {
+    hoisted.configOverride = createDepthLimitConfig({ maxSpawnDepth: 2 });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "hello",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        workspaceDir: "/tmp/workspace-main",
+        inheritedToolAllowlist: ["sessions_spawn", "read", ""],
+        inheritedToolDenylist: ["bash", "exec", "read", ""],
+      },
+    );
+
+    const accepted = expectAccepted(result, "run-1");
+    const childSession = persistedStore?.[accepted.childSessionKey];
+    if (!childSession) {
+      throw new Error("Expected persisted child session");
+    }
+    expect(childSession.inheritedToolAllow).toEqual(["sessions_spawn", "read"]);
+    expect(childSession.inheritedToolDeny).toEqual(["exec", "read"]);
+  });
+
   it("rejects callers when stored spawn depth is already at the configured max", async () => {
     hoisted.configOverride = createDepthLimitConfig({ maxSpawnDepth: 2 });
     hoisted.depthBySession.set("agent:main:subagent:flat-depth-2", 2);

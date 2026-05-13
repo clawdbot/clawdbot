@@ -92,7 +92,7 @@ describe("installFromNpmSpecArchive", () => {
     expect(installFromArchive).not.toHaveBeenCalled();
     const withTempDirMock = vi.mocked(withTempDir);
     expect(withTempDirMock).toHaveBeenCalledTimes(1);
-    const tempDirCall = withTempDirMock.mock.calls.at(0);
+    const tempDirCall = withTempDirMock.mock.calls[0];
     if (tempDirCall === undefined) {
       throw new Error("expected temp dir call");
     }

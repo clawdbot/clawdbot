@@ -89,8 +89,16 @@ function expectFields(
   return record;
 }
 
+function firstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }): unknown {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error("Expected mock to have at least one call");
+  }
+  return call[0];
+}
+
 function gatewayCall(index: number) {
-  const call = callGatewayFromCli.mock.calls.at(index);
+  const call = callGatewayFromCli.mock.calls[index];
   if (!call) {
     throw new Error(`Expected gateway call ${index + 1}`);
   }
@@ -105,7 +113,7 @@ function expectGatewayCall(index: number, method: string, params: unknown) {
 }
 
 function writtenJson(): Record<string, unknown> {
-  const value = vi.mocked(defaultRuntime.writeJson).mock.calls.at(0)?.[0];
+  const value = firstMockArg(vi.mocked(defaultRuntime.writeJson));
   return requireRecord(value, "written json");
 }
 
@@ -521,7 +529,7 @@ describe("exec approvals CLI", () => {
     expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "exec.approvals.set")).toBe(
       false,
     );
-    const saved = requireRecord(saveExecApprovals.mock.calls.at(0)?.[0], "saved approvals");
+    const saved = requireRecord(firstMockArg(saveExecApprovals), "saved approvals");
     expect(saveExecApprovals).toHaveBeenCalledWith(saved);
     if (requireRecord(saved.agents, "saved agents")["*"] === undefined) {
       throw new Error("Expected wildcard exec approval agent entry");
@@ -543,7 +551,7 @@ describe("exec approvals CLI", () => {
 
     await runApprovalsCommand(["approvals", "allowlist", "remove", "/usr/bin/uname"]);
 
-    const saved = requireRecord(saveExecApprovals.mock.calls.at(0)?.[0], "saved approvals");
+    const saved = requireRecord(firstMockArg(saveExecApprovals), "saved approvals");
     expect(saveExecApprovals).toHaveBeenCalledWith(saved);
     expectFields(saved, "saved approvals", {
       version: 1,

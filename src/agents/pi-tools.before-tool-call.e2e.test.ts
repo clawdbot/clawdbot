@@ -666,6 +666,14 @@ describe("before_tool_call requireApproval handling", () => {
     ];
   }
 
+  function requireGatewayCall(index: number): unknown[] {
+    const call = mockCallGateway.mock.calls[index] as unknown[] | undefined;
+    if (!call) {
+      throw new Error(`missing gateway call ${index + 1}`);
+    }
+    return call;
+  }
+
   function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
     for (const [key, value] of Object.entries(fields)) {
       expect(record[key]).toEqual(value);
@@ -1009,15 +1017,15 @@ describe("before_tool_call requireApproval handling", () => {
 
     expect(result.blocked).toBe(false);
     expect(mockCallGateway).toHaveBeenCalledTimes(2);
-    const requestCall = mockCallGateway.mock.calls.at(0);
-    expect(requestCall?.[0]).toBe("plugin.approval.request");
-    requireRecord(requestCall?.[1], "approval request gateway client");
-    expect(requireRecord(requestCall?.[2], "approval request params").twoPhase).toBe(true);
-    expect(requestCall?.[3]).toEqual({ expectFinal: false });
-    const waitCall = mockCallGateway.mock.calls.at(1);
-    expect(waitCall?.[0]).toBe("plugin.approval.waitDecision");
-    requireRecord(waitCall?.[1], "approval wait gateway client");
-    expect(waitCall?.[2]).toEqual({ id: "server-id-1" });
+    const requestCall = requireGatewayCall(0);
+    expect(requestCall[0]).toBe("plugin.approval.request");
+    requireRecord(requestCall[1], "approval request gateway client");
+    expect(requireRecord(requestCall[2], "approval request params").twoPhase).toBe(true);
+    expect(requestCall[3]).toEqual({ expectFinal: false });
+    const waitCall = requireGatewayCall(1);
+    expect(waitCall[0]).toBe("plugin.approval.waitDecision");
+    requireRecord(waitCall[1], "approval wait gateway client");
+    expect(waitCall[2]).toEqual({ id: "server-id-1" });
   });
 
   it("blocks on deny decision", async () => {

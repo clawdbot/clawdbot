@@ -25,7 +25,7 @@ function requireFetchPreflightRequest(): {
   timeoutMs?: number;
   auditContext?: string;
 } {
-  const request = fetchWithSsrFGuardMock.mock.calls.at(0)?.[0] as
+  const request = fetchWithSsrFGuardMock.mock.calls[0]?.[0] as
     | { url?: string; timeoutMs?: number; auditContext?: string }
     | undefined;
   if (!request) {

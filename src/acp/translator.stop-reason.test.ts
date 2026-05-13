@@ -22,11 +22,11 @@ function requireValue<T>(value: T | undefined, label: string): T {
 function requireFirstRequestIdempotencyKey(requestMock: {
   mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> };
 }): string {
-  const firstCall = requestMock.mock.calls.at(0);
+  const firstCall = requestMock.mock.calls[0];
   if (!firstCall) {
     throw new Error("expected request mock call");
   }
-  const params = firstCall.at(1);
+  const params = firstCall[1];
   if (!params || typeof params !== "object") {
     throw new Error("expected request params");
   }

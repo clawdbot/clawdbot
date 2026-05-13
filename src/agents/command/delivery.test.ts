@@ -85,8 +85,17 @@ function requirePayload(payloads: readonly ReplyPayload[], index: number): Reply
   return payload;
 }
 
+function lastMockArg(mock: { mock: { calls: Array<Array<unknown>> } }, label: string): unknown {
+  const calls = mock.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call[0];
+}
+
 function latestNormalizerOptions(): MediaNormalizerOptions {
-  const options = createReplyMediaPathNormalizerMock.mock.calls.at(-1)?.[0];
+  const options = lastMockArg(createReplyMediaPathNormalizerMock, "media normalizer options");
   if (!options || typeof options !== "object") {
     throw new Error("expected media normalizer options");
   }
@@ -98,7 +107,7 @@ function latestOutboundDeliveryArgs(): {
   bestEffort?: boolean;
   queuePolicy?: string;
 } {
-  const args = deliverOutboundPayloadsMock.mock.calls.at(-1)?.[0];
+  const args = lastMockArg(deliverOutboundPayloadsMock, "outbound delivery arguments");
   if (!args || typeof args !== "object") {
     throw new Error("expected outbound delivery arguments");
   }
@@ -137,11 +146,12 @@ function expectRuntimeErrorIncludes(
   runtime: { error: { mock: { calls: Array<Array<unknown>> } } },
   text: string,
 ) {
-  expect(runtime.error.mock.calls.some(([message]) => String(message).includes(text))).toBe(true);
+  const errorOutput = runtime.error.mock.calls.map(([message]) => String(message)).join("\n");
+  expect(errorOutput).toContain(text);
 }
 
 function latestJsonOutput(runtime: { writeJson: { mock: { calls: Array<Array<unknown>> } } }) {
-  const output = runtime.writeJson.mock.calls.at(-1)?.[0];
+  const output = lastMockArg(runtime.writeJson, "JSON output");
   if (!output || typeof output !== "object") {
     throw new Error("expected JSON output");
   }
@@ -292,7 +302,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     expect(normalizerOptions.workspaceDir).toBe("/tmp/agent-workspace");
     expect(normalizerOptions.messageProvider).toBe("slack");
 
-    const normalizedInput = normalizerFn.mock.calls.at(0)?.[0];
+    const normalizedInput = normalizerFn.mock.calls[0]?.[0];
     expect(normalizedInput?.mediaUrls).toStrictEqual(["./out/photo.png"]);
     expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(1);
     const deliverArgs = latestOutboundDeliveryArgs();

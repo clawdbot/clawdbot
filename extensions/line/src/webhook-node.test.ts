@@ -34,6 +34,24 @@ type ParsedLineWebhookPayload = {
   events: unknown;
 };
 
+function firstMockCall(
+  mock: { mock: { calls: Array<readonly unknown[]> } },
+  label: string,
+): readonly unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
+function firstParsedPayload(
+  mock: { mock: { calls: Array<readonly unknown[]> } },
+  label: string,
+): ParsedLineWebhookPayload {
+  return firstMockCall(mock, label)[0] as ParsedLineWebhookPayload;
+}
+
 type RuntimeEnvMock = RuntimeEnv & {
   error: ReturnType<typeof vi.fn<(...args: unknown[]) => void>>;
   exit: ReturnType<typeof vi.fn<(code: number) => void>>;
@@ -234,9 +252,9 @@ async function expectSignedRawBodyWins(params: { rawBody: string | Buffer; signe
 
   expect(res.status).toHaveBeenCalledWith(200);
   expect(onEvents).toHaveBeenCalledTimes(1);
-  const processedBody = (
-    onEvents.mock.calls.at(0) as unknown as [{ events?: Array<{ source?: { userId?: string } }> }]
-  )?.[0];
+  const processedBody = firstMockCall(onEvents, "LINE webhook events")[0] as {
+    events?: Array<{ source?: { userId?: string } }>;
+  };
   expect(processedBody?.events?.[0]?.source?.userId).toBe(params.signedUserId);
   expect(processedBody?.events?.[0]?.source?.userId).not.toBe("tampered-user");
 }
@@ -414,7 +432,7 @@ describe("createLineNodeWebhookHandler", () => {
 
     expect(res.statusCode).toBe(200);
     expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
-    const [payload] = bot.handleWebhook.mock.calls.at(0) as unknown as [ParsedLineWebhookPayload];
+    const payload = firstParsedPayload(bot.handleWebhook, "LINE node webhook payload");
     expect(payload.events).toEqual([{ type: "message" }]);
   });
 
@@ -494,7 +512,7 @@ describe("createLineWebhookMiddleware", () => {
     const { res, onEvents } = await invokeWebhook({ body });
     expect(res.status).toHaveBeenCalledWith(200);
     expect(onEvents).toHaveBeenCalledTimes(1);
-    const [payload] = onEvents.mock.calls.at(0) as unknown as [ParsedLineWebhookPayload];
+    const payload = firstParsedPayload(onEvents, "LINE middleware payload");
     expect(payload.events).toEqual(expectedEvents);
   });
 

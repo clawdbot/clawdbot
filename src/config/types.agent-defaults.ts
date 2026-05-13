@@ -420,7 +420,7 @@ export type AgentDefaultsConfig = {
      */
     isolatedSession?: boolean;
     /**
-     * If true, defer heartbeat runs while subagent or nested command lanes are busy.
+     * If true, defer heartbeat runs while this agent's session-keyed subagent or nested command lanes are busy.
      * Cron lanes are always treated as busy for heartbeat deferral.
      */
     skipWhenBusy?: boolean;

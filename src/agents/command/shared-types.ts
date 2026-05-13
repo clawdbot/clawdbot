@@ -1,6 +1,7 @@
 export type AgentStreamParams = {
   /** Provider stream params override (best-effort). */
   temperature?: number;
+  topP?: number;
   maxTokens?: number;
   /** Provider fast-mode override (best-effort). */
   fastMode?: boolean;

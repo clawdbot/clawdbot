@@ -54,6 +54,10 @@ function expectRelayConfig(
   expect(resolved.value.timeoutMs).toBe(expected.timeoutMs);
 }
 
+function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T | undefined {
+  return mock.mock.calls[0];
+}
+
 describe("push-apns.relay", () => {
   describe("resolveApnsRelayConfigFromEnv", () => {
     it("returns a missing-config error when no relay base URL is configured", () => {
@@ -160,7 +164,7 @@ describe("push-apns.relay", () => {
       });
 
       expect(sender).toHaveBeenCalledTimes(1);
-      const sent = sender.mock.calls.at(0)?.[0] as
+      const sent = firstMockCall(sender)?.[0] as
         | {
             relayConfig?: { baseUrl?: string; timeoutMs?: number };
             sendGrant?: string;
@@ -221,7 +225,7 @@ describe("push-apns.relay", () => {
       const result = await sendApnsRelayPush(createRelayPushParams());
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      const fetchOptions = fetchMock.mock.calls.at(0)?.[1] as { redirect?: unknown } | undefined;
+      const fetchOptions = firstMockCall(fetchMock)?.[1] as { redirect?: unknown } | undefined;
       expect(fetchOptions?.redirect).toBe("manual");
       expect(result.ok).toBe(false);
       expect(result.status).toBe(302);

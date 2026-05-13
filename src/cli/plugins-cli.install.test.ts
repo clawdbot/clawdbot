@@ -620,6 +620,33 @@ describe("plugins cli install", () => {
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
   });
 
+  it("passes ClawHub risk acknowledgement to explicit ClawHub installs", async () => {
+    loadConfig.mockReturnValue(createEmptyPluginConfig());
+    parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
+    installPluginFromClawHub.mockResolvedValue(
+      createClawHubInstallResult({
+        pluginId: "demo",
+        packageName: "demo",
+        version: "1.2.3",
+        channel: "official",
+      }),
+    );
+    enablePluginInConfig.mockReturnValue({ config: createEnabledPluginConfig("demo") });
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: createEnabledPluginConfig("demo"),
+      warnings: [],
+    });
+
+    await runPluginsCommand(["plugins", "install", "clawhub:demo", "--acknowledge-clawhub-risk"]);
+
+    expect(installPluginFromClawHub).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "clawhub:demo",
+        acknowledgeClawHubRisk: true,
+      }),
+    );
+  });
+
   it("passes the active profile extensions dir to ClawHub installs", async () => {
     const extensionsDir = useProfileExtensionsDir();
     const cfg = createEmptyPluginConfig();
@@ -679,7 +706,9 @@ describe("plugins cli install", () => {
 
     await runPluginsCommand(["plugins", "install", pluginId]);
 
-    const writtenConfig = writeConfigFile.mock.calls.at(-1)?.[0] as OpenClawConfig;
+    const writtenConfig = writeConfigFile.mock.calls[
+      writeConfigFile.mock.calls.length - 1
+    ]?.[0] as OpenClawConfig;
     expect(writtenConfig.plugins?.entries?.[pluginId]).toBeUndefined();
     expect(writtenConfig.plugins?.load?.paths).toEqual(["/existing/plugin"]);
     const record = persistedInstallRecord(pluginId);

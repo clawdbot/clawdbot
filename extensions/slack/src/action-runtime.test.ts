@@ -359,7 +359,7 @@ describe("handleSlackAction", () => {
     const firstContent = requireRecord(result.content[0], "first content item");
     expect(firstContent.type).toBe("text");
     expect(String(firstContent.text)).toContain("/tmp/openclaw-media/report.pdf");
-    expect(result.content.some((entry) => entry.type === "image")).toBe(false);
+    expect(result.content.map((entry) => entry.type)).not.toContain("image");
     const details = requireDetails(result);
     expectRecordFields(details, {
       ok: true,

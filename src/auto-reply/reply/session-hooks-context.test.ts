@@ -149,7 +149,7 @@ function requireHookCall(
   mock: ReturnType<typeof vi.fn>,
   label: string,
 ): readonly [Record<string, unknown>, Record<string, unknown> | undefined] {
-  const call = mock.mock.calls.at(0);
+  const call = mock.mock.calls[0];
   if (!call) {
     throw new Error(`expected ${label} hook call`);
   }

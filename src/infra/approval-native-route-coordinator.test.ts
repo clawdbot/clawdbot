@@ -45,7 +45,7 @@ describe("createApprovalNativeRouteReporter", () => {
       });
 
       expect(setTimeoutSpy).toHaveBeenCalledTimes(1);
-      const cleanupCall = setTimeoutSpy.mock.calls.at(0);
+      const cleanupCall = setTimeoutSpy.mock.calls[0];
       if (cleanupCall === undefined) {
         throw new Error("expected cleanup timeout call");
       }

@@ -31,7 +31,7 @@ function requireMockCall(
   callIndex: number,
   label: string,
 ): unknown[] {
-  const call = mock.mock.calls.at(callIndex);
+  const call = mock.mock.calls[callIndex];
   if (!call) {
     throw new Error(`expected ${label} call ${callIndex}`);
   }

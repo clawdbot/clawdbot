@@ -284,7 +284,17 @@ function consumeDreamingLeadPrefix(snippet: string): string {
 
 function hasDreamingNarrativeLead(snippet: string): boolean {
   const withoutPrefix = consumeDreamingLeadPrefix(snippet);
-  return /^Candidate:/i.test(withoutPrefix) || /^Reflections?:/i.test(withoutPrefix);
+  if (/^(?:Candidate|Reflections?):/i.test(withoutPrefix)) {
+    return true;
+  }
+  // Managed dreaming blocks occasionally serialize recall metadata (status:/confidence:/
+  // evidence:/recalls:) inline before the Candidate or Reflections marker, so the
+  // start-of-string check misses shapes like "status: staged - Candidate: User: ...".
+  // The composite detector below still requires the full signal combination, so widening
+  // the lead check to anywhere in the first 200 chars closes the leak without creating
+  // false positives for ordinary durable notes that merely mention the word in prose.
+  const head = withoutPrefix.slice(0, 200);
+  return /\b(?:Candidate|Reflections?):/i.test(head);
 }
 
 function isContaminatedDreamingSnippet(raw: string): boolean {
@@ -1491,6 +1501,38 @@ function relocateCandidateRange(
   };
 }
 
+const DREAMING_FENCE_START_RE = /<!--\s*openclaw:dreaming:[a-z][a-z0-9-]*:start\s*-->/i;
+const DREAMING_FENCE_END_RE = /<!--\s*openclaw:dreaming:[a-z][a-z0-9-]*:end\s*-->/i;
+
+function lineRangeOverlapsDreamingFence(
+  lines: string[],
+  startLine: number,
+  endLine: number,
+): boolean {
+  if (lines.length === 0) {
+    return false;
+  }
+  const safeStart = Math.max(1, Math.min(startLine, lines.length));
+  const safeEnd = Math.max(safeStart, Math.min(endLine, lines.length));
+  let insideFence = false;
+  for (let i = 0; i < safeEnd; i += 1) {
+    const line = lines[i] ?? "";
+    if (DREAMING_FENCE_START_RE.test(line)) {
+      insideFence = true;
+      continue;
+    }
+    if (DREAMING_FENCE_END_RE.test(line)) {
+      insideFence = false;
+      continue;
+    }
+    const oneIndexed = i + 1;
+    if (insideFence && oneIndexed >= safeStart && oneIndexed <= safeEnd) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function rehydratePromotionCandidate(
   workspaceDir: string,
   candidate: PromotionCandidate,
@@ -1510,6 +1552,13 @@ async function rehydratePromotionCandidate(
     const lines = rawSource.split(/\r?\n/);
     const relocated = relocateCandidateRange(lines, candidate);
     if (!relocated) {
+      continue;
+    }
+    // Managed dreaming blocks in daily memory files are scratchwork, not durable
+    // content. If rehydration lands inside an openclaw:dreaming fence (for example
+    // because file edits shifted lines between ranking and apply), refuse the
+    // candidate so dream artifacts cannot be promoted into MEMORY.md.
+    if (lineRangeOverlapsDreamingFence(lines, relocated.startLine, relocated.endLine)) {
       continue;
     }
     return {
@@ -2018,4 +2067,5 @@ export const __testing = {
   buildClaimHash,
   totalSignalCountForEntry,
   isContaminatedDreamingSnippet,
+  lineRangeOverlapsDreamingFence,
 };

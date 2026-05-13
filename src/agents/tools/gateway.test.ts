@@ -20,7 +20,7 @@ vi.mock("../../gateway/call.js", () => ({
 
 function capturedGatewayCall(): CallGatewayScopedOptions {
   expect(mocks.callGateway).toHaveBeenCalledTimes(1);
-  const call = mocks.callGateway.mock.calls.at(0);
+  const call = mocks.callGateway.mock.calls[0];
   if (!call) {
     throw new Error("expected callGateway to be called");
   }

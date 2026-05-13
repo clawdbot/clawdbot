@@ -82,6 +82,12 @@ function installMockFetch(
   return mockFetch;
 }
 
+function firstFetchRequestInit(
+  mockFetch: ReturnType<typeof installMockFetch>,
+): (RequestInit & { dispatcher?: unknown }) | undefined {
+  return mockFetch.mock.calls[0]?.[1] as (RequestInit & { dispatcher?: unknown }) | undefined;
+}
+
 function createFetchTool(fetchOverrides: Record<string, unknown> = {}) {
   return createWebFetchTool({
     config: {
@@ -344,9 +350,7 @@ describe("web_fetch extraction fallbacks", () => {
 
     await tool?.execute?.("call", { url: "https://example.com/proxy" });
 
-    const requestInit = mockFetch.mock.calls.at(0)?.[1] as
-      | (RequestInit & { dispatcher?: unknown })
-      | undefined;
+    const requestInit = firstFetchRequestInit(mockFetch);
     const dispatcher = requestInit?.dispatcher;
     if (!dispatcher) {
       throw new Error("expected SSRF dispatcher");
@@ -372,9 +376,7 @@ describe("web_fetch extraction fallbacks", () => {
 
     await tool?.execute?.("call", { url: "https://example.com/proxy" });
 
-    const requestInit = mockFetch.mock.calls.at(0)?.[1] as
-      | (RequestInit & { dispatcher?: unknown })
-      | undefined;
+    const requestInit = firstFetchRequestInit(mockFetch);
     const dispatcher = requestInit?.dispatcher;
     if (!dispatcher) {
       throw new Error("expected trusted proxy dispatcher");

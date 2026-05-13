@@ -272,7 +272,7 @@ describe("resolveGatewayInstallToken", () => {
 
     expect(result.token).toBeUndefined();
     expect(result.unavailableReason).toBeUndefined();
-    expect(result.warnings.some((message) => message.includes("Auto-generated"))).toBe(false);
+    expect(result.warnings.join("\n")).not.toContain("Auto-generated");
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 
@@ -304,7 +304,7 @@ describe("resolveGatewayInstallToken", () => {
     });
     expect(result.token).toBeUndefined();
     expect(result.unavailableReason).toBeUndefined();
-    expect(result.warnings.some((message) => message.includes("Auto-generated"))).toBe(false);
+    expect(result.warnings.join("\n")).not.toContain("Auto-generated");
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 

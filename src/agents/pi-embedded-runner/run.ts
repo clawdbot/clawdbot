@@ -2355,6 +2355,7 @@ export async function runEmbeddedPiAgent(
             failoverFailure,
             failoverReason: assistantFailoverReason,
             timedOut,
+            idleTimedOut,
             timedOutDuringCompaction,
             timedOutDuringToolExecution,
             profileRotated: false,

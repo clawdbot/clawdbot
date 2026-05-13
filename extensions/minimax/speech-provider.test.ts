@@ -333,7 +333,7 @@ describe("buildMinimaxSpeechProvider", () => {
     });
 
     function firstFetchCall(): unknown[] {
-      const call = vi.mocked(globalThis.fetch).mock.calls.at(0);
+      const call = vi.mocked(globalThis.fetch).mock.calls[0];
       if (!call) {
         throw new Error("Expected MiniMax TTS fetch call");
       }
@@ -341,7 +341,7 @@ describe("buildMinimaxSpeechProvider", () => {
     }
 
     function firstFetchInit(): RequestInit | undefined {
-      return firstFetchCall().at(1) as RequestInit | undefined;
+      return firstFetchCall()[1] as RequestInit | undefined;
     }
 
     function firstFetchBody(): Record<string, unknown> {
@@ -376,7 +376,7 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(result.audioBuffer.toString()).toBe("fake-audio-data");
 
       expect(mockFetch).toHaveBeenCalledOnce();
-      const url = firstFetchCall().at(0);
+      const url = firstFetchCall()[0];
       expect(url).toBe("https://api.minimaxi.com/v1/t2a_v2");
       const body = firstFetchBody();
       expect(body.model).toBe("speech-2.8-hd");
@@ -505,7 +505,7 @@ describe("buildMinimaxSpeechProvider", () => {
         timeoutMs: 30000,
       });
 
-      const url = firstFetchCall().at(0);
+      const url = firstFetchCall()[0];
       const init = firstFetchInit();
       expect(url).toBe("https://api.minimaxi.com/v1/t2a_v2");
       expect(init?.headers).toEqual({

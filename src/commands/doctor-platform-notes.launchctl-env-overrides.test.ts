@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { noteMacLaunchctlGatewayEnvOverrides } from "./doctor-platform-notes.js";
 
 function requireNoteCall(noteFn: { mock: { calls: unknown[][] } }, index = 0): unknown[] {
-  const call = noteFn.mock.calls.at(index);
+  const call = noteFn.mock.calls[index];
   if (!call) {
     throw new Error(`expected note call ${index}`);
   }

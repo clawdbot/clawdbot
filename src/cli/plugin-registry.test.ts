@@ -32,7 +32,7 @@ function expectConfiguredChannelPluginIdsParams(expected: {
   workspaceDir?: string;
 }) {
   expect(mocks.resolveConfiguredChannelPluginIds).toHaveBeenCalledTimes(1);
-  const params = mocks.resolveConfiguredChannelPluginIds.mock.calls.at(0)?.[0] as
+  const params = mocks.resolveConfiguredChannelPluginIds.mock.calls[0]?.[0] as
     | { config?: unknown; env?: NodeJS.ProcessEnv; workspaceDir?: string }
     | undefined;
   expect(params?.config).toBe(expected.config);

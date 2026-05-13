@@ -7,6 +7,14 @@ describe("gradium speech provider", () => {
 
   const provider = buildGradiumSpeechProvider();
 
+  const firstFetchCall = (fetchMock: ReturnType<typeof vi.fn>): [string, RequestInit] => {
+    const call = fetchMock.mock.calls[0] as [string, RequestInit] | undefined;
+    if (!call) {
+      throw new Error("expected Gradium fetch call");
+    }
+    return call;
+  };
+
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -52,7 +60,7 @@ describe("gradium speech provider", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, init] = fetchMock.mock.calls.at(0) as [string, RequestInit];
+    const [url, init] = firstFetchCall(fetchMock);
     expect(url).toBe("https://api.gradium.ai/api/post/speech/tts");
     const headers = new Headers(init.headers);
     expect(headers.get("x-api-key")).toBe("gsk_test123");
@@ -82,7 +90,7 @@ describe("gradium speech provider", () => {
       timeoutMs: 30_000,
     });
 
-    const [, init] = fetchMock.mock.calls.at(0) as [string, RequestInit];
+    const [, init] = firstFetchCall(fetchMock);
     expect(JSON.parse(init.body as string).output_format).toBe("opus");
     expect(result.outputFormat).toBe("opus");
     expect(result.fileExtension).toBe(".opus");
@@ -107,7 +115,7 @@ describe("gradium speech provider", () => {
       timeoutMs: 30_000,
     });
 
-    const [, init] = fetchMock.mock.calls.at(0) as [string, RequestInit];
+    const [, init] = firstFetchCall(fetchMock);
     expect(JSON.parse(init.body as string)).toEqual({
       text: "Telephony test",
       voice_id: "override-voice",

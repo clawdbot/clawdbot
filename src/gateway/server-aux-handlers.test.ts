@@ -61,6 +61,16 @@ async function invokeSecretsReload(params: {
   });
 }
 
+type RespondCall = [boolean, unknown, { message?: string } | undefined];
+
+function firstRespondCall(respond: ReturnType<typeof vi.fn>): RespondCall {
+  const call = respond.mock.calls[0];
+  if (!call) {
+    throw new Error("expected respond call");
+  }
+  return call as RespondCall;
+}
+
 // Other gateway test helpers (e.g. test-helpers.mocks.ts, test-helpers.server.ts)
 // set OPENCLAW_SKIP_CHANNELS / OPENCLAW_SKIP_PROVIDERS at module load. When a
 // shared vitest worker imports those helpers before this file's tests run,
@@ -273,10 +283,10 @@ describe("gateway aux handlers", () => {
     // The handler surfaces the partial-failure so the caller can retry/alert
     // instead of treating a swallowed restart error as a successful rotation.
     expect(respond.mock.calls).toHaveLength(1);
-    const [okFlag, successPayload, errorPayload] = respond.mock.calls.at(0) ?? [];
+    const [okFlag, successPayload, errorPayload] = firstRespondCall(respond);
     expect(okFlag).toBe(false);
     expect(successPayload).toBeUndefined();
-    expect(String(errorPayload?.message ?? "")).toBe("secrets.reload failed");
+    expect(errorPayload?.message ?? "").toBe("secrets.reload failed");
     expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(
       asConfig({
         channels: {
@@ -351,7 +361,7 @@ describe("gateway aux handlers", () => {
     // stopChannel(zalo) rejected.
     expect(startChannel.mock.calls.map(([ch]) => ch)).toEqual(["slack", "slack", "zalo"]);
     expect(respond.mock.calls).toHaveLength(1);
-    expect(respond.mock.calls.at(0)?.[0]).toBe(false);
+    expect(firstRespondCall(respond)[0]).toBe(false);
   });
 
   it("restores both current and required shared-gateway generation on reload failure", async () => {
@@ -403,7 +413,7 @@ describe("gateway aux handlers", () => {
     expect(sharedGatewaySessionGenerationState.current).toBe("gen-a");
     expect(sharedGatewaySessionGenerationState.required).toBe("gen-a");
     expect(respond.mock.calls).toHaveLength(1);
-    expect(respond.mock.calls.at(0)?.[0]).toBe(false);
+    expect(firstRespondCall(respond)[0]).toBe(false);
   });
 
   it("fails reload when channel restarts are required but skip flags block them", async () => {

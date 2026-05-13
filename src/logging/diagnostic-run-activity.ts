@@ -7,7 +7,7 @@ import {
 type SessionActivity = {
   sessionId?: string;
   sessionKey?: string;
-  activeEmbeddedRun: boolean;
+  activeEmbeddedRuns: Set<string>;
   activeTools: Map<string, ActiveTool>;
   activeModelCalls: Set<string>;
   lastProgressAt: number;
@@ -81,7 +81,9 @@ function replaceSessionActivityReferences(source: SessionActivity, target: Sessi
 function mergeSessionActivity(target: SessionActivity, source: SessionActivity): void {
   target.sessionId ??= source.sessionId;
   target.sessionKey ??= source.sessionKey;
-  target.activeEmbeddedRun ||= source.activeEmbeddedRun;
+  for (const key of source.activeEmbeddedRuns) {
+    target.activeEmbeddedRuns.add(key);
+  }
   for (const [key, tool] of source.activeTools) {
     target.activeTools.set(key, tool);
   }
@@ -133,7 +135,7 @@ function resolveSessionActivity(params: {
   const created: SessionActivity = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    activeEmbeddedRun: false,
+    activeEmbeddedRuns: new Set(),
     activeTools: new Map(),
     activeModelCalls: new Set(),
     lastProgressAt: Date.now(),
@@ -232,34 +234,43 @@ function recordRunCompleted(
   activityByRunId.delete(event.runId);
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
-  activity.activeEmbeddedRun = false;
+  activity.activeEmbeddedRuns.clear();
   touchSessionActivity(activity, "run:completed");
 }
 
 export function markDiagnosticEmbeddedRunStarted(params: {
   sessionId: string;
   sessionKey?: string;
+  workKey?: string;
 }): void {
   const activity = resolveSessionActivity({ ...params, create: true });
   if (!activity) {
     return;
   }
-  activity.activeEmbeddedRun = true;
+  activity.activeEmbeddedRuns.add(resolveEmbeddedRunWorkKey(params));
   touchSessionActivity(activity, "embedded_run:started");
 }
 
 export function markDiagnosticEmbeddedRunEnded(params: {
   sessionId: string;
   sessionKey?: string;
+  workKey?: string;
+  clearRunActivity?: boolean;
 }): void {
   const activity = resolveSessionActivity(params);
   if (!activity) {
     return;
   }
-  activity.activeEmbeddedRun = false;
-  activity.activeTools.clear();
-  activity.activeModelCalls.clear();
+  activity.activeEmbeddedRuns.delete(resolveEmbeddedRunWorkKey(params));
+  if (params.clearRunActivity !== false) {
+    activity.activeTools.clear();
+    activity.activeModelCalls.clear();
+  }
   touchSessionActivity(activity, "embedded_run:ended");
+}
+
+function resolveEmbeddedRunWorkKey(params: { sessionId: string; workKey?: string }): string {
+  return params.workKey ?? params.sessionId;
 }
 
 export function getDiagnosticSessionActivitySnapshot(
@@ -276,7 +287,7 @@ export function getDiagnosticSessionActivitySnapshot(
     activeWorkKind = "tool_call";
   } else if (activity.activeModelCalls.size > 0) {
     activeWorkKind = "model_call";
-  } else if (activity.activeEmbeddedRun) {
+  } else if (activity.activeEmbeddedRuns.size > 0) {
     activeWorkKind = "embedded_run";
   }
 

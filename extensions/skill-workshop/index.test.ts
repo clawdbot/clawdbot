@@ -983,7 +983,7 @@ describe("skill-workshop", () => {
     const proposal = details.proposal as SkillProposal | undefined;
     expect(proposal?.status).toBe("quarantined");
     expect(proposal?.quarantineReason).toContain("prompt");
-    expect(proposal?.scanFindings?.some((finding) => finding.severity === "critical")).toBe(true);
+    expect(proposal?.scanFindings?.map((finding) => finding.severity)).toContain("critical");
     const store = new SkillWorkshopStore({ stateDir, workspaceDir });
     expect(await store.list("quarantined")).toHaveLength(1);
   });

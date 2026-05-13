@@ -22,6 +22,17 @@ vi.mock("playwright-core", () => ({
   },
 }));
 
+function firstMockCall(
+  mock: { mock: { calls: Array<readonly unknown[]> } },
+  label: string,
+): readonly unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 afterAll(() => {
   vi.doUnmock("playwright-core");
   vi.resetModules();
@@ -128,7 +139,9 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(launchMock).toHaveBeenCalledTimes(1);
     expect(pages).toHaveLength(1);
     expect(pages[0]?.pdf).toHaveBeenCalledTimes(1);
-    const pdfCall = pages[0]?.pdf.mock.calls.at(0)?.[0] as Record<string, unknown> | undefined;
+    const pdfCall = firstMockCall(pages[0]?.pdf, "PDF render")[0] as
+      | Record<string, unknown>
+      | undefined;
     if (!pdfCall) {
       throw new Error("expected PDF render call");
     }
@@ -404,9 +417,12 @@ describe("diffs plugin registration", () => {
     registerDiffsPlugin(api as unknown as OpenClawPluginApi);
 
     expect(on).toHaveBeenCalledTimes(1);
-    expect(on.mock.calls.at(0)?.[0]).toBe("before_prompt_build");
-    const beforePromptBuild = on.mock.calls.at(0)?.[1];
-    const promptResult = await beforePromptBuild?.({}, {});
+    const [hookName, beforePromptBuild] = firstMockCall(on, "plugin hook registration");
+    expect(hookName).toBe("before_prompt_build");
+    if (typeof beforePromptBuild !== "function") {
+      throw new Error("expected before_prompt_build callback");
+    }
+    const promptResult = await beforePromptBuild({}, {});
     expect(promptResult?.prependSystemContext).toBe(
       [
         "When you need to show edits as a real diff, prefer the `diffs` tool instead of writing a manual summary.",

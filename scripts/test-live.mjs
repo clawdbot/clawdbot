@@ -2,9 +2,14 @@ import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 
 const forwardedArgs = [];
 let quietOverride;
+let forceCodexHarness = false;
 
 for (const arg of process.argv.slice(2)) {
   if (arg === "--") {
+    continue;
+  }
+  if (arg === "--codex-harness") {
+    forceCodexHarness = true;
     continue;
   }
   if (arg === "--quiet" || arg === "--quiet-live") {
@@ -20,8 +25,12 @@ for (const arg of process.argv.slice(2)) {
 
 const env = {
   ...process.env,
+  CI: process.env.CI || "1",
+  PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: process.env.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN || "false",
+  pnpm_config_verify_deps_before_run: process.env.pnpm_config_verify_deps_before_run || "false",
   OPENCLAW_LIVE_TEST: process.env.OPENCLAW_LIVE_TEST || "1",
   OPENCLAW_LIVE_TEST_QUIET: quietOverride ?? process.env.OPENCLAW_LIVE_TEST_QUIET ?? "1",
+  ...(forceCodexHarness ? { OPENCLAW_LIVE_CODEX_HARNESS: "1" } : {}),
 };
 
 function parsePositiveInt(value, fallback) {

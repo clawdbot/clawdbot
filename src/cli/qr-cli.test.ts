@@ -135,7 +135,8 @@ describe("registerQrCli", () => {
   }
 
   function parseLastLoggedQrJson() {
-    const raw = runtimeLog.mock.calls.at(-1)?.[0];
+    const calls = runtimeLog.mock.calls;
+    const raw = calls[calls.length - 1]?.[0];
     return JSON.parse(typeof raw === "string" ? raw : "{}") as {
       setupCode?: string;
       gatewayUrl?: string;
@@ -405,13 +406,14 @@ describe("registerQrCli", () => {
       bootstrapToken: "bootstrap-123",
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
-    const request = resolveCommandSecretRefsViaGateway.mock.calls.at(0)?.[0] as
+    const request = resolveCommandSecretRefsViaGateway.mock.calls[0]?.[0] as
       | { commandName?: string; targetIds?: Set<string> }
       | undefined;
-    expect(request?.commandName).toBe("qr --remote");
-    expect(request?.targetIds).toEqual(
-      new Set(["gateway.remote.token", "gateway.remote.password"]),
-    );
+    if (!request) {
+      throw new Error("expected command secret resolution request");
+    }
+    expect(request.commandName).toBe("qr --remote");
+    expect(request.targetIds).toEqual(new Set(["gateway.remote.token", "gateway.remote.password"]));
   });
 
   it("rejects invalid gateway.remote.url before printing remote setup codes", async () => {

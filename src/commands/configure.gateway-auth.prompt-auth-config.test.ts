@@ -211,7 +211,7 @@ function makeRuntime(): RuntimeEnv {
 }
 
 function promptModelAllowlistOptions(index = 0) {
-  return mocks.promptModelAllowlist.mock.calls.at(index)?.at(0) as
+  return mocks.promptModelAllowlist.mock.calls[index]?.[0] as
     | {
         allowedKeys?: string[];
         initialSelections?: string[];

@@ -39,6 +39,7 @@ let listCodexAppServerModels: typeof import("./models.js").listCodexAppServerMod
 let clearSharedCodexAppServerClient: typeof import("./shared-client.js").clearSharedCodexAppServerClient;
 let clearSharedCodexAppServerClientIfCurrent: typeof import("./shared-client.js").clearSharedCodexAppServerClientIfCurrent;
 let createIsolatedCodexAppServerClient: typeof import("./shared-client.js").createIsolatedCodexAppServerClient;
+let getSharedCodexAppServerClient: typeof import("./shared-client.js").getSharedCodexAppServerClient;
 let resetSharedCodexAppServerClientForTests: typeof import("./shared-client.js").resetSharedCodexAppServerClientForTests;
 
 async function sendInitializeResult(
@@ -110,6 +111,7 @@ describe("shared Codex app-server client", () => {
       clearSharedCodexAppServerClient,
       clearSharedCodexAppServerClientIfCurrent,
       createIsolatedCodexAppServerClient,
+      getSharedCodexAppServerClient,
       resetSharedCodexAppServerClientForTests,
     } = await import("./shared-client.js"));
   });
@@ -196,6 +198,31 @@ describe("shared Codex app-server client", () => {
     expect(bridgeCall?.authProfileId).toBe("openai-codex:work");
     const applyCall = applyAuthProfileCall();
     expect(applyCall?.authProfileId).toBe("openai-codex:work");
+  });
+
+  it("skips target auth resolution when native source auth is requested", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    const config = { auth: { order: { "openai-codex": ["openai-codex:target"] } } };
+
+    const clientPromise = getSharedCodexAppServerClient({
+      timeoutMs: 1000,
+      authProfileId: null,
+      agentDir: "/tmp/openclaw-target-agent",
+      config,
+    });
+    await sendInitializeResult(harness, "openclaw/0.125.0 (macOS; test)");
+
+    await expect(clientPromise).resolves.toBe(harness.client);
+    expect(mocks.resolveCodexAppServerAuthProfileIdForAgent).not.toHaveBeenCalled();
+    const bridgeCall = bridgeStartOptionsCall();
+    expect(bridgeCall.agentDir).toBe("/tmp/openclaw-target-agent");
+    expect(bridgeCall.authProfileId).toBeNull();
+    expect(bridgeCall.config).toBe(config);
+    const applyCall = applyAuthProfileCall();
+    expect(applyCall.agentDir).toBe("/tmp/openclaw-target-agent");
+    expect(applyCall.authProfileId).toBeNull();
+    expect(applyCall.config).toBe(config);
   });
 
   it("resolves the configured implicit auth profile before sharing a client", async () => {

@@ -347,7 +347,7 @@ function expectNoDiagnosticCode(value: unknown, code: string) {
 }
 
 function firstMockArg(source: { mock: { calls: Array<Array<unknown>> } }) {
-  const call = source.mock.calls.at(0);
+  const call = source.mock.calls[0];
   if (!call) {
     throw new Error("expected mock call options");
   }

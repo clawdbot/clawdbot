@@ -38,7 +38,7 @@ function expectFirstErrorLog(
   expected: readonly unknown[],
 ): void {
   expect(logger.error).toHaveBeenCalledTimes(1);
-  const call = logger.error.mock.calls.at(0);
+  const call = logger.error.mock.calls[0];
   if (!call) {
     throw new Error("expected logger.error call");
   }

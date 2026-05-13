@@ -24,15 +24,28 @@ export function resolveMigrationProvider(providerId: string): MigrationProviderP
   return provider;
 }
 
+export function buildMigrationProviderOptions(
+  opts: MigrateCommonOptions,
+): Record<string, unknown> | undefined {
+  if (opts.provider === "codex" && opts.verifyPluginApps === true) {
+    return { verifyPluginApps: true };
+  }
+  return undefined;
+}
+
 export async function createMigrationPlan(
   runtime: RuntimeEnv,
   opts: MigrateCommonOptions & { provider: string },
 ): Promise<MigrationPlan> {
+  if (opts.verifyPluginApps && opts.provider !== "codex") {
+    throw new Error("--verify-plugin-apps is only supported for Codex migrations.");
+  }
   const provider = resolveMigrationProvider(opts.provider);
   const ctx = buildMigrationContext({
     source: opts.source,
     includeSecrets: opts.includeSecrets,
     overwrite: opts.overwrite,
+    providerOptions: buildMigrationProviderOptions(opts),
     runtime,
     json: opts.json,
   });

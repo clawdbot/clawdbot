@@ -198,11 +198,20 @@ async function setupDebounceMonitor(params?: {
   return onMessage;
 }
 
-function getFirstDispatchedEvent(): FeishuMessageEvent {
-  const firstCall = handleFeishuMessageMock.mock.calls.at(0);
-  if (!firstCall) {
-    throw new Error("missing dispatch call");
+function mockCallAt(
+  mock: { mock: { calls: Array<readonly unknown[]> } },
+  index: number,
+  label: string,
+): readonly unknown[] {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
   }
+  return call;
+}
+
+function getFirstDispatchedEvent(): FeishuMessageEvent {
+  const firstCall = mockCallAt(handleFeishuMessageMock, 0, "Feishu message dispatch");
   const firstParams = firstCall[0] as { event?: FeishuMessageEvent } | undefined;
   if (!firstParams?.event) {
     throw new Error("missing dispatched event payload");
@@ -576,7 +585,7 @@ describe("Feishu inbound debounce regressions", () => {
     await vi.advanceTimersByTimeAsync(25);
 
     expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
-    const firstParams = handleFeishuMessageMock.mock.calls.at(0)?.[0] as
+    const firstParams = mockCallAt(handleFeishuMessageMock, 0, "Feishu message dispatch")[0] as
       | { botName?: string }
       | undefined;
     expect(firstParams?.botName).toBe("OpenClaw Bot");
@@ -680,7 +689,11 @@ describe("Feishu inbound debounce regressions", () => {
     const combined = JSON.parse(dispatched.message.content) as { text?: string };
     expect(combined.text).toBe("fresh");
     expect(recordSpy).toHaveBeenCalledTimes(1);
-    const [recordedMessageId, recordedNamespace, recordedLogger] = recordSpy.mock.calls.at(0) ?? [];
+    const [recordedMessageId, recordedNamespace, recordedLogger] = mockCallAt(
+      recordSpy,
+      0,
+      "Feishu processed-message record",
+    );
     expect(recordedMessageId).toBe("om_old_latest_fresh");
     expect(recordedNamespace).toBe("default");
     expect(typeof recordedLogger).toBe("function");

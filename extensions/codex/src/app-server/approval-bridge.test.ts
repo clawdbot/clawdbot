@@ -19,19 +19,24 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function gatewayCallAt(callIndex = 0) {
+  const call = mockCallGatewayTool.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected gateway call ${callIndex + 1}`);
+  }
+  return call;
+}
+
 function gatewayRequestPayload(callIndex = 0) {
-  return requireRecord(
-    mockCallGatewayTool.mock.calls.at(callIndex)?.[2],
-    `gateway request payload ${callIndex + 1}`,
-  );
+  return requireRecord(gatewayCallAt(callIndex)[2], `gateway request payload ${callIndex + 1}`);
 }
 
 function gatewayCallOptions(callIndex = 0) {
-  return mockCallGatewayTool.mock.calls.at(callIndex)?.[3];
+  return gatewayCallAt(callIndex)[3];
 }
 
 function gatewayCallMethod(callIndex = 0) {
-  return mockCallGatewayTool.mock.calls.at(callIndex)?.[0];
+  return gatewayCallAt(callIndex)[0];
 }
 
 function findApprovalEvent(
@@ -103,7 +108,7 @@ describe("Codex app-server approval bridge", () => {
       "plugin.approval.waitDecision",
     ]);
     expect(gatewayCallMethod()).toBe("plugin.approval.request");
-    expect(typeof mockCallGatewayTool.mock.calls.at(0)?.[1]).toBe("object");
+    expect(typeof gatewayCallAt(0)[1]).toBe("object");
     const requestPayload = gatewayRequestPayload();
     expect(requestPayload.pluginId).toBe("openclaw-codex-app-server");
     expect(requestPayload.title).toBe("Codex app-server command approval");
@@ -611,7 +616,7 @@ describe("Codex app-server approval bridge", () => {
       scope: "turn",
     });
     expect(gatewayCallMethod()).toBe("plugin.approval.request");
-    expect(typeof mockCallGatewayTool.mock.calls.at(0)?.[1]).toBe("object");
+    expect(typeof gatewayCallAt(0)[1]).toBe("object");
     const requestPayload = gatewayRequestPayload();
     expect(requestPayload.title).toBe("Codex app-server permission approval");
     expect(requestPayload.toolName).toBe("codex_permission_approval");

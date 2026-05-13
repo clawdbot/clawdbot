@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  getDiagnosticSessionActivitySnapshot,
+  resetDiagnosticRunActivityForTest,
+} from "../../logging/diagnostic-run-activity.js";
+import {
   __testing,
   abortActiveReplyRuns,
   createReplyOperation,
@@ -14,6 +18,7 @@ import {
 describe("reply run registry", () => {
   afterEach(() => {
     __testing.resetReplyRunRegistry();
+    resetDiagnosticRunActivityForTest();
     vi.restoreAllMocks();
   });
 
@@ -49,6 +54,39 @@ describe("reply run registry", () => {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
     }
+  });
+
+  it("mirrors active reply operations into diagnostic work state", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:telegram:direct:chat-1",
+      sessionId: "session-1",
+      resetTriggered: false,
+    });
+
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionId: "session-1",
+        sessionKey: "agent:main:telegram:direct:chat-1",
+      }).activeWorkKind,
+    ).toBe("embedded_run");
+
+    operation.updateSessionId("session-2");
+
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionId: "session-2",
+        sessionKey: "agent:main:telegram:direct:chat-1",
+      }).activeWorkKind,
+    ).toBe("embedded_run");
+
+    operation.complete();
+
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionId: "session-2",
+        sessionKey: "agent:main:telegram:direct:chat-1",
+      }).activeWorkKind,
+    ).toBeUndefined();
   });
 
   it("clears queued operations immediately on user abort", () => {

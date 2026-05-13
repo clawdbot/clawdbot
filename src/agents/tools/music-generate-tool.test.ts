@@ -810,9 +810,12 @@ describe("createMusicGenerateTool", () => {
     });
 
     expect(webMedia.loadWebMedia).toHaveBeenCalledTimes(1);
-    const loadCall = vi.mocked(webMedia.loadWebMedia).mock.calls.at(0);
-    expect(loadCall?.[0]).toBe("http://198.18.0.153/reference.png");
-    const loadOptions = loadCall?.[1] as {
+    const loadCall = vi.mocked(webMedia.loadWebMedia).mock.calls[0];
+    if (!loadCall) {
+      throw new Error("expected web media load call");
+    }
+    expect(loadCall[0]).toBe("http://198.18.0.153/reference.png");
+    const loadOptions = loadCall[1] as {
       requestInit?: { signal?: unknown };
       ssrfPolicy?: unknown;
     };
@@ -820,7 +823,7 @@ describe("createMusicGenerateTool", () => {
     expect(loadOptions.ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
     expect(generateMusicOptions().timeoutMs).toBe(180_000);
     expect(fetchTimeout.buildTimeoutAbortSignal).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(fetchTimeout.buildTimeoutAbortSignal).mock.calls.at(0)?.[0]).toEqual({
+    expect(vi.mocked(fetchTimeout.buildTimeoutAbortSignal).mock.calls[0]?.[0]).toEqual({
       operation: "music-generate.reference-fetch",
       timeoutMs: 30_000,
       url: "http://198.18.0.153/reference.png",

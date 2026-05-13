@@ -1,3 +1,7 @@
+import {
+  describeImageWithModel,
+  describeImagesWithModel,
+} from "openclaw/plugin-sdk/media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   openrouterMediaUnderstandingProvider,
@@ -29,6 +33,14 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
 
+function firstPostJsonRequest(): { body?: unknown; headers?: Headers } {
+  const [request] = postJsonRequestMock.mock.calls[0] ?? [];
+  if (!request || typeof request !== "object") {
+    throw new Error("expected first OpenRouter JSON request");
+  }
+  return request as { body?: unknown; headers?: Headers };
+}
+
 describe("openrouter media understanding provider", () => {
   afterEach(() => {
     assertOkOrThrowHttpErrorMock.mockClear();
@@ -37,7 +49,7 @@ describe("openrouter media understanding provider", () => {
   });
 
   it("declares image and audio capabilities with defaults", () => {
-    expect(openrouterMediaUnderstandingProvider).toMatchObject({
+    expect(openrouterMediaUnderstandingProvider).toEqual({
       id: "openrouter",
       capabilities: ["image", "audio"],
       defaultModels: {
@@ -45,8 +57,10 @@ describe("openrouter media understanding provider", () => {
         audio: "openai/whisper-large-v3-turbo",
       },
       autoPriority: { audio: 35 },
+      describeImage: describeImageWithModel,
+      describeImages: describeImagesWithModel,
+      transcribeAudio: transcribeOpenRouterAudio,
     });
-    expect(openrouterMediaUnderstandingProvider.transcribeAudio).toBeTypeOf("function");
   });
 
   it("sends JSON STT payload to OpenRouter transcriptions endpoint", async () => {
@@ -70,27 +84,43 @@ describe("openrouter media understanding provider", () => {
       text: "hello world",
       model: "openai/whisper-large-v3-turbo",
     });
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openrouter",
-        capability: "audio",
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://openrouter.ai/api/v1/audio/transcriptions",
-        timeoutMs: 12_000,
-        body: {
-          model: "openai/whisper-large-v3-turbo",
-          input_audio: {
-            data: Buffer.from("audio-bytes").toString("base64"),
-            format: "ogg",
-          },
-          language: "en",
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith({
+      baseUrl: undefined,
+      defaultBaseUrl: "https://openrouter.ai/api/v1",
+      headers: undefined,
+      request: undefined,
+      defaultHeaders: {
+        Authorization: "Bearer sk-openrouter",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://openclaw.ai",
+        "X-OpenRouter-Title": "OpenClaw",
+      },
+      provider: "openrouter",
+      api: "openrouter-stt",
+      capability: "audio",
+      transport: "media-understanding",
+    });
+    expect(postJsonRequestMock).toHaveBeenCalledWith({
+      url: "https://openrouter.ai/api/v1/audio/transcriptions",
+      headers: expect.any(Headers),
+      body: {
+        model: "openai/whisper-large-v3-turbo",
+        input_audio: {
+          data: Buffer.from("audio-bytes").toString("base64"),
+          format: "ogg",
         },
-      }),
-    );
-    const headers = postJsonRequestMock.mock.calls.at(0)?.[0]?.headers as Headers;
+        language: "en",
+      },
+      timeoutMs: 12_000,
+      fetchFn: fetch,
+      allowPrivateNetwork: false,
+      dispatcherPolicy: undefined,
+      auditContext: "openrouter stt",
+    });
+    const headers = firstPostJsonRequest().headers;
+    if (!headers) {
+      throw new Error("expected OpenRouter request headers");
+    }
     expect(headers.get("authorization")).toBe("Bearer sk-openrouter");
     expect(headers.get("http-referer")).toBe("https://openclaw.ai");
     expect(headers.get("x-openrouter-title")).toBe("OpenClaw");
@@ -113,13 +143,14 @@ describe("openrouter media understanding provider", () => {
       fetchFn: fetch,
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.objectContaining({
-          temperature: 0.2,
-        }),
-      }),
-    );
+    expect(firstPostJsonRequest().body).toEqual({
+      model: "openai/whisper-large-v3-turbo",
+      input_audio: {
+        data: Buffer.from("audio").toString("base64"),
+        format: "webm",
+      },
+      temperature: 0.2,
+    });
   });
 
   it("falls back to filename extension when mime is missing", async () => {
@@ -137,13 +168,13 @@ describe("openrouter media understanding provider", () => {
       fetchFn: fetch,
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.objectContaining({
-          input_audio: expect.objectContaining({ format: "ogg" }),
-        }),
-      }),
-    );
+    expect(firstPostJsonRequest().body).toEqual({
+      model: "openai/whisper-large-v3-turbo",
+      input_audio: {
+        data: Buffer.from("audio").toString("base64"),
+        format: "ogg",
+      },
+    });
   });
 
   it("maps mp4 filename extension to m4a when mime is missing", async () => {
@@ -161,13 +192,13 @@ describe("openrouter media understanding provider", () => {
       fetchFn: fetch,
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.objectContaining({
-          input_audio: expect.objectContaining({ format: "m4a" }),
-        }),
-      }),
-    );
+    expect(firstPostJsonRequest().body).toEqual({
+      model: "openai/whisper-large-v3-turbo",
+      input_audio: {
+        data: Buffer.from("audio").toString("base64"),
+        format: "m4a",
+      },
+    });
   });
 
   it("normalizes parameterized mime for extensionless filenames", async () => {
@@ -186,13 +217,13 @@ describe("openrouter media understanding provider", () => {
       fetchFn: fetch,
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.objectContaining({
-          input_audio: expect.objectContaining({ format: "ogg" }),
-        }),
-      }),
-    );
+    expect(firstPostJsonRequest().body).toEqual({
+      model: "openai/whisper-large-v3-turbo",
+      input_audio: {
+        data: Buffer.from("audio").toString("base64"),
+        format: "ogg",
+      },
+    });
   });
 
   it("throws when format cannot be resolved", async () => {

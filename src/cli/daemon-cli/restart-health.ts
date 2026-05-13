@@ -274,6 +274,7 @@ async function resolveGatewayRestartProbeAuth(
   const cfg = await createConfigIO({
     env: mergedEnv,
     pluginValidation: "skip",
+    suppressFutureVersionWarning: true,
   })
     .readBestEffortConfig()
     .catch((): OpenClawConfig => ({}));

@@ -61,6 +61,18 @@ function cleanedLock(sessionsDir: string, sessionId: string): SessionLockInspect
   return cleanedLockForPath(path.join(sessionsDir, `${sessionId}.jsonl.lock`));
 }
 
+function firstGatewayParams(): Record<string, unknown> {
+  const call = vi.mocked(callGateway).mock.calls[0];
+  if (!call) {
+    throw new Error("expected gateway call");
+  }
+  const params = call[0].params;
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    throw new Error("expected gateway params");
+  }
+  return params as Record<string, unknown>;
+}
+
 describe("main-session-restart-recovery", () => {
   it("marks only main running sessions whose transcript lock was cleaned", async () => {
     const sessionsDir = await makeSessionsDir();
@@ -235,12 +247,10 @@ describe("main-session-restart-recovery", () => {
 
     expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
-    const resumeParams = vi.mocked(callGateway).mock.calls.at(0)?.[0].params as
-      | { sessionKey?: string; deliver?: boolean; lane?: string }
-      | undefined;
-    expect(resumeParams?.sessionKey).toBe("agent:main:main");
-    expect(resumeParams?.deliver).toBe(false);
-    expect(resumeParams?.lane).toBe("main");
+    const resumeParams = firstGatewayParams();
+    expect(resumeParams.sessionKey).toBe("agent:main:main");
+    expect(resumeParams.deliver).toBe(false);
+    expect(resumeParams.lane).toBe("main");
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
   });
@@ -303,10 +313,7 @@ describe("main-session-restart-recovery", () => {
 
     expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
-    const callParams = vi.mocked(callGateway).mock.calls.at(0)?.[0].params as {
-      message?: string;
-    };
-    expect(callParams.message).toContain(pendingPayload);
+    expect(firstGatewayParams().message).toContain(pendingPayload);
 
     const beforeStoreRead = Date.now();
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));

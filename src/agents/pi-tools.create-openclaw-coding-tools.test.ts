@@ -450,7 +450,7 @@ describe("createOpenClawCodingTools", () => {
 
       expect(createOpenClawToolsMock).not.toHaveBeenCalled();
       expect(resolvePluginToolsSpy).toHaveBeenCalledTimes(1);
-      const pluginToolOptions = resolvePluginToolsSpy.mock.calls.at(0)?.[0].options;
+      const pluginToolOptions = resolvePluginToolsSpy.mock.calls[0]?.[0].options;
       expect(pluginToolOptions?.modelProvider).toBe("openrouter");
       expect(pluginToolOptions?.modelId).toBe("openrouter/auto");
     } finally {
@@ -483,6 +483,56 @@ describe("createOpenClawCodingTools", () => {
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     expectListIncludes(latestCreateOpenClawToolsOptions().pluginToolDenylist, ["pdf"]);
+  });
+
+  it("passes inherited allowlist entries to OpenClaw plugin discovery", async () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const agentId = `inherited-allow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const storeTemplate = path.join(
+      os.tmpdir(),
+      `openclaw-session-store-${agentId}-{agentId}.json`,
+    );
+    await writeSessionStore(storeTemplate, agentId, {
+      [`agent:${agentId}:subagent:limited`]: {
+        sessionId: "limited-session",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        inheritedToolAllow: ["custom_plugin_tool", "sessions_spawn"],
+      },
+    });
+
+    createOpenClawCodingTools({
+      sessionKey: `agent:${agentId}:subagent:limited`,
+      config: {
+        session: {
+          store: storeTemplate,
+        },
+      },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    expectListIncludes(latestCreateOpenClawToolsOptions().pluginToolAllowlist, [
+      "custom_plugin_tool",
+      "sessions_spawn",
+    ]);
+  });
+
+  it("passes effective allow-list-restricted tool surface to spawned sessions", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: { tools: { allow: ["read", "sessions_spawn"] } },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const inheritedAllow = latestCreateOpenClawToolsOptions().inheritedToolAllowlist;
+    expectListIncludes(inheritedAllow, ["read", "sessions_spawn"]);
+    expect(inheritedAllow?.includes("exec")).toBe(false);
+    expect(inheritedAllow?.includes("process")).toBe(false);
   });
 
   it("records core tool-prep stages for hot-path diagnostics", () => {

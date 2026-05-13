@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -119,7 +120,30 @@ function ownershipFor(dependencyOwnership, name) {
   return dependencyOwnership.dependencies?.[name];
 }
 
-export function collectSbomRiskReport(params = {}) {
+function gitValue(repoRoot, args) {
+  try {
+    return execFileSync("git", args, {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function collectReportTarget({ repoRoot, packageJson, ownershipPath }) {
+  return {
+    packageName: packageJson.name ?? null,
+    packageVersion: packageJson.version ?? null,
+    gitBranch: gitValue(repoRoot, ["branch", "--show-current"]),
+    gitCommit: gitValue(repoRoot, ["rev-parse", "HEAD"]),
+    lockfile: "pnpm-lock.yaml",
+    ownershipMetadata: path.relative(repoRoot, ownershipPath),
+  };
+}
+
+export function collectDependencyOwnershipSurfaceReport(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const packageJson = readJson(path.join(repoRoot, "package.json"));
   const lockfile = readLockfile(path.join(repoRoot, "pnpm-lock.yaml"));
@@ -213,6 +237,8 @@ export function collectSbomRiskReport(params = {}) {
 
   return {
     schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    target: collectReportTarget({ repoRoot, packageJson, ownershipPath }),
     summary: {
       importerCount: Object.keys(lockfile.importers ?? {}).length,
       lockfilePackageCount: Object.keys(lockfile.packages ?? {}).length,
@@ -224,86 +250,213 @@ export function collectSbomRiskReport(params = {}) {
     ownershipGaps,
     staleOwnershipRecords,
     ownershipWarnings,
-    buildRiskPackages: collectBuildRiskPackages(lockfile).slice(0, 50),
-    topRootDependencyCones: rootDependencyRows
-      .toSorted((left, right) => {
-        if (right.closureSize !== left.closureSize) {
-          return right.closureSize - left.closureSize;
-        }
-        return left.name.localeCompare(right.name);
-      })
-      .slice(0, 20),
+    buildRiskPackages: collectBuildRiskPackages(lockfile),
+    topRootDependencyCones: rootDependencyRows.toSorted((left, right) => {
+      if (right.closureSize !== left.closureSize) {
+        return right.closureSize - left.closureSize;
+      }
+      return left.name.localeCompare(right.name);
+    }),
     rootDependencies: rootDependencyRows,
-    importerClosures: importerClosures.slice(0, 30),
+    importerClosures,
   };
 }
 
-export function collectSbomRiskCheckErrors(report) {
+export function collectDependencyOwnershipSurfaceCheckErrors(report) {
   return report.ownershipGaps.map(
     (name) => `root dependency '${name}' is missing from ${DEFAULT_OWNERSHIP_PATH}`,
   );
 }
 
-function printTextReport(report) {
-  console.log("# SBOM dependency risk report");
-  console.log("");
-  console.log(`importers: ${report.summary.importerCount}`);
-  console.log(`lockfile packages: ${report.summary.lockfilePackageCount}`);
-  console.log(`root direct dependencies: ${report.summary.rootDirectDependencyCount}`);
-  console.log(`root closure packages: ${report.summary.rootClosurePackageCount}`);
-  console.log(`build/native/bin risk packages: ${report.summary.buildRiskPackageCount}`);
-  console.log(`ownership records: ${report.summary.rootOwnershipRecordCount}`);
+function renderTargetPackage(target) {
+  if (!target?.packageName && !target?.packageVersion) {
+    return "unknown";
+  }
+  if (!target.packageName) {
+    return target.packageVersion;
+  }
+  if (!target.packageVersion) {
+    return target.packageName;
+  }
+  return `${target.packageName}@${target.packageVersion}`;
+}
+
+function markdownCode(value) {
+  return `\`${String(value).replaceAll("`", "\\`")}\``;
+}
+
+function pluralize(count, singular, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+export function renderDependencyOwnershipSurfaceMarkdownReport(report) {
+  const lines = [
+    "# Dependency Ownership and Install Surface Report",
+    "",
+    `Generated: ${report.generatedAt}`,
+    "",
+    "## Target",
+    "",
+    `- Package: ${renderTargetPackage(report.target)}`,
+    `- Git branch: ${report.target?.gitBranch ?? "unknown"}`,
+    `- Git commit: ${report.target?.gitCommit ?? "unknown"}`,
+    `- Lockfile: ${report.target?.lockfile ?? "pnpm-lock.yaml"}`,
+    `- Ownership metadata: ${report.target?.ownershipMetadata ?? DEFAULT_OWNERSHIP_PATH}`,
+    "",
+    "## Scope",
+    "",
+    "This report summarizes the dependency ownership and install-time surface represented by the current workspace lockfile. It uses the root package dependencies, workspace package entries from pnpm-lock.yaml, dependency ownership metadata, and lockfile package metadata such as build requirements, binaries, and platform restrictions.",
+    "",
+    "It is report-only. It does not query npm advisories and does not inspect published package manifests.",
+    "",
+    "## Summary",
+    "",
+    `- Workspace package entries in lockfile: ${report.summary.importerCount}`,
+    `- Packages in lockfile: ${report.summary.lockfilePackageCount}`,
+    `- Root direct dependencies: ${report.summary.rootDirectDependencyCount}`,
+    `- Packages reachable from root dependencies: ${report.summary.rootClosurePackageCount}`,
+    `- Packages with install-time or platform-specific behavior: ${report.summary.buildRiskPackageCount}`,
+    `- Root dependency ownership records: ${report.summary.rootOwnershipRecordCount}`,
+  ];
   if (report.ownershipGaps.length > 0) {
-    console.log("");
-    console.log("## Ownership gaps");
+    lines.push("", "## Root Dependencies Missing Ownership Metadata", "");
     for (const name of report.ownershipGaps) {
-      console.log(`- ${name}`);
+      lines.push(`- ${markdownCode(name)}`);
     }
   }
   if (report.ownershipWarnings.length > 0) {
-    console.log("");
-    console.log("## Ownership warnings");
+    lines.push("", "## Dependency Ownership Mismatches", "");
     for (const warning of report.ownershipWarnings) {
-      console.log(`- ${warning.name}: ${warning.message} (${warning.sourceSections.join(",")})`);
+      lines.push(
+        `- ${markdownCode(warning.name)}: ${warning.message}; source sections: ` +
+          `${warning.sourceSections.join(", ")}`,
+      );
     }
   }
-  console.log("");
-  console.log("## Largest root dependency cones");
+  if (report.staleOwnershipRecords.length > 0) {
+    lines.push("", "## Stale Ownership Metadata", "");
+    for (const name of report.staleOwnershipRecords) {
+      lines.push(`- ${markdownCode(name)}`);
+    }
+  }
+
+  lines.push("", "## Root Dependencies By Resolved Transitive Package Count", "");
   for (const dependency of report.topRootDependencyCones) {
     const owner = dependency.owner ?? "unowned";
-    console.log(
-      `- ${dependency.name}: closure=${dependency.closureSize} owner=${owner} class=${dependency.class ?? "-"}`,
+    lines.push(
+      `- ${markdownCode(dependency.name)}: ` +
+        `${pluralize(dependency.closureSize, "resolved transitive package")}; ` +
+        `owner=${owner}; class=${dependency.class ?? "-"}`,
     );
   }
-  console.log("");
-  console.log("## Largest importer closures");
-  for (const importer of report.importerClosures.slice(0, 15)) {
-    console.log(
-      `- ${importer.importer}: closure=${importer.closureSize} direct=${importer.directDependencyCount}`,
+
+  lines.push("", "## Workspace Packages With The Most Dependencies", "");
+  for (const importer of report.importerClosures) {
+    lines.push(
+      `- ${markdownCode(importer.importer)}: ${pluralize(importer.closureSize, "package")}; ` +
+        pluralize(importer.directDependencyCount, "direct dependency", "direct dependencies"),
     );
   }
+
+  if (report.buildRiskPackages.length > 0) {
+    lines.push("", "## Packages With Install-Time Or Platform-Specific Behavior", "");
+  }
+  for (const dependency of report.buildRiskPackages) {
+    const traits = [];
+    if (dependency.requiresBuild) {
+      traits.push("requires build");
+    }
+    if (dependency.hasBin) {
+      traits.push("has binary");
+    }
+    if (dependency.platformRestricted) {
+      traits.push("platform-specific");
+    }
+    lines.push(`- ${markdownCode(dependency.lockKey)}: ${traits.join(", ") || "metadata present"}`);
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+const renderTextReport = renderDependencyOwnershipSurfaceMarkdownReport;
+
+function printTextReport(report) {
+  process.stdout.write(renderTextReport(report));
+}
+
+function parseArgs(argv) {
+  const options = {
+    asJson: false,
+    check: false,
+    jsonPath: null,
+    markdownPath: null,
+  };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--") {
+      continue;
+    }
+    if (arg === "--check") {
+      options.check = true;
+      continue;
+    }
+    if (arg === "--json") {
+      options.asJson = true;
+      if (argv[index + 1] && !argv[index + 1].startsWith("--")) {
+        options.jsonPath = argv[++index];
+      }
+      continue;
+    }
+    if (arg === "--markdown") {
+      options.markdownPath = argv[++index];
+      continue;
+    }
+    throw new Error(`Unsupported argument: ${arg}`);
+  }
+  return options;
+}
+
+function writeArtifact(filePath, content) {
+  if (!filePath) {
+    return;
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content, "utf8");
 }
 
 function main(argv = process.argv.slice(2)) {
-  const asJson = argv.includes("--json");
-  const check = argv.includes("--check");
-  const report = collectSbomRiskReport();
-  if (check) {
-    const errors = collectSbomRiskCheckErrors(report);
+  const options = parseArgs(argv);
+  const report = collectDependencyOwnershipSurfaceReport();
+  writeArtifact(options.jsonPath, `${JSON.stringify(report, null, 2)}\n`);
+  writeArtifact(options.markdownPath, renderTextReport(report));
+  if (options.check) {
+    const errors = collectDependencyOwnershipSurfaceCheckErrors(report);
     if (errors.length > 0) {
       for (const error of errors) {
-        console.error(`[sbom-risk] ${error}`);
+        console.error(`[ownership-surface] ${error}`);
       }
       process.exitCode = 1;
       return;
     }
-    if (!asJson) {
-      console.error("[sbom-risk] ok");
+    if (!options.asJson) {
+      console.error("[ownership-surface] ok");
       return;
     }
   }
-  if (asJson) {
+  if (options.asJson && !options.jsonPath) {
     console.log(JSON.stringify(report, null, 2));
+    return;
+  }
+  if (options.asJson) {
+    const artifactHint =
+      typeof options.markdownPath === "string" ? " See " + options.markdownPath + "." : "";
+    process.stdout.write(
+      `INFO dependency ownership/install surface report: ` +
+        `${report.summary.importerCount} workspace package entries, ` +
+        `${report.summary.lockfilePackageCount} lockfile packages, ` +
+        `${report.ownershipGaps.length} root dependencies missing ownership metadata; ` +
+        `report-only.${artifactHint}\n`,
+    );
     return;
   }
   printTextReport(report);

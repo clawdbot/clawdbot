@@ -319,6 +319,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       resolvedVerboseLevel: "off",
       thinkLevel: undefined,
       timeoutMs: 60_000,
+      senderIsOwner: true,
       messageChannel: "messagechat",
       suppressExecNotifyOnExit: true,
       toolPolicy: {

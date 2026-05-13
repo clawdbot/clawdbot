@@ -119,14 +119,14 @@ function expectRegistryDiagnosticContains(
   registry: ReturnType<typeof loadPluginManifestRegistry>,
   fragment: string,
 ) {
-  expect(registry.diagnostics.some((diag) => diag.message.includes(fragment))).toBe(true);
+  expect(registry.diagnostics.map((diag) => diag.message).join("\n")).toContain(fragment);
 }
 
 function expectNoRegistryDiagnosticContains(
   registry: ReturnType<typeof loadPluginManifestRegistry>,
   fragment: string,
 ) {
-  expect(registry.diagnostics.some((diag) => diag.message.includes(fragment))).toBe(false);
+  expect(registry.diagnostics.map((diag) => diag.message).join("\n")).not.toContain(fragment);
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {

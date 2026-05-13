@@ -761,11 +761,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
 
-    const secondCall = state.runWithModelFallbackMock.mock.calls.at(1)?.[0] as
-      | FallbackRunnerParams
-      | undefined;
-    expect(secondCall?.provider).toBe("openai");
-    expect(secondCall?.model).toBe("gpt-5.4");
+    const secondCall = mockCallArg(state.runWithModelFallbackMock, 1) as FallbackRunnerParams;
+    expect(secondCall.provider).toBe("openai");
+    expect(secondCall.model).toBe("gpt-5.4");
 
     const lifecycleEndCalls = state.emitAgentEventMock.mock.calls.filter((call: unknown[]) => {
       const arg = call[0] as { stream?: string; data?: { phase?: string } };
@@ -1176,7 +1174,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       code: "empty_result",
     });
     expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(2);
-    expectRecordFields(state.runAgentAttemptMock.mock.calls.at(1)?.[0], {
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 1), {
       providerOverride: "openai",
       modelOverride: "gpt-5.4",
       isFallbackRetry: true,

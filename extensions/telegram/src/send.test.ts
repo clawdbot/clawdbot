@@ -110,8 +110,14 @@ function requireMockCall<T extends unknown[]>(call: T | undefined, label: string
   return call;
 }
 
+function mockCall(mock: ReturnType<typeof vi.fn>, index: number, label: string): unknown[] {
+  const calls = mock.mock.calls;
+  const resolvedIndex = index < 0 ? calls.length + index : index;
+  return requireMockCall(calls[resolvedIndex], label);
+}
+
 function firstMockCall(mock: ReturnType<typeof vi.fn>, label: string): unknown[] {
-  return requireMockCall(mock.mock.calls.at(0), label);
+  return mockCall(mock, 0, label);
 }
 
 function requireString(value: unknown, label: string): string {
@@ -119,6 +125,10 @@ function requireString(value: unknown, label: string): string {
     throw new Error(`expected ${label} to be a string`);
   }
   return value;
+}
+
+function mockCallText(call: unknown[], label: string): string {
+  return requireString(call[1], label);
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -144,7 +154,7 @@ function expectMediaSendCall(
 
 function expectPersistedTarget(fields: Record<string, unknown>): void {
   const [target] = requireMockCall(
-    maybePersistResolvedTelegramTarget.mock.calls.at(-1),
+    mockCall(maybePersistResolvedTelegramTarget, -1, "persisted Telegram target"),
     "persisted Telegram target",
   );
   const record = requireRecord(target, "persisted Telegram target");
@@ -1985,10 +1995,15 @@ describe("sendMessageTelegram", () => {
         message_thread_id: 271,
       },
     );
-    expectMediaSendCall(sendPhoto.mock.calls.at(1), "second send photo call", chatId, {
-      caption: "photo",
-      parse_mode: "HTML",
-    });
+    expectMediaSendCall(
+      mockCall(sendPhoto, 1, "second send photo call"),
+      "second send photo call",
+      chatId,
+      {
+        caption: "photo",
+        parse_mode: "HTML",
+      },
+    );
     expect(res.messageId).toBe("59");
   });
 
@@ -2082,7 +2097,7 @@ describe("sendMessageTelegram", () => {
 
     expect(sendMessage).toHaveBeenCalledTimes(2);
     const firstCall = firstMockCall(sendMessage, "first sendMessage call");
-    const secondCall = requireMockCall(sendMessage.mock.calls.at(1), "second sendMessage call");
+    const secondCall = mockCall(sendMessage, 1, "second sendMessage call");
     const firstParams = requireRecord(firstCall[2], "first sendMessage params");
     const secondParams = requireRecord(secondCall[2], "second sendMessage params");
     expect((firstCall[1] as string).length).toBeLessThanOrEqual(4000);
@@ -2113,7 +2128,7 @@ describe("sendMessageTelegram", () => {
 
     expect(sendMessage).toHaveBeenCalledTimes(2);
     const firstCall = firstMockCall(sendMessage, "first sendMessage call");
-    const secondCall = requireMockCall(sendMessage.mock.calls.at(1), "second sendMessage call");
+    const secondCall = mockCall(sendMessage, 1, "second sendMessage call");
     const firstParams = requireRecord(firstCall[2], "first sendMessage params");
     const secondParams = requireRecord(secondCall[2], "second sendMessage params");
     const firstText = requireString(firstCall[1], "first sendMessage text");
@@ -2155,9 +2170,15 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(4);
-    const plainFallbackCalls = [sendMessage.mock.calls.at(1), sendMessage.mock.calls.at(3)];
-    expect(plainFallbackCalls.map((call) => String(call?.[1] ?? "")).join("")).toBe(plainText);
-    expect(plainFallbackCalls.some((call) => String(call?.[1] ?? "").includes("<"))).toBe(false);
+    const plainFallbackCalls = [
+      mockCall(sendMessage, 1, "first plain fallback sendMessage call"),
+      mockCall(sendMessage, 3, "second plain fallback sendMessage call"),
+    ];
+    const plainFallbackText = plainFallbackCalls
+      .map((call) => mockCallText(call, "plain fallback text"))
+      .join("");
+    expect(plainFallbackText).toBe(plainText);
+    expect(plainFallbackText).not.toContain("<");
     expect(res.messageId).toBe("91");
   });
 
@@ -2188,9 +2209,15 @@ describe("sendMessageTelegram", () => {
     expect(
       requireString(firstMockCall(sendMessage, "sendMessage call")[1], "sendMessage text"),
     ).toMatch(/^&/);
-    const plainFallbackCalls = [sendMessage.mock.calls.at(1), sendMessage.mock.calls.at(3)];
-    expect(plainFallbackCalls.map((call) => String(call?.[1] ?? "")).join("")).toBe(plainText);
-    expect(plainFallbackCalls.every((call) => String(call?.[1] ?? "").length > 0)).toBe(true);
+    const plainFallbackCalls = [
+      mockCall(sendMessage, 1, "first plain fallback sendMessage call"),
+      mockCall(sendMessage, 3, "second plain fallback sendMessage call"),
+    ];
+    const plainFallbackTexts = plainFallbackCalls.map((call) =>
+      mockCallText(call, "plain fallback text"),
+    );
+    expect(plainFallbackTexts.join("")).toBe(plainText);
+    expect(plainFallbackTexts.filter((text) => text === "")).toEqual([]);
     expect(res.messageId).toBe("93");
   });
 
@@ -2214,7 +2241,11 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(3);
-    expect(sendMessage.mock.calls.some((call) => call[2]?.parse_mode !== undefined)).toBe(false);
+    expect(sendMessage.mock.calls.map((call) => call[2]?.parse_mode)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
     expect(sendMessage.mock.calls.map((call) => String(call[1] ?? "")).join("")).toBe(plainText);
     expect(res.messageId).toBe("96");
   });
@@ -2743,7 +2774,7 @@ describe("editMessageTelegram", () => {
 
     if ("secondExpectReplyMarkup" in testCase && testCase.secondExpectReplyMarkup) {
       const secondParams = requireRecord(
-        (botApi.editMessageText.mock.calls.at(1) ?? [])[3],
+        mockCall(botApi.editMessageText, 1, "second editMessageText call")[3],
         "second edit params",
       );
       expect(secondParams.reply_markup, testCase.name).toEqual(testCase.secondExpectReplyMarkup);
@@ -2879,8 +2910,8 @@ describe("sendPollTelegram", () => {
         .message_thread_id,
     ).toBe(99);
     expect(
-      (api.sendPoll.mock.calls.at(1)?.[3] as { message_thread_id?: unknown } | undefined)
-        ?.message_thread_id,
+      (mockCall(api.sendPoll, 1, "second send poll call")[3] as { message_thread_id?: unknown })
+        .message_thread_id,
     ).toBeUndefined();
   });
 

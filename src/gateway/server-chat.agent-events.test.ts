@@ -274,10 +274,13 @@ describe("agent event handler", () => {
       data: { text: "hello" },
     });
 
-    const agentPayload1 = harness.broadcast.mock.calls.find(
-      ([event]) => event === "agent",
-    )?.[1] as Record<string, unknown>;
-    expect(agentPayload1).toBeDefined();
+    const agentPayload1 = requireRecord(
+      requireCall(
+        harness.broadcast.mock.calls.find(([event]) => event === "agent")?.[1],
+        "agent broadcast payload",
+      ),
+      "agent broadcast payload",
+    );
     expect(agentPayload1.isHeartbeat).toBe(true);
 
     // sessionKey is required for nodeSendToSession to be called
@@ -293,10 +296,13 @@ describe("agent event handler", () => {
       data: { text: "hello" },
     });
 
-    const nodeSendPayload1 = harness.nodeSendToSession.mock.calls.find(
-      ([, event]) => event === "agent",
-    )?.[2] as Record<string, unknown>;
-    expect(nodeSendPayload1).toBeDefined();
+    const nodeSendPayload1 = requireRecord(
+      requireCall(
+        harness.nodeSendToSession.mock.calls.find(([, event]) => event === "agent")?.[2],
+        "agent node-send payload",
+      ),
+      "agent node-send payload",
+    );
     expect(nodeSendPayload1.isHeartbeat).toBe(true);
 
     harness.broadcast.mockClear();
@@ -315,16 +321,22 @@ describe("agent event handler", () => {
       data: { text: "hello" },
     });
 
-    const agentPayload2 = harness.broadcast.mock.calls.find(
-      ([event]) => event === "agent",
-    )?.[1] as Record<string, unknown>;
-    expect(agentPayload2).toBeDefined();
+    const agentPayload2 = requireRecord(
+      requireCall(
+        harness.broadcast.mock.calls.find(([event]) => event === "agent")?.[1],
+        "agent broadcast payload",
+      ),
+      "agent broadcast payload",
+    );
     expect(agentPayload2.isHeartbeat).toBe(false);
 
-    const nodeSendPayload2 = harness.nodeSendToSession.mock.calls.find(
-      ([, event]) => event === "agent",
-    )?.[2] as Record<string, unknown>;
-    expect(nodeSendPayload2).toBeDefined();
+    const nodeSendPayload2 = requireRecord(
+      requireCall(
+        harness.nodeSendToSession.mock.calls.find(([, event]) => event === "agent")?.[2],
+        "agent node-send payload",
+      ),
+      "agent node-send payload",
+    );
     expect(nodeSendPayload2.isHeartbeat).toBe(false);
 
     harness.broadcast.mockClear();
@@ -343,16 +355,22 @@ describe("agent event handler", () => {
       data: { text: "hello" },
     });
 
-    const normalBroadcast = harness.broadcast.mock.calls.find(
-      ([event]) => event === "agent",
-    )?.[1] as Record<string, unknown>;
-    expect(normalBroadcast).toBeDefined();
+    const normalBroadcast = requireRecord(
+      requireCall(
+        harness.broadcast.mock.calls.find(([event]) => event === "agent")?.[1],
+        "normal agent broadcast payload",
+      ),
+      "normal agent broadcast payload",
+    );
     expect("isHeartbeat" in normalBroadcast).toBe(false);
 
-    const normalNodeSend = harness.nodeSendToSession.mock.calls.find(
-      ([, event]) => event === "agent",
-    )?.[2] as Record<string, unknown>;
-    expect(normalNodeSend).toBeDefined();
+    const normalNodeSend = requireRecord(
+      requireCall(
+        harness.nodeSendToSession.mock.calls.find(([, event]) => event === "agent")?.[2],
+        "normal agent node-send payload",
+      ),
+      "normal agent node-send payload",
+    );
     expect("isHeartbeat" in normalNodeSend).toBe(false);
   });
 
@@ -1201,9 +1219,10 @@ describe("agent event handler", () => {
       data?: { name?: string; args?: Record<string, unknown> };
     };
     expect(payload.stream).toBe("tool");
-    expect(payload.data).toMatchObject({
+    expect(payload.data).toEqual({
       phase: "start",
       name: "exec",
+      toolCallId: "tool-search-node-1",
       bridgeToolName: "tool_search_code",
       bridgeTargetToolName: "openclaw:core:exec",
       bridgeVerb: "call",

@@ -24,7 +24,7 @@ function makeTempDir(): string {
 }
 
 function requireFirstCreateJitiCall(): [string, { tryNative?: boolean }] {
-  const call = mocks.createJiti.mock.calls.at(0);
+  const call = mocks.createJiti.mock.calls[0];
   if (!call) {
     throw new Error("expected createJiti call");
   }

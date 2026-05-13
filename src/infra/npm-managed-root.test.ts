@@ -54,7 +54,7 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
-  const call = mock.mock.calls.at(0);
+  const call = mock.mock.calls[0];
   if (!call) {
     throw new Error(`expected ${label} call`);
   }
@@ -132,6 +132,10 @@ describe("managed npm root", () => {
       managedOverrides: {
         axios: "1.16.0",
         "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+        nested: {
+          semver: "1.2.3",
+          alias: "npm:@scope/alias@1.0.0",
+        },
       },
     });
 
@@ -147,9 +151,46 @@ describe("managed npm root", () => {
         "left-pad": "1.3.0",
         axios: "1.16.0",
         "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+        nested: {
+          alias: "npm:@scope/alias@1.0.0",
+          semver: "1.2.3",
+        },
       },
       openclaw: {
-        managedOverrides: ["axios", "node-domexception"],
+        managedOverrides: ["axios", "nested", "node-domexception"],
+      },
+    });
+  });
+
+  it("can omit npm alias overrides for npm versions that reject them", async () => {
+    const npmRoot = await makeTempRoot();
+
+    await upsertManagedNpmRootDependency({
+      npmRoot,
+      packageName: "@openclaw/feishu",
+      dependencySpec: "2026.5.4",
+      omitUnsupportedManagedOverrides: true,
+      managedOverrides: {
+        axios: "1.16.0",
+        "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+        nested: {
+          alias: "npm:@scope/alias@1.0.0",
+          semver: "1.2.3",
+        },
+      },
+    });
+
+    await expect(
+      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
+    ).resolves.toMatchObject({
+      overrides: {
+        axios: "1.16.0",
+        nested: {
+          semver: "1.2.3",
+        },
+      },
+      openclaw: {
+        managedOverrides: ["axios", "nested"],
       },
     });
   });
@@ -202,6 +243,7 @@ describe("managed npm root", () => {
           name: "openclaw",
           dependencies: {
             "@aws-sdk/client-bedrock-runtime": "3.1024.0",
+            "node-domexception": "npm:@nolyfill/domexception@1.0.28",
           },
           optionalDependencies: {
             "optional-runtime": "2.0.0",
@@ -210,8 +252,10 @@ describe("managed npm root", () => {
             "@aws-sdk/client-bedrock-runtime": "$@aws-sdk/client-bedrock-runtime",
             nested: {
               "optional-runtime": "$optional-runtime",
+              alias: "$node-domexception",
             },
             axios: "1.16.0",
+            "node-domexception": "$node-domexception",
           },
         },
         null,
@@ -223,8 +267,10 @@ describe("managed npm root", () => {
       "@aws-sdk/client-bedrock-runtime": "3.1024.0",
       nested: {
         "optional-runtime": "2.0.0",
+        alias: "npm:@nolyfill/domexception@1.0.28",
       },
       axios: "1.16.0",
+      "node-domexception": "npm:@nolyfill/domexception@1.0.28",
     });
   });
 

@@ -443,7 +443,7 @@ describe("ollama setup", () => {
       "gpt-oss:120b-cloud",
     ]);
     const requestUrls = fetchMock.mock.calls.map((call) => requestUrl(call[0]));
-    expect(requestUrls.some((url) => url.endsWith("/api/show"))).toBe(false);
+    expect(requestUrls.filter((url) => url.endsWith("/api/show"))).toEqual([]);
     expect(requestUrls).toContain("https://ollama.com/api/tags");
   });
 
@@ -708,7 +708,7 @@ describe("ollama setup", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const requestUrls = fetchMock.mock.calls.map((call) => requestUrl(call[0]));
-    expect(requestUrls.some((url) => url.endsWith("/api/pull"))).toBe(false);
+    expect(requestUrls.filter((url) => url.endsWith("/api/pull"))).toEqual([]);
     expect(result.models?.providers?.ollama?.models?.map((model) => model.id)).toEqual([
       "gemma4:latest",
     ]);

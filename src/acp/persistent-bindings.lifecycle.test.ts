@@ -99,7 +99,7 @@ function mockReadySession(params: {
 
 function expectCloseArgs(): Record<string, unknown> {
   expect(managerMocks.closeSession).toHaveBeenCalledTimes(1);
-  const call = managerMocks.closeSession.mock.calls.at(0);
+  const call = managerMocks.closeSession.mock.calls[0];
   if (!call) {
     throw new Error("expected closeSession call");
   }
@@ -108,7 +108,7 @@ function expectCloseArgs(): Record<string, unknown> {
 
 function expectInitializeArgs(): Record<string, unknown> {
   expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
-  const call = managerMocks.initializeSession.mock.calls.at(0);
+  const call = managerMocks.initializeSession.mock.calls[0];
   if (!call) {
     throw new Error("expected initializeSession call");
   }

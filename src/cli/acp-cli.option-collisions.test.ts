@@ -60,6 +60,14 @@ describe("acp cli option collisions", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   }
 
+  function requireFirstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }) {
+    const call = mock.mock.calls[0];
+    if (!call) {
+      throw new Error("expected mock to have at least one call");
+    }
+    return call[0];
+  }
+
   beforeEach(() => {
     runAcpClientInteractive.mockClear();
     serveAcpGateway.mockClear();
@@ -77,9 +85,7 @@ describe("acp cli option collisions", () => {
     });
 
     expect(runAcpClientInteractive).toHaveBeenCalledTimes(1);
-    const clientOptions = runAcpClientInteractive.mock.calls.at(0)?.[0] as
-      | { verbose?: boolean }
-      | undefined;
+    const clientOptions = requireFirstMockArg(runAcpClientInteractive) as { verbose?: boolean };
     expect(clientOptions?.verbose).toBe(true);
   });
 
@@ -99,9 +105,10 @@ describe("acp cli option collisions", () => {
     );
 
     expect(serveAcpGateway).toHaveBeenCalledTimes(1);
-    const gatewayOptions = serveAcpGateway.mock.calls.at(0)?.[0] as
-      | { gatewayPassword?: string; gatewayToken?: string }
-      | undefined;
+    const gatewayOptions = requireFirstMockArg(serveAcpGateway) as {
+      gatewayPassword?: string;
+      gatewayToken?: string;
+    };
     expect(gatewayOptions?.gatewayToken).toBe("tok_file");
     expect(gatewayOptions?.gatewayPassword).toBe("pw_file"); // pragma: allowlist secret
   });
@@ -150,9 +157,7 @@ describe("acp cli option collisions", () => {
     });
 
     expect(serveAcpGateway).toHaveBeenCalledTimes(1);
-    const gatewayOptions = serveAcpGateway.mock.calls.at(0)?.[0] as
-      | { gatewayToken?: string }
-      | undefined;
+    const gatewayOptions = requireFirstMockArg(serveAcpGateway) as { gatewayToken?: string };
     expect(gatewayOptions?.gatewayToken).toBe("tok_file");
   });
 

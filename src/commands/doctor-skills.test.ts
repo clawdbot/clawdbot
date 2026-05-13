@@ -103,9 +103,10 @@ describe("doctor skills", () => {
     };
 
     const lines = describeGhConfigDirHintFromDiscovery([githubSkill], discovery);
+    const output = lines.join("\n");
 
-    expect(lines.some((line) => line.includes("/root/.config/gh"))).toBe(true);
-    expect(lines.join("\n")).toContain("GH_CONFIG_DIR=/root/.config/gh");
+    expect(output).toContain("/root/.config/gh");
+    expect(output).toContain("GH_CONFIG_DIR=/root/.config/gh");
   });
 
   it("does not surface the GH_CONFIG_DIR hint when the github skill is missing the gh binary", () => {

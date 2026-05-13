@@ -44,7 +44,7 @@ const officialEndpointValidationCases = [
 ];
 
 function firstFetchCall(fetchMock: ReturnType<typeof vi.fn>): unknown[] {
-  const call = fetchMock.mock.calls.at(0);
+  const call = fetchMock.mock.calls[0];
   if (!call) {
     throw new Error("expected fetch call");
   }
@@ -52,7 +52,7 @@ function firstFetchCall(fetchMock: ReturnType<typeof vi.fn>): unknown[] {
 }
 
 function firstFetchInit(fetchMock: ReturnType<typeof vi.fn>): RequestInit {
-  const init = firstFetchCall(fetchMock).at(1);
+  const init = firstFetchCall(fetchMock)[1];
   if (!init || typeof init !== "object") {
     throw new Error("expected fetch init");
   }
@@ -164,7 +164,7 @@ describe("openai tts", () => {
         timeoutMs: 5_000,
       });
 
-      const url = firstFetchCall(fetchMock).at(0);
+      const url = firstFetchCall(fetchMock)[0];
       const init = firstFetchInit(fetchMock);
       const headers = init?.headers as Record<string, string> | undefined;
       expect(url).toBe("https://api.openai.com/v1/audio/speech");

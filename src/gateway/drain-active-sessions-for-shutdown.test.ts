@@ -55,7 +55,7 @@ const { clearActiveSessionsForShutdownTracker, listActiveSessionsForShutdown } =
 const cfg: OpenClawConfig = {};
 
 const requireSessionEndHookEvent = (index: number): SessionEndHookEvent => {
-  const call = runSessionEndMock.mock.calls.at(index);
+  const call = runSessionEndMock.mock.calls[index];
   if (!call) {
     throw new Error(`Expected session_end hook call ${index}`);
   }

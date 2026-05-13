@@ -45,7 +45,7 @@ type MockHttpCall = [
 ];
 
 function firstHttpsRequestCall(label = "Synology Chat HTTPS request"): MockHttpCall {
-  const call = vi.mocked(https.request).mock.calls.at(0);
+  const call = vi.mocked(https.request).mock.calls[0];
   if (!call) {
     throw new Error(`expected ${label}`);
   }
@@ -53,7 +53,7 @@ function firstHttpsRequestCall(label = "Synology Chat HTTPS request"): MockHttpC
 }
 
 function firstHttpsGetCall(label = "Synology Chat HTTPS get"): MockHttpCall {
-  const call = vi.mocked(https.get).mock.calls.at(0);
+  const call = vi.mocked(https.get).mock.calls[0];
   if (!call) {
     throw new Error(`expected ${label}`);
   }

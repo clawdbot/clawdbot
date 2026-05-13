@@ -29,7 +29,7 @@ type HeartbeatReplyContext = {
 };
 
 function replyCall(replySpy: { mock: { calls: unknown[][] } }, index = 0): HeartbeatReplyContext {
-  return (replySpy.mock.calls.at(index)?.at(0) ?? {}) as HeartbeatReplyContext;
+  return (replySpy.mock.calls[index]?.at(0) ?? {}) as HeartbeatReplyContext;
 }
 
 describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {

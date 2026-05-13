@@ -7,7 +7,7 @@ import {
 import type { CommitmentRecord, CommitmentStatus } from "../commitments/types.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { info } from "../globals.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { isRich, theme } from "../terminal/theme.js";
@@ -104,19 +104,13 @@ export async function commitmentsListCommand(
   ).filter((commitment) => opts.all || status || isActiveCommitment(commitment));
 
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        {
-          count: commitments.length,
-          status: status ?? (opts.all ? null : "pending"),
-          agentId: normalizeOptionalString(opts.agent) ?? null,
-          store: resolveCommitmentStorePath(),
-          commitments,
-        },
-        null,
-        2,
-      ),
-    );
+    writeRuntimeJson(runtime, {
+      count: commitments.length,
+      status: status ?? (opts.all ? null : "pending"),
+      agentId: normalizeOptionalString(opts.agent) ?? null,
+      store: resolveCommitmentStorePath(),
+      commitments,
+    });
     return;
   }
 
@@ -159,7 +153,7 @@ export async function commitmentsDismissCommand(
     nowMs: Date.now(),
   });
   if (opts.json) {
-    runtime.log(JSON.stringify({ dismissed: ids }, null, 2));
+    writeRuntimeJson(runtime, { dismissed: ids });
     return;
   }
   runtime.log(info(`Dismissed commitments: ${ids.join(", ")}`));

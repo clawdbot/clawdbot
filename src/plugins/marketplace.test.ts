@@ -194,7 +194,7 @@ function expectMarketplaceInstallSuccess(
 
 function expectRemoteCloneCommand() {
   expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
-  const [argv, options] = runCommandWithTimeoutMock.mock.calls.at(0) ?? [];
+  const [argv, options] = runCommandWithTimeoutMock.mock.calls[0] ?? [];
   expect(Array.isArray(argv)).toBe(true);
   expect((argv as unknown[]).slice(0, 5)).toEqual([
     "git",

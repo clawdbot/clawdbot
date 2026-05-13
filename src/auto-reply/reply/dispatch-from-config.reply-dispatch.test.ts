@@ -23,6 +23,27 @@ import {
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 
+function firstRuntimeLoadCall() {
+  return runtimePluginMocks.ensureRuntimePluginsLoaded.mock.calls[0]?.[0] as
+    | { config?: unknown; workspaceDir?: unknown }
+    | undefined;
+}
+
+function firstReplyDispatchCall() {
+  return hookMocks.runner.runReplyDispatch.mock.calls[0] as
+    | [
+        {
+          sessionKey?: string;
+          sendPolicy?: string;
+          inboundAudio?: boolean;
+        },
+        {
+          cfg?: unknown;
+        },
+      ]
+    | undefined;
+}
+
 describe("dispatchReplyFromConfig reply_dispatch hook", () => {
   beforeAll(async () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
@@ -109,27 +130,13 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     });
 
     expect(runtimePluginMocks.ensureRuntimePluginsLoaded).toHaveBeenCalledOnce();
-    const runtimeLoadCall = runtimePluginMocks.ensureRuntimePluginsLoaded.mock.calls.at(0)?.[0] as
-      | { config?: unknown; workspaceDir?: unknown }
-      | undefined;
+    const runtimeLoadCall = firstRuntimeLoadCall();
     expect(runtimeLoadCall?.config).toBe(emptyConfig);
     expect(typeof runtimeLoadCall?.workspaceDir).toBe("string");
     expect(String(runtimeLoadCall?.workspaceDir).length).toBeGreaterThan(0);
 
     expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledOnce();
-    const [replyDispatchEvent, replyDispatchRuntime] =
-      (hookMocks.runner.runReplyDispatch.mock.calls.at(0) as
-        | [
-            {
-              sessionKey?: string;
-              sendPolicy?: string;
-              inboundAudio?: boolean;
-            },
-            {
-              cfg?: unknown;
-            },
-          ]
-        | undefined) ?? [];
+    const [replyDispatchEvent, replyDispatchRuntime] = firstReplyDispatchCall() ?? [];
     expect(replyDispatchEvent?.sessionKey).toBe("agent:test:session");
     expect(replyDispatchEvent?.sendPolicy).toBe("allow");
     expect(replyDispatchEvent?.inboundAudio).toBe(false);

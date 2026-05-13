@@ -174,7 +174,7 @@ function firstRuntimeConfig(): VoiceCallRuntime["config"] | undefined {
 }
 
 function expectWarningIncludes(text: string): void {
-  expect(noopLogger.warn.mock.calls.some(([message]) => String(message).includes(text))).toBe(true);
+  expect(noopLogger.warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(text);
 }
 
 async function registerVoiceCallCli(

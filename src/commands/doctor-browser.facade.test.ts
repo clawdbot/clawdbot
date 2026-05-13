@@ -9,7 +9,7 @@ vi.mock("../plugin-sdk/facade-loader.js", () => ({
 }));
 
 function requireFirstNoteCall(noteFn: ReturnType<typeof vi.fn>): unknown[] {
-  const call = noteFn.mock.calls.at(0);
+  const call = noteFn.mock.calls[0];
   if (!call) {
     throw new Error("expected browser doctor note");
   }

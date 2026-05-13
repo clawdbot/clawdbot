@@ -43,6 +43,7 @@ export function describeSessionsSpawnTool(options?: {
       ? '`mode="run"` is one-shot and `mode="session"` is persistent and thread-bound.'
       : '`mode="run"` is one-shot background work.',
     "Subagents inherit the parent workspace directory automatically.",
+    "Native subagents receive the delegated task in their first visible `[Subagent Task]` message.",
     'For native subagents only, set `context="fork"` when the child needs the current transcript context; otherwise omit it or use `context="isolated"`.',
     "Use this when the work should happen in a fresh child session instead of the current one.",
   ];

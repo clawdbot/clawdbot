@@ -536,7 +536,7 @@ describe("discordPlugin outbound", () => {
         includeApplication: true,
       }),
     );
-    expect(statusPatches.some((patch) => "bot" in patch || "application" in patch)).toBe(false);
+    expect(statusPatches.filter((patch) => "bot" in patch || "application" in patch)).toEqual([]);
 
     if (!resolveProbe) {
       throw new Error("Expected Discord startup probe resolver to be initialized");
@@ -550,12 +550,20 @@ describe("discordPlugin outbound", () => {
 
     await vi.waitFor(() =>
       expect(
-        statusPatches.some(
-          (patch) =>
-            (patch.bot as { username?: string } | undefined)?.username === "AsyncBob" &&
-            Boolean(patch.application),
-        ),
-      ).toBe(true),
+        statusPatches
+          .filter(
+            (patch) => (patch.bot as { username?: string } | undefined)?.username === "AsyncBob",
+          )
+          .map((patch) => ({
+            bot: patch.bot,
+            application: patch.application,
+          })),
+      ).toEqual([
+        {
+          bot: { username: "AsyncBob" },
+          application: { intents: { messageContent: "limited" } },
+        },
+      ]),
     );
   });
 
@@ -585,14 +593,19 @@ describe("discordPlugin outbound", () => {
 
     await vi.waitFor(() =>
       expect(
-        statusPatches.some(
-          (patch) =>
-            "bot" in patch &&
-            "application" in patch &&
-            patch.bot === undefined &&
-            patch.application === undefined,
-        ),
-      ).toBe(true),
+        statusPatches
+          .filter(
+            (patch) =>
+              "bot" in patch &&
+              "application" in patch &&
+              patch.bot === undefined &&
+              patch.application === undefined,
+          )
+          .map((patch) => ({
+            bot: patch.bot,
+            application: patch.application,
+          })),
+      ).toEqual([{ bot: undefined, application: undefined }]),
     );
   });
 
@@ -617,14 +630,19 @@ describe("discordPlugin outbound", () => {
 
     await vi.waitFor(() =>
       expect(
-        statusPatches.some(
-          (patch) =>
-            "bot" in patch &&
-            "application" in patch &&
-            patch.bot === undefined &&
-            patch.application === undefined,
-        ),
-      ).toBe(true),
+        statusPatches
+          .filter(
+            (patch) =>
+              "bot" in patch &&
+              "application" in patch &&
+              patch.bot === undefined &&
+              patch.application === undefined,
+          )
+          .map((patch) => ({
+            bot: patch.bot,
+            application: patch.application,
+          })),
+      ).toEqual([{ bot: undefined, application: undefined }]),
     );
   });
 

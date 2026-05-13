@@ -258,21 +258,23 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expectPathMessage(res.issues, "plugins.slots.memory", "plugin not found: missing-slot");
-      expect(res.warnings).toContainEqual({
-        path: "plugins.allow",
-        message:
-          "plugin not found: missing-allow (stale config entry ignored; remove it from plugins config)",
-      });
-      expect(res.warnings).toContainEqual({
-        path: "plugins.deny",
-        message:
-          "plugin not found: missing-deny (stale config entry ignored; remove it from plugins config)",
-      });
-      expect(res.warnings).toContainEqual({
-        path: "plugins.entries.missing-plugin",
-        message:
-          "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
-      });
+      expect(res.warnings).toEqual([
+        {
+          path: "plugins.entries.missing-plugin",
+          message:
+            "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
+        },
+        {
+          path: "plugins.allow",
+          message:
+            "plugin not found: missing-allow (stale config entry ignored; remove it from plugins config)",
+        },
+        {
+          path: "plugins.deny",
+          message:
+            "plugin not found: missing-deny (stale config entry ignored; remove it from plugins config)",
+        },
+      ]);
     }
   });
 
@@ -523,10 +525,12 @@ describe("config plugin validation", () => {
     if (res.ok) {
       return;
     }
-    expect(res.issues).toContainEqual({
-      path: "channels.telegarm",
-      message: "unknown channel id: telegarm",
-    });
+    expect(res.issues.filter((issue) => issue.path === "channels.telegarm")).toEqual([
+      {
+        path: "channels.telegarm",
+        message: "unknown channel id: telegarm",
+      },
+    ]);
     expectNoPath(res.warnings, "channels.telegarm");
   });
 
@@ -553,11 +557,13 @@ describe("config plugin validation", () => {
     );
 
     expect(res.ok).toBe(true);
-    expect(res.warnings ?? []).toContainEqual({
-      path: "plugins.allow",
-      message:
-        "plugin not installed: discord — install the official external plugin with: openclaw plugins install @openclaw/discord",
-    });
+    expect(res.warnings ?? []).toEqual([
+      {
+        path: "plugins.allow",
+        message:
+          "plugin not installed: discord — install the official external plugin with: openclaw plugins install @openclaw/discord",
+      },
+    ]);
   });
 
   it("uses persisted installed-plugin records as stale channel evidence", async () => {
@@ -998,10 +1004,14 @@ describe("config plugin validation", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues).toContainEqual({
-        path: "agents.defaults.heartbeat.target",
-        message: "unknown heartbeat target: not-a-channel",
-      });
+      expect(
+        res.issues.filter((issue) => issue.path === "agents.defaults.heartbeat.target"),
+      ).toEqual([
+        {
+          path: "agents.defaults.heartbeat.target",
+          message: "unknown heartbeat target: not-a-channel",
+        },
+      ]);
     }
   });
 

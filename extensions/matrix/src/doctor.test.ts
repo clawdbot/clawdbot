@@ -58,7 +58,7 @@ describe("matrix doctor", () => {
   }
 
   function expectChangeContaining(changes: readonly string[], fragment: string): void {
-    expect(changes.some((change) => change.includes(fragment))).toBe(true);
+    expect(changes.join("\n")).toContain(fragment);
   }
 
   it("formats state and crypto previews", () => {

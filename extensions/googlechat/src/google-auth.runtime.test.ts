@@ -72,11 +72,11 @@ afterAll(() => {
 });
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
-  const call = mock.mock.calls.at(callIndex);
+  const call = mock.mock.calls[callIndex];
   if (!call) {
     throw new Error(`Expected mock call ${callIndex}`);
   }
-  return call.at(argIndex);
+  return call[argIndex];
 }
 
 describe("googlechat google auth runtime", () => {

@@ -29,7 +29,7 @@ let sendWebhookMessageDiscord: typeof import("./send.webhook.js").sendWebhookMes
 type MockWithCalls = { mock: { calls: unknown[][] } };
 
 function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
-  const call = mock.mock.calls.at(0);
+  const call = mock.mock.calls[0];
   if (!call) {
     throw new Error(`expected ${label} call`);
   }

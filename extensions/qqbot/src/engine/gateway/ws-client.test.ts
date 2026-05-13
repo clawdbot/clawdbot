@@ -28,7 +28,7 @@ beforeAll(async () => {
 });
 
 function expectWebSocketCtorCall(expected: unknown[]): void {
-  const call = webSocketCtorMock.mock.calls.at(0);
+  const call = webSocketCtorMock.mock.calls[0];
   if (!call) {
     throw new Error("Expected WebSocket constructor call");
   }

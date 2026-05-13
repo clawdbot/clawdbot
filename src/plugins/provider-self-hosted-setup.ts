@@ -1,5 +1,7 @@
 import type { ApiKeyCredential, AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
+import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../agents/provider-id.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
@@ -395,10 +397,20 @@ export async function discoverOpenAICompatibleSelfHostedProvider<
 >(params: {
   ctx: ProviderDiscoveryContext;
   providerId: string;
-  buildProvider: (params: { apiKey?: string }) => Promise<T>;
+  buildProvider: (params: { apiKey?: string; baseUrl?: string }) => Promise<T>;
 }): Promise<{ provider: T & { apiKey: string } } | null> {
-  if (params.ctx.config.models?.providers?.[params.providerId]) {
-    return null;
+  const configuredProvider = findNormalizedProviderValue(
+    params.ctx.config.models?.providers,
+    params.providerId,
+  );
+  const configuredBaseUrl = configuredProvider
+    ? normalizeOptionalString(configuredProvider.baseUrl)
+    : undefined;
+  if (configuredProvider) {
+    const visibility = parseConfiguredModelVisibilityEntries({ cfg: params.ctx.config });
+    if (!visibility.providerWildcards.has(normalizeProviderId(params.providerId))) {
+      return null;
+    }
   }
   const { apiKey, discoveryApiKey } = params.ctx.resolveProviderApiKey(params.providerId);
   if (!apiKey) {
@@ -406,7 +418,10 @@ export async function discoverOpenAICompatibleSelfHostedProvider<
   }
   return {
     provider: {
-      ...(await params.buildProvider({ apiKey: discoveryApiKey })),
+      ...(await params.buildProvider({
+        apiKey: discoveryApiKey,
+        ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
+      })),
       apiKey,
     },
   };

@@ -393,7 +393,7 @@ describe("Discord model picker rendering", () => {
     });
     expect(providerButtons).toHaveLength(Object.keys(entries).length);
     const customIds = allButtons.map((component) => component.custom_id ?? "");
-    expect(customIds.every((customId) => !customId.includes(";a=nav;"))).toBe(true);
+    expect(customIds.filter((customId) => customId.includes(";a=nav;"))).toEqual([]);
   });
 
   it("does not render navigation buttons even when provider count exceeds one page", () => {
@@ -419,7 +419,7 @@ describe("Discord model picker rendering", () => {
 
     const allButtons = rows.flatMap((row) => row.components ?? []);
     const customIds = allButtons.map((component) => component.custom_id ?? "");
-    expect(customIds.every((customId) => !customId.includes(";a=nav;"))).toBe(true);
+    expect(customIds.filter((customId) => customId.includes(";a=nav;"))).toEqual([]);
   });
 
   it("supports classic fallback rendering with content + action rows", () => {

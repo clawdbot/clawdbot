@@ -830,10 +830,12 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
     expect(state.runCliAgentMock).not.toHaveBeenCalled();
     expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(state.runEmbeddedPiAgentMock.mock.calls.at(0)?.[0]).not.toHaveProperty(
-      "agentHarnessId",
-      "claude-cli",
-    );
+    expect(
+      requireRecord(
+        requireMockCall(state.runEmbeddedPiAgentMock, 0, "embedded run params")[0],
+        "embedded run params",
+      ),
+    ).not.toHaveProperty("agentHarnessId", "claude-cli");
   });
 
   it("forwards media-only tool results without typing text", async () => {
@@ -880,7 +882,12 @@ describe("runAgentTurnWithFallback", () => {
     expectMockCallArgFields(onToolResult, 0, "tool result payload", {
       mediaUrls: ["/tmp/generated.png"],
     });
-    expect(onToolResult.mock.calls.at(0)?.[0]?.text).toBeUndefined();
+    expect(
+      requireRecord(
+        requireMockCall(onToolResult, 0, "tool result payload")[0],
+        "tool result payload",
+      ).text,
+    ).toBeUndefined();
   });
 
   it("surfaces model capacity errors from no-text mid-turn failures", async () => {

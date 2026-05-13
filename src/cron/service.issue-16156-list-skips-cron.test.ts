@@ -31,7 +31,7 @@ function createCronFromStorePath(storePath: string) {
 function requireEnqueueSystemEventCall(
   enqueueSystemEvent: ReturnType<typeof vi.fn>,
 ): [string, { agentId?: string } | undefined] {
-  const call = enqueueSystemEvent.mock.calls.at(0);
+  const call = enqueueSystemEvent.mock.calls[0];
   if (!call) {
     throw new Error("Expected enqueueSystemEvent call");
   }

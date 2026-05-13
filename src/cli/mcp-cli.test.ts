@@ -51,7 +51,16 @@ async function runMcpCommand(args: string[]) {
 }
 
 function lastLogLine(): string {
-  return String(mockLog.mock.calls.at(-1)?.[0] ?? "");
+  return lastRuntimeLine(mockLog);
+}
+
+function lastErrorLine(): string {
+  return lastRuntimeLine(mockError);
+}
+
+function lastRuntimeLine(mock: typeof mockLog): string {
+  const call = mock.mock.calls[mock.mock.calls.length - 1];
+  return String(call?.[0] ?? "");
 }
 
 describe("mcp cli", () => {
@@ -94,8 +103,7 @@ describe("mcp cli", () => {
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
 
       await expect(runMcpCommand(["mcp", "unset", "missing"])).rejects.toThrow("__exit__:1");
-      const errorLine = String(mockError.mock.calls.at(-1)?.[0] ?? "");
-      expect(errorLine).toBe(
+      expect(lastErrorLine()).toBe(
         `No MCP server named "missing" in ${configPath}. Run openclaw mcp list to see configured servers.`,
       );
     });

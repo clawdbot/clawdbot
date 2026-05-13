@@ -507,6 +507,7 @@ function shortenInstallLabel(message: string): string {
     [/^Preparing\b/i, "Preparing"],
     [/^Linking\b/i, "Linking"],
     [/^Linked\b/i, "Linking"],
+    [/^npm rejected managed npm alias overrides\b/i, "Retrying"],
     [/^Compatibility\b/i, "Resolving"],
     [/^ClawHub\b/i, "Resolving"],
   ];
@@ -587,6 +588,14 @@ function createAnimatedInstallProgress(
   };
 }
 
+function logInstallWarningWithSpacing(runtime: RuntimeEnv, message: string): void {
+  const sanitized = sanitizeTerminalText(message).trim();
+  if (!sanitized) {
+    return;
+  }
+  runtime.log?.(`${sanitized}\n`);
+}
+
 async function installPluginFromNpmSpecWithProgress(params: {
   entry: OnboardingPluginInstallEntry;
   npmSpec: string;
@@ -628,7 +637,7 @@ async function installPluginFromNpmSpecWithProgress(params: {
           info: updateProgress,
           warn: (message) => {
             updateProgress(message);
-            params.runtime.log?.(sanitizeTerminalText(message));
+            logInstallWarningWithSpacing(params.runtime, message);
           },
         },
       }),
@@ -697,7 +706,7 @@ async function installPluginFromNpmPackArchiveWithProgress(params: {
           info: updateProgress,
           warn: (message) => {
             updateProgress(message);
-            params.runtime.log?.(sanitizeTerminalText(message));
+            logInstallWarningWithSpacing(params.runtime, message);
           },
         },
       }),
@@ -877,8 +886,16 @@ async function installPluginFromClawHubSpecWithProgress(params: {
           info: updateProgress,
           warn: (message) => {
             updateProgress(message);
-            params.runtime.log?.(sanitizeTerminalText(message));
+            logInstallWarningWithSpacing(params.runtime, message);
           },
+        },
+        onClawHubRisk: async (request) => {
+          animated.stop();
+          progress.stop("Review ClawHub warning");
+          return await params.prompter.confirm({
+            message: `Continue installing ClawHub package "${sanitizeTerminalText(request.packageName)}@${sanitizeTerminalText(request.version)}" despite this warning?`,
+            initialValue: false,
+          });
         },
       }),
       ONBOARDING_PLUGIN_INSTALL_WATCHDOG_TIMEOUT_MS,

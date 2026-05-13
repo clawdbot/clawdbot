@@ -125,7 +125,7 @@ async function waitForMicrotaskCondition(
 }
 
 function firstSleepWithAbortCall(): [number, AbortSignal | undefined] {
-  const call = hoisted.sleepWithAbort.mock.calls.at(0);
+  const call = hoisted.sleepWithAbort.mock.calls[0];
   if (!call) {
     throw new Error("expected sleepWithAbort call");
   }
@@ -135,7 +135,7 @@ function firstSleepWithAbortCall(): [number, AbortSignal | undefined] {
 function firstStartAccountContext(
   startAccount: ReturnType<typeof vi.fn>,
 ): ChannelGatewayContext<TestAccount> {
-  const ctx = startAccount.mock.calls.at(0)?.at(0);
+  const ctx = startAccount.mock.calls[0]?.[0];
   if (!ctx || typeof ctx !== "object") {
     throw new Error("expected channel start context");
   }

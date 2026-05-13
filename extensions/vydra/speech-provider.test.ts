@@ -54,7 +54,7 @@ describe("vydra speech provider", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    const [url, init] = fetchMock.mock.calls.at(0) as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://www.vydra.ai/api/v1/models/elevenlabs/tts");
     expect(init.method).toBe("POST");
     expect(init.body).toBe(

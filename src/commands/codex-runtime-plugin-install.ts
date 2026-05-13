@@ -9,7 +9,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
-const CODEX_RUNTIME_PLUGIN_ID = "codex";
+export const CODEX_RUNTIME_PLUGIN_ID = "codex";
 const CODEX_RUNTIME_PLUGIN_LABEL = "Codex";
 const CODEX_RUNTIME_PLUGIN_NPM_SPEC = "@openclaw/codex";
 
@@ -49,7 +49,11 @@ export async function ensureCodexRuntimePluginForModelSelection(params: {
   workspaceDir?: string;
 }): Promise<CodexRuntimePluginInstallResult> {
   if (!selectedModelShouldEnsureCodexRuntimePlugin({ cfg: params.cfg, model: params.model })) {
-    return { cfg: params.cfg, required: false, installed: false };
+    return {
+      cfg: params.cfg,
+      required: false,
+      installed: false,
+    };
   }
   const existingRecords = await loadInstalledPluginIndexInstallRecords({ env: process.env });
   if (isInstalledRecordPresentOnDisk(existingRecords[CODEX_RUNTIME_PLUGIN_ID], process.env)) {

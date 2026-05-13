@@ -142,7 +142,7 @@ function resetMemoryRecallMocks() {
 }
 
 function firstNoteMessage(): string {
-  return String(note.mock.calls.at(0)?.[0] ?? "");
+  return String(note.mock.calls[0]?.[0] ?? "");
 }
 
 describe("noteMemorySearchHealth", () => {
@@ -852,7 +852,7 @@ describe("memory recall doctor integration", () => {
     expect(repairDreamingArtifacts).toHaveBeenCalledWith({
       workspaceDir: "/tmp/agent-default/workspace",
     });
-    const message = String(note.mock.calls.at(-1)?.[0] ?? "");
+    const message = String(note.mock.calls[note.mock.calls.length - 1]?.[0] ?? "");
     expect(message).toContain("Dreaming artifacts repaired:");
     expect(message).toContain("archived session corpus");
     expect(message).toContain("archived session-ingestion state");

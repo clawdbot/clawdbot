@@ -31,7 +31,7 @@ function requireMockCallArg(
 }
 
 function expectRuntimeLogIncludes(fragment: string) {
-  expect(runtimeLogs.some((log) => log.includes(fragment))).toBe(true);
+  expect(runtimeLogs.join("\n")).toContain(fragment);
 }
 
 describe("persistPluginInstall", () => {

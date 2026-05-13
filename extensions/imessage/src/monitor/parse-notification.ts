@@ -42,7 +42,9 @@ function isOptionalAttachments(value: unknown): value is IMessagePayload["attach
     return (
       isOptionalString(attachment.original_path) &&
       isOptionalString(attachment.mime_type) &&
-      isOptionalBoolean(attachment.missing)
+      isOptionalBoolean(attachment.missing) &&
+      isOptionalString(attachment.transfer_name) &&
+      isOptionalString(attachment.uti)
     );
   });
 }

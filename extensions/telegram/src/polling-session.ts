@@ -239,14 +239,7 @@ export class TelegramPollingSession {
     });
     bot.api.config.use(async (prev, method, payload, signal) => {
       if (method !== "getUpdates") {
-        const callId = liveness.noteApiCallStarted();
-        try {
-          const result = await prev(method, payload, signal);
-          liveness.noteApiCallSuccess();
-          return result;
-        } finally {
-          liveness.noteApiCallFinished(callId);
-        }
+        return await prev(method, payload, signal);
       }
 
       liveness.noteGetUpdatesStarted(payload);
@@ -263,6 +256,7 @@ export class TelegramPollingSession {
     });
 
     const runner = run(bot, this.opts.runnerOptions);
+    this.opts.log(`[telegram][diag] polling cycle started ${liveness.formatDiagnosticFields()}`);
     this.#activeRunner = runner;
     const fetchAbortController = this.#activeFetchAbort;
     const abortFetch = () => {

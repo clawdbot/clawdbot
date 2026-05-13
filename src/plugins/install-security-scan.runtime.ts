@@ -75,6 +75,11 @@ type PackageManifestTraversalResult = {
   packageManifestPaths: string[];
 };
 
+type InstalledPackageScanRoot = {
+  packageDir: string;
+  realPath: string;
+};
+
 type PluginInstallRequestKind =
   | "skill-install"
   | "plugin-dir"
@@ -321,6 +326,7 @@ function buildBuiltinScanFromSummary(summary: {
   critical: number;
   warn: number;
   info: number;
+  truncated: boolean;
   findings: InstallScanFinding[];
 }): BuiltinInstallScan {
   return {
@@ -338,6 +344,7 @@ const DEFAULT_PACKAGE_MANIFEST_TRAVERSAL_LIMITS: PackageManifestTraversalLimits 
   maxDirectories: 10_000,
   maxManifests: 10_000,
 };
+const DEFAULT_INSTALLED_PACKAGE_CODE_SCAN_MAX_FILES = 10_000;
 
 function readPositiveIntegerEnv(name: string, fallback: number): number {
   const rawValue = process.env[name];
@@ -366,6 +373,171 @@ function resolvePackageManifestTraversalLimits(): PackageManifestTraversalLimits
       DEFAULT_PACKAGE_MANIFEST_TRAVERSAL_LIMITS.maxManifests,
     ),
   };
+}
+
+function resolveInstalledPackageCodeScanMaxFiles(): number {
+  return readPositiveIntegerEnv(
+    "OPENCLAW_INSTALL_SCAN_MAX_CODE_FILES",
+    DEFAULT_INSTALLED_PACKAGE_CODE_SCAN_MAX_FILES,
+  );
+}
+
+function isSamePathOrInside(parentPath: string, candidatePath: string): boolean {
+  return parentPath === candidatePath || isPathInside(parentPath, candidatePath);
+}
+
+function getErrnoCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return undefined;
+  }
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+function isInstallScannableDependencyName(name: string): boolean {
+  if (name.startsWith("@")) {
+    const parts = name.split("/");
+    return (
+      parts.length === 2 && parts.every((part) => part.length > 0 && part !== "." && part !== "..")
+    );
+  }
+  return (
+    name.length > 0 && !name.includes("/") && !name.includes("\\") && name !== "." && name !== ".."
+  );
+}
+
+function collectManifestRuntimeDependencyNames(manifest: PackageManifest): string[] {
+  const dependencyNames = new Set<string>();
+  for (const dependencies of [manifest.dependencies, manifest.optionalDependencies]) {
+    for (const dependencyName of Object.keys(dependencies ?? {})) {
+      if (isInstallScannableDependencyName(dependencyName)) {
+        dependencyNames.add(dependencyName);
+      }
+    }
+  }
+  for (const dependencyName of Object.keys(manifest.peerDependencies ?? {})) {
+    if (dependencyName !== "openclaw" && isInstallScannableDependencyName(dependencyName)) {
+      dependencyNames.add(dependencyName);
+    }
+  }
+  return [...dependencyNames].toSorted((left, right) => left.localeCompare(right));
+}
+
+async function resolveInstalledPackageScanRoot(params: {
+  boundaryRealPath: string;
+  dependencyName: string;
+  packageDir: string;
+}): Promise<InstalledPackageScanRoot | undefined> {
+  const packageDir = path.join(params.packageDir, "node_modules", params.dependencyName);
+  let stats: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    stats = await fs.stat(packageDir);
+  } catch (error) {
+    if (getErrnoCode(error) === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+  if (!stats.isDirectory()) {
+    return undefined;
+  }
+
+  const realPath = await fs.realpath(packageDir).catch(() => path.resolve(packageDir));
+  if (!isSamePathOrInside(params.boundaryRealPath, realPath)) {
+    throw new Error(
+      `installed dependency scan found package outside install root at ${packageDir}`,
+    );
+  }
+  return { packageDir, realPath };
+}
+
+async function collectInstalledPackageScanRoots(params: {
+  additionalPackageDirs?: string[];
+  dependencyScanRootDir?: string;
+  packageDir: string;
+}): Promise<string[]> {
+  const limits = resolvePackageManifestTraversalLimits();
+  const boundaryDir = params.dependencyScanRootDir ?? params.packageDir;
+  const boundaryRealPath = await fs.realpath(boundaryDir).catch(() => path.resolve(boundaryDir));
+  const packageRealPath = await fs
+    .realpath(params.packageDir)
+    .catch(() => path.resolve(params.packageDir));
+  if (!isSamePathOrInside(boundaryRealPath, packageRealPath)) {
+    throw new Error(
+      `installed dependency scan found package outside install root at ${params.packageDir}`,
+    );
+  }
+
+  const queue: InstalledPackageScanRoot[] = [
+    { packageDir: params.packageDir, realPath: packageRealPath },
+  ];
+  for (const packageDir of params.additionalPackageDirs ?? []) {
+    const realPath = await fs.realpath(packageDir).catch(() => path.resolve(packageDir));
+    if (!isSamePathOrInside(boundaryRealPath, realPath)) {
+      throw new Error(
+        `installed dependency scan found package outside install root at ${packageDir}`,
+      );
+    }
+    queue.push({ packageDir, realPath });
+  }
+  const visitedRealPaths = new Set<string>();
+  const scanRoots: string[] = [];
+  let queueIndex = 0;
+
+  while (queueIndex < queue.length) {
+    const current = queue[queueIndex];
+    queueIndex += 1;
+    if (!current || visitedRealPaths.has(current.realPath)) {
+      continue;
+    }
+    visitedRealPaths.add(current.realPath);
+    if (visitedRealPaths.size > limits.maxDirectories) {
+      throw new Error(
+        `installed dependency scan exceeded max packages (${limits.maxDirectories}) under ${boundaryDir}`,
+      );
+    }
+    scanRoots.push(current.packageDir);
+
+    const manifest = await tryReadJson<PackageManifest>(
+      path.join(current.packageDir, "package.json"),
+    );
+    if (!manifest) {
+      continue;
+    }
+    for (const dependencyName of collectManifestRuntimeDependencyNames(manifest)) {
+      const nestedCandidate = await resolveInstalledPackageScanRoot({
+        boundaryRealPath,
+        dependencyName,
+        packageDir: current.packageDir,
+      });
+      const candidate =
+        nestedCandidate ??
+        (params.dependencyScanRootDir
+          ? await resolveInstalledPackageScanRoot({
+              boundaryRealPath,
+              dependencyName,
+              packageDir: params.dependencyScanRootDir,
+            })
+          : undefined);
+      if (candidate && !visitedRealPaths.has(candidate.realPath)) {
+        queue.push(candidate);
+      }
+    }
+  }
+
+  return scanRoots;
+}
+
+async function collectNonOverlappingPackageScanRoots(packageDirs: string[]): Promise<string[]> {
+  const selectedRoots: InstalledPackageScanRoot[] = [];
+  for (const packageDir of packageDirs) {
+    const realPath = await fs.realpath(packageDir).catch(() => path.resolve(packageDir));
+    if (selectedRoots.some((selectedRoot) => isSamePathOrInside(selectedRoot.realPath, realPath))) {
+      continue;
+    }
+    selectedRoots.push({ packageDir, realPath });
+  }
+  return selectedRoots.map((selectedRoot) => selectedRoot.packageDir);
 }
 
 async function collectPackageManifestPaths(params: {
@@ -493,10 +665,25 @@ async function collectPackageManifestPaths(params: {
   };
 }
 
+function formatPackageScanRelativePath(params: {
+  packageDir: string;
+  relativePath: string;
+  relativeRootDir?: string;
+}): string {
+  if (!params.relativeRootDir) {
+    return params.relativePath;
+  }
+  const packageRelativePath = path.relative(params.relativeRootDir, params.packageDir);
+  return packageRelativePath
+    ? path.join(packageRelativePath, params.relativePath)
+    : params.relativePath;
+}
+
 async function scanManifestDependencyDenylist(params: {
   allowManagedNpmRootPackagePeerSymlinks?: boolean;
   logger: InstallScanLogger;
   packageDir: string;
+  relativeRootDir?: string;
   targetLabel: string;
 }): Promise<InstallSecurityScanResult | undefined> {
   const traversalResult = await collectPackageManifestPaths({
@@ -515,7 +702,11 @@ async function scanManifestDependencyDenylist(params: {
       continue;
     }
 
-    const manifestRelativePath = path.relative(params.packageDir, manifestPath) || "package.json";
+    const manifestRelativePath = formatPackageScanRelativePath({
+      packageDir: params.packageDir,
+      relativePath: path.relative(params.packageDir, manifestPath) || "package.json",
+      relativeRootDir: params.relativeRootDir,
+    });
     const reason = buildBlockedDependencyReason({
       findings: blockedDependencies,
       manifestPackageName: manifest.name,
@@ -536,7 +727,11 @@ async function scanManifestDependencyDenylist(params: {
   if (traversalResult.blockedDirectoryFinding) {
     const reason = buildBlockedDependencyDirectoryReason({
       dependencyName: traversalResult.blockedDirectoryFinding.dependencyName,
-      directoryRelativePath: traversalResult.blockedDirectoryFinding.directoryRelativePath,
+      directoryRelativePath: formatPackageScanRelativePath({
+        packageDir: params.packageDir,
+        relativePath: traversalResult.blockedDirectoryFinding.directoryRelativePath,
+        relativeRootDir: params.relativeRootDir,
+      }),
       targetLabel: params.targetLabel,
     });
     params.logger.warn?.(`WARNING: ${reason}`);
@@ -550,7 +745,11 @@ async function scanManifestDependencyDenylist(params: {
   if (traversalResult.blockedFileFinding) {
     const reason = buildBlockedDependencyFileReason({
       dependencyName: traversalResult.blockedFileFinding.dependencyName,
-      fileRelativePath: traversalResult.blockedFileFinding.fileRelativePath,
+      fileRelativePath: formatPackageScanRelativePath({
+        packageDir: params.packageDir,
+        relativePath: traversalResult.blockedFileFinding.fileRelativePath,
+        relativeRootDir: params.relativeRootDir,
+      }),
       targetLabel: params.targetLabel,
     });
     params.logger.warn?.(`WARNING: ${reason}`);
@@ -565,8 +764,14 @@ async function scanManifestDependencyDenylist(params: {
 }
 
 async function scanDirectoryTarget(params: {
+  excludeTestFiles?: boolean;
+  failOnTruncated?: boolean;
+  includeHiddenDirectories?: boolean;
+  includeNestedNodeModulesTestFiles?: boolean;
+  includeNodeModules?: boolean;
   includeFiles?: string[];
   logger: InstallScanLogger;
+  maxFiles?: number;
   path: string;
   suppressBuiltinWarnings?: boolean;
   suspiciousMessage: string;
@@ -575,9 +780,18 @@ async function scanDirectoryTarget(params: {
 }): Promise<BuiltinInstallScan> {
   try {
     const scanSummary = await scanDirectoryWithSummary(params.path, {
-      excludeTestFiles: true,
+      excludeTestFiles: params.excludeTestFiles ?? true,
+      includeHiddenDirectories: params.includeHiddenDirectories,
+      includeNestedNodeModulesTestFiles: params.includeNestedNodeModulesTestFiles,
+      includeNodeModules: params.includeNodeModules,
       includeFiles: params.includeFiles,
+      maxFiles: params.maxFiles,
     });
+    if (params.failOnTruncated && scanSummary.truncated) {
+      return buildBuiltinScanFromError(
+        `code safety scan reached file limit (${params.maxFiles ?? "configured limit"})`,
+      );
+    }
     const builtinScan = buildBuiltinScanFromSummary(scanSummary);
     if (params.suppressBuiltinWarnings) {
       return builtinScan;
@@ -934,17 +1148,81 @@ export async function scanPackageInstallSourceRuntime(
 }
 
 export async function scanInstalledPackageDependencyTreeRuntime(params: {
+  additionalPackageDirs?: string[];
   allowManagedNpmRootPackagePeerSymlinks?: boolean;
+  dangerouslyForceUnsafeInstall?: boolean;
+  dependencyScanRootDir?: string;
   logger: InstallScanLogger;
   packageDir: string;
   pluginId: string;
+  trustedSourceLinkedOfficialInstall?: boolean;
 }): Promise<InstallSecurityScanResult | undefined> {
-  return await scanManifestDependencyDenylist({
-    logger: params.logger,
+  const scanRoots = await collectInstalledPackageScanRoots({
+    ...(params.additionalPackageDirs
+      ? { additionalPackageDirs: params.additionalPackageDirs }
+      : {}),
+    dependencyScanRootDir: params.dependencyScanRootDir,
     packageDir: params.packageDir,
-    allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
-    targetLabel: `Plugin "${params.pluginId}" installation`,
   });
+  const directoryScanRoots = await collectNonOverlappingPackageScanRoots(scanRoots);
+  for (const packageDir of directoryScanRoots) {
+    const dependencyBlocked = await scanManifestDependencyDenylist({
+      logger: params.logger,
+      packageDir,
+      allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
+      relativeRootDir: params.dependencyScanRootDir ?? params.packageDir,
+      targetLabel: `Plugin "${params.pluginId}" installation`,
+    });
+    if (dependencyBlocked) {
+      return dependencyBlocked;
+    }
+  }
+
+  let remainingMaxFiles = resolveInstalledPackageCodeScanMaxFiles();
+  const pluginRootRealPath = await fs
+    .realpath(params.packageDir)
+    .catch(() => path.resolve(params.packageDir));
+  for (const packageDir of directoryScanRoots) {
+    if (remainingMaxFiles <= 0) {
+      return resolveBuiltinScanDecision({
+        builtinScan: buildBuiltinScanFromError(
+          "code safety scan reached file limit (configured limit)",
+        ),
+        logger: params.logger,
+        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+        trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+        targetLabel: `Plugin "${params.pluginId}" installation`,
+      });
+    }
+    const packageRealPath = await fs.realpath(packageDir).catch(() => path.resolve(packageDir));
+    const isPluginRoot = packageRealPath === pluginRootRealPath;
+    const builtinScan = await scanDirectoryTarget({
+      excludeTestFiles: isPluginRoot,
+      failOnTruncated: true,
+      includeHiddenDirectories: true,
+      includeNestedNodeModulesTestFiles: isPluginRoot,
+      includeNodeModules: true,
+      logger: params.logger,
+      maxFiles: remainingMaxFiles,
+      path: packageDir,
+      suppressBuiltinWarnings: params.trustedSourceLinkedOfficialInstall === true,
+      suspiciousMessage: `Plugin "{target}" installed tree has {count} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
+      targetName: params.pluginId,
+      warningMessage: `WARNING: Plugin "${params.pluginId}" installed tree contains dangerous code patterns`,
+    });
+    const builtinBlocked = resolveBuiltinScanDecision({
+      builtinScan,
+      logger: params.logger,
+      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+      targetLabel: `Plugin "${params.pluginId}" installation`,
+    });
+    if (builtinBlocked) {
+      return builtinBlocked;
+    }
+    remainingMaxFiles -= builtinScan.scannedFiles;
+  }
+  return undefined;
 }
 
 export async function scanFileInstallSourceRuntime(

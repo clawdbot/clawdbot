@@ -32,7 +32,7 @@ async function withTempHome<T>(
 }
 
 function noteArg(noteFn: ReturnType<typeof vi.fn>, argIndex: number): unknown {
-  const call = noteFn.mock.calls.at(0);
+  const call = noteFn.mock.calls[0];
   if (!call) {
     throw new Error("Expected note call");
   }

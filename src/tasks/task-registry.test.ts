@@ -1809,10 +1809,10 @@ describe("task-registry", () => {
         cleanupStamped: 0,
         pruned: 0,
       });
-      expect(getTaskById(task.taskId)).toMatchObject({
-        status: "running",
-        taskKind: "codex-native",
-        runId: "codex-thread:child-thread",
+      expect(getTaskById(task.taskId)).toEqual({
+        ...task,
+        createdAt: now - 10 * 60_000,
+        lastEventAt: now - 10 * 60_000,
       });
     });
   });
@@ -3087,14 +3087,11 @@ describe("task-registry", () => {
         taskId: task.taskId,
       });
 
-      expect(result).toMatchObject({
+      expect(result).toEqual({
         found: true,
         cancelled: false,
         reason: "Task has no cancellable child session.",
-        task: expect.objectContaining({
-          taskId: task.taskId,
-          status: "running",
-        }),
+        task,
       });
       expect(hoisted.killSubagentRunAdminMock).not.toHaveBeenCalled();
     });

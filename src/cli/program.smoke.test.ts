@@ -36,6 +36,14 @@ describe("cli program (smoke)", () => {
     await program.parseAsync(argv, { from: "user" });
   }
 
+  function firstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }): unknown {
+    const call = mock.mock.calls[0];
+    if (!call) {
+      throw new Error("expected mock to have at least one call");
+    }
+    return call[0];
+  }
+
   beforeEach(() => {
     program = createProgram();
     vi.clearAllMocks();
@@ -52,15 +60,17 @@ describe("cli program (smoke)", () => {
 
   it("runs tui with explicit timeout override", async () => {
     await runProgram(["tui", "--timeout-ms", "45000"]);
-    const options = runTui.mock.calls.at(0)?.[0] as { timeoutMs?: number } | undefined;
+    const options = firstMockArg(runTui) as { timeoutMs?: number };
     expect(options?.timeoutMs).toBe(45000);
   });
 
   it("runs crestodian one-shot requests", async () => {
     await runProgram(["crestodian", "--message", "status"]);
-    const options = runCrestodian.mock.calls.at(0)?.[0] as
-      | { message?: string; yes?: boolean; json?: boolean }
-      | undefined;
+    const options = firstMockArg(runCrestodian) as {
+      message?: string;
+      yes?: boolean;
+      json?: boolean;
+    };
     expect(options?.message).toBe("status");
     expect(options?.yes).toBe(false);
     expect(options?.json).toBe(false);
@@ -69,7 +79,7 @@ describe("cli program (smoke)", () => {
   it("warns and ignores invalid tui timeout override", async () => {
     await runProgram(["tui", "--timeout-ms", "nope"]);
     expect(runtime.error).toHaveBeenCalledWith('warning: invalid --timeout-ms "nope"; ignoring');
-    const options = runTui.mock.calls.at(0)?.[0] as { timeoutMs?: number } | undefined;
+    const options = firstMockArg(runTui) as { timeoutMs?: number };
     expect(options?.timeoutMs).toBeUndefined();
   });
 

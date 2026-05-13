@@ -32,6 +32,6 @@ describe("formatCliFailureLines", () => {
       "[openclaw] Stack:",
       "[openclaw] Error: boom",
     ]);
-    expect(lines.some((line) => line.includes("Error: boom"))).toBe(true);
+    expect(lines.join("\n")).toContain("Error: boom");
   });
 });

@@ -203,7 +203,7 @@ describe("imessage message actions", () => {
     ).rejects.toThrow(/imsg private API bridge/);
 
     expect(loggerMock.warn).toHaveBeenCalledTimes(1);
-    const warnArg = String(loggerMock.warn.mock.calls.at(0)?.[0]);
+    const warnArg = String(loggerMock.warn.mock.calls[0]?.[0]);
     expect(warnArg).toMatch(/iMessage react blocked: private API bridge unavailable/);
     expect(warnArg).toMatch(/imsg launch/);
     expect(runtimeMock.sendReaction).not.toHaveBeenCalled();

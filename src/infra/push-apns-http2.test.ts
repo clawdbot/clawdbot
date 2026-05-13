@@ -84,6 +84,24 @@ vi.mock("./net/http-connect-tunnel.js", () => ({
   openHttpConnectTunnel: tunnelSpy,
 }));
 
+function lastTunnelCall(): HttpConnectTunnelParams {
+  const calls = tunnelSpy.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error("expected HTTP CONNECT tunnel call");
+  }
+  return call[0];
+}
+
+function lastConnectCall(): [string, http2.ClientSessionOptions] {
+  const calls = connectSpy.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error("expected http2 connect call");
+  }
+  return call as unknown as [string, http2.ClientSessionOptions];
+}
+
 describe("connectApnsHttp2Session", () => {
   beforeEach(() => {
     connectSpy.mockClear();
@@ -153,22 +171,20 @@ describe("connectApnsHttp2Session", () => {
     stopActiveManagedProxyRegistration(registration);
 
     expect(session).toBe(fakeSession);
-    const tunnelCall = tunnelSpy.mock.calls.at(-1)?.[0];
-    const proxyUrl = tunnelCall?.proxyUrl;
+    const tunnelCall = lastTunnelCall();
+    const proxyUrl = tunnelCall.proxyUrl;
     expect(proxyUrl).toBeInstanceOf(URL);
     if (!(proxyUrl instanceof URL)) {
       throw new Error("expected active managed proxy URL");
     }
     expect(proxyUrl.href).toBe("http://proxy.example:8080/");
-    expect(tunnelCall?.targetHost).toBe("api.push.apple.com");
-    expect(tunnelCall?.targetPort).toBe(443);
-    expect(tunnelCall?.timeoutMs).toBe(10_000);
+    expect(tunnelCall.targetHost).toBe("api.push.apple.com");
+    expect(tunnelCall.targetPort).toBe(443);
+    expect(tunnelCall.timeoutMs).toBe(10_000);
     expect(connectSpy).toHaveBeenCalledTimes(1);
-    const connectCall = connectSpy.mock.calls.at(-1) as
-      | [string, http2.ClientSessionOptions]
-      | undefined;
-    expect(connectCall?.[0]).toBe("https://api.push.apple.com");
-    const createConnection = connectCall?.[1].createConnection;
+    const connectCall = lastConnectCall();
+    expect(connectCall[0]).toBe("https://api.push.apple.com");
+    const createConnection = connectCall[1].createConnection;
     expect(typeof createConnection).toBe("function");
     expect(createConnection?.(new URL("https://api.push.apple.com"), {})).toBe(fakeTlsSocket);
   });
@@ -209,8 +225,8 @@ describe("connectApnsHttp2Session", () => {
       body: '{"reason":"InvalidProviderToken"}',
       responseHeaders: {},
     });
-    const tunnelCall = tunnelSpy.mock.calls.at(-1)?.[0];
-    const proxyUrl = tunnelCall?.proxyUrl;
+    const tunnelCall = lastTunnelCall();
+    const proxyUrl = tunnelCall.proxyUrl;
     expect(proxyUrl).toBeInstanceOf(URL);
     if (!(proxyUrl instanceof URL)) {
       throw new Error("expected explicit proxy URL");

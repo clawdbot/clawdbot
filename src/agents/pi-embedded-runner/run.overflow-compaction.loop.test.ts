@@ -41,11 +41,11 @@ function requireMockCallArg(
 }
 
 function expectLogIncludes(mock: { mock: { calls: unknown[][] } }, fragment: string) {
-  expect(mock.mock.calls.some((call) => String(call[0]).includes(fragment))).toBe(true);
+  expect(mock.mock.calls.map((call) => String(call[0])).join("\n")).toContain(fragment);
 }
 
 function expectLogExcludes(mock: { mock: { calls: unknown[][] } }, fragment: string) {
-  expect(mock.mock.calls.some((call) => String(call[0]).includes(fragment))).toBe(false);
+  expect(mock.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(fragment);
 }
 
 function expectRetryContinuesFromTranscript() {
@@ -677,15 +677,26 @@ describe("overflow compaction in run loop", () => {
 
     const result = await runEmbeddedPiAgent(baseParams);
 
-    expect(result.payloads).toEqual([
-      expect.objectContaining({
+    expect(
+      result.payloads?.map((payload) => ({
+        isError: payload.isError,
+        textIncludesTimedOut: payload.text?.includes("timed out") ?? false,
+        mediaUrl: payload.mediaUrl,
+        mediaUrls: payload.mediaUrls,
+      })),
+    ).toEqual([
+      {
+        isError: undefined,
+        textIncludesTimedOut: false,
         mediaUrl: "https://example.test/tool-output.png",
         mediaUrls: ["https://example.test/tool-output.png"],
-      }),
-      expect.objectContaining({
+      },
+      {
         isError: true,
-        text: expect.stringContaining("timed out"),
-      }),
+        textIncludesTimedOut: true,
+        mediaUrl: undefined,
+        mediaUrls: undefined,
+      },
     ]);
   });
 

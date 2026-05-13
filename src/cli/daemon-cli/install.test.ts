@@ -393,7 +393,7 @@ describe("runDaemonInstall", () => {
     expectFields(readFirstInstallPlanArg(), { port: 18789 });
     expectFirstInstallPlanCallOmitsToken();
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
-    expect(actionState.warnings.some((warning) => warning.includes("Auto-generated"))).toBe(true);
+    expect(actionState.warnings.join("\n")).toContain("Auto-generated");
   });
 
   it("continues Linux install when service probe hits a non-fatal systemd bus failure", async () => {

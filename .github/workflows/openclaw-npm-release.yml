@@ -169,12 +169,27 @@ jobs:
       - name: Verify release contents
         run: pnpm release:check
 
+      - name: Generate dependency release evidence
+        id: dependency_evidence
+        env:
+          RELEASE_REF: ${{ inputs.tag }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+        run: |
+          set -euo pipefail
+          node scripts/generate-dependency-release-evidence.mjs \
+            --release-ref "$RELEASE_REF" \
+            --npm-dist-tag "$RELEASE_NPM_DIST_TAG" \
+            --output-dir "$RUNNER_TEMP/openclaw-release-dependency-evidence" \
+            --github-output "$GITHUB_OUTPUT" \
+            --github-step-summary "$GITHUB_STEP_SUMMARY"
+
       - name: Pack prepared npm tarball
         id: packed_tarball
         env:
           OPENCLAW_PREPACK_PREPARED: "1"
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          DEPENDENCY_EVIDENCE_DIR: ${{ steps.dependency_evidence.outputs.dir }}
         run: |
           set -euo pipefail
           PACK_OUTPUT="$RUNNER_TEMP/npm-pack-output.txt"
@@ -246,6 +261,7 @@ jobs:
           rm -rf "$ARTIFACT_DIR"
           mkdir -p "$ARTIFACT_DIR"
           cp "$PACK_PATH" "$ARTIFACT_DIR/"
+          cp -R "$DEPENDENCY_EVIDENCE_DIR" "$ARTIFACT_DIR/dependency-evidence"
           printf '%s\n' "$RELEASE_TAG" > "$ARTIFACT_DIR/release-tag.txt"
           printf '%s\n' "$RELEASE_SHA" > "$ARTIFACT_DIR/release-sha.txt"
           printf '%s\n' "$RELEASE_NPM_DIST_TAG" > "$ARTIFACT_DIR/release-npm-dist-tag.txt"
@@ -261,6 +277,8 @@ jobs:
             packageVersion: process.env.PACKAGE_VERSION,
             tarballName: process.env.TARBALL_NAME,
             tarballSha256: process.env.TARBALL_SHA256,
+            dependencyEvidenceDir: "dependency-evidence",
+            dependencyEvidenceManifest: "dependency-evidence/dependency-evidence-manifest.json",
           };
           fs.writeFileSync(
             path.join(process.env.ARTIFACT_DIR, "preflight-manifest.json"),
@@ -268,6 +286,13 @@ jobs:
           );
           NODE
           echo "dir=$ARTIFACT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Upload dependency release evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-release-dependency-evidence-${{ inputs.tag }}
+          path: ${{ steps.dependency_evidence.outputs.dir }}
+          if-no-files-found: error
 
       - name: Upload prepared npm publish bundle
         uses: actions/upload-artifact@v7

@@ -1278,7 +1278,7 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("instead of full-file `cat`");
   });
 
-  it("keeps multiline and indented task text verbatim in the system prompt (#72019)", () => {
+  it("keeps delegated task text out of the system prompt", () => {
     const task = "line one\n  line two\n  line three";
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
@@ -1287,11 +1287,11 @@ describe("buildSubagentSystemPrompt", () => {
       maxSpawnDepth: 1,
     });
 
-    expect(prompt).toContain("```");
-    expect(prompt).toContain("line one");
-    expect(prompt).toContain("  line two");
-    expect(prompt).toContain("  line three");
-    expect(prompt).not.toContain("line one line two");
+    expect(prompt).toContain("## Your Role");
+    expect(prompt).toContain("first user-visible `[Subagent Task]` message");
+    expect(prompt).not.toContain("line one");
+    expect(prompt).not.toContain("  line two");
+    expect(prompt).not.toContain("  line three");
   });
 
   it("omits ACP spawning guidance when ACP is disabled", () => {

@@ -64,7 +64,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   }
 
   function requireTranscriptUpdateCall(spy: TranscriptUpdateEmitterSpy): SessionTranscriptUpdate {
-    const call = spy.mock.calls.at(0);
+    const call = spy.mock.calls[0];
     if (!call) {
       throw new Error("expected transcript update event");
     }

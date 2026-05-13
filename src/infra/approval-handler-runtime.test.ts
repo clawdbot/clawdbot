@@ -96,6 +96,10 @@ function expectApprovalRuntime(
   return runtime;
 }
 
+function firstCallArg(mock: ReturnType<typeof vi.fn>): unknown {
+  return mock.mock.calls[0]?.[0];
+}
+
 describe("createChannelApprovalHandlerFromCapability", () => {
   it("returns null when the capability does not expose a native runtime", async () => {
     await expect(
@@ -154,7 +158,9 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     await approvalRuntime.stop();
 
     expect(unbindPending).toHaveBeenCalledOnce();
-    const stopUnbind = unbindPending.mock.calls.at(0)?.[0];
+    const stopUnbind = firstCallArg(unbindPending) as
+      | { request?: unknown; approvalKind?: string }
+      | undefined;
     expect(stopUnbind?.request).toBe(request);
     expect(stopUnbind?.approvalKind).toBe("plugin");
   });
@@ -183,7 +189,9 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     } as never);
 
     expect(unbindPending).toHaveBeenCalledTimes(1);
-    const unbind = unbindPending.mock.calls.at(0)?.[0];
+    const unbind = firstCallArg(unbindPending) as
+      | { entry?: unknown; binding?: unknown; request?: unknown }
+      | undefined;
     expect(unbind?.entry).toEqual({ messageId: "1" });
     expect(unbind?.binding).toEqual({ bindingId: "bound-1" });
     expect(unbind?.request).toBe(request);
@@ -226,7 +234,8 @@ describe("createChannelApprovalHandlerFromCapability", () => {
 
     expect(unbindPending).toHaveBeenCalledTimes(2);
     expect(buildResolvedResult).toHaveBeenCalledTimes(1);
-    expect(buildResolvedResult.mock.calls.at(0)?.[0]?.entry).toEqual({ messageId: "2" });
+    const resolvedPayload = firstCallArg(buildResolvedResult) as { entry?: unknown } | undefined;
+    expect(resolvedPayload?.entry).toEqual({ messageId: "2" });
   });
 
   it("continues stop-time unbind cleanup when one binding throws", async () => {

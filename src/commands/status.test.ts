@@ -93,16 +93,20 @@ function getRuntimeLog(index: number): string {
   return String(call[0]);
 }
 
+function getLastRuntimeLog(): string {
+  return getRuntimeLog(runtimeLogMock.mock.calls.length - 1);
+}
+
 function getJoinedRuntimeLogs() {
   return getRuntimeLogs().join("\n");
 }
 
 function expectLogsInclude(logs: readonly string[], fragment: string) {
-  expect(logs.some((log) => log.includes(fragment))).toBe(true);
+  expect(logs.join("\n")).toContain(fragment);
 }
 
 function expectLogsExclude(logs: readonly string[], fragment: string) {
-  expect(logs.some((log) => log.includes(fragment))).toBe(false);
+  expect(logs.join("\n")).not.toContain(fragment);
 }
 
 function expectLogsMatch(logs: readonly string[], pattern: RegExp) {
@@ -1025,7 +1029,7 @@ describe("statusCommand", () => {
     const allPayload = JSON.parse(getRuntimeLog(0));
     expect(allPayload.securityAudit.summary.critical).toBe(1);
     expect(allPayload.securityAudit.summary.warn).toBe(1);
-    const auditParams = mocks.runSecurityAudit.mock.calls.at(0)?.[0];
+    const auditParams = mocks.runSecurityAudit.mock.calls[0]?.[0];
     expect(auditParams?.includeFilesystem).toBe(true);
     expect(auditParams?.includeChannelSecurity).toBe(true);
   });
@@ -1038,7 +1042,7 @@ describe("statusCommand", () => {
 
     await statusCommand({ usage: true, timeoutMs: 1234 }, runtime as never);
 
-    const params = snapshotMock.mock.calls.at(-1)?.[0] as
+    const params = snapshotMock.mock.calls[snapshotMock.mock.calls.length - 1]?.[0] as
       | {
           config: unknown;
           timeoutMs?: number;
@@ -1083,7 +1087,7 @@ describe("statusCommand", () => {
     await withUnknownUsageStore(async () => {
       runtimeLogMock.mockClear();
       await statusCommand({ json: true }, runtime as never);
-      const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
+      const payload = JSON.parse(getLastRuntimeLog());
       expect(payload.sessions.recent[0].totalTokens).toBeNull();
       expect(payload.sessions.recent[0].totalTokensFresh).toBe(false);
       expect(payload.sessions.recent[0].percentUsed).toBeNull();
@@ -1103,7 +1107,7 @@ describe("statusCommand", () => {
     });
     runtimeLogMock.mockClear();
     await statusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
+    const payload = JSON.parse(getLastRuntimeLog());
     expect(payload.sessions.recent[0].totalTokens).toBe(5000);
     expect(payload.sessions.recent[0].totalTokensFresh).toBe(false);
     expect(payload.sessions.recent[0].percentUsed).toBe(50);
@@ -1278,7 +1282,7 @@ describe("statusCommand", () => {
     });
 
     await statusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
+    const payload = JSON.parse(getLastRuntimeLog());
     const gatewayAuthMessage = payload.gateway.error ?? payload.gateway.authWarning;
     expect(typeof gatewayAuthMessage).toBe("string");
     expect(gatewayAuthMessage.trim().length).toBeGreaterThan(0);
@@ -1448,7 +1452,7 @@ describe("statusCommand", () => {
     });
 
     await statusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
+    const payload = JSON.parse(getLastRuntimeLog());
     expect(payload.sessions.count).toBe(2);
     expect(payload.sessions.paths.length).toBe(2);
     expect(

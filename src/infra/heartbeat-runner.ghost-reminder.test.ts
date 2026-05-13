@@ -113,21 +113,37 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(calledCtx.Body).not.toContain("heartbeat poll");
   };
 
+  const mockCallAt = (
+    mock: { mock: { calls: Array<readonly unknown[]> } },
+    index: number,
+    label: string,
+  ): readonly unknown[] => {
+    const call = mock.mock.calls[index];
+    if (!call) {
+      throw new Error(`expected ${label} call`);
+    }
+    return call;
+  };
+
   const getFirstReplyContext = (
     replySpy: ReturnType<typeof vi.fn>,
   ): {
+    Provider?: string;
     SessionKey?: string;
     MessageThreadId?: number;
     Body?: string;
+    ForceSenderIsOwnerFalse?: boolean;
   } => {
-    const ctx = replySpy.mock.calls.at(0)?.at(0);
+    const [ctx] = mockCallAt(replySpy, 0, "heartbeat reply");
     if (!ctx || typeof ctx !== "object") {
       throw new Error("expected heartbeat reply context");
     }
     return ctx as {
+      Provider?: string;
       SessionKey?: string;
       MessageThreadId?: number;
       Body?: string;
+      ForceSenderIsOwnerFalse?: boolean;
     };
   };
 
@@ -140,7 +156,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     },
   ) => {
     expect(sendTelegram).toHaveBeenCalledTimes(1);
-    const [to, text, options] = sendTelegram.mock.calls.at(0) ?? [];
+    const [to, text, options] = mockCallAt(sendTelegram, 0, "Telegram send");
     expect(to).toBe(params.to);
     expect(text).toBe(params.text);
     expect((options as { messageThreadId?: number } | undefined)?.messageThreadId).toBe(
@@ -202,12 +218,8 @@ describe("Ghost reminder bug (issue #13317)", () => {
             telegram: sendTelegram,
           },
         });
-        const calledCtx = (getReplySpy.mock.calls.at(0)?.at(0) ?? null) as {
-          Provider?: string;
-          Body?: string;
-          SessionKey?: string;
-          ForceSenderIsOwnerFalse?: boolean;
-        } | null;
+        const calledCtx =
+          getReplySpy.mock.calls.length === 0 ? null : getFirstReplyContext(getReplySpy);
         return {
           result,
           sendTelegram,
@@ -352,11 +364,11 @@ describe("Ghost reminder bug (issue #13317)", () => {
       expect(second.status).toBe("ran");
       expect(getReplySpy).toHaveBeenCalledTimes(2);
 
-      const firstCtx = getReplySpy.mock.calls.at(0)?.at(0) as {
+      const firstCtx = mockCallAt(getReplySpy, 0, "first heartbeat reply")[0] as {
         Provider?: string;
         Body?: string;
       };
-      const secondCtx = getReplySpy.mock.calls.at(1)?.at(0) as {
+      const secondCtx = mockCallAt(getReplySpy, 1, "second heartbeat reply")[0] as {
         Provider?: string;
         Body?: string;
       };

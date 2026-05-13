@@ -12,7 +12,7 @@ vi.mock("../logging/subsystem.js", () => ({
 import { buildTimeoutAbortSignal } from "./fetch-timeout.js";
 
 function requireWarnCall(callIndex: number): [string, Record<string, unknown>] {
-  const call = warn.mock.calls.at(callIndex);
+  const call = warn.mock.calls[callIndex];
   if (!call) {
     throw new Error(`missing warning call ${callIndex}`);
   }

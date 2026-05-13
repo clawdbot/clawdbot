@@ -196,7 +196,7 @@ describe("irc inbound behavior", () => {
 
     const assembledRequest = (
       coreRuntime.channel.turn.runAssembled as unknown as { mock: { calls: unknown[][] } }
-    ).mock.calls.at(0)?.[0] as { replyPipeline?: unknown } | undefined;
+    ).mock.calls[0]?.[0] as { replyPipeline?: unknown } | undefined;
     expect(assembledRequest?.replyPipeline).toEqual({});
   });
 });

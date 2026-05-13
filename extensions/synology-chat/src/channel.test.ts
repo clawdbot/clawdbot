@@ -27,7 +27,7 @@ function makeSecurityAccount(
 }
 
 function expectIncludesSubstring(values: readonly string[], expected: string): void {
-  expect(values.some((value) => value.includes(expected))).toBe(true);
+  expect(values.join("\n")).toContain(expected);
 }
 
 function mockStringMessages(mock: { mock: { calls: unknown[][] } }): string[] {

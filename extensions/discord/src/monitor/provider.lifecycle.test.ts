@@ -189,11 +189,11 @@ describe("runDiscordGatewayLifecycle", () => {
   }
 
   function expectMockMessageContains(mock: ReturnType<typeof vi.fn>, expected: string): void {
-    expect(mockMessages(mock).some((message) => message.includes(expected))).toBe(true);
+    expect(mockMessages(mock).join("\n")).toContain(expected);
   }
 
   function expectMockMessageNotContains(mock: ReturnType<typeof vi.fn>, expected: string): void {
-    expect(mockMessages(mock).every((message) => !message.includes(expected))).toBe(true);
+    expect(mockMessages(mock).join("\n")).not.toContain(expected);
   }
 
   type StatusPatch = {

@@ -3,6 +3,7 @@ import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
   isCloudflareOrHtmlErrorPage,
+  isGenericProviderInternalError,
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
   parseApiErrorInfo,
   parseApiErrorPayload,
@@ -450,6 +451,9 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
 
     if (isBillingErrorMessage(trimmed)) {
       return BILLING_ERROR_USER_MESSAGE;
+    }
+    if (isGenericProviderInternalError(trimmed)) {
+      return formatRawAssistantErrorForUi(trimmed);
     }
     if (isInvalidStreamingEventOrderError(trimmed)) {
       return "LLM request failed: provider returned an invalid streaming response. Please try again.";

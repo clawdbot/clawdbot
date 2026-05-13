@@ -54,6 +54,10 @@ function gatewayRequest(method: string): Record<string, unknown> {
   return requireRecord(request);
 }
 
+function firstRegisteredSubagentRun(): Record<string, unknown> {
+  return requireRecord(hoisted.registerSubagentRunMock.mock.calls[0]?.[0]);
+}
+
 describe("spawnSubagentDirect seam flow", () => {
   beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
@@ -215,7 +219,7 @@ describe("spawnSubagentDirect seam flow", () => {
     const childSessionKey = result.childSessionKey as string;
     expect(hoisted.pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(3);
     expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(3);
-    const registerInput = requireRecord(hoisted.registerSubagentRunMock.mock.calls.at(0)?.[0]);
+    const registerInput = firstRegisteredSubagentRun();
     const requesterOrigin = requireRecord(registerInput.requesterOrigin);
     expect(registerInput.runId).toBe("run-1");
     expect(registerInput.childSessionKey).toBe(childSessionKey);
@@ -281,7 +285,7 @@ describe("spawnSubagentDirect seam flow", () => {
     );
 
     expect(result.status).toBe("accepted");
-    const registerInput = requireRecord(hoisted.registerSubagentRunMock.mock.calls.at(0)?.[0]);
+    const registerInput = firstRegisteredSubagentRun();
     const requesterOrigin = requireRecord(registerInput.requesterOrigin);
     expect(requesterOrigin.channel).toBe("discord");
     expect(requesterOrigin.accountId).toBe("acct-1");
@@ -398,9 +402,10 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.status).toBe("accepted");
     const agentCall = calls.find((call) => call.method === "agent");
     const params = agentCall?.params as { message?: string; extraSystemPrompt?: string };
-    expect(params.message).not.toContain("UNIQUE_LONG_SUBAGENT_TASK_TOKEN");
-    expect(params.message).not.toContain("[Subagent Task]:");
-    expect(params.message).toContain("**Your Role**");
+    expect(params.message).toContain("[Subagent Task]");
+    expect(params.message).toContain("UNIQUE_LONG_SUBAGENT_TASK_TOKEN");
+    expect(params.message).toContain("  keep indentation");
+    expect(params.message).not.toContain("**Your Role**");
     expect(params.extraSystemPrompt).toBe("system-prompt");
   });
 

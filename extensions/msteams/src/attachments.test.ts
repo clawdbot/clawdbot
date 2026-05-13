@@ -647,7 +647,7 @@ describe("msteams attachments", () => {
         });
         // Should have hit the original host, NOT graph shares.
         expect(calledUrls).toContain(directUrl);
-        expect(calledUrls.some((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toBe(false);
+        expect(calledUrls.filter((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toEqual([]);
       });
     });
 

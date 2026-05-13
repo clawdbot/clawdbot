@@ -33,6 +33,10 @@ async function withControlUiRoot<T>(fn: (tmp: string) => Promise<T>) {
   }
 }
 
+function responseBody(end: ReturnType<typeof makeMockHttpResponse>["end"]) {
+  return String(end.mock.calls[0]?.[0] ?? "");
+}
+
 afterEach(() => {
   resolveControlUiRootSyncMock.mockReset();
   isPackageProvenControlUiRootSyncMock.mockReset();
@@ -56,7 +60,7 @@ describe("handleControlUiHttpRequest auto-detected root", () => {
 
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
-      expect(String(end.mock.calls.at(0)?.[0] ?? "")).toBe("console.log('hi');");
+      expect(responseBody(end)).toBe("console.log('hi');");
     });
   });
 
@@ -77,7 +81,7 @@ describe("handleControlUiHttpRequest auto-detected root", () => {
 
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
-      expect(String(end.mock.calls.at(0)?.[0] ?? "")).toBe("<html>fallback-hardlink</html>\n");
+      expect(responseBody(end)).toBe("<html>fallback-hardlink</html>\n");
     });
   });
 

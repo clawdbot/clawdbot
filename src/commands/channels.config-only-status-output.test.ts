@@ -192,7 +192,7 @@ function expectResolvedTokenStatusSummary(
 }
 
 function requireReadOnlyPluginListCall(): unknown[] {
-  const call = listReadOnlyChannelPluginsForConfig.mock.calls.at(0);
+  const call = listReadOnlyChannelPluginsForConfig.mock.calls[0];
   if (!call) {
     throw new Error("expected listReadOnlyChannelPluginsForConfig call");
   }

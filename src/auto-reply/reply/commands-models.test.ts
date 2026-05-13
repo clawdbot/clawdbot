@@ -174,6 +174,10 @@ function buildParams(
   } as unknown as HandleCommandsParams;
 }
 
+function firstAuthCheckerParams() {
+  return modelProviderAuthMocks.createProviderAuthChecker.mock.calls[0]?.[0];
+}
+
 describe("handleModelsCommand", () => {
   it("shows a simple providers menu on text surfaces", async () => {
     const result = await handleModelsCommand(buildParams("/models"), true);
@@ -186,8 +190,7 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("Use: /models <provider>");
     expect(result?.reply?.text).toContain("Switch: /model <provider/model>");
     expect(result?.reply?.text).not.toContain("Add: /models add");
-    const authCheckerParams =
-      modelProviderAuthMocks.createProviderAuthChecker.mock.calls.at(0)?.[0];
+    const authCheckerParams = firstAuthCheckerParams();
     expect(authCheckerParams?.workspaceDir).toBe("/tmp");
   });
 
@@ -412,8 +415,7 @@ describe("handleModelsCommand", () => {
     const result = await handleModelsCommand(params, true);
 
     expect(result?.reply?.text).toContain("- anthropic (2)");
-    const authCheckerParams =
-      modelProviderAuthMocks.createProviderAuthChecker.mock.calls.at(0)?.[0];
+    const authCheckerParams = firstAuthCheckerParams();
     expect(authCheckerParams?.workspaceDir).toBe("/tmp/spawned-workspace");
   });
 

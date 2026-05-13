@@ -34,6 +34,12 @@ vi.mock("../runtime.js", () => ({
   },
 }));
 
+function firstConfigReadyCall() {
+  return ensureConfigReadyMock.mock.calls[0]?.[0] as
+    | { runtime?: unknown; commandPath?: unknown }
+    | undefined;
+}
+
 describe("tryRouteCli", () => {
   let tryRouteCli: typeof import("./route.js").tryRouteCli;
   // Capture the same loggingState reference that route.js uses.
@@ -88,9 +94,7 @@ describe("tryRouteCli", () => {
     await expect(tryRouteCli(["node", "openclaw", "status"])).resolves.toBe(true);
 
     expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
-    const configReadyCall = ensureConfigReadyMock.mock.calls.at(0)?.[0] as
-      | { runtime?: unknown; commandPath?: unknown }
-      | undefined;
+    const configReadyCall = firstConfigReadyCall();
     expect(typeof configReadyCall?.runtime).toBe("object");
     expect(configReadyCall?.commandPath).toEqual(["status"]);
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
@@ -161,9 +165,7 @@ describe("tryRouteCli", () => {
       ["node", "openclaw", "--log-level", "debug", "status"],
     );
     expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
-    const configReadyCall = ensureConfigReadyMock.mock.calls.at(0)?.[0] as
-      | { runtime?: unknown; commandPath?: unknown }
-      | undefined;
+    const configReadyCall = firstConfigReadyCall();
     expect(typeof configReadyCall?.runtime).toBe("object");
     expect(configReadyCall?.commandPath).toEqual(["status"]);
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({

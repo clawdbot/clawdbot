@@ -66,4 +66,37 @@ describe("parseIMessageNotification", () => {
     expect(parsed?.reaction_emoji).toBe("👍");
     expect(parsed?.reacted_to_guid).toBe("target-guid");
   });
+
+  it("accepts iMessage attachment transfer_name and uti metadata", () => {
+    const parsed = parseIMessageNotification({
+      message: {
+        id: 1,
+        guid: "link-preview-guid",
+        chat_id: 2,
+        sender: "+10000000000",
+        is_from_me: false,
+        text: "https://example.com/article",
+        attachments: [
+          {
+            original_path:
+              "/Users/openclaw/Library/Messages/Attachments/AA/BB/link.pluginPayloadAttachment",
+            mime_type: null,
+            missing: false,
+            transfer_name: "link.pluginPayloadAttachment",
+            uti: "com.apple.messages.pluginPayloadAttachment",
+          },
+        ],
+        chat_identifier: null,
+        chat_guid: null,
+        chat_name: null,
+        participants: null,
+        is_group: false,
+      },
+    });
+
+    expect(parsed?.attachments?.[0]).toMatchObject({
+      transfer_name: "link.pluginPayloadAttachment",
+      uti: "com.apple.messages.pluginPayloadAttachment",
+    });
+  });
 });

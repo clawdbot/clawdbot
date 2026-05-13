@@ -369,7 +369,7 @@ describe("runHeartbeatOnce commitments", () => {
       runner.stop();
 
       expect(runOnce).toHaveBeenCalledTimes(1);
-      const runOptions = runOnce.mock.calls.at(0)?.[0] as
+      const runOptions = runOnce.mock.calls[0]?.[0] as
         | { agentId?: string; heartbeat?: { target?: string }; sessionKey?: string }
         | undefined;
       expect(runOptions?.agentId).toBe("main");
@@ -436,6 +436,103 @@ describe("runHeartbeatOnce commitments", () => {
     expect(result.status).toBe("ran");
     expect(sendTelegram).toHaveBeenCalled();
     expectCommitmentFields(store.commitments[0], {
+      id: "cm_interview",
+      status: "sent",
+      attempts: 1,
+      sentAtMs: nowMs,
+    });
+  });
+
+  it("appends HEARTBEAT.md directives to commitment prompt when tasks are configured but none are due", async () => {
+    const { result, sendTelegram, store } = await withTempHeartbeatSandbox(
+      async ({ tmpDir, storePath, replySpy }) => {
+        vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+        const sessionKey = "agent:main:telegram:user-155462274";
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "last",
+              },
+            },
+          },
+          channels: { telegram: { allowFrom: ["*"] } },
+          session: { store: storePath },
+          commitments: { enabled: true },
+        };
+        // HEARTBEAT.md has a tasks block (task ran recently — NOT due) plus extra prose directives.
+        await fs.writeFile(
+          path.join(tmpDir, "HEARTBEAT.md"),
+          `Do not contact the user unless critical.
+
+tasks:
+  - name: check-deployment
+    interval: 5m
+    prompt: Check deployment status
+`,
+          "utf-8",
+        );
+        // Seed heartbeatTaskState so the task ran at nowMs (well within 5m interval — not due).
+        await fs.writeFile(
+          storePath,
+          JSON.stringify({
+            [sessionKey]: {
+              sessionId: "sid",
+              updatedAt: nowMs,
+              lastChannel: "telegram",
+              lastProvider: "telegram",
+              lastTo: "155462274",
+              heartbeatTaskState: { "check-deployment": nowMs },
+            },
+          }),
+        );
+        await saveCommitmentStore(undefined, {
+          version: 1,
+          commitments: [buildCommitment({ id: "cm_interview", sessionKey, to: "155462274" })],
+        });
+
+        const sendTelegram = vi.fn().mockResolvedValue({
+          messageId: "m1",
+          chatId: "155462274",
+        });
+        replySpy.mockImplementation(
+          async (ctx: { Body?: string }, _opts?: { disableTools?: boolean }) => {
+            // Must contain commitment text
+            expect(ctx.Body).toContain("Due inferred follow-up commitments");
+            expect(ctx.Body).toContain("How did the interview go?");
+            // Must also contain HEARTBEAT.md directives outside the tasks block
+            expect(ctx.Body).toContain("Do not contact the user unless critical.");
+            // Must NOT contain the task prompt (task is not due)
+            expect(ctx.Body).not.toContain("Check deployment status");
+            return { text: "How did the interview go?" };
+          },
+        );
+
+        const result = await runHeartbeatOnce({
+          cfg,
+          agentId: "main",
+          sessionKey,
+          deps: {
+            getReplyFromConfig: replySpy,
+            telegram: sendTelegram,
+            getQueueSize: () => 0,
+            nowMs: () => nowMs,
+          },
+        });
+
+        return {
+          result,
+          sendTelegram,
+          store: await loadCommitmentStore(),
+        };
+      },
+    );
+
+    expect(result.status).toBe("ran");
+    expect(sendTelegram).toHaveBeenCalled();
+    expect(store.commitments[0]).toMatchObject({
       id: "cm_interview",
       status: "sent",
       attempts: 1,

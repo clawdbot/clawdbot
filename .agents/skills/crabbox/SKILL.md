@@ -1,6 +1,6 @@
 ---
 name: crabbox
-description: Use Crabbox for OpenClaw remote Linux validation. Default to Blacksmith Testbox; includes direct Blacksmith and owned AWS/Hetzner fallback notes when Crabbox fails.
+description: Use Crabbox for OpenClaw remote validation across Linux, macOS, Windows, and WSL2. Default to Blacksmith Testbox for broad Linux proof; includes direct Blacksmith and owned AWS/Hetzner fallback notes when Crabbox fails.
 ---
 
 # Crabbox
@@ -64,7 +64,8 @@ Crabbox supports static SSH targets:
 - `target=macos` and `target=windows --windows-mode wsl2` use the POSIX SSH,
   bash, Git, rsync, and tar contract.
 - Native Windows uses OpenSSH, PowerShell, Git, and tar; sync is manifest tar
-  archive transfer into `static.workRoot`.
+  archive transfer into `static.workRoot`. Direct native Windows runs support
+  `--script*`, `--env-from-profile`, `--preflight`, and PowerShell `--shell`.
 - `crabbox actions hydrate/register` are Linux-only today; use plain
   `crabbox run` loops for static macOS and Windows hosts.
 - Live proof needs a reachable, operator-managed SSH host. Without one, verify
@@ -144,8 +145,16 @@ blacksmith testbox list
 Use these on debugging runs before inventing ad hoc logging:
 
 - `--preflight`: prints run context, workspace mode, SSH target, remote user/cwd,
-  sudo/apt, Node, pnpm, Docker, and bubblewrap. On `blacksmith-testbox`, this
-  prints a delegated-unsupported note because the workflow owns setup.
+  and target-specific tool probes. Defaults cover `git`, `tar`, `node`, `npm`,
+  `corepack`, `pnpm`, `yarn`, `bun`, `docker`, plus POSIX
+  `sudo`/`apt`/`bubblewrap` and native Windows
+  `powershell`/`execution_policy`/`longpaths`/`temp`/`pwsh`. Add
+  `--preflight-tools node,bun,docker`, `CRABBOX_PREFLIGHT_TOOLS`, or repo
+  `run.preflightTools` to replace the list. `default` expands built-ins; `none`
+  prints only the workspace summary. Preflight is diagnostic only; install
+  toolchains through Actions hydration, images, devcontainer/Nix/mise/asdf, or
+  the run script. On `blacksmith-testbox`, this prints a delegated-unsupported
+  note because the workflow owns setup.
 - `CRABBOX_ENV_ALLOW=NAME,...`: forwards only listed local env vars for direct
   providers and prints `set len=N secret=true` style summaries. On
   `blacksmith-testbox`, env forwarding is unsupported; put secrets in the
@@ -154,11 +163,13 @@ Use these on debugging runs before inventing ad hoc logging:
   `export NAME=value` / `NAME=value` lines from a local profile without
   executing it, then forwards only allowlisted names. `--allow-env` is
   repeatable and comma-separated. Profile values override ambient allowlisted
-  env values for that run.
+  env values for that run. Direct POSIX, WSL2, and native Windows runs are
+  supported; delegated providers are not.
 - `--script <file>` / `--script-stdin`: upload a local script into
   `.crabbox/scripts/` and execute it on the remote box. Shebang scripts execute
-  directly; scripts without a shebang run through `bash`. Arguments after `--`
-  become script args.
+  directly on POSIX; scripts without a shebang run through `bash`. Native
+  Windows uploads run through Windows PowerShell, and Crabbox appends `.ps1`
+  when needed. Arguments after `--` become script args.
 - `--fresh-pr owner/repo#123|URL|number`: skip dirty local sync and create a
   fresh remote checkout of the GitHub PR. Bare numbers use the current repo's
   GitHub origin. Add `--apply-local-patch` only when the current local

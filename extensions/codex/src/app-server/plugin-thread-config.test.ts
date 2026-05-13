@@ -415,9 +415,32 @@ describe("Codex plugin thread config", () => {
       mcpServerNames: [],
     });
     expect(config.diagnostics).toStrictEqual([]);
-    expect(request.mock.calls.map(([method]) => method)).toContain("plugin/install");
-    expect(request.mock.calls.some(([method]) => method === "app/list")).toBe(true);
-    expect(appListParams.map((params) => params.forceRefetch)).toContain(true);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "plugin/list",
+      "plugin/read",
+      "plugin/list",
+      "plugin/install",
+      "plugin/list",
+      "skills/list",
+      "hooks/list",
+      "config/mcpServer/reload",
+      "app/list",
+      "app/list",
+      "plugin/list",
+      "plugin/read",
+    ]);
+    expect(appListParams).toEqual([
+      {
+        cursor: undefined,
+        limit: 100,
+        forceRefetch: true,
+      },
+      {
+        cursor: undefined,
+        limit: 100,
+        forceRefetch: true,
+      },
+    ]);
   });
 
   it("surfaces critical post-install refresh failures and keeps plugin apps disabled", async () => {

@@ -64,7 +64,7 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
 }
 
 function requireResolveCommandConfigParams(callIndex = 0): ResolveCommandConfigParams {
-  const call = resolveCommandConfigWithSecretsMock.mock.calls.at(callIndex);
+  const call = resolveCommandConfigWithSecretsMock.mock.calls[callIndex];
   if (!call) {
     throw new Error(`expected command config resolution call ${callIndex}`);
   }

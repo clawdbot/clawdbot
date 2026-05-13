@@ -486,6 +486,44 @@ describe("gateway sessions patch", () => {
     expect(entry.spawnDepth).toBe(2);
   });
 
+  test("sets inheritedToolDeny for ACP sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:acp:child",
+        patch: { key: "agent:main:acp:child", inheritedToolDeny: ["bash", "read", "bash"] },
+      }),
+    );
+    expect(entry.inheritedToolDeny).toEqual(["exec", "read"]);
+  });
+
+  test("sets inheritedToolAllow for ACP sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:acp:child",
+        patch: {
+          key: "agent:main:acp:child",
+          inheritedToolAllow: ["sessions_spawn", "read", "sessions_spawn"],
+        },
+      }),
+    );
+    expect(entry.inheritedToolAllow).toEqual(["sessions_spawn", "read"]);
+  });
+
+  test("preserves inheritedToolDeny entries beyond large configured lists", async () => {
+    const configuredDeny = Array.from({ length: 150 }, (_, index) => `custom_${index}`);
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:subagent:child",
+        patch: {
+          key: "agent:main:subagent:child",
+          inheritedToolDeny: [...configuredDeny, "exec"],
+        },
+      }),
+    );
+    expect(entry.inheritedToolDeny).toHaveLength(151);
+    expect(entry.inheritedToolDeny?.at(-1)).toBe("exec");
+  });
+
   test("rejects spawnDepth on non-subagent sessions", async () => {
     const result = await runPatch({
       patch: { key: MAIN_SESSION_KEY, spawnDepth: 1 },
@@ -498,6 +536,20 @@ describe("gateway sessions patch", () => {
       patch: { key: MAIN_SESSION_KEY, spawnedWorkspaceDir: "/tmp/nope" },
     });
     expectPatchError(result, "spawnedWorkspaceDir is only supported");
+  });
+
+  test("rejects inheritedToolDeny on non-subagent sessions", async () => {
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, inheritedToolDeny: ["exec"] },
+    });
+    expectPatchError(result, "inheritedToolDeny is only supported");
+  });
+
+  test("rejects inheritedToolAllow on non-subagent sessions", async () => {
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, inheritedToolAllow: ["read"] },
+    });
+    expectPatchError(result, "inheritedToolAllow is only supported");
   });
 
   test("normalizes exec/send/group patches", async () => {

@@ -109,7 +109,7 @@ describe("task-flow-registry store runtime", () => {
     });
 
     expect(saveSnapshot).toHaveBeenCalled();
-    const latestCall = saveSnapshot.mock.calls.at(-1);
+    const latestCall = saveSnapshot.mock.calls[saveSnapshot.mock.calls.length - 1];
     if (!latestCall) {
       throw new Error("Expected task flow snapshot save call");
     }

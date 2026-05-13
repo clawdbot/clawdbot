@@ -819,7 +819,16 @@ describe("monitorMatrixProvider", () => {
   it("resolves text chunk limit for the effective Matrix account", async () => {
     await startMonitorAndAbortAfterStartup();
 
-    expect(mockCallArg(hoisted.resolveTextChunkLimit, 0, 0)).toBeDefined();
+    expect(mockCallArg(hoisted.resolveTextChunkLimit, 0, 0)).toEqual({
+      channels: {
+        matrix: {
+          dm: {
+            allowFrom: [],
+          },
+          groupAllowFrom: [],
+        },
+      },
+    });
     expect(mockCallArg(hoisted.resolveTextChunkLimit, 0, 1)).toBe("matrix");
     expect(mockCallArg(hoisted.resolveTextChunkLimit, 0, 2)).toBe("default");
   });

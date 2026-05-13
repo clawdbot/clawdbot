@@ -77,10 +77,9 @@ describe("gateway startup log", () => {
       isNixMode: false,
     });
 
-    expect(info.mock.calls.at(0)?.[0]).toBe(
-      "agent model: openai-codex/gpt-5.5 (thinking=medium, fast=on)",
-    );
-    expect(stripAnsi(String(info.mock.calls.at(0)?.[1]?.consoleMessage))).toBe(
+    const firstInfoCall = info.mock.calls[0];
+    expect(firstInfoCall?.[0]).toBe("agent model: openai-codex/gpt-5.5 (thinking=medium, fast=on)");
+    expect(stripAnsi(String(firstInfoCall?.[1]?.consoleMessage))).toBe(
       "agent model: openai-codex/gpt-5.5 (thinking=medium, fast=on)",
     );
   });

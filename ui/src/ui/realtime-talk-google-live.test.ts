@@ -297,7 +297,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     ]);
     expect(onTranscript).toHaveBeenCalledWith({ role: "user", text: "hello", final: true });
     expect(onTranscript).toHaveBeenCalledWith({ role: "assistant", text: "hi", final: false });
-    const audioEvent = onTalkEvent.mock.calls.at(2)?.[0];
+    const audioEvent = onTalkEvent.mock.calls[2]?.[0];
     expect(audioEvent?.payload).toStrictEqual({ byteLength: 4, mimeType: "audio/pcm;rate=24000" });
     expect(audioEvent?.sessionId).toBe("main:google:provider-websocket");
     expect(audioEvent?.transport).toBe("provider-websocket");

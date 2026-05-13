@@ -113,7 +113,7 @@ function mockRotateOperatorTokenSuccess(): void {
 function expectRespondedErrorMessage(opts: GatewayRequestHandlerOptions, message: string): void {
   const respond = opts.respond as ReturnType<typeof vi.fn>;
   expect(respond).toHaveBeenCalledTimes(1);
-  const call = respond.mock.calls.at(0) as unknown as [boolean, unknown, { message?: string }];
+  const call = respond.mock.calls[0] as unknown as [boolean, unknown, { message?: string }];
   expect(call[0]).toBe(false);
   expect(call[1]).toBeUndefined();
   expect(call[2]?.message).toBe(message);
@@ -181,6 +181,40 @@ describe("deviceHandlers", () => {
     );
   });
 
+  it("rejects removing mixed-role devices without admin scope", async () => {
+    getPairedDeviceMock.mockResolvedValue({
+      deviceId: "device-1",
+      role: "operator",
+      roles: ["operator", "node"],
+      tokens: {
+        operator: {
+          token: "operator-token",
+          role: "operator",
+          scopes: ["operator.pairing"],
+          createdAtMs: 100,
+        },
+        node: {
+          token: "node-token",
+          role: "node",
+          scopes: [],
+          createdAtMs: 100,
+          revokedAtMs: 200,
+        },
+      },
+    });
+    const opts = createOptions(
+      "device.pair.remove",
+      { deviceId: "device-1" },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+    );
+
+    await deviceHandlers["device.pair.remove"](opts);
+
+    expect(removePairedDeviceMock).not.toHaveBeenCalled();
+    expect(opts.context.disconnectClientsForDevice).not.toHaveBeenCalled();
+    expectRespondedErrorMessage(opts, "device pairing removal denied");
+  });
+
   it("disconnects active clients after revoking a device token", async () => {
     revokeDeviceTokenMock.mockResolvedValue({
       ok: true,
@@ -232,6 +266,20 @@ describe("deviceHandlers", () => {
       { deviceId: "device-2", role: "operator", revokedAtMs: 456 },
       undefined,
     );
+  });
+
+  it("rejects revoking node tokens without admin scope", async () => {
+    const opts = createOptions(
+      "device.token.revoke",
+      { deviceId: "device-1", role: "node" },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+    );
+
+    await deviceHandlers["device.token.revoke"](opts);
+
+    expect(revokeDeviceTokenMock).not.toHaveBeenCalled();
+    expect(opts.context.disconnectClientsForDevice).not.toHaveBeenCalled();
+    expectRespondedErrorMessage(opts, "device token revocation denied");
   });
 
   it("treats normalized device ids as self-owned for token revocation", async () => {
@@ -336,6 +384,65 @@ describe("deviceHandlers", () => {
     );
   });
 
+  it("allows pairing-scoped device sessions to manage their own operator token", async () => {
+    rotateDeviceTokenMock.mockResolvedValue({
+      ok: true,
+      entry: {
+        token: "rotated-token",
+        role: "operator",
+        scopes: ["operator.pairing"],
+        createdAtMs: 456,
+        rotatedAtMs: 789,
+      },
+    });
+    revokeDeviceTokenMock.mockResolvedValue({
+      ok: true,
+      entry: { role: "operator", revokedAtMs: 987 },
+    });
+
+    const rotateOpts = createOptions(
+      "device.token.rotate",
+      { deviceId: "device-1", role: "operator", scopes: ["operator.pairing"] },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+    );
+    const revokeOpts = createOptions(
+      "device.token.revoke",
+      { deviceId: "device-1", role: "operator" },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+    );
+
+    await deviceHandlers["device.token.rotate"](rotateOpts);
+    await deviceHandlers["device.token.revoke"](revokeOpts);
+
+    expect(rotateDeviceTokenMock).toHaveBeenCalledWith({
+      deviceId: "device-1",
+      role: "operator",
+      scopes: ["operator.pairing"],
+      callerScopes: ["operator.pairing"],
+    });
+    expect(revokeDeviceTokenMock).toHaveBeenCalledWith({
+      deviceId: "device-1",
+      role: "operator",
+      callerScopes: ["operator.pairing"],
+    });
+    expect(rotateOpts.respond).toHaveBeenCalledWith(
+      true,
+      {
+        deviceId: "device-1",
+        role: "operator",
+        token: "rotated-token",
+        scopes: ["operator.pairing"],
+        rotatedAtMs: 789,
+      },
+      undefined,
+    );
+    expect(revokeOpts.respond).toHaveBeenCalledWith(
+      true,
+      { deviceId: "device-1", role: "operator", revokedAtMs: 987 },
+      undefined,
+    );
+  });
+
   it("omits rotated tokens when an admin rotates another device token", async () => {
     mockPairedOperatorDevice();
     mockRotateOperatorTokenSuccess();
@@ -368,8 +475,27 @@ describe("deviceHandlers", () => {
   });
 
   it("rejects rotating a token for a role that was never approved", async () => {
-    mockPairedOperatorDevice();
     rotateDeviceTokenMock.mockResolvedValue({ ok: false, reason: "unknown-device-or-role" });
+    const opts = createOptions(
+      "device.token.rotate",
+      { deviceId: "device-1", role: "node" },
+      { client: createClient(["operator.admin"], "admin-device", { isDeviceTokenAuth: true }) },
+    );
+
+    await deviceHandlers["device.token.rotate"](opts);
+
+    expect(rotateDeviceTokenMock).toHaveBeenCalledWith({
+      deviceId: "device-1",
+      role: "node",
+      scopes: undefined,
+      callerScopes: ["operator.admin"],
+    });
+    expect(opts.context.disconnectClientsForDevice).not.toHaveBeenCalled();
+    expectRespondedErrorMessage(opts, "device token rotation denied");
+  });
+
+  it("rejects rotating node tokens without admin scope", async () => {
+    mockPairedOperatorDevice();
     const opts = createOptions(
       "device.token.rotate",
       {
@@ -387,12 +513,7 @@ describe("deviceHandlers", () => {
 
     await deviceHandlers["device.token.rotate"](opts);
 
-    expect(rotateDeviceTokenMock).toHaveBeenCalledWith({
-      deviceId: "device-1",
-      role: "node",
-      scopes: undefined,
-      callerScopes: ["operator.pairing"],
-    });
+    expect(rotateDeviceTokenMock).not.toHaveBeenCalled();
     expect(opts.context.disconnectClientsForDevice).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "device token rotation denied");
   });
@@ -686,6 +807,27 @@ describe("deviceHandlers", () => {
       },
       undefined,
     );
+  });
+
+  it("rejects approving node roles for the caller device without admin scope", async () => {
+    getPendingDevicePairingMock.mockResolvedValue({
+      requestId: "req-1",
+      deviceId: " device-1 ",
+      publicKey: "pk-1",
+      role: "node",
+      roles: ["node"],
+      ts: 100,
+    });
+    const opts = createOptions(
+      "device.pair.approve",
+      { requestId: "req-1" },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+    );
+
+    await deviceHandlers["device.pair.approve"](opts);
+
+    expect(approveDevicePairingMock).not.toHaveBeenCalled();
+    expectRespondedErrorMessage(opts, "device pairing approval denied");
   });
 
   it("rejects rejecting another device from a non-admin device session", async () => {

@@ -47,7 +47,7 @@ function expectRestartNoticeLogged() {
 
 function expectSingleCallParams(mockFn: ReturnType<typeof vi.fn>) {
   expect(mockFn).toHaveBeenCalledTimes(1);
-  const params = mockFn.mock.calls.at(0)?.[0] as Record<string, unknown> | undefined;
+  const params = mockFn.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
   if (params === undefined) {
     throw new Error("expected call params");
   }
@@ -208,6 +208,35 @@ describe("plugins cli update", () => {
     expect(updateParams.config).toEqual(config);
     expect(updateParams.pluginIds).toEqual(["openclaw-codex-app-server"]);
     expect(updateParams.dangerouslyForceUnsafeInstall).toBe(true);
+  });
+
+  it("passes ClawHub risk acknowledgement to plugin updates", async () => {
+    const config = createTrackedPluginConfig({
+      pluginId: "openclaw-codex-app-server",
+      spec: "openclaw-codex-app-server@beta",
+    });
+    loadConfig.mockReturnValue(config);
+    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+    updateNpmInstalledPlugins.mockResolvedValue({
+      config,
+      changed: false,
+      outcomes: [],
+    });
+
+    await runPluginsCommand([
+      "plugins",
+      "update",
+      "openclaw-codex-app-server",
+      "--acknowledge-clawhub-risk",
+    ]);
+
+    expect(updateNpmInstalledPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        pluginIds: ["openclaw-codex-app-server"],
+        acknowledgeClawHubRisk: true,
+      }),
+    );
   });
 
   it("writes updated config when updater reports changes", async () => {

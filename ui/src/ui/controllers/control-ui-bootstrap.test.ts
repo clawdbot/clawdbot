@@ -316,14 +316,10 @@ describe("loadControlUiBootstrapConfig", () => {
     await loadControlUiBootstrapConfig(state);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    const [, firstInit] = fetchMock.mock.calls.at(0) ?? [];
-    const [, secondInit] = fetchMock.mock.calls.at(1) ?? [];
-    expect((firstInit?.headers as Record<string, string> | undefined)?.Authorization).toBe(
-      "Bearer stale-token",
-    );
-    expect((secondInit?.headers as Record<string, string> | undefined)?.Authorization).toBe(
-      "Bearer fresh-password",
-    );
+    const firstFetchCall = requireFetchCall(fetchMock, 0);
+    const secondFetchCall = requireFetchCall(fetchMock, 1);
+    expect(firstFetchCall.headers.Authorization).toBe("Bearer stale-token");
+    expect(secondFetchCall.headers.Authorization).toBe("Bearer fresh-password");
     expect(state.assistantName).toBe("Ops");
     expect(state.serverVersion).toBe("2026.4.22");
 

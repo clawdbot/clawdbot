@@ -133,6 +133,7 @@ export function resolveExtraParams(params: {
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: "none" | "short" | "long";
   cachedContent?: string;
+  topP?: number;
 };
 export type SupportedTransport = AgentRuntimeTransport;
 
@@ -378,6 +379,9 @@ function createStreamFnWithExtraParams(
   const streamParams: CacheRetentionStreamOptions = {};
   if (typeof extraParams.temperature === "number") {
     streamParams.temperature = extraParams.temperature;
+  }
+  if (typeof extraParams.topP === "number") {
+    streamParams.topP = extraParams.topP;
   }
   if (typeof extraParams.maxTokens === "number") {
     streamParams.maxTokens = extraParams.maxTokens;

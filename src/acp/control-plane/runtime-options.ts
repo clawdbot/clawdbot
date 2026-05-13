@@ -340,7 +340,10 @@ export function buildRuntimeConfigOptionPairs(
       normalized.permissionProfile,
     );
   }
-  if (typeof normalized.timeoutSeconds === "number") {
+  if (
+    typeof normalized.timeoutSeconds === "number" &&
+    shouldEmitTimeoutConfigOption(advertisedConfigOptionKeys)
+  ) {
     pairs.set(
       resolveRuntimeConfigOptionKey("timeout", advertisedConfigOptionKeys),
       String(normalized.timeoutSeconds),
@@ -353,6 +356,16 @@ export function buildRuntimeConfigOptionPairs(
     }
   }
   return [...pairs.entries()];
+}
+
+function shouldEmitTimeoutConfigOption(advertisedConfigOptionKeys?: readonly string[]): boolean {
+  const advertisedKeys = buildAdvertisedConfigOptionKeyMap(advertisedConfigOptionKeys);
+  return (
+    advertisedKeys.size === 0 ||
+    RUNTIME_CONFIG_OPTION_ALIASES.timeoutSeconds.some((alias) =>
+      advertisedKeys.has(normalizeLowercaseStringOrEmpty(alias)),
+    )
+  );
 }
 
 function buildAdvertisedConfigOptionKeyMap(

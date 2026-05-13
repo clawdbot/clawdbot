@@ -208,12 +208,23 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function requireWriteConfig(callIndex = 0) {
-  const call = mocks.writeConfigFile.mock.calls.at(callIndex);
+function mockCallArg(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  label: string,
+  callIndex = 0,
+): unknown {
+  const call = mock.mock.calls[callIndex];
   if (!call) {
-    throw new Error(`Expected writeConfigFile call ${callIndex}`);
+    throw new Error(`Expected ${label} call ${callIndex}`);
   }
-  return requireRecord(call[0], "written config");
+  return call[0];
+}
+
+function requireWriteConfig(callIndex = 0) {
+  return requireRecord(
+    mockCallArg(mocks.writeConfigFile, "writeConfigFile", callIndex),
+    "written config",
+  );
 }
 
 function getGateway(config: Record<string, unknown>) {
@@ -333,7 +344,7 @@ describe("runConfigureWizard", () => {
     await runWebConfigureWizard();
 
     const setupConfig = requireRecord(
-      mocks.setupSearch.mock.calls.at(0)?.[0],
+      mockCallArg(mocks.setupSearch, "setupSearch"),
       "setupSearch config",
     );
     expect(getGateway(setupConfig).mode).toBe("local");
@@ -381,7 +392,7 @@ describe("runConfigureWizard", () => {
     await runWebConfigureWizard();
 
     const ownersRequest = requireRecord(
-      mocks.resolvePluginContributionOwners.mock.calls.at(0)?.[0],
+      mockCallArg(mocks.resolvePluginContributionOwners, "plugin owner request"),
       "plugin owner request",
     );
     expect(ownersRequest.contribution).toBe("contracts");
@@ -399,7 +410,7 @@ describe("runConfigureWizard", () => {
 
     await runConfigureWizard({ command: "configure", sections: ["channels"] }, createRuntime());
 
-    const setupChannelsCall = mocks.setupChannels.mock.calls.at(0) as Array<unknown> | undefined;
+    const setupChannelsCall = mocks.setupChannels.mock.calls[0] as Array<unknown> | undefined;
     const setupChannelsConfig = requireRecord(setupChannelsCall?.[0], "setupChannels config");
     expect(getGateway(setupChannelsConfig).mode).toBe("local");
     const setupChannelsOptions = requireRecord(setupChannelsCall?.[3], "setupChannels options");
@@ -597,7 +608,7 @@ describe("runConfigureWizard", () => {
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(3);
 
     // Verify plugin-written nested config survived the retry merge.
-    const retryCall = mocks.replaceConfigFile.mock.calls.at(1)?.[0] as {
+    const retryCall = mockCallArg(mocks.replaceConfigFile, "replaceConfigFile", 1) as {
       nextConfig: Record<string, unknown>;
     };
     const agents = requireRecord(retryCall.nextConfig.agents, "agents config");

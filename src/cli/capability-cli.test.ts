@@ -505,7 +505,7 @@ describe("capability cli", () => {
   }
 
   function expectRuntimeErrorContains(expected: string): void {
-    expect(runtimeErrorMessages().some((message) => message.includes(expected))).toBe(true);
+    expect(runtimeErrorMessages().join("\n")).toContain(expected);
   }
 
   it("lists canonical capabilities", async () => {

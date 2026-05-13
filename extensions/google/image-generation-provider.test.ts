@@ -52,7 +52,7 @@ function fetchRequest(fetchMock: ReturnType<typeof vi.fn>): {
   method?: string;
   url: string;
 } {
-  const [url, init] = fetchMock.mock.calls.at(0) as [string, RequestInit | undefined];
+  const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit | undefined];
   expect(typeof url).toBe("string");
   if (!init) {
     throw new Error("Expected fetch init");

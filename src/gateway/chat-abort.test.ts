@@ -61,6 +61,14 @@ function createOps(params: {
   };
 }
 
+function firstBroadcastPayload(ops: { broadcast: ReturnType<typeof vi.fn> }): unknown {
+  const call = ops.broadcast.mock.calls[0];
+  if (!call) {
+    throw new Error("expected broadcast call");
+  }
+  return call[1];
+}
+
 describe("isChatStopCommandText", () => {
   it("matches slash and standalone multilingual stop forms", () => {
     expect(isChatStopCommandText(" /STOP!!! ")).toBe(true);
@@ -105,7 +113,7 @@ describe("abortChatRunById", () => {
     expect(ops.agentRunSeq.has("client-run-1")).toBe(false);
 
     expect(ops.broadcast).toHaveBeenCalledTimes(1);
-    const payload = ops.broadcast.mock.calls.at(0)?.[1] as ChatAbortPayload;
+    const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
     expect(payload).toEqual({
       runId,
       sessionKey,
@@ -130,7 +138,7 @@ describe("abortChatRunById", () => {
     const result = abortChatRunById(ops, { runId, sessionKey });
 
     expect(result).toEqual({ aborted: true });
-    const payload = ops.broadcast.mock.calls.at(0)?.[1] as Record<string, unknown>;
+    const payload = firstBroadcastPayload(ops) as Record<string, unknown>;
     expect(payload.message).toBeUndefined();
   });
 
@@ -151,7 +159,7 @@ describe("abortChatRunById", () => {
     const result = abortChatRunById(ops, { runId, sessionKey });
 
     expect(result).toEqual({ aborted: true });
-    const payload = ops.broadcast.mock.calls.at(0)?.[1] as ChatAbortPayload;
+    const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
     expect(payload).toEqual({
       runId,
       sessionKey,

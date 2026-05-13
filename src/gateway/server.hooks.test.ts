@@ -189,14 +189,14 @@ describe("gateway server hooks", () => {
       const resWake = await postHook(port, "/hooks/wake", { text: "Ping", mode: "next-heartbeat" });
       expect(resWake.status).toBe(200);
       const wakeEvents = await waitForSystemEvent();
-      expect(wakeEvents.some((event) => event.includes("Ping"))).toBe(true);
+      expect(wakeEvents.join("\n")).toContain("Ping");
       drainSystemEvents(resolveMainKey());
 
       mockIsolatedRunOkOnce();
       const resAgent = await postHook(port, "/hooks/agent", { message: "Do it", name: "Email" });
       expect(resAgent.status).toBe(200);
       const agentEvents = await waitForSystemEvent();
-      expect(agentEvents.some((event) => event.includes("Hook Email: done"))).toBe(true);
+      expect(agentEvents.join("\n")).toContain("Hook Email: done");
       const firstCall = cronRunCall();
       expect(firstCall?.job?.payload?.externalContentSource).toBe("webhook");
       drainSystemEvents(resolveMainKey());
@@ -260,7 +260,7 @@ describe("gateway server hooks", () => {
       );
       expect(resHeader.status).toBe(200);
       const headerEvents = await waitForSystemEvent();
-      expect(headerEvents.some((event) => event.includes("Header auth"))).toBe(true);
+      expect(headerEvents.join("\n")).toContain("Header auth");
       drainSystemEvents(resolveMainKey());
 
       const resGet = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
@@ -327,7 +327,7 @@ describe("gateway server hooks", () => {
       expect(resAgent.status).toBe(200);
 
       const targetEvents = await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
-      expect(targetEvents.some((event) => event.includes("Hook Email: done"))).toBe(true);
+      expect(targetEvents.join("\n")).toContain("Hook Email: done");
       expect(peekSystemEventEntries(resolveMainKey())).toStrictEqual([]);
       drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
     });

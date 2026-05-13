@@ -68,6 +68,24 @@ async function loadGetReplyRuntimeForTest() {
   ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
 }
 
+function requirePreparedReplyParams() {
+  const preparedReplyParams = vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
+  if (!preparedReplyParams) {
+    throw new Error("expected prepared reply params");
+  }
+  return preparedReplyParams;
+}
+
+function requireDirectiveParams() {
+  const directiveParams = mocks.resolveReplyDirectives.mock.calls[0]?.[0] as
+    | { sessionKey?: string; workspaceDir?: string }
+    | undefined;
+  if (!directiveParams) {
+    throw new Error("expected directive params");
+  }
+  return directiveParams;
+}
+
 describe("getReplyFromConfig fast test bootstrap", () => {
   beforeAll(async () => {
     await loadGetReplyRuntimeForTest();
@@ -133,10 +151,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
-    const preparedReplyParams = vi.mocked(runPreparedReplyMock).mock.calls.at(0)?.[0];
-    if (!preparedReplyParams) {
-      throw new Error("expected prepared reply params");
-    }
+    const preparedReplyParams = requirePreparedReplyParams();
     expect(preparedReplyParams.cfg).toBe(cfg);
   });
 
@@ -443,12 +458,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
-    const directiveParams = mocks.resolveReplyDirectives.mock.calls.at(0)?.[0] as
-      | { sessionKey?: string; workspaceDir?: string }
-      | undefined;
-    if (!directiveParams) {
-      throw new Error("expected directive params");
-    }
+    const directiveParams = requireDirectiveParams();
     expect(directiveParams.sessionKey).toBe(targetSessionKey);
     expect(directiveParams.workspaceDir).toBe("/tmp/workspace");
   });

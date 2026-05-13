@@ -15,9 +15,14 @@ const newerConfigHints = [
   "Set OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 only for an intentional downgrade or recovery action.",
 ];
 const newerConfigHintItems = newerConfigHints.map((text) => ({ kind: "generic", text }));
+const invalidConfigRecoveryHint = [
+  'Run "openclaw doctor --fix" to repair, then retry.',
+  "If startup is still blocked, inspect the adjacent .bak backup before restoring it manually.",
+].join("\n");
 
 function expectLatestRuntimeJson(payload: unknown) {
-  expect(defaultRuntime.writeJson.mock.calls.at(-1)?.[0]).toEqual(payload);
+  const calls = defaultRuntime.writeJson.mock.calls;
+  expect(calls[calls.length - 1]?.[0]).toEqual(payload);
 }
 
 vi.mock("../../config/config.js", () => ({
@@ -92,6 +97,14 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
     await expect(runServiceRestart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
 
     expect(service.restart).not.toHaveBeenCalled();
+    expectLatestRuntimeJson({
+      action: "restart",
+      ok: false,
+      error: `Gateway aborted: config is invalid.\nagents.defaults.pdfModel: Unrecognized key\n${invalidConfigRecoveryHint}`,
+      hints: undefined,
+      hintItems: undefined,
+      warnings: undefined,
+    });
   });
 
   it("blocks restart from an older binary when config was written by a newer one", async () => {
@@ -162,6 +175,14 @@ describe("runServiceStart config pre-flight (#35862)", () => {
     await expect(runServiceStart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
 
     expect(service.restart).not.toHaveBeenCalled();
+    expectLatestRuntimeJson({
+      action: "start",
+      ok: false,
+      error: `Gateway aborted: config is invalid.\nagents.defaults.pdfModel: Unrecognized key\n${invalidConfigRecoveryHint}`,
+      hints: undefined,
+      hintItems: undefined,
+      warnings: undefined,
+    });
   });
 
   it("aborts before not-loaded start recovery when config is invalid", async () => {

@@ -81,15 +81,15 @@ function requireRecord(value: unknown): Record<string, unknown> {
 function firstRespondCall(
   opts: GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> },
 ) {
-  return opts.respond.mock.calls.at(0);
+  return opts.respond.mock.calls[0];
 }
 
 function firstEnsureAuthProfileStoreCall() {
-  return mocks.ensureAuthProfileStore.mock.calls.at(0);
+  return mocks.ensureAuthProfileStore.mock.calls[0];
 }
 
 function firstBuildAuthHealthSummaryCall() {
-  return mocks.buildAuthHealthSummary.mock.calls.at(0) as unknown as
+  return mocks.buildAuthHealthSummary.mock.calls[0] as unknown as
     | [{ providers?: string[] }]
     | undefined;
 }

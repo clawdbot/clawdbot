@@ -568,8 +568,13 @@ function Install-OpenClawFromGit {
     }
 
     if (-not $SkipUpdate) {
-        if (-not (git -C $RepoDir status --porcelain 2>$null)) {
-            git -C $RepoDir pull --rebase 2>$null
+        # PowerShell 7+ surfaces native-command stderr as terminating errors when
+        # $ErrorActionPreference=Stop, so git's normal "From <url>" progress line
+        # would abort the script. Swallow failures here — pull is best-effort.
+        $dirty = $null
+        try { $dirty = git -C $RepoDir status --porcelain 2>$null } catch {}
+        if (-not $dirty) {
+            try { git -C $RepoDir pull --rebase 2>$null } catch {}
         } else {
             Write-Host "[!] Repo is dirty; skipping git pull" -ForegroundColor Yellow
         }

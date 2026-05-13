@@ -74,6 +74,8 @@ The request follows the OpenResponses API with item-based input. Current support
 - `tool_choice`: filter or require client tools.
 - `stream`: enables SSE streaming.
 - `max_output_tokens`: best-effort output limit (provider dependent).
+- `temperature`: best-effort sampling temperature forwarded to the provider. Ignored by the ChatGPT-based Codex Responses backend, which uses fixed server-side sampling.
+- `top_p`: best-effort nucleus sampling forwarded to the provider. Same Codex Responses caveat as `temperature`.
 - `user`: stable session routing.
 
 Accepted but **currently ignored**:

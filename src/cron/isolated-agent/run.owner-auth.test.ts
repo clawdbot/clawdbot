@@ -51,7 +51,7 @@ function requireEmbeddedAgentCall(): {
   ownerOnlyToolAllowlist?: string[];
   toolsAllow?: string[];
 } {
-  const call = runEmbeddedPiAgentMock.mock.calls.at(0)?.[0] as
+  const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
     | {
         senderIsOwner?: boolean;
         jobId?: string;

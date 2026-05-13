@@ -349,6 +349,45 @@ function unwrapEnvCommand(parts: string[]): string[] {
   return parts.slice(index);
 }
 
+function matchesExecutableName(value: string, executableName: string): boolean {
+  const normalized = basename(value).toLowerCase();
+  return normalized === executableName || normalized === `${executableName}.exe`;
+}
+
+function matchesPackageSpec(value: string, packageName: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === packageName || normalized.startsWith(`${packageName}@`);
+}
+
+function stripModuleExtension(value: string): string {
+  return value.replace(/\.[cm]?js$/i, "").toLowerCase();
+}
+
+function isAcpCommand(
+  command: string | undefined,
+  params: { packageName: string; executableName: string },
+): boolean {
+  if (!command) {
+    return false;
+  }
+  const parts = unwrapEnvCommand(splitCommandParts(command.trim()));
+  if (!parts.length) {
+    return false;
+  }
+  if (parts.some((part) => matchesPackageSpec(part, params.packageName))) {
+    return true;
+  }
+  const commandName = basename(parts[0] ?? "");
+  if (matchesExecutableName(commandName, params.executableName)) {
+    return true;
+  }
+  if (!matchesExecutableName(commandName, "node")) {
+    return false;
+  }
+  const scriptName = stripModuleExtension(basename(parts[1] ?? ""));
+  return scriptName === params.executableName || scriptName === `${params.executableName}-wrapper`;
+}
+
 function isOpenClawBridgeCommand(command: string | undefined): boolean {
   if (!command) {
     return false;
@@ -364,30 +403,18 @@ function isOpenClawBridgeCommand(command: string | undefined): boolean {
   return /^openclaw(?:\.[cm]?js)?$/i.test(scriptName) && parts[2] === OPENCLAW_BRIDGE_SUBCOMMAND;
 }
 
-function isCodexAcpPackageSpec(value: string): boolean {
-  return /^@zed-industries\/codex-acp(?:@.+)?$/i.test(value.trim());
+function isCodexAcpCommand(command: string | undefined): boolean {
+  return isAcpCommand(command, {
+    packageName: "@zed-industries/codex-acp",
+    executableName: "codex-acp",
+  });
 }
 
-function isCodexAcpCommand(command: string | undefined): boolean {
-  if (!command) {
-    return false;
-  }
-  const parts = unwrapEnvCommand(splitCommandParts(command.trim()));
-  if (!parts.length) {
-    return false;
-  }
-  if (parts.some(isCodexAcpPackageSpec)) {
-    return true;
-  }
-  const commandName = basename(parts[0] ?? "");
-  if (/^codex-acp(?:\.exe)?$/i.test(commandName)) {
-    return true;
-  }
-  if (commandName !== "node") {
-    return false;
-  }
-  const scriptName = basename(parts[1] ?? "");
-  return /^codex-acp(?:-wrapper)?(?:\.[cm]?js)?$/i.test(scriptName);
+function isClaudeAcpCommand(command: string | undefined): boolean {
+  return isAcpCommand(command, {
+    packageName: "@agentclientprotocol/claude-agent-acp",
+    executableName: "claude-agent-acp",
+  });
 }
 
 function failUnsupportedCodexAcpModel(rawModel: string, detail?: string): never {
@@ -403,6 +430,7 @@ function failUnsupportedCodexAcpModel(rawModel: string, detail?: string): never 
 // `SessionResumeRequiredError` on agent restart. Fail fast at this boundary instead.
 // See openclaw/openclaw#73071.
 const SUPPORTED_RUNTIME_SESSION_MODES = new Set(["persistent", "oneshot"] as const);
+const WIRE_TIMEOUT_CONFIG_KEYS = new Set(["timeout", "timeout_seconds"]);
 
 function assertSupportedRuntimeSessionMode(
   mode: unknown,
@@ -889,10 +917,11 @@ export class AcpxRuntime implements AcpRuntime {
     const delegate = await this.resolveDelegateForHandle(input.handle);
     const command = await this.resolveCommandForHandle(input.handle);
     const key = input.key.trim().toLowerCase();
-    if (isCodexAcpCommand(command)) {
-      if (key === "timeout" || key === "timeout_seconds") {
-        return;
-      }
+    const isCodexAcp = isCodexAcpCommand(command);
+    if (WIRE_TIMEOUT_CONFIG_KEYS.has(key) && (isCodexAcp || isClaudeAcpCommand(command))) {
+      return;
+    }
+    if (isCodexAcp) {
       if (
         key === "model" ||
         key === "thinking" ||
@@ -974,6 +1003,7 @@ export const __testing = {
   appendCodexAcpConfigOverrides,
   assertSupportedRuntimeSessionMode,
   codexAcpSessionModelId,
+  isClaudeAcpCommand,
   isCodexAcpCommand,
   normalizeCodexAcpModelOverride,
 };

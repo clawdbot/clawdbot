@@ -17,12 +17,17 @@ describe("slash command browser import", () => {
     const mod = (await import(browserImportPath)) as SlashCommandsModule;
 
     const thinkCommand = mod.SLASH_COMMANDS.find((command) => command.name === "think");
-    expect(thinkCommand).toMatchObject({
+    expect(thinkCommand).toEqual({
       key: "think",
       name: "think",
+      aliases: ["thinking", "t"],
+      description: "Set thinking level.",
       category: "model",
-      executeLocal: true,
       args: "[level]",
+      icon: "brain",
+      executeLocal: true,
+      argOptions: undefined,
+      tier: "essential",
     });
   });
 
@@ -38,10 +43,17 @@ describe("slash command browser import", () => {
     );
     const mod = (await import(browserImportPath)) as SlashCommandsModule;
 
-    expect(mod.SLASH_COMMANDS.find((command) => command.name === "think")).toMatchObject({
+    expect(mod.SLASH_COMMANDS.find((command) => command.name === "think")).toEqual({
       key: "think",
+      name: "think",
+      aliases: ["thinking", "t"],
+      description: "Set thinking level.",
       category: "model",
+      args: "[level]",
+      icon: "brain",
       executeLocal: true,
+      argOptions: undefined,
+      tier: "essential",
     });
     expect(importLines(slashCommands)).toEqual([
       'import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";',

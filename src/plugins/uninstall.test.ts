@@ -245,7 +245,7 @@ async function expectPathAccessState(pathToCheck: string, expected: "exists" | "
 }
 
 function expectNpmUninstallCommand(params: { packageName: string; npmRoot: string }) {
-  const command = runCommandWithTimeoutMock.mock.calls.at(0);
+  const command = runCommandWithTimeoutMock.mock.calls[0];
   if (!command) {
     throw new Error("Expected npm uninstall command");
   }

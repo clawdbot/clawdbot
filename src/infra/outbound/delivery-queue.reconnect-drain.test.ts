@@ -55,7 +55,7 @@ function firstMockArg(
 }
 
 function expectLogMessageWith(logFn: ReturnType<typeof vi.fn>, text: string): void {
-  expect(logFn.mock.calls.some(([message]) => String(message).includes(text))).toBe(true);
+  expect(logFn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(text);
 }
 
 async function drainDirectChatReconnectPending(opts: {

@@ -11,6 +11,24 @@ import {
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 
+function firstBeforeAgentReplyCall() {
+  const call = mockedGlobalHookRunner.runBeforeAgentReply.mock.calls[0];
+  if (!call) {
+    throw new Error("expected before_agent_reply hook call");
+  }
+  return call;
+}
+
+function firstAttemptParams(): { modelRun?: boolean; promptMode?: string } {
+  const call = mockedRunEmbeddedAttempt.mock.calls[0] as
+    | [{ modelRun?: boolean; promptMode?: string }]
+    | undefined;
+  if (!call) {
+    throw new Error("expected embedded attempt call");
+  }
+  return call[0];
+}
+
 describe("runEmbeddedPiAgent cron before_agent_reply seam", () => {
   beforeAll(async () => {
     ({ runEmbeddedPiAgent } = await loadRunOverflowCompactionHarness());
@@ -37,8 +55,7 @@ describe("runEmbeddedPiAgent cron before_agent_reply seam", () => {
     });
 
     expect(mockedGlobalHookRunner.runBeforeAgentReply).toHaveBeenCalledTimes(1);
-    const [hookPayload, hookContext] =
-      mockedGlobalHookRunner.runBeforeAgentReply.mock.calls.at(0) ?? [];
+    const [hookPayload, hookContext] = firstBeforeAgentReplyCall();
     expect(hookPayload).toEqual({
       cleanedBody: "__openclaw_memory_core_short_term_promotion_dream__",
     });
@@ -94,10 +111,8 @@ describe("runEmbeddedPiAgent cron before_agent_reply seam", () => {
       promptMode: "none",
     });
 
-    const [attemptParams] = (mockedRunEmbeddedAttempt.mock.calls.at(0) ?? []) as [
-      { modelRun?: boolean; promptMode?: string }?,
-    ];
-    expect(attemptParams?.modelRun).toBe(true);
-    expect(attemptParams?.promptMode).toBe("none");
+    const attemptParams = firstAttemptParams();
+    expect(attemptParams.modelRun).toBe(true);
+    expect(attemptParams.promptMode).toBe("none");
   });
 });

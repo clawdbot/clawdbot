@@ -165,7 +165,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   }
 
   function expectExecDeniedEvent(sendNodeEvent: MockedSendNodeEvent): void {
-    const call = sendNodeEvent.mock.calls.at(0);
+    const call = sendNodeEvent.mock.calls[0];
     if (!call) {
       throw new Error("expected sendNodeEvent call");
     }

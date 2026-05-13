@@ -48,7 +48,7 @@ function issueMessages(issues: Array<{ message: string }>): string[] {
 }
 
 function expectSomeIssueMessageContains(issues: Array<{ message: string }>, text: string): void {
-  expect(issueMessages(issues).some((message) => message.includes(text))).toBe(true);
+  expect(issueMessages(issues).join("\n")).toContain(text);
 }
 
 describe("boolean config validation", () => {

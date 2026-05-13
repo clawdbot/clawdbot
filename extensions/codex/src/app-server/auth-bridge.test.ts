@@ -550,6 +550,25 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it("leaves native app-server auth untouched when auth bridging is disabled", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async () => ({ requiresOpenaiAuth: true }));
+    try {
+      vi.stubEnv("OPENAI_API_KEY", "env-api-key");
+
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+        authProfileId: null,
+        startOptions: createStartOptions(),
+      });
+
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("applies a normal OpenAI API-key profile as a Codex app-server backup", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const request = vi.fn(async () => ({ type: "apiKey" }));

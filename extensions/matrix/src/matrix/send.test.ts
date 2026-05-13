@@ -145,7 +145,7 @@ function mockCallArg(
   label: string,
   argIndex: number,
 ) {
-  const call = mock.mock.calls.at(0);
+  const call = mock.mock.calls[0];
   if (!call) {
     throw new Error(`expected ${label} call`);
   }
@@ -153,7 +153,7 @@ function mockCallArg(
 }
 
 function sentContent(sendMessage: { mock: { calls: Array<Array<unknown>> } }, index = 0) {
-  return requireRecord(sendMessage.mock.calls.at(index)?.[1], `sent content ${index}`);
+  return requireRecord(sendMessage.mock.calls[index]?.[1], `sent content ${index}`);
 }
 
 function newContent(content: Record<string, unknown>) {
@@ -336,12 +336,7 @@ describe("sendMessageMatrix media", () => {
       replyToId: "$reply",
     });
 
-    const transcriptContent = sendMessage.mock.calls.at(1)?.[1] as {
-      body?: string;
-      "m.relates_to"?: {
-        "m.in_reply_to"?: { event_id?: string };
-      };
-    };
+    const transcriptContent = sentContent(sendMessage, 1);
 
     expect(transcriptContent.body).toBe("voice caption");
     expect(requireRecord(transcriptContent["m.relates_to"], "relation")["m.in_reply_to"]).toEqual({
@@ -676,9 +671,9 @@ describe("sendMessageMatrix threads", () => {
     expect(sentContent(sendMessage, 0).body).toBe("first");
     expect(sentContent(sendMessage, 0)["com.openclaw.approval"]).toEqual({ id: "req-1" });
     expect(sentContent(sendMessage, 1).body).toBe("second");
-    expect(sendMessage.mock.calls.at(1)?.[1]).not.toHaveProperty("com.openclaw.approval");
+    expect(sentContent(sendMessage, 1)).not.toHaveProperty("com.openclaw.approval");
     expect(sentContent(sendMessage, 2).body).toBe("third");
-    expect(sendMessage.mock.calls.at(2)?.[1]).not.toHaveProperty("com.openclaw.approval");
+    expect(sentContent(sendMessage, 2)).not.toHaveProperty("com.openclaw.approval");
   });
 });
 

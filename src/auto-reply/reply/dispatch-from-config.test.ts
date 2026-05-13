@@ -894,11 +894,12 @@ describe("dispatchReplyFromConfig", () => {
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    const pluginLoadOptions = runtimePluginMocks.ensureRuntimePluginsLoaded.mock.calls.at(
-      0,
-    )?.[0] as { config?: unknown; workspaceDir?: unknown } | undefined;
-    expect(pluginLoadOptions?.config).toBe(cfg);
-    expect(typeof pluginLoadOptions?.workspaceDir).toBe("string");
+    const pluginLoadOptions = firstMockArg(
+      runtimePluginMocks.ensureRuntimePluginsLoaded,
+      "runtime plugin load",
+    ) as { config?: unknown; workspaceDir?: unknown };
+    expect(pluginLoadOptions.config).toBe(cfg);
+    expect(typeof pluginLoadOptions.workspaceDir).toBe("string");
     expect(runtimePluginMocks.ensureRuntimePluginsLoaded.mock.invocationCallOrder[0]).toBeLessThan(
       hookMocks.runner.hasHooks.mock.invocationCallOrder[0],
     );
@@ -1599,11 +1600,13 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(2);
     expect(firstToolResultPayload(dispatcher)?.text).toBe("🔧 tools/sessions_send");
-    const sent = (dispatcher.sendToolResult as Mock).mock.calls.at(1)?.[0] as
-      | ReplyPayload
-      | undefined;
-    expect(sent?.mediaUrl).toBe("https://example.com/tts-native.opus");
-    expect(sent?.text).toBeUndefined();
+    const sent = firstMockArg(
+      dispatcher.sendToolResult as ReturnType<typeof vi.fn>,
+      "tool result",
+      1,
+    ) as ReplyPayload;
+    expect(sent.mediaUrl).toBe("https://example.com/tts-native.opus");
+    expect(sent.text).toBeUndefined();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
@@ -1646,10 +1649,12 @@ describe("dispatchReplyFromConfig", () => {
     expect(firstToolResultPayload(dispatcher)?.text).toBe(
       "Inspect code, patch it, run tests.\n\n1. Inspect code\n2. Patch code\n3. Run tests",
     );
-    const secondToolPayload = (dispatcher.sendToolResult as Mock).mock.calls.at(1)?.[0] as
-      | ReplyPayload
-      | undefined;
-    expect(secondToolPayload?.text).toBe("Working: awaiting approval: pnpm test");
+    const secondToolPayload = firstMockArg(
+      dispatcher.sendToolResult as ReturnType<typeof vi.fn>,
+      "tool result",
+      1,
+    ) as ReplyPayload;
+    expect(secondToolPayload.text).toBe("Working: awaiting approval: pnpm test");
     expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(2);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });

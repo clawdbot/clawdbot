@@ -11,6 +11,8 @@
 /.github/workflows/codeql.yml @openclaw/openclaw-secops
 /.github/workflows/codeql-android-critical-security.yml @openclaw/openclaw-secops
 /.github/workflows/codeql-critical-quality.yml @openclaw/openclaw-secops
+/.github/workflows/dependency-change-awareness.yml @openclaw/openclaw-secops
+/test/scripts/dependency-change-awareness-workflow.test.ts @openclaw/openclaw-secops
 /src/security/ @openclaw/openclaw-secops
 /src/secrets/ @openclaw/openclaw-secops
 /src/config/*secret*.ts @openclaw/openclaw-secops

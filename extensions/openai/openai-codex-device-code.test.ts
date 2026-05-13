@@ -17,6 +17,14 @@ function createJsonResponse(body: unknown, init?: { status?: number }) {
   });
 }
 
+function fetchCall(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>, index: number) {
+  const call = fetchMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected fetch call ${index}`);
+  }
+  return call;
+}
+
 describe("loginOpenAICodexDeviceCode", () => {
   it("requests a device code, polls for authorization, and exchanges OAuth tokens", async () => {
     vi.useFakeTimers();
@@ -74,30 +82,30 @@ describe("loginOpenAICodexDeviceCode", () => {
       await vi.advanceTimersByTimeAsync(1);
       const credentials = await credentialsPromise;
 
-      const userCodeRequest = fetchMock.mock.calls.at(0);
-      expect(userCodeRequest?.[0]).toBe("https://auth.openai.com/api/accounts/deviceauth/usercode");
-      expect(userCodeRequest?.[1]?.method).toBe("POST");
-      expect(userCodeRequest?.[1]?.headers).toEqual({
+      const userCodeRequest = fetchCall(fetchMock, 0);
+      expect(userCodeRequest[0]).toBe("https://auth.openai.com/api/accounts/deviceauth/usercode");
+      expect(userCodeRequest[1]?.method).toBe("POST");
+      expect(userCodeRequest[1]?.headers).toEqual({
         "Content-Type": "application/json",
         originator: "openclaw",
         version: "2026.3.22",
         "User-Agent": "openclaw/2026.3.22",
       });
 
-      const deviceTokenRequest = fetchMock.mock.calls.at(1);
-      expect(deviceTokenRequest?.[0]).toBe("https://auth.openai.com/api/accounts/deviceauth/token");
-      expect(deviceTokenRequest?.[1]?.method).toBe("POST");
-      expect(deviceTokenRequest?.[1]?.headers).toEqual({
+      const deviceTokenRequest = fetchCall(fetchMock, 1);
+      expect(deviceTokenRequest[0]).toBe("https://auth.openai.com/api/accounts/deviceauth/token");
+      expect(deviceTokenRequest[1]?.method).toBe("POST");
+      expect(deviceTokenRequest[1]?.headers).toEqual({
         "Content-Type": "application/json",
         originator: "openclaw",
         version: "2026.3.22",
         "User-Agent": "openclaw/2026.3.22",
       });
 
-      const oauthTokenRequest = fetchMock.mock.calls.at(3);
-      expect(oauthTokenRequest?.[0]).toBe("https://auth.openai.com/oauth/token");
-      expect(oauthTokenRequest?.[1]?.method).toBe("POST");
-      expect(oauthTokenRequest?.[1]?.headers).toEqual({
+      const oauthTokenRequest = fetchCall(fetchMock, 3);
+      expect(oauthTokenRequest[0]).toBe("https://auth.openai.com/oauth/token");
+      expect(oauthTokenRequest[1]?.method).toBe("POST");
+      expect(oauthTokenRequest[1]?.headers).toEqual({
         "Content-Type": "application/x-www-form-urlencoded",
         originator: "openclaw",
         version: "2026.3.22",

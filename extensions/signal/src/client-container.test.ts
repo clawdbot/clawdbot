@@ -57,7 +57,7 @@ function parseFetchBody(index = 0): Record<string, unknown> {
 
 function expectMockLogNotContains(mock: ReturnType<typeof vi.fn>, expected: string): void {
   const messages = mock.mock.calls.map((call) => String(call[0] ?? ""));
-  expect(messages.every((message) => !message.includes(expected))).toBe(true);
+  expect(messages.join("\n")).not.toContain(expected);
 }
 
 // Minimal WebSocket mock for connection-log assertions.
@@ -377,11 +377,7 @@ describe("containerSendMessage", () => {
       textStyles: [{ start: 0, length: 4, style: "BOLD" }],
     });
 
-    const callArgs = mockFetch.mock.calls.at(0);
-    if (callArgs === undefined) {
-      throw new Error("expected container fetch call");
-    }
-    const body = JSON.parse(callArgs[1].body);
+    const body = parseFetchBody();
     expect(body.message).toBe("**Bold** \\* not italic");
   });
 
@@ -400,11 +396,7 @@ describe("containerSendMessage", () => {
       textStyles: [{ start: 0, length: 4, style: "BOLD" }],
     });
 
-    const callArgs = mockFetch.mock.calls.at(0);
-    if (callArgs === undefined) {
-      throw new Error("expected container fetch call");
-    }
-    const body = JSON.parse(callArgs[1].body);
+    const body = parseFetchBody();
     expect(body.message).toBe("**Bold** C:\\Temp\\file and /foo\\bar/");
   });
 
@@ -433,11 +425,7 @@ describe("containerSendMessage", () => {
       attachments: [tmpFile],
     });
 
-    const callArgs = mockFetch.mock.calls.at(0);
-    if (callArgs === undefined) {
-      throw new Error("expected container fetch call");
-    }
-    const body = JSON.parse(callArgs[1].body);
+    const body = parseFetchBody();
     expect(body.attachments).toBeUndefined();
     if (!Array.isArray(body.base64_attachments)) {
       throw new Error("expected base64 attachments array");

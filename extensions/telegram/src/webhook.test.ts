@@ -146,7 +146,7 @@ function mockMessages(mock: unknown): string[] {
 }
 
 function expectMockMessageContains(mock: unknown, expected: string): void {
-  expect(mockMessages(mock).some((message) => message.includes(expected))).toBe(true);
+  expect(mockMessages(mock).join("\n")).toContain(expected);
 }
 
 function expectStatusCall(

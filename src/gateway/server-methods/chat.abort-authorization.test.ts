@@ -10,6 +10,7 @@ type AbortResponsePayload = {
   aborted?: boolean;
   runIds?: string[];
 };
+type AbortRespond = Awaited<ReturnType<typeof invokeChatAbortHandler>>;
 
 async function invokeSingleRunAbort({
   context,
@@ -46,6 +47,15 @@ function createSingleAbortContext() {
   });
 }
 
+function requireLastRespondCall(respond: AbortRespond) {
+  const calls = respond.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error("expected respond call");
+  }
+  return call;
+}
+
 describe("chat.abort authorization", () => {
   it("rejects explicit run aborts from other clients", async () => {
     const context = createSingleAbortContext();
@@ -57,7 +67,7 @@ describe("chat.abort authorization", () => {
       scopes: ["operator.write"],
     });
 
-    const [ok, payload, error] = respond.mock.calls.at(-1) ?? [];
+    const [ok, payload, error] = requireLastRespondCall(respond);
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
     expect(error?.code).toBe("INVALID_REQUEST");
@@ -82,7 +92,7 @@ describe("chat.abort authorization", () => {
       },
     });
 
-    const [ok, payload] = respond.mock.calls.at(-1) ?? [];
+    const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
     const abortPayload = payload as AbortResponsePayload | undefined;
     expect(abortPayload?.aborted).toBe(true);
@@ -108,7 +118,7 @@ describe("chat.abort authorization", () => {
       },
     });
 
-    const [ok, payload] = respond.mock.calls.at(-1) ?? [];
+    const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
     const abortPayload = payload as AbortResponsePayload | undefined;
     expect(abortPayload?.aborted).toBe(true);
@@ -127,7 +137,7 @@ describe("chat.abort authorization", () => {
       scopes: ["operator.admin"],
     });
 
-    const [ok, payload] = respond.mock.calls.at(-1) ?? [];
+    const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
     const abortPayload = payload as AbortResponsePayload | undefined;
     expect(abortPayload?.aborted).toBe(true);

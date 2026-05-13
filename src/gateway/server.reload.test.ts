@@ -291,6 +291,15 @@ vi.mock("./config-reload.js", async (importOriginal) => {
 
 installGatewayTestHooks({ scope: "suite" });
 
+function latestMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const calls = mock.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 async function waitForGatewayAuthChangedClose(ws: WebSocket): Promise<{
   code: number;
   reason: string;
@@ -704,21 +713,21 @@ describe("gateway hot reload", () => {
       );
 
       expect(hoisted.stopGmailWatcher).toHaveBeenCalled();
-      const restartedGmailCall = hoisted.startGmailWatcher.mock.calls.at(-1) as
-        | [typeof nextConfig]
-        | undefined;
-      const restartedGmailConfig = restartedGmailCall?.[0];
-      expect(restartedGmailConfig?.hooks).toEqual(nextConfig.hooks);
-      expect(restartedGmailConfig?.channels).toEqual(nextConfig.channels);
+      const [restartedGmailConfig] = latestMockCall(
+        hoisted.startGmailWatcher,
+        "Gmail watcher start",
+      ) as [typeof nextConfig];
+      expect(restartedGmailConfig.hooks).toEqual(nextConfig.hooks);
+      expect(restartedGmailConfig.channels).toEqual(nextConfig.channels);
 
       expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
       expect(hoisted.heartbeatUpdateConfig).toHaveBeenCalledTimes(1);
-      const heartbeatUpdateCall = hoisted.heartbeatUpdateConfig.mock.calls.at(-1) as
-        | [typeof nextConfig]
-        | undefined;
-      const heartbeatConfig = heartbeatUpdateCall?.[0];
-      expect(heartbeatConfig?.agents).toEqual(nextConfig.agents);
-      expect(heartbeatConfig?.web).toEqual(nextConfig.web);
+      const [heartbeatConfig] = latestMockCall(
+        hoisted.heartbeatUpdateConfig,
+        "heartbeat config update",
+      ) as [typeof nextConfig];
+      expect(heartbeatConfig.agents).toEqual(nextConfig.agents);
+      expect(heartbeatConfig.web).toEqual(nextConfig.web);
 
       await vi.waitFor(() => {
         expect(hoisted.cronInstances.length).toBeGreaterThanOrEqual(1);
