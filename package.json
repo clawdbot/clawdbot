@@ -771,7 +771,7 @@
     "express": "^5.2.1",
     "file-type": "21.3.4",
     "gaxios": "7.1.4",
-    "hono": "4.12.14",
+    "hono": "4.12.18",
     "ipaddr.js": "^2.3.0",
     "jiti": "^2.6.1",
     "json5": "^2.2.3",
@@ -789,7 +789,7 @@
     "tar": "7.5.12",
     "tslog": "^4.10.2",
     "undici": "^7.24.5",
-    "uuid": "^13.0.0",
+    "uuid": "^14.0.0",
     "ws": "^8.20.0",
     "yaml": "^2.8.3",
     "zod": "^4.3.6"
@@ -836,7 +836,7 @@
   "pnpm": {
     "minimumReleaseAge": 2880,
     "overrides": {
-      "hono": "4.12.14",
+      "hono": "4.12.18",
       "@hono/node-server": "1.19.10",
       "fast-xml-parser": "5.5.7",
       "request": "npm:@cypress/request@3.0.10",
