@@ -16,3 +16,5 @@ onlyBuiltDependencies:
   - '@firebase/util'
   - esbuild
   - protobufjs
+overrides:
+  fast-uri@<=3.1.2: 3.1.2
