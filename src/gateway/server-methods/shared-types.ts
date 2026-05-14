@@ -13,6 +13,7 @@ import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import type { ConnectParams, ErrorShape, RequestFrame } from "../protocol/index.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
+import type { BufferedAgentEvent } from "../server-chat-state.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 
@@ -75,6 +76,9 @@ export type GatewayRequestContext = {
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastLen: Map<string, number>;
+  chatDeltaLastBroadcastText: Map<string, string>;
+  agentDeltaSentAt: Map<string, number>;
+  bufferedAgentEvents: Map<string, BufferedAgentEvent>;
   addChatRun: (sessionId: string, entry: { sessionKey: string; clientRunId: string }) => void;
   removeChatRun: (
     sessionId: string,

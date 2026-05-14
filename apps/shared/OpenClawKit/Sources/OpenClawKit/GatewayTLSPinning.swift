@@ -79,6 +79,12 @@ public protocol GatewayDeviceTokenRetryTrustProviding: AnyObject {
     var allowsDeviceTokenRetryAuth: Bool { get }
 }
 
+enum GatewayTLSFirstUsePolicy {
+    static func allowsFirstUsePin(systemTrustOk: Bool) -> Bool {
+        systemTrustOk
+    }
+}
+
 public enum GatewayTLSStore {
     private static let keychainService = "ai.openclaw.tls-pinning"
 
@@ -159,7 +165,8 @@ public enum GatewayTLSStore {
     }
 }
 
-public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLSessionDelegate, GatewayTLSFailureProviding, GatewayDeviceTokenRetryTrustProviding, @unchecked Sendable {
+public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLSessionDelegate,
+GatewayTLSFailureProviding, GatewayDeviceTokenRetryTrustProviding, @unchecked Sendable {
     private let params: GatewayTLSParams
     private let failureLock = NSLock()
     private var lastTLSFailure: GatewayTLSValidationFailure?
@@ -238,12 +245,14 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
                 return
             }
             if self.params.allowTOFU {
-                if let storeKey = params.storeKey {
-                    GatewayTLSStore.saveFingerprint(fingerprint, stableID: storeKey)
+                if GatewayTLSFirstUsePolicy.allowsFirstUsePin(systemTrustOk: systemTrustOk) {
+                    if let storeKey = params.storeKey {
+                        GatewayTLSStore.saveFingerprint(fingerprint, stableID: storeKey)
+                    }
+                    self.clearTLSFailure()
+                    completionHandler(.useCredential, URLCredential(trust: trust))
+                    return
                 }
-                self.clearTLSFailure()
-                completionHandler(.useCredential, URLCredential(trust: trust))
-                return
             }
         }
 

@@ -74,6 +74,32 @@ describe("resolveSlackChannelConfig", () => {
     });
   });
 
+  it("merges direct bot loop protection over wildcard defaults field-by-field", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channels: {
+        "*": {
+          botLoopProtection: {
+            windowSeconds: 120,
+            cooldownSeconds: 240,
+          },
+        },
+        C1: {
+          botLoopProtection: {
+            maxEventsPerWindow: 3,
+          },
+        },
+      },
+      defaultRequireMention: true,
+    });
+
+    expect(res?.botLoopProtection).toEqual({
+      maxEventsPerWindow: 3,
+      windowSeconds: 120,
+      cooldownSeconds: 240,
+    });
+  });
+
   it("uses direct match metadata when channel config exists", () => {
     const res = resolveSlackChannelConfig({
       channelId: "C1",

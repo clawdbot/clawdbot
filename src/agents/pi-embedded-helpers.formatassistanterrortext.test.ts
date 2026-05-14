@@ -281,6 +281,15 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("returns an explicit re-authentication message for Codex app-server refresh failures", () => {
+    const msg = makeAssistantError(
+      "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication refresh failed. Re-authenticate this provider and try again.",
+    );
+  });
+
   it("returns a contention-specific message for OAuth refresh lock timeouts", () => {
     const msg = makeAssistantError("file lock timeout for /tmp/openclaw-oauth-refresh.lock");
     expect(formatAssistantErrorText(msg)).toBe(

@@ -49,7 +49,7 @@ let resolveProviderSetupFlowContributions: ResolveProviderSetupFlowContributions
 let resolveProviderModelPickerFlowContributions: ResolveProviderModelPickerFlowContributions;
 
 function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
-  const call = mock.mock.calls.at(0);
+  const call = mock.mock.calls[0];
   if (!call) {
     throw new Error(`expected ${label} call`);
   }

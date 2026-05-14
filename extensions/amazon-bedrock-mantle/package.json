@@ -1,8 +1,11 @@
 {
   "name": "@openclaw/amazon-bedrock-mantle-provider",
   "version": "2026.5.12-beta.1",
-  "private": true,
   "description": "OpenClaw Amazon Bedrock Mantle (OpenAI-compatible) provider plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
     "@anthropic-ai/sdk": "0.95.2",
@@ -15,6 +18,21 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "install": {
+      "npmSpec": "@openclaw/amazon-bedrock-mantle-provider",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.5.12-beta.1"
+    },
+    "compat": {
+      "pluginApi": ">=2026.5.12-beta.1"
+    },
+    "build": {
+      "openclawVersion": "2026.5.12-beta.1",
+      "bundledDist": false
+    },
+    "release": {
+      "publishToNpm": true
+    }
   }
 }

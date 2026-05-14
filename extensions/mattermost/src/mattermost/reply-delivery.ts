@@ -21,6 +21,14 @@ type SendMattermostMessage = (
   },
 ) => Promise<unknown>;
 
+/**
+ * Result of `deliverMattermostReplyPayload`. Callers in `monitor.ts` use this
+ * to distinguish a successful visible send from an intentionally suppressed
+ * reasoning payload from a substantive payload that ended up sending nothing
+ * (the silent-completion symptom in #80501).
+ */
+export type MattermostReplyDeliveryOutcome = "reasoning_skipped" | "empty" | "text" | "media";
+
 export async function deliverMattermostReplyPayload(params: {
   core: PluginRuntime;
   cfg: OpenClawConfig;
@@ -32,9 +40,9 @@ export async function deliverMattermostReplyPayload(params: {
   textLimit: number;
   tableMode: MarkdownTableMode;
   sendMessage: SendMattermostMessage;
-}): Promise<void> {
+}): Promise<MattermostReplyDeliveryOutcome> {
   if (isReasoningReplyPayload(params.payload)) {
-    return;
+    return "reasoning_skipped";
   }
   const reply = resolveSendableOutboundReplyParts(params.payload, {
     text: params.core.channel.text.convertMarkdownTables(
@@ -48,7 +56,7 @@ export async function deliverMattermostReplyPayload(params: {
     "mattermost",
     params.accountId,
   );
-  await deliverTextOrMediaReply({
+  return await deliverTextOrMediaReply({
     payload: params.payload,
     text: reply.text,
     chunkText: (value) =>

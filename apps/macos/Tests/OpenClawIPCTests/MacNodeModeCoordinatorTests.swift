@@ -35,6 +35,60 @@ struct MacNodeModeCoordinatorTests {
         #expect(MacNodeModeCoordinator.tlsPinStoreKey(for: url) == "gateway.example.ts.net:443")
     }
 
+    @Test func `remote tls params prefer configured fingerprint over stored pin`() throws {
+        let url = try #require(URL(string: "wss://gateway.example.com"))
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "tlsFingerprint": "sha256:configured",
+                ],
+            ],
+        ]
+
+        let params = try #require(MacNodeModeCoordinator.tlsParams(
+            for: url,
+            connectionMode: .remote,
+            root: root,
+            storedFingerprint: "stored"))
+
+        #expect(params.expectedFingerprint == "sha256:configured")
+        #expect(params.allowTOFU == false)
+        #expect(params.storeKey == "gateway.example.com:443")
+    }
+
+    @Test func `remote tls params allow first use only when no configured or stored pin exists`() throws {
+        let url = try #require(URL(string: "wss://gateway.example.com"))
+
+        let params = try #require(MacNodeModeCoordinator.tlsParams(
+            for: url,
+            connectionMode: .remote,
+            root: [:],
+            storedFingerprint: nil))
+
+        #expect(params.expectedFingerprint == nil)
+        #expect(params.allowTOFU == true)
+    }
+
+    @Test func `local tls params ignore remote configured fingerprint`() throws {
+        let url = try #require(URL(string: "wss://127.0.0.1:18789"))
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "tlsFingerprint": "sha256:remote",
+                ],
+            ],
+        ]
+
+        let params = try #require(MacNodeModeCoordinator.tlsParams(
+            for: url,
+            connectionMode: .local,
+            root: root,
+            storedFingerprint: "stored-local"))
+
+        #expect(params.expectedFingerprint == "stored-local")
+        #expect(params.allowTOFU == false)
+    }
+
     @Test func `auto repairs trusted tailscale serve pin mismatch`() throws {
         let url = try #require(URL(string: "wss://gateway.example.ts.net"))
         let failure = GatewayTLSValidationFailure(

@@ -57,7 +57,7 @@ async function loadGoogleChatActionMedia(params: {
 }) {
   const runtime = getGoogleChatRuntime();
   return /^https?:\/\//i.test(params.mediaUrl)
-    ? await runtime.channel.media.fetchRemoteMedia({
+    ? await runtime.channel.media.readRemoteMediaBuffer({
         url: params.mediaUrl,
         maxBytes: params.maxBytes,
       })

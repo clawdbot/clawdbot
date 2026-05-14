@@ -101,15 +101,19 @@ export async function handleDreamingCommand(api: OpenClawPluginApi, ctx: PluginC
       return { text: "⚠️ /dreaming on|off requires operator.admin for gateway clients." };
     }
     const enabled = firstToken === "on";
-    const nextConfig = updateDreamingEnabledInConfig(currentConfig, enabled);
-    await api.runtime.config.replaceConfigFile({
-      nextConfig,
+    const committed = await api.runtime.config.mutateConfigFile({
       afterWrite: { mode: "auto" },
+      mutate: (draft) => {
+        const nextConfig = updateDreamingEnabledInConfig(draft, enabled);
+        Object.assign(draft, nextConfig);
+      },
     });
     return {
-      text: [`Dreaming ${enabled ? "enabled" : "disabled"}.`, "", formatStatus(nextConfig)].join(
-        "\n",
-      ),
+      text: [
+        `Dreaming ${enabled ? "enabled" : "disabled"}.`,
+        "",
+        formatStatus(committed.nextConfig),
+      ].join("\n"),
     };
   }
 

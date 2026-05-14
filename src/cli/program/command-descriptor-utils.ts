@@ -11,6 +11,7 @@ export type CommandDescriptorCatalog<TDescriptor extends NamedCommandDescriptor>
   getDescriptors: () => readonly TDescriptor[];
   getNames: () => string[];
   getCommandsWithSubcommands: () => string[];
+  getParentDefaultHelpCommands: () => string[];
 };
 
 export function normalizeCommandDescriptorName(name: string): string | null {
@@ -42,6 +43,14 @@ export function getCommandsWithSubcommands(
     .map((descriptor) => descriptor.name);
 }
 
+export function getParentDefaultHelpCommands(
+  descriptors: readonly NamedCommandDescriptor[],
+): string[] {
+  return descriptors
+    .filter((descriptor) => descriptor.parentDefaultHelp)
+    .map((descriptor) => descriptor.name);
+}
+
 export function collectUniqueCommandDescriptors<TDescriptor extends CommandDescriptorLike>(
   descriptorGroups: readonly (readonly TDescriptor[])[],
 ): TDescriptor[] {
@@ -67,6 +76,7 @@ export function defineCommandDescriptorCatalog<TDescriptor extends NamedCommandD
     getDescriptors: () => descriptors,
     getNames: () => getCommandDescriptorNames(descriptors),
     getCommandsWithSubcommands: () => getCommandsWithSubcommands(descriptors),
+    getParentDefaultHelpCommands: () => getParentDefaultHelpCommands(descriptors),
   };
 }
 

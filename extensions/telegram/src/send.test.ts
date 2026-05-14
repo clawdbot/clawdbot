@@ -346,6 +346,13 @@ describe("buildInlineKeyboard", () => {
         },
       },
       {
+        name: "keeps web app buttons",
+        input: [[{ text: "Launch", web_app: { url: "https://example.com/app" } }]],
+        expected: {
+          inline_keyboard: [[{ text: "Launch", web_app: { url: "https://example.com/app" } }]],
+        },
+      },
+      {
         name: "prefers url over callback data when both are present",
         input: [[{ text: "Open", callback_data: "cmd:open", url: "https://example.com" }]],
         expected: {

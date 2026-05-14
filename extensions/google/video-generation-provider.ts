@@ -3,6 +3,7 @@ import path from "node:path";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   createProviderOperationDeadline,
+  executeProviderOperationWithRetry,
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
@@ -161,9 +162,15 @@ async function downloadGeneratedVideo(params: {
         rootDir: tempDir,
         path: fileName,
         write: async (downloadPath) => {
-          await params.client.files.download({
-            file: params.file as never,
-            downloadPath,
+          await executeProviderOperationWithRetry({
+            provider: "google",
+            stage: "download",
+            operation: async () => {
+              await params.client.files.download({
+                file: params.file as never,
+                downloadPath,
+              });
+            },
           });
         },
       });
@@ -230,27 +237,33 @@ async function downloadGeneratedVideoFromUri(params: {
   if (!downloadUrl) {
     return undefined;
   }
-  const { response, release } = await fetchWithSsrFGuard({
-    url: downloadUrl,
+  return await executeProviderOperationWithRetry({
+    provider: "google",
+    stage: "download",
+    operation: async () => {
+      const { response, release } = await fetchWithSsrFGuard({
+        url: downloadUrl,
+      });
+      try {
+        if (!response.ok) {
+          throw new Error(
+            `Failed to download Google generated video: ${response.status} ${response.statusText}`,
+          );
+        }
+        const buffer = Buffer.from(await response.arrayBuffer());
+        return {
+          buffer,
+          mimeType:
+            normalizeOptionalString(response.headers.get("content-type")) ||
+            normalizeOptionalString(params.mimeType) ||
+            "video/mp4",
+          fileName: `video-${params.index + 1}.mp4`,
+        };
+      } finally {
+        await release();
+      }
+    },
   });
-  try {
-    if (!response.ok) {
-      throw new Error(
-        `Failed to download Google generated video: ${response.status} ${response.statusText}`,
-      );
-    }
-    const buffer = Buffer.from(await response.arrayBuffer());
-    return {
-      buffer,
-      mimeType:
-        normalizeOptionalString(response.headers.get("content-type")) ||
-        normalizeOptionalString(params.mimeType) ||
-        "video/mp4",
-      fileName: `video-${params.index + 1}.mp4`,
-    };
-  } finally {
-    await release();
-  }
 }
 
 function extractGoogleApiErrorCode(error: unknown): number | undefined {
@@ -284,39 +297,77 @@ async function requestGoogleVideoJson(params: {
   method: "GET" | "POST";
   headers: Record<string, string>;
   deadline: ReturnType<typeof createProviderOperationDeadline>;
+  stage: "create" | "poll";
   body?: unknown;
 }): Promise<unknown> {
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(),
-    resolveProviderOperationTimeoutMs({
-      deadline: params.deadline,
-      defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-    }),
-  );
-  try {
-    const { response, release } = await fetchWithSsrFGuard({
-      url: params.url,
-      init: {
-        method: params.method,
-        headers: params.headers,
-        ...(params.body === undefined ? {} : { body: JSON.stringify(params.body) }),
-      },
-      signal: controller.signal,
-    });
-    try {
-      const text = await response.text();
-      const payload = text ? (JSON.parse(text) as unknown) : {};
-      if (!response.ok) {
-        throw new Error(typeof payload === "string" ? payload : JSON.stringify(payload ?? null));
-      }
-      return payload;
-    } finally {
-      await release();
+  function createHttpError(response: Response, detail: unknown): Error {
+    const parts = [`HTTP ${response.status}`];
+    const statusText = response.statusText.trim();
+    if (statusText) {
+      parts.push(statusText);
     }
-  } finally {
-    clearTimeout(timeout);
+    if (typeof detail === "string") {
+      const trimmed = detail.trim();
+      if (trimmed) {
+        parts.push(trimmed);
+      }
+    } else if (detail && typeof detail === "object") {
+      parts.push(JSON.stringify(detail));
+    }
+    const error = new Error(parts.join(": "));
+    Object.assign(error, { status: response.status, statusCode: response.status });
+    return error;
   }
+
+  return await executeProviderOperationWithRetry({
+    provider: "google",
+    stage: params.stage,
+    operation: async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(
+        () => {
+          const error = new Error("request timed out");
+          error.name = "TimeoutError";
+          controller.abort(error);
+        },
+        resolveProviderOperationTimeoutMs({
+          deadline: params.deadline,
+          defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+        }),
+      );
+      try {
+        const { response, release } = await fetchWithSsrFGuard({
+          url: params.url,
+          init: {
+            method: params.method,
+            headers: params.headers,
+            ...(params.body === undefined ? {} : { body: JSON.stringify(params.body) }),
+          },
+          signal: controller.signal,
+        });
+        try {
+          const text = await response.text();
+          if (!response.ok) {
+            let detail: unknown = text;
+            if (text) {
+              try {
+                detail = JSON.parse(text) as unknown;
+              } catch {
+                detail = text;
+              }
+            }
+            throw createHttpError(response, detail);
+          }
+          const payload = text ? (JSON.parse(text) as unknown) : {};
+          return payload;
+        } finally {
+          await release();
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+    },
+  });
 }
 
 async function generateGoogleVideoViaRest(params: {
@@ -334,6 +385,7 @@ async function generateGoogleVideoViaRest(params: {
     method: "POST",
     headers: params.headers,
     deadline: params.deadline,
+    stage: "create",
     body: {
       instances: [{ prompt: params.prompt }],
       parameters: {
@@ -363,6 +415,7 @@ async function generateGoogleVideoViaRest(params: {
       method: "GET",
       headers: params.headers,
       deadline: params.deadline,
+      stage: "poll",
     });
   }
   const error = (operation as { error?: unknown }).error;
@@ -462,7 +515,11 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
           }
           await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
           resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: DEFAULT_TIMEOUT_MS });
-          sdkOperation = await client.operations.getVideosOperation({ operation: sdkOperation });
+          sdkOperation = await executeProviderOperationWithRetry({
+            provider: "google",
+            stage: "poll",
+            operation: () => client.operations.getVideosOperation({ operation: sdkOperation }),
+          });
         }
         operation = sdkOperation;
       }

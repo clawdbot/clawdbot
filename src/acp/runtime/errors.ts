@@ -43,6 +43,31 @@ function getForeignAcpRuntimeError(value: unknown): {
   };
 }
 
+function readAcpRequestErrorDetails(value: Error): string | undefined {
+  const code = (value as { code?: unknown }).code;
+  if (typeof code !== "number") {
+    return undefined;
+  }
+  const data = (value as { data?: unknown }).data;
+  if (!data || typeof data !== "object") {
+    return undefined;
+  }
+  const details = (data as { details?: unknown }).details;
+  if (details === undefined || details === null) {
+    return undefined;
+  }
+  const rendered = redactSensitiveText(stringifyNonErrorCause(details)).trim();
+  return rendered.length > 0 ? rendered : undefined;
+}
+
+function messageWithAcpRequestErrorDetails(error: Error): string {
+  const details = readAcpRequestErrorDetails(error);
+  if (!details || error.message.includes(details)) {
+    return error.message;
+  }
+  return `${error.message}: ${details}`;
+}
+
 export function isAcpRuntimeError(value: unknown): value is AcpRuntimeError {
   return value instanceof AcpRuntimeError || getForeignAcpRuntimeError(value) !== null;
 }
@@ -62,9 +87,13 @@ export function toAcpRuntimeError(params: {
     });
   }
   if (params.error instanceof Error) {
-    return new AcpRuntimeError(params.fallbackCode, params.error.message, {
-      cause: params.error,
-    });
+    return new AcpRuntimeError(
+      params.fallbackCode,
+      messageWithAcpRequestErrorDetails(params.error),
+      {
+        cause: params.error,
+      },
+    );
   }
   return new AcpRuntimeError(params.fallbackCode, params.fallbackMessage, {
     cause: params.error,

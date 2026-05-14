@@ -212,6 +212,24 @@ describe("loginOpenAICodexOAuth", () => {
     );
   });
 
+  it("describes remote OAuth paste first while noting automatic callback completion", async () => {
+    const creds = createCodexCredentials();
+    mocks.loginOpenAICodex.mockResolvedValue(creds);
+
+    const { prompter } = await runCodexOAuth({ isRemote: true });
+    const noteCalls = (prompter.note as unknown as { mock?: { calls?: Array<Array<unknown>> } })
+      .mock?.calls;
+    const [message, title] = noteCalls?.[0] ?? [];
+
+    expect(title).toBe("OpenAI Codex OAuth");
+    expect(message).toContain("A URL will be shown for you to open in your LOCAL browser.");
+    expect(message).toContain("Open it, sign in, then paste the redirect URL here.");
+    expect(message).toContain(
+      "If this OpenClaw process can receive the browser callback, sign-in may finish automatically before you paste.",
+    );
+    expect(message).not.toContain("After signing in, paste");
+  });
+
   it("explains OpenAI unsupported region token exchange failures", async () => {
     mocks.loginOpenAICodex.mockRejectedValue(new Error("403 unsupported_country_region_territory"));
 

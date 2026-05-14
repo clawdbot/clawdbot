@@ -102,6 +102,16 @@ describe("pickLastDeliverablePayload", () => {
     expect(pickLastDeliverablePayload([media, error])).toBe(media);
   });
 
+  it("picks presentation-only payload over error text payload", () => {
+    const presentation = {
+      presentation: {
+        blocks: [{ type: "buttons" as const, buttons: [{ label: "Ack", value: "ack" }] }],
+      },
+    };
+    const error = { text: "Error warning", isError: true as const };
+    expect(pickLastDeliverablePayload([presentation, error])).toBe(presentation);
+  });
+
   it("treats isError: undefined as non-error", () => {
     const normal = { text: "ok", isError: undefined };
     const error = { text: "bad", isError: true as const };
@@ -118,6 +128,16 @@ describe("pickDeliverablePayloads", () => {
     ];
 
     expect(pickDeliverablePayloads(payloads)).toEqual([{ text: "line 1" }, { text: "line 2" }]);
+  });
+
+  it("preserves rich-only successful deliverable payloads", () => {
+    const presentation = {
+      presentation: {
+        blocks: [{ type: "buttons" as const, buttons: [{ label: "Ack", value: "ack" }] }],
+      },
+    };
+
+    expect(pickDeliverablePayloads([presentation])).toEqual([presentation]);
   });
 
   it("returns only the last error payload when all payloads are errors", () => {
@@ -165,6 +185,22 @@ describe("isHeartbeatOnlyResponse", () => {
     expect(
       isHeartbeatOnlyResponse(
         [{ text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" }],
+        ACK_MAX,
+      ),
+    ).toBe(false);
+  });
+
+  it("returns false when rich content is present even with HEARTBEAT_OK text", () => {
+    expect(
+      isHeartbeatOnlyResponse(
+        [
+          {
+            text: "HEARTBEAT_OK",
+            presentation: {
+              blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+            },
+          },
+        ],
         ACK_MAX,
       ),
     ).toBe(false);

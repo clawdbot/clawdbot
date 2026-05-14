@@ -575,6 +575,24 @@ describe("DiscordVoiceManager", () => {
     expectConnectedStatus(manager, "1002");
   });
 
+  it("suppresses repeated autoJoin attempts after fatal realtime startup failures", async () => {
+    realtimeSessionMock.connect.mockRejectedValueOnce(new Error("Incorrect API key provided"));
+    const manager = createManager({
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        autoJoin: [{ guildId: "g1", channelId: "1001" }],
+      },
+    });
+
+    await manager.autoJoin();
+    await manager.autoJoin();
+
+    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+    expect(realtimeSessionMock.connect).toHaveBeenCalledTimes(1);
+    expect(manager.status()).toStrictEqual([]);
+  });
+
   it("rejects joins outside configured allowed voice channels", async () => {
     const manager = createManager({
       voice: {

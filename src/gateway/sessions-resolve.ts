@@ -64,12 +64,11 @@ function isResolvedSessionKeyVisible(params: {
   if (typeof params.p.spawnedBy !== "string" || params.p.spawnedBy.trim().length === 0) {
     return true;
   }
-  return listSessionsFromStore({
-    cfg: params.cfg,
-    storePath: params.storePath,
+  return filterAndSortSessionEntries({
     store: params.store,
+    now: Date.now(),
     opts: resolveSessionVisibilityFilterOptions(params.p),
-  }).sessions.some((session) => session.key === params.key);
+  }).some(([key]) => key === params.key);
 }
 
 function findVisibleSessionIdMatches(params: {

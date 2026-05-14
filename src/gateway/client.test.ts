@@ -1184,6 +1184,37 @@ describe("GatewayClient connect auth payload", () => {
     });
   });
 
+  it("keeps reconnecting on PAIRING_REQUIRED when retry hints keep reconnect active", async () => {
+    vi.useFakeTimers();
+    const onReconnectPaused = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      bootstrapToken: "setup-bootstrap-token",
+      role: "node",
+      scopes: [],
+      onReconnectPaused,
+    });
+
+    try {
+      const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+      emitConnectFailure(ws1, firstConnect.id, {
+        code: "PAIRING_REQUIRED",
+        reason: "not-paired",
+        recommendedNextStep: "wait_then_retry",
+        pauseReconnect: false,
+      });
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(wsInstances).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(wsInstances).toHaveLength(2);
+      expect(onReconnectPaused).not.toHaveBeenCalled();
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("clears stale stored device tokens and does not reconnect on AUTH_DEVICE_TOKEN_MISMATCH", async () => {
     loadDeviceAuthTokenMock.mockReturnValue({
       token: "stored-device-token",

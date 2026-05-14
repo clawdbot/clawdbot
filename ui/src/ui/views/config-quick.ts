@@ -7,7 +7,7 @@
 
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../icons.ts";
-import type { BorderRadiusStop } from "../storage.ts";
+import type { BorderRadiusStop, TextScaleStop } from "../storage.ts";
 import { normalizeOptionalString } from "../string-coerce.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
@@ -82,10 +82,12 @@ export type QuickSettingsProps = {
   hasCustomTheme: boolean;
   customThemeLabel?: string | null;
   borderRadius: number;
+  textScale: number;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
   onOpenCustomThemeImport?: () => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
   setBorderRadius: (value: number) => void;
+  setTextScale: (value: number) => void;
   userAvatar?: string | null;
   onUserAvatarChange?: (next: string | null) => void;
 
@@ -137,6 +139,14 @@ const BORDER_RADIUS_STOPS: Array<{ value: BorderRadiusStop; label: string }> = [
   { value: 50, label: "Default" },
   { value: 75, label: "Round" },
   { value: 100, label: "Full" },
+];
+
+const TEXT_SCALE_OPTIONS: Array<{ value: TextScaleStop; label: string }> = [
+  { value: 90, label: "S" },
+  { value: 100, label: "M" },
+  { value: 110, label: "L" },
+  { value: 125, label: "XL" },
+  { value: 140, label: "XXL" },
 ];
 
 const THINKING_LEVELS = ["off", "low", "medium", "high"];
@@ -651,6 +661,25 @@ function renderAppearanceCard(props: QuickSettingsProps) {
                     ? "qs-segmented__btn--active"
                     : ""}"
                   @click=${() => props.setBorderRadius(stop.value)}
+                >
+                  ${stop.label}
+                </button>
+              `,
+            )}
+          </div>
+        </div>
+        <div class="qs-row">
+          <span class="qs-row__label">Text size</span>
+          <div class="qs-segmented">
+            ${TEXT_SCALE_OPTIONS.map(
+              (stop) => html`
+                <button
+                  class="qs-segmented__btn qs-segmented__btn--compact ${stop.value ===
+                  props.textScale
+                    ? "qs-segmented__btn--active"
+                    : ""}"
+                  title=${`${stop.value}%`}
+                  @click=${() => props.setTextScale(stop.value)}
                 >
                   ${stop.label}
                 </button>

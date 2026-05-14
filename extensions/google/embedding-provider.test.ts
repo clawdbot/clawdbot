@@ -1,4 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings")>();
+  return {
+    ...actual,
+    withRemoteHttpResponse: (async <T>(params: {
+      url: string;
+      init?: RequestInit;
+      onResponse: (response: Response) => Promise<T>;
+    }): Promise<T> => {
+      const response = await fetch(params.url, params.init);
+      return await params.onResponse(response);
+    }) satisfies typeof actual.withRemoteHttpResponse,
+  };
+});
+
 import {
   buildGeminiEmbeddingRequest,
   buildGeminiTextEmbeddingRequest,

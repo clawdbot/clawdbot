@@ -13,3 +13,9 @@ export function isPathInsideContainerRoot(root: string, target: string): boolean
   }
   return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}/`);
 }
+
+export function relativePathEscapesContainerRoot(relativePath: string): boolean {
+  return (
+    relativePath === ".." || relativePath.startsWith("../") || path.posix.isAbsolute(relativePath)
+  );
+}

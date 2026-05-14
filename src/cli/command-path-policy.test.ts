@@ -203,9 +203,13 @@ describe("command-path-policy", () => {
       loadPlugins: "never",
       hideBanner: true,
     });
+    expectResolvedPolicy(["plugins", "list"], {
+      ensureCliPath: false,
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    });
     for (const commandPath of [
       ["plugins", "install"],
-      ["plugins", "list"],
       ["plugins", "inspect"],
       ["plugins", "registry"],
       ["plugins", "doctor"],

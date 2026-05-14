@@ -34,6 +34,15 @@ function safeLogValue(value: string): string {
   return sanitizeForLog(value);
 }
 
+function isNonEmptyRelativePathInsideRoot(relativePath: string): boolean {
+  return (
+    relativePath !== "" &&
+    relativePath !== ".." &&
+    !relativePath.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relativePath)
+  );
+}
+
 function maybeWarnTrustedHookSource(source: string): void {
   if (source === "openclaw-workspace") {
     log.warn(
@@ -211,7 +220,7 @@ export async function loadInternalHooks(
         continue;
       }
       const rel = path.relative(baseDirReal, modulePathSafe);
-      if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+      if (!isNonEmptyRelativePathInsideRoot(rel)) {
         log.error(`Handler module path must stay within workspaceDir: ${safeLogValue(rawModule)}`);
         continue;
       }

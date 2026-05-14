@@ -106,6 +106,7 @@ describe("google video generation provider", () => {
     generateVideosMock.mockReset();
     getVideosOperationMock.mockReset();
     createGoogleGenAIMock.mockClear();
+    vi.useRealTimers();
   });
 
   afterAll(() => {
@@ -354,6 +355,75 @@ describe("google video generation provider", () => {
       "https://generativelanguage.googleapis.com/v1beta/files/rest-video:download?alt=media&key=google-key",
     );
     expect(downloadMock).not.toHaveBeenCalled();
+    expect(result.videos[0]?.buffer).toEqual(Buffer.from("rest-video"));
+  });
+
+  it("retries transient Google REST poll failures with empty bodies", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            done: false,
+            name: "operations/rest-123",
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(new Response("", { status: 503, statusText: "Service Unavailable" }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            done: true,
+            name: "operations/rest-123",
+            response: {
+              generateVideoResponse: {
+                generatedSamples: [
+                  {
+                    video: {
+                      uri: "https://generativelanguage.googleapis.com/v1beta/files/rest-video:download?alt=media",
+                      mimeType: "video/mp4",
+                    },
+                  },
+                ],
+              },
+            },
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response("rest-video", {
+          status: 200,
+          statusText: "OK",
+          headers: { "content-type": "video/mp4" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = buildGoogleVideoGenerationProvider();
+    const resultPromise = provider.generateVideo({
+      provider: "google",
+      model: "veo-3.1-fast-generate-preview",
+      prompt: "A tiny robot watering a windowsill garden",
+      cfg: {},
+      durationSeconds: 3,
+    });
+    await vi.advanceTimersByTimeAsync(10_250);
+    const result = await resultPromise;
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchInputUrl(fetchMock, 1)).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/operations/rest-123",
+    );
+    expect(fetchInputUrl(fetchMock, 2)).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/operations/rest-123",
+    );
     expect(result.videos[0]?.buffer).toEqual(Buffer.from("rest-video"));
   });
 

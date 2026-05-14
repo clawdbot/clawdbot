@@ -1,3 +1,4 @@
+import { copyReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { EmbeddedPiRunResult } from "../types.js";
 
 type EmbeddedRunPayload = NonNullable<EmbeddedPiRunResult["payloads"]>[number];
@@ -19,12 +20,12 @@ export function mergeAttemptToolMediaPayloads(params: {
   if (payloadIndex >= 0) {
     const payload = payloads[payloadIndex];
     const mergedMediaUrls = Array.from(new Set([...(payload.mediaUrls ?? []), ...mediaUrls]));
-    payloads[payloadIndex] = {
+    payloads[payloadIndex] = copyReplyPayloadMetadata(payload, {
       ...payload,
       mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
       mediaUrl: payload.mediaUrl ?? mergedMediaUrls[0],
       audioAsVoice: payload.audioAsVoice || params.toolAudioAsVoice || undefined,
-    };
+    });
     return payloads;
   }
 

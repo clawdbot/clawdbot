@@ -21,6 +21,7 @@ const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
   "scripts/test-live-codex-harness-docker.sh",
   "scripts/test-live-gateway-models-docker.sh",
   "scripts/test-live-models-docker.sh",
+  "scripts/test-live-subagent-announce-docker.sh",
 ];
 
 export function createChangedCheckChildEnv(baseEnv = process.env) {
@@ -126,6 +127,7 @@ export function createChangedCheckPlan(result, options = {}) {
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
   add("duplicate scan target coverage", ["dup:check:coverage"]);
   add("dependency pin guard", ["deps:pins:check"]);
+  add("package patch guard", ["deps:patches:check"]);
 
   if (result.docsOnly) {
     return {
@@ -156,6 +158,7 @@ export function createChangedCheckPlan(result, options = {}) {
   }
 
   if (runAll) {
+    add("media download helper guard", ["check:media-download-helpers"]);
     add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
     addTypecheck("typecheck all", ["tsgo:all"]);
     addLint("lint", ["lint"]);
@@ -200,6 +203,7 @@ export function createChangedCheckPlan(result, options = {}) {
   }
 
   if (lanes.core || lanes.extensions) {
+    add("media download helper guard", ["check:media-download-helpers"]);
     add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
     add("runtime import cycles", ["check:import-cycles"]);
   }

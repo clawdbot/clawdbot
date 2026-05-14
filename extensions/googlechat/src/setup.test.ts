@@ -462,6 +462,66 @@ describe("resolveGoogleChatAccount", () => {
     expect(resolved.config.webhookPath).toBe("/googlechat-april");
   });
 
+  it("merges account bot loop protection over top-level defaults field-by-field", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        googlechat: {
+          botLoopProtection: {
+            maxEventsPerWindow: 8,
+            windowSeconds: 120,
+            cooldownSeconds: 240,
+          },
+          accounts: {
+            april: {
+              webhookPath: "/googlechat-april",
+              botLoopProtection: {
+                maxEventsPerWindow: 3,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const resolved = resolveGoogleChatAccount({ cfg, accountId: "april" });
+    expect(resolved.config.botLoopProtection).toEqual({
+      maxEventsPerWindow: 3,
+      windowSeconds: 120,
+      cooldownSeconds: 240,
+    });
+  });
+
+  it("merges account bot loop protection over accounts.default field-by-field", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        googlechat: {
+          accounts: {
+            default: {
+              webhookPath: "/googlechat",
+              botLoopProtection: {
+                windowSeconds: 120,
+                cooldownSeconds: 240,
+              },
+            },
+            april: {
+              webhookPath: "/googlechat-april",
+              botLoopProtection: {
+                maxEventsPerWindow: 3,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const resolved = resolveGoogleChatAccount({ cfg, accountId: "april" });
+    expect(resolved.config.botLoopProtection).toEqual({
+      maxEventsPerWindow: 3,
+      windowSeconds: 120,
+      cooldownSeconds: 240,
+    });
+  });
+
   it("does not inherit disabled state from accounts.default for named accounts", () => {
     const cfg: OpenClawConfig = {
       channels: {

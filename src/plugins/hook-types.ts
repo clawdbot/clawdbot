@@ -217,6 +217,7 @@ export type PluginHookLlmInputEvent = {
   prompt: string;
   historyMessages: unknown[];
   imagesCount: number;
+  tools?: unknown[];
 };
 
 export type PluginHookModelCallBaseEvent = {

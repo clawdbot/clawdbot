@@ -123,8 +123,10 @@ inventory a specific Codex home.
 
 Use this provider when moving to the OpenClaw Codex harness and you want to
 promote useful personal Codex CLI assets deliberately. Local Codex app-server
-launches use per-agent `CODEX_HOME` and `HOME` directories, so they do not read
-your personal Codex CLI state by default.
+launches use a per-agent `CODEX_HOME`, so they do not read your personal
+`~/.codex` by default. The normal process `HOME` is still inherited, so Codex
+can see shared `$HOME/.agents/*` skills/plugin marketplace entries and
+subprocesses can find user-home config and tokens.
 
 Running `openclaw migrate codex` in an interactive terminal previews the full
 plan, then opens checkbox selectors before the final apply confirmation. Skill

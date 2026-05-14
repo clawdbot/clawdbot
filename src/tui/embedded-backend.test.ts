@@ -207,6 +207,7 @@ describe("EmbeddedTuiBackend", () => {
           runId: "run-local-1",
           sessionKey: "agent:main:main",
           state: "delta",
+          deltaText: "hello",
           message: {
             role: "assistant",
             content: [{ type: "text", text: "hello" }],
@@ -301,6 +302,65 @@ describe("EmbeddedTuiBackend", () => {
         timestamp: embeddedEventTimestamp,
       },
     });
+  });
+
+  it("marks local embedded replacement deltas", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "replace",
+      runId: "run-local-replace",
+    });
+
+    registeredListener?.({
+      runId: "run-local-replace",
+      stream: "assistant",
+      data: { text: "Hello world" },
+    });
+    registeredListener?.({
+      runId: "run-local-replace",
+      stream: "assistant",
+      data: { text: "Goodbye world" },
+    });
+
+    pending.resolve({ payloads: [{ text: "Goodbye world" }], meta: {} });
+    await flushMicrotasks();
+
+    const chatPayloads = events
+      .filter((entry) => entry.event === "chat")
+      .map(
+        (entry) =>
+          entry.payload as {
+            state?: string;
+            deltaText?: string;
+            replace?: boolean;
+          },
+      );
+    expect(
+      chatPayloads
+        .filter((payload) => payload.state === "delta")
+        .map((payload) => ({
+          state: payload.state,
+          deltaText: payload.deltaText,
+          replace: payload.replace,
+        })),
+    ).toEqual([
+      { state: "delta", deltaText: "Hello world", replace: undefined },
+      { state: "delta", deltaText: "Goodbye world", replace: true },
+    ]);
   });
 
   it("keeps a fallback response deliverable after a retryable lifecycle error", async () => {
@@ -496,6 +556,7 @@ describe("EmbeddedTuiBackend", () => {
           runId: "run-tool-first",
           sessionKey: "agent:main:main",
           state: "delta",
+          deltaText: "",
           message: {
             role: "assistant",
             content: [{ type: "text", text: "" }],

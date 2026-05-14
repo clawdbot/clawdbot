@@ -168,6 +168,20 @@ This disables runtime trajectory capture. `/export-trajectory` can still export
 the transcript branch, but runtime-only files such as compiled context,
 provider artifacts, and prompt metadata may be missing.
 
+## Tune flush timeout
+
+OpenClaw flushes runtime trajectory sidecars during agent cleanup. The default
+cleanup timeout is 10,000 ms. On slow disks or large stores, set
+`OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS` before starting OpenClaw:
+
+```bash
+export OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS=30000
+```
+
+This controls when OpenClaw logs a `pi-trajectory-flush` timeout and continues.
+It does not change the trajectory size caps. To tune all agent cleanup steps
+that do not pass an explicit timeout, set `OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS`.
+
 ## Privacy and limits
 
 Trajectory bundles are designed for support and debugging, not public posting.

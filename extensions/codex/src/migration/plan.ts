@@ -441,9 +441,6 @@ export async function buildCodexMigrationPlan(
           "Codex app-backed plugins were planned without source app accessibility verification. Re-run with --verify-plugin-apps to force a fresh source app/list check before planning native plugin activation.",
         ]
       : []),
-    ...(source.plugins.some((plugin) => plugin.sourceKind === "cache")
-      ? ["Codex cached plugin bundles remain manual-review only."]
-      : []),
     ...(source.pluginDiscoveryError
       ? [
           `Codex app-server plugin inventory discovery failed: ${source.pluginDiscoveryError}. Cached plugin bundles, if any, are advisory only.`,

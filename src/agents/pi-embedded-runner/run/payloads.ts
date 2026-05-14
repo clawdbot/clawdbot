@@ -1,14 +1,21 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import {
   createHeartbeatToolResponsePayload,
   type HeartbeatToolResponse,
 } from "../../../auto-reply/heartbeat-tool-response.js";
+import {
+  markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+  type ReplyPayloadMetadata,
+} from "../../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import { isCronSessionKey } from "../../../routing/session-key.js";
 import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
 import {
@@ -23,6 +30,7 @@ import {
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../pi-embedded-helpers.js";
+import type { MessagingToolSourceReplyPayload } from "../../pi-embedded-messaging.types.js";
 import type { ToolResultFormat } from "../../pi-embedded-subscribe.shared-types.js";
 import { extractAssistantThinking, extractAssistantVisibleText } from "../../pi-embedded-utils.js";
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
@@ -187,20 +195,14 @@ export function buildEmbeddedRunPayloads(params: {
   suppressToolErrorWarnings?: boolean;
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
+  messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  agentId?: string;
+  runId?: string;
+  runAborted?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
   heartbeatToolResponse?: HeartbeatToolResponse;
-}): Array<{
-  text?: string;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-  replyToId?: string;
-  isError?: boolean;
-  isReasoning?: boolean;
-  audioAsVoice?: boolean;
-  replyToTag?: boolean;
-  replyToCurrent?: boolean;
-  channelData?: Record<string, unknown>;
-}> {
+}): ReplyPayload[] {
   if (params.heartbeatToolResponse) {
     return [createHeartbeatToolResponsePayload(params.heartbeatToolResponse)];
   }
@@ -208,19 +210,67 @@ export function buildEmbeddedRunPayloads(params: {
   const replyItems: Array<{
     text: string;
     media?: string[];
+    mediaUrl?: string;
     isError?: boolean;
     isReasoning?: boolean;
     audioAsVoice?: boolean;
     replyToId?: string;
     replyToTag?: boolean;
     replyToCurrent?: boolean;
+    presentation?: ReplyPayload["presentation"];
+    interactive?: ReplyPayload["interactive"];
+    channelData?: Record<string, unknown>;
+    sourceReplyMirror?: {
+      idempotencyKey?: string;
+    };
   }> = [];
 
+  const sourceReplyPayloads =
+    params.sourceReplyDeliveryMode === "message_tool_only"
+      ? (params.messagingToolSourceReplyPayloads ?? [])
+      : [];
+  const sourceReplyStartIndex = replyItems.length;
+  sourceReplyPayloads.forEach((payload, index) => {
+    const text = normalizeOptionalString(payload.text) ?? "";
+    const media = Array.from(
+      new Set([...(payload.mediaUrl ? [payload.mediaUrl] : []), ...(payload.mediaUrls ?? [])]),
+    ).filter((value) => value.trim().length > 0);
+    if (
+      !text &&
+      media.length === 0 &&
+      !payload.presentation &&
+      !payload.interactive &&
+      !payload.channelData
+    ) {
+      return;
+    }
+    replyItems.push({
+      text,
+      ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
+      ...(media.length ? { media } : {}),
+      ...(payload.audioAsVoice ? { audioAsVoice: true } : {}),
+      ...(payload.presentation ? { presentation: payload.presentation } : {}),
+      ...(payload.interactive ? { interactive: payload.interactive } : {}),
+      ...(payload.channelData ? { channelData: payload.channelData } : {}),
+      sourceReplyMirror: {
+        idempotencyKey:
+          payload.idempotencyKey ??
+          (params.runId ? `${params.runId}:internal-source-reply:${index}` : undefined),
+      },
+    });
+  });
+  const hasSourceReplyPayload = replyItems.length > sourceReplyStartIndex;
+
   const useMarkdown = params.toolResultFormat === "markdown";
-  const suppressAssistantArtifacts = params.didSendDeterministicApprovalPrompt === true;
-  const lastAssistantErrored = params.lastAssistant?.stopReason === "error";
+  const suppressAssistantArtifacts =
+    params.didSendDeterministicApprovalPrompt === true || hasSourceReplyPayload;
+  const lastAssistantStopReason = params.lastAssistant?.stopReason;
+  const lastAssistantErrored = lastAssistantStopReason === "error";
+  const lastAssistantAborted = lastAssistantStopReason === "aborted";
+  const runAborted = params.runAborted === true || lastAssistantAborted;
+  const lastAssistantNeedsErrorSurface = lastAssistantErrored || lastAssistantAborted;
   const errorText =
-    params.lastAssistant && lastAssistantErrored
+    params.lastAssistant && lastAssistantNeedsErrorSurface
       ? suppressAssistantArtifacts
         ? undefined
         : formatAssistantErrorText(params.lastAssistant, {
@@ -230,7 +280,7 @@ export function buildEmbeddedRunPayloads(params: {
             model: params.model,
           })
       : undefined;
-  const rawErrorMessage = lastAssistantErrored
+  const rawErrorMessage = lastAssistantNeedsErrorSurface
     ? normalizeOptionalString(params.lastAssistant?.errorMessage)
     : undefined;
   const rawErrorFingerprint = rawErrorMessage
@@ -280,11 +330,12 @@ export function buildEmbeddedRunPayloads(params: {
     }
   }
 
-  const reasoningText = suppressAssistantArtifacts
-    ? ""
-    : params.lastAssistant && params.reasoningLevel === "on" && params.thinkingLevel !== "off"
-      ? extractAssistantThinking(params.lastAssistant)
-      : "";
+  const reasoningText =
+    suppressAssistantArtifacts || runAborted
+      ? ""
+      : params.lastAssistant && params.reasoningLevel === "on" && params.thinkingLevel !== "off"
+        ? extractAssistantThinking(params.lastAssistant)
+        : "";
   if (reasoningText) {
     replyItems.push({ text: reasoningText, isReasoning: true });
   }
@@ -294,7 +345,7 @@ export function buildEmbeddedRunPayloads(params: {
     : "";
   const fallbackRawAnswerText = resolveRawAssistantAnswerText(params.lastAssistant);
   const shouldSuppressRawErrorText = (text: string) => {
-    if (!lastAssistantErrored) {
+    if (!lastAssistantNeedsErrorSurface) {
       return false;
     }
     const trimmed = text.trim();
@@ -371,20 +422,21 @@ export function buildEmbeddedRunPayloads(params: {
     fallbackAnswerSourceText.length > 0 &&
     normalizedFallbackAnswerSourceText.length > 0;
   const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
-  const answerTexts = suppressAssistantArtifacts
-    ? []
-    : (shouldUseCanonicalFinalAnswer
-        ? [fallbackAnswerSourceText]
-        : shouldPreferRawAnswerText && fallbackRawAnswerText
-          ? [fallbackRawAnswerText]
-          : hasAssistantTextPayload
-            ? nonEmptyAssistantTexts
-            : fallbackAnswerText
-              ? [fallbackAnswerText]
-              : []
-      ).filter((text) => !shouldSuppressRawErrorText(text));
+  const answerTexts =
+    suppressAssistantArtifacts || runAborted
+      ? []
+      : (shouldUseCanonicalFinalAnswer
+          ? [fallbackAnswerSourceText]
+          : shouldPreferRawAnswerText && fallbackRawAnswerText
+            ? [fallbackRawAnswerText]
+            : hasAssistantTextPayload
+              ? nonEmptyAssistantTexts
+              : fallbackAnswerText
+                ? [fallbackAnswerText]
+                : []
+        ).filter((text) => !shouldSuppressRawErrorText(text));
 
-  let hasUserFacingAssistantReply = false;
+  let hasUserFacingAssistantReply = hasSourceReplyPayload;
   const hasUserFacingErrorReply = replyItems.some((item) => item.isError === true);
   let hasUserFacingFailureAcknowledgement = false;
   for (const text of answerTexts) {
@@ -461,20 +513,69 @@ export function buildEmbeddedRunPayloads(params: {
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
   return replyItems
     .map((item) => {
-      const payload = {
+      const payload: ReplyPayload = {
         text: normalizeOptionalString(item.text),
-        mediaUrls: item.media?.length ? item.media : undefined,
-        mediaUrl: item.media?.[0],
-        isError: item.isError,
-        replyToId: item.replyToId,
-        replyToTag: item.replyToTag,
-        replyToCurrent: item.replyToCurrent,
-        audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
       };
+      const mediaUrl = item.mediaUrl ?? item.media?.[0];
+      if (mediaUrl) {
+        payload.mediaUrl = mediaUrl;
+      }
+      if (item.media?.length) {
+        payload.mediaUrls = item.media;
+      }
+      if (item.isError !== undefined) {
+        payload.isError = item.isError;
+      }
+      if (item.replyToId) {
+        payload.replyToId = item.replyToId;
+      }
+      if (item.replyToTag !== undefined) {
+        payload.replyToTag = item.replyToTag;
+      }
+      if (item.replyToCurrent !== undefined) {
+        payload.replyToCurrent = item.replyToCurrent;
+      }
+      if (item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length)) {
+        payload.audioAsVoice = true;
+      }
+      if (item.presentation) {
+        payload.presentation = item.presentation;
+      }
+      if (item.interactive) {
+        payload.interactive = item.interactive;
+      }
+      if (item.channelData) {
+        payload.channelData = item.channelData;
+      }
+      if (item.sourceReplyMirror) {
+        markReplyPayloadForSourceSuppressionDelivery(payload);
+        if (params.sessionKey) {
+          const sourceReplyTranscriptMirror: NonNullable<
+            ReplyPayloadMetadata["sourceReplyTranscriptMirror"]
+          > = {
+            sessionKey: params.sessionKey,
+          };
+          if (params.agentId) {
+            sourceReplyTranscriptMirror.agentId = params.agentId;
+          }
+          if (payload.text) {
+            sourceReplyTranscriptMirror.text = payload.text;
+          }
+          if (payload.mediaUrls?.length) {
+            sourceReplyTranscriptMirror.mediaUrls = payload.mediaUrls;
+          }
+          if (item.sourceReplyMirror.idempotencyKey) {
+            sourceReplyTranscriptMirror.idempotencyKey = item.sourceReplyMirror.idempotencyKey;
+          }
+          setReplyPayloadMetadata(payload, {
+            sourceReplyTranscriptMirror,
+          });
+        }
+      }
       if (payload.text && isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN)) {
         const silentText = payload.text;
         payload.text = undefined;
-        if (hasOutboundReplyContent(payload)) {
+        if (hasReplyPayloadContent(payload)) {
           return payload;
         }
         payload.text = silentText;
@@ -482,7 +583,7 @@ export function buildEmbeddedRunPayloads(params: {
       return payload;
     })
     .filter((p) => {
-      if (!hasOutboundReplyContent(p)) {
+      if (!hasReplyPayloadContent(p)) {
         return false;
       }
       if (p.text && isSilentReplyPayloadText(p.text, SILENT_REPLY_TOKEN)) {

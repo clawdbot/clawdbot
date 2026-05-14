@@ -1,3 +1,4 @@
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import type { PluginCandidate } from "./discovery.js";
@@ -66,6 +67,7 @@ function matchesPathMatcher(matcher: PathMatcher, sourcePath: string): boolean {
 export function buildProvenanceIndex(params: {
   normalizedLoadPaths: string[];
   env: NodeJS.ProcessEnv;
+  installRecords?: Record<string, PluginInstallRecord>;
 }): PluginProvenanceIndex {
   const loadPathMatcher = createPathMatcher();
   for (const loadPath of params.normalizedLoadPaths) {
@@ -73,7 +75,10 @@ export function buildProvenanceIndex(params: {
   }
 
   const installRules = new Map<string, InstallTrackingRule>();
-  const installs = loadInstalledPluginIndexInstallRecordsSync({ env: params.env });
+  const installs = {
+    ...loadInstalledPluginIndexInstallRecordsSync({ env: params.env }),
+    ...params.installRecords,
+  };
   for (const [pluginId, install] of Object.entries(installs)) {
     const rule: InstallTrackingRule = {
       trackedWithoutPaths: false,

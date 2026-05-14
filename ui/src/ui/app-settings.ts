@@ -65,6 +65,7 @@ import {
   type Tab,
 } from "./navigation.ts";
 import {
+  normalizeTextScale,
   saveLocalUserIdentity,
   saveSettings,
   type LocalUserIdentity,
@@ -152,6 +153,7 @@ type SettingsAppHost = SettingsHost &
 export function applySettings(host: SettingsHost, next: UiSettings) {
   const normalized = {
     ...next,
+    textScale: normalizeTextScale(next.textScale),
     lastActiveSessionKey:
       normalizeOptionalString(next.lastActiveSessionKey) ??
       normalizeOptionalString(next.sessionKey) ??
@@ -165,7 +167,8 @@ export function applySettings(host: SettingsHost, next: UiSettings) {
     host.themeMode = next.themeMode;
     applyResolvedTheme(host, resolveTheme(next.theme, next.themeMode));
   }
-  applyBorderRadius(next.borderRadius);
+  applyBorderRadius(normalized.borderRadius);
+  applyTextScale(normalized.textScale);
   host.applySessionKey = host.settings.lastActiveSessionKey;
 }
 
@@ -450,6 +453,7 @@ export function syncThemeWithSettings(host: SettingsHost) {
   }
   applyResolvedTheme(host, resolveTheme(host.theme, host.themeMode));
   applyBorderRadius(host.settings.borderRadius ?? 50);
+  applyTextScale(host.settings.textScale);
   syncSystemThemeListener(host);
 }
 
@@ -472,6 +476,15 @@ export function applyBorderRadius(value: number) {
   root.style.setProperty("--radius-xl", `${Math.round(BASE_RADII.xl * scale)}px`);
   root.style.setProperty("--radius-full", `${Math.round(BASE_RADII.full * scale)}px`);
   root.style.setProperty("--radius", `${Math.round(BASE_RADII.default * scale)}px`);
+}
+
+export function applyTextScale(value: unknown) {
+  if (typeof document === "undefined") {
+    return;
+  }
+  const root = document.documentElement;
+  const scale = normalizeTextScale(value) / 100;
+  root.style.setProperty("--control-ui-text-scale", scale.toFixed(2));
 }
 
 export function applyResolvedTheme(host: SettingsHost, resolved: ResolvedTheme) {

@@ -272,6 +272,24 @@ export function parseChannelsStatusRouteArgs(argv: string[]) {
   };
 }
 
+export function parsePluginsListRouteArgs(argv: string[]) {
+  if (!hasFlag(argv, "--json")) {
+    return null;
+  }
+  const positionals = getCommandPositionalsWithRootOptions(argv, {
+    commandPath: ["plugins", "list"],
+    booleanFlags: ["--json", "--enabled", "--verbose"],
+  });
+  if (!positionals || positionals.length !== 0) {
+    return null;
+  }
+  return {
+    json: true as const,
+    enabled: hasFlag(argv, "--enabled"),
+    verbose: hasFlag(argv, "--verbose"),
+  };
+}
+
 function parseTasksListRouteArgsForCommandPath(argv: string[], commandPath: string[]) {
   if (!hasFlag(argv, "--json")) {
     return null;

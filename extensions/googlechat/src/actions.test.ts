@@ -117,7 +117,7 @@ describe("googlechat message actions", () => {
     });
     resolveGoogleChatAccount.mockReturnValue(account);
     resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/AAA");
-    const fetchRemoteMedia = vi.fn(async () => ({
+    const readRemoteMediaBuffer = vi.fn(async () => ({
       buffer: Buffer.from("remote-bytes"),
       fileName: "remote.png",
       contentType: "image/png",
@@ -125,7 +125,7 @@ describe("googlechat message actions", () => {
     getGoogleChatRuntime.mockReturnValue({
       channel: {
         media: {
-          fetchRemoteMedia,
+          readRemoteMediaBuffer,
         },
       },
     });
@@ -155,7 +155,7 @@ describe("googlechat message actions", () => {
       account,
       target: "spaces/AAA",
     });
-    expect(fetchRemoteMedia).toHaveBeenCalledWith({
+    expect(readRemoteMediaBuffer).toHaveBeenCalledWith({
       url: "https://example.com/file.png",
       maxBytes: 5 * 1024 * 1024,
     });
@@ -188,7 +188,7 @@ describe("googlechat message actions", () => {
     getGoogleChatRuntime.mockReturnValue({
       channel: {
         media: {
-          fetchRemoteMedia: vi.fn(),
+          readRemoteMediaBuffer: vi.fn(),
         },
       },
     });

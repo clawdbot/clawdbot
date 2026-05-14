@@ -634,6 +634,149 @@ describe("preflightDiscordMessage", () => {
     ).toBe("default");
   });
 
+  it("passes bot-loop protection facts for accepted bot-authored Discord messages (#58789)", async () => {
+    const channelId = "channel-bot-loop";
+    const guildId = "guild-bot-loop";
+    const senderBotId = "relay-bot-1";
+    const messageTimestamp = "2026-05-13T05:00:00.000Z";
+
+    const message = createDiscordMessage({
+      id: "m-loop-1",
+      channelId,
+      content: "chatter <@openclaw-bot>",
+      mentionedUsers: [{ id: "openclaw-bot" }],
+      author: { id: senderBotId, bot: true, username: "Relay" },
+      timestamp: messageTimestamp,
+    });
+    const result = await preflightDiscordMessage(
+      createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {
+          allowBots: true,
+          botLoopProtection: {
+            enabled: true,
+            maxEventsPerWindow: 3,
+            cooldownSeconds: 60,
+          },
+        } as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client: createGuildTextClient(channelId),
+      }),
+    );
+
+    expect(expectPreflightResult(result).botLoopProtection).toEqual({
+      scopeId: "default",
+      conversationId: channelId,
+      senderId: senderBotId,
+      receiverId: "openclaw-bot",
+      config: {
+        enabled: true,
+        maxEventsPerWindow: 3,
+        cooldownSeconds: 60,
+      },
+      defaultsConfig: undefined,
+      defaultEnabled: true,
+      nowMs: Date.parse(messageTimestamp),
+    });
+  });
+
+  it("passes generic channel defaults for Discord bot loop budgets", async () => {
+    const channelId = "channel-bot-loop-defaults";
+    const guildId = "guild-bot-loop-defaults";
+    const discordConfig = { allowBots: true } as DiscordConfig;
+    const message = createDiscordMessage({
+      id: "m-loop-default-1",
+      channelId,
+      content: "relay <@openclaw-bot>",
+      mentionedUsers: [{ id: "openclaw-bot" }],
+      author: { id: "relay-bot-defaults", bot: true, username: "Relay" },
+    });
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig,
+      cfg: {
+        ...DEFAULT_PREFLIGHT_CFG,
+        channels: {
+          defaults: {
+            botLoopProtection: {
+              maxEventsPerWindow: 1,
+              cooldownSeconds: 60,
+            },
+          },
+        },
+      },
+    });
+
+    expect(expectPreflightResult(result).botLoopProtection?.defaultsConfig).toEqual({
+      maxEventsPerWindow: 1,
+      cooldownSeconds: 60,
+    });
+  });
+
+  it("does not prepare loop-guard facts for bot messages that later preflight gates drop (#58789)", async () => {
+    const channelId = "channel-bot-loop-dropped";
+    const guildId = "guild-bot-loop-dropped";
+    const senderBotId = "relay-bot-dropped";
+    const discordConfig = {
+      allowBots: true,
+      botLoopProtection: {
+        enabled: true,
+        maxEventsPerWindow: 1,
+        cooldownSeconds: 60,
+      },
+    } as DiscordConfig;
+    const guildEntries = {
+      [guildId]: {
+        requireMention: false,
+        ignoreOtherMentions: true,
+      },
+    };
+
+    for (const messageId of ["m-dropped-1", "m-dropped-2"]) {
+      const message = createDiscordMessage({
+        id: messageId,
+        channelId,
+        content: `cc <@999> ${messageId}`,
+        mentionedUsers: [{ id: "999" }],
+        author: { id: senderBotId, bot: true, username: "Relay" },
+      });
+
+      expect(
+        await runGuildPreflight({
+          channelId,
+          guildId,
+          message,
+          discordConfig,
+          guildEntries,
+        }),
+      ).toBeNull();
+    }
+
+    const validMessage = createDiscordMessage({
+      id: "m-valid-after-dropped",
+      channelId,
+      content: "legitimate bot relay",
+      author: { id: senderBotId, bot: true, username: "Relay" },
+    });
+
+    expect(
+      await runGuildPreflight({
+        channelId,
+        guildId,
+        message: validMessage,
+        discordConfig,
+        guildEntries,
+      }),
+    ).not.toBeNull();
+  });
+
   it("keeps bound-thread regular bot messages flowing when allowBots=true", async () => {
     const threadBinding = createThreadBinding({
       targetKind: "session",

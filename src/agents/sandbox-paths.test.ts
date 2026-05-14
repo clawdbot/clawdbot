@@ -167,6 +167,16 @@ describe("resolveSandboxedMediaSource", () => {
     });
   });
 
+  it("allows dot-dot-prefixed filenames inside the sandbox root", async () => {
+    await withSandboxRoot(async (sandboxDir) => {
+      const result = await resolveSandboxedMediaSource({
+        media: "./..image.png",
+        sandboxRoot: sandboxDir,
+      });
+      expect(result).toBe(path.join(sandboxDir, "..image.png"));
+    });
+  });
+
   it("maps container /workspace absolute paths into sandbox root", async () => {
     await withSandboxRoot(async (sandboxDir) => {
       const result = await resolveSandboxedMediaSource({

@@ -30,7 +30,7 @@ export async function handleGatewayPostJsonEndpoint(
     ) => string[];
   },
 ): Promise<false | { body: unknown; requestAuth: AuthorizedGatewayHttpRequest } | undefined> {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
+  const url = new URL(req.url ?? "/", "http://localhost");
   if (url.pathname !== opts.pathname) {
     return false;
   }

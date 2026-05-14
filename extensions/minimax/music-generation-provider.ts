@@ -8,7 +8,7 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
-  fetchWithTimeout,
+  fetchProviderDownloadResponse,
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
@@ -89,13 +89,14 @@ async function downloadTrackFromUrl(params: {
   timeoutMs?: number;
   fetchFn: typeof fetch;
 }): Promise<GeneratedMusicAsset> {
-  const response = await fetchWithTimeout(
-    params.url,
-    { method: "GET" },
-    params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    params.fetchFn,
-  );
-  await assertOkOrThrowHttpError(response, "MiniMax generated music download failed");
+  const response = await fetchProviderDownloadResponse({
+    url: params.url,
+    init: { method: "GET" },
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    fetchFn: params.fetchFn,
+    provider: "minimax",
+    requestFailedMessage: "MiniMax generated music download failed",
+  });
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "audio/mpeg";
   const ext = extensionForMime(mimeType)?.replace(/^\./u, "") || "mp3";
   return {

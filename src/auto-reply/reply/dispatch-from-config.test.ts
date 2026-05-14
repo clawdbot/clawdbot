@@ -165,6 +165,11 @@ const ttsMocks = vi.hoisted(() => {
 });
 const transcriptMocks = vi.hoisted(() => ({
   persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
+  appendAssistantMessageToSessionTranscript: vi.fn(async (_params: unknown) => ({
+    ok: true,
+    sessionFile: "/tmp/session.jsonl",
+    messageId: "message-1",
+  })),
 }));
 const replyMediaPathMocks = vi.hoisted(() => ({
   createReplyMediaPathNormalizer: vi.fn(
@@ -498,6 +503,10 @@ vi.mock("./dispatch-acp-tts.runtime.js", () => ({
 vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
   persistAcpDispatchTranscript: (params: unknown) =>
     transcriptMocks.persistAcpDispatchTranscript(params),
+}));
+vi.mock("../../config/sessions/transcript.js", () => ({
+  appendAssistantMessageToSessionTranscript: (params: unknown) =>
+    transcriptMocks.appendAssistantMessageToSessionTranscript(params),
 }));
 vi.mock("./dispatch-acp-session.runtime.js", () => ({
   readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
@@ -875,6 +884,7 @@ describe("dispatchReplyFromConfig", () => {
       mode: "final",
     });
     transcriptMocks.persistAcpDispatchTranscript.mockClear();
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
     replyMediaPathMocks.createReplyMediaPathNormalizer.mockReset();
     replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValue(
       async (payload: ReplyPayload) => payload,
@@ -4773,6 +4783,51 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(failureNotice);
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+  });
+
+  it("mirrors internal source reply payloads into the active transcript", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const sourceReply = setReplyPayloadMetadata(
+      { text: "message tool reply" },
+      {
+        deliverDespiteSourceReplySuppression: true,
+        sourceReplyTranscriptMirror: {
+          sessionKey: "agent:main",
+          agentId: "main",
+          text: "message tool reply",
+          idempotencyKey: "run-1:internal-source-reply:0",
+        },
+      },
+    );
+    const replyResolver = vi.fn(async () => sourceReply satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "webchat", Surface: "webchat", SessionKey: "agent:main" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(sourceReply);
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      sessionKey: "agent:main",
+      agentId: "main",
+      text: "message tool reply",
+      mediaUrls: undefined,
+      idempotencyKey: "run-1:internal-source-reply:0",
+      updateMode: "inline",
+      config: emptyConfig,
+    });
   });
 
   it("does not deliver marked runtime failure notices when sendPolicy denies delivery", async () => {

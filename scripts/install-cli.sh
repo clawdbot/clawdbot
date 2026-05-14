@@ -364,6 +364,128 @@ run_pnpm() {
   "${PNPM_CMD[@]}" "$@"
 }
 
+resolve_git_openclaw_ref() {
+  local requested="${OPENCLAW_VERSION:-latest}"
+  local resolved_version=""
+
+  case "$requested" in
+    ""|latest)
+      resolved_version="$("$(npm_bin)" view "openclaw" "dist-tags.${requested:-latest}" 2>/dev/null || true)"
+      if [[ -n "$resolved_version" ]]; then
+        echo "v${resolved_version}"
+        return 0
+      fi
+      echo "main"
+      return 0
+      ;;
+    next|beta)
+      resolved_version="$("$(npm_bin)" view "openclaw" "dist-tags.${requested:-latest}" 2>/dev/null || true)"
+      if [[ -n "$resolved_version" ]]; then
+        echo "v${resolved_version}"
+        return 0
+      fi
+      echo "$requested"
+      return 0
+      ;;
+    main)
+      echo "main"
+      return 0
+      ;;
+    v[0-9]*)
+      echo "$requested"
+      return 0
+      ;;
+    [0-9]*.[0-9]*.[0-9]*)
+      echo "v${requested}"
+      return 0
+      ;;
+    *)
+      echo "$requested"
+      return 0
+      ;;
+  esac
+}
+
+checkout_git_openclaw_ref() {
+  local repo_dir="$1"
+  local ref="$2"
+
+  if [[ -z "$ref" ]]; then
+    return 0
+  fi
+
+  git -C "$repo_dir" fetch --tags origin
+
+  if [[ "$ref" == "main" ]]; then
+    git -C "$repo_dir" checkout main
+    if [[ "$GIT_UPDATE" == "1" ]]; then
+      git -C "$repo_dir" pull --rebase || true
+    fi
+    return 0
+  fi
+
+  if git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
+    git -C "$repo_dir" checkout --detach "$ref"
+    return 0
+  fi
+
+  if git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
+    git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
+    if [[ "$GIT_UPDATE" == "1" ]]; then
+      git -C "$repo_dir" pull --rebase || true
+    fi
+    return 0
+  fi
+
+  if git -C "$repo_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
+    git -C "$repo_dir" checkout --detach "$ref"
+    return 0
+  fi
+
+  fail "Requested git version not found: ${ref}"
+}
+
+repo_pnpm_spec() {
+  local repo_dir="$1"
+  local package_json="${repo_dir}/package.json"
+
+  if [[ ! -f "$package_json" ]]; then
+    return 1
+  fi
+
+  sed -n -E 's/^[[:space:]]*"packageManager"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$package_json" | head -n1
+}
+
+activate_repo_pnpm_version() {
+  local repo_dir="$1"
+  local spec
+  local version
+  local corepack_cmd=""
+
+  spec="$(repo_pnpm_spec "$repo_dir" || true)"
+  if [[ "$spec" != pnpm@* ]]; then
+    return 0
+  fi
+
+  version="${spec#pnpm@}"
+  version="${version%%+*}"
+  if [[ -z "$version" ]]; then
+    return 0
+  fi
+
+  if [[ -x "$(node_dir)/bin/corepack" ]]; then
+    corepack_cmd="$(node_dir)/bin/corepack"
+  elif command -v corepack >/dev/null 2>&1; then
+    corepack_cmd="$(command -v corepack)"
+  fi
+
+  if [[ -n "$corepack_cmd" ]]; then
+    log "Activating repo pnpm ${version}"
+    "$corepack_cmd" prepare "pnpm@${version}" --activate >/dev/null 2>&1 || true
+    detect_pnpm_cmd || true
+  fi
+}
+
 install_node() {
   local os
   local arch
@@ -588,18 +710,20 @@ install_openclaw_from_git() {
     git clone "$repo_url" "$repo_dir"
   fi
 
-  if [[ "$GIT_UPDATE" == "1" ]]; then
-    if [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
-      git -C "$repo_dir" pull --rebase || true
-    else
-      log "Repo is dirty; skipping git pull"
-    fi
+  local git_ref
+  git_ref="$(resolve_git_openclaw_ref)"
+  if [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
+    log "Using git ref: ${git_ref}"
+    checkout_git_openclaw_ref "$repo_dir" "$git_ref"
+  else
+    log "Repo is dirty; skipping git checkout/update"
   fi
 
   cleanup_legacy_submodules "$repo_dir"
   ensure_pnpm_git_prepare_allowlist "$repo_dir"
+  activate_repo_pnpm_version "$repo_dir"
 
-  SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_pnpm -C "$repo_dir" install
+  SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_pnpm -C "$repo_dir" install --frozen-lockfile
 
   if ! run_pnpm -C "$repo_dir" ui:build; then
     log "UI build failed; continuing (CLI may still work)"

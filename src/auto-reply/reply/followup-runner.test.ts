@@ -847,7 +847,7 @@ describe("createFollowupRunner compaction", () => {
         sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
       },
     });
-    const queueSettings: QueueSettings = { mode: "queue" };
+    const queueSettings: QueueSettings = { mode: "followup" };
     enqueueFollowupRun("main", queuedNext, queueSettings);
 
     const current = createQueuedRun({

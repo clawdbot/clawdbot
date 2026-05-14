@@ -1030,6 +1030,43 @@ describe("handleTelegramAction", () => {
       ],
     ]);
   });
+
+  it("forwards web app buttons from generic presentation", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "5232990709",
+        content: "Choose",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Launch",
+                  web_app: { url: "https://example.com/app" },
+                  style: "primary",
+                },
+              ],
+            },
+          ],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "dm" } }),
+    );
+    const call = mockCall(sendMessageTelegram, 0, "inline keyboard web app");
+    expect(call[0]).toBe("5232990709");
+    expect(call[1]).toBe("Choose");
+    expect(requireRecord(call[2], "inline keyboard web app options").buttons).toEqual([
+      [
+        {
+          text: "Launch",
+          web_app: { url: "https://example.com/app" },
+          style: "primary",
+        },
+      ],
+    ]);
+  });
 });
 
 describe("handleTelegramAction per-account gating", () => {

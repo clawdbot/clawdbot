@@ -2132,6 +2132,19 @@ describe("memory plugin e2e", () => {
     expect(shouldCapture("My email is test@example.com")).toBe(true);
     expect(shouldCapture("Call me at +1234567890123")).toBe(true);
     expect(shouldCapture("I always want verbose output")).toBe(true);
+    expect(shouldCapture("记住这个")).toBe(true);
+    expect(shouldCapture("我喜欢")).toBe(true);
+    expect(shouldCapture("以后都用这个")).toBe(true);
+    expect(shouldCapture("重要")).toBe(true);
+    expect(shouldCapture("覚えて")).toBe(true);
+    expect(shouldCapture("私は猫が好き")).toBe(true);
+    expect(shouldCapture("기억해줘")).toBe(true);
+    expect(shouldCapture("중요")).toBe(true);
+    expect(shouldCapture("blue", { customTriggers: ["blue"] })).toBe(false);
+    expect(shouldCapture("记住这个", { customTriggers: ["记住"] })).toBe(true);
+    expect(shouldCapture("use the azure profile", { customTriggers: ["azure profile"] })).toBe(
+      true,
+    );
     expect(shouldCapture("x")).toBe(false);
     expect(shouldCapture("<relevant-memories>injected</relevant-memories>")).toBe(false);
     expect(shouldCapture("<system>status</system>")).toBe(false);

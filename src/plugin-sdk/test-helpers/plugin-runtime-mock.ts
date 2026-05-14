@@ -69,6 +69,33 @@ function createDeprecatedRuntimeConfigError(name: "loadConfig" | "writeConfigFil
   );
 }
 
+export type PluginRuntimeMediaMock = PluginRuntime["channel"]["media"];
+
+export function createPluginRuntimeMediaMock(
+  overrides: Partial<PluginRuntimeMediaMock> = {},
+): PluginRuntimeMediaMock {
+  const readRemoteMediaBuffer =
+    vi.fn() as unknown as PluginRuntimeMediaMock["readRemoteMediaBuffer"];
+  return {
+    readRemoteMediaBuffer,
+    fetchRemoteMedia:
+      readRemoteMediaBuffer as unknown as PluginRuntimeMediaMock["fetchRemoteMedia"],
+    saveRemoteMedia: vi.fn().mockResolvedValue({
+      path: "/tmp/test-media.jpg",
+      contentType: "image/jpeg",
+    }) as unknown as PluginRuntimeMediaMock["saveRemoteMedia"],
+    saveResponseMedia: vi.fn().mockResolvedValue({
+      path: "/tmp/test-media.jpg",
+      contentType: "image/jpeg",
+    }) as unknown as PluginRuntimeMediaMock["saveResponseMedia"],
+    saveMediaBuffer: vi.fn().mockResolvedValue({
+      path: "/tmp/test-media.jpg",
+      contentType: "image/jpeg",
+    }) as unknown as PluginRuntimeMediaMock["saveMediaBuffer"],
+    ...overrides,
+  };
+}
+
 export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
   const taskFlow = {
     bindSession: vi.fn(
@@ -524,14 +551,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           created: true,
         }) as unknown as PluginRuntime["channel"]["pairing"]["upsertPairingRequest"],
       },
-      media: {
-        fetchRemoteMedia:
-          vi.fn() as unknown as PluginRuntime["channel"]["media"]["fetchRemoteMedia"],
-        saveMediaBuffer: vi.fn().mockResolvedValue({
-          path: "/tmp/test-media.jpg",
-          contentType: "image/jpeg",
-        }) as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
-      },
+      media: createPluginRuntimeMediaMock(),
       session: {
         resolveStorePath: vi.fn(
           () => "/tmp/sessions.json",

@@ -2957,19 +2957,23 @@ export default definePluginEntry({
             };
           }
           if (action === "on" || action === "enable" || action === "enabled") {
-            const nextConfig = updateActiveMemoryGlobalEnabledInConfig(currentConfig, true);
-            await api.runtime.config.replaceConfigFile({
-              nextConfig,
+            await api.runtime.config.mutateConfigFile({
               afterWrite: { mode: "auto" },
+              mutate: (draft) => {
+                const nextConfig = updateActiveMemoryGlobalEnabledInConfig(draft, true);
+                Object.assign(draft, nextConfig);
+              },
             });
             refreshLiveConfigFromRuntime();
             return { text: "Active Memory: on globally." };
           }
           if (action === "off" || action === "disable" || action === "disabled") {
-            const nextConfig = updateActiveMemoryGlobalEnabledInConfig(currentConfig, false);
-            await api.runtime.config.replaceConfigFile({
-              nextConfig,
+            await api.runtime.config.mutateConfigFile({
               afterWrite: { mode: "auto" },
+              mutate: (draft) => {
+                const nextConfig = updateActiveMemoryGlobalEnabledInConfig(draft, false);
+                Object.assign(draft, nextConfig);
+              },
             });
             refreshLiveConfigFromRuntime();
             return { text: "Active Memory: off globally." };

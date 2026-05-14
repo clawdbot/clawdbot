@@ -1,5 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
+import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import type { InteractiveReply, MessagePresentation } from "../../../interactive/payload.js";
 import {
   buildPayloads,
   expectSinglePayloadText,
@@ -135,6 +137,98 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expectSinglePayloadText(payloads, "The schema export is fixed.");
+  });
+
+  it("turns internal message-tool source replies into suppression-safe final payloads", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["ordinary final should stay private"],
+      didSendViaMessagingTool: true,
+      messagingToolSourceReplyPayloads: [
+        {
+          text: "sent through message tool",
+          mediaUrls: ["/tmp/reply.png"],
+        },
+      ],
+      sourceReplyDeliveryMode: "message_tool_only",
+      sessionKey: "agent:main",
+      agentId: "main",
+      runId: "run-1",
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      text: "sent through message tool",
+      mediaUrl: "/tmp/reply.png",
+      mediaUrls: ["/tmp/reply.png"],
+    });
+    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+      sourceReplyTranscriptMirror: {
+        sessionKey: "agent:main",
+        agentId: "main",
+        text: "sent through message tool",
+        mediaUrls: ["/tmp/reply.png"],
+        idempotencyKey: "run-1:internal-source-reply:0",
+      },
+    });
+  });
+
+  it("preserves rich-only internal message-tool source replies", () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Approve", value: "approve" }],
+        },
+      ],
+    } satisfies MessagePresentation;
+    const interactive = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Open", value: "open" }],
+        },
+      ],
+    } satisfies InteractiveReply;
+
+    const payloads = buildPayloads({
+      assistantTexts: ["ordinary final should stay private"],
+      didSendViaMessagingTool: true,
+      messagingToolSourceReplyPayloads: [
+        {
+          presentation,
+        },
+        {
+          interactive,
+        },
+      ],
+      sourceReplyDeliveryMode: "message_tool_only",
+      sessionKey: "agent:main",
+      agentId: "main",
+      runId: "run-1",
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]).toMatchObject({ presentation });
+    expect(payloads[0]?.text).toBeUndefined();
+    expect(payloads[1]).toMatchObject({ interactive });
+    expect(payloads[1]?.text).toBeUndefined();
+    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+      sourceReplyTranscriptMirror: {
+        sessionKey: "agent:main",
+        agentId: "main",
+        idempotencyKey: "run-1:internal-source-reply:0",
+      },
+    });
+    expect(getReplyPayloadMetadata(payloads[1] as object)).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+      sourceReplyTranscriptMirror: {
+        sessionKey: "agent:main",
+        agentId: "main",
+        idempotencyKey: "run-1:internal-source-reply:1",
+      },
+    });
   });
 
   it("ignores accumulated internal/status text after the final answer", () => {

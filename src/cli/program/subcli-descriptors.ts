@@ -41,6 +41,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "approvals",
     description: "Manage exec approvals (gateway or node host)",
     hasSubcommands: true,
+    parentDefaultHelp: true,
   },
   {
     name: "exec-policy",
@@ -56,6 +57,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "devices",
     description: "Device pairing + token management",
     hasSubcommands: true,
+    parentDefaultHelp: true,
   },
   {
     name: "node",
@@ -86,6 +88,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "cron",
     description: "Schedule and inspect Gateway background jobs",
     hasSubcommands: true,
+    parentDefaultHelp: true,
   },
   {
     name: "dns",
@@ -136,11 +139,13 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "plugins",
     description: "Install, enable, disable, and inspect plugins",
     hasSubcommands: true,
+    parentDefaultHelp: true,
   },
   {
     name: "channels",
     description: "Add, remove, login, and inspect messaging channels",
     hasSubcommands: true,
+    parentDefaultHelp: true,
   },
   {
     name: "directory",
@@ -186,6 +191,14 @@ export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
 
 export function getSubCliCommandsWithSubcommands(): string[] {
   const commands = subCliCommandCatalog.getCommandsWithSubcommands();
+  if (isPrivateQaCliEnabled()) {
+    return commands;
+  }
+  return commands.filter((command) => command !== "qa");
+}
+
+export function getSubCliParentDefaultHelpCommands(): string[] {
+  const commands = subCliCommandCatalog.getParentDefaultHelpCommands();
   if (isPrivateQaCliEnabled()) {
     return commands;
   }

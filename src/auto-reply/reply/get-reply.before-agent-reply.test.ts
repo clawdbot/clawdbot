@@ -71,6 +71,7 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
       kind: "continue",
       directives: {},
       abortedLastRun: false,
+      cleanedBody: "hello world",
     });
     mocks.hasHooks.mockImplementation((hookName) => hookName === "before_agent_reply");
   });

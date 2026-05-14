@@ -5,7 +5,7 @@ import { createToolFactoryHarness, type ToolLike } from "./tool-factory-test-har
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const resolveFeishuToolAccountMock = vi.hoisted(() => vi.fn());
-const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
+const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
 const convertMock = vi.hoisted(() => vi.fn());
 const documentCreateMock = vi.hoisted(() => vi.fn());
@@ -40,7 +40,7 @@ vi.spyOn(runtimeModule, "getFeishuRuntime").mockImplementation(
     ({
       channel: {
         media: {
-          fetchRemoteMedia: fetchRemoteMediaMock,
+          readRemoteMediaBuffer: readRemoteMediaBufferMock,
           saveMediaBuffer: vi.fn(),
         },
       },
@@ -389,7 +389,7 @@ describe("feishu_doc image fetch hardening", () => {
 
   it("skips image upload when markdown image URL is blocked", async () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    fetchRemoteMediaMock.mockRejectedValueOnce(
+    readRemoteMediaBufferMock.mockRejectedValueOnce(
       new Error("Blocked: resolves to private/internal IP address"),
     );
 
@@ -401,7 +401,7 @@ describe("feishu_doc image fetch hardening", () => {
       content: "![x](https://x.test/image.png)",
     });
 
-    expect(fetchRemoteMediaMock).toHaveBeenCalled();
+    expect(readRemoteMediaBufferMock).toHaveBeenCalled();
     expect(driveUploadAllMock).not.toHaveBeenCalled();
     expect(blockPatchMock).not.toHaveBeenCalled();
     expect(result.details.images_processed).toBe(0);

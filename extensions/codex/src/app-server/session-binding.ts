@@ -40,11 +40,20 @@ export type CodexAppServerThreadBinding = {
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
   dynamicToolsFingerprint?: string;
+  userMcpServersFingerprint?: string;
+  mcpServersFingerprint?: string;
   pluginAppsFingerprint?: string;
   pluginAppsInputFingerprint?: string;
   pluginAppPolicyContext?: PluginAppPolicyContext;
+  contextEngine?: CodexAppServerContextEngineBinding;
   createdAt: string;
   updatedAt: string;
+};
+
+export type CodexAppServerContextEngineBinding = {
+  schemaVersion: 1;
+  engineId: string;
+  policyFingerprint: string;
 };
 
 export function resolveCodexAppServerBindingPath(sessionFile: string): string {
@@ -92,6 +101,12 @@ export async function readCodexAppServerBinding(
         typeof parsed.dynamicToolsFingerprint === "string"
           ? parsed.dynamicToolsFingerprint
           : undefined,
+      userMcpServersFingerprint:
+        typeof parsed.userMcpServersFingerprint === "string"
+          ? parsed.userMcpServersFingerprint
+          : undefined,
+      mcpServersFingerprint:
+        typeof parsed.mcpServersFingerprint === "string" ? parsed.mcpServersFingerprint : undefined,
       pluginAppsFingerprint:
         typeof parsed.pluginAppsFingerprint === "string" ? parsed.pluginAppsFingerprint : undefined,
       pluginAppsInputFingerprint:
@@ -99,6 +114,7 @@ export async function readCodexAppServerBinding(
           ? parsed.pluginAppsInputFingerprint
           : undefined,
       pluginAppPolicyContext: readPluginAppPolicyContext(parsed.pluginAppPolicyContext),
+      contextEngine: readContextEngineBinding(parsed.contextEngine),
       createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : new Date().toISOString(),
       updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
     };
@@ -135,9 +151,12 @@ export async function writeCodexAppServerBinding(
     sandbox: binding.sandbox,
     serviceTier: binding.serviceTier,
     dynamicToolsFingerprint: binding.dynamicToolsFingerprint,
+    userMcpServersFingerprint: binding.userMcpServersFingerprint,
+    mcpServersFingerprint: binding.mcpServersFingerprint,
     pluginAppsFingerprint: binding.pluginAppsFingerprint,
     pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
     pluginAppPolicyContext: binding.pluginAppPolicyContext,
+    contextEngine: binding.contextEngine,
     createdAt: binding.createdAt ?? now,
     updatedAt: now,
   };
@@ -145,6 +164,25 @@ export async function writeCodexAppServerBinding(
     resolveCodexAppServerBindingPath(sessionFile),
     `${JSON.stringify(payload, null, 2)}\n`,
   );
+}
+
+function readContextEngineBinding(value: unknown): CodexAppServerContextEngineBinding | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    record.schemaVersion !== 1 ||
+    typeof record.engineId !== "string" ||
+    typeof record.policyFingerprint !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    schemaVersion: 1,
+    engineId: record.engineId,
+    policyFingerprint: record.policyFingerprint,
+  };
 }
 
 function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | undefined {

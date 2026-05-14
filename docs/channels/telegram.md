@@ -293,6 +293,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 - Group sessions are isolated by group ID. Forum topics append `:topic:<threadId>` to keep topics isolated.
 - DM messages can carry `message_thread_id`; OpenClaw preserves the thread ID for replies but keeps DMs on the flat session by default. Configure `channels.telegram.dm.threadReplies: "inbound"`, `channels.telegram.direct.<chatId>.threadReplies: "inbound"`, `requireTopic: true`, or a matching topic config when you intentionally want DM topic session isolation.
 - Long polling uses grammY runner with per-chat/per-thread sequencing. Overall runner sink concurrency uses `agents.defaults.maxConcurrent`.
+- Multi-account startup bounds concurrent Telegram `getMe` probes so large bot fleets do not fan out every account probe at once.
 - Long polling is guarded inside each gateway process so only one active poller can use a bot token at a time. If you still see `getUpdates` 409 conflicts, another OpenClaw gateway, script, or external poller is likely using the same token.
 - Long-polling watchdog restarts trigger after 120 seconds without completed `getUpdates` liveness by default. Increase `channels.telegram.pollingStallThresholdMs` only if your deployment still sees false polling-stall restarts during long-running work. The value is in milliseconds and is allowed from `30000` to `600000`; per-account overrides are supported.
 - Telegram Bot API has no read-receipt support (`sendReadReceipts` does not apply).
@@ -457,7 +458,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
        - `/pair approve` when there is only one pending request
        - `/pair approve latest` for most recent
 
-    The setup code carries a short-lived bootstrap token. Built-in bootstrap handoff keeps the primary node token at `scopes: []`; any handed-off operator token stays bounded to `operator.approvals`, `operator.read`, `operator.talk.secrets`, and `operator.write`. Bootstrap scope checks are role-prefixed, so that operator allowlist only satisfies operator requests; non-operator roles still need scopes under their own role prefix.
+    The setup code carries a short-lived bootstrap token. Built-in setup-code bootstrap is node-only: the first connect creates a pending node request, and after approval the Gateway returns a durable node token with `scopes: []`. It does not return a handed-off operator token; operator access requires a separate approved operator pairing or token flow.
 
     If a device retries with changed auth details (for example role/scopes/public key), the previous pending request is superseded and the new request uses a different `requestId`. Re-run `/pair pending` before approving.
 
@@ -525,6 +526,28 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   ],
 }
 ```
+
+    Mini App button example:
+
+```json5
+{
+  action: "send",
+  channel: "telegram",
+  to: "123456789",
+  message: "Open app:",
+  presentation: {
+    blocks: [
+      {
+        type: "buttons",
+        buttons: [{ label: "Launch", web_app: { url: "https://example.com/app" } }],
+      },
+    ],
+  },
+}
+```
+
+    Telegram `web_app` buttons work only in private chats between a user and the
+    bot.
 
     Callback clicks are passed to the agent as text:
     `callback_data: <value>`

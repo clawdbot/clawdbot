@@ -6,7 +6,17 @@ function makeClient(
   connId: string,
   nodeId: string,
   sent: string[] = [],
-  opts: { clientId?: string; platform?: string; version?: string } = {},
+  opts: {
+    clientId?: string;
+    platform?: string;
+    version?: string;
+    caps?: string[];
+    commands?: string[];
+    permissions?: Record<string, boolean>;
+    declaredCaps?: string[];
+    declaredCommands?: string[];
+    declaredPermissions?: Record<string, boolean>;
+  } = {},
 ): GatewayWsClient {
   return {
     connId,
@@ -19,6 +29,8 @@ function makeClient(
       },
     } as unknown as GatewayWsClient["socket"],
     connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
       client: {
         id: opts.clientId ?? "openclaw-macos",
         version: opts.version ?? "1.0.0",
@@ -32,7 +44,13 @@ function makeClient(
         signedAt: 1,
         nonce: "nonce",
       },
-    } as GatewayWsClient["connect"],
+      caps: opts.caps ?? [],
+      commands: opts.commands ?? [],
+      permissions: opts.permissions,
+      declaredCaps: opts.declaredCaps,
+      declaredCommands: opts.declaredCommands,
+      declaredPermissions: opts.declaredPermissions,
+    } as unknown as GatewayWsClient["connect"],
   };
 }
 
@@ -432,5 +450,52 @@ describe("gateway/node-registry", () => {
       '{"type":"event","event":"chat","payload":{"foo":"bar"}}',
       '{"type":"event","event":"heartbeat"}',
     ]);
+  });
+
+  it("refreshes effective live surface within the declared surface", () => {
+    const registry = new NodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], {
+      caps: [],
+      commands: [],
+      declaredCaps: ["talk"],
+      declaredCommands: ["talk.ptt.start"],
+      declaredPermissions: { microphone: true, camera: false },
+    });
+
+    const session = registry.register(client, {});
+    expect(session.caps).toEqual([]);
+    expect(session.commands).toEqual([]);
+
+    const updated = registry.updateSurface("node-1", {
+      caps: ["talk", "screen"],
+      commands: ["talk.ptt.start", "system.run"],
+      permissions: { microphone: true, camera: true },
+    });
+
+    expect(updated?.caps).toEqual(["talk"]);
+    expect(updated?.commands).toEqual(["talk.ptt.start"]);
+    expect(updated?.permissions).toEqual({ microphone: true, camera: false });
+    expect(client.connect.caps).toEqual(["talk"]);
+    expect((client.connect as { commands?: string[] }).commands).toEqual(["talk.ptt.start"]);
+  });
+
+  it("clears effective permissions when explicitly removed", () => {
+    const registry = new NodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], {
+      permissions: { camera: false },
+      declaredPermissions: { camera: false },
+    });
+
+    registry.register(client, {});
+    const updated = registry.updateSurface("node-1", {
+      caps: [],
+      commands: [],
+      permissions: undefined,
+    });
+
+    expect(updated?.permissions).toBeUndefined();
+    expect(
+      (client.connect as { permissions?: Record<string, boolean> }).permissions,
+    ).toBeUndefined();
   });
 });

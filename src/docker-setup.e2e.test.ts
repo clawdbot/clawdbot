@@ -90,6 +90,15 @@ async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
 
 const sandboxRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-docker-setup-" });
 
+const prestartContainerEnvFlags = [
+  "-e HOME=/home/node",
+  "-e OPENCLAW_HOME=/home/node",
+  "-e OPENCLAW_STATE_DIR=/home/node/.openclaw",
+  "-e OPENCLAW_CONFIG_PATH=/home/node/.openclaw/openclaw.json",
+  "-e OPENCLAW_CONFIG_DIR=/home/node/.openclaw",
+  "-e OPENCLAW_WORKSPACE_DIR=/home/node/.openclaw/workspace",
+].join(" ");
+
 function createEnv(
   sandbox: DockerSetupSandbox,
   overrides: Record<string, string | undefined> = {},
@@ -275,10 +284,10 @@ describe("scripts/docker/setup.sh", () => {
     const log = await readDockerLog(activeSandbox);
     expect(log).toContain("--build-arg OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
     expect(log).toContain(
-      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js onboard --mode local --no-install-daemon",
+      `run --rm --no-deps ${prestartContainerEnvFlags} --entrypoint node openclaw-gateway dist/index.js onboard --mode local --no-install-daemon`,
     );
     expect(log).toContain(
-      'run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set --batch-json [{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"},{"path":"gateway.controlUi.allowedOrigins","value":["http://localhost:18789","http://127.0.0.1:18789"]}]',
+      `run --rm --no-deps ${prestartContainerEnvFlags} --entrypoint node openclaw-gateway dist/index.js config set --batch-json [{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"},{"path":"gateway.controlUi.allowedOrigins","value":["http://localhost:18789","http://127.0.0.1:18789"]}]`,
     );
     expect(log).not.toContain("run --rm openclaw-cli onboard --mode local --no-install-daemon");
   });
@@ -311,6 +320,32 @@ describe("scripts/docker/setup.sh", () => {
       /\bcompose\b.*\brun\b.*\bopenclaw-cli\b/.test(line),
     );
     expect(prestartCliRunLines).toStrictEqual([]);
+  });
+
+  it("pins setup-time CLI state paths inside the container", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+
+    await resetDockerLog(activeSandbox);
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_HOME: "/mnt/c/Users/Trevor",
+      OPENCLAW_STATE_DIR: "/mnt/c/Users/Trevor/.openclaw",
+      OPENCLAW_CONFIG_PATH: "/mnt/c/Users/Trevor/.openclaw/openclaw.json",
+      OPENCLAW_SKIP_ONBOARDING: "1",
+    });
+    expect(result.status).toBe(0);
+
+    const lines = await readDockerLogLines(activeSandbox);
+    const gatewayStartIdx = findGatewayStartLineIndex(lines);
+    expect(gatewayStartIdx).toBeGreaterThanOrEqual(0);
+
+    const prestartConfigLines = collectMatchingLines(lines.slice(0, gatewayStartIdx), (line) =>
+      line.includes(" dist/index.js config "),
+    );
+    expect(prestartConfigLines.length).toBeGreaterThan(0);
+    for (const line of prestartConfigLines) {
+      expect(line).toContain(prestartContainerEnvFlags);
+      expect(line).not.toContain("/mnt/c");
+    }
   });
 
   it("forces BuildKit for local and sandbox docker builds", async () => {
@@ -692,12 +727,16 @@ describe("scripts/docker/setup.sh", () => {
     expect(compose.match(/TZ: \$\{OPENCLAW_TZ:-UTC\}/g)).toHaveLength(2);
   });
 
-  it("pins container-side workspace and config dirs on both services so host .env paths cannot leak (#77436)", async () => {
+  it("pins container-side state, workspace, and config dirs on both services so host .env paths cannot leak (#77436)", async () => {
     const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
-    // Both gateway and CLI services must override the env_file values with the
-    // canonical container paths so a host-style OPENCLAW_WORKSPACE_DIR like
-    // `/Users/<you>/.openclaw/workspace` written to `.env` by docker-setup.sh
-    // cannot reach runtime code inside Linux Docker.
+    // Both gateway and CLI services must override env_file values with the
+    // canonical container paths so host-style paths written to `.env` cannot
+    // reach runtime code inside Linux Docker.
+    expect(compose.match(/OPENCLAW_HOME: \/home\/node$/gm)).toHaveLength(2);
+    expect(compose.match(/OPENCLAW_STATE_DIR: \/home\/node\/\.openclaw$/gm)).toHaveLength(2);
+    expect(
+      compose.match(/OPENCLAW_CONFIG_PATH: \/home\/node\/\.openclaw\/openclaw\.json$/gm),
+    ).toHaveLength(2);
     expect(compose.match(/OPENCLAW_CONFIG_DIR: \/home\/node\/\.openclaw$/gm)).toHaveLength(2);
     expect(
       compose.match(/OPENCLAW_WORKSPACE_DIR: \/home\/node\/\.openclaw\/workspace$/gm),

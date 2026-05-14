@@ -107,7 +107,7 @@ export async function deliverGoogleChatReply(params: {
     },
     sendMedia: async ({ mediaUrl, caption }) => {
       try {
-        const loaded = await core.channel.media.fetchRemoteMedia({
+        const loaded = await core.channel.media.readRemoteMediaBuffer({
           url: mediaUrl,
           maxBytes: (account.config.mediaMaxMb ?? 20) * 1024 * 1024,
         });

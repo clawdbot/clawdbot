@@ -5,6 +5,25 @@ import { downloadMSTeamsAttachments } from "./attachments/download.js";
 import { resolveRequestUrl } from "./attachments/shared.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
+const saveResponseMediaMock = vi.hoisted(() =>
+  vi.fn(async (response: Response) => {
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const contentType = response.headers.get("content-type") ?? "image/png";
+    return {
+      id: contentType === "application/pdf" ? "saved.pdf" : "saved.png",
+      path: contentType === "application/pdf" ? "/tmp/saved.pdf" : "/tmp/saved.png",
+      size: 42,
+      contentType,
+    };
+  }),
+);
+
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => ({
+  saveResponseMedia: saveResponseMediaMock,
+}));
+
 const GRAPH_HOST = "graph.microsoft.com";
 const _SHAREPOINT_HOST = "contoso.sharepoint.com";
 const AZUREEDGE_HOST = "azureedge.net";
@@ -41,12 +60,20 @@ type RemoteMediaFetchParams = {
 };
 
 const detectMimeMock = vi.fn(async () => CONTENT_TYPE_IMAGE_PNG);
-const saveMediaBufferMock = vi.fn(async () => ({
-  id: "saved.png",
-  path: SAVED_PNG_PATH,
-  size: Buffer.byteLength(PNG_BUFFER),
-  contentType: CONTENT_TYPE_IMAGE_PNG,
-}));
+const saveMediaBufferMock = vi.fn(
+  async (
+    _buffer: Buffer,
+    contentType?: string,
+    _subdir?: string,
+    _maxBytes?: number,
+    _originalFilename?: string,
+  ) => ({
+    id: "saved.png",
+    path: contentType === CONTENT_TYPE_APPLICATION_PDF ? SAVED_PDF_PATH : SAVED_PNG_PATH,
+    size: Buffer.byteLength(PNG_BUFFER),
+    contentType: contentType ?? CONTENT_TYPE_IMAGE_PNG,
+  }),
+);
 function isHostnameAllowedByPattern(hostname: string, pattern: string): boolean {
   if (pattern.startsWith("*.")) {
     const suffix = pattern.slice(2);
@@ -65,7 +92,7 @@ function isUrlAllowedBySsrfPolicy(url: string, policy?: SsrFPolicy): boolean {
   );
 }
 
-async function fetchRemoteMediaWithRedirects(
+async function readRemoteMediaBufferWithRedirects(
   params: RemoteMediaFetchParams,
   requestInit?: RequestInit,
 ) {
@@ -89,8 +116,18 @@ async function fetchRemoteMediaWithRedirects(
   throw new Error("too many redirects");
 }
 
-const fetchRemoteMediaMock = vi.fn(async (params: RemoteMediaFetchParams) => {
-  return await fetchRemoteMediaWithRedirects(params);
+const readRemoteMediaBufferMock = vi.fn(async (params: RemoteMediaFetchParams) => {
+  return await readRemoteMediaBufferWithRedirects(params);
+});
+const saveRemoteMediaMock = vi.fn(async (params: RemoteMediaFetchParams) => {
+  const fetched = await readRemoteMediaBufferWithRedirects(params);
+  return await saveMediaBufferMock(
+    fetched.buffer,
+    fetched.contentType,
+    "inbound",
+    params.maxBytes,
+    params.filePathHint,
+  );
 });
 
 const runtimeStub = {
@@ -99,7 +136,9 @@ const runtimeStub = {
   },
   channel: {
     media: {
-      fetchRemoteMedia: fetchRemoteMediaMock,
+      readRemoteMediaBuffer: readRemoteMediaBufferMock,
+      saveRemoteMedia: saveRemoteMediaMock,
+      saveResponseMedia: saveResponseMediaMock,
       saveMediaBuffer: saveMediaBufferMock,
     },
   },
@@ -261,7 +300,9 @@ const expectSingleMedia = (media: DownloadedMedia, expected: DownloadedMediaExpe
   expectFirstMedia(media, expected);
 };
 const expectMediaBufferSaved = () => {
-  expect(saveMediaBufferMock).toHaveBeenCalled();
+  expect(
+    saveResponseMediaMock.mock.calls.length + saveMediaBufferMock.mock.calls.length,
+  ).toBeGreaterThan(0);
 };
 const expectFirstMedia = (media: DownloadedMedia, expected: DownloadedMediaExpectation) => {
   const first = media[0];
@@ -383,7 +424,9 @@ describe("msteams attachments", () => {
   beforeEach(() => {
     detectMimeMock.mockClear();
     saveMediaBufferMock.mockClear();
-    fetchRemoteMediaMock.mockClear();
+    readRemoteMediaBufferMock.mockClear();
+    saveRemoteMediaMock.mockClear();
+    saveResponseMediaMock.mockClear();
     setMSTeamsRuntime(runtimeStub);
   });
 
@@ -425,8 +468,8 @@ describe("msteams attachments", () => {
         return createNotFoundResponse();
       });
 
-      fetchRemoteMediaMock.mockImplementationOnce(async (params) => {
-        return await fetchRemoteMediaWithRedirects(params, {
+      readRemoteMediaBufferMock.mockImplementationOnce(async (params) => {
+        return await readRemoteMediaBufferWithRedirects(params, {
           dispatcher: {},
         } as RequestInit);
       });

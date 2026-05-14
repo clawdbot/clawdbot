@@ -46,6 +46,11 @@ const { subagentRegistryRuntimeMock } = vi.hoisted(() => ({
 
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: (request: unknown) => callGatewayMock(request),
+  dispatchGatewayMethodInProcess: (
+    method: string,
+    params: Record<string, unknown>,
+    options?: { timeoutMs?: number },
+  ) => callGatewayMock({ method, params, timeoutMs: options?.timeoutMs }),
   isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
   getRuntimeConfig: () => mockConfig,
   loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
@@ -109,7 +114,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
         `[Internal task completion event]\n${params.triggerMessage}`,
         { steeringMode: "all" },
       );
-      return { delivered: true, path: "queue" };
+      return { delivered: true, path: "steered" };
     }
 
     const effectiveOrigin =
@@ -350,7 +355,7 @@ describe("subagent announce seam flow", () => {
       messages: {
         queue: {
           byChannel: {
-            discord: "steer",
+            discord: "followup",
           },
         },
       },

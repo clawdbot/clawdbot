@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../../../auto-reply/reply-payload.js";
 import { mergeAttemptToolMediaPayloads } from "./tool-media-payloads.js";
 
 describe("mergeAttemptToolMediaPayloads", () => {
@@ -38,5 +42,32 @@ describe("mergeAttemptToolMediaPayloads", () => {
         audioAsVoice: true,
       },
     ]);
+  });
+
+  it("preserves reply metadata when attaching tool media to a visible reply", () => {
+    const visibleReply = setReplyPayloadMetadata(
+      { text: "done" },
+      {
+        assistantMessageIndex: 7,
+        deliverDespiteSourceReplySuppression: true,
+      },
+    );
+
+    const [reasoningReply, mergedReply] =
+      mergeAttemptToolMediaPayloads({
+        payloads: [{ text: "thinking", isReasoning: true }, visibleReply],
+        toolMediaUrls: ["/tmp/reply.png"],
+      }) ?? [];
+
+    expect(reasoningReply).toEqual({ text: "thinking", isReasoning: true });
+    expect(mergedReply).toEqual({
+      text: "done",
+      mediaUrls: ["/tmp/reply.png"],
+      mediaUrl: "/tmp/reply.png",
+    });
+    expect(getReplyPayloadMetadata(mergedReply ?? {})).toEqual({
+      assistantMessageIndex: 7,
+      deliverDespiteSourceReplySuppression: true,
+    });
   });
 });

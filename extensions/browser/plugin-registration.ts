@@ -7,6 +7,10 @@ import type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  BROWSER_REQUEST_GATEWAY_METHOD,
+  BROWSER_REQUEST_GATEWAY_SCOPE,
+} from "./src/browser-gateway-contract.js";
 import { BrowserToolSchema } from "./src/browser-tool.schema.js";
 
 const BROWSER_CLI_DESCRIPTOR = {
@@ -107,13 +111,13 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
     { commands: ["browser"], descriptors: [BROWSER_CLI_DESCRIPTOR] },
   );
   api.registerGatewayMethod(
-    "browser.request",
+    BROWSER_REQUEST_GATEWAY_METHOD,
     async (opts) => {
       const { handleBrowserGatewayRequest } = await import("./register.runtime.js");
       return await handleBrowserGatewayRequest(opts);
     },
     {
-      scope: "operator.admin",
+      scope: BROWSER_REQUEST_GATEWAY_SCOPE,
     },
   );
   api.registerService(createLazyBrowserPluginService());

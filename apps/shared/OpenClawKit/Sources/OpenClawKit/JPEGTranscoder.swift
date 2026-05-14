@@ -38,6 +38,26 @@ public struct JPEGTranscoder: Sendable {
         quality: Double,
         maxBytes: Int? = nil) throws -> (data: Data, widthPx: Int, heightPx: Int)
     {
+        try self.transcodeToJPEG(
+            imageData: imageData,
+            maxWidthPx: maxWidthPx,
+            maxLongEdgePx: nil,
+            quality: quality,
+            maxBytes: maxBytes)
+    }
+
+    /// Re-encodes image data to JPEG, optionally downscaling so the *oriented* longest edge is <= `maxLongEdgePx`.
+    ///
+    /// When `maxLongEdgePx` is provided it takes precedence over `maxWidthPx`.
+    /// - Important: This normalizes EXIF orientation (the output pixels are rotated if needed; orientation tag is not
+    ///   relied on).
+    public static func transcodeToJPEG(
+        imageData: Data,
+        maxWidthPx: Int? = nil,
+        maxLongEdgePx: Int?,
+        quality: Double,
+        maxBytes: Int? = nil) throws -> (data: Data, widthPx: Int, heightPx: Int)
+    {
         guard let src = CGImageSourceCreateWithData(imageData as CFData, nil) else {
             throw JPEGTranscodeError.decodeFailed
         }
@@ -63,6 +83,10 @@ public struct JPEGTranscoder: Sendable {
 
         let maxDim = max(orientedWidth, orientedHeight)
         var targetMaxPixelSize: Int = {
+            if let maxLongEdgePx, maxLongEdgePx > 0 {
+                guard maxDim > maxLongEdgePx else { return maxDim } // never upscale
+                return maxLongEdgePx
+            }
             guard let maxWidthPx, maxWidthPx > 0 else { return maxDim }
             guard orientedWidth > maxWidthPx else { return maxDim } // never upscale
 
@@ -81,6 +105,7 @@ public struct JPEGTranscoder: Sendable {
             guard let img = CGImageSourceCreateThumbnailAtIndex(src, 0, thumbOpts as CFDictionary) else {
                 throw JPEGTranscodeError.decodeFailed
             }
+            let opaqueImage = Self.flattenAlphaIfNeeded(img)
 
             let out = NSMutableData()
             guard let dest = CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil) else {
@@ -88,12 +113,12 @@ public struct JPEGTranscoder: Sendable {
             }
             let q = self.clampQuality(quality)
             let encodeProps = [kCGImageDestinationLossyCompressionQuality: q] as CFDictionary
-            CGImageDestinationAddImage(dest, img, encodeProps)
+            CGImageDestinationAddImage(dest, opaqueImage, encodeProps)
             guard CGImageDestinationFinalize(dest) else {
                 throw JPEGTranscodeError.encodeFailed
             }
 
-            return (out as Data, img.width, img.height)
+            return (out as Data, opaqueImage.width, opaqueImage.height)
         }
 
         guard let maxBytes, maxBytes > 0 else {
@@ -131,5 +156,35 @@ public struct JPEGTranscoder: Sendable {
         }
 
         return best
+    }
+
+    /// JPEG cannot store alpha. Flatten transparent sources over white before encoding so ImageIO does not composite
+    /// transparent pixels onto black by default.
+    private static func flattenAlphaIfNeeded(_ image: CGImage) -> CGImage {
+        switch image.alphaInfo {
+        case .none, .noneSkipFirst, .noneSkipLast:
+            return image
+        default:
+            break
+        }
+
+        guard
+            let context = CGContext(
+                data: nil,
+                width: image.width,
+                height: image.height,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+        else {
+            return image
+        }
+
+        let rect = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        context.fill(rect)
+        context.draw(image, in: rect)
+        return context.makeImage() ?? image
     }
 }

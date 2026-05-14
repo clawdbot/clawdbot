@@ -165,7 +165,9 @@ export async function recoverStuckDiagnosticSession(
     const released =
       sessionLane && (!activeSessionId || !aborted || !drained) ? resetCommandLane(sessionLane) : 0;
 
-    if (aborted || released > 0) {
+    const clearStaleQueuedSession = !aborted && released === 0 && (params.queueDepth ?? 0) > 0;
+
+    if (aborted || released > 0 || clearStaleQueuedSession) {
       const action = aborted ? "abort_embedded_run" : "release_lane";
       const stoppedFields = formatStoppedCronSessionDiagnosticFields(
         resolveCronSessionDiagnosticContext({ sessionKey: params.sessionKey, activeSessionId }),

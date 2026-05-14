@@ -248,6 +248,37 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("sessions.send creates a configured agent main session before sending", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-agent-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    testState.agentsConfig = {
+      list: [{ id: "main", default: true }, { id: "orion" }],
+    };
+    try {
+      await writeSessionStore({ entries: {} });
+
+      const res = await rpcReq(ws, "sessions.send", {
+        key: "agent:orion:main",
+        message: "hello orion",
+        idempotencyKey: "idem-sessions-send-orion",
+      });
+      expect(res.ok).toBe(true);
+      expect(res.payload?.runId).toBe("idem-sessions-send-orion");
+
+      const rawStore = JSON.parse(await fs.readFile(testState.sessionStorePath, "utf-8")) as Record<
+        string,
+        {
+          sessionId?: string;
+        }
+      >;
+      expect(rawStore["agent:orion:main"]?.sessionId).toBeTypeOf("string");
+    } finally {
+      testState.agentsConfig = undefined;
+      testState.sessionStorePath = undefined;
+      await removeTempDir(dir);
+    }
+  });
+
   test("sessions.steer accepts dashboard follow-up messages for existing sessions", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-steer-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");

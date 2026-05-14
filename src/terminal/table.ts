@@ -70,9 +70,10 @@ function wrapLine(text: string, width: number): string[] {
   }
 
   // ANSI-aware wrapping: never split inside ANSI SGR/OSC-8 sequences.
-  // We don't attempt to re-open styling per line; terminals keep SGR state
-  // across newlines, so as long as we don't corrupt escape sequences we're safe.
+  // Table cells are padded and bordered per physical line, so wrapped lines
+  // must not leak styling into padding while the next continuation keeps it.
   const ESC = "\u001b";
+  const SGR_RESET = `${ESC}[0m`;
 
   type Token = { kind: "ansi" | "char"; value: string };
   const tokens: Token[] = [];
@@ -170,9 +171,140 @@ function wrapLine(text: string, width: number): string[] {
   const bufVisibleWidth = (slice: Token[]) =>
     slice.reduce((acc, t) => acc + (t.kind === "char" ? visibleWidth(t.value) : 0), 0);
 
+  const parseSgrParams = (value: string): number[] | null => {
+    if (!value.startsWith(`${ESC}[`) || !value.endsWith("m")) {
+      return null;
+    }
+    const raw = value.slice(2, -1);
+    if (!raw) {
+      return [0];
+    }
+    const params = raw.split(";").map((part) => (part === "" ? 0 : Number(part)));
+    return params.every((param) => Number.isInteger(param)) ? params : null;
+  };
+
+  const activeSgrAfter = (tokens: Token[]) => {
+    type SgrCategory =
+      | "background"
+      | "blink"
+      | "conceal"
+      | "foreground"
+      | "intensity"
+      | "inverse"
+      | "italic"
+      | "strike"
+      | "underline";
+    const active: Array<{ value: string; categories: Set<SgrCategory> }> = [];
+    const resetCategoriesFor = (params: number[]) => {
+      const categories = new Set<SgrCategory>();
+      for (const param of params) {
+        if (param === 22) {
+          categories.add("intensity");
+        } else if (param === 23) {
+          categories.add("italic");
+        } else if (param === 24) {
+          categories.add("underline");
+        } else if (param === 25) {
+          categories.add("blink");
+        } else if (param === 27) {
+          categories.add("inverse");
+        } else if (param === 28) {
+          categories.add("conceal");
+        } else if (param === 29) {
+          categories.add("strike");
+        } else if (param === 39) {
+          categories.add("foreground");
+        } else if (param === 49) {
+          categories.add("background");
+        }
+      }
+      return categories;
+    };
+    const activeCategoriesFor = (params: number[]) => {
+      const categories = new Set<SgrCategory>();
+      for (let i = 0; i < params.length; i += 1) {
+        const param = params[i] ?? 0;
+        if (param === 1 || param === 2) {
+          categories.add("intensity");
+        } else if (param === 3) {
+          categories.add("italic");
+        } else if (param === 4) {
+          categories.add("underline");
+        } else if (param === 5 || param === 6) {
+          categories.add("blink");
+        } else if (param === 7) {
+          categories.add("inverse");
+        } else if (param === 8) {
+          categories.add("conceal");
+        } else if (param === 9) {
+          categories.add("strike");
+        } else if ((param >= 30 && param <= 37) || (param >= 90 && param <= 97)) {
+          categories.add("foreground");
+        } else if (param === 38) {
+          categories.add("foreground");
+          if (params[i + 1] === 2) {
+            i += 4;
+          } else if (params[i + 1] === 5) {
+            i += 2;
+          }
+        } else if ((param >= 40 && param <= 47) || (param >= 100 && param <= 107)) {
+          categories.add("background");
+        } else if (param === 48) {
+          categories.add("background");
+          if (params[i + 1] === 2) {
+            i += 4;
+          } else if (params[i + 1] === 5) {
+            i += 2;
+          }
+        }
+      }
+      return categories;
+    };
+    const intersects = (left: Set<SgrCategory>, right: Set<SgrCategory>) => {
+      for (const value of left) {
+        if (right.has(value)) {
+          return true;
+        }
+      }
+      return false;
+    };
+    for (const token of tokens) {
+      if (token.kind !== "ansi") {
+        continue;
+      }
+      const params = parseSgrParams(token.value);
+      if (!params) {
+        continue;
+      }
+      if (params.includes(0)) {
+        active.length = 0;
+      }
+      const resetCategories = resetCategoriesFor(params);
+      if (resetCategories.size > 0) {
+        for (let i = active.length - 1; i >= 0; i -= 1) {
+          const entry = active[i];
+          if (entry && intersects(entry.categories, resetCategories)) {
+            active.splice(i, 1);
+          }
+        }
+      }
+      const activeCategories = activeCategoriesFor(params);
+      if (activeCategories.size > 0) {
+        for (let i = active.length - 1; i >= 0; i -= 1) {
+          const entry = active[i];
+          if (entry && intersects(entry.categories, activeCategories)) {
+            active.splice(i, 1);
+          }
+        }
+        active.push({ value: token.value, categories: activeCategories });
+      }
+    }
+    return active.map((entry) => entry.value).join("");
+  };
+
   const pushLine = (value: string) => {
     const cleaned = value.replace(/\s+$/, "");
-    if (cleaned.trim().length === 0) {
+    if (visibleWidth(cleaned) === 0) {
       return;
     }
     lines.push(cleaned);
@@ -197,8 +329,12 @@ function wrapLine(text: string, width: number): string[] {
       return;
     }
     if (breakAt == null || breakAt <= 0) {
-      pushLine(bufToString());
+      const activeSgr = activeSgrAfter(buf);
+      pushLine(activeSgr ? `${bufToString()}${SGR_RESET}` : bufToString());
       buf.length = 0;
+      if (activeSgr) {
+        buf.push({ kind: "ansi", value: activeSgr });
+      }
       bufVisible = 0;
       lastBreakIndex = null;
       return;
@@ -206,8 +342,12 @@ function wrapLine(text: string, width: number): string[] {
 
     const left = buf.slice(0, breakAt);
     const rest = buf.slice(breakAt);
-    pushLine(bufToString(left));
+    const activeSgr = activeSgrAfter(left);
+    pushLine(activeSgr ? `${bufToString(left)}${SGR_RESET}` : bufToString(left));
     trimLeadingSpaces(rest);
+    if (activeSgr) {
+      rest.unshift({ kind: "ansi", value: activeSgr });
+    }
 
     buf.length = 0;
     buf.push(...rest);

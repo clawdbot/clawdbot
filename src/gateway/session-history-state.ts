@@ -1,3 +1,4 @@
+import { asPositiveSafeInteger } from "../shared/number-coercion.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   projectChatDisplayMessages,
@@ -26,6 +27,12 @@ type PaginatedSessionHistory = {
 type SessionHistorySnapshot = {
   history: PaginatedSessionHistory;
   rawTranscriptSeq: number;
+};
+
+type InlineSessionHistoryAppend = {
+  message?: unknown;
+  messageSeq?: number;
+  shouldRefresh?: boolean;
 };
 
 type SessionHistoryTranscriptTarget = {
@@ -82,8 +89,7 @@ function buildPaginatedSessionHistory(params: {
 }
 
 function resolveMessageSeq(message: SessionHistoryMessage | undefined): number | undefined {
-  const seq = message?.__openclaw?.seq;
-  return typeof seq === "number" && Number.isFinite(seq) && seq > 0 ? seq : undefined;
+  return asPositiveSafeInteger(message?.__openclaw?.seq);
 }
 
 function paginateSessionMessages(
@@ -224,11 +230,20 @@ export class SessionHistorySseState {
   appendInlineMessage(update: {
     message: unknown;
     messageId?: string;
-  }): { message: unknown; messageSeq?: number } | null {
+    messageSeq?: number;
+  }): InlineSessionHistoryAppend | null {
     if (this.limit !== undefined || this.cursor !== undefined) {
       return null;
     }
-    this.rawTranscriptSeq += 1;
+    const carriedSeq = asPositiveSafeInteger(update.messageSeq);
+    if (carriedSeq !== undefined) {
+      if (carriedSeq <= this.rawTranscriptSeq) {
+        return { shouldRefresh: true };
+      }
+      this.rawTranscriptSeq = carriedSeq;
+    } else {
+      this.rawTranscriptSeq += 1;
+    }
     const nextMessage = attachOpenClawTranscriptMeta(update.message, {
       ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
       seq: this.rawTranscriptSeq,

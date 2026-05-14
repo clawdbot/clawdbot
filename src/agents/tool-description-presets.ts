@@ -5,7 +5,8 @@ export const SESSIONS_LIST_TOOL_DISPLAY_SUMMARY =
   "List visible sessions with mailbox filters and optional previews.";
 export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY =
   "Read sanitized message history for a visible session.";
-export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Send a message to another visible session.";
+export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY =
+  "Send a message to another visible session or configured agent.";
 export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY = "Spawn sub-agent or ACP sessions.";
 export const SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY = "Spawn sub-agent sessions.";
 export const SESSION_STATUS_TOOL_DISPLAY_SUMMARY = "Show session status, usage, and model state.";
@@ -27,9 +28,9 @@ export function describeSessionsHistoryTool(): string {
 
 export function describeSessionsSendTool(): string {
   return [
-    "Send a message into another visible session by sessionKey or label.",
+    "Send a message into another visible session by sessionKey or label, or to a configured agent by agentId.",
     "Thread-scoped chat sessions are rejected; target the parent channel session for inter-agent coordination.",
-    "Use this to delegate follow-up work to an existing session; waits for the target run and returns the updated assistant reply when available.",
+    "Missing configured agent main sessions are created before send; waits for the target run and returns the updated assistant reply when available.",
   ].join(" ");
 }
 

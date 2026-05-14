@@ -169,6 +169,69 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
+  it("suppresses aborted assistant partial text and surfaces a clean timeout error", () => {
+    const payloads = buildPayloads({
+      runAborted: true,
+      assistantTexts: [
+        "Need answer concise mention not fully E2E tested tomorrow.\n[[reply_to_current]] Final draft",
+      ],
+      lastAssistant: makeAssistant({
+        stopReason: "aborted",
+        errorMessage: "request timed out",
+        content: [
+          {
+            type: "text",
+            text: "Need answer concise mention not fully E2E tested tomorrow.\n[[reply_to_current]] Final draft",
+          },
+        ],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request timed out.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "Need answer concise");
+    expectNoPayloadTextContaining(payloads, "[[reply_to_current]]");
+  });
+
+  it("suppresses aborted assistant reasoning text as well as partial answer text", () => {
+    const payloads = buildPayloads({
+      runAborted: true,
+      assistantTexts: ["partial answer that should not leak"],
+      lastAssistant: makeAssistant({
+        stopReason: "aborted",
+        errorMessage: "request timed out",
+        content: [
+          { type: "thinking", thinking: "partial hidden reasoning" },
+          { type: "text", text: "partial answer that should not leak" },
+        ],
+      }),
+      reasoningLevel: "on",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request timed out.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "partial hidden reasoning");
+    expectNoPayloadTextContaining(payloads, "partial answer that should not leak");
+  });
+
+  it("does not replay a stale previous assistant when an aborted run has no new text", () => {
+    const payloads = buildPayloads({
+      runAborted: true,
+      assistantTexts: [],
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [{ type: "text", text: "Previous completed assistant reply" }],
+      }),
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
   it("includes provider and model context for billing errors", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({

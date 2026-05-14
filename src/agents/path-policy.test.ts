@@ -36,3 +36,17 @@ describe("toRelativeWorkspacePath (windows semantics)", () => {
     }
   });
 });
+
+describe("toRelativeWorkspacePath", () => {
+  it("accepts dot-dot-prefixed filenames inside the workspace", () => {
+    expect(toRelativeWorkspacePath("/workspace/root", "/workspace/root/..file.txt")).toBe(
+      "..file.txt",
+    );
+  });
+
+  it("rejects parent directory traversal outside the workspace", () => {
+    expect(() => toRelativeWorkspacePath("/workspace/root", "/workspace/root/../file.txt")).toThrow(
+      "Path escapes workspace root",
+    );
+  });
+});

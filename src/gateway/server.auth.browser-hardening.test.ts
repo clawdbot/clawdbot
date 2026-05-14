@@ -30,6 +30,12 @@ const TEST_OPERATOR_CLIENT = {
   platform: "test",
   mode: GATEWAY_CLIENT_MODES.TEST,
 };
+const CONTROL_UI_CLIENT = {
+  id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+  version: "1.0.0",
+  platform: "web",
+  mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+};
 const ALLOWED_BROWSER_ORIGIN = "https://control.example.com";
 const TRUSTED_PROXY_BROWSER_HEADERS = {
   "x-forwarded-for": "203.0.113.50",
@@ -377,6 +383,44 @@ describe("gateway auth browser hardening", () => {
         const pending = pairing.pending.find((entry) => entry.deviceId === identity.deviceId);
         if (!pending) {
           throw new Error("expected non-control browser client to create pending pairing request");
+        }
+        expect(pending.silent).toBe(false);
+      } finally {
+        browserWs.close();
+      }
+    });
+  });
+
+  test("does not silently auto-pair control-ui browser clients on loopback", async () => {
+    const { listDevicePairing } = await import("../infra/device-pairing.js");
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+
+    await withGatewayServer(async ({ port }) => {
+      const browserWs = await openWs(port, { origin: originForPort(port) });
+      try {
+        const nonce = await readConnectChallengeNonce(browserWs);
+        expect(typeof nonce).toBe("string");
+        const { identity, device } = await createSignedDevice({
+          token: "secret",
+          scopes: ["operator.admin"],
+          clientId: CONTROL_UI_CLIENT.id,
+          clientMode: CONTROL_UI_CLIENT.mode,
+          identityPath: path.join(os.tmpdir(), `openclaw-control-ui-device-${randomUUID()}.json`),
+          nonce: nonce ?? "",
+        });
+        const res = await connectReq(browserWs, {
+          token: "secret",
+          scopes: ["operator.admin"],
+          client: CONTROL_UI_CLIENT,
+          device,
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("pairing required");
+
+        const pairing = await listDevicePairing();
+        const pending = pairing.pending.find((entry) => entry.deviceId === identity.deviceId);
+        if (!pending) {
+          throw new Error("expected control ui browser client to create pending pairing request");
         }
         expect(pending.silent).toBe(false);
       } finally {

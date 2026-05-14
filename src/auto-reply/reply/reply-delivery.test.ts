@@ -131,6 +131,41 @@ describe("createBlockReplyDeliveryHandler", () => {
     );
   });
 
+  it("sends presentation-only block replies when block streaming is disabled", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    const directlySentBlockKeys = new Set<string>();
+    const presentation = {
+      blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
+    };
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply,
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+    });
+
+    await handler({ presentation });
+
+    const expectedPayload = {
+      presentation,
+      text: undefined,
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+      replyToId: undefined,
+      replyToCurrent: undefined,
+      replyToTag: undefined,
+      audioAsVoice: false,
+    };
+    expect(onBlockReply).toHaveBeenCalledWith(expectedPayload);
+    expect(directlySentBlockKeys).toEqual(new Set([createBlockReplyContentKey(expectedPayload)]));
+  });
+
   it("keeps text-only block replies buffered when block streaming is disabled", async () => {
     const onBlockReply = vi.fn(async () => {});
 

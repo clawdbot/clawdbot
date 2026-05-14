@@ -60,6 +60,7 @@ type LocalRunState = {
   sessionKey: string;
   controller: AbortController;
   buffer: string;
+  lastBroadcastText?: string;
   isBtw: boolean;
   question?: string;
   finalSent: boolean;
@@ -104,6 +105,16 @@ function timeoutSecondsFromMs(timeoutMs?: number): string | undefined {
     return undefined;
   }
   return String(Math.max(0, Math.ceil(timeoutMs / 1000)));
+}
+
+function resolveDeltaPayload(text: string, previousText: string | undefined) {
+  if (previousText === undefined) {
+    return { deltaText: text };
+  }
+  if (!text.startsWith(previousText)) {
+    return { deltaText: text, replace: true as const };
+  }
+  return { deltaText: text.slice(previousText.length) };
 }
 
 export class EmbeddedTuiBackend implements TuiBackend {
@@ -396,11 +407,17 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (!text || projected.suppress) {
       return;
     }
+    const deltaPayload = resolveDeltaPayload(text, run.lastBroadcastText);
+    if (!deltaPayload.deltaText && !deltaPayload.replace) {
+      return;
+    }
     run.registered = true;
+    run.lastBroadcastText = text;
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
       state: "delta",
+      ...deltaPayload,
       message: {
         role: "assistant",
         content: [{ type: "text", text }],
@@ -416,6 +433,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     run.finalSent = true;
     run.registered = true;
+    run.lastBroadcastText = undefined;
     const projected = projectLiveAssistantBufferedText(run.buffer.trim(), {
       suppressLeadFragments: false,
     });
@@ -445,6 +463,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     run.finalSent = true;
     run.registered = true;
+    run.lastBroadcastText = undefined;
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
@@ -459,6 +478,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     run.finalSent = true;
     run.registered = true;
+    run.lastBroadcastText = undefined;
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
@@ -472,10 +492,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
       return;
     }
     run.registered = true;
+    run.lastBroadcastText = "";
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
       state: "delta",
+      deltaText: "",
       message: {
         role: "assistant",
         content: [{ type: "text", text: "" }],

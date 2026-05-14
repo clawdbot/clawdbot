@@ -3,6 +3,7 @@ import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
+import { basenameFromAnyPath } from "./file-name.js";
 
 const DEFAULT_OPUS_SAMPLE_RATE_HZ = 48_000;
 const DEFAULT_OPUS_BITRATE = "64k";
@@ -33,7 +34,7 @@ function normalizeTempPrefix(value?: string): string {
 }
 
 function normalizeOutputFileName(value?: string): string {
-  const baseName = path.basename(value?.trim() || DEFAULT_OUTPUT_FILE_NAME);
+  const baseName = basenameFromAnyPath(value?.trim() || DEFAULT_OUTPUT_FILE_NAME);
   if (/^[a-zA-Z0-9._-]{1,80}$/.test(baseName) && baseName !== "." && baseName !== "..") {
     return baseName;
   }

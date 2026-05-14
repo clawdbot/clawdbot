@@ -7,10 +7,13 @@ import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibility.js";
-import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
+import { createProviderAuthChecker } from "../../agents/model-provider-auth.js";
+import {
+  isCliRuntimeProvider,
+  listLegacyRuntimeModelProviderAliases,
+} from "../../agents/model-runtime-aliases.js";
 import {
   buildModelAliasIndex,
-  // Preserve Plugin SDK API baseline source lines after unused import cleanup.
   normalizeProviderId,
   resolveBareModelDefaultProvider,
   resolveDefaultModelForAgent,
@@ -67,6 +70,15 @@ type ParsedModelsCommand =
       modelId?: string;
     };
 
+function isModelsBrowseVisibleProvider(provider: string): boolean {
+  const normalized = normalizeProviderId(provider);
+  return isCliRuntimeProvider(normalized) || isModelPickerVisibleProvider(normalized);
+}
+
+function usesUnfilteredCatalogModels(provider: string): boolean {
+  return isCliRuntimeProvider(provider);
+}
+
 export async function buildModelsProviderData(
   cfg: OpenClawConfig,
   agentId?: string,
@@ -108,10 +120,14 @@ export async function buildModelsProviderData(
   const byProvider = new Map<string, Set<string>>();
   const add = (p: string, m: string) => {
     const key = normalizeProviderId(p);
-    if (!isModelPickerVisibleProvider(key)) {
+    if (!isModelsBrowseVisibleProvider(key)) {
       return;
     }
-    if (restrictToProviderWildcards && !visibilityPolicy.allows({ provider: key, model: m })) {
+    if (
+      restrictToProviderWildcards &&
+      !usesUnfilteredCatalogModels(key) &&
+      !visibilityPolicy.allows({ provider: key, model: m })
+    ) {
       return;
     }
     const set = byProvider.get(key) ?? new Set<string>();
@@ -167,6 +183,24 @@ export async function buildModelsProviderData(
 
   for (const entry of visibleCatalog) {
     add(entry.provider, entry.id);
+  }
+
+  const hasAuth =
+    options.view === "all"
+      ? () => true
+      : createProviderAuthChecker({
+          cfg,
+          workspaceDir:
+            options.workspaceDir ??
+            (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
+            resolveDefaultAgentWorkspaceDir(),
+          agentDir: agentId ? resolveAgentDir(cfg, agentId) : undefined,
+        });
+
+  for (const entry of catalog) {
+    if (usesUnfilteredCatalogModels(entry.provider) && hasAuth(entry.provider)) {
+      add(entry.provider, entry.id);
+    }
   }
 
   for (const raw of visibilityPolicy.exactModelRefs) {

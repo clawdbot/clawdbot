@@ -57,6 +57,8 @@ describe("config view", () => {
     onOpenCustomThemeImport: vi.fn(),
     borderRadius: 50,
     setBorderRadius: vi.fn(),
+    textScale: 100,
+    setTextScale: vi.fn(),
     gatewayUrl: "",
     assistantName: "OpenClaw",
   });

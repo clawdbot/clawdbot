@@ -8,6 +8,7 @@ import {
   buildActiveMemoryPromptSection,
   listActiveMemoryPublicArtifacts,
 } from "./memory-host-core.js";
+import * as memoryCoreAlias from "./memory-core.js";
 
 describe("memory-host-core helpers", () => {
   afterEach(() => {
@@ -57,5 +58,10 @@ describe("memory-host-core helpers", () => {
         contentType: "markdown",
       },
     ]);
+  });
+
+  it("keeps the deprecated memory-core alias wired to memory-host-core", () => {
+    expect(memoryCoreAlias.buildActiveMemoryPromptSection).toBe(buildActiveMemoryPromptSection);
+    expect(memoryCoreAlias.listActiveMemoryPublicArtifacts).toBe(listActiveMemoryPublicArtifacts);
   });
 });

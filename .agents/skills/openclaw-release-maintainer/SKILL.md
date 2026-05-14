@@ -65,8 +65,8 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
   stable base version section, for example `v2026.4.20-beta.1` uses
   `## 2026.4.20` release notes.
 - When any beta or stable release is live, make a best-effort Discord
-  announcement using Peter's bot token from `.profile`; do not block or roll
-  back the release if the announcement fails.
+  announcement using the configured secret workflow; do not block or roll back
+  the release if the announcement fails.
 - When asked to announce on X, use `~/Projects/bird/bird` and follow the
   release tweet style below.
 
@@ -288,13 +288,11 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 ## Check all relevant release builds
 
 - Always validate the OpenClaw npm release path before creating the tag.
-- Source Peter's profile before live release validation so OpenAI and Anthropic
-  credentials are available without printing secrets:
-  `set -a; source "$HOME/.profile"; set +a`.
+- Use the configured secret workflow before live release validation so OpenAI
+  and Anthropic credentials are available without printing secrets.
 - Parallels validation and any local live model QA for this train must use both
-  `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`. If either is missing after sourcing
-  `.profile`, stop before starting those local long lanes and report the
-  missing key.
+  `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`. If either cannot be injected, stop
+  before starting those local long lanes and report the missing key.
 - Live credentialed channel QA is the GitHub Actions workflow
   `QA-Lab - All Lanes` (`.github/workflows/qa-live-telegram-convex.yml`), not a
   local substitute. Dispatch it from Actions against the release tag and wait
@@ -592,8 +590,7 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     If a pre-npm lane fails before any tag/package leaves the machine, fix and
     rerun the same intended beta attempt. Repeat up to the operator's
     authorized beta-attempt limit, normally 4.
-24. Announce the beta/stable release on Discord best-effort using Peter's bot
-    token from `.profile`.
+24. Announce the beta/stable release on Discord best-effort using the configured secret workflow.
 25. If the operator requested beta only, stop after beta verification and the
     announcement.
 26. If the stable release was published to `beta`, use the light stable

@@ -7,7 +7,7 @@ import { shouldSkipHeartbeatOnlyDelivery } from "../heartbeat-policy.js";
 
 type DeliveryPayload = Pick<
   ReplyPayload,
-  "text" | "mediaUrl" | "mediaUrls" | "interactive" | "channelData" | "isError"
+  "text" | "mediaUrl" | "mediaUrls" | "presentation" | "interactive" | "channelData" | "isError"
 >;
 
 export type CronPayloadOutcome = {
@@ -184,9 +184,7 @@ function isDeliverablePayload(payload: DeliveryPayload | null | undefined): bool
   if (!payload) {
     return false;
   }
-  const hasInteractive = (payload.interactive?.blocks?.length ?? 0) > 0;
-  const hasChannelData = Object.keys(payload.channelData ?? {}).length > 0;
-  return hasOutboundReplyContent(payload, { trimText: true }) || hasInteractive || hasChannelData;
+  return hasOutboundReplyContent(payload, { trimText: true });
 }
 
 function payloadHasStructuredDeliveryContent(payload: DeliveryPayload | null | undefined): boolean {
@@ -196,6 +194,7 @@ function payloadHasStructuredDeliveryContent(payload: DeliveryPayload | null | u
   return (
     payload.mediaUrl !== undefined ||
     (payload.mediaUrls?.length ?? 0) > 0 ||
+    (payload.presentation?.blocks?.length ?? 0) > 0 ||
     (payload.interactive?.blocks?.length ?? 0) > 0 ||
     Object.keys(payload.channelData ?? {}).length > 0
   );

@@ -1,4 +1,4 @@
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
 import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -86,7 +86,7 @@ export function createBlockReplyDeliveryHandler(params: {
 }): (payload: ReplyPayload) => Promise<void> {
   return async (payload) => {
     const { text, skip } = params.normalizeStreamingText(payload);
-    if (skip && !resolveSendableOutboundReplyParts(payload).hasMedia) {
+    if (skip && !hasOutboundReplyContent({ ...payload, text: undefined })) {
       return;
     }
 
@@ -129,13 +129,13 @@ export function createBlockReplyDeliveryHandler(params: {
       payload,
       params.applyReplyToMode(mediaNormalizedPayload),
     );
-    const blockHasMedia = resolveSendableOutboundReplyParts(blockPayload).hasMedia;
+    const blockHasNonTextContent = hasOutboundReplyContent({ ...blockPayload, text: undefined });
 
     // Skip empty payloads unless they have audioAsVoice flag (need to track it).
-    if (!blockPayload.text && !blockHasMedia && !blockPayload.audioAsVoice) {
+    if (!blockPayload.text && !blockHasNonTextContent && !blockPayload.audioAsVoice) {
       return;
     }
-    if (normalized.isSilent && !blockHasMedia) {
+    if (normalized.isSilent && !blockHasNonTextContent) {
       return;
     }
 
@@ -157,7 +157,7 @@ export function createBlockReplyDeliveryHandler(params: {
         trackingPayload: blockPayload,
         payload: blockPayload,
       });
-    } else if (blockHasMedia) {
+    } else if (blockHasNonTextContent) {
       await sendDirectBlockReply({
         onBlockReply: params.onBlockReply,
         directlySentBlockKeys: params.directlySentBlockKeys,

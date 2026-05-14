@@ -38,11 +38,11 @@ function createWsClient(): MockWsClient {
 }
 
 function firstRuntimeError(runtime: { error: ReturnType<typeof vi.fn> }): string {
-  return String(runtime.error.mock.calls.at(0)?.at(0) ?? "");
+  return String(runtime.error.mock.calls[0]?.[0] ?? "");
 }
 
 function firstWsCallbacks(): { onError?: (err: Error) => void } {
-  const callbacks = createFeishuWSClientMock.mock.calls.at(0)?.at(1);
+  const callbacks = createFeishuWSClientMock.mock.calls[0]?.[1];
   if (!callbacks || typeof callbacks !== "object") {
     throw new Error("expected Feishu websocket callbacks");
   }

@@ -277,7 +277,7 @@ export async function downloadMSTeamsAttachments(params: {
         preserveFilenames: params.preserveFilenames,
         ssrfPolicy,
         // `fetchImpl` below already validates each hop against the hostname
-        // allowlist via `safeFetchWithPolicy`, so skip `fetchRemoteMedia`'s
+        // allowlist via `safeFetchWithPolicy`, so skip `readRemoteMediaBuffer`'s
         // strict SSRF dispatcher (incompatible with Node 24+ / undici v7;
         // see issue #63396).
         useDirectFetch: true,

@@ -6,6 +6,8 @@ import {
   buildPluginRegistrySnapshotReport,
   buildPluginSnapshotReport,
   inspectPluginRegistry,
+  loadConfig,
+  readConfigFileSnapshot,
   resetPluginsCliTestState,
   refreshPluginRegistry,
   runPluginsCommand,
@@ -79,8 +81,61 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "doctor"]);
 
-    expect(buildPluginDiagnosticsReport).toHaveBeenCalledWith({ effectiveOnly: true });
+    expect(buildPluginDiagnosticsReport).toHaveBeenCalledWith({ config: {}, effectiveOnly: true });
     expect(runtimeLogs).toContain("No plugin issues detected.");
+  });
+
+  it("reports stale plugin config in doctor output without claiming full plugin health", async () => {
+    const sourceConfig = {
+      plugins: {
+        allow: ["lossless-claw"],
+        entries: {
+          "lossless-claw": { enabled: true },
+        },
+        slots: {
+          contextEngine: "lossless-claw",
+        },
+      },
+    };
+    loadConfig.mockReturnValue({});
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/openclaw-config.json5",
+      exists: true,
+      raw: "{}",
+      parsed: sourceConfig,
+      resolved: sourceConfig,
+      sourceConfig,
+      runtimeConfig: {},
+      config: {},
+      valid: true,
+      hash: "mock",
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain("Plugin configuration:");
+    expect(output).toContain('plugins.allow: stale plugin reference "lossless-claw" was found.');
+    expect(output).toContain(
+      'plugins.entries.lossless-claw: stale plugin reference "lossless-claw" was found.',
+    );
+    expect(output).toContain(
+      'plugins.slots.contextEngine: slot references missing plugin "lossless-claw".',
+    );
+    expect(output).toContain(
+      'Run "openclaw doctor --fix" to remove stale plugin ids and dangling channel references.',
+    );
+    expect(output).toContain(
+      "No plugin install-tree issues detected; configuration warnings remain.",
+    );
+    expect(output).not.toContain("No plugin issues detected.");
   });
 
   it("reports config-selected plugin source shadowing in doctor output", async () => {

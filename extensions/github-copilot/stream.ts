@@ -131,6 +131,27 @@ export function wrapCopilotOpenAIResponsesStream(
   };
 }
 
+export function wrapCopilotOpenAICompletionsStream(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn | undefined {
+  if (!baseStreamFn) {
+    return undefined;
+  }
+  const underlying = baseStreamFn;
+  return (model, context, options) => {
+    if (model.provider !== "github-copilot" || model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+
+    return underlying(model, context, {
+      ...options,
+      headers: buildCopilotRequestHeaders(context, options?.headers),
+    });
+  };
+}
+
 export function wrapCopilotProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
-  return wrapCopilotOpenAIResponsesStream(wrapCopilotAnthropicStream(ctx.streamFn));
+  return wrapCopilotOpenAICompletionsStream(
+    wrapCopilotOpenAIResponsesStream(wrapCopilotAnthropicStream(ctx.streamFn)),
+  );
 }

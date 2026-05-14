@@ -21,7 +21,7 @@ import {
 } from "./allow-list.js";
 import { resolveDiscordChannelInfoSafe, resolveDiscordChannelNameSafe } from "./channel-access.js";
 import { resolveDiscordTextCommandAccess } from "./dm-command-auth.js";
-import { resolveDiscordSystemLocation } from "./format.js";
+import { resolveDiscordSystemLocation, resolveTimestampMs } from "./format.js";
 import { resolveDiscordDmPreflightAccess } from "./message-handler.dm-preflight.js";
 import { hydrateDiscordMessageIfNeeded } from "./message-handler.hydration.js";
 import { resolveDiscordPreflightChannelAccess } from "./message-handler.preflight-channel-access.js";
@@ -554,7 +554,6 @@ export async function preflightDiscordMessage(
       return null;
     }
   }
-
   const ignoreOtherMentions =
     channelConfig?.ignoreOtherMentions ?? guildInfo?.ignoreOtherMentions ?? false;
   if (
@@ -613,6 +612,24 @@ export async function preflightDiscordMessage(
     }
   }
 
+  const botLoopProtection =
+    author.bot &&
+    !sender.isPluralKit &&
+    allowBotsMode !== "off" &&
+    params.botUserId &&
+    author.id !== params.botUserId
+      ? {
+          scopeId: params.accountId,
+          conversationId: messageChannelId,
+          senderId: author.id,
+          receiverId: params.botUserId,
+          config: params.discordConfig?.botLoopProtection,
+          defaultsConfig: params.cfg.channels?.defaults?.botLoopProtection,
+          defaultEnabled: true,
+          nowMs: resolveTimestampMs(message.timestamp),
+        }
+      : undefined;
+
   logDebug(
     `[discord-preflight] success: route=${effectiveRoute.agentId} sessionKey=${effectiveRoute.sessionKey}`,
   );
@@ -662,5 +679,6 @@ export async function preflightDiscordMessage(
     effectiveWasMentioned,
     canDetectMention,
     historyEntry,
+    botLoopProtection,
   });
 }

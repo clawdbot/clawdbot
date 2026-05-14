@@ -287,4 +287,36 @@ struct GatewayEndpointStoreTests {
         let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://127.attacker.example")
         #expect(url == nil)
     }
+
+    @Test func `resolve tls fingerprint trims remote config value`() {
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "tlsFingerprint": " sha256:ABC123 ",
+                ],
+            ],
+        ]
+
+        #expect(GatewayRemoteConfig.resolveTLSFingerprint(root: root) == "sha256:ABC123")
+    }
+
+    @Test func `resolve tls fingerprint ignores blank or non string values`() {
+        let blank: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "tlsFingerprint": "   ",
+                ],
+            ],
+        ]
+        let nonString: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "tlsFingerprint": 123,
+                ],
+            ],
+        ]
+
+        #expect(GatewayRemoteConfig.resolveTLSFingerprint(root: blank) == nil)
+        #expect(GatewayRemoteConfig.resolveTLSFingerprint(root: nonString) == nil)
+    }
 }

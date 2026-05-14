@@ -28,6 +28,7 @@ import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import * as claudeCliAuth from "./cli-auth-seam.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
+import { buildClaudeCliCatalogEntries } from "./cli-catalog.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
@@ -579,6 +580,8 @@ export function buildAnthropicProvider(): ProviderPlugin {
       normalizeLowercaseStringOrEmpty(provider) === CLAUDE_CLI_BACKEND_ID
         ? resolveClaudeCliSyntheticAuth()
         : undefined,
+    // Publish Claude CLI rows through the provider catalog hook.
+    augmentModelCatalog: () => buildClaudeCliCatalogEntries(),
     buildReplayPolicy: buildAnthropicReplayPolicy,
     isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
     resolveReasoningOutputMode: () => "native",

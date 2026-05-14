@@ -175,6 +175,20 @@ vi.mock("./subagent-announce-delivery.js", () => ({
 }));
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: createGatewayCallModuleMock().callGateway,
+  dispatchGatewayMethodInProcess: async (
+    method: string,
+    params: Record<string, unknown>,
+    options?: { expectFinal?: boolean; timeoutMs?: number },
+  ) => {
+    const request = {
+      method,
+      params,
+      expectFinal: options?.expectFinal,
+      timeoutMs: options?.timeoutMs,
+    };
+    gatewayCalls.push(request);
+    return await callGatewayImpl(request);
+  },
   getRuntimeConfig: () => configOverride,
   loadSessionStore: vi.fn(() => sessionStore),
   resolveAgentIdFromSessionKey: () => "main",

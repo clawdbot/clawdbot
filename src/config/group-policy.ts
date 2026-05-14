@@ -340,6 +340,21 @@ function resolveChannelGroups(
     return undefined;
   }
   const accountGroups = resolveAccountEntry(channelConfig.accounts, normalizedAccountId)?.groups;
+  // In a single-account setup, treat an explicit empty account groups map
+  // (`accounts.<id>.groups: {}`) the same as undefined for fallback: the empty
+  // literal is almost always a config-migration artifact, not an intentional
+  // "block all groups" declaration — the explicit way to block is
+  // `groupPolicy: "disabled"` (or omitting the group from a populated
+  // allowlist). Without this, an empty `{}` paired with the default
+  // `groupPolicy: "allowlist"` silently denies every group update even though
+  // root `channels.<channel>.groups` is populated. Multi-account contexts keep
+  // the existing semantics so per-account explicit-empty groups still scope
+  // disable a single account without affecting siblings.
+  const isMultiAccount = Object.keys(channelConfig.accounts ?? {}).length > 1;
+  if (!isMultiAccount) {
+    const hasAccountGroups = accountGroups && Object.keys(accountGroups).length > 0;
+    return hasAccountGroups ? accountGroups : channelConfig.groups;
+  }
   return accountGroups ?? channelConfig.groups;
 }
 

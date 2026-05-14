@@ -942,6 +942,14 @@
     box-shadow var(--duration-fast) ease;
 }
 
+@media (hover: none) and (pointer: coarse) {
+  .field input,
+  .field textarea,
+  .field select {
+    font-size: 16px;
+  }
+}
+
 .field input:focus,
 .field textarea:focus,
 .field select:focus {

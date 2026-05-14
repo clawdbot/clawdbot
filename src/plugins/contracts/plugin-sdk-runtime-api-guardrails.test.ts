@@ -88,7 +88,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { GoogleChatConfigSchema } from "openclaw/plugin-sdk/bundled-channel-config-schema";',
     'export { GROUP_POLICY_BLOCKED_LABEL, resolveAllowlistProviderRuntimeGroupPolicy, resolveDefaultGroupPolicy, warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";',
     'export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";',
-    'export { fetchRemoteMedia, resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";',
+    'export { readRemoteMediaBuffer, resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";',
     'export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";',
     'export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";',
     'export { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";',

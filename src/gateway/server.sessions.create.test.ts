@@ -135,6 +135,55 @@ test("sessions.create scopes the main alias to the requested agent", async () =>
   expect(rawStore["agent:main:main"]).toBeUndefined();
 });
 
+test("sessions.create replaces a dead main entry with a fresh session id", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+  try {
+    await writeSessionStore({
+      agentId: "ops",
+      entries: {
+        main: {
+          updatedAt: 1,
+          label: "Ops Main",
+          sessionFile: "stale.jsonl",
+        },
+      },
+    });
+
+    const created = await directSessionReq<{
+      key?: string;
+      sessionId?: string;
+      entry?: {
+        label?: string;
+        sessionFile?: string;
+      };
+    }>("sessions.create", {
+      key: "main",
+      agentId: "ops",
+    });
+
+    expect(created.ok).toBe(true);
+    expect(created.payload?.key).toBe("agent:ops:main");
+    expect(created.payload?.sessionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    expect(created.payload?.entry?.label).toBe("Ops Main");
+    expect(created.payload?.entry?.sessionFile).not.toBe("stale.jsonl");
+
+    const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      {
+        sessionId?: string;
+        sessionFile?: string;
+      }
+    >;
+    expect(rawStore["agent:ops:main"]?.sessionId).toBe(created.payload?.sessionId);
+    expect(rawStore["agent:ops:main"]?.sessionFile).not.toBe("stale.jsonl");
+  } finally {
+    testState.agentsConfig = undefined;
+  }
+});
+
 test("sessions.create preserves global and unknown sentinel keys", async () => {
   const { storePath } = await createSessionStoreDir();
 

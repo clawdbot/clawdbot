@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -33,6 +33,73 @@ describe("doctor config analysis helpers", () => {
     expect(result.removed).toContain("unexpected");
     expect((result.config as Record<string, unknown>).unexpected).toBeUndefined();
     expect((result.config as Record<string, unknown>).hooks).toStrictEqual({});
+  });
+
+  describe("stripUnknownConfigKeys during update", () => {
+    const originalEnv = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+
+    beforeEach(() => {
+      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+    });
+
+    afterEach(() => {
+      if (originalEnv !== undefined) {
+        process.env.OPENCLAW_UPDATE_IN_PROGRESS = originalEnv;
+      } else {
+        delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+      }
+    });
+
+    it("returns input unchanged when OPENCLAW_UPDATE_IN_PROGRESS=1", () => {
+      process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+      const input = { hooks: {}, unexpected: true } as never;
+      const result = stripUnknownConfigKeys(input);
+      expect(result.config).toBe(input);
+      expect(result.removed).toEqual([]);
+    });
+
+    it("returns input unchanged when OPENCLAW_UPDATE_IN_PROGRESS=true", () => {
+      process.env.OPENCLAW_UPDATE_IN_PROGRESS = "true";
+      const input = { hooks: {}, unexpected: true } as never;
+      const result = stripUnknownConfigKeys(input);
+      expect(result.config).toBe(input);
+      expect(result.removed).toEqual([]);
+    });
+
+    it("strips unknown keys normally when env is unset", () => {
+      const result = stripUnknownConfigKeys({
+        hooks: {},
+        unexpected: true,
+      } as never);
+      expect(result.removed).toContain("unexpected");
+    });
+  });
+
+  describe("plugins.installs whitelist", () => {
+    const originalEnv = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+
+    beforeEach(() => {
+      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+    });
+
+    afterEach(() => {
+      if (originalEnv !== undefined) {
+        process.env.OPENCLAW_UPDATE_IN_PROGRESS = originalEnv;
+      } else {
+        delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+      }
+    });
+
+    it("never strips plugins.installs even when env is unset", () => {
+      const result = stripUnknownConfigKeys({
+        plugins: { installs: ["matrix"], badKey: true },
+      } as never);
+      expect(result.removed).toContain("plugins.badKey");
+      expect(result.removed).not.toContain("plugins.installs");
+      expect((result.config as Record<string, Record<string, unknown>>).plugins?.installs).toEqual([
+        "matrix",
+      ]);
+    });
   });
 });
 

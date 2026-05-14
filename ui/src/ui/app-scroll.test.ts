@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleChatScroll, scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
+import type { ChatAutoScrollMode } from "./storage.ts";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -12,6 +13,7 @@ function createScrollHost(
     scrollTop?: number;
     clientHeight?: number;
     overflowY?: string;
+    chatAutoScroll?: ChatAutoScrollMode;
   } = {},
 ) {
   const {
@@ -19,6 +21,7 @@ function createScrollHost(
     scrollTop = 1500,
     clientHeight = 500,
     overflowY = "auto",
+    chatAutoScroll,
   } = overrides;
 
   const container = {
@@ -46,6 +49,7 @@ function createScrollHost(
     chatNewMessagesBelow: false,
     chatIsProgrammaticScroll: false,
     chatProgrammaticScrollTarget: 0,
+    settings: chatAutoScroll ? { chatAutoScroll } : undefined,
     logsScrollFrame: null as number | null,
     logsAtBottom: true,
     topbarObserver: null as ResizeObserver | null,
@@ -236,6 +240,54 @@ describe("scheduleChatScroll", () => {
     await host.updateComplete;
 
     expect(host.chatNewMessagesBelow).toBe(true);
+  });
+
+  it("does NOT scroll automatically when chat auto-scroll is off", async () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1600,
+      clientHeight: 400,
+      chatAutoScroll: "off",
+    });
+    host.chatUserNearBottom = true;
+    const originalScrollTop = container.scrollTop;
+
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    expect(container.scrollTop).toBe(originalScrollTop);
+    expect(host.chatNewMessagesBelow).toBe(true);
+  });
+
+  it("scrolls from the manual scroll-to-bottom action when chat auto-scroll is off", async () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 500,
+      clientHeight: 400,
+      chatAutoScroll: "off",
+    });
+    host.chatUserNearBottom = false;
+
+    scheduleChatScroll(host, true, false, { source: "manual" });
+    await host.updateComplete;
+
+    expect(container.scrollTop).toBe(container.scrollHeight);
+    expect(host.chatNewMessagesBelow).toBe(false);
+  });
+
+  it("scrolls even when user is scrolled up when chat auto-scroll is always", async () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 500,
+      clientHeight: 400,
+      chatAutoScroll: "always",
+    });
+    host.chatUserNearBottom = false;
+
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    expect(container.scrollTop).toBe(container.scrollHeight);
   });
 });
 

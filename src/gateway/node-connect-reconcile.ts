@@ -13,8 +13,11 @@ import type { ConnectParams } from "./protocol/index.js";
 
 export type NodeConnectPairingReconcileResult = {
   nodeId: string;
+  declaredCaps: string[];
   effectiveCaps: string[];
+  declaredCommands: string[];
   effectiveCommands: string[];
+  declaredPermissions?: Record<string, boolean>;
   effectivePermissions?: Record<string, boolean>;
   pendingPairing?: RequestNodePairingResult;
 };
@@ -169,9 +172,12 @@ export async function reconcileNodePairingOnConnect(params: {
     );
     return {
       nodeId,
-      effectiveCaps: declaredCaps,
-      effectiveCommands: declared,
-      effectivePermissions: declaredPermissions,
+      declaredCaps,
+      effectiveCaps: [],
+      declaredCommands: declared,
+      effectiveCommands: [],
+      declaredPermissions,
+      effectivePermissions: undefined,
       pendingPairing,
     };
   }
@@ -211,8 +217,11 @@ export async function reconcileNodePairingOnConnect(params: {
     );
     return {
       nodeId,
+      declaredCaps,
       effectiveCaps: effectiveApprovedDeclaredCaps,
+      declaredCommands: declared,
       effectiveCommands: effectiveApprovedDeclaredCommands,
+      declaredPermissions,
       effectivePermissions: effectiveApprovedDeclaredPermissions,
       pendingPairing,
     };
@@ -220,8 +229,11 @@ export async function reconcileNodePairingOnConnect(params: {
 
   return {
     nodeId,
+    declaredCaps,
     effectiveCaps: declaredCaps,
+    declaredCommands: declared,
     effectiveCommands: declared,
+    declaredPermissions,
     effectivePermissions: declaredPermissions,
   };
 }

@@ -46,7 +46,7 @@ wired end-to-end.
 
 - Runs are serialized per session key (session lane) and optionally through a global lane.
 - This prevents tool/session races and keeps session history consistent.
-- Messaging channels can choose queue modes (collect/steer/followup) that feed this lane system.
+- Messaging channels can choose queue modes (steer/followup/collect/interrupt) that feed this lane system.
   See [Command Queue](/concepts/queue).
 - Transcript writes are also protected by a session write lock on the session file. The lock is
   process-aware and file-based, so it catches writers that bypass the in-process queue or come from

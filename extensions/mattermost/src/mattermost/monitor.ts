@@ -66,8 +66,15 @@ import {
   type MattermostEventPayload,
   type MattermostWebSocketFactory,
 } from "./monitor-websocket.js";
+import {
+  evaluateMattermostNoVisibleReply,
+  formatMattermostNoVisibleReplyLog,
+} from "./no-visible-reply-diagnostic.js";
 import { runWithReconnect } from "./reconnect.js";
-import { deliverMattermostReplyPayload } from "./reply-delivery.js";
+import {
+  deliverMattermostReplyPayload,
+  type MattermostReplyDeliveryOutcome,
+} from "./reply-delivery.js";
 import type {
   ChannelAccountSnapshot,
   ChatType,
@@ -377,6 +384,31 @@ export async function deliverMattermostReplyWithDraftPreview(
       await params.deliverFinal();
     },
   });
+}
+
+export function formatMattermostFinalDeliveryOutcomeLog(params: {
+  outcome: MattermostReplyDeliveryOutcome;
+  payload: ReplyPayload;
+  to: string;
+  accountId: string;
+  agentId: string | undefined;
+}): string | undefined {
+  const violation = evaluateMattermostNoVisibleReply({
+    outcome: params.outcome,
+    payload: params.payload,
+  });
+  if (violation) {
+    return formatMattermostNoVisibleReplyLog({
+      violation,
+      to: params.to,
+      accountId: params.accountId,
+      agentId: params.agentId,
+    });
+  }
+  if (params.outcome === "text" || params.outcome === "media") {
+    return `delivered reply to ${params.to}`;
+  }
+  return undefined;
 }
 
 export function resolveMattermostEffectiveReplyToId(params: {
@@ -823,9 +855,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       debug: (message) => logger.debug?.(String(message)),
     },
     mediaMaxBytes,
-    fetchRemoteMedia: (params) => core.channel.media.fetchRemoteMedia(params),
-    saveMediaBuffer: (buffer, contentType, direction, maxBytes) =>
-      core.channel.media.saveMediaBuffer(Buffer.from(buffer), contentType, direction, maxBytes),
+    saveRemoteMedia: (params) => core.channel.media.saveRemoteMedia(params),
     mediaKindFromMime: (contentType) => core.media.mediaKindFromMime(contentType) as MediaKind,
   });
 
@@ -1682,7 +1712,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 previewState,
                 logVerboseMessage,
                 deliverFinal: async () => {
-                  await deliverMattermostReplyPayload({
+                  const outcome = await deliverMattermostReplyPayload({
                     core,
                     cfg,
                     payload,
@@ -1698,7 +1728,16 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     tableMode,
                     sendMessage: sendMessageMattermost,
                   });
-                  runtime.log?.(`delivered reply to ${to}`);
+                  const deliveryLog = formatMattermostFinalDeliveryOutcomeLog({
+                    outcome,
+                    payload,
+                    to,
+                    accountId: account.accountId,
+                    agentId: route.agentId,
+                  });
+                  if (deliveryLog) {
+                    runtime.log?.(deliveryLog);
+                  }
                 },
               });
             },

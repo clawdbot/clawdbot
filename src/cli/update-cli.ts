@@ -31,21 +31,6 @@ function inheritedUpdateTimeout(
   return inheritOptionFromParent<string>(command, "timeout");
 }
 
-type CommanderUpdateOptions = Record<string, unknown> & {
-  acknowledgeClawhubRisk?: boolean;
-  channel?: string;
-  dryRun?: boolean;
-  json?: boolean;
-  restart?: boolean;
-  tag?: string;
-  timeout?: string;
-  yes?: boolean;
-};
-
-function normalizeCommanderClawHubRiskOption(opts: CommanderUpdateOptions): boolean {
-  return opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true;
-}
-
 export function registerUpdateCli(program: Command) {
   program.enablePositionalOptions();
   const update = program
@@ -61,11 +46,6 @@ export function registerUpdateCli(program: Command) {
     )
     .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1800)")
     .option("--yes", "Skip confirmation prompts (non-interactive)", false)
-    .option(
-      "--acknowledge-clawhub-risk",
-      "Acknowledge ClawHub release trust warnings during post-update plugin sync",
-      false,
-    )
     .addHelpText("after", () => {
       const examples = [
         ["openclaw update", "Update a source checkout (git)"],
@@ -77,7 +57,6 @@ export function registerUpdateCli(program: Command) {
         ["openclaw update --no-restart", "Update without restarting the service"],
         ["openclaw update --json", "Output result as JSON"],
         ["openclaw update --yes", "Non-interactive (accept downgrade prompts)"],
-        ["openclaw update --acknowledge-clawhub-risk", "Acknowledge ClawHub plugin trust warnings"],
         ["openclaw update wizard", "Interactive update wizard"],
         ["openclaw --update", "Shorthand for openclaw update"],
       ] as const;
@@ -96,7 +75,6 @@ ${theme.heading("Switch channels:")}
 
 ${theme.heading("Non-interactive:")}
   - Use --yes to accept downgrade prompts
-  - Use --acknowledge-clawhub-risk only after reviewing ClawHub plugin trust warnings
   - Combine with --channel/--tag/--no-restart/--json/--timeout as needed
   - Use --dry-run to preview actions without writing config/installing/restarting
 
@@ -111,17 +89,16 @@ ${theme.heading("Notes:")}
 
 ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}`;
     })
-    .action(async (opts: CommanderUpdateOptions) => {
+    .action(async (opts) => {
       try {
         await updateCommand({
           json: Boolean(opts.json),
           restart: Boolean(opts.restart),
           dryRun: Boolean(opts.dryRun),
-          channel: opts.channel,
-          tag: opts.tag,
-          timeout: opts.timeout,
+          channel: opts.channel as string | undefined,
+          tag: opts.tag as string | undefined,
+          timeout: opts.timeout as string | undefined,
           yes: Boolean(opts.yes),
-          acknowledgeClawHubRisk: normalizeCommanderClawHubRiskOption(opts),
         });
       } catch (err) {
         defaultRuntime.error(String(err));

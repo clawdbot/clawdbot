@@ -221,6 +221,54 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     });
   });
 
+  it("hydrates package metadata from dot-prefixed package directories", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    fs.mkdirSync(path.join(rootDir, "..meta"), { recursive: true });
+    fs.writeFileSync(
+      path.join(rootDir, "..meta", "package.json"),
+      JSON.stringify({
+        openclaw: {
+          channel: {
+            id: "installed",
+            label: "Installed",
+            commands: {
+              nativeCommandsAutoEnabled: true,
+              nativeSkillsAutoEnabled: false,
+            },
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const index = createIndex(rootDir);
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: {
+        ...index,
+        plugins: [
+          {
+            ...index.plugins[0],
+            packageJson: {
+              path: "..meta/package.json",
+              hash: "old-index-hash",
+            },
+          },
+        ],
+      },
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins[0]?.channelCatalogMeta?.commands).toEqual({
+      nativeCommandsAutoEnabled: true,
+      nativeSkillsAutoEnabled: false,
+    });
+  });
+
   it("round-trips bundle metadata through the persisted index before reconstruction", async () => {
     const stateDir = makeTempDir();
     const rootDir = makeTempDir();

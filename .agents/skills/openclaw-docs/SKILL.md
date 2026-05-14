@@ -42,16 +42,20 @@ Choose the page type before writing:
 Use this default topic page structure:
 
 1. Title: name the major entity or surface.
-2. Overview: explain what it is, what it owns, and what it does not own.
+2. Opening overview: start with a few unheaded sentences that explain what it
+   is, what it owns, and what it does not own. Do not add a `## Overview`
+   heading unless the page is itself an overview index.
 3. Requirements: include only when setup needs specific accounts, versions,
    permissions, plugins, operating systems, or credentials.
 4. Quickstart: show the recommended setup path and smallest reliable verification.
 5. Configuration: show the minimum configuration needed to use the surface,
    common variants users must choose between, and where each option is set:
    CLI, config file, environment variable, plugin manifest, dashboard, or API.
-6. Subtopics: organize the entity's major concepts, workflows, and decisions by
-   reader intent.
-7. Troubleshooting: diagnose common observable failures.
+6. Major subtopics: organize the entity's major concepts, workflows, and
+   decisions by reader intent. Put each major subtopic under its own heading;
+   do not wrap them in a generic `## Subtopics` section.
+7. Troubleshooting: diagnose common observable failures under an explicit
+   `## Troubleshooting` heading.
 8. Related: link to guides, references, commands, concepts, and adjacent topics.
 
 Topic pages may be longer than quickstarts, but they should not become exhaustive

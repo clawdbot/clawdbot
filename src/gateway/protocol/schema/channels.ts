@@ -204,6 +204,7 @@ export const TalkSessionJoinParamsSchema = Type.Object(
 export const TalkSessionCreateParamsSchema = Type.Object(
   {
     sessionKey: Type.Optional(Type.String()),
+    spawnedBy: Type.Optional(NonEmptyString),
     provider: Type.Optional(Type.String()),
     model: Type.Optional(Type.String()),
     voice: Type.Optional(Type.String()),

@@ -12,8 +12,6 @@
   "dist/extensions/ollama/runtime-api.js",
   "dist/extensions/open-prose/runtime-api.js",
   "dist/extensions/signal/runtime-api.js",
-  "dist/extensions/slack/runtime-api.js",
-  "dist/extensions/slack/runtime-setter-api.js",
   "dist/extensions/telegram/runtime-api.js",
   "dist/extensions/telegram/runtime-setter-api.js",
   "dist/extensions/tokenjuice/runtime-api.js",

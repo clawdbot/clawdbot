@@ -61,7 +61,7 @@ function cliInstallPath(pluginId: string): string {
 
 function useProfileExtensionsDir(): string {
   process.env.OPENCLAW_STATE_DIR = PROFILE_STATE_ROOT;
-  return path.join(PROFILE_STATE_ROOT, "extensions");
+  return path.resolve(PROFILE_STATE_ROOT, "extensions");
 }
 
 function createEnabledPluginConfig(pluginId: string): OpenClawConfig {
@@ -620,33 +620,6 @@ describe("plugins cli install", () => {
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
   });
 
-  it("passes ClawHub risk acknowledgement to explicit ClawHub installs", async () => {
-    loadConfig.mockReturnValue(createEmptyPluginConfig());
-    parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
-    installPluginFromClawHub.mockResolvedValue(
-      createClawHubInstallResult({
-        pluginId: "demo",
-        packageName: "demo",
-        version: "1.2.3",
-        channel: "official",
-      }),
-    );
-    enablePluginInConfig.mockReturnValue({ config: createEnabledPluginConfig("demo") });
-    applyExclusiveSlotSelection.mockReturnValue({
-      config: createEnabledPluginConfig("demo"),
-      warnings: [],
-    });
-
-    await runPluginsCommand(["plugins", "install", "clawhub:demo", "--acknowledge-clawhub-risk"]);
-
-    expect(installPluginFromClawHub).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "clawhub:demo",
-        acknowledgeClawHubRisk: true,
-      }),
-    );
-  });
-
   it("passes the active profile extensions dir to ClawHub installs", async () => {
     const extensionsDir = useProfileExtensionsDir();
     const cfg = createEmptyPluginConfig();
@@ -877,10 +850,10 @@ describe("plugins cli install", () => {
 
     await runPluginsCommand(["plugins", "install", "wecom"]);
 
-    expect(npmInstallCall().spec).toBe("@wecom/wecom-openclaw-plugin@2026.4.23");
+    expect(npmInstallCall().spec).toBe("@wecom/wecom-openclaw-plugin@2026.5.7");
     expect(npmInstallCall().expectedPluginId).toBe("wecom-openclaw-plugin");
     expect(npmInstallCall().expectedIntegrity).toBe(
-      "sha512-bnzfdIEEu1/LFvcdyjaTkyxt27w6c7dqhkPezU62OWaqmcdFsUGR3T55USK/O9pIKsNcnL1Tnu1pqKYCWHFgWQ==",
+      "sha512-TCkP9as00WfEhgFWG8YL/rcmaWGIshAki2HQh83nTRccGfVBCoGjrEboTTqq3yDmK9koWTV11zi8u8A4dNtvug==",
     );
     expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
   });
@@ -923,15 +896,15 @@ describe("plugins cli install", () => {
     installHooksFromNpmSpec.mockResolvedValue({
       ok: false,
       error:
-        "aborted: npm package integrity drift detected for @wecom/wecom-openclaw-plugin@2026.4.23",
+        "aborted: npm package integrity drift detected for @wecom/wecom-openclaw-plugin@2026.5.7",
     });
 
     await expect(runPluginsCommand(["plugins", "install", "wecom"])).rejects.toThrow("__exit__:1");
 
     expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
-    expect(hookNpmInstallCall().spec).toBe("@wecom/wecom-openclaw-plugin@2026.4.23");
+    expect(hookNpmInstallCall().spec).toBe("@wecom/wecom-openclaw-plugin@2026.5.7");
     expect(hookNpmInstallCall().expectedIntegrity).toBe(
-      "sha512-bnzfdIEEu1/LFvcdyjaTkyxt27w6c7dqhkPezU62OWaqmcdFsUGR3T55USK/O9pIKsNcnL1Tnu1pqKYCWHFgWQ==",
+      "sha512-TCkP9as00WfEhgFWG8YL/rcmaWGIshAki2HQh83nTRccGfVBCoGjrEboTTqq3yDmK9koWTV11zi8u8A4dNtvug==",
     );
   });
 

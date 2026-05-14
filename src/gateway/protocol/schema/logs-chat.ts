@@ -70,31 +70,70 @@ export const ChatInjectParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const ChatEventSchema = Type.Object(
+const ChatEventBaseSchema = {
+  runId: NonEmptyString,
+  sessionKey: NonEmptyString,
+  spawnedBy: Type.Optional(NonEmptyString),
+  seq: Type.Integer({ minimum: 0 }),
+};
+
+const ChatEventErrorKindSchema = Type.Union([
+  Type.Literal("refusal"),
+  Type.Literal("timeout"),
+  Type.Literal("rate_limit"),
+  Type.Literal("context_length"),
+  Type.Literal("unknown"),
+]);
+
+export const ChatDeltaEventSchema = Type.Object(
   {
-    runId: NonEmptyString,
-    sessionKey: NonEmptyString,
-    spawnedBy: Type.Optional(NonEmptyString),
-    seq: Type.Integer({ minimum: 0 }),
-    state: Type.Union([
-      Type.Literal("delta"),
-      Type.Literal("final"),
-      Type.Literal("aborted"),
-      Type.Literal("error"),
-    ]),
+    ...ChatEventBaseSchema,
+    state: Type.Literal("delta"),
     message: Type.Optional(Type.Unknown()),
-    errorMessage: Type.Optional(Type.String()),
-    errorKind: Type.Optional(
-      Type.Union([
-        Type.Literal("refusal"),
-        Type.Literal("timeout"),
-        Type.Literal("rate_limit"),
-        Type.Literal("context_length"),
-        Type.Literal("unknown"),
-      ]),
-    ),
+    deltaText: Type.String(),
+    replace: Type.Optional(Type.Boolean()),
+    usage: Type.Optional(Type.Unknown()),
+  },
+  { additionalProperties: false },
+);
+
+export const ChatFinalEventSchema = Type.Object(
+  {
+    ...ChatEventBaseSchema,
+    state: Type.Literal("final"),
+    message: Type.Optional(Type.Unknown()),
     usage: Type.Optional(Type.Unknown()),
     stopReason: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
+
+export const ChatAbortedEventSchema = Type.Object(
+  {
+    ...ChatEventBaseSchema,
+    state: Type.Literal("aborted"),
+    message: Type.Optional(Type.Unknown()),
+    stopReason: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const ChatErrorEventSchema = Type.Object(
+  {
+    ...ChatEventBaseSchema,
+    state: Type.Literal("error"),
+    message: Type.Optional(Type.Unknown()),
+    errorMessage: Type.Optional(Type.String()),
+    errorKind: Type.Optional(ChatEventErrorKindSchema),
+    usage: Type.Optional(Type.Unknown()),
+    stopReason: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const ChatEventSchema = Type.Union([
+  ChatDeltaEventSchema,
+  ChatFinalEventSchema,
+  ChatAbortedEventSchema,
+  ChatErrorEventSchema,
+]);

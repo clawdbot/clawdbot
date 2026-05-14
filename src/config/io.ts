@@ -2428,6 +2428,7 @@ export async function writeConfigFile(
     nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot!, runtimePatch));
   }
   const writeResult = await io.writeConfigFile(nextCfg, {
+    baseSnapshot: options.baseSnapshot,
     envSnapshotForRestore: resolveWriteEnvSnapshotForPath({
       actualConfigPath: io.configPath,
       expectedConfigPath: options.expectedConfigPath,
@@ -2438,6 +2439,7 @@ export async function writeConfigFile(
     explicitSetValueSource: options.explicitSetPaths
       ? (options.explicitSetValueSource ?? cfg)
       : undefined,
+    afterWrite: options.afterWrite,
     allowDestructiveWrite: options.allowDestructiveWrite,
     allowConfigSizeDrop: options.allowConfigSizeDrop,
     skipRuntimeSnapshotRefresh: options.skipRuntimeSnapshotRefresh,

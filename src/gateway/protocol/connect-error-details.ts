@@ -60,6 +60,9 @@ export type PairingConnectErrorDetails = {
   reason?: ConnectPairingRequiredReason;
   requestId?: string;
   remediationHint?: string;
+  recommendedNextStep?: ConnectRecoveryNextStep;
+  retryable?: boolean;
+  pauseReconnect?: boolean;
   deviceId?: string;
   requestedRole?: string;
   requestedScopes?: string[];
@@ -245,6 +248,9 @@ function createPairingConnectErrorDetails(params: {
   reason?: ConnectPairingRequiredReason;
   requestId?: string;
   remediationHint?: string;
+  recommendedNextStep?: ConnectRecoveryNextStep;
+  retryable?: boolean;
+  pauseReconnect?: boolean;
   deviceId?: string;
   requestedRole?: string;
   requestedScopes?: string[];
@@ -256,6 +262,9 @@ function createPairingConnectErrorDetails(params: {
     ...(params.reason ? { reason: params.reason } : {}),
     ...(params.requestId ? { requestId: params.requestId } : {}),
     ...(params.remediationHint ? { remediationHint: params.remediationHint } : {}),
+    ...(params.recommendedNextStep ? { recommendedNextStep: params.recommendedNextStep } : {}),
+    ...(params.retryable !== undefined ? { retryable: params.retryable } : {}),
+    ...(params.pauseReconnect !== undefined ? { pauseReconnect: params.pauseReconnect } : {}),
     ...(params.deviceId ? { deviceId: params.deviceId } : {}),
     ...(params.requestedRole ? { requestedRole: params.requestedRole } : {}),
     ...(params.requestedScopes ? { requestedScopes: params.requestedScopes } : {}),
@@ -300,6 +309,9 @@ export function buildPairingConnectErrorDetails(params: {
   reason: ConnectPairingRequiredReason | undefined;
   requestId?: string;
   remediationHint?: string;
+  recommendedNextStep?: ConnectRecoveryNextStep;
+  retryable?: boolean;
+  pauseReconnect?: boolean;
   deviceId?: string;
   requestedRole?: string;
   requestedScopes?: string[];
@@ -319,6 +331,9 @@ export function buildPairingConnectErrorDetails(params: {
     reason: params.reason,
     requestId,
     remediationHint,
+    recommendedNextStep: params.recommendedNextStep,
+    retryable: params.retryable,
+    pauseReconnect: params.pauseReconnect,
     deviceId,
     requestedRole,
     requestedScopes,
@@ -349,6 +364,9 @@ export function readPairingConnectErrorDetails(
     reason?: unknown;
     requestId?: unknown;
     remediationHint?: unknown;
+    recommendedNextStep?: unknown;
+    retryable?: unknown;
+    pauseReconnect?: unknown;
     deviceId?: unknown;
     requestedRole?: unknown;
     requestedScopes?: unknown;
@@ -359,6 +377,12 @@ export function readPairingConnectErrorDetails(
   const requestId = normalizePairingConnectRequestId(raw.requestId);
   const remediationHint =
     normalizeOptionalString(raw.remediationHint) ?? buildPairingConnectRemediationHint(reason);
+  const normalizedNextStep = normalizeOptionalString(raw.recommendedNextStep) ?? "";
+  const recommendedNextStep = CONNECT_RECOVERY_NEXT_STEP_VALUES.has(
+    normalizedNextStep as ConnectRecoveryNextStep,
+  )
+    ? (normalizedNextStep as ConnectRecoveryNextStep)
+    : undefined;
   const deviceId = normalizeOptionalString(raw.deviceId);
   const requestedRole = normalizeOptionalString(raw.requestedRole);
   const requestedScopes = normalizeStringArray(raw.requestedScopes);
@@ -368,6 +392,9 @@ export function readPairingConnectErrorDetails(
     reason,
     requestId,
     remediationHint,
+    recommendedNextStep,
+    retryable: typeof raw.retryable === "boolean" ? raw.retryable : undefined,
+    pauseReconnect: typeof raw.pauseReconnect === "boolean" ? raw.pauseReconnect : undefined,
     deviceId,
     requestedRole,
     requestedScopes,

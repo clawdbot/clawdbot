@@ -110,6 +110,12 @@ function canCloseManagedRoomSession(
   return !handoff?.room.activeClientId || handoff.room.activeClientId === connId;
 }
 
+function canCreateUnscopedManagedRoomSession(
+  client: { connect?: { scopes?: string[] } } | null,
+): boolean {
+  return client?.connect?.scopes?.includes(ADMIN_SCOPE) === true;
+}
+
 function managedRoomOwnershipError(action: string) {
   return errorShape(
     ErrorCodes.INVALID_REQUEST,
@@ -160,10 +166,27 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        const spawnedBy = normalizeOptionalString(params.spawnedBy);
+        if (
+          normalizeOptionalString(params.sessionKey) &&
+          !spawnedBy &&
+          !canCreateUnscopedManagedRoomSession(client)
+        ) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `talk.session.create managed-room sessionKey requires spawnedBy or gateway scope: ${ADMIN_SCOPE}`,
+            ),
+          );
+          return;
+        }
         const resolvedSession = await resolveSessionKeyFromResolveParams({
           cfg: context.getRuntimeConfig(),
           p: {
             key: params.sessionKey,
+            ...(spawnedBy ? { spawnedBy } : {}),
             includeGlobal: true,
             includeUnknown: true,
           },

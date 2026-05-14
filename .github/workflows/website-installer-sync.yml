@@ -196,7 +196,10 @@ jobs:
         run: |
           git config user.name "openclaw-installer-sync[bot]"
           git config user.email "openclaw-installer-sync[bot]@users.noreply.github.com"
-          git add public/install.sh public/install-cli.sh public/install.ps1 public/install.cmd
+          git add public/install.sh public/install-cli.sh public/install.ps1
+          if git ls-files --error-unmatch public/install.cmd >/dev/null 2>&1; then
+            git add -u -- public/install.cmd
+          fi
           git commit -m "chore: sync installers from openclaw ${GITHUB_SHA::12}"
           git pull --rebase origin main
           git push origin HEAD:main

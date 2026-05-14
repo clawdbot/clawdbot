@@ -1,6 +1,8 @@
 import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
@@ -54,6 +56,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
 
 let downloadImageFeishu: typeof import("./media.js").downloadImageFeishu;
 let downloadMessageResourceFeishu: typeof import("./media.js").downloadMessageResourceFeishu;
+let saveMessageResourceFeishu: typeof import("./media.js").saveMessageResourceFeishu;
 let sanitizeFileNameForUpload: typeof import("./media.js").sanitizeFileNameForUpload;
 let sendMediaFeishu: typeof import("./media.js").sendMediaFeishu;
 let shouldSuppressFeishuTextForVoiceMedia: typeof import("./media.js").shouldSuppressFeishuTextForVoiceMedia;
@@ -114,6 +117,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     ({
       downloadImageFeishu,
       downloadMessageResourceFeishu,
+      saveMessageResourceFeishu,
       sanitizeFileNameForUpload,
       sendMediaFeishu,
       shouldSuppressFeishuTextForVoiceMedia,
@@ -545,6 +549,40 @@ describe("sendMediaFeishu msg_type routing", () => {
     expectPathIsolatedToTmpRoot(capturedPath, fileKey);
   });
 
+  it("rejects oversized message resource streams before buffering the rest", async () => {
+    messageResourceGetMock.mockResolvedValueOnce({
+      getReadableStream: () => Readable.from([Buffer.alloc(4), Buffer.alloc(4)]),
+    });
+
+    await expect(
+      downloadMessageResourceFeishu({
+        cfg: emptyConfig,
+        messageId: "om_123",
+        fileKey: "file_v3_01abc123",
+        type: "file",
+        maxBytes: 7,
+      }),
+    ).rejects.toThrow(/Media exceeds/i);
+  });
+
+  it("rejects oversized writeFile downloads before reading the temp file", async () => {
+    messageResourceGetMock.mockResolvedValueOnce({
+      writeFile: async (tmpPath: string) => {
+        await fs.writeFile(tmpPath, Buffer.alloc(8));
+      },
+    });
+
+    await expect(
+      downloadMessageResourceFeishu({
+        cfg: emptyConfig,
+        messageId: "om_123",
+        fileKey: "file_v3_01abc123",
+        type: "file",
+        maxBytes: 7,
+      }),
+    ).rejects.toThrow(/Media exceeds/i);
+  });
+
   it("rejects invalid image keys before calling feishu api", async () => {
     await expect(
       downloadImageFeishu({
@@ -875,5 +913,42 @@ describe("downloadMessageResourceFeishu", () => {
     });
 
     expect(result.fileName).toBe(latin1LookingFileName);
+  });
+
+  it("saves message resource streams directly to the media store", async () => {
+    const originalHome = process.env.HOME;
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-media-"));
+    try {
+      process.env.HOME = tempHome;
+      messageResourceGetMock.mockResolvedValueOnce({
+        getReadableStream: () => Readable.from([Buffer.from([0xff, 0xd8, 0xff, 0x00])]),
+        headers: {
+          "content-type": "image/jpeg",
+          "content-disposition": `attachment; filename="photo.jpg"`,
+        },
+      });
+
+      const result = await saveMessageResourceFeishu({
+        cfg: emptyConfig,
+        messageId: "om_stream_msg",
+        fileKey: "img_key_stream",
+        type: "image",
+        maxBytes: 1024,
+      });
+
+      expect(result.saved.path).toContain(`${path.sep}.openclaw${path.sep}media${path.sep}inbound`);
+      expect(result.saved.id).toMatch(/^photo---[a-f0-9-]{36}\.jpg$/);
+      expect(result.saved.size).toBe(4);
+      await expect(fs.readFile(result.saved.path)).resolves.toEqual(
+        Buffer.from([0xff, 0xd8, 0xff, 0x00]),
+      );
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
   });
 });

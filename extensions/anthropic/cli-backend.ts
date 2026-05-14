@@ -63,6 +63,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       imagePathScope: "workspace",
       sessionArg: "--session-id",
       sessionMode: "always",
+      reseedFromRawTranscriptWhenUncompacted: true,
       sessionIdFields: [...CLAUDE_CLI_SESSION_ID_FIELDS],
       systemPromptFileArg: "--append-system-prompt-file",
       systemPromptMode: "append",

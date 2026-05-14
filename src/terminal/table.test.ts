@@ -124,6 +124,40 @@ describe("renderTable", () => {
     expect(lines[0]).not.toContain("│ \x1b[2m Use when");
   });
 
+  it("keeps ANSI styling when a multiline cell wraps after an unstyled line", () => {
+    const muted = "\x1b[38;2;120;120;120m";
+    const resetForeground = "\x1b[39m";
+    const out = renderTable({
+      width: 62,
+      columns: [
+        { key: "Status", header: "Status", minWidth: 10 },
+        { key: "Source", header: "Source", minWidth: 24, flex: true },
+        { key: "Version", header: "Version", minWidth: 8 },
+      ],
+      rows: [
+        {
+          Status: "disabled",
+          Source:
+            "stock:codex/index.js\n" +
+            `${muted}Codex app-server harness and Codex-managed GPT model catalog.${resetForeground}`,
+          Version: "2026.5.12-beta.6",
+        },
+      ],
+    });
+
+    const descLines = out
+      .split("\n")
+      .filter((line) => line.includes("Codex") || line.includes("catalog."));
+    expect(descLines.length).toBeGreaterThan(1);
+    for (const line of descLines) {
+      expect(line).toContain(muted);
+      const resetIndex = line.lastIndexOf(resetForeground);
+      const lastSep = Math.max(line.lastIndexOf("│"), line.lastIndexOf("|"));
+      expect(resetIndex).toBeGreaterThan(-1);
+      expect(lastSep).toBeGreaterThan(resetIndex);
+    }
+  });
+
   it("respects explicit newlines in cell values", () => {
     const out = renderTable({
       width: 48,

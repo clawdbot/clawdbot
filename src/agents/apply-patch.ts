@@ -326,7 +326,7 @@ async function assertNoExistingParentAliases(params: { parentPath: string; rootP
   const rootPath = path.resolve(params.rootPath);
   const parentPath = path.resolve(params.parentPath);
   const relative = path.relative(rootPath, parentPath);
-  if (!relative || relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (!relative || relative === "" || relativePathEscapesRoot(relative)) {
     return;
   }
 
@@ -410,10 +410,19 @@ function toDisplayPath(resolved: string, cwd: string): string {
   if (!relative || relative === "") {
     return path.basename(resolved);
   }
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (relativePathEscapesRoot(relative)) {
     return resolved;
   }
   return relative;
+}
+
+function relativePathEscapesRoot(relativePath: string): boolean {
+  return (
+    relativePath === ".." ||
+    relativePath.startsWith("../") ||
+    relativePath.startsWith("..\\") ||
+    path.isAbsolute(relativePath)
+  );
 }
 
 function parsePatchText(input: string): { hunks: Hunk[]; patch: string } {

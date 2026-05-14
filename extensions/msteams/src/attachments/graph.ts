@@ -225,13 +225,17 @@ async function downloadGraphHostedContent(params: {
           if (!valRes.ok) {
             continue;
           }
-          // Check Content-Length before buffering to avoid RSS spikes on large files.
-          const cl = valRes.headers.get("content-length");
-          if (cl && Number(cl) > params.maxBytes) {
-            continue;
-          }
-          const ab = await valRes.arrayBuffer();
-          buffer = Buffer.from(ab);
+          const saved = await getMSTeamsRuntime().channel.media.saveResponseMedia(valRes, {
+            sourceUrl: valueUrl,
+            maxBytes: params.maxBytes,
+            fallbackContentType: item.contentType ?? undefined,
+            subdir: "inbound",
+          });
+          out.push({
+            path: saved.path,
+            contentType: saved.contentType,
+            placeholder: inferPlaceholder({ contentType: saved.contentType }),
+          });
         } finally {
           await release();
         }
@@ -241,6 +245,7 @@ async function downloadGraphHostedContent(params: {
         });
         continue;
       }
+      continue;
     } else {
       continue;
     }

@@ -46,7 +46,7 @@ function shouldPreferRuntimeProviders(params: {
   return !resolveManifestContractOwnerPluginId({
     contract: resolveWebProviderContract(params.kind),
     value: params.providerSelectionId,
-    origin: "bundled",
+    ...(params.kind === "fetch" ? { origin: "bundled" as const } : {}),
     config: params.config,
   });
 }

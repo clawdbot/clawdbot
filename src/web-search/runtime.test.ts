@@ -595,8 +595,8 @@ describe("web search runtime", () => {
 
     const ownerCall = mockCallParam(resolveManifestContractOwnerPluginIdMock);
     expect(ownerCall.contract).toBe("webSearchProviders");
-    expect(ownerCall.origin).toBe("bundled");
     expect(ownerCall.value).toBe("duckduckgo");
+    expect(ownerCall).not.toHaveProperty("origin");
     expect(mockCallParam(resolveRuntimeWebSearchProvidersMock).onlyPluginIds).toEqual([
       "duckduckgo",
     ]);
@@ -626,6 +626,38 @@ describe("web search runtime", () => {
     expect(result.provider).toBe("gemini");
 
     expect(mockCallParam(resolveRuntimeWebSearchProvidersMock).onlyPluginIds).toEqual(["google"]);
+  });
+
+  it("scopes configured global web_search providers when runtime providers are not preferred", async () => {
+    resolveManifestContractOwnerPluginIdMock.mockImplementation(({ value }) =>
+      value === "custom" ? "custom-search" : undefined,
+    );
+    resolvePluginWebSearchProvidersMock.mockReturnValue([createCustomSearchProvider()]);
+
+    await expect(
+      runWebSearch({
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "custom",
+              },
+            },
+          },
+          ...createCustomSearchConfig("custom-key"),
+        },
+        preferRuntimeProviders: false,
+        args: { query: "configured-custom" },
+      }),
+    ).resolves.toMatchObject({
+      provider: "custom",
+    });
+
+    expect(resolvePluginWebSearchProvidersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["custom-search"],
+      }),
+    );
   });
 
   it("keeps runtime provider loading unscoped when configured provider ownership is unknown", async () => {

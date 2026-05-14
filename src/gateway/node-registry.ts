@@ -15,8 +15,11 @@ export type NodeSession = {
   deviceFamily?: string;
   modelIdentifier?: string;
   remoteIp?: string;
+  declaredCaps: string[];
   caps: string[];
+  declaredCommands: string[];
   commands: string[];
+  declaredPermissions?: Record<string, boolean>;
   permissions?: Record<string, boolean>;
   pathEnv?: string;
   connectedAtMs: number;
@@ -138,13 +141,27 @@ export class NodeRegistry {
     const connect = client.connect;
     const nodeId = connect.device?.id ?? connect.client.id;
     const caps = Array.isArray(connect.caps) ? connect.caps : [];
+    const declaredCaps = Array.isArray((connect as { declaredCaps?: string[] }).declaredCaps)
+      ? ((connect as { declaredCaps?: string[] }).declaredCaps ?? [])
+      : caps;
     const commands = Array.isArray((connect as { commands?: string[] }).commands)
       ? ((connect as { commands?: string[] }).commands ?? [])
       : [];
+    const declaredCommands = Array.isArray(
+      (connect as { declaredCommands?: string[] }).declaredCommands,
+    )
+      ? ((connect as { declaredCommands?: string[] }).declaredCommands ?? [])
+      : commands;
     const permissions =
       typeof (connect as { permissions?: Record<string, boolean> }).permissions === "object"
         ? ((connect as { permissions?: Record<string, boolean> }).permissions ?? undefined)
         : undefined;
+    const declaredPermissions =
+      typeof (connect as { declaredPermissions?: Record<string, boolean> }).declaredPermissions ===
+      "object"
+        ? ((connect as { declaredPermissions?: Record<string, boolean> }).declaredPermissions ??
+          undefined)
+        : permissions;
     const pathEnv =
       typeof (connect as { pathEnv?: string }).pathEnv === "string"
         ? (connect as { pathEnv?: string }).pathEnv
@@ -163,8 +180,11 @@ export class NodeRegistry {
       deviceFamily: connect.client.deviceFamily,
       modelIdentifier: connect.client.modelIdentifier,
       remoteIp: opts.remoteIp,
+      declaredCaps,
       caps,
+      declaredCommands,
       commands,
+      declaredPermissions,
       permissions,
       pathEnv,
       connectedAtMs: Date.now(),
@@ -206,6 +226,66 @@ export class NodeRegistry {
 
   get(nodeId: string): NodeSession | undefined {
     return this.nodesById.get(nodeId);
+  }
+
+  updateCommands(nodeId: string, commands: readonly string[]): NodeSession | null {
+    return this.updateSurface(nodeId, { commands });
+  }
+
+  updateSurface(
+    nodeId: string,
+    surface: {
+      caps?: readonly string[];
+      commands: readonly string[];
+      permissions?: Record<string, boolean> | undefined;
+    },
+  ): NodeSession | null {
+    const node = this.nodesById.get(nodeId);
+    if (!node) {
+      return null;
+    }
+
+    const declaredCommands = new Set(node.declaredCommands);
+    const nextCommands = surface.commands.filter((command) => declaredCommands.has(command));
+    node.commands = nextCommands;
+    (node.client.connect as { commands?: string[] }).commands = nextCommands;
+
+    if ("caps" in surface) {
+      const declaredCaps = new Set(node.declaredCaps);
+      const nextCaps = (surface.caps ?? []).filter((capability) => declaredCaps.has(capability));
+      node.caps = nextCaps;
+      (node.client.connect as { caps?: string[] }).caps = nextCaps;
+    }
+
+    if ("permissions" in surface) {
+      if (surface.permissions === undefined) {
+        node.permissions = undefined;
+        (node.client.connect as { permissions?: Record<string, boolean> }).permissions = undefined;
+        return node;
+      }
+      const declared = node.declaredPermissions ?? {};
+      const nextEntries: Array<[string, boolean]> = [];
+      for (const [key, declaredValue] of Object.entries(declared)) {
+        if (!declaredValue) {
+          nextEntries.push([key, false]);
+          continue;
+        }
+        const approvedValue = surface.permissions?.[key];
+        if (approvedValue) {
+          nextEntries.push([key, true]);
+          continue;
+        }
+        if (approvedValue !== undefined) {
+          nextEntries.push([key, false]);
+        }
+      }
+      const nextPermissions = nextEntries.length > 0 ? Object.fromEntries(nextEntries) : undefined;
+      node.permissions = nextPermissions;
+      (node.client.connect as { permissions?: Record<string, boolean> }).permissions =
+        nextPermissions;
+    }
+
+    return node;
   }
 
   async invoke(params: {

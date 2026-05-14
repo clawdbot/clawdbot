@@ -65,6 +65,22 @@ function sha256FileSync(filePath: string): string {
   return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
+function canWritePathSync(targetPath: string): boolean {
+  try {
+    fs.accessSync(targetPath, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function canMutateNativeBinaryFixturePath(binaryPath: string): boolean {
+  const realPath = fs.realpathSync(binaryPath);
+  return [binaryPath, path.dirname(binaryPath), realPath, path.dirname(realPath)].some((entry) =>
+    canWritePathSync(entry),
+  );
+}
+
 function createScriptOperandFixture(tmp: string, fixture?: RuntimeFixture): ScriptOperandFixture {
   if (fixture) {
     return {
@@ -646,7 +662,7 @@ describe("hardenApprovedExecutionPaths", () => {
     );
   });
 
-  it("allows shell payloads that invoke absolute-path native binaries", () => {
+  it("handles shell payloads that invoke absolute-path native binaries", () => {
     if (process.platform === "win32") {
       return;
     }
@@ -656,6 +672,10 @@ describe("hardenApprovedExecutionPaths", () => {
       rawCommand: binaryPath,
       cwd: process.cwd(),
     });
+    if (canMutateNativeBinaryFixturePath(binaryPath)) {
+      expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+      return;
+    }
     expect(prepared.ok).toBe(true);
     if (!prepared.ok) {
       throw new Error("unreachable");

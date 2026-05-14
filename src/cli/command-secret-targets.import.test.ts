@@ -147,7 +147,7 @@ describe("command secret targets module import", () => {
     expect(targets.has("channels.telegram.gatewayToken")).toBe(false);
     expect(targets.has("channels.telegram.gatewayTokenRef")).toBe(false);
     expect(targets.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
-    const pluginCall = listReadOnlyChannelPluginsForConfig.mock.calls.at(0) as unknown as
+    const pluginCall = listReadOnlyChannelPluginsForConfig.mock.calls[0] as unknown as
       | [unknown, { includePersistedAuthState?: boolean }]
       | undefined;
     expect(typeof pluginCall?.[0]).toBe("object");

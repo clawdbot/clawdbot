@@ -289,7 +289,7 @@ function expectRestartHandoffCall(expected: {
   supervisorMode: "external" | "launchd";
 }) {
   expect(writeGatewayRestartHandoffSync).toHaveBeenCalledTimes(1);
-  const [handoff] = writeGatewayRestartHandoffSync.mock.calls.at(0) ?? [];
+  const [handoff] = writeGatewayRestartHandoffSync.mock.calls[0] ?? [];
   if (!handoff || typeof handoff !== "object" || Array.isArray(handoff)) {
     throw new Error("expected restart handoff options object");
   }

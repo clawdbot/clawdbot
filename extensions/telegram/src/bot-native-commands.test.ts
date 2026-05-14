@@ -196,6 +196,35 @@ describe("registerTelegramNativeCommands", () => {
     });
   });
 
+  it("passes skill command description localizations into Telegram menu sync", async () => {
+    const { bot, setMyCommands } = createCommandBot();
+    listSkillCommandsForAgents.mockReturnValue([
+      {
+        name: "demo_skill",
+        skillName: "demo-skill",
+        description: "Demo skill",
+        descriptionLocalizations: { ko: "데모 스킬" },
+      },
+    ]);
+
+    registerTelegramNativeCommands(
+      createNativeCommandTestParams(
+        {
+          commands: { native: true, nativeSkills: true },
+          agents: { list: [{ id: "main", default: true }] },
+        },
+        { bot },
+      ),
+    );
+
+    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
+    expect(registeredCommands).toContainEqual({
+      command: "demo_skill",
+      description: "Demo skill",
+      descriptionLocalizations: { ko: "데모 스킬" },
+    });
+  });
+
   it("truncates Telegram command registration to 100 commands", async () => {
     const customCommands = Array.from({ length: 120 }, (_, index) => ({
       command: `cmd_${index}`,

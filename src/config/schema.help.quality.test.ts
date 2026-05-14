@@ -271,6 +271,11 @@ const TARGET_KEYS = [
   "channels.defaults.heartbeat.showOk",
   "channels.defaults.heartbeat.showAlerts",
   "channels.defaults.heartbeat.useIndicator",
+  "channels.defaults.botLoopProtection",
+  "channels.defaults.botLoopProtection.enabled",
+  "channels.defaults.botLoopProtection.maxEventsPerWindow",
+  "channels.defaults.botLoopProtection.windowSeconds",
+  "channels.defaults.botLoopProtection.cooldownSeconds",
   "gateway",
   "gateway.mode",
   "gateway.bind",
@@ -434,15 +439,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "hooks.mappings[].wakeMode": ['"now"', '"next-heartbeat"'],
   "hooks.gmail.tailscale.mode": ['"off"', '"serve"', '"funnel"'],
   "hooks.gmail.thinking": ['"off"', '"minimal"', '"low"', '"medium"', '"high"'],
-  "messages.queue.mode": [
-    '"steer"',
-    '"followup"',
-    '"collect"',
-    '"steer-backlog"',
-    '"steer+backlog"',
-    '"queue"',
-    '"interrupt"',
-  ],
+  "messages.queue.mode": ['"steer"', '"followup"', '"collect"', '"interrupt"'],
   "messages.queue.drop": ['"old"', '"new"', '"summarize"'],
   "channels.defaults.groupPolicy": ['"open"', '"disabled"', '"allowlist"'],
   "channels.defaults.contextVisibility": ['"all"', '"allowlist"', '"allowlist_quote"'],
@@ -783,7 +780,7 @@ describe("config help copy quality", () => {
 
     const queueMode = FIELD_HELP["messages.queue.mode"];
     expect(queueMode.includes('"interrupt"')).toBe(true);
-    expect(queueMode.includes('"steer+backlog"')).toBe(true);
+    expect(queueMode.includes('"steer"')).toBe(true);
   });
 
   it("documents gateway bind modes and web reconnect semantics", () => {

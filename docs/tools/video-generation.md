@@ -483,9 +483,8 @@ Repo wrapper:
 pnpm test:live:media video
 ```
 
-This live file loads missing provider env vars from `~/.profile`, prefers
-live/env API keys ahead of stored auth profiles by default, and runs a
-release-safe smoke by default:
+This live file uses already-exported provider env vars ahead of stored auth
+profiles by default, and runs a release-safe smoke by default:
 
 - `generate` for every non-FAL provider in the sweep.
 - One-second lobster prompt.

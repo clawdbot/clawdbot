@@ -65,7 +65,7 @@ describe("plugin-sdk exports", () => {
       "resolveStateDir",
       "writeConfigFile",
       "enqueueSystemEvent",
-      "fetchRemoteMedia",
+      "readRemoteMediaBuffer",
       "saveMediaBuffer",
       "formatAgentEnvelope",
       "buildPairingReply",

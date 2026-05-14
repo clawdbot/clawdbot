@@ -51,12 +51,14 @@ function createManifestPlugin(id: string): PluginManifestRecord {
 function createManifestPluginWithoutDiscovery(params: {
   id: string;
   providerAuthEnvVars?: Record<string, string[]>;
+  setupProviders?: NonNullable<PluginManifestRecord["setup"]>["providers"];
 }): PluginManifestRecord {
   const { providerDiscoverySource: _providerDiscoverySource, ...plugin } = createManifestPlugin(
     params.id,
   );
   return {
     ...plugin,
+    ...(params.setupProviders ? { setup: { providers: params.setupProviders } } : {}),
     ...(params.providerAuthEnvVars ? { providerAuthEnvVars: params.providerAuthEnvVars } : {}),
   };
 }
@@ -182,6 +184,36 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     expect(mocks.resolvePluginProviders).toHaveBeenCalledTimes(1);
     const params = requireResolvePluginProvidersParams();
     expect(params.onlyPluginIds).toEqual(["deepseek", "kilocode"]);
+  });
+
+  it("falls back to full provider plugins when setup provider env vars are configured", () => {
+    const codexEntryProvider = createProvider({ id: "codex", mode: "catalog" });
+    const fullProviders = [createProvider({ id: "kilocode", mode: "catalog" })];
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["codex", "kilocode"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [
+          createManifestPlugin("codex"),
+          createManifestPluginWithoutDiscovery({
+            id: "kilocode",
+            setupProviders: [{ id: "kilocode", envVars: ["KILOCODE_API_KEY"] }],
+          }),
+        ],
+        diagnostics: [],
+      },
+    });
+    mocks.loadSource.mockReturnValue(codexEntryProvider);
+    mocks.resolvePluginProviders.mockReturnValue(fullProviders);
+
+    expect(
+      resolvePluginDiscoveryProvidersRuntime({
+        env: { KILOCODE_API_KEY: "sk-test" } as NodeJS.ProcessEnv,
+      }),
+    ).toEqual([{ ...codexEntryProvider, pluginId: "codex" }, ...fullProviders]);
+    expect(mocks.resolvePluginProviders).toHaveBeenCalledTimes(1);
+    const params = requireResolvePluginProvidersParams();
+    expect(params.onlyPluginIds).toEqual(["kilocode"]);
   });
 
   it("shares one metadata snapshot between provider id discovery and entry loading", () => {

@@ -58,7 +58,10 @@ export async function deliverReplies(params: {
         // not before. The window between send completion and cache write is sub-millisecond;
         // the next SQLite inbound poll is 1-2s away, so no echo can arrive before the
         // cache entry exists.
-        sentMessageCache?.remember(scope, { text: sent.sentText, messageId: sent.messageId });
+        sentMessageCache?.remember(scope, {
+          text: sent.echoText ?? sent.sentText,
+          messageId: sent.messageId,
+        });
       },
       sendMedia: async ({ mediaUrl, caption }) => {
         const sent = await sendMessageIMessage(target, caption ?? "", {
@@ -70,7 +73,7 @@ export async function deliverReplies(params: {
           replyToId: payload.replyToId,
         });
         sentMessageCache?.remember(scope, {
-          text: sent.sentText || undefined,
+          text: sent.echoText ?? (sent.sentText || undefined),
           messageId: sent.messageId,
         });
       },
@@ -94,7 +97,7 @@ export function createIMessageEchoCachingSend(params: {
     });
     const scope = `${params.accountId ?? opts.accountId ?? ""}:${target}`;
     params.sentMessageCache?.remember(scope, {
-      text: sent.sentText || undefined,
+      text: sent.echoText ?? (sent.sentText || undefined),
       messageId: sent.messageId,
     });
     return sent;

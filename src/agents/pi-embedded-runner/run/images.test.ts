@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
@@ -103,8 +104,10 @@ describe("detectImageReferences", () => {
     expect(detectImageReferences("[Image: source: /tmp/second.jpg]")).toStrictEqual([
       { raw: "/tmp/second.jpg", type: "path", resolved: "/tmp/second.jpg" },
     ]);
-    expect(detectImageReferences("See file:///tmp/third.webp")).toStrictEqual([
-      { raw: "file:///tmp/third.webp", type: "path", resolved: "/tmp/third.webp" },
+    const thirdPath = path.join(os.tmpdir(), "third.webp");
+    const thirdUrl = pathToFileURL(thirdPath).href;
+    expect(detectImageReferences(`See ${thirdUrl}`)).toStrictEqual([
+      { raw: thirdUrl, type: "path", resolved: thirdPath },
     ]);
     expect(detectImageReferences("See ./fourth.jpeg")).toStrictEqual([
       { raw: "./fourth.jpeg", type: "path", resolved: "./fourth.jpeg" },
@@ -189,6 +192,18 @@ describe("detectImageReferences", () => {
       raw: "./screenshot.png",
       type: "path",
       resolved: "./screenshot.png",
+    });
+  });
+
+  it("detects Windows drive image paths in plain prompts", () => {
+    const ref = expectSingleImageReference(
+      String.raw`Look at C:\Users\Ada\Pictures\screenshot.png`,
+    );
+
+    expect(ref).toStrictEqual({
+      raw: String.raw`C:\Users\Ada\Pictures\screenshot.png`,
+      type: "path",
+      resolved: String.raw`C:\Users\Ada\Pictures\screenshot.png`,
     });
   });
 

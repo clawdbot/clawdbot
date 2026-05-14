@@ -11,6 +11,7 @@ import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-b
 import {
   isPathInsideContainerRoot,
   normalizeContainerPath as normalizeSandboxContainerPath,
+  relativePathEscapesContainerRoot,
 } from "./path-utils.js";
 
 type ResolvedRemotePath = SandboxResolvedPath & {
@@ -67,8 +68,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     if (
       relativePath === "" ||
       relativePath === "." ||
-      relativePath.startsWith("..") ||
-      path.posix.isAbsolute(relativePath)
+      relativePathEscapesContainerRoot(relativePath)
     ) {
       throw new Error(`Invalid sandbox entry target: ${target.containerPath}`);
     }
@@ -124,7 +124,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     const target = this.resolveTarget(params);
     this.ensureWritable(target, "create directories");
     const relativePath = path.posix.relative(target.mountRootPath, target.containerPath);
-    if (relativePath.startsWith("..") || path.posix.isAbsolute(relativePath)) {
+    if (relativePathEscapesContainerRoot(relativePath)) {
       throw new Error(
         `Sandbox path escapes allowed mounts; cannot create directories: ${target.containerPath}`,
       );
@@ -319,7 +319,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
 
   private toResolvedPath(params: { mount: MountInfo; containerPath: string }): ResolvedRemotePath {
     const relative = path.posix.relative(params.mount.containerRoot, params.containerPath);
-    if (relative.startsWith("..") || path.posix.isAbsolute(relative)) {
+    if (relativePathEscapesContainerRoot(relative)) {
       throw new Error(
         `Sandbox path escapes allowed mounts; cannot access: ${params.containerPath}`,
       );
@@ -460,7 +460,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       );
     }
     const relativeParentPath = path.posix.relative(mount.containerRoot, canonicalParent);
-    if (relativeParentPath.startsWith("..") || path.posix.isAbsolute(relativeParentPath)) {
+    if (relativePathEscapesContainerRoot(relativeParentPath)) {
       throw new Error(
         `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.containerPath}`,
       );

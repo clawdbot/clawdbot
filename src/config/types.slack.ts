@@ -6,6 +6,7 @@ import type {
   ReplyToMode,
   SlackChannelStreamingConfig,
 } from "./types.base.js";
+import type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection.js";
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
@@ -38,6 +39,8 @@ export type SlackChannelConfig = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Allow bot-authored messages to trigger replies (default: false). Set to "mentions" to only allow bot messages that @mention this bot. */
   allowBots?: boolean | "mentions";
+  /** Sliding-window bot-pair loop guard for accepted bot-authored Slack messages. */
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
   /** Allowlist of users that can invoke the bot in this channel. */
   users?: Array<string | number>;
   /** Optional skill filter for this channel. */
@@ -145,6 +148,8 @@ export type SlackAccountConfig = {
   userTokenReadOnly?: boolean;
   /** Allow bot-authored messages to trigger replies (default: false). Set to "mentions" to only allow bot messages that @mention this bot. */
   allowBots?: boolean | "mentions";
+  /** Sliding-window bot-pair loop guard for accepted bot-authored Slack messages. */
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
   /**
    * Break-glass override: allow mutable identity matching (name/slug) in allowlists.
    * Default behavior is ID-only matching.

@@ -760,6 +760,7 @@ export async function getReplyFromConfig(
   }
   await maybeEmitMissingResetHooks();
   directives = inlineActionResult.directives;
+  cleanedBody = inlineActionResult.cleanedBody;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
 
   // Allow plugins to intercept and return a synthetic reply before the LLM runs.

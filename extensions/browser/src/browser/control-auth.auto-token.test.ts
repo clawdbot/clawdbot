@@ -8,6 +8,25 @@ const mocks = vi.hoisted(() => ({
   replaceConfigFile: vi.fn(async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
     await mocks.writeConfigFile(nextConfig);
   }),
+  mutateConfigFile: vi.fn(
+    async (params: {
+      mutate: (draft: OpenClawConfig, context: { snapshot: { path: string } }) => unknown;
+    }) => {
+      const draft = structuredClone(mocks.getRuntimeConfig());
+      const result = await params.mutate(draft, { snapshot: { path: "/tmp/openclaw.json" } });
+      await mocks.writeConfigFile(draft);
+      return {
+        path: "/tmp/openclaw.json",
+        previousHash: "test-hash",
+        snapshot: { path: "/tmp/openclaw.json" },
+        nextConfig: draft,
+        result,
+        attempts: 1,
+        afterWrite: { mode: "auto" },
+        followUp: { action: "none" },
+      };
+    },
+  ),
   resolveGatewayAuth: vi.fn(
     ({
       authConfig,
@@ -53,6 +72,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
   replaceConfigFile: mocks.replaceConfigFile,
+  mutateConfigFile: mocks.mutateConfigFile,
 }));
 
 vi.mock("../gateway/startup-auth.js", () => ({
@@ -146,6 +166,7 @@ describe("ensureBrowserControlAuth", () => {
     vi.restoreAllMocks();
     mocks.getRuntimeConfig.mockClear();
     mocks.writeConfigFile.mockClear();
+    mocks.mutateConfigFile.mockClear();
     mocks.resolveGatewayAuth.mockClear();
     mocks.ensureGatewayStartupAuth.mockClear();
   });

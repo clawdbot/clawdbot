@@ -27,7 +27,6 @@ openclaw update --tag main
 openclaw update --dry-run
 openclaw update --no-restart
 openclaw update --yes
-openclaw update --acknowledge-clawhub-risk
 openclaw update --json
 openclaw --update
 ```
@@ -45,10 +44,6 @@ openclaw --update
   when npm plugin artifact drift is detected during post-update plugin sync.
 - `--timeout <seconds>`: per-step timeout (default is 1800s).
 - `--yes`: skip confirmation prompts (for example downgrade confirmation).
-- `--acknowledge-clawhub-risk`: continue post-update ClawHub plugin sync when
-  the selected plugin release has a ClawHub trust warning. Without this flag,
-  interactive runs ask before downloading risky ClawHub plugin releases and
-  non-interactive runs fail closed.
 
 `openclaw update` does not have a `--verbose` flag. Use `--dry-run` to preview
 the planned channel/tag/install/restart actions, `--json` for machine-readable

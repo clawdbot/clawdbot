@@ -69,6 +69,17 @@ enum GatewayRemoteConfig {
         }
     }
 
+    static func resolveTLSFingerprint(root: [String: Any]) -> String? {
+        guard let gateway = root["gateway"] as? [String: Any],
+              let remote = gateway["remote"] as? [String: Any],
+              let raw = remote["tlsFingerprint"] as? String
+        else {
+            return nil
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     static func resolveGatewayUrl(root: [String: Any]) -> URL? {
         guard let raw = self.resolveUrlString(root: root) else { return nil }
         return self.normalizeGatewayUrl(raw)

@@ -11,7 +11,8 @@ type TelegramBotRuntimeForTest = NonNullable<
 type DispatchReplyWithBufferedBlockDispatcherFn =
   typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithBufferedBlockDispatcher;
 type DispatchReplyHarnessParams = Parameters<DispatchReplyWithBufferedBlockDispatcherFn>[0];
-type FetchRemoteMediaFn = typeof import("openclaw/plugin-sdk/media-runtime").fetchRemoteMedia;
+type ReadRemoteMediaBufferFn =
+  typeof import("openclaw/plugin-sdk/media-runtime").readRemoteMediaBuffer;
 
 const useSpy: Mock = vi.fn();
 const middlewareUseSpy: Mock = vi.fn();
@@ -30,9 +31,9 @@ function resetUndiciFetchMock() {
   undiciFetchSpy.mockImplementation(defaultUndiciFetch);
 }
 
-async function defaultFetchRemoteMedia(
-  params: Parameters<FetchRemoteMediaFn>[0],
-): ReturnType<FetchRemoteMediaFn> {
+async function defaultReadRemoteMediaBuffer(
+  params: Parameters<ReadRemoteMediaBufferFn>[0],
+): ReturnType<ReadRemoteMediaBufferFn> {
   if (!params.fetchImpl) {
     throw new Error(`Missing fetchImpl for ${params.url}`);
   }
@@ -47,14 +48,14 @@ async function defaultFetchRemoteMedia(
     buffer: Buffer.from(arrayBuffer),
     contentType: response.headers.get("content-type") ?? undefined,
     fileName: params.filePathHint ? path.basename(params.filePathHint) : undefined,
-  } as Awaited<ReturnType<FetchRemoteMediaFn>>;
+  } as Awaited<ReturnType<ReadRemoteMediaBufferFn>>;
 }
 
-export const fetchRemoteMediaSpy: Mock = vi.fn(defaultFetchRemoteMedia);
+export const readRemoteMediaBufferSpy: Mock = vi.fn(defaultReadRemoteMediaBuffer);
 
-export function resetFetchRemoteMediaMock() {
-  fetchRemoteMediaSpy.mockReset();
-  fetchRemoteMediaSpy.mockImplementation(defaultFetchRemoteMedia);
+export function resetReadRemoteMediaBufferMock() {
+  readRemoteMediaBufferSpy.mockReset();
+  readRemoteMediaBufferSpy.mockImplementation(defaultReadRemoteMediaBuffer);
 }
 
 async function defaultSaveMediaBuffer(buffer: Buffer, contentType?: string) {
@@ -173,7 +174,7 @@ beforeEach(() => {
   resetInboundDedupe();
   resetSaveMediaBufferMock();
   resetUndiciFetchMock();
-  resetFetchRemoteMediaMock();
+  resetReadRemoteMediaBufferMock();
 });
 
 vi.doMock("./bot.runtime.js", () => ({
@@ -198,10 +199,24 @@ vi.mock("undici", () => ({
 }));
 
 vi.mock("./telegram-media.runtime.js", () => ({
-  fetchRemoteMedia: (...args: Parameters<typeof fetchRemoteMediaSpy>) =>
-    fetchRemoteMediaSpy(...args),
+  readRemoteMediaBuffer: (...args: Parameters<typeof readRemoteMediaBufferSpy>) =>
+    readRemoteMediaBufferSpy(...args),
   getAgentScopedMediaLocalRoots: vi.fn(() => []),
   saveMediaBuffer: (...args: Parameters<typeof saveMediaBufferSpy>) => saveMediaBufferSpy(...args),
+  saveRemoteMedia: async (...args: Parameters<typeof readRemoteMediaBufferSpy>) => {
+    const fetched = (await readRemoteMediaBufferSpy(...args)) as {
+      buffer: Buffer;
+      contentType?: string;
+      fileName?: string;
+    };
+    return await saveMediaBufferSpy(
+      fetched.buffer,
+      fetched.contentType,
+      "inbound",
+      args[0]?.maxBytes,
+      args[0]?.originalFilename ?? fetched.fileName ?? args[0]?.filePathHint,
+    );
+  },
 }));
 
 vi.doMock("./bot-message-context.session.runtime.js", async () => {

@@ -61,6 +61,11 @@
       "advanced": true,
       "placeholder": "500"
     },
+    "customTriggers": {
+      "label": "Custom Triggers",
+      "help": "Literal phrases that should make auto-capture consider a message memory-worthy",
+      "advanced": true
+    },
     "recallMaxChars": {
       "label": "Recall Query Max Chars",
       "help": "Maximum prompt/query length embedded for memory recall. Lower for small local embedding models.",
@@ -116,6 +121,15 @@
         "type": "number",
         "minimum": 100,
         "maximum": 10000
+      },
+      "customTriggers": {
+        "type": "array",
+        "maxItems": 50,
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        }
       },
       "recallMaxChars": {
         "type": "number",

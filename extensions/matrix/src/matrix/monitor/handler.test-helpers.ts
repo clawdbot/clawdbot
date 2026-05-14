@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import type { RuntimeEnv, RuntimeLogger } from "../../runtime-api.js";
 import type {
   MatrixConfig,
@@ -81,6 +81,7 @@ type MatrixHandlerTestHarnessOptions = {
     queuedFinal: boolean;
     counts: { final: number; block: number; tool: number };
   }>;
+  runPrepared?: MatrixRunPreparedMock;
   withReplyDispatcher?: <T>(params: {
     dispatcher: {
       markComplete?: () => void;
@@ -108,8 +109,15 @@ type MatrixHandlerTestHarness = {
   readAllowFromStore: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["readAllowFromStore"];
   recordInboundSession: (...args: unknown[]) => Promise<void>;
   resolveAgentRoute: () => typeof DEFAULT_ROUTE;
+  runPrepared: MatrixRunPreparedMock;
   upsertPairingRequest: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["upsertPairingRequest"];
 };
+
+type MatrixRunPreparedInput = Parameters<
+  MatrixMonitorHandlerParams["core"]["channel"]["turn"]["runPrepared"]
+>[0];
+type MatrixRunPreparedMockFn = (turn: MatrixRunPreparedInput) => Promise<unknown>;
+type MatrixRunPreparedMock = Mock<MatrixRunPreparedMockFn>;
 
 export function createMatrixHandlerTestHarness(
   options: MatrixHandlerTestHarnessOptions = {},
@@ -127,10 +135,9 @@ export function createMatrixHandlerTestHarness(
       counts: { final: 0, block: 0, tool: 0 },
     }));
   const enqueueSystemEvent = options.enqueueSystemEvent ?? vi.fn();
-  const runPrepared = vi.fn(
-    async (
-      turn: Parameters<MatrixMonitorHandlerParams["core"]["channel"]["turn"]["runPrepared"]>[0],
-    ) => {
+  const runPrepared =
+    options.runPrepared ??
+    vi.fn<MatrixRunPreparedMockFn>(async (turn) => {
       await turn.recordInboundSession({
         storePath: turn.storePath,
         sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
@@ -148,8 +155,7 @@ export function createMatrixHandlerTestHarness(
         routeSessionKey: turn.routeSessionKey,
         dispatchResult,
       };
-    },
-  );
+    });
   const run = vi.fn(
     async (params: Parameters<MatrixMonitorHandlerParams["core"]["channel"]["turn"]["run"]>[0]) => {
       const input = await params.adapter.ingest(params.raw);
@@ -327,6 +333,7 @@ export function createMatrixHandlerTestHarness(
     readAllowFromStore,
     recordInboundSession,
     resolveAgentRoute,
+    runPrepared,
     upsertPairingRequest,
   };
 }

@@ -7,7 +7,7 @@ import {
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type Client, type Message } from "../internal/discord.js";
 
-const fetchRemoteMedia = vi.fn();
+const readRemoteMediaBuffer = vi.fn();
 const saveMediaBuffer = vi.fn();
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
@@ -16,7 +16,21 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   );
   return {
     ...actual,
-    fetchRemoteMedia: (...args: unknown[]) => fetchRemoteMedia(...args),
+    readRemoteMediaBuffer: (...args: unknown[]) => readRemoteMediaBuffer(...args),
+    saveRemoteMedia: async (...args: unknown[]) => {
+      const fetched = await readRemoteMediaBuffer(...args);
+      if (fetched && typeof fetched === "object" && "path" in fetched) {
+        return fetched;
+      }
+      const options = (args[0] ?? {}) as { maxBytes?: number; originalFilename?: string };
+      return await saveMediaBuffer(
+        Buffer.from((fetched as { buffer?: Uint8Array }).buffer ?? new Uint8Array()),
+        (fetched as { contentType?: string }).contentType,
+        "inbound",
+        options.maxBytes,
+        options.originalFilename,
+      );
+    },
     saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
   };
 });
@@ -82,7 +96,10 @@ function callArg(mock: unknown, callIndex: number, argIndex: number, label: stri
 }
 
 function fetchParams(): Record<string, unknown> {
-  return requireRecord(callArg(fetchRemoteMedia, 0, 0, "fetch media params"), "fetch media params");
+  return requireRecord(
+    callArg(readRemoteMediaBuffer, 0, 0, "fetch media params"),
+    "fetch media params",
+  );
 }
 
 function expectDiscordCdnSsrFPolicy(policy: unknown) {
@@ -101,7 +118,7 @@ function expectSinglePngDownload(params: {
   expectedPath: string;
   placeholder: "<media:image>" | "<media:sticker>";
 }) {
-  expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
+  expect(readRemoteMediaBuffer).toHaveBeenCalledTimes(1);
   const call = fetchParams();
   expect(call.url).toBe(params.expectedUrl);
   expect(call.filePathHint).toBe(params.filePathHint);
@@ -220,7 +237,7 @@ describe("resolveDiscordMessageChannelId", () => {
 
 describe("resolveForwardedMediaList", () => {
   beforeEach(() => {
-    fetchRemoteMedia.mockClear();
+    readRemoteMediaBuffer.mockClear();
     saveMediaBuffer.mockClear();
   });
 
@@ -231,7 +248,7 @@ describe("resolveForwardedMediaList", () => {
       filename: "image.png",
       content_type: "image/png",
     };
-    fetchRemoteMedia.mockResolvedValueOnce({
+    readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("image"),
       contentType: "image/png",
     });
@@ -266,7 +283,7 @@ describe("resolveForwardedMediaList", () => {
       filename: "proxy.png",
       content_type: "image/png",
     };
-    fetchRemoteMedia.mockResolvedValueOnce({
+    readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("image"),
       contentType: "image/png",
     });
@@ -295,7 +312,7 @@ describe("resolveForwardedMediaList", () => {
       filename: "fallback.png",
       content_type: "image/png",
     };
-    fetchRemoteMedia.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
 
     const result = await resolveForwardedMediaList(
       asMessage({
@@ -315,7 +332,7 @@ describe("resolveForwardedMediaList", () => {
       name: "wave",
       format_type: StickerFormatType.PNG,
     };
-    fetchRemoteMedia.mockResolvedValueOnce({
+    readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("sticker"),
       contentType: "image/png",
     });
@@ -346,7 +363,7 @@ describe("resolveForwardedMediaList", () => {
     const result = await resolveForwardedMediaList(asMessage({}), 512);
 
     expect(result).toStrictEqual([]);
-    expect(fetchRemoteMedia).not.toHaveBeenCalled();
+    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
   });
 
   it("downloads forwarded referenced attachments when snapshots are absent", async () => {
@@ -356,7 +373,7 @@ describe("resolveForwardedMediaList", () => {
       filename: "ref-image.png",
       content_type: "image/png",
     };
-    fetchRemoteMedia.mockResolvedValueOnce({
+    readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("image"),
       contentType: "image/png",
     });
@@ -392,7 +409,7 @@ describe("resolveForwardedMediaList", () => {
     );
 
     expect(result).toStrictEqual([]);
-    expect(fetchRemoteMedia).not.toHaveBeenCalled();
+    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
   });
 
   it("passes readIdleTimeoutMs to forwarded attachment downloads", async () => {
@@ -402,7 +419,7 @@ describe("resolveForwardedMediaList", () => {
       filename: "forwarded-timeout.png",
       content_type: "image/png",
     };
-    fetchRemoteMedia.mockResolvedValueOnce({
+    readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("image"),
       contentType: "image/png",
     });
@@ -430,7 +447,7 @@ describe("resolveForwardedMediaList", () => {
       name: "timeout-forwarded",
       format_type: StickerFormatType.PNG,
     };
-    fetchRemoteMedia.mockResolvedValueOnce({
+    readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("sticker"),
       contentType: "image/png",
     });
@@ -455,7 +472,7 @@ describe("resolveForwardedMediaList", () => {
 
 describe("resolveMediaList", () => {
   beforeEach(() => {
-    fetchRemoteMedia.mockClear();
+    readRemoteMediaBuffer.mockClear();
     saveMediaBuffer.mockClear();
   });
 
@@ -465,7 +482,7 @@ describe("resolveMediaList", () => {
       name: "hello",
       format_type: StickerFormatType.PNG,
     };
-    fetchRemoteMedia.mockResolvedValueOnce({
+    readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("sticker"),
       contentType: "image/png",
     });
@@ -497,7 +514,7 @@ describe("resolveMediaList", () => {
       name: "proxy-sticker",
       format_type: StickerFormatType.PNG,
     };
-    fetchRemoteMedia.mockResolvedValueOnce({
+    readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("sticker"),
       contentType: "image/png",
     });
@@ -524,7 +541,7 @@ describe("resolveMediaList", () => {
       filename: "main-fallback.png",
       content_type: "image/png",
     };
-    fetchRemoteMedia.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
 
     const result = await resolveMediaList(
       asMessage({
@@ -550,7 +567,7 @@ describe("resolveMediaList", () => {
       512,
     );
 
-    expect(fetchRemoteMedia).not.toHaveBeenCalled();
+    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
     expect(saveMediaBuffer).not.toHaveBeenCalled();
     expect(result).toStrictEqual([]);
   });
@@ -561,7 +578,7 @@ describe("resolveMediaList", () => {
       url: "https://cdn.discordapp.com/attachments/1/voice.ogg",
       filename: "voice.ogg",
     };
-    fetchRemoteMedia.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
 
     const result = await resolveMediaList(
       asMessage({
@@ -587,7 +604,7 @@ describe("resolveMediaList", () => {
       duration_secs: 1.5,
       waveform: "AAAA",
     };
-    fetchRemoteMedia.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
 
     const result = await resolveMediaList(
       asMessage({
@@ -612,7 +629,7 @@ describe("resolveMediaList", () => {
       filename: "photo.png",
       content_type: "image/png",
     };
-    fetchRemoteMedia.mockResolvedValueOnce({
+    readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("image"),
       contentType: "image/png",
     });
@@ -625,7 +642,7 @@ describe("resolveMediaList", () => {
       512,
     );
 
-    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(readRemoteMediaBuffer).toHaveBeenCalledTimes(1);
     expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
     expect(result).toEqual([
       {
@@ -650,7 +667,7 @@ describe("resolveMediaList", () => {
       content_type: "application/pdf",
     };
 
-    fetchRemoteMedia
+    readRemoteMediaBuffer
       .mockResolvedValueOnce({
         buffer: Buffer.from("image"),
         contentType: "image/png",
@@ -688,7 +705,7 @@ describe("resolveMediaList", () => {
       name: "fallback",
       format_type: StickerFormatType.PNG,
     };
-    fetchRemoteMedia.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
 
     const result = await resolveMediaList(
       asMessage({
@@ -707,14 +724,14 @@ describe("resolveMediaList", () => {
     ]);
   });
 
-  it("passes readIdleTimeoutMs to fetchRemoteMedia for attachments", async () => {
+  it("passes readIdleTimeoutMs to readRemoteMediaBuffer for attachments", async () => {
     const attachment = {
       id: "att-timeout",
       url: "https://cdn.discordapp.com/attachments/1/timeout.png",
       filename: "timeout.png",
       content_type: "image/png",
     };
-    fetchRemoteMedia.mockResolvedValueOnce({
+    readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("image"),
       contentType: "image/png",
     });
@@ -734,13 +751,13 @@ describe("resolveMediaList", () => {
     expect(fetchParams().readIdleTimeoutMs).toBe(60_000);
   });
 
-  it("passes readIdleTimeoutMs to fetchRemoteMedia for stickers", async () => {
+  it("passes readIdleTimeoutMs to readRemoteMediaBuffer for stickers", async () => {
     const sticker = {
       id: "sticker-timeout",
       name: "timeout",
       format_type: StickerFormatType.PNG,
     };
-    fetchRemoteMedia.mockResolvedValueOnce({
+    readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("sticker"),
       contentType: "image/png",
     });
@@ -768,7 +785,7 @@ describe("resolveMediaList", () => {
       content_type: "image/png",
     };
     vi.useFakeTimers();
-    fetchRemoteMedia.mockImplementation(
+    readRemoteMediaBuffer.mockImplementation(
       () =>
         new Promise(() => {
           // never resolves
@@ -798,7 +815,7 @@ describe("resolveMediaList", () => {
     }
   });
 
-  it("passes abortSignal to fetchRemoteMedia and falls back when aborted", async () => {
+  it("passes abortSignal to readRemoteMediaBuffer and falls back when aborted", async () => {
     const attachment = {
       id: "att-abort",
       url: "https://cdn.discordapp.com/attachments/1/abort.png",
@@ -806,7 +823,7 @@ describe("resolveMediaList", () => {
       content_type: "image/png",
     };
     const abortController = new AbortController();
-    fetchRemoteMedia.mockImplementationOnce(
+    readRemoteMediaBuffer.mockImplementationOnce(
       (params: { requestInit?: { signal?: AbortSignal } }) =>
         new Promise((_, reject) => {
           const signal = params.requestInit?.signal;
@@ -842,12 +859,12 @@ describe("resolveMediaList", () => {
 
 describe("Discord media SSRF policy", () => {
   beforeEach(() => {
-    fetchRemoteMedia.mockClear();
+    readRemoteMediaBuffer.mockClear();
     saveMediaBuffer.mockClear();
   });
 
   it("passes Discord CDN hostname allowlist with RFC2544 enabled", async () => {
-    fetchRemoteMedia.mockResolvedValueOnce({
+    readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("img"),
       contentType: "image/png",
     });
@@ -867,7 +884,7 @@ describe("Discord media SSRF policy", () => {
   });
 
   it("merges provided ssrfPolicy with Discord CDN defaults", async () => {
-    fetchRemoteMedia.mockResolvedValueOnce({
+    readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("img"),
       contentType: "image/png",
     });

@@ -19,6 +19,7 @@
   "matrix",
   "mattermost",
   "media-generation-runtime-shared",
+  "memory-core",
   "memory-core-engine-runtime",
   "memory-core-host-events",
   "memory-core-host-multimodal",

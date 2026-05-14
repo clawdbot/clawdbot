@@ -1,4 +1,8 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  BROWSER_REQUEST_GATEWAY_METHOD,
+  BROWSER_REQUEST_GATEWAY_SCOPES,
+} from "../browser-gateway-contract.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./core-api.js";
 
 export type BrowserParentOpts = GatewayRpcOpts & {
@@ -44,7 +48,7 @@ export async function callBrowserRequest<T>(
       : undefined;
   const timeout = typeof resolvedTimeout === "number" ? String(resolvedTimeout) : opts.timeout;
   const payload = await callGatewayFromCli(
-    "browser.request",
+    BROWSER_REQUEST_GATEWAY_METHOD,
     { ...opts, timeout },
     {
       method: params.method,
@@ -53,7 +57,7 @@ export async function callBrowserRequest<T>(
       body: params.body,
       timeoutMs: resolvedTimeout,
     },
-    { progress: extra?.progress },
+    { progress: extra?.progress, scopes: [...BROWSER_REQUEST_GATEWAY_SCOPES] },
   );
   if (payload === undefined) {
     throw new Error("Unexpected browser.request response");

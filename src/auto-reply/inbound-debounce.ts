@@ -50,6 +50,7 @@ export type InboundDebounceCreateParams<T> = {
   buildKey: (item: T) => string | null | undefined;
   shouldDebounce?: (item: T) => boolean;
   resolveDebounceMs?: (item: T) => number | undefined;
+  serializeImmediate?: boolean;
   onFlush: (items: T[]) => Promise<void>;
   onError?: (err: unknown, items: T[]) => void;
 };
@@ -92,6 +93,29 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       }
     };
     settled.then(cleanup, cleanup);
+    return next;
+  };
+
+  const runKeyTaskNow = (key: string, task: () => Promise<void>) => {
+    let resolveSettled!: () => void;
+    const settled = new Promise<void>((resolve) => {
+      resolveSettled = resolve;
+    });
+    keyChains.set(key, settled);
+    const cleanup = () => {
+      resolveSettled();
+      if (keyChains.get(key) === settled) {
+        keyChains.delete(key);
+      }
+    };
+    let next: Promise<void>;
+    try {
+      next = task();
+    } catch (err) {
+      cleanup();
+      throw err;
+    }
+    next.then(cleanup, cleanup);
     return next;
   };
 
@@ -186,6 +210,12 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
         }
         if (keyChains.has(key)) {
           await enqueueKeyTask(key, async () => {
+            await runFlush([item]);
+          });
+          return;
+        }
+        if (params.serializeImmediate) {
+          await runKeyTaskNow(key, async () => {
             await runFlush([item]);
           });
           return;

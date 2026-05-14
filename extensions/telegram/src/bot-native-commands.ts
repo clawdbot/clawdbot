@@ -62,6 +62,7 @@ import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
   syncTelegramMenuCommands as syncTelegramMenuCommandsRuntime,
+  type TelegramMenuCommand,
 } from "./bot-native-command-menu.js";
 import { TelegramUpdateKeyContext } from "./bot-updates.js";
 import type { TelegramBotOptions } from "./bot.types.js";
@@ -759,9 +760,9 @@ export const registerTelegramNativeCommands = ({
       return telegramCfg;
     }
   };
-  const allCommandsFull: Array<{ command: string; description: string }> = [
+  const allCommandsFull: TelegramMenuCommand[] = [
     ...nativeCommands
-      .map((command) => {
+      .map((command): TelegramMenuCommand | null => {
         const normalized = normalizeTelegramCommandName(command.name);
         if (!TELEGRAM_COMMAND_NAME_PATTERN.test(normalized)) {
           runtime.error?.(
@@ -771,12 +772,16 @@ export const registerTelegramNativeCommands = ({
           );
           return null;
         }
-        return {
+        const menuCommand: TelegramMenuCommand = {
           command: normalized,
           description: command.description,
         };
+        if (command.descriptionLocalizations) {
+          menuCommand.descriptionLocalizations = command.descriptionLocalizations;
+        }
+        return menuCommand;
       })
-      .filter((cmd): cmd is { command: string; description: string } => cmd !== null),
+      .filter((cmd) => cmd !== null),
     ...(nativeEnabled ? pluginCatalog.commands : []),
     ...customCommands,
   ];

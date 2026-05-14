@@ -5,7 +5,7 @@ export {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-export { replaceConfigFile } from "openclaw/plugin-sdk/config-mutation";
+export { mutateConfigFile, replaceConfigFile } from "openclaw/plugin-sdk/config-mutation";
 export {
   type BrowserConfig,
   type BrowserProfileConfig,

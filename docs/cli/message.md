@@ -284,6 +284,16 @@ openclaw message send --channel telegram --target @mychat --message "Choose:" \
   --presentation '{"blocks":[{"type":"buttons","buttons":[{"label":"Yes","value":"cmd:yes"},{"label":"No","value":"cmd:no"}]}]}'
 ```
 
+Send a Telegram Mini App button through generic presentation:
+
+```
+openclaw message send --channel telegram --target 123456789 --message "Open app:" \
+  --presentation '{"blocks":[{"type":"buttons","buttons":[{"label":"Launch","web_app":{"url":"https://example.com/app"}}]}]}'
+```
+
+Telegram `web_app` buttons are supported only in private chats between a user
+and the bot.
+
 Send a Teams card through generic presentation:
 
 ```bash

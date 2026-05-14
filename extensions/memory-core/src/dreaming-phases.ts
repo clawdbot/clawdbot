@@ -74,7 +74,7 @@ type RunPhaseIfTriggeredParams = {
 const LIGHT_SLEEP_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
 const REM_SLEEP_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
 const MEMORY_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
-const DAILY_MEMORY_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
+const DAILY_MEMORY_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})(?:-[^/]+)?\.md$/i;
 const DAILY_INGESTION_STATE_RELATIVE_PATH = path.join("memory", ".dreams", "daily-ingestion.json");
 const DAILY_INGESTION_SCORE = 0.62;
 const DAILY_INGESTION_MAX_SNIPPET_CHARS = 280;
@@ -385,11 +385,35 @@ type DailyIngestionBatch = {
   results: MemorySearchResult[];
 };
 
+type DailyMemoryFile = {
+  fileName: string;
+  day: string;
+};
+
 type DailyIngestionFileState = {
   mtimeMs: number;
   size: number;
   lastDreamingDayIngested?: string;
 };
+
+function parseDailyMemoryFileName(fileName: string): DailyMemoryFile | null {
+  const match = fileName.match(DAILY_MEMORY_FILENAME_RE);
+  const day = match?.[1];
+  return day ? { fileName, day } : null;
+}
+
+function compareDailyMemoryFilesByNewestDay(left: DailyMemoryFile, right: DailyMemoryFile): number {
+  const dayOrder = right.day.localeCompare(left.day);
+  return dayOrder !== 0 ? dayOrder : left.fileName.localeCompare(right.fileName);
+}
+
+function resolveWorkspaceMemoryRelativePath(workspaceDir: string, filePath: string): string {
+  const relativePath = path.relative(workspaceDir, filePath).replace(/\\/g, "/");
+  if (relativePath && relativePath !== ".." && !relativePath.startsWith("../")) {
+    return relativePath;
+  }
+  return `memory/${path.basename(filePath)}`;
+}
 
 type DailyIngestionState = {
   version: 1;
@@ -1082,18 +1106,17 @@ async function collectDailyIngestionBatches(params: {
   const files = entries
     .filter((entry) => entry.isFile())
     .map((entry) => {
-      const match = entry.name.match(DAILY_MEMORY_FILENAME_RE);
-      if (!match) {
+      const file = parseDailyMemoryFileName(entry.name);
+      if (!file) {
         return null;
       }
-      const day = match[1];
-      if (!isDayWithinLookback(day, cutoffMs)) {
+      if (!isDayWithinLookback(file.day, cutoffMs)) {
         return null;
       }
-      return { fileName: entry.name, day };
+      return file;
     })
-    .filter((entry): entry is { fileName: string; day: string } => entry !== null)
-    .toSorted((a, b) => b.day.localeCompare(a.day));
+    .filter((entry): entry is DailyMemoryFile => entry !== null)
+    .toSorted(compareDailyMemoryFilesByNewestDay);
 
   const batches: DailyIngestionBatch[] = [];
   const nextFiles: Record<string, DailyIngestionFileState> = {};
@@ -1252,15 +1275,21 @@ export async function seedHistoricalDailyMemorySignals(params: {
   const resolved = normalizedPaths
     .map((filePath) => {
       const fileName = path.basename(filePath);
-      const match = fileName.match(DAILY_MEMORY_FILENAME_RE);
-      if (!match) {
-        return { filePath, day: null as string | null };
+      const file = parseDailyMemoryFileName(fileName);
+      if (!file) {
+        return { filePath, fileName, relativePath: "", day: null as string | null };
       }
-      return { filePath, day: match[1] ?? null };
+      return {
+        filePath,
+        fileName,
+        relativePath: resolveWorkspaceMemoryRelativePath(params.workspaceDir, filePath),
+        day: file.day,
+      };
     })
     .toSorted((a, b) => {
       if (a.day && b.day) {
-        return b.day.localeCompare(a.day);
+        const dayOrder = b.day.localeCompare(a.day);
+        return dayOrder !== 0 ? dayOrder : a.fileName.localeCompare(b.fileName);
       }
       if (a.day) {
         return -1;
@@ -1271,8 +1300,9 @@ export async function seedHistoricalDailyMemorySignals(params: {
       return a.filePath.localeCompare(b.filePath);
     });
 
-  const valid = resolved.filter((entry): entry is { filePath: string; day: string } =>
-    Boolean(entry.day),
+  const valid = resolved.filter(
+    (entry): entry is { filePath: string; fileName: string; relativePath: string; day: string } =>
+      Boolean(entry.day),
   );
   const skippedPaths = resolved.filter((entry) => !entry.day).map((entry) => entry.filePath);
   const totalCap = Math.max(20, params.limit * 4);
@@ -1299,7 +1329,7 @@ export async function seedHistoricalDailyMemorySignals(params: {
     const results: MemorySearchResult[] = [];
     for (const chunk of chunks) {
       results.push({
-        path: `memory/${entry.day}.md`,
+        path: entry.relativePath,
         startLine: chunk.startLine,
         endLine: chunk.endLine,
         score: DAILY_INGESTION_SCORE,

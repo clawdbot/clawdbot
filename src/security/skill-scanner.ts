@@ -33,6 +33,7 @@ export type SkillScanOptions = {
   includeNestedNodeModulesTestFiles?: boolean;
   includeNodeModules?: boolean;
   includeFiles?: string[];
+  onlyIncludeFiles?: boolean;
   maxFiles?: number;
   maxFileBytes?: number;
 };
@@ -436,6 +437,7 @@ function normalizeScanOptions(opts?: SkillScanOptions): Required<SkillScanOption
     includeNestedNodeModulesTestFiles: opts?.includeNestedNodeModulesTestFiles ?? false,
     includeNodeModules: opts?.includeNodeModules ?? false,
     includeFiles: opts?.includeFiles ?? [],
+    onlyIncludeFiles: opts?.onlyIncludeFiles ?? false,
     maxFiles: Math.max(1, opts?.maxFiles ?? DEFAULT_MAX_SCAN_FILES),
     maxFileBytes: Math.max(1, opts?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES),
   };
@@ -594,6 +596,12 @@ async function collectScannableFiles(
     rootDir: dirPath,
     includeFiles: opts.includeFiles,
   });
+  if (opts.onlyIncludeFiles) {
+    return {
+      files: forcedFiles.slice(0, opts.maxFiles),
+      truncated: forcedFiles.length > opts.maxFiles,
+    };
+  }
   if (forcedFiles.length > opts.maxFiles) {
     return { files: forcedFiles.slice(0, opts.maxFiles), truncated: true };
   }

@@ -30,6 +30,7 @@ import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
 import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
 import { renderChatRunControls } from "../chat/run-controls.ts";
+import type { ChatRunUiStatus } from "../chat/run-lifecycle.ts";
 import { getOrCreateSessionCacheValue } from "../chat/session-cache.ts";
 import { renderSideResult } from "../chat/side-result-render.ts";
 import type { ChatSideResult } from "../chat/side-result.ts";
@@ -41,7 +42,11 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../chat/slash-commands.ts";
-import { renderCompactionIndicator, renderFallbackIndicator } from "../chat/status-indicators.ts";
+import {
+  renderChatRunStatusIndicator,
+  renderCompactionIndicator,
+  renderFallbackIndicator,
+} from "../chat/status-indicators.ts";
 import { getExpandedToolCards, syncToolCardExpansionState } from "../chat/tool-expansion-state.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
@@ -62,6 +67,7 @@ export type ChatProps = {
   loading: boolean;
   sending: boolean;
   canAbort?: boolean;
+  runStatus?: ChatRunUiStatus | null;
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   messages: unknown[];
@@ -910,6 +916,7 @@ export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
+  const composerRunStatus = canAbort ? { phase: "in-progress" as const } : props.runStatus;
   const compactBusy =
     props.compactionStatus?.phase === "active" || props.compactionStatus?.phase === "retrying";
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
@@ -1449,6 +1456,7 @@ export function renderChat(props: ChatProps) {
                 `
               : nothing}
             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
+            ${renderChatRunStatusIndicator(composerRunStatus)}
           </div>
 
           ${renderChatRunControls({

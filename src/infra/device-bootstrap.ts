@@ -288,6 +288,36 @@ export async function revokeDeviceBootstrapToken(params: {
   });
 }
 
+export async function revokeDeviceBootstrapTokensForDevice(params: {
+  deviceId: string;
+  publicKey: string;
+  baseDir?: string;
+}): Promise<{ removed: number }> {
+  return await withLock(async () => {
+    const deviceId = params.deviceId.trim();
+    const publicKey = normalizeBootstrapPublicKey(params.publicKey);
+    if (!deviceId || !publicKey) {
+      return { removed: 0 };
+    }
+    const state = await loadState(params.baseDir);
+    let removed = 0;
+    for (const [tokenKey, record] of Object.entries(state)) {
+      const recordPublicKey =
+        typeof record.publicKey === "string"
+          ? normalizeBootstrapPublicKey(record.publicKey)
+          : undefined;
+      if (record.deviceId?.trim() === deviceId && recordPublicKey === publicKey) {
+        delete state[tokenKey];
+        removed += 1;
+      }
+    }
+    if (removed > 0) {
+      await persistState(state, params.baseDir);
+    }
+    return { removed };
+  });
+}
+
 export async function restoreDeviceBootstrapToken(params: {
   record: DeviceBootstrapTokenRecord;
   baseDir?: string;

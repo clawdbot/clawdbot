@@ -309,7 +309,7 @@ export function isProtectedSessionMaintenanceEntry(
   return chatType === "group" || chatType === "channel" || chatType === "thread";
 }
 
-function shouldPreserveMaintenanceEntry(params: {
+export function shouldPreserveMaintenanceEntry(params: {
   key: string;
   entry: SessionEntry | undefined;
   preserveKeys?: ReadonlySet<string>;

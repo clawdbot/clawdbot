@@ -1,8 +1,11 @@
 {
   "name": "@openclaw/anthropic-vertex-provider",
   "version": "2026.5.12-beta.1",
-  "private": true,
   "description": "OpenClaw Anthropic Vertex provider plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
     "@anthropic-ai/vertex-sdk": "0.16.0",
@@ -15,6 +18,22 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "install": {
+      "npmSpec": "@openclaw/anthropic-vertex-provider",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.5.12-beta.1"
+    },
+    "compat": {
+      "pluginApi": ">=2026.5.12-beta.1"
+    },
+    "build": {
+      "openclawVersion": "2026.5.12-beta.1",
+      "bundledDist": false
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
   }
 }

@@ -18,7 +18,9 @@ function createNodeSession(): NodeSession {
     nodeId: "node-1",
     connId: "conn-1",
     client: {} as NodeSession["client"],
+    declaredCaps: [],
     caps: [],
+    declaredCommands: ["demo.read"],
     commands: ["demo.read"],
     connectedAtMs: 0,
   };

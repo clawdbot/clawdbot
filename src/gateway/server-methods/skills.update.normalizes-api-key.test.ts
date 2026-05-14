@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import { REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
 
 let writtenConfig: unknown = null;
@@ -17,6 +18,31 @@ vi.mock("../../config/config.js", () => {
     },
     replaceConfigFile: async ({ nextConfig }: { nextConfig: unknown }) => {
       writtenConfig = nextConfig;
+    },
+    mutateConfigFileWithRetry: async (params: {
+      mutate: (
+        draft: OpenClawConfig,
+        context: { snapshot: { path: string }; previousHash: string; attempt: number },
+      ) => unknown;
+    }) => {
+      const draft = structuredClone(loadedConfig) as OpenClawConfig;
+      const snapshot = { path: "/tmp/openclaw/config.json" };
+      const result = await params.mutate(draft, {
+        snapshot,
+        previousHash: "test-hash",
+        attempt: 0,
+      });
+      writtenConfig = draft;
+      return {
+        path: snapshot.path,
+        previousHash: "test-hash",
+        snapshot,
+        nextConfig: draft,
+        result,
+        attempts: 1,
+        afterWrite: { mode: "auto" },
+        followUp: { action: "none" },
+      };
     },
   };
 });

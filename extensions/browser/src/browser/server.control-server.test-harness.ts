@@ -423,7 +423,29 @@ vi.mock("../config/config.js", async () => {
       },
     };
   };
-  const writeConfigFile = vi.fn(async () => {});
+  const writeConfigFile = vi.fn(async (_cfg?: ReturnType<typeof loadConfig>) => {});
+  const mutateConfigFile = vi.fn(
+    async (params: {
+      mutate: (
+        draft: ReturnType<typeof loadConfig>,
+        context: { snapshot: { path: string } },
+      ) => unknown;
+    }) => {
+      const draft = structuredClone(loadConfig());
+      const result = await params.mutate(draft, { snapshot: { path: "/tmp/openclaw.json" } });
+      await writeConfigFile(draft);
+      return {
+        path: "/tmp/openclaw.json",
+        previousHash: "test-hash",
+        snapshot: { path: "/tmp/openclaw.json" },
+        nextConfig: draft,
+        result,
+        attempts: 1,
+        afterWrite: { mode: "auto" },
+        followUp: { action: "none" },
+      };
+    },
+  );
   return {
     ...actual,
     createConfigIO: vi.fn(() => ({
@@ -434,6 +456,7 @@ vi.mock("../config/config.js", async () => {
     getRuntimeConfigSnapshot: vi.fn(() => null),
     loadConfig,
     writeConfigFile,
+    mutateConfigFile,
   };
 });
 

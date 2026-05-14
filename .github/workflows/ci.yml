@@ -1398,6 +1398,7 @@ jobs:
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
+              pnpm deps:patches:check
               ;;
             prod-types)
               pnpm tsgo:prod

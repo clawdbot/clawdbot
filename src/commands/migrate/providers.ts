@@ -9,8 +9,10 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { buildMigrationContext } from "./context.js";
 import type { MigrateCommonOptions } from "./types.js";
 
-export function resolveMigrationProvider(providerId: string): MigrationProviderPlugin {
-  const config = getRuntimeConfig();
+export function resolveMigrationProvider(
+  providerId: string,
+  config = getRuntimeConfig(),
+): MigrationProviderPlugin {
   ensureStandaloneMigrationProviderRegistryLoaded({ cfg: config });
   const provider = resolvePluginMigrationProvider({ providerId, cfg: config });
   if (!provider) {
@@ -27,10 +29,14 @@ export function resolveMigrationProvider(providerId: string): MigrationProviderP
 export function buildMigrationProviderOptions(
   opts: MigrateCommonOptions,
 ): Record<string, unknown> | undefined {
+  const options: Record<string, unknown> = {};
   if (opts.provider === "codex" && opts.verifyPluginApps === true) {
-    return { verifyPluginApps: true };
+    options.verifyPluginApps = true;
   }
-  return undefined;
+  if (opts.provider === "codex" && opts.configPatchMode) {
+    options.configPatchMode = opts.configPatchMode;
+  }
+  return Object.keys(options).length > 0 ? options : undefined;
 }
 
 export async function createMigrationPlan(
@@ -40,11 +46,12 @@ export async function createMigrationPlan(
   if (opts.verifyPluginApps && opts.provider !== "codex") {
     throw new Error("--verify-plugin-apps is only supported for Codex migrations.");
   }
-  const provider = resolveMigrationProvider(opts.provider);
+  const provider = resolveMigrationProvider(opts.provider, opts.configOverride);
   const ctx = buildMigrationContext({
     source: opts.source,
     includeSecrets: opts.includeSecrets,
     overwrite: opts.overwrite,
+    configOverride: opts.configOverride,
     providerOptions: buildMigrationProviderOptions(opts),
     runtime,
     json: opts.json,

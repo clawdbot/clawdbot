@@ -71,6 +71,44 @@ describe("normalizeToolParameterSchema", () => {
     expect(normalizeToolParameterSchema(schema)).toEqual(schema);
   });
 
+  it("adds permissive items schemas to arrays missing items", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        properties: {
+          entity_hints: { type: "array", description: "Optional entity hints" },
+          nested: {
+            type: "object",
+            properties: {
+              ids: { type: "array" },
+            },
+          },
+          alternatives: {
+            anyOf: [{ type: "array" }, { type: "string" }],
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        entity_hints: {
+          type: "array",
+          description: "Optional entity hints",
+          items: {},
+        },
+        nested: {
+          type: "object",
+          properties: {
+            ids: { type: "array", items: {} },
+          },
+        },
+        alternatives: {
+          anyOf: [{ type: "array", items: {} }, { type: "string" }],
+        },
+      },
+    });
+  });
+
   it("inlines local $ref before removing unsupported keywords", () => {
     const cleaned = cleanToolSchemaForGemini({
       type: "object",

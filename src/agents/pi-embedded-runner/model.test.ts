@@ -1,8 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  replaceRuntimeAuthProfileStoreSnapshots,
+} from "../auth-profiles.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
+import { resetModelDiscoveryCacheForTest } from "./model-discovery-cache.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
 const resolveBundledStaticCatalogModelMock = vi.hoisted(() => vi.fn());
+const resolveRuntimeSyntheticAuthProviderRefsMock = vi.hoisted(() => vi.fn((): string[] => []));
+const resolveRuntimeExternalAuthProviderRefsMock = vi.hoisted(() => vi.fn((): string[] => []));
 
 vi.mock("../model-suppression.js", () => {
   // Mirrors the canonical manifest-driven suppression in
@@ -142,6 +152,11 @@ vi.mock("../pi-model-discovery.js", () => ({
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
 }));
 
+vi.mock("../../plugins/synthetic-auth.runtime.js", () => ({
+  resolveRuntimeSyntheticAuthProviderRefs: resolveRuntimeSyntheticAuthProviderRefsMock,
+  resolveRuntimeExternalAuthProviderRefs: resolveRuntimeExternalAuthProviderRefsMock,
+}));
+
 vi.mock("./model.static-catalog.js", () => ({
   resolveBundledStaticCatalogModel: resolveBundledStaticCatalogModelMock,
 }));
@@ -180,14 +195,24 @@ import {
 } from "./model.test-harness.js";
 
 beforeEach(() => {
+  clearRuntimeAuthProfileStoreSnapshots();
+  resetModelDiscoveryCacheForTest();
   resetMockDiscoverModels(discoverModels);
   vi.mocked(discoverModels).mockClear();
   vi.mocked(discoverAuthStorage).mockClear();
+  resolveRuntimeSyntheticAuthProviderRefsMock.mockReset();
+  resolveRuntimeSyntheticAuthProviderRefsMock.mockReturnValue([]);
+  resolveRuntimeExternalAuthProviderRefsMock.mockReset();
+  resolveRuntimeExternalAuthProviderRefsMock.mockReturnValue([]);
   mockGetOpenRouterModelCapabilities.mockReset();
   mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
   mockLoadOpenRouterModelCapabilities.mockReset();
   mockLoadOpenRouterModelCapabilities.mockResolvedValue();
   resolveBundledStaticCatalogModelMock.mockReset();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 function createRuntimeHooks() {
@@ -272,6 +297,160 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0): Record<stri
 }
 
 describe("resolveModel", () => {
+  it("reuses PI discovery stores while the agent model files are unchanged", async () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai",
+      modelId: "gpt-5.5",
+      templateModel: {
+        provider: "openai",
+        ...makeModel("gpt-5.5"),
+      },
+    });
+
+    const first = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", undefined, {
+      runtimeHooks: createRuntimeHooks(),
+    });
+    const second = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", undefined, {
+      runtimeHooks: createRuntimeHooks(),
+    });
+
+    expectResolvedModel(first);
+    expectResolvedModel(second);
+    expect(discoverAuthStorage).toHaveBeenCalledTimes(1);
+    expect(discoverModels).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates PI discovery stores when inherited default auth changes", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-cache-"));
+    const agentDir = path.join(rootDir, "agent");
+    const defaultAgentDir = path.join(rootDir, "default-agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(defaultAgentDir, { recursive: true });
+    const cfg = {
+      agents: {
+        list: [
+          { id: "main", default: true, agentDir: defaultAgentDir },
+          { id: "worker", agentDir },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai",
+      modelId: "gpt-5.5",
+      templateModel: {
+        provider: "openai",
+        ...makeModel("gpt-5.5"),
+      },
+    });
+
+    const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, {
+      runtimeHooks: createRuntimeHooks(),
+    });
+    fs.writeFileSync(
+      path.join(defaultAgentDir, "auth-profiles.json"),
+      JSON.stringify({ version: 1, profiles: { openai: { type: "api_key", key: "one" } } }),
+    );
+    const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, cfg, {
+      runtimeHooks: createRuntimeHooks(),
+    });
+
+    expectResolvedModel(first);
+    expectResolvedModel(second);
+    expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
+    expect(discoverModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates PI discovery stores when implicit main auth changes without config", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-cache-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", rootDir);
+    const agentDir = path.join(rootDir, "agents", "worker", "agent");
+    const mainAgentDir = path.join(rootDir, "agents", "main", "agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(mainAgentDir, { recursive: true });
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai",
+      modelId: "gpt-5.5",
+      templateModel: {
+        provider: "openai",
+        ...makeModel("gpt-5.5"),
+      },
+    });
+
+    const first = await resolveModelAsync("openai", "gpt-5.5", agentDir, undefined, {
+      runtimeHooks: createRuntimeHooks(),
+    });
+    fs.writeFileSync(
+      path.join(mainAgentDir, "auth-profiles.json"),
+      JSON.stringify({ version: 1, profiles: { openai: { type: "api_key", key: "one" } } }),
+    );
+    const second = await resolveModelAsync("openai", "gpt-5.5", agentDir, undefined, {
+      runtimeHooks: createRuntimeHooks(),
+    });
+
+    expectResolvedModel(first);
+    expectResolvedModel(second);
+    expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
+    expect(discoverModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache PI discovery stores while runtime auth snapshots are active", async () => {
+    replaceRuntimeAuthProfileStoreSnapshots([
+      {
+        store: {
+          version: 1,
+          profiles: {
+            openai: { type: "api_key", key: "one" },
+          },
+        } as never,
+      },
+    ]);
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai",
+      modelId: "gpt-5.5",
+      templateModel: {
+        provider: "openai",
+        ...makeModel("gpt-5.5"),
+      },
+    });
+
+    const first = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", undefined, {
+      runtimeHooks: createRuntimeHooks(),
+    });
+    const second = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", undefined, {
+      runtimeHooks: createRuntimeHooks(),
+    });
+
+    expectResolvedModel(first);
+    expectResolvedModel(second);
+    expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
+    expect(discoverModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache PI discovery stores while plugin auth overlays are active", async () => {
+    resolveRuntimeSyntheticAuthProviderRefsMock.mockReturnValue(["runtime-provider"]);
+    resolveRuntimeExternalAuthProviderRefsMock.mockReturnValue(["external-provider"]);
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai",
+      modelId: "gpt-5.5",
+      templateModel: {
+        provider: "openai",
+        ...makeModel("gpt-5.5"),
+      },
+    });
+
+    const first = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", undefined, {
+      runtimeHooks: createRuntimeHooks(),
+    });
+    const second = await resolveModelAsync("openai", "gpt-5.5", "/tmp/agent", undefined, {
+      runtimeHooks: createRuntimeHooks(),
+    });
+
+    expectResolvedModel(first);
+    expectResolvedModel(second);
+    expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
+    expect(discoverModels).toHaveBeenCalledTimes(2);
+  });
+
   it("skips PI auth and model discovery during dynamic model resolution", async () => {
     const result = await resolveModelAsync(
       "openrouter",

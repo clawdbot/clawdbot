@@ -427,6 +427,7 @@ jobs:
               add_profile_suite live-cli-backend-docker "stable full"
               add_profile_suite live-acp-bind-docker "stable full"
               add_profile_suite live-codex-harness-docker "stable full"
+              add_profile_suite live-subagent-announce-docker "stable full"
 
               add_profile_suite native-live-extensions-a-k "full"
               add_profile_suite native-live-extensions-media-audio "full"
@@ -2289,6 +2290,12 @@ jobs:
             label: Docker live Codex harness
             command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh
             timeout_minutes: 40
+            profile_env_only: false
+            profiles: stable full
+          - suite_id: live-subagent-announce-docker
+            label: Docker live subagent announce
+            command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 20m bash .release-harness/scripts/test-live-subagent-announce-docker.sh
+            timeout_minutes: 25
             profile_env_only: false
             profiles: stable full
     env:

@@ -4,6 +4,7 @@ import {
   hasReplyContent,
   hasReplyPayloadContent,
   normalizeInteractiveReply,
+  normalizeMessagePresentation,
   presentationToInteractiveControlsReply,
   presentationToInteractiveReply,
   renderMessagePresentationFallbackText,
@@ -129,6 +130,38 @@ describe("interactive payload helpers", () => {
     });
     expect(renderMessagePresentationFallbackText({ presentation })).toBe(
       "- Docs: https://example.com/docs",
+    );
+  });
+
+  it("preserves web app presentation buttons for channel-native renderers", () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [{ label: "Launch", web_app: { url: "https://example.com/app" } }],
+        },
+      ],
+    };
+    const normalized = normalizeMessagePresentation(presentation);
+
+    expect(normalized).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Launch", webApp: { url: "https://example.com/app" } }],
+        },
+      ],
+    });
+    expect(presentationToInteractiveReply(normalized!)).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Launch", webApp: { url: "https://example.com/app" } }],
+        },
+      ],
+    });
+    expect(renderMessagePresentationFallbackText({ presentation: normalized })).toBe(
+      "- Launch: https://example.com/app",
     );
   });
 

@@ -166,8 +166,12 @@ import {
   TickEventSchema,
 } from "./frames.js";
 import {
+  ChatAbortedEventSchema,
   ChatAbortParamsSchema,
+  ChatDeltaEventSchema,
+  ChatErrorEventSchema,
   ChatEventSchema,
+  ChatFinalEventSchema,
   ChatHistoryParamsSchema,
   ChatInjectParamsSchema,
   ChatSendParamsSchema,
@@ -493,6 +497,10 @@ export const ProtocolSchemas = {
   ChatSendParams: ChatSendParamsSchema,
   ChatAbortParams: ChatAbortParamsSchema,
   ChatInjectParams: ChatInjectParamsSchema,
+  ChatDeltaEvent: ChatDeltaEventSchema,
+  ChatFinalEvent: ChatFinalEventSchema,
+  ChatAbortedEvent: ChatAbortedEventSchema,
+  ChatErrorEvent: ChatErrorEventSchema,
   ChatEvent: ChatEventSchema,
   UpdateStatusParams: UpdateStatusParamsSchema,
   UpdateRunParams: UpdateRunParamsSchema,

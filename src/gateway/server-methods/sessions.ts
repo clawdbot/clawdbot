@@ -398,6 +398,87 @@ function cloneCheckpointSessionEntry(params: {
   };
 }
 
+function isAgentMainSessionKey(cfg: OpenClawConfig, sessionKey: string): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return false;
+  }
+  return sessionKey === resolveAgentMainSessionKey({ cfg, agentId: parsed.agentId });
+}
+
+async function createAgentMainSessionForSend(params: {
+  req: GatewayRequestHandlerOptions["req"];
+  canonicalKey: string;
+  context: GatewayRequestContext;
+  client: GatewayClient | null;
+  isWebchatConnect: GatewayRequestHandlerOptions["isWebchatConnect"];
+}): Promise<
+  | {
+      ok: true;
+      entry: SessionEntry;
+      canonicalKey: string;
+      storePath: string;
+    }
+  | { ok: false; error: ReturnType<typeof errorShape> }
+> {
+  const agentId = parseAgentSessionKey(params.canonicalKey)?.agentId;
+  if (!agentId) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${params.canonicalKey}`),
+    };
+  }
+
+  let createResult:
+    | { ok: boolean; payload?: { key?: string }; error?: ReturnType<typeof errorShape> }
+    | undefined;
+  await sessionsHandlers["sessions.create"]({
+    req: params.req,
+    params: {
+      key: params.canonicalKey,
+      agentId,
+    },
+    respond: (ok, payload, error) => {
+      createResult = {
+        ok,
+        payload: payload && typeof payload === "object" ? (payload as { key?: string }) : undefined,
+        error,
+      };
+    },
+    context: params.context,
+    client: params.client,
+    isWebchatConnect: params.isWebchatConnect,
+  });
+
+  if (!createResult) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.UNAVAILABLE, "sessions.create did not respond"),
+    };
+  }
+  if (!createResult.ok) {
+    return {
+      ok: false,
+      error: createResult.error ?? errorShape(ErrorCodes.UNAVAILABLE, "failed to create session"),
+    };
+  }
+
+  const createdKey = normalizeOptionalString(createResult.payload?.key) ?? params.canonicalKey;
+  const loaded = loadSessionEntry(createdKey);
+  if (!loaded.entry?.sessionId) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.UNAVAILABLE, `session not created: ${createdKey}`),
+    };
+  }
+  return {
+    ok: true,
+    entry: loaded.entry,
+    canonicalKey: loaded.canonicalKey,
+    storePath: loaded.storePath,
+  };
+}
+
 function ensureSessionTranscriptFile(params: {
   sessionId: string;
   storePath: string;
@@ -581,7 +662,9 @@ async function handleSessionSend(params: {
   if (!key) {
     return;
   }
-  const { cfg, entry, canonicalKey, storePath } = loadSessionEntry(key);
+  const loaded = loadSessionEntry(key);
+  const { cfg } = loaded;
+  let { entry, canonicalKey, storePath } = loaded;
   // Reject sends/steers targeting sessions whose owning agent was deleted (#65524).
   const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, canonicalKey);
   if (deletedAgentId !== null) {
@@ -594,6 +677,22 @@ async function handleSessionSend(params: {
       ),
     );
     return;
+  }
+  if (!entry?.sessionId && !params.interruptIfActive && isAgentMainSessionKey(cfg, canonicalKey)) {
+    const created = await createAgentMainSessionForSend({
+      req: params.req,
+      canonicalKey,
+      context: params.context,
+      client: params.client,
+      isWebchatConnect: params.isWebchatConnect,
+    });
+    if (!created.ok) {
+      params.respond(false, undefined, created.error);
+      return;
+    }
+    entry = created.entry;
+    canonicalKey = created.canonicalKey;
+    storePath = created.storePath;
   }
   if (!entry?.sessionId) {
     params.respond(
@@ -1718,6 +1817,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       provider: resolvedDisplayModel.provider,
       model: resolvedDisplayModel.model,
       sessionKey: target.canonicalKey ?? key,
+      acpRuntime: applied.entry?.acp != null,
+      acpBackend: applied.entry?.acp?.backend,
     });
     const result: SessionsPatchResult = {
       ok: true,

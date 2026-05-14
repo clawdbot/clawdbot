@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { getGoogleChatAccessToken } from "./auth.js";
@@ -108,30 +109,14 @@ async function fetchBuffer(
           throw new Error(`Google Chat media exceeds max bytes (${maxBytes})`);
         }
       }
-      if (!maxBytes || !res.body) {
+      if (!maxBytes) {
         const buffer = Buffer.from(await res.arrayBuffer());
         const contentType = res.headers.get("content-type") ?? undefined;
         return { buffer, contentType };
       }
-      const reader = res.body.getReader();
-      const chunks: Buffer[] = [];
-      let total = 0;
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
-        if (!value) {
-          continue;
-        }
-        total += value.length;
-        if (total > maxBytes) {
-          await reader.cancel();
-          throw new Error(`Google Chat media exceeds max bytes (${maxBytes})`);
-        }
-        chunks.push(Buffer.from(value));
-      }
-      const buffer = Buffer.concat(chunks, total);
+      const buffer = await readResponseWithLimit(res, maxBytes, {
+        onOverflow: () => new Error(`Google Chat media exceeds max bytes (${maxBytes})`),
+      });
       const contentType = res.headers.get("content-type") ?? undefined;
       return { buffer, contentType };
     },

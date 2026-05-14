@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: codex-review [options]
+
+Options:
+  --mode auto|local|branch   Target selection. Default: auto.
+  --base REF                 Base ref for branch review. Default: PR base or origin/main.
+  --codex-bin PATH           Codex binary. Default: codex.
+  --output FILE              Also save output to file.
+  --parallel-tests CMD       Run review and test command concurrently.
+  --dry-run                  Print selected commands, do not run.
+  -h, --help                 Show help.
+
+Modes:
+  local   codex review --uncommitted
+  branch  codex review --base <base>
+  auto    dirty tree -> local, else PR/current branch -> branch
+EOF
+}
+
+mode=auto
+base_ref=
+codex_bin=${CODEX_BIN:-codex}
+output=${CODEX_REVIEW_OUTPUT:-}
+parallel_tests=
+dry_run=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --mode)
+      mode=${2:-}
+      shift 2
+      ;;
+    --base)
+      base_ref=${2:-}
+      shift 2
+      ;;
+    --codex-bin)
+      codex_bin=${2:-}
+      shift 2
+      ;;
+    --output)
+      output=${2:-}
+      shift 2
+      ;;
+    --parallel-tests)
+      parallel_tests=${2:-}
+      shift 2
+      ;;
+    --dry-run)
+      dry_run=true
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+case "$mode" in
+  auto|local|branch) ;;
+  *)
+    echo "invalid --mode: $mode" >&2
+    exit 2
+    ;;
+esac
+
+git rev-parse --show-toplevel >/dev/null
+
+current_branch=$(git branch --show-current 2>/dev/null || true)
+dirty=false
+if [[ -n "$(git status --porcelain)" ]]; then
+  dirty=true
+fi
+
+pr_url=
+if [[ -z "$base_ref" && "$mode" != local ]] && command -v gh >/dev/null 2>&1; then
+  if pr_lines=$(gh pr view --json baseRefName,url --jq '[.baseRefName, .url] | @tsv' 2>/dev/null); then
+    base_name=${pr_lines%%$'\t'*}
+    pr_url=${pr_lines#*$'\t'}
+    if [[ -n "$base_name" ]]; then
+      base_ref="origin/$base_name"
+    fi
+  fi
+fi
+
+if [[ -z "$base_ref" ]]; then
+  base_ref=origin/main
+fi
+
+review_kind=
+if [[ "$mode" == local || ( "$mode" == auto && "$dirty" == true ) ]]; then
+  review_kind=local
+elif [[ "$mode" == branch || ( "$mode" == auto && -n "$current_branch" && "$current_branch" != "main" ) ]]; then
+  review_kind=branch
+else
+  echo "no review target: clean main checkout and no forced mode" >&2
+  exit 1
+fi
+
+if [[ "$review_kind" == local ]]; then
+  review_cmd=("$codex_bin" review --uncommitted)
+else
+  review_cmd=("$codex_bin" review --base "$base_ref")
+fi
+
+printf 'codex-review target: %s\n' "$review_kind"
+printf 'branch: %s\n' "${current_branch:-detached}"
+if [[ -n "$pr_url" ]]; then
+  printf 'pr: %s\n' "$pr_url"
+fi
+printf 'review:'
+printf ' %q' "${review_cmd[@]}"
+printf '\n'
+if [[ -n "$parallel_tests" ]]; then
+  printf 'tests: %s\n' "$parallel_tests"
+fi
+if [[ "$review_kind" == branch ]]; then
+  printf 'fetch: git fetch origin --quiet\n'
+fi
+if [[ -n "$output" ]]; then
+  printf 'output: %s\n' "$output"
+fi
+
+if [[ "$dry_run" == true ]]; then
+  exit 0
+fi
+
+if [[ "$review_kind" == branch ]]; then
+  git fetch origin --quiet || {
+    echo "warning: git fetch origin failed; reviewing with existing refs" >&2
+  }
+fi
+
+run_review() {
+  if [[ -n "$output" ]]; then
+    mkdir -p "$(dirname "$output")"
+    "${review_cmd[@]}" 2>&1 | tee "$output"
+  else
+    "${review_cmd[@]}"
+  fi
+}
+
+if [[ -z "$parallel_tests" ]]; then
+  run_review
+  exit $?
+fi
+
+review_status_file=$(mktemp)
+tests_status_file=$(mktemp)
+
+(
+  set +e
+  run_review
+  status=$?
+  printf '%s\n' "$status" > "$review_status_file"
+) &
+review_pid=$!
+
+(
+  set +e
+  bash -lc "$parallel_tests"
+  status=$?
+  printf '%s\n' "$status" > "$tests_status_file"
+) &
+tests_pid=$!
+
+wait "$review_pid" || true
+wait "$tests_pid" || true
+
+review_status=$(cat "$review_status_file")
+tests_status=$(cat "$tests_status_file")
+rm -f "$review_status_file" "$tests_status_file"
+
+printf 'codex-review exit: %s\n' "$review_status"
+printf 'tests exit: %s\n' "$tests_status"
+
+if [[ "$review_status" != 0 || "$tests_status" != 0 ]]; then
+  exit 1
+fi

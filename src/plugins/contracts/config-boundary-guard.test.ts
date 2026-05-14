@@ -120,4 +120,22 @@ describe("config boundary guard", () => {
 
     expect(collectDeprecatedInternalConfigApiViolations({ repoRoot })).toStrictEqual([]);
   });
+
+  it("flags low-level config mutation imports in semantic handlers", () => {
+    const repoRoot = makeRepoFixture();
+    writeFixture(
+      repoRoot,
+      "src/gateway/server-methods/agents.ts",
+      'import { mutateConfigFileWithRetry } from "../../config/config.js";\n',
+    );
+    writeFixture(
+      repoRoot,
+      "src/gateway/server-methods/agents-config-mutations.ts",
+      'import { mutateConfigFileWithRetry } from "../../config/config.js";\n',
+    );
+
+    expect(collectDeprecatedInternalConfigApiViolations({ repoRoot })).toEqual([
+      "src/gateway/server-methods/agents.ts:1 use the local domain config mutation helper instead of direct config writes",
+    ]);
+  });
 });

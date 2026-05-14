@@ -148,6 +148,18 @@ observation-only.
 - `cron_changed` - observe gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled)
 - **`before_install`** - inspect skill or plugin install scans and optionally block
 
+## Debug runtime hooks
+
+Use `before_model_resolve` when a plugin needs to switch the provider or model
+for an agent turn. It runs before model resolution; `llm_output` only runs after
+a model attempt produces assistant output.
+
+For proof of the effective session model, inspect runtime registrations, then
+use `openclaw sessions` or the Gateway session/status surfaces. When debugging
+provider payloads, start the Gateway with `--raw-stream` and
+`--raw-stream-path <path>`; those flags write raw model stream events to a jsonl
+file.
+
 ## Tool call policy
 
 `before_tool_call` receives:
@@ -184,7 +196,7 @@ type BeforeToolCallResult = {
 };
 ```
 
-Rules:
+Hook guard behavior for typed lifecycle hooks:
 
 - `block: true` is terminal and skips lower-priority handlers.
 - `block: false` is treated as no decision.

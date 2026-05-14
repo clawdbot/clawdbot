@@ -455,9 +455,6 @@ const QueueModeSchema = z.union([
   z.literal("steer"),
   z.literal("followup"),
   z.literal("collect"),
-  z.literal("steer-backlog"),
-  z.literal("steer+backlog"),
-  z.literal("queue"),
   z.literal("interrupt"),
 ]);
 const QueueDropSchema = z.union([z.literal("old"), z.literal("new"), z.literal("summarize")]);

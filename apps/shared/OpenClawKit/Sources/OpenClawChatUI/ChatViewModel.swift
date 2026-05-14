@@ -17,6 +17,7 @@ private let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawC
 // swiftlint:disable:next type_body_length
 public final class OpenClawChatViewModel {
     public static let defaultModelSelectionID = "__default__"
+    private static let maxAttachmentBytes = 5_000_000
 
     public private(set) var messages: [OpenClawChatMessage] = []
     public var input: String = ""
@@ -1298,11 +1299,6 @@ public final class OpenClawChatViewModel {
     }
 
     private func addImageAttachment(url: URL?, data: Data, fileName: String, mimeType: String) async {
-        if data.count > 5_000_000 {
-            self.errorText = "Attachment \(fileName) exceeds 5 MB limit"
-            return
-        }
-
         let uti: UTType = {
             if let url {
                 return UTType(filenameExtension: url.pathExtension) ?? .data
@@ -1314,13 +1310,33 @@ public final class OpenClawChatViewModel {
             return
         }
 
-        let preview = Self.previewImage(data: data)
+        let processed: Data
+        do {
+            processed = try await Task.detached(priority: .userInitiated) {
+                try ChatImageProcessor.processForUpload(data: data)
+            }.value
+        } catch {
+            self.errorText = "Could not process \(fileName): \(error.localizedDescription)"
+            return
+        }
+
+        if processed.count > Self.maxAttachmentBytes {
+            self.errorText = "Attachment \(fileName) exceeds 5 MB limit after resizing"
+            return
+        }
+
+        let outputFileName: String = {
+            let baseName = (fileName as NSString).deletingPathExtension
+            return baseName.isEmpty ? "image.jpg" : "\(baseName).jpg"
+        }()
+
+        let preview = Self.previewImage(data: processed)
         self.attachments.append(
             OpenClawPendingAttachment(
                 url: url,
-                data: data,
-                fileName: fileName,
-                mimeType: mimeType,
+                data: processed,
+                fileName: outputFileName,
+                mimeType: "image/jpeg",
                 preview: preview))
     }
 

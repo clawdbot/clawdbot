@@ -31,6 +31,7 @@ describe("sendMessageIMessage receipts", () => {
 
     expect(result.messageId).toBe("p:0/imsg-1");
     expect(result.sentText).toBe("hello");
+    expect(result.echoText).toBe("hello");
     expect(result.receipt.primaryPlatformMessageId).toBe("p:0/imsg-1");
     expect(result.receipt.platformMessageIds).toEqual(["p:0/imsg-1"]);
     expect(result.receipt.replyToId).toBe("reply-1");
@@ -70,9 +71,19 @@ describe("sendMessageIMessage receipts", () => {
     });
 
     expect(result.messageId).toBe("12345");
-    expect(result.sentText).toBe("<media:image>");
+    expect(result.sentText).toBe("");
+    expect(result.echoText).toBe("<media:image>");
     expect(result.receipt.primaryPlatformMessageId).toBe("12345");
     expect(result.receipt.platformMessageIds).toEqual(["12345"]);
+    expect(client.request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        chat_guid: "chat-1",
+        file: "/tmp/image.png",
+        text: "",
+      }),
+      expect.any(Object),
+    );
     expect(result.receipt.raw).toEqual([
       {
         channel: "imessage",
@@ -95,6 +106,26 @@ describe("sendMessageIMessage receipts", () => {
       },
     ]);
     expect(result.receipt.sentAt).toBeGreaterThan(0);
+  });
+
+  it("preserves literal media placeholder text when no attachment is sent", async () => {
+    const client = createClient({ guid: "p:0/imsg-text" });
+
+    const result = await sendMessageIMessage("chat_id:42", "literal <media:image> text", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+    });
+
+    expect(result.sentText).toBe("literal <media:image> text");
+    expect(result.echoText).toBe("literal <media:image> text");
+    expect(client.request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        chat_id: 42,
+        text: "literal <media:image> text",
+      }),
+      expect.any(Object),
+    );
   });
 
   it("does not treat compatibility ok responses as visible platform ids", async () => {

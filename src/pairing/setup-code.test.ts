@@ -91,8 +91,8 @@ describe("pairing setup code", () => {
     expect(issueDeviceBootstrapTokenMock).toHaveBeenCalledWith({
       baseDir: undefined,
       profile: {
-        roles: ["node", "operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        roles: ["node"],
+        scopes: [],
       },
     });
     if (params.url) {

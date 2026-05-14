@@ -12,7 +12,7 @@ Adds Anthropic Vertex model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/anthropic-vertex-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub
 
 ## Surface
 

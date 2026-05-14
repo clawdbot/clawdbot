@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import SwiftUI
 
 struct GatewayOnboardingView: View {

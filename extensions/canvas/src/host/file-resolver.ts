@@ -9,11 +9,46 @@ export function normalizeUrlPath(rawPath: string): string {
   return normalized.startsWith("/") ? normalized : `/${normalized}`;
 }
 
+function pathEscapesRoot(decodedPath: string): boolean {
+  let depth = 0;
+  for (const segment of decodedPath.split("/")) {
+    if (segment === "" || segment === ".") {
+      continue;
+    }
+    if (segment === "..") {
+      if (depth === 0) {
+        return true;
+      }
+      depth--;
+      continue;
+    }
+    depth++;
+  }
+  return false;
+}
+
+function tryNormalizeUrlPath(rawPath: string): string | null {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(rawPath || "/");
+  } catch {
+    return null;
+  }
+  if (pathEscapesRoot(decoded)) {
+    return null;
+  }
+  const normalized = path.posix.normalize(decoded);
+  return normalized.startsWith("/") ? normalized : `/${normalized}`;
+}
+
 export async function resolveFileWithinRoot(
   rootReal: string,
   urlPath: string,
 ): Promise<CanvasOpenResult | null> {
-  const normalized = normalizeUrlPath(urlPath);
+  const normalized = tryNormalizeUrlPath(urlPath);
+  if (normalized === null) {
+    return null;
+  }
   const rel = normalized.replace(/^\/+/, "");
   if (rel.split("/").some((p) => p === "..")) {
     return null;

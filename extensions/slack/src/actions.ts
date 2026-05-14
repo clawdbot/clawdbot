@@ -2,6 +2,7 @@ import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { z } from "zod";
 import { resolveSlackAccount } from "./accounts.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient, getSlackWriteClient } from "./client.js";
@@ -75,6 +76,42 @@ function normalizeEmoji(raw: string) {
     throw new Error("Emoji is required for Slack reactions");
   }
   return trimmed.replace(/^:+|:+$/g, "");
+}
+
+const SLACK_TIMESTAMP_RE = /^\d+(?:\.\d+)?$/;
+const ISO_8601_TIMESTAMP_SCHEMA = z.iso.datetime({ offset: true });
+
+function formatEpochSeconds(milliseconds: number): string {
+  const seconds = milliseconds / 1000;
+  if (Number.isInteger(seconds)) {
+    return String(seconds);
+  }
+  return seconds.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function normalizeSlackReadTimestamp(
+  raw: string | undefined,
+  field: "before" | "after",
+): string | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (SLACK_TIMESTAMP_RE.test(trimmed)) {
+    return trimmed;
+  }
+  if (!ISO_8601_TIMESTAMP_SCHEMA.safeParse(trimmed).success) {
+    throw new Error(
+      `Invalid Slack read ${field} timestamp "${trimmed}": expected a Slack timestamp or ISO-8601 date string`,
+    );
+  }
+  const parsed = Date.parse(trimmed);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(
+      `Invalid Slack read ${field} timestamp "${trimmed}": expected a Slack timestamp or ISO-8601 date string`,
+    );
+  }
+  return formatEpochSeconds(parsed);
 }
 
 function hasSlackPlatformError(err: unknown, code: string): boolean {
@@ -268,7 +305,6 @@ export async function readSlackMessages(
     messageId?: string;
   } = {},
 ): Promise<{ messages: SlackMessageSummary[]; hasMore: boolean }> {
-  const client = await getClient(opts);
   const exactMessageId = opts.messageId?.trim();
   const readLimit = exactMessageId ? 1 : opts.limit;
   const exactBounds = exactMessageId
@@ -278,9 +314,10 @@ export async function readSlackMessages(
         oldest: undefined,
       }
     : {
-        latest: opts.before,
-        oldest: opts.after,
+        latest: normalizeSlackReadTimestamp(opts.before, "before"),
+        oldest: normalizeSlackReadTimestamp(opts.after, "after"),
       };
+  const client = await getClient(opts);
 
   // Use conversations.replies for thread messages, conversations.history for channel messages.
   if (opts.threadId) {

@@ -3,10 +3,10 @@ import os from "node:os";
 import type { RawData, WebSocket } from "ws";
 import { getRuntimeConfig } from "../../../config/io.js";
 import {
-  getBoundDeviceBootstrapProfile,
   getDeviceBootstrapTokenProfile,
   redeemDeviceBootstrapTokenProfile,
   revokeDeviceBootstrapToken,
+  restoreDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
 } from "../../../infra/device-bootstrap.js";
 import {
@@ -14,7 +14,6 @@ import {
   normalizeDevicePublicKeyBase64Url,
 } from "../../../infra/device-identity.js";
 import {
-  approveBootstrapDevicePairing,
   approveDevicePairing,
   ensureDeviceToken,
   getPairedDevice,
@@ -42,10 +41,6 @@ import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
-import {
-  resolveBootstrapProfileScopesForRole,
-  type DeviceBootstrapProfile,
-} from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isBrowserOperatorUiClient,
@@ -900,9 +895,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           authMethod === "bootstrap-token" && bootstrapTokenCandidate
             ? await getDeviceBootstrapTokenProfile({ token: bootstrapTokenCandidate })
             : null;
-        let boundBootstrapProfile: DeviceBootstrapProfile | null = null;
-        let handoffBootstrapProfile: DeviceBootstrapProfile | null = null;
-
         const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({
           isControlUi,
           role,
@@ -997,21 +989,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 allowedScopes: pairedScopes,
               });
             };
-            if (
-              boundBootstrapProfile === null &&
-              authMethod === "bootstrap-token" &&
-              reason === "not-paired" &&
-              role === "node" &&
-              scopes.length === 0 &&
-              !existingPairedDevice &&
-              bootstrapTokenCandidate
-            ) {
-              boundBootstrapProfile = await getBoundDeviceBootstrapProfile({
-                token: bootstrapTokenCandidate,
-                deviceId: device.id,
-                publicKey: devicePublicKey,
-              });
-            }
             const allowSilentExistingNonOperatorPairing = !(
               existingPairedDevice && role !== "operator"
             );
@@ -1039,30 +1016,14 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 autoApproveCidrs: configSnapshot.gateway?.nodes?.pairing?.autoApproveCidrs,
               },
             );
-            const allowSilentBootstrapPairing =
-              authMethod === "bootstrap-token" &&
-              reason === "not-paired" &&
-              role === "node" &&
-              scopes.length === 0 &&
-              !existingPairedDevice &&
-              boundBootstrapProfile !== null;
-            const bootstrapProfileForSilentApproval = allowSilentBootstrapPairing
-              ? boundBootstrapProfile
-              : null;
-            const bootstrapPairingRoles = bootstrapProfileForSilentApproval
-              ? Array.from(new Set([role, ...bootstrapProfileForSilentApproval.roles]))
-              : undefined;
             const pairing = await requestDevicePairing({
               deviceId: device.id,
               publicKey: devicePublicKey,
               ...clientPairingMetadata,
-              ...(bootstrapPairingRoles ? { roles: bootstrapPairingRoles } : {}),
               silent:
                 reason === "scope-upgrade"
                   ? false
-                  : allowSilentLocalPairing ||
-                    allowSilentBootstrapPairing ||
-                    allowSilentTrustedCidrsNodePairing,
+                  : allowSilentLocalPairing || allowSilentTrustedCidrsNodePairing,
             });
             const context = buildRequestContext();
             let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
@@ -1083,18 +1044,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               return replacementPending?.requestId;
             };
             if (pairing.request.silent === true) {
-              approved = bootstrapProfileForSilentApproval
-                ? await approveBootstrapDevicePairing(
-                    pairing.request.requestId,
-                    bootstrapProfileForSilentApproval,
-                  )
-                : await approveDevicePairing(pairing.request.requestId, {
-                    callerScopes: scopes,
-                  });
+              approved = await approveDevicePairing(pairing.request.requestId, {
+                callerScopes: scopes,
+              });
               if (approved?.status === "approved") {
-                if (bootstrapProfileForSilentApproval) {
-                  handoffBootstrapProfile = bootstrapProfileForSilentApproval;
-                }
                 logGateway.info(
                   `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
                 );
@@ -1143,9 +1096,22 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                     ? existingPairedDevice.scopes
                     : []
                 : [];
+              const retryAfterBootstrapPairingApproval =
+                authMethod === "bootstrap-token" &&
+                reason === "not-paired" &&
+                role === "node" &&
+                scopes.length === 0 &&
+                !existingPairedDevice;
               const pairingErrorDetails = buildPairingConnectErrorDetails({
                 reason,
                 requestId: recoveryRequestId,
+                ...(retryAfterBootstrapPairingApproval
+                  ? {
+                      recommendedNextStep: "wait_then_retry",
+                      retryable: true,
+                      pauseReconnect: false,
+                    }
+                  : {}),
                 deviceId: device.id,
                 requestedRole: role,
                 requestedScopes: scopes,
@@ -1285,54 +1251,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           }
         }
 
+        const shouldIssueDeviceToken = !trustedProxyAuthOk;
         const deviceToken =
-          device && hasServerApprovedDeviceTokenBaseline
+          shouldIssueDeviceToken && device && hasServerApprovedDeviceTokenBaseline
             ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
             : null;
-        const bootstrapDeviceTokens: Array<{
-          deviceToken: string;
-          role: string;
-          scopes: string[];
-          issuedAtMs: number;
-        }> = [];
-        if (deviceToken) {
-          bootstrapDeviceTokens.push({
-            deviceToken: deviceToken.token,
-            role: deviceToken.role,
-            scopes: deviceToken.scopes,
-            issuedAtMs: deviceToken.rotatedAtMs ?? deviceToken.createdAtMs,
-          });
-        }
-        if (device && handoffBootstrapProfile) {
-          const bootstrapProfileForHello = handoffBootstrapProfile as DeviceBootstrapProfile;
-          for (const bootstrapRole of bootstrapProfileForHello.roles) {
-            if (bootstrapDeviceTokens.some((entry) => entry.role === bootstrapRole)) {
-              continue;
-            }
-            const bootstrapRoleScopes =
-              bootstrapRole === "operator"
-                ? resolveBootstrapProfileScopesForRole(
-                    bootstrapRole,
-                    bootstrapProfileForHello.scopes,
-                  )
-                : [];
-            const extraToken = await ensureDeviceToken({
-              deviceId: device.id,
-              role: bootstrapRole,
-              scopes: bootstrapRoleScopes,
-            });
-            if (!extraToken) {
-              continue;
-            }
-            bootstrapDeviceTokens.push({
-              deviceToken: extraToken.token,
-              role: extraToken.role,
-              scopes: extraToken.scopes,
-              issuedAtMs: extraToken.rotatedAtMs ?? extraToken.createdAtMs,
-            });
-          }
-        }
-
         if (role === "node") {
           const reconciliation = await reconcileNodePairingOnConnect({
             cfg: getRuntimeConfig(),
@@ -1360,6 +1283,14 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               dropIfSlow: true,
             });
           }
+          const nodeConnectParams = connectParams as ConnectParams & {
+            declaredCaps?: string[];
+            declaredCommands?: string[];
+            declaredPermissions?: Record<string, boolean>;
+          };
+          nodeConnectParams.declaredCaps = reconciliation.declaredCaps;
+          nodeConnectParams.declaredCommands = reconciliation.declaredCommands;
+          nodeConnectParams.declaredPermissions = reconciliation.declaredPermissions;
           connectParams.caps = reconciliation.effectiveCaps;
           connectParams.commands = reconciliation.effectiveCommands;
           connectParams.permissions = reconciliation.effectivePermissions;
@@ -1560,9 +1491,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               ? {
                   deviceToken: deviceToken.token,
                   issuedAtMs: deviceToken.rotatedAtMs ?? deviceToken.createdAtMs,
-                  ...(bootstrapDeviceTokens.length > 1
-                    ? { deviceTokens: bootstrapDeviceTokens.slice(1) }
-                    : {}),
                 }
               : {}),
           },
@@ -1573,25 +1501,12 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           },
         };
 
-        try {
-          await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
-        } catch (err) {
-          setCloseCause("hello-send-failed", { error: formatForLog(err) });
-          close();
-          return;
-        }
+        let revokedBootstrapTokenRecord:
+          | Awaited<ReturnType<typeof revokeDeviceBootstrapToken>>["record"]
+          | undefined;
         if (authMethod === "bootstrap-token" && bootstrapTokenCandidate && device) {
           try {
-            if (handoffBootstrapProfile) {
-              const revoked = await revokeDeviceBootstrapToken({
-                token: bootstrapTokenCandidate,
-              });
-              if (!revoked.removed) {
-                logGateway.warn(
-                  `bootstrap token revoke skipped after device-token handoff device=${device.id}`,
-                );
-              }
-            } else if (issuedBootstrapProfile) {
+            if (issuedBootstrapProfile) {
               const redemption = await redeemDeviceBootstrapTokenProfile({
                 token: bootstrapTokenCandidate,
                 role,
@@ -1605,6 +1520,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   logGateway.warn(
                     `bootstrap token revoke skipped after profile redemption device=${device.id}`,
                   );
+                } else {
+                  revokedBootstrapTokenRecord = revoked.record;
                 }
               }
             }
@@ -1613,6 +1530,22 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               `bootstrap token post-connect bookkeeping failed device=${device.id}: ${formatForLog(err)}`,
             );
           }
+        }
+        try {
+          await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
+        } catch (err) {
+          if (revokedBootstrapTokenRecord) {
+            try {
+              await restoreDeviceBootstrapToken({ record: revokedBootstrapTokenRecord });
+            } catch (restoreErr) {
+              logGateway.warn(
+                `bootstrap token restore after hello-send failure failed device=${device?.id ?? "unknown"}: ${formatForLog(restoreErr)}`,
+              );
+            }
+          }
+          setCloseCause("hello-send-failed", { error: formatForLog(err) });
+          close();
+          return;
         }
         logWs("out", "hello-ok", {
           connId,

@@ -20,20 +20,13 @@ export type MattermostMediaInfo = {
 const CHANNEL_CACHE_TTL_MS = 5 * 60_000;
 const USER_CACHE_TTL_MS = 10 * 60_000;
 
-type FetchRemoteMedia = (params: {
+type SaveRemoteMedia = (params: {
   url: string;
   requestInit?: RequestInit;
   filePathHint?: string;
   maxBytes: number;
   ssrfPolicy?: { allowedHostnames?: string[] };
-}) => Promise<{ buffer: Uint8Array; contentType?: string | null }>;
-
-type SaveMediaBuffer = (
-  buffer: Uint8Array,
-  contentType: string | undefined,
-  direction: "inbound" | "outbound",
-  maxBytes: number,
-) => Promise<{ path: string; contentType?: string | null }>;
+}) => Promise<{ path: string; contentType?: string | null }>;
 
 export function createMattermostMonitorResources(params: {
   accountId: string;
@@ -41,8 +34,7 @@ export function createMattermostMonitorResources(params: {
   client: MattermostClient;
   logger: { debug?: (...args: unknown[]) => void };
   mediaMaxBytes: number;
-  fetchRemoteMedia: FetchRemoteMedia;
-  saveMediaBuffer: SaveMediaBuffer;
+  saveRemoteMedia: SaveRemoteMedia;
   mediaKindFromMime: (contentType?: string) => MattermostMediaKind | null | undefined;
 }) {
   const {
@@ -51,8 +43,7 @@ export function createMattermostMonitorResources(params: {
     client,
     logger,
     mediaMaxBytes,
-    fetchRemoteMedia,
-    saveMediaBuffer,
+    saveRemoteMedia,
     mediaKindFromMime,
   } = params;
   const channelCache = new Map<string, { value: MattermostChannel | null; expiresAt: number }>();
@@ -68,7 +59,7 @@ export function createMattermostMonitorResources(params: {
     const out: MattermostMediaInfo[] = [];
     for (const fileId of ids) {
       try {
-        const fetched = await fetchRemoteMedia({
+        const saved = await saveRemoteMedia({
           url: `${client.apiBaseUrl}/files/${fileId}`,
           requestInit: {
             headers: {
@@ -79,13 +70,7 @@ export function createMattermostMonitorResources(params: {
           maxBytes: mediaMaxBytes,
           ssrfPolicy: { allowedHostnames: [new URL(client.baseUrl).hostname] },
         });
-        const saved = await saveMediaBuffer(
-          Buffer.from(fetched.buffer),
-          fetched.contentType ?? undefined,
-          "inbound",
-          mediaMaxBytes,
-        );
-        const contentType = saved.contentType ?? fetched.contentType ?? undefined;
+        const contentType = saved.contentType ?? undefined;
         out.push({
           path: saved.path,
           contentType,

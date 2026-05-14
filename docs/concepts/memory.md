@@ -16,8 +16,11 @@ Your agent has three memory-related files:
 
 - **`MEMORY.md`** — long-term memory. Durable facts, preferences, and
   decisions. Loaded at the start of every DM session.
-- **`memory/YYYY-MM-DD.md`** — daily notes. Running context and observations.
-  Today and yesterday's notes are loaded automatically.
+- **`memory/YYYY-MM-DD.md`** (or **`memory/YYYY-MM-DD-<slug>.md`**) — daily notes.
+  Running context and observations. Today and yesterday's notes are loaded
+  automatically, and slugged variants such as those written by the bundled
+  session-memory hook on `/new` or `/reset` are now picked up alongside the
+  date-only file.
 - **`DREAMS.md`** (optional) — Dream Diary and dreaming sweep
   summaries for human review, including grounded historical backfill entries.
 

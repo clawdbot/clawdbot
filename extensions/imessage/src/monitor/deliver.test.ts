@@ -237,11 +237,12 @@ describe("deliverReplies", () => {
     });
   });
 
-  it("records the actual sent placeholder for media-only replies", async () => {
+  it("records the internal echo key for media-only replies", async () => {
     const remember = vi.fn();
     sendMessageIMessageMock.mockResolvedValueOnce({
       messageId: "imsg-media-1",
-      sentText: "<media:image>",
+      sentText: "",
+      echoText: "<media:image>",
     });
 
     await deliverReplies({

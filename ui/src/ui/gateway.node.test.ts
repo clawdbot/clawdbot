@@ -903,6 +903,44 @@ describe("GatewayBrowserClient", () => {
     vi.useRealTimers();
   });
 
+  it("keeps reconnecting on PAIRING_REQUIRED when retry hints keep reconnect active", async () => {
+    useNodeFakeTimers();
+    localStorage.clear();
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "setup-token",
+    });
+
+    const { ws: ws1, connectFrame: connect } = await startConnect(client);
+
+    ws1.emitMessage({
+      type: "res",
+      id: connect.id,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "unauthorized",
+        details: {
+          code: "PAIRING_REQUIRED",
+          reason: "not-paired",
+          recommendedNextStep: "wait_then_retry",
+          pauseReconnect: false,
+        },
+      },
+    });
+    await expectSocketClosed(ws1);
+    ws1.emitClose(4008, "connect failed");
+
+    await vi.advanceTimersByTimeAsync(799);
+    expect(wsInstances).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(wsInstances).toHaveLength(2);
+
+    client.stop();
+    vi.useRealTimers();
+  });
+
   it("clears stale stored device tokens and does not reconnect on AUTH_DEVICE_TOKEN_MISMATCH", async () => {
     useNodeFakeTimers();
 

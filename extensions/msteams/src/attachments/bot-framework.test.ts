@@ -50,7 +50,30 @@ function installRuntime(): MockRuntime {
           });
           return { path: state.savePath, contentType: state.savedContentType };
         },
-        fetchRemoteMedia: async () => ({ buffer: Buffer.alloc(0), contentType: undefined }),
+        readRemoteMediaBuffer: async () => ({ buffer: Buffer.alloc(0), contentType: undefined }),
+        saveRemoteMedia: async () => ({
+          path: state.savePath,
+          contentType: state.savedContentType,
+        }),
+        saveResponseMedia: async (
+          response: Response,
+          options: {
+            fallbackContentType?: string;
+            subdir?: string;
+            maxBytes?: number;
+            originalFilename?: string;
+          },
+        ) => {
+          const buffer = Buffer.from(await response.arrayBuffer());
+          state.saveCalls.push({
+            buffer,
+            contentType: options.fallbackContentType,
+            direction: options.subdir ?? "inbound",
+            maxBytes: options.maxBytes ?? 0,
+            originalFilename: options.originalFilename,
+          });
+          return { path: state.savePath, contentType: state.savedContentType };
+        },
       },
     },
   } as unknown as Parameters<typeof setMSTeamsRuntime>[0]);

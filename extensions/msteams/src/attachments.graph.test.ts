@@ -18,13 +18,21 @@ const CONTENT_TYPE_APPLICATION_PDF = "application/pdf";
 const PNG_BUFFER = Buffer.from("png");
 
 const detectMimeMock = vi.fn(async () => CONTENT_TYPE_IMAGE_PNG);
-const saveMediaBufferMock = vi.fn(async () => ({
-  id: "saved.png",
-  path: "/tmp/saved.png",
-  size: Buffer.byteLength(PNG_BUFFER),
-  contentType: CONTENT_TYPE_IMAGE_PNG,
-}));
-const fetchRemoteMediaMock = vi.fn(
+const saveMediaBufferMock = vi.fn(
+  async (
+    _buffer: Buffer,
+    contentType?: string,
+    _subdir?: string,
+    _maxBytes?: number,
+    _originalFilename?: string,
+  ) => ({
+    id: "saved.png",
+    path: "/tmp/saved.png",
+    size: Buffer.byteLength(PNG_BUFFER),
+    contentType: contentType ?? CONTENT_TYPE_IMAGE_PNG,
+  }),
+);
+const readRemoteMediaBufferMock = vi.fn(
   async (params: {
     url: string;
     maxBytes?: number;
@@ -36,6 +44,43 @@ const fetchRemoteMediaMock = vi.fn(
     return readRemoteMediaResponse(res, params);
   },
 );
+const saveRemoteMediaMock = vi.fn(
+  async (params: {
+    url: string;
+    maxBytes?: number;
+    filePathHint?: string;
+    fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  }) => {
+    const fetched = await readRemoteMediaBufferMock(params);
+    return await saveMediaBufferMock(
+      fetched.buffer,
+      fetched.contentType,
+      "inbound",
+      params.maxBytes,
+      params.filePathHint,
+    );
+  },
+);
+const saveResponseMediaMock = vi.fn(
+  async (
+    res: Response,
+    options: {
+      maxBytes?: number;
+      fallbackContentType?: string;
+      subdir?: string;
+      originalFilename?: string;
+    },
+  ) => {
+    const buffer = Buffer.from(await res.arrayBuffer());
+    return await saveMediaBufferMock(
+      buffer,
+      options.fallbackContentType,
+      options.subdir ?? "inbound",
+      options.maxBytes,
+      options.originalFilename,
+    );
+  },
+);
 
 const runtimeStub = {
   media: {
@@ -43,7 +88,9 @@ const runtimeStub = {
   },
   channel: {
     media: {
-      fetchRemoteMedia: fetchRemoteMediaMock,
+      readRemoteMediaBuffer: readRemoteMediaBufferMock,
+      saveRemoteMedia: saveRemoteMediaMock,
+      saveResponseMedia: saveResponseMediaMock,
       saveMediaBuffer: saveMediaBufferMock,
     },
   },
@@ -222,6 +269,18 @@ const GRAPH_MEDIA_SUCCESS_CASES: GraphMediaSuccessCase[] = [
       expectMediaBufferSaved();
     },
   }),
+  withLabel("streams hostedContent value responses through shared response saver", {
+    buildOptions: () => ({
+      hostedContents: [{ id: "hosted-1", contentType: CONTENT_TYPE_APPLICATION_PDF }],
+      onUnhandled: (url) =>
+        url.endsWith("/hostedContents/hosted-1/$value") ? createPdfResponse() : undefined,
+    }),
+    expectedLength: 1,
+    assert: () => {
+      expect(saveResponseMediaMock).toHaveBeenCalledTimes(1);
+      expectMediaBufferSaved();
+    },
+  }),
   withLabel("merges SharePoint reference attachments with hosted content", {
     buildOptions: () => {
       return {
@@ -242,7 +301,9 @@ describe("msteams graph attachments", () => {
     ssrfMock?.mockRestore();
     ssrfMock = mockPinnedHostnameResolution();
     detectMimeMock.mockClear();
-    fetchRemoteMediaMock.mockClear();
+    readRemoteMediaBufferMock.mockClear();
+    saveRemoteMediaMock.mockClear();
+    saveResponseMediaMock.mockClear();
     saveMediaBufferMock.mockClear();
     setMSTeamsRuntime(runtimeStub);
   });

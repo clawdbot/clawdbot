@@ -185,6 +185,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Independent dispatch gate for ACP session turns (default: true). Set false to keep ACP commands available while blocking ACP turn execution.",
   "acp.backend":
     "Default ACP runtime backend id (for example: acpx). Must match a registered ACP runtime plugin backend.",
+  "acp.fallbacks":
+    "Ordered list of fallback ACP backend ids tried when the primary backend fails with UNAVAILABLE (for example: rate-limit / quota exhausted). Each entry must match a registered ACP runtime plugin backend.",
   "acp.defaultAgent":
     "Fallback ACP target agent id used when ACP spawns do not specify an explicit target.",
   "acp.allowedAgents":
@@ -1001,8 +1003,8 @@ export const FIELD_HELP: Record<string, string> = {
   "models.providers.*.models[].agentRuntime.id":
     'Model agent runtime id: "pi", "auto", a registered plugin harness id such as "codex", or a supported CLI backend alias such as "claude-cli".',
   auth: "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
-  "channels.matrix.allowBots":
-    'Allow messages from other configured Matrix bot accounts to trigger replies (default: false). Set "mentions" to only accept bot messages that visibly mention this bot.',
+  "channels.googlechat.botLoopProtection":
+    "Sliding-window guard for accepted Google Chat bot-to-bot loops. Defaults to the shared bot loop protection budget when allowBots lets bot-authored messages reach dispatch.",
   "channels.mattermost.botToken":
     "Bot token from Mattermost System Console -> Integrations -> Bot Accounts.",
   "channels.mattermost.baseUrl":
@@ -1759,13 +1761,13 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.groupChat.visibleReplies":
     'Overrides visible source replies for group/channel conversations. Defaults to "message_tool" when no global visible reply policy is set. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
   "messages.queue":
-    "Inbound message queue strategy for messages that arrive while a session run is active. Default mode is steer, with followup fallback when steering is unavailable.",
+    "Queue strategy for inbound messages that arrive while a session run is active. Use this to tune steering, deferred followups, batching, or interruption.",
   "messages.queue.mode":
-    'Queue behavior mode. Use "steer" to inject all queued steering messages at the next model boundary; "queue" is legacy one-at-a-time steering; "followup" runs later; "collect" batches later; "steer-backlog" (alias "steer+backlog") does both; "interrupt" aborts the active run.',
+    'Queue mode for active runs. Use "steer" to inject prompts into the active run, "followup" to run later, "collect" to batch compatible messages later, or "interrupt" to abort the active run before starting the newest prompt.',
   "messages.queue.byChannel":
-    "Per-channel queue mode overrides keyed by provider id (for example telegram, discord, slack). Use this when one channel’s traffic pattern needs different queue behavior than global defaults.",
+    "Per-channel queue mode overrides keyed by provider id (for example telegram, discord, slack). Use this when one channel's traffic pattern needs different behavior than global defaults.",
   "messages.queue.debounceMs":
-    "Global followup queue debounce window in milliseconds before draining buffered inbound messages. Default is 500ms; higher values coalesce bursts, lower values reduce latency.",
+    "Global fallback followup queue debounce window in milliseconds before draining buffered inbound messages. Default is 500ms; higher values coalesce bursts, lower values reduce latency.",
   "messages.queue.debounceMsByChannel":
     "Per-channel debounce overrides for queue behavior keyed by provider id. Use this to tune burst handling independently for chat surfaces with different pacing.",
   "messages.queue.cap":
@@ -1814,6 +1816,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Shows degraded/error heartbeat alerts when true so operator channels surface problems promptly. Keep enabled in production so broken channel states are visible.",
   "channels.defaults.heartbeat.useIndicator":
     "Enables concise indicator-style heartbeat rendering instead of verbose status text where supported. Use indicator mode for dense dashboards with many active channels.",
+  "channels.defaults.botLoopProtection":
+    "Default pair loop protection settings for channel providers that support bot-to-bot loop guards. Use provider-specific overrides only when one channel needs a different budget.",
+  "channels.defaults.botLoopProtection.enabled":
+    "Enables pair loop protection by default for supporting channels when bot-authored messages can reach dispatch. Providers may still disable the guard when bots are ignored.",
+  "channels.defaults.botLoopProtection.maxEventsPerWindow":
+    "Maximum events a sender/receiver pair may exchange within the configured window before suppression starts. Default for supporting channels is 20.",
+  "channels.defaults.botLoopProtection.windowSeconds":
+    "Sliding window length in seconds for pair loop budgets. Default for supporting channels is 60.",
+  "channels.defaults.botLoopProtection.cooldownSeconds":
+    "Cooldown seconds applied to a pair after it exceeds the loop budget. Default for supporting channels is 60.",
   "agents.defaults.heartbeat.includeSystemPromptSection":
     "Includes the default agent's ## Heartbeats system prompt section when true. Turn this off to keep heartbeat runtime behavior while omitting the heartbeat prompt instructions from the agent system prompt.",
   "agents.list.*.heartbeat.includeSystemPromptSection":

@@ -56,6 +56,19 @@ export type ReplyPayloadMetadata = {
    * assistant source replies are message-tool-only; sendPolicy deny still wins.
    */
   deliverDespiteSourceReplySuppression?: boolean;
+  /**
+   * A message-tool reply to the active internal UI source. The final payload is
+   * still the live delivery vehicle; this mirror makes the reply durable for
+   * chat.history and page reloads without turning the internal UI into an
+   * outbound channel.
+   */
+  sourceReplyTranscriptMirror?: {
+    sessionKey: string;
+    agentId?: string;
+    text?: string;
+    mediaUrls?: string[];
+    idempotencyKey?: string;
+  };
   beforeAgentRunBlocked?: boolean;
 };
 

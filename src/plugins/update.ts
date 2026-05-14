@@ -20,11 +20,7 @@ import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveBundledPluginSources } from "./bundled-sources.js";
 import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
-import {
-  CLAWHUB_INSTALL_ERROR_CODE,
-  installPluginFromClawHub,
-  type ClawHubRiskAcknowledgementRequest,
-} from "./clawhub.js";
+import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "./clawhub.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import {
   getExternalizedBundledPluginLegacyPathSuffix,
@@ -52,6 +48,7 @@ import {
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
+import { defaultSlotIdForKey } from "./slots.js";
 
 export type PluginUpdateLogger = {
   info?: (message: string) => void;
@@ -764,14 +761,52 @@ function createPluginUpdateIntegrityDriftHandler(params: {
   };
 }
 
+function removeDisabledPluginIdFromList(
+  list: string[] | undefined,
+  pluginId: string,
+): string[] | undefined {
+  if (!Array.isArray(list) || !list.includes(pluginId)) {
+    return list;
+  }
+  const next = list.filter((id) => id !== pluginId);
+  return next.length > 0 ? next : undefined;
+}
+
+function resetDisabledPluginSlots(
+  slots: NonNullable<OpenClawConfig["plugins"]>["slots"] | undefined,
+  pluginId: string,
+): NonNullable<OpenClawConfig["plugins"]>["slots"] | undefined {
+  if (!slots) {
+    return slots;
+  }
+  let next = slots;
+  if (next.memory === pluginId) {
+    next = {
+      ...next,
+      memory: defaultSlotIdForKey("memory"),
+    };
+  }
+  if (next.contextEngine === pluginId) {
+    next = {
+      ...next,
+      contextEngine: defaultSlotIdForKey("contextEngine"),
+    };
+  }
+  return next;
+}
+
 function disablePluginConfigEntry(config: OpenClawConfig, pluginId: string): OpenClawConfig {
-  const existingEntry = config.plugins?.entries?.[pluginId];
+  const pluginsConfig = config.plugins ?? {};
+  const existingEntry = pluginsConfig.entries?.[pluginId];
   return {
     ...config,
     plugins: {
-      ...config.plugins,
+      ...pluginsConfig,
+      allow: removeDisabledPluginIdFromList(pluginsConfig.allow, pluginId),
+      deny: removeDisabledPluginIdFromList(pluginsConfig.deny, pluginId),
+      slots: resetDisabledPluginSlots(pluginsConfig.slots, pluginId),
       entries: {
-        ...config.plugins?.entries,
+        ...pluginsConfig.entries,
         [pluginId]: {
           ...existingEntry,
           enabled: false,
@@ -852,8 +887,6 @@ export async function updateNpmInstalledPlugins(params: {
   dangerouslyForceUnsafeInstall?: boolean;
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
-  acknowledgeClawHubRisk?: boolean;
-  onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
 }): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
   const installs = params.config.plugins?.installs ?? {};
@@ -871,10 +904,6 @@ export async function updateNpmInstalledPlugins(params: {
   ): Promise<Awaited<ReturnType<typeof installPluginFromNpmSpec>>> => {
     ranNpmInstaller = true;
     return await installPluginFromNpmSpec(installParams);
-  };
-  const clawHubRiskAcknowledgementOptions = {
-    ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-    ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
   };
 
   const recordFailure = (pluginId: string, message: string) => {
@@ -1155,7 +1184,6 @@ export async function updateNpmInstalledPlugins(params: {
                   dryRun: true,
                   dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                   expectedPluginId: pluginId,
-                  ...clawHubRiskAcknowledgementOptions,
                   logger,
                 })
               : record.source === "git"
@@ -1243,7 +1271,6 @@ export async function updateNpmInstalledPlugins(params: {
           dryRun: true,
           dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
           expectedPluginId: pluginId,
-          ...clawHubRiskAcknowledgementOptions,
           logger,
         });
       }
@@ -1357,7 +1384,6 @@ export async function updateNpmInstalledPlugins(params: {
                 timeoutMs: params.timeoutMs,
                 dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                 expectedPluginId: pluginId,
-                ...clawHubRiskAcknowledgementOptions,
                 logger,
               })
             : record.source === "git"
@@ -1441,7 +1467,6 @@ export async function updateNpmInstalledPlugins(params: {
         timeoutMs: params.timeoutMs,
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         expectedPluginId: pluginId,
-        ...clawHubRiskAcknowledgementOptions,
         logger,
       });
     }
@@ -1583,8 +1608,6 @@ export async function syncPluginsForUpdateChannel(params: {
   env?: NodeJS.ProcessEnv;
   logger?: PluginUpdateLogger;
   externalizedBundledPluginBridges?: readonly ExternalizedBundledPluginBridge[];
-  acknowledgeClawHubRisk?: boolean;
-  onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
 }): Promise<PluginChannelSyncResult> {
   const env = params.env ?? process.env;
   const logger = params.logger ?? {};
@@ -1604,10 +1627,6 @@ export async function syncPluginsForUpdateChannel(params: {
   const loadHelpers = buildLoadPathHelpers(next.plugins?.load?.paths ?? [], env);
   let installs = next.plugins?.installs ?? {};
   let changed = false;
-  const clawHubRiskAcknowledgementOptions = {
-    ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-    ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
-  };
 
   if (params.channel === "dev") {
     for (const [pluginId, record] of Object.entries(installs)) {
@@ -1720,7 +1739,6 @@ export async function syncPluginsForUpdateChannel(params: {
           ...(bridge.clawhubUrl ? { baseUrl: bridge.clawhubUrl } : {}),
           mode: "update",
           expectedPluginId: targetPluginId,
-          ...clawHubRiskAcknowledgementOptions,
           logger,
         });
         if (!result.ok && npmSpec && shouldFallbackClawHubBridgeToNpm(result)) {

@@ -8,7 +8,9 @@ function registryWith(nodes: Array<Partial<NodeSession>>): NodeRegistry {
       nodes.map((node, index) => ({
         nodeId: `node-${index}`,
         connId: `conn-${index}`,
+        declaredCaps: [],
         caps: [],
+        declaredCommands: [],
         commands: [],
         connectedAtMs: 0,
         ...node,

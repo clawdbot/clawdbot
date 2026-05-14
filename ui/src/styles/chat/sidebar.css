@@ -68,7 +68,7 @@
 
 .sidebar-title {
   font-weight: 600;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
 }
 
 .sidebar-content {
@@ -78,7 +78,7 @@
 }
 
 .sidebar-markdown {
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   line-height: 1.6;
   color: var(--text);
 }
@@ -123,7 +123,7 @@
 
 .sidebar-markdown-shell__hint {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.45;
 }
 
@@ -158,7 +158,7 @@
 }
 
 .sidebar-markdown-reader.sidebar-markdown {
-  font-size: 14.5px;
+  font-size: calc(14.5px * var(--control-ui-text-scale));
   line-height: 1.72;
 }
 

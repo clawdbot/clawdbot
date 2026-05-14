@@ -83,7 +83,7 @@ export function shouldAllowSilentLocalPairing(params: {
   if (params.locality === "remote") {
     return false;
   }
-  if (params.hasBrowserOriginHeader && !params.isControlUi && !params.isWebchat) {
+  if (params.hasBrowserOriginHeader) {
     return false;
   }
   if (

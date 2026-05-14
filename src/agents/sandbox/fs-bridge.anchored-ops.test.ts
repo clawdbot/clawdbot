@@ -133,6 +133,22 @@ describe("sandbox fs bridge anchored ops", () => {
     });
   });
 
+  it("allows dot-dot-prefixed sandbox entries without treating them as parent traversal", async () => {
+    await withTempDir("openclaw-fs-bridge-dot-prefix-", async (stateDir) => {
+      const { bridge } = await createSeededSandboxFsBridge(stateDir);
+
+      expect(bridge.resolvePath({ filePath: "..cache" })).toMatchObject({
+        relativePath: "..cache",
+        containerPath: "/workspace/..cache",
+      });
+      await bridge.mkdirp({ filePath: "..cache" });
+
+      const mkdirCall = requireDockerCall(findCallByDockerArg(1, "mkdirp"), "mkdirp");
+      expect(getDockerArg(mkdirCall[0], 2)).toBe("/workspace");
+      expect(getDockerArg(mkdirCall[0], 3)).toBe("..cache");
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "write resolves symlink parents to canonical pinned paths",
     async () => {

@@ -159,6 +159,7 @@ function getBlockedHostPaths(): string[] {
     home: process.env.HOME,
     openclawHome: process.env.OPENCLAW_HOME,
     osHome: os.homedir(),
+    userProfile: process.env.USERPROFILE,
   });
   if (blockedHostPathsCache?.key === cacheKey) {
     return blockedHostPathsCache.paths;
@@ -176,9 +177,15 @@ function getBlockedHostPaths(): string[] {
 function getBlockedHomeRoots(): string[] {
   const roots = new Set<string>();
   for (const candidate of [
+    process.env.OPENCLAW_HOME,
+    process.env.HOME,
+    process.env.USERPROFILE,
     resolveRequiredHomeDir(process.env, os.homedir),
     resolveRequiredOsHomeDir(process.env, os.homedir),
   ]) {
+    if (!candidate) {
+      continue;
+    }
     const normalized = normalizeHostPath(candidate);
     if (normalized !== "/") {
       roots.add(normalized);

@@ -10,6 +10,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
+import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import {
   applyLocalNoAuthHeaderOverride,
   getApiKeyForModel,
@@ -21,6 +22,7 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "./model-selection.js";
+import { OPENAI_CODEX_PROVIDER_ID, isOpenAIProvider } from "./openai-codex-routing.js";
 import { resolveModel, resolveModelAsync } from "./pi-embedded-runner/model.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 
@@ -55,6 +57,8 @@ export type PreparedSimpleCompletionModel =
 export type AgentSimpleCompletionSelection = {
   provider: string;
   modelId: string;
+  /** Provider used for auth/transport when runtime policy redirects the logical model ref. */
+  runtimeProvider?: string;
   profileId?: string;
   agentDir: string;
 };
@@ -102,9 +106,33 @@ export function resolveSimpleCompletionSelectionForAgent(params: {
   return {
     provider,
     modelId,
+    ...resolveSimpleCompletionRuntimeProvider({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      provider,
+      modelId,
+    }),
     profileId: split?.profile || undefined,
     agentDir: resolveAgentDir(params.cfg, params.agentId),
   };
+}
+
+function resolveSimpleCompletionRuntimeProvider(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  provider: string;
+  modelId: string;
+}): Pick<AgentSimpleCompletionSelection, "runtimeProvider"> {
+  if (!isOpenAIProvider(params.provider)) {
+    return {};
+  }
+  const policy = resolveAgentHarnessPolicy({
+    provider: params.provider,
+    modelId: params.modelId,
+    config: params.cfg,
+    agentId: params.agentId,
+  });
+  return policy.runtime === "codex" ? { runtimeProvider: OPENAI_CODEX_PROVIDER_ID } : {};
 }
 
 async function setRuntimeApiKeyForCompletion(params: {
@@ -266,7 +294,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   }
   const prepared = await prepareSimpleCompletionModel({
     cfg: params.cfg,
-    provider: selection.provider,
+    provider: selection.runtimeProvider ?? selection.provider,
     modelId: selection.modelId,
     agentDir: selection.agentDir,
     profileId: selection.profileId,

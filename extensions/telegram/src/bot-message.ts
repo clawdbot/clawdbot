@@ -72,6 +72,29 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     telegramDeps,
     opts,
   } = deps;
+  const sessionRuntime = {
+    ...(telegramDeps.buildChannelTurnContext
+      ? { buildChannelTurnContext: telegramDeps.buildChannelTurnContext }
+      : {}),
+    ...(telegramDeps.readSessionUpdatedAt
+      ? { readSessionUpdatedAt: telegramDeps.readSessionUpdatedAt }
+      : {}),
+    ...(telegramDeps.recordInboundSession
+      ? { recordInboundSession: telegramDeps.recordInboundSession }
+      : {}),
+    ...(telegramDeps.resolveInboundLastRouteSessionKey
+      ? { resolveInboundLastRouteSessionKey: telegramDeps.resolveInboundLastRouteSessionKey }
+      : {}),
+    ...(telegramDeps.resolvePinnedMainDmOwnerFromAllowlist
+      ? {
+          resolvePinnedMainDmOwnerFromAllowlist: telegramDeps.resolvePinnedMainDmOwnerFromAllowlist,
+        }
+      : {}),
+    resolveStorePath: telegramDeps.resolveStorePath,
+  };
+  const contextRuntime = telegramDeps.recordChannelActivity
+    ? { recordChannelActivity: telegramDeps.recordChannelActivity }
+    : undefined;
 
   return async (
     primaryCtx: TelegramContext,
@@ -112,6 +135,8 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       resolveTelegramGroupConfig,
       sendChatActionHandler,
       loadFreshConfig,
+      runtime: contextRuntime,
+      sessionRuntime,
       upsertPairingRequest: telegramDeps.upsertChannelPairingRequest,
     });
     if (!context) {

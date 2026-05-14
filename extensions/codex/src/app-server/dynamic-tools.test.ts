@@ -320,6 +320,37 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
+  it("records internal UI source replies separately from outbound messaging evidence", async () => {
+    const toolResult = textToolResult("Sent to current chat.", {
+      status: "ok",
+      deliveryStatus: "sent",
+      sourceReplySink: "internal-ui",
+      sourceReply: {
+        text: "visible reply",
+        mediaUrls: ["/tmp/reply.png"],
+      },
+    });
+    const bridge = createBridgeWithToolResult("message", toolResult);
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      message: "<think>private</think>visible reply",
+    });
+
+    expect(result).toEqual(expectInputText("Sent to current chat."));
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
+    expect(bridge.telemetry.messagingToolSentTexts).toEqual([]);
+    expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual([]);
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
+    expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([
+      {
+        text: "visible reply",
+        mediaUrl: "/tmp/reply.png",
+        mediaUrls: ["/tmp/reply.png"],
+      },
+    ]);
+  });
+
   it("does not record messaging side effects when the send fails", async () => {
     const tool = createTool({
       name: "message",

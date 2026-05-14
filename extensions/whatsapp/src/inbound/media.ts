@@ -1,8 +1,16 @@
 import type { proto, WAMessage } from "baileys";
+import { saveMediaStream, type SavedMedia } from "openclaw/plugin-sdk/media-store";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { createWaSocket } from "../session.js";
 import { extractContextInfo } from "./extract.js";
 import { downloadMediaMessage, normalizeMessageContent } from "./runtime-api.js";
+
+export class WhatsAppInboundMediaLimitExceededError extends Error {
+  constructor(maxBytes: number) {
+    super(`Media exceeds ${Math.round(maxBytes / (1024 * 1024))}MB limit`);
+    this.name = "WhatsAppInboundMediaLimitExceededError";
+  }
+}
 
 function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
   const normalized = normalizeMessageContent(message);
@@ -43,7 +51,8 @@ function resolveMediaMimetype(message: proto.IMessage): string | undefined {
 export async function downloadInboundMedia(
   msg: proto.IWebMessageInfo,
   sock: Awaited<ReturnType<typeof createWaSocket>>,
-): Promise<{ buffer: Buffer; mimetype?: string; fileName?: string } | undefined> {
+  maxBytes = 50 * 1024 * 1024,
+): Promise<{ saved: SavedMedia; mimetype?: string; fileName?: string } | undefined> {
   const message = unwrapMessage(msg.message as proto.IMessage | undefined);
   if (!message) {
     return undefined;
@@ -60,17 +69,32 @@ export async function downloadInboundMedia(
     return undefined;
   }
   try {
-    const buffer = await downloadMediaMessage(
+    const stream = await downloadMediaMessage(
       msg as WAMessage,
-      "buffer",
+      "stream",
       {},
       {
         reuploadRequest: sock.updateMediaMessage,
         logger: sock.logger,
       },
     );
-    return { buffer, mimetype, fileName };
+    const saved = await saveMediaStream(
+      stream as AsyncIterable<unknown>,
+      mimetype,
+      "inbound",
+      maxBytes,
+      fileName,
+    ).catch((err) => {
+      if (err instanceof Error && /Media exceeds/i.test(err.message)) {
+        throw new WhatsAppInboundMediaLimitExceededError(maxBytes);
+      }
+      throw err;
+    });
+    return { saved, mimetype, fileName };
   } catch (err) {
+    if (err instanceof WhatsAppInboundMediaLimitExceededError) {
+      throw err;
+    }
     logVerbose(`downloadMediaMessage failed: ${String(err)}`);
     return undefined;
   }
@@ -79,7 +103,8 @@ export async function downloadInboundMedia(
 export async function downloadQuotedInboundMedia(
   msg: proto.IWebMessageInfo,
   sock: Awaited<ReturnType<typeof createWaSocket>>,
-): Promise<{ buffer: Buffer; mimetype?: string; fileName?: string } | undefined> {
+  maxBytes = 50 * 1024 * 1024,
+): Promise<{ saved: SavedMedia; mimetype?: string; fileName?: string } | undefined> {
   const message = unwrapMessage(msg.message as proto.IMessage | undefined);
   const contextInfo = extractContextInfo(message);
   if (!contextInfo?.quotedMessage) {
@@ -98,5 +123,6 @@ export async function downloadQuotedInboundMedia(
       messageTimestamp: msg.messageTimestamp,
     },
     sock,
+    maxBytes,
   );
 }

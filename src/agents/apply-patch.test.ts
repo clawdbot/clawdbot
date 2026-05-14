@@ -364,6 +364,20 @@ describe("applyPatch", () => {
     });
   });
 
+  it("keeps dot-dot-prefixed filenames inside cwd and reports relative paths", async () => {
+    await withTempDir(async (dir) => {
+      const patch = `*** Begin Patch
+*** Add File: ..note.txt
++inside
+*** End Patch`;
+
+      const result = await applyPatch(patch, { cwd: dir });
+
+      expect(result.summary.added).toEqual(["..note.txt"]);
+      await expect(fs.readFile(path.join(dir, "..note.txt"), "utf8")).resolves.toBe("inside\n");
+    });
+  });
+
   it("allows deleting a symlink itself even if it points outside cwd", async () => {
     await withTempDir(async (dir) => {
       const outsideDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-outside-"));

@@ -85,7 +85,8 @@ const CONTROL_UI_I18N_WORKFLOW = 1;
 const DEFAULT_OPENAI_MODEL = "gpt-5.5";
 const DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-6";
 const DEFAULT_PROVIDER = "openai";
-const DEFAULT_PI_PACKAGE_VERSION = "0.58.3";
+export const DEFAULT_PI_PACKAGE_VERSION = "0.74.0";
+const PI_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
@@ -109,6 +110,7 @@ const ENV_PI_ARGS = "OPENCLAW_CONTROL_UI_I18N_PI_ARGS";
 const ENV_PI_PACKAGE_VERSION = "OPENCLAW_CONTROL_UI_I18N_PI_PACKAGE_VERSION";
 const ENV_BATCH_CHAR_BUDGET = "OPENCLAW_CONTROL_UI_I18N_BATCH_CHAR_BUDGET";
 const ENV_PROMPT_TIMEOUT = "OPENCLAW_CONTROL_UI_I18N_PROMPT_TIMEOUT";
+const ENV_AUTH_OPTIONAL = "OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL";
 
 const LOCALE_ENTRIES: readonly LocaleEntry[] = [
   { locale: "zh-CN", fileName: "zh-CN.ts", exportName: "zh_CN", languageKey: "zhCN" },
@@ -872,6 +874,21 @@ function isPromptTimeoutError(error: Error): boolean {
   return error.message.toLowerCase().includes("timed out");
 }
 
+export function isProviderAuthError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("401") ||
+    message.includes("authentication_error") ||
+    message.includes("incorrect api key") ||
+    message.includes("invalid x-api-key")
+  );
+}
+
+function isProviderAuthOptional(): boolean {
+  const raw = process.env[ENV_AUTH_OPTIONAL]?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
 function resolvePromptTimeoutMs(): number {
   const raw = process.env[ENV_PROMPT_TIMEOUT]?.trim();
   if (!raw) {
@@ -918,6 +935,14 @@ function getPiRuntimeDir() {
   );
 }
 
+export function resolveLocalPiCommand(root = ROOT): PiCommand | null {
+  const cliPath = path.join(root, "node_modules", ...PI_PACKAGE_NAME.split("/"), "dist", "cli.js");
+  if (!existsSync(cliPath)) {
+    return null;
+  }
+  return { executable: "node", args: [cliPath] };
+}
+
 async function resolvePiCommand(): Promise<PiCommand> {
   const explicitExecutable = process.env[ENV_PI_EXECUTABLE]?.trim();
   if (explicitExecutable) {
@@ -935,12 +960,16 @@ async function resolvePiCommand(): Promise<PiCommand> {
     }
   }
 
+  const localCommand = resolveLocalPiCommand();
+  if (localCommand) {
+    return localCommand;
+  }
+
   const runtimeDir = getPiRuntimeDir();
   const cliPath = path.join(
     runtimeDir,
     "node_modules",
-    "@mariozechner",
-    "pi-coding-agent",
+    ...PI_PACKAGE_NAME.split("/"),
     "dist",
     "cli.js",
   );
@@ -953,7 +982,7 @@ async function resolvePiCommand(): Promise<PiCommand> {
         "--silent",
         "--no-audit",
         "--no-fund",
-        `@earendil-works/pi-coding-agent@${resolvePiPackageVersion()}`,
+        `${PI_PACKAGE_NAME}@${resolvePiPackageVersion()}`,
       ],
       {
         cwd: runtimeDir,
@@ -1540,6 +1569,18 @@ async function syncLocale(
           });
         }
       }
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      if (isProviderAuthOptional() && isProviderAuthError(failure)) {
+        logProgress(`${localeLabel}: translation provider auth failed; skipping refresh`);
+        return {
+          changed: false,
+          fallbackCount: previousMeta?.fallbackKeys.length ?? 0,
+          locale: entry.locale,
+          wrote: false,
+        } satisfies SyncOutcome;
+      }
+      throw failure;
     } finally {
       await clientAccess.resetClient();
     }

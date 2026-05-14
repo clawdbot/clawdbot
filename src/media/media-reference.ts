@@ -87,6 +87,15 @@ function maybeLocalPathFromSource(source: string): string | null {
   return null;
 }
 
+function relativePathEscapesBase(relativePath: string): boolean {
+  return (
+    relativePath === ".." ||
+    relativePath.startsWith("../") ||
+    relativePath.startsWith("..\\") ||
+    path.isAbsolute(relativePath)
+  );
+}
+
 async function resolvePathForContainment(candidate: string): Promise<string> {
   try {
     return await fs.realpath(candidate);
@@ -161,13 +170,13 @@ export async function resolveInboundMediaReference(
   const rawResolvedPath = path.resolve(localPath);
   const rawRel = path.relative(rawInboundDir, rawResolvedPath);
   const rel =
-    rawRel && !rawRel.startsWith("..") && !path.isAbsolute(rawRel)
+    rawRel && !relativePathEscapesBase(rawRel)
       ? rawRel
       : path.relative(
           await resolvePathForContainment(rawInboundDir),
           await resolvePathForContainment(localPath),
         );
-  if (!rel || rel.startsWith("..") || path.isAbsolute(rel) || rel.includes(path.sep)) {
+  if (!rel || relativePathEscapesBase(rel) || rel.includes(path.sep)) {
     return null;
   }
 

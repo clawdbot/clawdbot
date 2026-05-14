@@ -20,8 +20,8 @@ export const BOOTSTRAP_HANDOFF_OPERATOR_SCOPES = [
 const BOOTSTRAP_HANDOFF_OPERATOR_SCOPE_SET = new Set<string>(BOOTSTRAP_HANDOFF_OPERATOR_SCOPES);
 
 export const PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
-  roles: ["node", "operator"],
-  scopes: [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES],
+  roles: ["node"],
+  scopes: [],
 };
 
 export function resolveBootstrapProfileScopesForRole(

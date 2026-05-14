@@ -113,6 +113,17 @@ describe("github-copilot model defaults", () => {
       expect(def.api).toBe("openai-responses");
     });
 
+    it("routes Gemini models through Chat Completions with Copilot compat flags", () => {
+      const def = buildCopilotModelDefinition("gemini-3.1-pro-preview");
+      expect(def.api).toBe("openai-completions");
+      expect(def.compat).toEqual({
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        supportsUsageInStreaming: false,
+        maxTokensField: "max_tokens",
+      });
+    });
+
     it("throws on empty model id", () => {
       expect(() => buildCopilotModelDefinition("")).toThrow("Model id required");
       expect(() => buildCopilotModelDefinition("  ")).toThrow("Model id required");
@@ -223,6 +234,17 @@ describe("resolveCopilotForwardCompatModel", () => {
     expect(result.name).toBe("gpt-5.4-mini");
     expect((result as unknown as Record<string, unknown>).api).toBe("openai-responses");
     expect((result as unknown as Record<string, unknown>).input).toEqual(["text", "image"]);
+  });
+
+  it("creates synthetic Gemini models with Chat Completions compatibility", () => {
+    const result = requireResolvedModel(createMockCtx("gemini-3.1-pro-preview"));
+    expect((result as unknown as Record<string, unknown>).api).toBe("openai-completions");
+    expect((result as unknown as Record<string, unknown>).compat).toEqual({
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      supportsUsageInStreaming: false,
+      maxTokensField: "max_tokens",
+    });
   });
 
   it("infers reasoning=true for o1/o3 model IDs", () => {
@@ -444,6 +466,24 @@ describe("fetchCopilotModelCatalog", () => {
         },
       },
       {
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
+        object: "model",
+        vendor: "Google",
+        capabilities: {
+          type: "chat",
+          limits: {
+            max_context_window_tokens: 1_000_000,
+            max_output_tokens: 65_536,
+          },
+          supports: {
+            vision: true,
+            tool_calls: true,
+            streaming: true,
+          },
+        },
+      },
+      {
         id: "claude-opus-4.7-1m-internal",
         name: "Claude Opus 4.7 (1M context)(Internal only)",
         object: "model",
@@ -501,6 +541,7 @@ describe("fetchCopilotModelCatalog", () => {
     expect(out.map((m) => m.id)).toEqual([
       "gpt-5.5",
       "gpt-5.3-codex",
+      "gemini-3.1-pro-preview",
       "claude-opus-4.7-1m-internal",
     ]);
 
@@ -520,6 +561,15 @@ describe("fetchCopilotModelCatalog", () => {
     expect(codex?.input).toEqual(["text"]);
     expect(codex?.reasoning).toBe(true);
     expect(codex?.contextWindow).toBe(400000);
+
+    const gemini = out.find((m) => m.id === "gemini-3.1-pro-preview");
+    expect(gemini?.api).toBe("openai-completions");
+    expect(gemini?.compat).toEqual({
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      supportsUsageInStreaming: false,
+      maxTokensField: "max_tokens",
+    });
 
     const opus1m = out.find((m) => m.id === "claude-opus-4.7-1m-internal");
     expect(opus1m?.api).toBe("anthropic-messages");

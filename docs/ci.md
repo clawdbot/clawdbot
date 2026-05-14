@@ -517,7 +517,11 @@ Before a first run, check the wrapper from the repo root:
 pnpm crabbox:run -- --help | sed -n '1,120p'
 ```
 
-The repo wrapper refuses a stale Crabbox binary that does not advertise `blacksmith-testbox`. Pass the provider explicitly even though `.crabbox.yaml` has owned-cloud defaults.
+The repo wrapper refuses a stale Crabbox binary that does not advertise `blacksmith-testbox`. Pass the provider explicitly even though `.crabbox.yaml` has owned-cloud defaults. In Codex worktrees or linked/sparse checkouts, avoid the local `pnpm crabbox:run` script because pnpm may reconcile dependencies before Crabbox starts; invoke the node wrapper directly instead:
+
+```bash
+node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --timing-json --shell -- "pnpm test <path-or-filter>"
+```
 
 Changed gate:
 

@@ -232,6 +232,10 @@ describe("canvas host", () => {
       expect(response.body).toContain("v1");
       expect(response.body).toContain(CANVAS_WS_PATH);
 
+      const malformed = await captureHandlerResponse(handler, `${CANVAS_HOST_PATH}/%E0%A4%A`);
+      expect(malformed.status).toBe(404);
+      expect(malformed.body).toBe("not found");
+
       const miss = await captureHandlerResponse(handler, "/");
       expect(miss.handled).toBe(false);
 
@@ -396,6 +400,9 @@ describe("canvas host", () => {
       const traversalRes = await captureA2uiResponse(`${A2UI_PATH}/%2e%2e%2fpackage.json`);
       expect(traversalRes.status).toBe(404);
       expect(traversalRes.body).toBe("not found");
+      const malformedRes = await captureA2uiResponse(`${A2UI_PATH}/%E0%A4%A`);
+      expect(malformedRes.status).toBe(404);
+      expect(malformedRes.body).toBe("not found");
       const symlinkRes = await captureA2uiResponse(`${A2UI_PATH}/${linkName}`);
       expect(symlinkRes.status).toBe(404);
       expect(symlinkRes.body).toBe("not found");

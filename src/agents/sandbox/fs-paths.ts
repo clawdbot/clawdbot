@@ -7,7 +7,11 @@ import type { SandboxFsBridgeContext } from "./backend-handle.types.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
-import { isPathInsideContainerRoot, normalizeContainerPath } from "./path-utils.js";
+import {
+  isPathInsideContainerRoot,
+  normalizeContainerPath,
+  relativePathEscapesContainerRoot,
+} from "./path-utils.js";
 
 export type SandboxFsMount = {
   hostRoot: string;
@@ -271,7 +275,7 @@ function toDisplayRelative(params: {
   if (!rel) {
     return "";
   }
-  if (!rel.startsWith("..") && !path.posix.isAbsolute(rel)) {
+  if (!relativePathEscapesContainerRoot(rel)) {
     return rel;
   }
   return params.containerPath;

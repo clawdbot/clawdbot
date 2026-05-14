@@ -3,7 +3,7 @@ import type {
   MigrationProviderContext,
   MigrationProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { applyCodexMigrationPlan } from "./apply.js";
+import { applyCodexMigrationPlan, prepareTargetCodexAppServer } from "./apply.js";
 import { buildCodexMigrationPlan } from "./plan.js";
 import { discoverCodexSource, hasCodexSource } from "./source.js";
 
@@ -31,6 +31,9 @@ export function buildCodexMigrationProvider(
       };
     },
     plan: buildCodexMigrationPlan,
+    prepareApply(ctx) {
+      return prepareTargetCodexAppServer(ctx);
+    },
     async apply(ctx, plan?: MigrationPlan) {
       return await applyCodexMigrationPlan({ ctx, plan, runtime: params.runtime });
     },

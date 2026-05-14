@@ -1729,6 +1729,64 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it("clears stale plugin policy and slot references when disabling failed updates", async () => {
+    const warn = vi.fn();
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: false,
+      error: "security scan blocked install",
+    });
+    const config = {
+      plugins: {
+        allow: ["demo", "keep"],
+        deny: ["demo", "blocked"],
+        slots: {
+          memory: "demo",
+          contextEngine: "demo",
+        },
+        entries: {
+          demo: {
+            enabled: true,
+          },
+        },
+        installs: {
+          demo: {
+            source: "npm" as const,
+            spec: "@acme/demo",
+            installPath: "/tmp/demo",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      disableOnFailure: true,
+      logger: { warn },
+    });
+
+    const message =
+      'Disabled "demo" after plugin update failure; OpenClaw will continue without it. Failed to update demo: security scan blocked install';
+    expect(warn).toHaveBeenCalledWith(message);
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.entries?.demo).toEqual({
+      enabled: false,
+    });
+    expect(result.config.plugins?.installs?.demo).toEqual(config.plugins.installs.demo);
+    expect(result.config.plugins?.allow).toEqual(["keep"]);
+    expect(result.config.plugins?.deny).toEqual(["blocked"]);
+    expect(result.config.plugins?.slots).toEqual({
+      memory: "memory-core",
+      contextEngine: "legacy",
+    });
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "demo",
+        status: "skipped",
+        message,
+      },
+    ]);
+  });
+
   it("aborts exact pinned npm plugin updates on integrity drift by default", async () => {
     const warn = vi.fn();
     installPluginFromNpmSpecMock.mockImplementation(
@@ -2397,54 +2455,6 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
-  it("forwards ClawHub risk acknowledgement inputs to dry-run and live ClawHub updates", async () => {
-    const onClawHubRisk = vi.fn(async () => true);
-    const config = createClawHubInstallConfig({
-      pluginId: "demo",
-      installPath: "/tmp/demo",
-      clawhubUrl: "https://clawhub.ai",
-      clawhubPackage: "demo",
-      clawhubFamily: "code-plugin",
-      clawhubChannel: "official",
-    });
-    installPluginFromClawHubMock.mockResolvedValue({
-      ok: true,
-      pluginId: "demo",
-      targetDir: "/tmp/demo",
-      version: "1.2.4",
-      clawhub: {
-        source: "clawhub",
-        clawhubUrl: "https://clawhub.ai",
-        clawhubPackage: "demo",
-        clawhubFamily: "code-plugin",
-        clawhubChannel: "official",
-        integrity: "sha256-next",
-        resolvedAt: "2026-03-22T00:00:00.000Z",
-      },
-    });
-
-    for (const dryRun of [true, false]) {
-      installPluginFromClawHubMock.mockClear();
-
-      await updateNpmInstalledPlugins({
-        config,
-        pluginIds: ["demo"],
-        acknowledgeClawHubRisk: true,
-        onClawHubRisk,
-        ...(dryRun ? { dryRun: true } : {}),
-      });
-
-      expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          spec: "clawhub:demo",
-          acknowledgeClawHubRisk: true,
-          onClawHubRisk,
-          ...(dryRun ? { dryRun: true } : {}),
-        }),
-      );
-    }
-  });
-
   it("migrates legacy unscoped install keys when a scoped npm package updates", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: true,
@@ -2995,12 +3005,9 @@ describe("syncPluginsForUpdateChannel", () => {
         clawhubPackage: "legacy-chat",
       }),
     );
-    const onClawHubRisk = vi.fn(async () => true);
 
     const result = await syncPluginsForUpdateChannel({
       channel: "stable",
-      acknowledgeClawHubRisk: true,
-      onClawHubRisk,
       externalizedBundledPluginBridges: [
         {
           bundledPluginId: "legacy-chat",
@@ -3034,8 +3041,6 @@ describe("syncPluginsForUpdateChannel", () => {
     expect(clawHubInstallCall()?.baseUrl).toBe("https://clawhub.ai");
     expect(clawHubInstallCall()?.mode).toBe("update");
     expect(clawHubInstallCall()?.expectedPluginId).toBe("legacy-chat");
-    expect(clawHubInstallCall()?.acknowledgeClawHubRisk).toBe(true);
-    expect(clawHubInstallCall()?.onClawHubRisk).toBe(onClawHubRisk);
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(true);
     expect(result.summary.switchedToClawHub).toEqual(["legacy-chat"]);

@@ -5,7 +5,7 @@ import { buildCommandTestParams } from "./commands.test-harness.js";
 const steerRuntimeMocks = vi.hoisted(() => ({
   formatEmbeddedPiQueueFailureSummary: vi.fn(),
   isEmbeddedPiRunActive: vi.fn(),
-  queueEmbeddedPiMessageWithOutcome: vi.fn(),
+  queueEmbeddedPiMessageWithOutcomeAsync: vi.fn(),
   resolveActiveEmbeddedRunSessionId: vi.fn(),
 }));
 
@@ -30,7 +30,7 @@ describe("handleSteerCommand", () => {
         "queue_message_failed reason=not_streaming sessionId=session-active gatewayHealth=live",
       );
     steerRuntimeMocks.isEmbeddedPiRunActive.mockReset().mockReturnValue(false);
-    steerRuntimeMocks.queueEmbeddedPiMessageWithOutcome.mockReset().mockReturnValue({
+    steerRuntimeMocks.queueEmbeddedPiMessageWithOutcomeAsync.mockReset().mockResolvedValue({
       queued: true,
       sessionId: "session-active",
       target: "embedded_run",
@@ -51,7 +51,7 @@ describe("handleSteerCommand", () => {
     expect(steerRuntimeMocks.resolveActiveEmbeddedRunSessionId).toHaveBeenCalledWith(
       "agent:main:main",
     );
-    expect(steerRuntimeMocks.queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledWith(
+    expect(steerRuntimeMocks.queueEmbeddedPiMessageWithOutcomeAsync).toHaveBeenCalledWith(
       "session-active",
       "keep going",
       {
@@ -74,7 +74,7 @@ describe("handleSteerCommand", () => {
     expect(steerRuntimeMocks.resolveActiveEmbeddedRunSessionId).toHaveBeenCalledWith(
       "agent:main:discord:direct:target",
     );
-    expect(steerRuntimeMocks.queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledWith(
+    expect(steerRuntimeMocks.queueEmbeddedPiMessageWithOutcomeAsync).toHaveBeenCalledWith(
       "session-target",
       "check the target",
       {
@@ -96,7 +96,7 @@ describe("handleSteerCommand", () => {
       "agent:main:main",
     );
     expect(steerRuntimeMocks.isEmbeddedPiRunActive).toHaveBeenCalledWith("stored-session-id");
-    expect(steerRuntimeMocks.queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledWith(
+    expect(steerRuntimeMocks.queueEmbeddedPiMessageWithOutcomeAsync).toHaveBeenCalledWith(
       "stored-session-id",
       "continue from state",
       {
@@ -113,34 +113,40 @@ describe("handleSteerCommand", () => {
       shouldContinue: false,
       reply: { text: "Usage: /steer <message>" },
     });
-    expect(steerRuntimeMocks.queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
+    expect(steerRuntimeMocks.queueEmbeddedPiMessageWithOutcomeAsync).not.toHaveBeenCalled();
   });
 
-  it("does not start a new run when no current session run is active", async () => {
-    const result = await handleSteerCommand(buildParams("/steer keep going"), true);
+  it("continues as a normal prompt when no current session run is active", async () => {
+    const params = buildParams("/steer keep going");
+    const result = await handleSteerCommand(params, true);
 
     expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "⚠️ No active run to steer in this session." },
+      shouldContinue: true,
     });
-    expect(steerRuntimeMocks.queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
+    expect(params.ctx.Body).toBe("keep going");
+    expect(params.ctx.BodyForAgent).toBe("keep going");
+    expect((params.ctx as Record<string, unknown>).BodyStripped).toBe("keep going");
+    expect(params.command.commandBodyNormalized).toBe("keep going");
+    expect(steerRuntimeMocks.queueEmbeddedPiMessageWithOutcomeAsync).not.toHaveBeenCalled();
   });
 
-  it("reports when the active run rejects steering injection", async () => {
+  it("continues as a normal prompt when the active run rejects steering injection", async () => {
     steerRuntimeMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("session-active");
-    steerRuntimeMocks.queueEmbeddedPiMessageWithOutcome.mockReturnValue({
+    steerRuntimeMocks.queueEmbeddedPiMessageWithOutcomeAsync.mockResolvedValue({
       queued: false,
       sessionId: "session-active",
       reason: "not_streaming",
       gatewayHealth: "live",
     });
 
-    const result = await handleSteerCommand(buildParams("/steer keep going"), true);
+    const params = buildParams("/steer keep going");
+    const result = await handleSteerCommand(params, true);
 
     expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "⚠️ Current run is active but not accepting steering right now." },
+      shouldContinue: true,
     });
+    expect(params.ctx.BodyForAgent).toBe("keep going");
+    expect(params.command.commandBodyNormalized).toBe("keep going");
     expect(steerRuntimeMocks.formatEmbeddedPiQueueFailureSummary).toHaveBeenCalledWith({
       queued: false,
       sessionId: "session-active",
@@ -149,20 +155,37 @@ describe("handleSteerCommand", () => {
     });
   });
 
-  it("reports compacting runs distinctly", async () => {
+  it("continues as a normal prompt when steering throws", async () => {
     steerRuntimeMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("session-active");
-    steerRuntimeMocks.queueEmbeddedPiMessageWithOutcome.mockReturnValue({
+    steerRuntimeMocks.queueEmbeddedPiMessageWithOutcomeAsync.mockRejectedValue(
+      new Error("socket closed"),
+    );
+
+    const params = buildParams("/steer keep going");
+    const result = await handleSteerCommand(params, true);
+
+    expect(result).toEqual({
+      shouldContinue: true,
+    });
+    expect(params.ctx.BodyForAgent).toBe("keep going");
+    expect(params.command.commandBodyNormalized).toBe("keep going");
+  });
+
+  it("continues as a normal prompt when the active run is compacting", async () => {
+    steerRuntimeMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("session-active");
+    steerRuntimeMocks.queueEmbeddedPiMessageWithOutcomeAsync.mockResolvedValue({
       queued: false,
       sessionId: "session-active",
       reason: "compacting",
       gatewayHealth: "live",
     });
 
-    const result = await handleSteerCommand(buildParams("/steer keep going"), true);
+    const params = buildParams("/steer keep going");
+    const result = await handleSteerCommand(params, true);
 
     expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "⚠️ Current run is compacting; retry after compaction finishes." },
+      shouldContinue: true,
     });
+    expect(params.ctx.BodyForAgent).toBe("keep going");
   });
 });

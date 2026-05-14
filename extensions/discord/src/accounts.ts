@@ -42,13 +42,15 @@ export function mergeDiscordAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): DiscordAccountConfig {
-  return resolveMergedAccountConfig<DiscordAccountConfig>({
+  const merged = resolveMergedAccountConfig<DiscordAccountConfig>({
     channelConfig: cfg.channels?.discord as DiscordAccountConfig | undefined,
     accounts: cfg.channels?.discord?.accounts as
       | Record<string, Partial<DiscordAccountConfig>>
       | undefined,
     accountId,
+    nestedObjectKeys: ["botLoopProtection"],
   });
+  return merged;
 }
 
 export function resolveDiscordAccountAllowFrom(params: {

@@ -40,6 +40,8 @@ export type AcpConfig = {
   dispatch?: AcpDispatchConfig;
   /** Backend id registered by ACP runtime plugin (for example: acpx). */
   backend?: string;
+  /** Fallback backend ids tried when the primary backend fails with UNAVAILABLE. */
+  fallbacks?: string[];
   defaultAgent?: string;
   allowedAgents?: string[];
   maxConcurrentSessions?: number;

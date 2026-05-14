@@ -25,7 +25,7 @@ function expectSlackMediaResult(
   return result;
 }
 
-const fetchRemoteMediaMock = vi.hoisted(() =>
+const readRemoteMediaBufferMock = vi.hoisted(() =>
   vi.fn(
     async (params: {
       url: string;
@@ -65,21 +65,46 @@ const fetchRemoteMediaMock = vi.hoisted(() =>
   ),
 );
 const saveMediaBufferMock = vi.hoisted(() =>
-  vi.fn(async (_buffer: Buffer, contentType?: string) => ({
-    id: "saved-media-id",
-    path: "/tmp/test.bin",
-    size: _buffer.byteLength,
-    contentType,
-  })),
+  vi.fn(
+    async (
+      _buffer: Buffer,
+      contentType?: string,
+      _subdir?: string,
+      _maxBytes?: number,
+      _originalFilename?: string,
+    ) => ({
+      id: "saved-media-id",
+      path: "/tmp/test.bin",
+      size: _buffer.byteLength,
+      contentType,
+    }),
+  ),
+);
+const saveRemoteMediaMock = vi.hoisted(() =>
+  vi.fn(async (params: Parameters<typeof readRemoteMediaBufferMock>[0]) => {
+    const fetched = await readRemoteMediaBufferMock(params);
+    const saved = await saveMediaBufferMock(
+      fetched.buffer,
+      fetched.contentType,
+      "inbound",
+      params.maxBytes,
+      params.filePathHint,
+    );
+    return {
+      ...saved,
+      fileName: fetched.fileName,
+    };
+  }),
 );
 const fetchWithRuntimeDispatcherMock = vi.hoisted(() => vi.fn());
 const logVerboseMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./media.runtime.js", () => ({
-  fetchRemoteMedia: fetchRemoteMediaMock,
+  readRemoteMediaBuffer: readRemoteMediaBufferMock,
   fetchWithRuntimeDispatcher: fetchWithRuntimeDispatcherMock,
   logVerbose: logVerboseMock,
   saveMediaBuffer: saveMediaBufferMock,
+  saveRemoteMedia: saveRemoteMediaMock,
 }));
 
 vi.mock("./thread.runtime.js", () => ({
@@ -98,10 +123,41 @@ const originalFetch = globalThis.fetch;
 let mockFetch: ReturnType<typeof vi.fn<FetchMock>>;
 
 beforeEach(() => {
-  fetchRemoteMediaMock.mockClear();
+  readRemoteMediaBufferMock.mockClear();
   fetchWithRuntimeDispatcherMock.mockClear();
   logVerboseMock.mockClear();
-  saveMediaBufferMock.mockClear();
+  saveMediaBufferMock.mockReset();
+  saveMediaBufferMock.mockImplementation(
+    async (
+      _buffer: Buffer,
+      contentType?: string,
+      _subdir?: string,
+      _maxBytes?: number,
+      _originalFilename?: string,
+    ) => ({
+      id: "saved-media-id",
+      path: "/tmp/test.bin",
+      size: _buffer.byteLength,
+      contentType,
+    }),
+  );
+  saveRemoteMediaMock.mockReset();
+  saveRemoteMediaMock.mockImplementation(
+    async (params: Parameters<typeof readRemoteMediaBufferMock>[0]) => {
+      const fetched = await readRemoteMediaBufferMock(params);
+      const saved = await saveMediaBufferMock(
+        fetched.buffer,
+        fetched.contentType,
+        "inbound",
+        params.maxBytes,
+        params.filePathHint,
+      );
+      return {
+        ...saved,
+        fileName: fetched.fileName,
+      };
+    },
+  );
 });
 
 const createSavedMedia = (filePath: string, contentType: string): SavedMedia => ({
@@ -303,6 +359,20 @@ describe("fetchWithSlackAuth", () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("returns redirect response when location header is malformed", async () => {
+    const redirectResponse = new Response(null, {
+      status: 302,
+      headers: { location: "http://[::1" },
+    });
+
+    mockFetch.mockResolvedValueOnce(redirectResponse);
+
+    const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
+
+    expect(result).toBe(redirectResponse);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
   it("returns 4xx/5xx responses directly without following", async () => {
     const errorResponse = new Response("Not Found", {
       status: 404,
@@ -422,8 +492,8 @@ describe("resolveSlackMedia", () => {
 
     expectSlackMediaResult(result);
     const fetchOptions = requireRecord(
-      requireMockCall(fetchRemoteMediaMock, 0, "fetchRemoteMedia")[0],
-      "fetchRemoteMedia options",
+      requireMockCall(readRemoteMediaBufferMock, 0, "readRemoteMediaBuffer")[0],
+      "readRemoteMediaBuffer options",
     ) as { readIdleTimeoutMs?: number; requestInit?: RequestInit };
     expect(fetchOptions.readIdleTimeoutMs).toBe(SLACK_MEDIA_READ_IDLE_TIMEOUT_MS);
     expect(fetchOptions.requestInit?.signal).toBeInstanceOf(AbortSignal);
@@ -436,7 +506,7 @@ describe("resolveSlackMedia", () => {
     vi.useFakeTimers();
     try {
       let abortSignal: AbortSignal | undefined;
-      fetchRemoteMediaMock.mockImplementationOnce(
+      readRemoteMediaBufferMock.mockImplementationOnce(
         (params) =>
           new Promise<never>((_resolve, reject) => {
             abortSignal = params.requestInit?.signal ?? undefined;
@@ -600,7 +670,6 @@ describe("resolveSlackMedia", () => {
   });
 
   it("rejects HTML auth pages for non-HTML files", async () => {
-    const saveMediaBufferMock = vi.spyOn(mediaRuntime, "saveMediaBuffer");
     mockFetch.mockResolvedValueOnce(
       new Response("<!DOCTYPE html><html><body>login</body></html>", {
         status: 200,
@@ -615,7 +684,7 @@ describe("resolveSlackMedia", () => {
     });
 
     expect(result).toBeNull();
-    expect(saveMediaBufferMock).not.toHaveBeenCalled();
+    expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
   });
 
   it("allows expected HTML uploads", async () => {
@@ -649,9 +718,13 @@ describe("resolveSlackMedia", () => {
     // saveMediaBuffer re-detects MIME from buffer bytes, so it may return
     // video/mp4 for MP4 containers.  Verify resolveSlackMedia preserves
     // the overridden audio/* type in its return value despite this.
-    const saveMediaBufferMock = vi
-      .spyOn(mediaRuntime, "saveMediaBuffer")
-      .mockResolvedValue(createSavedMedia("/tmp/voice.mp4", "video/mp4"));
+    saveRemoteMediaMock.mockResolvedValueOnce({
+      id: "saved-media-id",
+      path: "/tmp/voice.mp4",
+      size: 128,
+      contentType: "video/mp4",
+      fileName: "voice.mp4",
+    });
 
     const mockResponse = new Response(Buffer.from("audio data"), {
       status: 200,
@@ -674,10 +747,13 @@ describe("resolveSlackMedia", () => {
 
     const media = expectSlackMediaResult(result);
     expect(media).toHaveLength(1);
-    // saveMediaBuffer should receive the overridden audio/mp4
-    expectSaveMediaBufferCall(saveMediaBufferMock, "audio/mp4", 16 * 1024 * 1024);
+    expect(
+      requireRecord(requireMockCall(saveRemoteMediaMock, 0, "saveRemoteMedia")[0], "save params"),
+    ).toMatchObject({
+      fallbackContentType: "audio/mp4",
+    });
     // Returned contentType must be the overridden value, not the
-    // re-detected video/mp4 from saveMediaBuffer
+    // re-detected video/mp4 from the saved file
     expect(media[0]?.contentType).toBe("audio/mp4");
   });
 
@@ -873,7 +949,7 @@ describe("Slack media SSRF policy", () => {
       new Response(Buffer.from("img"), { status: 200, headers: { "content-type": "image/jpeg" } }),
     );
 
-    const spy = vi.spyOn(mediaRuntime, "fetchRemoteMedia");
+    const spy = vi.spyOn(mediaRuntime, "readRemoteMediaBuffer");
 
     await resolveSlackMedia({
       files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
@@ -882,8 +958,10 @@ describe("Slack media SSRF policy", () => {
     });
 
     const policy = requireRecord(
-      requireRecord(requireMockCall(spy, 0, "fetchRemoteMedia")[0], "fetchRemoteMedia params")
-        .ssrfPolicy,
+      requireRecord(
+        requireMockCall(spy, 0, "readRemoteMediaBuffer")[0],
+        "readRemoteMediaBuffer params",
+      ).ssrfPolicy,
       "ssrfPolicy",
     );
     expect(policy.allowRfc2544BenchmarkRange).toBe(true);
@@ -901,7 +979,7 @@ describe("Slack media SSRF policy", () => {
       new Response(Buffer.from("fwd"), { status: 200, headers: { "content-type": "image/jpeg" } }),
     );
 
-    const spy = vi.spyOn(mediaRuntime, "fetchRemoteMedia");
+    const spy = vi.spyOn(mediaRuntime, "readRemoteMediaBuffer");
 
     await resolveSlackAttachmentContent({
       attachments: [{ is_share: true, image_url: "https://files.slack.com/forwarded.jpg" }],
@@ -910,8 +988,10 @@ describe("Slack media SSRF policy", () => {
     });
 
     const policy = requireRecord(
-      requireRecord(requireMockCall(spy, 0, "fetchRemoteMedia")[0], "fetchRemoteMedia params")
-        .ssrfPolicy,
+      requireRecord(
+        requireMockCall(spy, 0, "readRemoteMediaBuffer")[0],
+        "readRemoteMediaBuffer params",
+      ).ssrfPolicy,
       "ssrfPolicy",
     );
     expect(policy.allowRfc2544BenchmarkRange).toBe(true);

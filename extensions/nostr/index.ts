@@ -52,23 +52,21 @@ export default defineBundledChannelEntry({
       },
       updateConfigProfile: async (_accountId: string, profile: unknown) => {
         const runtime = getNostrRuntime();
-        const cfg = runtime.config.current() as OpenClawConfig;
 
-        const channels = (cfg.channels ?? {}) as Record<string, unknown>;
-        const nostrConfig = (channels.nostr ?? {}) as Record<string, unknown>;
+        await runtime.config.mutateConfigFile({
+          afterWrite: { mode: "auto" },
+          mutate: (draft) => {
+            const channels = (draft.channels ?? {}) as Record<string, unknown>;
+            const nostrConfig = (channels.nostr ?? {}) as Record<string, unknown>;
 
-        await runtime.config.replaceConfigFile({
-          nextConfig: {
-            ...cfg,
-            channels: {
+            draft.channels = {
               ...channels,
               nostr: {
                 ...nostrConfig,
                 profile,
               },
-            },
+            };
           },
-          afterWrite: { mode: "auto" },
         });
       },
       getAccountInfo: (accountId: string) => {

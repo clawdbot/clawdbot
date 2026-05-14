@@ -97,14 +97,17 @@ final class ContactsService: ContactsServicing {
         return OpenClawContactsAddPayload(contact: Self.payload(from: persisted))
     }
 
-    private static func ensureAuthorization(store: CNContactStore, status: CNAuthorizationStatus) async -> Bool {
+    private static func ensureAuthorization(status: CNAuthorizationStatus) async -> Bool {
         switch status {
         case .authorized, .limited:
             return true
         case .notDetermined:
-            // Don’t prompt during node.invoke; the caller should instruct the user to grant permission.
-            // Prompts block the invoke and lead to timeouts in headless flows.
-            return false
+            return await PermissionRequestBridge.awaitRequest { completion in
+                let store = CNContactStore()
+                store.requestAccess(for: .contacts) { granted, _ in
+                    completion(granted)
+                }
+            }
         case .restricted, .denied:
             return false
         @unknown default:
@@ -113,15 +116,14 @@ final class ContactsService: ContactsServicing {
     }
 
     private static func authorizedStore() async throws -> CNContactStore {
-        let store = CNContactStore()
         let status = CNContactStore.authorizationStatus(for: .contacts)
-        let authorized = await Self.ensureAuthorization(store: store, status: status)
+        let authorized = await Self.ensureAuthorization(status: status)
         guard authorized else {
             throw NSError(domain: "Contacts", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "CONTACTS_PERMISSION_REQUIRED: grant Contacts permission",
             ])
         }
-        return store
+        return CNContactStore()
     }
 
     private static func normalizeStrings(_ values: [String]?, lowercased: Bool = false) -> [String] {

@@ -3,7 +3,11 @@ import path from "node:path";
 import type { PathAliasPolicy } from "../../infra/path-alias-guards.js";
 import { openRootFile, type RootFileOpenResult } from "./fs-bridge-path-safety.runtime.js";
 import type { SandboxResolvedFsPath, SandboxFsMount } from "./fs-paths.js";
-import { isPathInsideContainerRoot, normalizeContainerPath } from "./path-utils.js";
+import {
+  isPathInsideContainerRoot,
+  normalizeContainerPath,
+  relativePathEscapesContainerRoot,
+} from "./path-utils.js";
 
 type BoundaryAllowedType = "file" | "directory";
 
@@ -96,7 +100,7 @@ export class SandboxFsPathGuard {
     action: string;
   }): PinnedSandboxEntry {
     const relativeParentPath = path.posix.relative(params.mount.containerRoot, params.parentPath);
-    if (relativeParentPath.startsWith("..") || path.posix.isAbsolute(relativeParentPath)) {
+    if (relativePathEscapesContainerRoot(relativeParentPath)) {
       throw new Error(
         `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.targetPath}`,
       );
@@ -217,7 +221,7 @@ export class SandboxFsPathGuard {
   ): PinnedSandboxDirectoryEntry {
     const mount = this.resolveRequiredMount(target.containerPath, action);
     const relativePath = path.posix.relative(mount.containerRoot, target.containerPath);
-    if (relativePath.startsWith("..") || path.posix.isAbsolute(relativePath)) {
+    if (relativePathEscapesContainerRoot(relativePath)) {
       throw new Error(
         `Sandbox path escapes allowed mounts; cannot ${action}: ${target.containerPath}`,
       );

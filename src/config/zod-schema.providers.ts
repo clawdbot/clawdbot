@@ -11,6 +11,15 @@ const ChannelModelByChannelSchema = z
   .record(z.string(), z.record(z.string(), z.string()))
   .optional();
 
+export const ChannelBotLoopProtectionSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    maxEventsPerWindow: z.number().int().positive().optional(),
+    windowSeconds: z.number().int().positive().optional(),
+    cooldownSeconds: z.number().int().positive().optional(),
+  })
+  .strict();
+
 function addLegacyChannelAcpBindingIssues(
   value: unknown,
   ctx: z.RefinementCtx,
@@ -50,6 +59,7 @@ export const ChannelsSchema: z.ZodType<ChannelsConfig | undefined> = z
         groupPolicy: GroupPolicySchema.optional(),
         contextVisibility: ContextVisibilityModeSchema.optional(),
         heartbeat: ChannelHeartbeatVisibilitySchema,
+        botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
       })
       .strict()
       .optional(),

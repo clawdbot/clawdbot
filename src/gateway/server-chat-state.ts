@@ -1,6 +1,13 @@
+import type { AgentEventPayload } from "../infra/agent-events.js";
+
 export type ChatRunEntry = {
   sessionKey: string;
   clientRunId: string;
+};
+
+export type BufferedAgentEvent = {
+  sessionKey?: string;
+  payload: AgentEventPayload & { spawnedBy?: string };
 };
 
 export type ChatRunRegistry = {
@@ -70,6 +77,9 @@ export type ChatRunState = {
   deltaSentAt: Map<string, number>;
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
   deltaLastBroadcastLen: Map<string, number>;
+  deltaLastBroadcastText: Map<string, string>;
+  agentDeltaSentAt: Map<string, number>;
+  bufferedAgentEvents: Map<string, BufferedAgentEvent>;
   abortedRuns: Map<string, number>;
   clear: () => void;
 };
@@ -80,6 +90,9 @@ export function createChatRunState(): ChatRunState {
   const buffers = new Map<string, string>();
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
+  const deltaLastBroadcastText = new Map<string, string>();
+  const agentDeltaSentAt = new Map<string, number>();
+  const bufferedAgentEvents = new Map<string, BufferedAgentEvent>();
   const abortedRuns = new Map<string, number>();
 
   const clear = () => {
@@ -88,6 +101,9 @@ export function createChatRunState(): ChatRunState {
     buffers.clear();
     deltaSentAt.clear();
     deltaLastBroadcastLen.clear();
+    deltaLastBroadcastText.clear();
+    agentDeltaSentAt.clear();
+    bufferedAgentEvents.clear();
     abortedRuns.clear();
   };
 
@@ -97,6 +113,9 @@ export function createChatRunState(): ChatRunState {
     buffers,
     deltaSentAt,
     deltaLastBroadcastLen,
+    deltaLastBroadcastText,
+    agentDeltaSentAt,
+    bufferedAgentEvents,
     abortedRuns,
     clear,
   };

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
+  createPreUpdateConfigSnapshot,
   maintainConfigBackups,
   rotateConfigBackups,
   hardenBackupPermissions,
@@ -143,6 +144,91 @@ describe("config backup rotation", () => {
       }
       // Out-of-ring orphan gets pruned.
       await expectPathMissing(`${configPath}.bak.orphan`);
+    });
+  });
+
+  it("createPreUpdateConfigSnapshot writes .pre-update outside rotation ring", async () => {
+    await withTempHome(async () => {
+      const configPath = resolveConfigPathFromTempState();
+      const content = JSON.stringify({ plugins: { installs: ["matrix"] } });
+      await fs.writeFile(configPath, content, { mode: 0o600 });
+
+      const { existsSync } = await import("node:fs");
+      await createPreUpdateConfigSnapshot({
+        configPath,
+        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+      });
+
+      const snapshotPath = `${configPath}.pre-update`;
+      await expectRegularFile(snapshotPath);
+      await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(content);
+      if (!IS_WINDOWS) {
+        const stat = await fs.stat(snapshotPath);
+        expectPosixMode(stat.mode, 0o600);
+      }
+    });
+  });
+
+  it("createPreUpdateConfigSnapshot survives multiple config writes", async () => {
+    await withTempHome(async () => {
+      const configPath = resolveConfigPathFromTempState();
+      const original = JSON.stringify({ version: "original" });
+      await fs.writeFile(configPath, original, { mode: 0o600 });
+
+      const { existsSync } = await import("node:fs");
+      await createPreUpdateConfigSnapshot({
+        configPath,
+        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+      });
+
+      // Simulate multiple config writes + backup rotations
+      for (let i = 0; i < 7; i++) {
+        await rotateConfigBackups(configPath, fs);
+        await fs.copyFile(configPath, `${configPath}.bak`);
+        await fs.writeFile(configPath, JSON.stringify({ version: `write-${i}` }));
+      }
+
+      // .pre-update still holds the original content
+      const snapshotPath = `${configPath}.pre-update`;
+      await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(original);
+    });
+  });
+
+  it("createPreUpdateConfigSnapshot is first-write-wins; second call does not overwrite", async () => {
+    await withTempHome(async () => {
+      const configPath = resolveConfigPathFromTempState();
+      const original = JSON.stringify({ snapshot: "first" });
+      await fs.writeFile(configPath, original, { mode: 0o600 });
+
+      const { existsSync } = await import("node:fs");
+      await createPreUpdateConfigSnapshot({
+        configPath,
+        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+      });
+
+      // Mutate config and call again
+      await fs.writeFile(configPath, JSON.stringify({ snapshot: "second" }));
+      await createPreUpdateConfigSnapshot({
+        configPath,
+        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+      });
+
+      const snapshotPath = `${configPath}.pre-update`;
+      await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(original);
+    });
+  });
+
+  it("createPreUpdateConfigSnapshot is a no-op when config does not exist", async () => {
+    await withTempHome(async () => {
+      const configPath = resolveConfigPathFromTempState();
+      const { existsSync } = await import("node:fs");
+
+      await createPreUpdateConfigSnapshot({
+        configPath,
+        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+      });
+
+      await expectPathMissing(`${configPath}.pre-update`);
     });
   });
 });

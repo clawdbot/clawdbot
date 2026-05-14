@@ -126,6 +126,27 @@ describe("remote sandbox fs bridge", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "reads dot-dot-prefixed filenames inside the workspace",
+    async () => {
+      await withTempDir("openclaw-remote-fs-bridge-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.writeFile(path.join(workspaceDir, "..note.txt"), "hidden", "utf8");
+
+        const bridge = createWorkspaceReadBridge(workspaceDir);
+
+        expect(bridge.resolvePath({ filePath: "..note.txt" })).toMatchObject({
+          relativePath: "..note.txt",
+          containerPath: `${workspaceDir}/..note.txt`,
+        });
+        await expect(bridge.readFile({ filePath: "..note.txt" })).resolves.toEqual(
+          Buffer.from("hidden"),
+        );
+      });
+    },
+  );
+
   it.runIf(process.platform !== "win32")("rejects symlink escapes while reading", async () => {
     await withTempDir("openclaw-remote-fs-bridge-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");

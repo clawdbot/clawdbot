@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeHostname } from "openclaw/plugin-sdk/host-runtime";
@@ -10,12 +11,7 @@ import { formatSlackFileReference } from "../file-reference.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
 export { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
 import { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
-import {
-  type FetchLike,
-  fetchRemoteMedia,
-  fetchWithRuntimeDispatcher,
-  saveMediaBuffer,
-} from "./media.runtime.js";
+import { type FetchLike, fetchWithRuntimeDispatcher, saveRemoteMedia } from "./media.runtime.js";
 import { logVerbose } from "./thread.runtime.js";
 export {
   resetSlackThreadStarterCacheForTest,
@@ -126,7 +122,12 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
     return initialRes;
   }
 
-  const resolvedUrl = new URL(redirectUrl, parsed.href);
+  let resolvedUrl: URL;
+  try {
+    resolvedUrl = new URL(redirectUrl, parsed.href);
+  } catch {
+    return initialRes;
+  }
   if (resolvedUrl.protocol !== "https:") {
     return initialRes;
   }
@@ -146,7 +147,7 @@ const SLACK_MEDIA_SSRF_POLICY = {
 };
 export const SLACK_MEDIA_READ_IDLE_TIMEOUT_MS = 60_000;
 export const SLACK_MEDIA_TOTAL_TIMEOUT_MS = 120_000;
-type SlackFetchRemoteMediaOptions = Parameters<typeof fetchRemoteMedia>[0];
+type SlackSaveRemoteMediaOptions = Parameters<typeof saveRemoteMedia>[0];
 
 function mergeAbortSignals(signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
   const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
@@ -178,12 +179,12 @@ function mergeAbortSignals(signals: Array<AbortSignal | undefined>): AbortSignal
   return controller.signal;
 }
 
-async function fetchSlackMedia(params: {
-  options: SlackFetchRemoteMediaOptions;
+async function saveSlackMedia(params: {
+  options: SlackSaveRemoteMediaOptions;
   readIdleTimeoutMs?: number;
   totalTimeoutMs?: number;
   abortSignal?: AbortSignal;
-}): ReturnType<typeof fetchRemoteMedia> {
+}): ReturnType<typeof saveRemoteMedia> {
   const timeoutAbortController = params.totalTimeoutMs ? new AbortController() : undefined;
   const signal = mergeAbortSignals([
     params.abortSignal,
@@ -193,7 +194,7 @@ async function fetchSlackMedia(params: {
   let timedOut = false;
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
-  const fetchPromise = fetchRemoteMedia({
+  const savePromise = saveRemoteMedia({
     ...params.options,
     readIdleTimeoutMs: params.readIdleTimeoutMs ?? SLACK_MEDIA_READ_IDLE_TIMEOUT_MS,
     ...(signal
@@ -213,7 +214,7 @@ async function fetchSlackMedia(params: {
 
   try {
     if (!params.totalTimeoutMs) {
-      return await fetchPromise;
+      return await savePromise;
     }
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutHandle = setTimeout(() => {
@@ -223,7 +224,7 @@ async function fetchSlackMedia(params: {
       }, params.totalTimeoutMs);
       timeoutHandle.unref?.();
     });
-    return await Promise.race([fetchPromise, timeoutPromise]);
+    return await Promise.race([savePromise, timeoutPromise]);
   } finally {
     if (timeoutHandle) {
       clearTimeout(timeoutHandle);
@@ -253,6 +254,20 @@ function looksLikeHtmlBuffer(buffer: Buffer): boolean {
     buffer.subarray(0, 512).toString("utf-8").replace(/^\s+/, ""),
   );
   return head.startsWith("<!doctype html") || head.startsWith("<html");
+}
+
+async function looksLikeHtmlFile(filePath: string): Promise<boolean> {
+  const handle = await fs.open(filePath, "r").catch(() => null);
+  if (!handle) {
+    return false;
+  }
+  try {
+    const buffer = Buffer.alloc(512);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.byteLength, 0);
+    return looksLikeHtmlBuffer(buffer.subarray(0, bytesRead));
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
 }
 
 const MAX_SLACK_MEDIA_CONCURRENCY = 3;
@@ -294,12 +309,13 @@ async function downloadSlackMediaFile(params: {
 }): Promise<SlackMediaResult | null> {
   const { url: slackUrl, requestInit } = createSlackMediaRequest(params.url, params.token);
   const fetchImpl = createSlackMediaFetch();
-  const fetched = await fetchSlackMedia({
+  const saved = await saveSlackMedia({
     options: {
       url: slackUrl,
       fetchImpl,
       requestInit,
       filePathHint: params.file.name,
+      fallbackContentType: resolveSlackMediaMimetype(params.file, params.file.mimetype),
       maxBytes: params.maxBytes,
       ssrfPolicy: SLACK_MEDIA_SSRF_POLICY,
     },
@@ -307,9 +323,6 @@ async function downloadSlackMediaFile(params: {
     totalTimeoutMs: params.totalTimeoutMs ?? SLACK_MEDIA_TOTAL_TIMEOUT_MS,
     abortSignal: params.abortSignal,
   });
-  if (fetched.buffer.byteLength > params.maxBytes) {
-    return null;
-  }
 
   // Guard against auth/login HTML pages returned instead of binary media.
   // Allow user-provided HTML files through.
@@ -318,15 +331,15 @@ async function downloadSlackMediaFile(params: {
   const isExpectedHtml =
     fileMime === "text/html" || fileName.endsWith(".html") || fileName.endsWith(".htm");
   if (!isExpectedHtml) {
-    const detectedMime = normalizeOptionalLowercaseString(fetched.contentType?.split(";")[0]);
-    if (detectedMime === "text/html" || looksLikeHtmlBuffer(fetched.buffer)) {
+    const detectedMime = normalizeOptionalLowercaseString(saved.contentType?.split(";")[0]);
+    if (detectedMime === "text/html" || (await looksLikeHtmlFile(saved.path))) {
+      await fs.rm(saved.path, { force: true }).catch(() => undefined);
       return null;
     }
   }
 
-  const effectiveMime = resolveSlackMediaMimetype(params.file, fetched.contentType);
-  const saved = await saveMediaBuffer(fetched.buffer, effectiveMime, "inbound", params.maxBytes);
-  const label = fetched.fileName ?? params.file.name;
+  const effectiveMime = resolveSlackMediaMimetype(params.file, saved.contentType);
+  const label = saved.fileName ?? params.file.name;
   const contentType = effectiveMime ?? saved.contentType;
   return {
     path: saved.path,
@@ -479,7 +492,7 @@ export async function resolveSlackAttachmentContent(params: {
       try {
         const { url: slackUrl, requestInit } = createSlackMediaRequest(imageUrl, params.token);
         const fetchImpl = createSlackMediaFetch();
-        const fetched = await fetchSlackMedia({
+        const saved = await saveSlackMedia({
           options: {
             url: slackUrl,
             fetchImpl,
@@ -491,20 +504,12 @@ export async function resolveSlackAttachmentContent(params: {
           totalTimeoutMs: params.totalTimeoutMs ?? SLACK_MEDIA_TOTAL_TIMEOUT_MS,
           abortSignal: params.abortSignal,
         });
-        if (fetched.buffer.byteLength <= params.maxBytes) {
-          const saved = await saveMediaBuffer(
-            fetched.buffer,
-            fetched.contentType,
-            "inbound",
-            params.maxBytes,
-          );
-          const label = fetched.fileName ?? "forwarded image";
-          allMedia.push({
-            path: saved.path,
-            contentType: fetched.contentType ?? saved.contentType,
-            placeholder: `[Forwarded image: ${label}]`,
-          });
-        }
+        const label = saved.fileName ?? "forwarded image";
+        allMedia.push({
+          path: saved.path,
+          contentType: saved.contentType,
+          placeholder: `[Forwarded image: ${label}]`,
+        });
       } catch {
         // Skip images that fail to download
       }

@@ -309,6 +309,26 @@ describe("stuck session recovery", () => {
     ]);
   });
 
+  it("clears stale queued processing state even when the lane has no active work", async () => {
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedPiRunActive.mockReturnValue(false);
+    mocks.resetCommandLane.mockReturnValue(0);
+
+    await recoverStuckDiagnosticSession({
+      sessionId: "stale-session",
+      sessionKey: "agent:main:main",
+      ageMs: 180_000,
+      queueDepth: 2,
+    });
+
+    expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
+    expect(warnLogMessages()).toEqual([
+      "stuck session recovery: sessionId=stale-session sessionKey=agent:main:main age=180s action=release_lane aborted=false drained=true released=0",
+      "stuck session recovery outcome: status=released action=release_lane sessionId=stale-session sessionKey=agent:main:main lane=session:agent:main:main released=0",
+    ]);
+  });
+
   it("releases a stale session-id lane when no session key is available", async () => {
     mocks.isEmbeddedPiRunHandleActive.mockReturnValue(false);
     mocks.resetCommandLane.mockReturnValue(1);

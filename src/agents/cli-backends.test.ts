@@ -67,7 +67,7 @@ function createBackendEntry(params: {
             params.id === "claude-cli"
               ? "@anthropic-ai/claude-code"
               : params.id === "codex-cli"
-                ? "@openai/codex@0.129.0"
+                ? "@openai/codex@0.130.0"
                 : params.id === "google-gemini-cli"
                   ? "@google/gemini-cli"
                   : undefined,
@@ -498,7 +498,7 @@ describe("resolveCliBackendLiveTest", () => {
       defaultModelRef: "codex-cli/gpt-5.5",
       defaultImageProbe: true,
       defaultMcpProbe: true,
-      dockerNpmPackage: "@openai/codex@0.129.0",
+      dockerNpmPackage: "@openai/codex@0.130.0",
       dockerBinaryName: "codex",
     });
   });

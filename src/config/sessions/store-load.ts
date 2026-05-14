@@ -9,6 +9,7 @@ import {
   setSerializedSessionStore,
   writeSessionStoreCache,
 } from "./store-cache.js";
+import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
@@ -156,13 +157,20 @@ export function loadSessionStore(
     let pruned = 0;
     let capped = 0;
     if (maintenance.mode === "enforce" && beforeCount > maintenance.maxEntries) {
-      pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, { log: false });
+      const preserveSessionKeys = collectSessionMaintenancePreserveKeys();
+      pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
+        log: false,
+        preserveKeys: preserveSessionKeys,
+      });
       const countAfterPrune = Object.keys(store).length;
       capped = shouldRunSessionEntryMaintenance({
         entryCount: countAfterPrune,
         maxEntries: maintenance.maxEntries,
       })
-        ? capEntryCount(store, maintenance.maxEntries, { log: false })
+        ? capEntryCount(store, maintenance.maxEntries, {
+            log: false,
+            preserveKeys: preserveSessionKeys,
+          })
         : 0;
     }
     const afterCount = Object.keys(store).length;

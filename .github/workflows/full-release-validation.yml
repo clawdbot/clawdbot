@@ -297,6 +297,7 @@ jobs:
             echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
             if [[ "$conclusion" != "success" ]]; then
               gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
+              exit 1
             fi
           }
 
@@ -396,6 +397,7 @@ jobs:
             echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
             if [[ "$conclusion" != "success" ]]; then
               gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
+              exit 1
             fi
           }
 
@@ -504,6 +506,7 @@ jobs:
             echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
             if [[ "$conclusion" != "success" ]]; then
               gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
+              exit 1
             fi
           }
 
@@ -726,6 +729,7 @@ jobs:
           echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
           if [[ "$conclusion" != "success" ]]; then
             gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
+            exit 1
           fi
 
   summary:
@@ -735,62 +739,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Request private evidence update
-        env:
-          RELEASE_PRIVATE_DISPATCH_TOKEN: ${{ secrets.OPENCLAW_RELEASES_PRIVATE_DISPATCH_TOKEN }}
-          TARGET_REF: ${{ inputs.ref }}
-          PACKAGE_SPEC: ${{ inputs.evidence_package_spec || inputs.npm_telegram_package_spec }}
-          GITHUB_RUN_ID_VALUE: ${{ github.run_id }}
-          RELEASE_CHECKS_RESULT: ${{ needs.release_checks.result }}
-        run: |
-          set -euo pipefail
-          if [[ "$RELEASE_CHECKS_RESULT" == "skipped" ]]; then
-            echo "Release checks were skipped by rerun group; skipping automatic private evidence update."
-            exit 0
-          fi
-          if [[ -z "${RELEASE_PRIVATE_DISPATCH_TOKEN// }" ]]; then
-            echo "OPENCLAW_RELEASES_PRIVATE_DISPATCH_TOKEN is not configured; skipping automatic private evidence update."
-            exit 0
-          fi
-
-          release_id="${TARGET_REF#refs/tags/}"
-          release_id="${release_id#v}"
-          if [[ "$PACKAGE_SPEC" =~ ^openclaw@(.+)$ ]]; then
-            release_id="${BASH_REMATCH[1]}"
-          fi
-          release_id="$(printf '%s' "$release_id" | tr '/:@ ' '----' | tr -cd 'A-Za-z0-9._-')"
-          if [[ -z "$release_id" ]]; then
-            echo "::error::Could not derive release evidence id from target ref '${TARGET_REF}'."
-            exit 1
-          fi
-
-          payload="$(
-            jq -cn \
-              --arg full_validation_run_id "$GITHUB_RUN_ID_VALUE" \
-              --arg release_id "$release_id" \
-              --arg release_ref "$TARGET_REF" \
-              --arg package_spec "$PACKAGE_SPEC" \
-              --arg notes "Automatically requested by Full Release Validation ${GITHUB_RUN_ID_VALUE} after child workflows completed; the parent summary re-checks current child run conclusions." \
-              '{
-                event_type: "openclaw_full_release_validation_completed",
-                client_payload: {
-                  full_validation_run_id: $full_validation_run_id,
-                  release_id: $release_id,
-                  release_ref: $release_ref,
-                  package_spec: $package_spec,
-                  notes: $notes
-                }
-              }'
-          )"
-
-          curl --fail-with-body \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${RELEASE_PRIVATE_DISPATCH_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/openclaw/releases-private/dispatches \
-            -d "$payload"
-
       - name: Verify child workflow results
         env:
           GH_TOKEN: ${{ github.token }}
@@ -969,3 +917,61 @@ jobs:
           summarize_child_timing "npm_telegram" "$NPM_TELEGRAM_RUN_ID"
 
           exit "$failed"
+
+      - name: Request private evidence update
+        env:
+          RELEASE_PRIVATE_DISPATCH_TOKEN: ${{ secrets.OPENCLAW_RELEASES_PRIVATE_DISPATCH_TOKEN }}
+          TARGET_REF: ${{ inputs.ref }}
+          PACKAGE_SPEC: ${{ inputs.evidence_package_spec || inputs.npm_telegram_package_spec }}
+          GITHUB_RUN_ID_VALUE: ${{ github.run_id }}
+          RELEASE_CHECKS_RESULT: ${{ needs.release_checks.result }}
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_CHECKS_RESULT" == "skipped" ]]; then
+            echo "Release checks were skipped by rerun group; skipping automatic private evidence update."
+            exit 0
+          fi
+          if [[ -z "${RELEASE_PRIVATE_DISPATCH_TOKEN// }" ]]; then
+            echo "OPENCLAW_RELEASES_PRIVATE_DISPATCH_TOKEN is not configured; skipping automatic private evidence update."
+            exit 0
+          fi
+
+          release_id="${TARGET_REF#refs/tags/}"
+          release_id="${release_id#v}"
+          if [[ "$PACKAGE_SPEC" =~ ^openclaw@(.+)$ ]]; then
+            release_id="${BASH_REMATCH[1]}"
+          fi
+          release_id="$(printf '%s' "$release_id" | tr '/:@ ' '----' | tr -cd 'A-Za-z0-9._-')"
+          if [[ -z "$release_id" ]]; then
+            echo "::warning::Could not derive release evidence id from target ref '${TARGET_REF}'; skipping automatic private evidence update."
+            exit 0
+          fi
+
+          payload="$(
+            jq -cn \
+              --arg full_validation_run_id "$GITHUB_RUN_ID_VALUE" \
+              --arg release_id "$release_id" \
+              --arg release_ref "$TARGET_REF" \
+              --arg package_spec "$PACKAGE_SPEC" \
+              --arg notes "Automatically requested by Full Release Validation ${GITHUB_RUN_ID_VALUE} after child workflows completed; the parent summary re-checks current child run conclusions." \
+              '{
+                event_type: "openclaw_full_release_validation_completed",
+                client_payload: {
+                  full_validation_run_id: $full_validation_run_id,
+                  release_id: $release_id,
+                  release_ref: $release_ref,
+                  package_spec: $package_spec,
+                  notes: $notes
+                }
+              }'
+          )"
+
+          if ! curl --fail-with-body \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${RELEASE_PRIVATE_DISPATCH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/openclaw/releases-private/dispatches \
+            -d "$payload"; then
+            echo "::warning::Automatic private release evidence dispatch failed; child workflow validation remains authoritative."
+          fi

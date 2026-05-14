@@ -118,6 +118,42 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
   });
 
+  it("collapses case-insensitive duplicate env keys on Windows", () => {
+    const resolved = resolveCommandEnv({
+      argv: ["node", "script.js"],
+      platform: "win32",
+      baseEnv: {
+        Path: "C:\\base\\bin",
+        OPENCLAW_BASE_ENV: "base",
+      },
+      env: {
+        PATH: "C:\\override\\bin",
+        OPENCLAW_TEST_ENV: "ok",
+      },
+    });
+
+    expect(resolved.Path).toBeUndefined();
+    expect(resolved.PATH).toBe("C:\\override\\bin");
+    expect(resolved.OPENCLAW_BASE_ENV).toBe("base");
+    expect(resolved.OPENCLAW_TEST_ENV).toBe("ok");
+  });
+
+  it("preserves case-distinct env keys outside Windows", () => {
+    const resolved = resolveCommandEnv({
+      argv: ["node", "script.js"],
+      platform: "linux",
+      baseEnv: {
+        Path: "/base/bin",
+      },
+      env: {
+        PATH: "/override/bin",
+      },
+    });
+
+    expect(resolved.Path).toBe("/base/bin");
+    expect(resolved.PATH).toBe("/override/bin");
+  });
+
   it("suppresses npm fund prompts for npm argv", () => {
     const resolved = resolveCommandEnv({
       argv: ["npm", "--version"],

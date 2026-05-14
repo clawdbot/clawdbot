@@ -98,6 +98,7 @@ describe("llm hook runner methods", () => {
         prompt: "hello",
         historyMessages: [],
         imagesCount: 0,
+        tools: [],
       },
     },
     {

@@ -3,6 +3,7 @@ import {
   AcpRuntimeError,
   formatAcpErrorChain,
   isAcpRuntimeError,
+  toAcpRuntimeError,
   withAcpRuntimeErrorBoundary,
 } from "./errors.js";
 
@@ -71,6 +72,65 @@ describe("withAcpRuntimeErrorBoundary", () => {
     expect(error.message).toBe("backend missing");
     expect(error.cause).toBe(foreignError);
     expect(isAcpRuntimeError(foreignError)).toBe(true);
+  });
+
+  it("preserves redacted RequestError details from numeric ACP errors", () => {
+    const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
+    const requestError = Object.assign(new Error("Internal error"), {
+      name: "RequestError",
+      code: -32603,
+      data: {
+        details: `unknown config option: timeout; token=${token}`,
+      },
+    });
+
+    const error = toAcpRuntimeError({
+      error: requestError,
+      fallbackCode: "ACP_TURN_FAILED",
+      fallbackMessage: "fallback",
+    });
+
+    expect(error.code).toBe("ACP_TURN_FAILED");
+    expect(error.message).toContain("Internal error: unknown config option: timeout");
+    expect(error.message).not.toContain(token);
+    expect(error.cause).toBe(requestError);
+  });
+
+  it("keeps foreign OpenClaw ACP string code behavior unchanged", () => {
+    const foreignError = Object.assign(new Error("backend missing"), {
+      code: "ACP_BACKEND_MISSING",
+      data: {
+        details: "extra backend diagnostic",
+      },
+    });
+
+    const error = toAcpRuntimeError({
+      error: foreignError,
+      fallbackCode: "ACP_TURN_FAILED",
+      fallbackMessage: "fallback",
+    });
+
+    expect(error.code).toBe("ACP_BACKEND_MISSING");
+    expect(error.message).toBe("backend missing");
+    expect(error.cause).toBe(foreignError);
+  });
+
+  it("keeps generic non-RequestError messages unchanged", () => {
+    const sourceError = Object.assign(new Error("boom"), {
+      data: {
+        details: "extra diagnostic",
+      },
+    });
+
+    const error = toAcpRuntimeError({
+      error: sourceError,
+      fallbackCode: "ACP_TURN_FAILED",
+      fallbackMessage: "fallback",
+    });
+
+    expect(error.code).toBe("ACP_TURN_FAILED");
+    expect(error.message).toBe("boom");
+    expect(error.cause).toBe(sourceError);
   });
 });
 

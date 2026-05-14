@@ -1,7 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
+  isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "./model-auth-markers.js";
@@ -40,8 +42,6 @@ export {
 } from "./models-config.providers.secret-helpers.js";
 
 type AuthProfileStoreInput = AuthProfileStore | (() => AuthProfileStore);
-
-const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
 function resolveAuthProfileStoreInput(input: AuthProfileStoreInput) {
   return typeof input === "function" ? input() : input;
@@ -208,23 +208,49 @@ function resolveConfigBackedProviderAuth(params: {
   }
 
   const configuredProvider = params.config?.models?.providers?.[authProvider];
-  if (typeof configuredProvider?.apiKey !== "string") {
+  const configuredProviderApiKey = configuredProvider?.apiKey;
+  const configuredApiKeyRef = resolveSecretInputRef({
+    value: configuredProviderApiKey,
+    defaults: params.config?.secrets?.defaults,
+  }).ref;
+  if (configuredApiKeyRef) {
+    if (configuredApiKeyRef.source === "env") {
+      const envVar = configuredApiKeyRef.id.trim();
+      const envValue = params.env?.[envVar]?.trim();
+      return envValue
+        ? {
+            apiKey: envVar,
+            discoveryApiKey: toDiscoveryApiKey(envValue),
+            mode: "api_key",
+            source: "config",
+          }
+        : undefined;
+    }
+    return {
+      apiKey: resolveNonEnvSecretRefApiKeyMarker(configuredApiKeyRef.source),
+      discoveryApiKey: undefined,
+      mode: "api_key",
+      source: "config",
+    };
+  }
+  if (typeof configuredProviderApiKey !== "string") {
     return undefined;
   }
-  const configuredApiKey = normalizeApiKeyConfig(configuredProvider.apiKey);
+  const configuredApiKey = normalizeApiKeyConfig(configuredProviderApiKey);
   if (!configuredApiKey) {
     return undefined;
   }
-  if (ENV_VAR_NAME_RE.test(configuredApiKey)) {
+  if (isKnownEnvApiKeyMarker(configuredApiKey)) {
     const envValue = params.env?.[configuredApiKey]?.trim();
-    return envValue
-      ? {
-          apiKey: configuredApiKey,
-          discoveryApiKey: toDiscoveryApiKey(envValue),
-          mode: "api_key",
-          source: "config",
-        }
-      : undefined;
+    if (envValue) {
+      return {
+        apiKey: configuredApiKey,
+        discoveryApiKey: toDiscoveryApiKey(envValue),
+        mode: "api_key",
+        source: "config",
+      };
+    }
+    return undefined;
   }
   return isNonSecretApiKeyMarker(configuredApiKey)
     ? {

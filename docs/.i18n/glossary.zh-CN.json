@@ -652,6 +652,26 @@
     "target": "管理插件"
   },
   {
+    "source": "Plugin inventory",
+    "target": "插件清单"
+  },
+  {
+    "source": "Plugin reference",
+    "target": "插件参考"
+  },
+  {
+    "source": "Community plugins",
+    "target": "社区插件"
+  },
+  {
+    "source": "ClawHub publishing",
+    "target": "ClawHub 发布"
+  },
+  {
+    "source": "Plugin dependency resolution",
+    "target": "插件依赖解析"
+  },
+  {
     "source": "Plugin path ownership",
     "target": "插件路径所有权"
   },
@@ -950,5 +970,9 @@
   {
     "source": "ACP agents setup",
     "target": "ACP Agents 设置"
+  },
+  {
+    "source": "ds4 (local DeepSeek V4)",
+    "target": "ds4（本地 DeepSeek V4）"
   }
 ]

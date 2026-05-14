@@ -8,6 +8,7 @@ export type {
   BlockStreamingCoalesceConfig,
   BrowserConfig,
   BrowserProfileConfig,
+  ChannelBotLoopProtectionConfig,
   ContextVisibilityMode,
   DiscordAccountConfig,
   DiscordActionConfig,

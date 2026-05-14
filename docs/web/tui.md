@@ -73,6 +73,7 @@ Notes:
 ## Sending + delivery
 
 - Messages are sent to the Gateway; delivery to providers is off by default.
+- The TUI is an internal source surface like WebChat, not a generic outbound channel. Harnesses that require `tools.message` for visible replies can satisfy the active TUI turn with a targetless `message.send`; explicit provider delivery still uses normal configured channels and never falls back to `lastChannel`.
 - Turn delivery on:
   - `/deliver on`
   - or the Settings panel

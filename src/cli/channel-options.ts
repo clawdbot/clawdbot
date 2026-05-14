@@ -1,4 +1,3 @@
-import { CHAT_CHANNEL_ORDER } from "../channels/ids.js";
 import { readCliStartupMetadata } from "./startup-metadata.js";
 
 function dedupe(values: string[]): string[] {
@@ -29,7 +28,7 @@ function loadPrecomputedChannelOptions(): string[] | null {
       return precomputedChannelOptions;
     }
   } catch {
-    // Fall back to dynamic catalog resolution.
+    // Source checkouts may not have generated startup metadata yet.
   }
   precomputedChannelOptions = null;
   return null;
@@ -37,11 +36,12 @@ function loadPrecomputedChannelOptions(): string[] | null {
 
 export function resolveCliChannelOptions(): string[] {
   const precomputed = loadPrecomputedChannelOptions();
-  return precomputed ?? [...CHAT_CHANNEL_ORDER];
+  return precomputed ?? [];
 }
 
 export function formatCliChannelOptions(extra: string[] = []): string {
-  return [...extra, ...resolveCliChannelOptions()].join("|");
+  const options = [...extra, ...resolveCliChannelOptions()];
+  return options.length > 0 ? options.join("|") : "channel";
 }
 
 export const __testing = {

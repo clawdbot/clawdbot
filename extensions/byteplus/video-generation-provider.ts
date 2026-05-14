@@ -4,11 +4,14 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
-  fetchWithTimeout,
+  createProviderOperationTimeoutResolver,
+  fetchProviderDownloadResponse,
+  fetchProviderOperationResponse,
   postJsonRequest,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   waitProviderOperationPollInterval,
+  type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
@@ -82,16 +85,21 @@ async function pollBytePlusTask(params: {
     label: `BytePlus video generation task ${params.taskId}`,
   });
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
-    const response = await fetchWithTimeout(
-      `${params.baseUrl}/contents/generations/tasks/${params.taskId}`,
-      {
+    const response = await fetchProviderOperationResponse({
+      stage: "poll",
+      url: `${params.baseUrl}/contents/generations/tasks/${params.taskId}`,
+      init: {
         method: "GET",
         headers: params.headers,
       },
-      resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: DEFAULT_TIMEOUT_MS }),
-      params.fetchFn,
-    );
-    await assertOkOrThrowHttpError(response, "BytePlus video status request failed");
+      timeoutMs: createProviderOperationTimeoutResolver({
+        deadline,
+        defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+      }),
+      fetchFn: params.fetchFn,
+      provider: "byteplus",
+      requestFailedMessage: "BytePlus video status request failed",
+    });
     const payload = (await response.json()) as BytePlusTaskResponse;
     switch (normalizeOptionalString(payload.status)) {
       case "succeeded":
@@ -113,16 +121,17 @@ async function pollBytePlusTask(params: {
 
 async function downloadBytePlusVideo(params: {
   url: string;
-  timeoutMs?: number;
+  timeoutMs?: ProviderOperationTimeoutMs;
   fetchFn: typeof fetch;
 }): Promise<GeneratedVideoAsset> {
-  const response = await fetchWithTimeout(
-    params.url,
-    { method: "GET" },
-    params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    params.fetchFn,
-  );
-  await assertOkOrThrowHttpError(response, "BytePlus generated video download failed");
+  const response = await fetchProviderDownloadResponse({
+    url: params.url,
+    init: { method: "GET" },
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    fetchFn: params.fetchFn,
+    provider: "byteplus",
+    requestFailedMessage: "BytePlus generated video download failed",
+  });
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
   const arrayBuffer = await response.arrayBuffer();
   return {
@@ -304,7 +313,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         }
         const video = await downloadBytePlusVideo({
           url: videoUrl,
-          timeoutMs: resolveProviderOperationTimeoutMs({
+          timeoutMs: createProviderOperationTimeoutResolver({
             deadline,
             defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           }),

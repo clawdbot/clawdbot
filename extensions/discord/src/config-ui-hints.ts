@@ -310,6 +310,26 @@ export const discordChannelConfigUiHints = {
     label: "Discord Allow Bot Messages",
     help: 'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
   },
+  botLoopProtection: {
+    label: "Discord Bot Loop Protection",
+    help: "Sliding-window guard for bot-to-bot Discord loops. Default is enabled whenever allowBots lets bot-authored messages reach dispatch.",
+  },
+  "botLoopProtection.enabled": {
+    label: "Discord Bot Loop Protection Enabled",
+    help: 'Enable the bot-pair loop guard. Defaults to true when allowBots is true or "mentions", and false when bot messages are ignored.',
+  },
+  "botLoopProtection.maxEventsPerWindow": {
+    label: "Discord Bot Pair Events Per Window",
+    help: "Maximum messages a single Discord bot pair may exchange in the configured window before suppression starts. Default: 20.",
+  },
+  "botLoopProtection.windowSeconds": {
+    label: "Discord Bot Loop Window Seconds",
+    help: "Sliding window length in seconds for Discord bot-pair loop budgets. Default: 60.",
+  },
+  "botLoopProtection.cooldownSeconds": {
+    label: "Discord Bot Loop Cooldown Seconds",
+    help: "Seconds to suppress a Discord bot pair after it exceeds the loop budget. Default: 60.",
+  },
   mentionAliases: {
     label: "Discord Mention Aliases",
     help: "Map outbound @handle text to stable Discord user IDs before sending. Set per account via channels.discord.accounts.<id>.mentionAliases.",

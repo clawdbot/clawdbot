@@ -73,8 +73,9 @@ openclaw logs --follow
   tool execution.
 - **Worker/dist:** run `pnpm build` when touching workers, dynamic imports,
   package exports, lazy runtime boundaries, or published paths.
-- **Live keys:** check local `~/.profile` for key presence/length before saying
-  live proof is blocked. Never print secrets.
+- **Live keys:** use the configured secret workflow for missing provider keys
+  before saying live proof is blocked. Env checks are presence-only; never print
+  secrets.
 
 ## Code Pointers
 

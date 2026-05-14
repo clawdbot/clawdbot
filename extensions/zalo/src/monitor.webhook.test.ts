@@ -549,7 +549,8 @@ describe("handleZaloWebhookRequest", () => {
       core,
       finalizeInboundContextMock,
       recordInboundSessionMock,
-      fetchRemoteMediaMock,
+      readRemoteMediaBufferMock,
+      saveRemoteMediaMock,
       saveMediaBufferMock,
     } = createImageLifecycleCore();
     const unregister = registerTarget({
@@ -582,9 +583,11 @@ describe("handleZaloWebhookRequest", () => {
       unregister();
     }
 
-    await vi.waitFor(() => expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1));
+    expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
     expectImageLifecycleDelivery({
-      fetchRemoteMediaMock,
+      readRemoteMediaBufferMock,
+      saveRemoteMediaMock,
       saveMediaBufferMock,
       finalizeInboundContextMock,
       recordInboundSessionMock,

@@ -1,10 +1,6 @@
 import { StickerFormatType, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
 import { getFileExtension } from "openclaw/plugin-sdk/media-mime";
-import {
-  fetchRemoteMedia,
-  saveMediaBuffer,
-  type FetchLike,
-} from "openclaw/plugin-sdk/media-runtime";
+import { saveRemoteMedia, type FetchLike } from "openclaw/plugin-sdk/media-runtime";
 import { buildMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -215,19 +211,23 @@ async function fetchDiscordMedia(params: {
   readIdleTimeoutMs?: number;
   totalTimeoutMs?: number;
   abortSignal?: AbortSignal;
+  fallbackContentType?: string;
+  originalFilename?: string;
 }) {
   const timeoutAbortController = params.totalTimeoutMs ? new AbortController() : undefined;
   const signal = mergeAbortSignals([params.abortSignal, timeoutAbortController?.signal]);
   let timedOut = false;
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
-  const fetchPromise = fetchRemoteMedia({
+  const savePromise = saveRemoteMedia({
     url: params.url,
     filePathHint: params.filePathHint,
     maxBytes: params.maxBytes,
     fetchImpl: params.fetchImpl,
     ssrfPolicy: params.ssrfPolicy,
     readIdleTimeoutMs: params.readIdleTimeoutMs,
+    fallbackContentType: params.fallbackContentType,
+    originalFilename: params.originalFilename,
     ...(signal ? { requestInit: { signal } } : {}),
   }).catch((error) => {
     if (timedOut) {
@@ -238,7 +238,7 @@ async function fetchDiscordMedia(params: {
 
   try {
     if (!params.totalTimeoutMs) {
-      return await fetchPromise;
+      return await savePromise;
     }
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutHandle = setTimeout(() => {
@@ -248,7 +248,7 @@ async function fetchDiscordMedia(params: {
       }, params.totalTimeoutMs);
       timeoutHandle.unref?.();
     });
-    return await Promise.race([fetchPromise, timeoutPromise]);
+    return await Promise.race([savePromise, timeoutPromise]);
   } finally {
     if (timeoutHandle) {
       clearTimeout(timeoutHandle);
@@ -280,7 +280,7 @@ async function appendResolvedMediaFromAttachments(params: {
       continue;
     }
     try {
-      const fetched = await fetchDiscordMedia({
+      const saved = await fetchDiscordMedia({
         url: attachmentUrl,
         filePathHint: attachment.filename ?? attachmentUrl,
         maxBytes: params.maxBytes,
@@ -289,14 +289,9 @@ async function appendResolvedMediaFromAttachments(params: {
         readIdleTimeoutMs: params.readIdleTimeoutMs,
         totalTimeoutMs: params.totalTimeoutMs,
         abortSignal: params.abortSignal,
+        fallbackContentType: attachment.content_type,
+        originalFilename: attachment.filename,
       });
-      const saved = await saveMediaBuffer(
-        fetched.buffer,
-        fetched.contentType ?? attachment.content_type,
-        "inbound",
-        params.maxBytes,
-        attachment.filename,
-      );
       params.out.push({
         path: saved.path,
         contentType: saved.contentType,
@@ -388,7 +383,7 @@ async function appendResolvedMediaFromStickers(params: {
     let lastError: unknown;
     for (const candidate of candidates) {
       try {
-        const fetched = await fetchDiscordMedia({
+        const saved = await fetchDiscordMedia({
           url: candidate.url,
           filePathHint: candidate.fileName,
           maxBytes: params.maxBytes,
@@ -397,14 +392,9 @@ async function appendResolvedMediaFromStickers(params: {
           readIdleTimeoutMs: params.readIdleTimeoutMs,
           totalTimeoutMs: params.totalTimeoutMs,
           abortSignal: params.abortSignal,
+          fallbackContentType: inferStickerContentType(sticker),
+          originalFilename: candidate.fileName,
         });
-        const saved = await saveMediaBuffer(
-          fetched.buffer,
-          fetched.contentType,
-          "inbound",
-          params.maxBytes,
-          candidate.fileName,
-        );
         params.out.push({
           path: saved.path,
           contentType: saved.contentType,

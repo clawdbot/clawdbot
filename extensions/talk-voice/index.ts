@@ -209,24 +209,26 @@ export default definePluginEntry({
             return { text: `No voice found for ${hint}. Try: ${commandLabel} list` };
           }
 
-          const nextConfig = {
-            ...cfg,
-            talk: {
-              ...cfg.talk,
-              provider: providerId,
-              providers: {
-                ...cfg.talk?.providers,
-                [providerId]: {
-                  ...cfg.talk?.providers?.[providerId],
-                  voiceId: chosen.id,
-                },
-              },
-              ...(providerId === "elevenlabs" ? { voiceId: chosen.id } : {}),
-            },
-          };
-          await api.runtime.config.replaceConfigFile({
-            nextConfig,
+          await api.runtime.config.mutateConfigFile({
             afterWrite: { mode: "auto" },
+            mutate: (draft) => {
+              const nextConfig = {
+                ...draft,
+                talk: {
+                  ...draft.talk,
+                  provider: providerId,
+                  providers: {
+                    ...draft.talk?.providers,
+                    [providerId]: {
+                      ...draft.talk?.providers?.[providerId],
+                      voiceId: chosen.id,
+                    },
+                  },
+                  ...(providerId === "elevenlabs" ? { voiceId: chosen.id } : {}),
+                },
+              };
+              Object.assign(draft, nextConfig);
+            },
           });
 
           const name = (chosen.name ?? "").trim() || "(unnamed)";

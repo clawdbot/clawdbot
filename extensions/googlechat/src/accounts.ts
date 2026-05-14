@@ -7,6 +7,7 @@ import {
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { isSecretRef } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
@@ -48,6 +49,7 @@ function mergeGoogleChatAccountConfig(
     accounts: raw.accounts as Record<string, Partial<GoogleChatAccountConfig>> | undefined,
     accountId,
     omitKeys: ["defaultAccount"],
+    nestedObjectKeys: ["botLoopProtection"],
   });
   const defaultAccountConfig = resolveAccountEntry(raw.accounts, DEFAULT_ACCOUNT_ID) ?? {};
   if (accountId === DEFAULT_ACCOUNT_ID) {
@@ -63,7 +65,15 @@ function mergeGoogleChatAccountConfig(
   } = defaultAccountConfig;
   // In multi-account setups, allow accounts.default to provide shared defaults
   // (for example webhook/audience fields) while preserving top-level and account overrides.
-  return { ...defaultAccountShared, ...base } as GoogleChatAccountConfig;
+  const botLoopProtection = mergePairLoopGuardConfig(
+    defaultAccountShared.botLoopProtection,
+    base.botLoopProtection,
+  );
+  return {
+    ...defaultAccountShared,
+    ...base,
+    ...(botLoopProtection ? { botLoopProtection } : {}),
+  } as GoogleChatAccountConfig;
 }
 
 export function resolveGoogleChatConfigAccessorAccount(params: {

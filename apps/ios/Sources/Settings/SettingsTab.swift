@@ -405,6 +405,8 @@ struct SettingsTab: View {
                         }
                     }
 
+                    AnyView(PrivacyAccessSectionView())
+
                     DisclosureGroup("Device Info") {
                         TextField("Name", text: self.$displayName)
                         Text(self.instanceId)
@@ -419,16 +421,7 @@ struct SettingsTab: View {
                 }
             }
             .navigationTitle("Settings")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        self.dismiss()
-                    } label: {
-                        Image(systemName: "xmark")
-                    }
-                    .accessibilityLabel("Close")
-                }
-            }
+            .modifier(SettingsCloseToolbar())
             .sheet(isPresented: self.$showGatewayProblemDetails) {
                 if let gatewayProblem = self.appModel.lastGatewayProblem {
                     GatewayProblemDetailsSheet(
@@ -488,90 +481,91 @@ struct SettingsTab: View {
                 Text(self.scannerError ?? "")
             }
             .onAppear {
-                self.lastLocationModeRaw = self.locationEnabledModeRaw
-                self.syncManualPortText()
-                let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmedInstanceId.isEmpty {
-                    self.gatewayToken = GatewaySettingsStore.loadGatewayToken(instanceId: trimmedInstanceId) ?? ""
-                    self.gatewayPassword = GatewaySettingsStore.loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
+                    self.lastLocationModeRaw = self.locationEnabledModeRaw
+                    self.syncManualPortText()
+                    let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmedInstanceId.isEmpty {
+                        self.gatewayToken = GatewaySettingsStore.loadGatewayToken(instanceId: trimmedInstanceId) ?? ""
+                        self.gatewayPassword = GatewaySettingsStore
+                            .loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
+                    }
+                    self.defaultShareInstruction = ShareToAgentSettings.loadDefaultInstruction()
+                    self.appModel.refreshLastShareEventFromRelay()
+                    // Keep setup front-and-center when disconnected; keep things compact once connected.
+                    self.gatewayExpanded = !self.isGatewayConnected
+                    self.selectedAgentPickerId = self.appModel.selectedAgentId ?? ""
+                    if self.isGatewayConnected {
+                        self.appModel.reloadTalkConfig()
+                    }
                 }
-                self.defaultShareInstruction = ShareToAgentSettings.loadDefaultInstruction()
-                self.appModel.refreshLastShareEventFromRelay()
-                // Keep setup front-and-center when disconnected; keep things compact once connected.
-                self.gatewayExpanded = !self.isGatewayConnected
-                self.selectedAgentPickerId = self.appModel.selectedAgentId ?? ""
-                if self.isGatewayConnected {
-                    self.appModel.reloadTalkConfig()
+                .onChange(of: self.selectedAgentPickerId) { _, newValue in
+                    let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    self.appModel.setSelectedAgentId(trimmed.isEmpty ? nil : trimmed)
                 }
-            }
-            .onChange(of: self.selectedAgentPickerId) { _, newValue in
-                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                self.appModel.setSelectedAgentId(trimmed.isEmpty ? nil : trimmed)
-            }
-            .onChange(of: self.appModel.selectedAgentId ?? "") { _, newValue in
-                if newValue != self.selectedAgentPickerId {
-                    self.selectedAgentPickerId = newValue
+                .onChange(of: self.appModel.selectedAgentId ?? "") { _, newValue in
+                    if newValue != self.selectedAgentPickerId {
+                        self.selectedAgentPickerId = newValue
+                    }
                 }
-            }
-            .onChange(of: self.preferredGatewayStableID) { _, newValue in
-                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { return }
-                GatewaySettingsStore.savePreferredGatewayStableID(trimmed)
-            }
-            .onChange(of: self.gatewayToken) { _, newValue in
-                guard !self.suppressCredentialPersist else { return }
-                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !instanceId.isEmpty else { return }
-                GatewaySettingsStore.saveGatewayToken(trimmed, instanceId: instanceId)
-            }
-            .onChange(of: self.gatewayPassword) { _, newValue in
-                guard !self.suppressCredentialPersist else { return }
-                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !instanceId.isEmpty else { return }
-                GatewaySettingsStore.saveGatewayPassword(trimmed, instanceId: instanceId)
-            }
-            .onChange(of: self.defaultShareInstruction) { _, newValue in
-                ShareToAgentSettings.saveDefaultInstruction(newValue)
-            }
-            .onChange(of: self.manualGatewayPort) { _, _ in
-                self.syncManualPortText()
-            }
-            .onChange(of: self.appModel.gatewayServerName) { _, newValue in
-                if newValue != nil {
-                    self.setupCode = ""
-                    self.setupStatusText = nil
-                    return
+                .onChange(of: self.preferredGatewayStableID) { _, newValue in
+                    let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { return }
+                    GatewaySettingsStore.savePreferredGatewayStableID(trimmed)
                 }
-                if self.manualGatewayEnabled {
-                    self.setupStatusText = self.appModel.gatewayStatusText
+                .onChange(of: self.gatewayToken) { _, newValue in
+                    guard !self.suppressCredentialPersist else { return }
+                    let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !instanceId.isEmpty else { return }
+                    GatewaySettingsStore.saveGatewayToken(trimmed, instanceId: instanceId)
                 }
-            }
-            .onChange(of: self.appModel.gatewayStatusText) { _, newValue in
-                guard self.manualGatewayEnabled || self.connectingGatewayID == "manual" else { return }
-                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { return }
-                self.setupStatusText = trimmed
-            }
-            .onChange(of: self.locationEnabledModeRaw) { _, newValue in
-                let previous = self.lastLocationModeRaw
-                self.lastLocationModeRaw = newValue
-                guard let mode = OpenClawLocationMode(rawValue: newValue) else { return }
-                Task {
-                    let granted = await self.appModel.requestLocationPermissions(mode: mode)
-                    if !granted {
-                        await MainActor.run {
-                            self.locationEnabledModeRaw = previous
-                            self.lastLocationModeRaw = previous
-                        }
+                .onChange(of: self.gatewayPassword) { _, newValue in
+                    guard !self.suppressCredentialPersist else { return }
+                    let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !instanceId.isEmpty else { return }
+                    GatewaySettingsStore.saveGatewayPassword(trimmed, instanceId: instanceId)
+                }
+                .onChange(of: self.defaultShareInstruction) { _, newValue in
+                    ShareToAgentSettings.saveDefaultInstruction(newValue)
+                }
+                .onChange(of: self.manualGatewayPort) { _, _ in
+                    self.syncManualPortText()
+                }
+                .onChange(of: self.appModel.gatewayServerName) { _, newValue in
+                    if newValue != nil {
+                        self.setupCode = ""
+                        self.setupStatusText = nil
                         return
                     }
-                    await MainActor.run {
-                        self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
+                    if self.manualGatewayEnabled {
+                        self.setupStatusText = self.appModel.gatewayStatusText
                     }
                 }
-            }
+                .onChange(of: self.appModel.gatewayStatusText) { _, newValue in
+                    guard self.manualGatewayEnabled || self.connectingGatewayID == "manual" else { return }
+                    let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { return }
+                    self.setupStatusText = trimmed
+                }
+                .onChange(of: self.locationEnabledModeRaw) { _, newValue in
+                    let previous = self.lastLocationModeRaw
+                    self.lastLocationModeRaw = newValue
+                    guard let mode = OpenClawLocationMode(rawValue: newValue) else { return }
+                    Task {
+                        let granted = await self.appModel.requestLocationPermissions(mode: mode)
+                        if !granted {
+                            await MainActor.run {
+                                self.locationEnabledModeRaw = previous
+                                self.lastLocationModeRaw = previous
+                            }
+                            return
+                        }
+                        await MainActor.run {
+                            self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
+                        }
+                    }
+                }
         }
         .gatewayTrustPromptAlert()
     }
@@ -1135,6 +1129,23 @@ struct SettingsTab: View {
         }
 
         return lines
+    }
+}
+
+private struct SettingsCloseToolbar: ViewModifier {
+    @Environment(\.dismiss) private var dismiss
+
+    func body(content: Content) -> some View {
+        content.toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    self.dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .accessibilityLabel("Close")
+            }
+        }
     }
 }
 

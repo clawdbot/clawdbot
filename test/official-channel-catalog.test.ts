@@ -85,9 +85,10 @@ describe("buildOfficialChannelCatalog", () => {
           blurb: "works with your own number; recommend a separate phone + eSIM.",
         },
         install: {
+          clawhubSpec: "clawhub:@openclaw/whatsapp",
           npmSpec: "@openclaw/whatsapp",
           localPath: bundledPluginRoot("whatsapp"),
-          defaultChoice: "npm",
+          defaultChoice: "clawhub",
         },
         release: {
           publishToNpm: true,
@@ -139,10 +140,10 @@ describe("buildOfficialChannelCatalog", () => {
         aliases: ["qywx", "wework", "enterprise-wechat"],
       },
       install: {
-        npmSpec: "@wecom/wecom-openclaw-plugin@2026.4.23",
+        npmSpec: "@wecom/wecom-openclaw-plugin@2026.5.7",
         defaultChoice: "npm",
         expectedIntegrity:
-          "sha512-bnzfdIEEu1/LFvcdyjaTkyxt27w6c7dqhkPezU62OWaqmcdFsUGR3T55USK/O9pIKsNcnL1Tnu1pqKYCWHFgWQ==",
+          "sha512-TCkP9as00WfEhgFWG8YL/rcmaWGIshAki2HQh83nTRccGfVBCoGjrEboTTqq3yDmK9koWTV11zi8u8A4dNtvug==",
       },
     });
     expect(
@@ -195,8 +196,9 @@ describe("buildOfficialChannelCatalog", () => {
         systemImage: "message",
       },
       install: {
+        clawhubSpec: "clawhub:@openclaw/whatsapp",
         npmSpec: "@openclaw/whatsapp",
-        defaultChoice: "npm",
+        defaultChoice: "clawhub",
         minHostVersion: ">=2026.4.25",
       },
     });
@@ -325,8 +327,9 @@ describe("buildOfficialChannelCatalog", () => {
         systemImage: "message",
       },
       install: {
+        clawhubSpec: "clawhub:@openclaw/whatsapp",
         npmSpec: "@openclaw/whatsapp",
-        defaultChoice: "npm",
+        defaultChoice: "clawhub",
         minHostVersion: ">=2026.4.25",
       },
     });

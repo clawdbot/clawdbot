@@ -15,11 +15,11 @@ import {
 import { asRecord } from "./dreaming-shared.js";
 import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
 
-const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})\.md$/;
+const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
 const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
 const SHORT_TERM_SESSION_CORPUS_RE =
   /(?:^|\/)memory\/\.dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/;
-const SHORT_TERM_BASENAME_RE = /^(\d{4})-(\d{2})-(\d{2})\.md$/;
+const SHORT_TERM_BASENAME_RE = /^(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RECENCY_HALF_LIFE_DAYS = 14;
 export const DEFAULT_PROMOTION_MIN_SCORE = 0.75;

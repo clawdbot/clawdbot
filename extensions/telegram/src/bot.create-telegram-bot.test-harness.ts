@@ -1,4 +1,5 @@
 import { rmSync } from "node:fs";
+import { buildChannelTurnContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -13,6 +14,8 @@ type LoadSessionStoreFn =
   typeof import("openclaw/plugin-sdk/session-store-runtime").loadSessionStore;
 type ResolveStorePathFn =
   typeof import("openclaw/plugin-sdk/session-store-runtime").resolveStorePath;
+type ReadSessionUpdatedAtFn =
+  typeof import("openclaw/plugin-sdk/session-store-runtime").readSessionUpdatedAt;
 type SessionStore = ReturnType<LoadSessionStoreFn>;
 type TelegramBotRuntimeForTest = NonNullable<
   Parameters<typeof import("./bot.js").setTelegramBotRuntimeForTest>[0]
@@ -46,24 +49,34 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));
 
-const { getRuntimeConfig, loadSessionStoreMock, resolveStorePathMock, sessionStoreEntries } =
-  vi.hoisted(
-    (): {
-      getRuntimeConfig: MockFn<GetRuntimeConfigFn>;
-      loadSessionStoreMock: MockFn<LoadSessionStoreFn>;
-      resolveStorePathMock: MockFn<ResolveStorePathFn>;
-      sessionStoreEntries: { value: SessionStore };
-    } => ({
-      getRuntimeConfig: vi.fn<GetRuntimeConfigFn>(() => ({})),
-      loadSessionStoreMock: vi.fn<LoadSessionStoreFn>(
-        (_storePath, _opts) => sessionStoreEntries.value,
-      ),
-      resolveStorePathMock: vi.fn<ResolveStorePathFn>(
-        (storePath?: string) => storePath ?? sessionStorePath,
-      ),
-      sessionStoreEntries: { value: {} as SessionStore },
-    }),
-  );
+const {
+  getRuntimeConfig,
+  loadSessionStoreMock,
+  readSessionUpdatedAtMock,
+  recordInboundSessionMock,
+  resolveStorePathMock,
+  sessionStoreEntries,
+} = vi.hoisted(
+  (): {
+    getRuntimeConfig: MockFn<GetRuntimeConfigFn>;
+    loadSessionStoreMock: MockFn<LoadSessionStoreFn>;
+    readSessionUpdatedAtMock: MockFn<ReadSessionUpdatedAtFn>;
+    recordInboundSessionMock: MockFn<NonNullable<TelegramBotDeps["recordInboundSession"]>>;
+    resolveStorePathMock: MockFn<ResolveStorePathFn>;
+    sessionStoreEntries: { value: SessionStore };
+  } => ({
+    getRuntimeConfig: vi.fn<GetRuntimeConfigFn>(() => ({})),
+    loadSessionStoreMock: vi.fn<LoadSessionStoreFn>(
+      (_storePath, _opts) => sessionStoreEntries.value,
+    ),
+    resolveStorePathMock: vi.fn<ResolveStorePathFn>(
+      (storePath?: string) => storePath ?? sessionStorePath,
+    ),
+    readSessionUpdatedAtMock: vi.fn<ReadSessionUpdatedAtFn>(() => undefined),
+    recordInboundSessionMock: vi.fn(async () => undefined),
+    sessionStoreEntries: { value: {} as SessionStore },
+  }),
+);
 
 export function getLoadConfigMock(): AnyMock {
   return getRuntimeConfig;
@@ -369,6 +382,13 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   getRuntimeConfig,
   loadSessionStore: loadSessionStoreMock as TelegramBotDeps["loadSessionStore"],
   resolveStorePath: resolveStorePathMock,
+  readSessionUpdatedAt: readSessionUpdatedAtMock,
+  recordInboundSession: recordInboundSessionMock as TelegramBotDeps["recordInboundSession"],
+  recordChannelActivity: vi.fn() as TelegramBotDeps["recordChannelActivity"],
+  resolveInboundLastRouteSessionKey: ({ route, sessionKey }) =>
+    route.lastRoutePolicy === "main" ? route.mainSessionKey : sessionKey,
+  resolvePinnedMainDmOwnerFromAllowlist: () => null,
+  buildChannelTurnContext,
   readChannelAllowFromStore:
     readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
   upsertChannelPairingRequest:
@@ -466,6 +486,10 @@ beforeEach(() => {
   loadSessionStoreMock.mockImplementation(() => sessionStoreEntries.value);
   resolveStorePathMock.mockReset();
   resolveStorePathMock.mockImplementation((storePath?: string) => storePath ?? sessionStorePath);
+  readSessionUpdatedAtMock.mockReset();
+  readSessionUpdatedAtMock.mockReturnValue(undefined);
+  recordInboundSessionMock.mockReset();
+  recordInboundSessionMock.mockResolvedValue(undefined);
   loadWebMedia.mockReset();
   readChannelAllowFromStore.mockReset();
   readChannelAllowFromStore.mockResolvedValue([]);

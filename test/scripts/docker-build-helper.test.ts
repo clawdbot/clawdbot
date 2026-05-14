@@ -266,6 +266,7 @@ describe("docker build helper", () => {
       };
       expect(workspace).toContain('  "kept@1.0.0": "patches/kept.patch"');
       expect(workspace).toContain("allowUnusedPatches: true");
+      expect(workspace).toContain("minimumReleaseAge: 0");
       expect(workspace).toContain("allowBuilds:");
       expect(manifest.pnpm).toBeUndefined();
     } finally {

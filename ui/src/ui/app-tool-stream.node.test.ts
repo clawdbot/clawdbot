@@ -307,7 +307,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       startedAt: TOOL_STREAM_TEST_NOW,
       completedAt: null,
     });
-    expect(host.compactionClearTimer).toBeNull();
+    expect(host.compactionClearTimer).not.toBeNull();
 
     handleAgentEvent(host, agentEvent("run-2", 3, "lifecycle", { phase: "end" }));
 
@@ -321,6 +321,34 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     handleAgentEvent(host, agentEvent("run-1", 4, "lifecycle", { phase: "end" }));
 
     expectCompactionCompleteAndAutoClears(host);
+
+    vi.useRealTimers();
+  });
+
+  it("auto-clears active compaction after the stale timeout", () => {
+    useToolStreamFakeTimers();
+    const host = createHost();
+
+    handleAgentEvent(host, agentEvent("run-1", 1, "compaction", { phase: "start" }));
+
+    expect(host.compactionStatus).toEqual({
+      phase: "active",
+      runId: "run-1",
+      startedAt: TOOL_STREAM_TEST_NOW,
+      completedAt: null,
+    });
+    vi.advanceTimersByTime(5 * 60_000 - 1);
+    expect(host.compactionStatus).toEqual({
+      phase: "active",
+      runId: "run-1",
+      startedAt: TOOL_STREAM_TEST_NOW,
+      completedAt: null,
+    });
+
+    vi.advanceTimersByTime(1);
+
+    expect(host.compactionStatus).toBeNull();
+    expect(host.compactionClearTimer).toBeNull();
 
     vi.useRealTimers();
   });

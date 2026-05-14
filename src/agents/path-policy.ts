@@ -36,7 +36,12 @@ function validateRelativePathWithinBoundary(params: {
       candidate: params.candidate,
     });
   }
-  if (params.relativePath.startsWith("..") || params.isAbsolutePath(params.relativePath)) {
+  if (
+    params.relativePath === ".." ||
+    params.relativePath.startsWith("../") ||
+    params.relativePath.startsWith("..\\") ||
+    params.isAbsolutePath(params.relativePath)
+  ) {
     throwPathEscapesBoundary({
       options: params.options,
       rootResolved: params.rootResolved,

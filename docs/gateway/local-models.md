@@ -20,10 +20,11 @@ Aim high: **≥2 maxed-out Mac Studios or an equivalent GPU rig (~$30k+)** for a
 
 | Backend                                              | Use when                                                                    |
 | ---------------------------------------------------- | --------------------------------------------------------------------------- |
+| [ds4](/providers/ds4)                                | Local DeepSeek V4 Flash on macOS Metal with OpenAI-compatible tool calls    |
 | [LM Studio](/providers/lmstudio)                     | First-time local setup, GUI loader, native Responses API                    |
-| [Ollama](/providers/ollama)                          | CLI workflow, model library, hands-off systemd service                      |
-| MLX / vLLM / SGLang                                  | High-throughput self-hosted serving with an OpenAI-compatible HTTP endpoint |
 | LiteLLM / OAI-proxy / custom OpenAI-compatible proxy | You front another model API and need OpenClaw to treat it as OpenAI         |
+| MLX / vLLM / SGLang                                  | High-throughput self-hosted serving with an OpenAI-compatible HTTP endpoint |
+| [Ollama](/providers/ollama)                          | CLI workflow, model library, hands-off systemd service                      |
 
 Use Responses API (`api: "openai-responses"`) when the backend supports it (LM Studio does). Otherwise stick to Chat Completions (`api: "openai-completions"`).
 

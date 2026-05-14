@@ -22,7 +22,6 @@ const mocks = vi.hoisted(() => ({
   captureSubagentCompletionReply: vi.fn(),
   loadSubagentRegistryFromDisk: vi.fn(() => new Map()),
   saveSubagentRegistryToDisk: vi.fn(),
-  resetAnnounceQueuesForTests: vi.fn(),
   resolveAgentTimeoutMs: vi.fn(() => 60_000),
   scheduleOrphanRecovery: vi.fn(),
 }));
@@ -59,10 +58,6 @@ vi.mock("./subagent-registry.store.js", () => ({
   saveSubagentRegistryToDisk: mocks.saveSubagentRegistryToDisk,
 }));
 
-vi.mock("./subagent-announce-queue.js", () => ({
-  resetAnnounceQueuesForTests: mocks.resetAnnounceQueuesForTests,
-}));
-
 vi.mock("./timeout.js", () => ({
   resolveAgentTimeoutMs: mocks.resolveAgentTimeoutMs,
 }));
@@ -97,7 +92,6 @@ describe("announce loop guard (#18264)", () => {
     mocks.onAgentEventStop.mockClear();
     mocks.onAgentEvent.mockReset();
     mocks.onAgentEvent.mockReturnValue(mocks.onAgentEventStop);
-    mocks.resetAnnounceQueuesForTests.mockClear();
     mocks.resolveAgentTimeoutMs.mockClear();
     mocks.runSubagentAnnounceFlow.mockReset();
     mocks.runSubagentAnnounceFlow.mockResolvedValue(false);

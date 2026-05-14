@@ -20,6 +20,7 @@ import {
 } from "./app-settings.ts";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
+import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { recordControlUiRpcTiming } from "./control-ui-performance.ts";
@@ -551,11 +552,24 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       }
       // Reset orphaned chat run state from before disconnect.
       // Any in-flight run's final event was lost during the disconnect window.
-      host.chatRunId = null;
-      (host as unknown as { chatStream: string | null }).chatStream = null;
-      (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
-      (host as GatewayHostWithSideResults).chatSideResultTerminalRuns?.clear();
-      resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+      const orphanedRunId = host.chatRunId;
+      const hadOrphanedRun =
+        Boolean(orphanedRunId) ||
+        (host as unknown as { chatStream?: string | null }).chatStream != null;
+      reconcileChatRunLifecycle(
+        host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+        {
+          outcome: hadOrphanedRun ? "interrupted" : undefined,
+          sessionStatus: "killed",
+          runId: orphanedRunId,
+          sessionKey: host.sessionKey,
+          clearLocalRun: true,
+          clearChatStream: true,
+          clearToolStream: true,
+          clearSideResultTerminalRuns: true,
+          clearRunStatus: !hadOrphanedRun,
+        },
+      );
       if (shutdownHost.resumeChatQueueAfterReconnect) {
         // The interrupted run will never emit its terminal event now that the
         // old client is gone, so resume any deferred commands after hello.

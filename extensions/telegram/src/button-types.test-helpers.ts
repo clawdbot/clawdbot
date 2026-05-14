@@ -13,6 +13,7 @@ export function describeTelegramInteractiveButtonBehavior(): void {
                 { label: "Approve", value: "approve", style: "success" },
                 { label: "Docs", url: "https://example.com/docs", style: "primary" },
                 { label: "Reject", value: "reject", style: "danger" },
+                { label: "Launch", webApp: { url: "https://example.com/app" } },
                 { label: "Later", value: "later" },
                 { label: "Archive", value: "archive" },
               ],
@@ -30,6 +31,7 @@ export function describeTelegramInteractiveButtonBehavior(): void {
           { text: "Reject", callback_data: "reject", style: "danger" },
         ],
         [
+          { text: "Launch", web_app: { url: "https://example.com/app" }, style: undefined },
           { text: "Later", callback_data: "later", style: undefined },
           { text: "Archive", callback_data: "archive", style: undefined },
         ],

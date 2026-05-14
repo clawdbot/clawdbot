@@ -33,11 +33,7 @@ describe("mattermost monitor resources", () => {
   });
 
   it("downloads media, preserves auth headers, and infers media kind", async () => {
-    const fetchRemoteMedia = vi.fn(async () => ({
-      buffer: new Uint8Array([1, 2, 3]),
-      contentType: "image/png",
-    }));
-    const saveMediaBuffer = vi.fn(async () => ({
+    const saveRemoteMedia = vi.fn(async () => ({
       path: "/tmp/file.png",
       contentType: "image/png",
     }));
@@ -52,8 +48,7 @@ describe("mattermost monitor resources", () => {
       } as never,
       logger: {},
       mediaMaxBytes: 1024,
-      fetchRemoteMedia,
-      saveMediaBuffer,
+      saveRemoteMedia,
       mediaKindFromMime: () => "image",
     });
 
@@ -65,7 +60,7 @@ describe("mattermost monitor resources", () => {
       },
     ]);
 
-    expect(fetchRemoteMedia).toHaveBeenCalledWith({
+    expect(saveRemoteMedia).toHaveBeenCalledWith({
       url: "https://chat.example.com/api/v4/files/file-1",
       requestInit: {
         headers: {
@@ -89,8 +84,7 @@ describe("mattermost monitor resources", () => {
       client: {} as never,
       logger: {},
       mediaMaxBytes: 1024,
-      fetchRemoteMedia: vi.fn(),
-      saveMediaBuffer: vi.fn(),
+      saveRemoteMedia: vi.fn(),
       mediaKindFromMime: () => "document",
     });
 
@@ -135,8 +129,7 @@ describe("mattermost monitor resources", () => {
       client,
       logger: {},
       mediaMaxBytes: 1024,
-      fetchRemoteMedia: vi.fn(),
-      saveMediaBuffer: vi.fn(),
+      saveRemoteMedia: vi.fn(),
       mediaKindFromMime: () => "document",
     });
 

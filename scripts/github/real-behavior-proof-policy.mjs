@@ -112,6 +112,8 @@ export function hasProofOverride(labels) {
 }
 
 export function extractRealBehaviorProofSection(body = "") {
+  // Normalize CRLF → LF so regexes and section slicing see GitHub web-editor PR
+  // bodies the same way as locally-authored Markdown.
   const normalizedBody = normalizeLineEndings(body);
   const headingRegex = /^#{2,6}\s+real behavior proof\b[^\n]*$/gim;
   const match = headingRegex.exec(normalizedBody);

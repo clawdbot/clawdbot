@@ -7,6 +7,7 @@ import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
 } from "../config/sessions/transcript.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
@@ -576,6 +577,59 @@ describe("session history HTTP endpoints", () => {
         seq: 2,
         id: appended.messageId,
       });
+
+      await stream.reader.cancel();
+    });
+  });
+
+  test("refreshes SSE history for non-monotonic carried sequence", async () => {
+    const storePath = await createSessionStoreFile();
+    const transcriptPath = path.join(path.dirname(storePath), "sess-main.jsonl");
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({
+          id: "msg-first",
+          message: makeTranscriptAssistantMessage({ text: "first message" }),
+        }),
+        JSON.stringify({
+          id: "msg-second",
+          message: makeTranscriptAssistantMessage({ text: "second message" }),
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await withGatewayHarness(async (harness) => {
+      const stream = await openSessionHistorySse(harness.port, "agent:main:main");
+      await expectHistoryEventTexts(stream, ["first message", "second message"]);
+
+      emitSessionTranscriptUpdate({
+        sessionFile: transcriptPath,
+        sessionKey: "agent:main:main",
+        message: makeTranscriptAssistantMessage({ text: "rewound branch message" }),
+        messageId: "msg-rewound",
+        messageSeq: 1,
+      });
+
+      const refreshEvent = await readSseEvent(stream.reader, stream.streamState);
+      expect(refreshEvent.event).toBe("history");
+      expect(
+        (
+          refreshEvent.data as { messages?: Array<{ content?: Array<{ text?: string }> }> }
+        ).messages?.map((message) => message.content?.[0]?.text),
+      ).toEqual(["first message", "second message"]);
 
       await stream.reader.cancel();
     });

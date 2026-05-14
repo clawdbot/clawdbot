@@ -764,7 +764,7 @@ export const dispatchTelegramMessage = async ({
     if (!activeAnswerDraftIsToolProgressOnly) {
       return false;
     }
-    await answerLane.stream?.stop();
+    await answerLane.stream?.clear();
     answerLane.stream?.forceNewMessage();
     resetDraftLaneState(answerLane);
     streamToolProgressSuppressed = true;

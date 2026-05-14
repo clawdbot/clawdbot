@@ -6,9 +6,6 @@ export function normalizeQueueMode(raw?: string): QueueMode | undefined {
   if (!cleaned) {
     return undefined;
   }
-  if (cleaned === "queue" || cleaned === "queued") {
-    return "queue";
-  }
   if (cleaned === "interrupt" || cleaned === "interrupts" || cleaned === "abort") {
     return "interrupt";
   }
@@ -21,8 +18,20 @@ export function normalizeQueueMode(raw?: string): QueueMode | undefined {
   if (cleaned === "collect" || cleaned === "coalesce") {
     return "collect";
   }
+  return undefined;
+}
+
+export function normalizePersistedQueueMode(raw?: string): QueueMode | undefined {
+  const normalized = normalizeQueueMode(raw);
+  if (normalized) {
+    return normalized;
+  }
+  const cleaned = normalizeOptionalLowercaseString(raw);
+  if (cleaned === "queue" || cleaned === "queued") {
+    return "steer";
+  }
   if (cleaned === "steer+backlog" || cleaned === "steer-backlog" || cleaned === "steer_backlog") {
-    return "steer-backlog";
+    return "followup";
   }
   return undefined;
 }

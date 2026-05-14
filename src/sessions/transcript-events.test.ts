@@ -28,13 +28,40 @@ describe("transcript events", () => {
       sessionFile: "  /tmp/session.jsonl  ",
       sessionKey: "  agent:main:main  ",
       message: { role: "assistant", content: "hi" },
+      messageId: "  msg-1  ",
+      messageSeq: 2,
     });
 
     expect(listener).toHaveBeenCalledWith({
       sessionFile: "/tmp/session.jsonl",
       sessionKey: "agent:main:main",
       message: { role: "assistant", content: "hi" },
+      messageId: "msg-1",
+      messageSeq: 2,
     });
+  });
+
+  it("drops invalid message sequence values", () => {
+    const listener = vi.fn();
+    cleanup.push(onSessionTranscriptUpdate(listener));
+
+    emitSessionTranscriptUpdate({
+      sessionFile: "/tmp/session.jsonl",
+      messageSeq: 0,
+    });
+    emitSessionTranscriptUpdate({
+      sessionFile: "/tmp/session.jsonl",
+      messageSeq: 1.5,
+    });
+    emitSessionTranscriptUpdate({
+      sessionFile: "/tmp/session.jsonl",
+      messageSeq: Number.POSITIVE_INFINITY,
+    });
+
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(listener).toHaveBeenNthCalledWith(1, { sessionFile: "/tmp/session.jsonl" });
+    expect(listener).toHaveBeenNthCalledWith(2, { sessionFile: "/tmp/session.jsonl" });
+    expect(listener).toHaveBeenNthCalledWith(3, { sessionFile: "/tmp/session.jsonl" });
   });
 
   it("continues notifying other listeners when one throws", () => {

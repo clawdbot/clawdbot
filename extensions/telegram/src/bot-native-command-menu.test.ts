@@ -156,6 +156,28 @@ describe("bot-native-command-menu", () => {
     expect(result.issues).toContain('Plugin command "/empty" is missing a description.');
   });
 
+  it("preserves plugin command description localizations for Telegram menu sync", () => {
+    const result = buildPluginTelegramMenuCommands({
+      specs: [
+        {
+          name: "valid",
+          description: "Works",
+          descriptionLocalizations: { ko: "작동함" },
+        },
+      ],
+      existingCommands: new Set<string>(),
+    });
+
+    expect(result.commands).toEqual([
+      {
+        command: "valid",
+        description: "Works",
+        descriptionLocalizations: { ko: "작동함" },
+      },
+    ]);
+    expect(result.issues).toStrictEqual([]);
+  });
+
   it("normalizes hyphenated plugin command names", () => {
     const result = buildPluginTelegramMenuCommands({
       specs: [{ name: "agent-run", description: "Run agent" }],
@@ -239,6 +261,77 @@ describe("bot-native-command-menu", () => {
     expect(setMyCommands).toHaveBeenCalledWith(commands, {
       scope: { type: "all_group_chats" },
     });
+  });
+
+  it("registers localized command descriptions per Telegram language scope", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+    const runtimeLog = vi.fn();
+    const commands = [
+      {
+        command: "cmd",
+        description: "Default",
+        descriptionLocalizations: {
+          ko: "한국어",
+          "en-GB": "British English is unsupported by Telegram",
+        },
+      },
+    ];
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
+      commandsToRegister: commands,
+      accountId: `test-localized-${Date.now()}`,
+      botIdentity: "bot-a",
+    });
+
+    await vi.waitFor(() => {
+      expect(setMyCommands).toHaveBeenCalledTimes(4);
+    });
+
+    expect(setMyCommandsPayload(setMyCommands, 0)).toEqual([
+      { command: "cmd", description: "Default" },
+    ]);
+    expect(setMyCommandsPayload(setMyCommands, 2)).toEqual([
+      { command: "cmd", description: "한국어" },
+    ]);
+    expect(setMyCommandsCall(setMyCommands, 2).at(1)).toEqual({ language_code: "ko" });
+    expect(setMyCommandsCall(setMyCommands, 3).at(1)).toEqual({
+      scope: { type: "all_group_chats" },
+      language_code: "ko",
+    });
+    expect(runtimeLog).toHaveBeenCalledWith(
+      "Telegram command menu ignored unsupported description localization codes: en-GB.",
+    );
+  });
+
+  it("caps localized command descriptions before registering Telegram variants", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      commandsToRegister: [
+        {
+          command: "long",
+          description: "Default",
+          descriptionLocalizations: { ko: "x".repeat(300) },
+        },
+      ],
+      accountId: `test-localized-cap-${Date.now()}`,
+      botIdentity: "bot-a",
+    });
+
+    await vi.waitFor(() => {
+      expect(setMyCommands).toHaveBeenCalledTimes(4);
+    });
+
+    const localizedPayload = setMyCommandsPayload(setMyCommands, 2);
+    expect(localizedPayload[0]).toMatchObject({ command: "long" });
+    expect((localizedPayload[0] as { description: string }).description).toHaveLength(256);
   });
 
   it("produces a stable hash regardless of command order (#32017)", () => {
@@ -397,6 +490,34 @@ describe("bot-native-command-menu", () => {
       "Telegram accepted 80 commands after BOT_COMMANDS_TOO_MUCH (started with 100; omitted 20). Reduce plugin/skill/custom commands to expose more menu entries.",
     );
     expect(runtimeError).not.toHaveBeenCalled();
+  });
+
+  it("registers localized variants from the accepted retry command set", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("400: Bad Request: BOT_COMMANDS_TOO_MUCH"))
+      .mockResolvedValue(undefined);
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      commandsToRegister: Array.from({ length: 100 }, (_, i) => ({
+        command: `cmd_${i}`,
+        description: `Command ${i}`,
+        descriptionLocalizations: { ko: `명령 ${i}` },
+      })),
+      accountId: `test-localized-retry-${Date.now()}`,
+      botIdentity: "bot-a",
+    });
+
+    await vi.waitFor(() => {
+      expect(setMyCommands).toHaveBeenCalledTimes(5);
+    });
+    expect(setMyCommandsPayload(setMyCommands, 0)).toHaveLength(100);
+    expect(setMyCommandsPayload(setMyCommands, 1)).toHaveLength(80);
+    expect(setMyCommandsPayload(setMyCommands, 3)).toHaveLength(80);
+    expect(setMyCommandsCall(setMyCommands, 3).at(1)).toEqual({ language_code: "ko" });
   });
 
   it.each([

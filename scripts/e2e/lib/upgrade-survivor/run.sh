@@ -38,6 +38,7 @@ CANDIDATE_KIND="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_KIND:-tarball}"
 CANDIDATE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC:-${OPENCLAW_CURRENT_PACKAGE_TGZ:-}}"
 SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
 UPDATE_RESTART_MODE="${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-manual}"
+ROOT_MANAGED_VPS="${OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS:-0}"
 CURRENT_PHASE="setup"
 FAILURE_PHASE=""
 FAILURE_MESSAGE=""
@@ -681,7 +682,16 @@ install_baseline() {
 
 seed_state() {
   openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}"
-  openclaw_test_state_create "$ARTIFACT_ROOT/state-home" minimal
+  if [ "$ROOT_MANAGED_VPS" = "1" ]; then
+    if [ "$(id -u)" -ne 0 ]; then
+      echo "root-managed VPS survivor mode must run as uid 0" >&2
+      return 1
+    fi
+    rm -rf /root/.openclaw /root/workspace
+    openclaw_test_state_create /root minimal
+  else
+    openclaw_test_state_create "$ARTIFACT_ROOT/state-home" minimal
+  fi
   export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION="$baseline_version"
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed
 }
@@ -1037,12 +1047,21 @@ update_candidate() {
   local update_start=""
   local update_end=""
   local update_args=(update --tag "$CANDIDATE_SPEC" --yes --json)
+  local update_env=(
+    env
+    -u OPENCLAW_GATEWAY_TOKEN
+    -u OPENCLAW_GATEWAY_PASSWORD
+    -u OPENCLAW_ALLOW_ROOT
+  )
   if [ "$UPDATE_RESTART_MODE" = "manual" ]; then
     update_args+=(--no-restart)
   else
     update_start="$(node -e "process.stdout.write(String(Date.now()))")"
   fi
-  if ! env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD OPENCLAW_ALLOW_ROOT=1 openclaw "${update_args[@]}" >"$UPDATE_JSON" 2>"$UPDATE_ERR"; then
+  if [ "$ROOT_MANAGED_VPS" != "1" ]; then
+    update_env+=(OPENCLAW_ALLOW_ROOT=1)
+  fi
+  if ! "${update_env[@]}" openclaw "${update_args[@]}" >"$UPDATE_JSON" 2>"$UPDATE_ERR"; then
     echo "openclaw update failed" >&2
     cat "$UPDATE_ERR" >&2 || true
     cat "$UPDATE_JSON" >&2 || true
@@ -1061,6 +1080,20 @@ update_candidate() {
     ' "$UPDATE_JSON"
   fi
   installed_version="$(read_installed_version)"
+}
+
+assert_root_managed_vps_cli_usable() {
+  if [ "$ROOT_MANAGED_VPS" != "1" ]; then
+    return 0
+  fi
+  local root_cli_env=(
+    env
+    -u OPENCLAW_GATEWAY_TOKEN
+    -u OPENCLAW_GATEWAY_PASSWORD
+    -u OPENCLAW_ALLOW_ROOT
+  )
+  "${root_cli_env[@]}" openclaw config file >"$ARTIFACT_ROOT/root-vps-config-file.out" 2>"$ARTIFACT_ROOT/root-vps-config-file.err"
+  "${root_cli_env[@]}" openclaw plugins >"$ARTIFACT_ROOT/root-vps-plugins.out" 2>"$ARTIFACT_ROOT/root-vps-plugins.err"
 }
 
 run_doctor() {
@@ -1183,6 +1216,7 @@ phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
 phase resolve-candidate resolve_candidate_version
 phase prepare-update-restart-probe prepare_update_restart_probe
 phase update-candidate update_candidate
+phase root-managed-vps-cli-usable assert_root_managed_vps_cli_usable
 phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor
 phase configure-configured-plugin-install-fixture-registry configure_configured_plugin_install_fixture_registry
 phase doctor run_doctor

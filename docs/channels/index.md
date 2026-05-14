@@ -16,8 +16,11 @@ Text is supported everywhere; media and reactions vary by channel.
 - Slack multi-person DMs route as group chats, so group policy, mention
   behavior, and group-session rules apply to MPIM conversations.
 - WhatsApp setup is install-on-demand: onboarding can show the setup flow before
-  the plugin package is installed, and the Gateway loads the WhatsApp runtime
-  only when the channel is actually active.
+  the plugin package is installed, and the Gateway loads the external
+  ClawHub/npm plugin only when the channel is actually active.
+- Channels that accept bot-authored inbound messages can use shared
+  [bot loop protection](/channels/bot-loop-protection) to prevent bot pairs from
+  replying to each other indefinitely.
 
 ## Supported channels
 

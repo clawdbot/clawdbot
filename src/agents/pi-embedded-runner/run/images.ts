@@ -40,12 +40,15 @@ const MEDIA_ATTACHED_PATH_REGEX_SOURCE =
 const MESSAGE_IMAGE_REGEX_SOURCE =
   "\\[Image:\\s*source:\\s*([^\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + "))\\]";
 const FILE_URL_REGEX_SOURCE = "file://[^\\s<>\"'`\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + ")";
+const WINDOWS_DRIVE_PATH_REGEX_SOURCE =
+  "(?:^|\\s|[\"'`(])([A-Za-z]:[\\\\/][^\\s\"'`()\\[\\]]*\\.(?:" + IMAGE_EXTENSION_PATTERN + "))";
 const PATH_REGEX_SOURCE =
   "(?:^|\\s|[\"'`(])((\\.\\.?/|[~/])[^\\s\"'`()\\[\\]]*\\.(?:" + IMAGE_EXTENSION_PATTERN + "))";
 const MEDIA_ATTACHED_PATTERN = /\[media attached(?:\s+\d+\/\d+)?:\s*([^\]]+)\]/gi;
 const MEDIA_ATTACHED_PATH_PATTERN = new RegExp(MEDIA_ATTACHED_PATH_REGEX_SOURCE, "i");
 const MESSAGE_IMAGE_PATTERN = new RegExp(MESSAGE_IMAGE_REGEX_SOURCE, "gi");
 const FILE_URL_PATTERN = new RegExp(FILE_URL_REGEX_SOURCE, "gi");
+const WINDOWS_DRIVE_PATH_PATTERN = new RegExp(WINDOWS_DRIVE_PATH_REGEX_SOURCE, "gi");
 const PATH_PATTERN = new RegExp(PATH_REGEX_SOURCE, "gi");
 
 /**
@@ -265,6 +268,7 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   MEDIA_ATTACHED_PATTERN.lastIndex = 0;
   MESSAGE_IMAGE_PATTERN.lastIndex = 0;
   FILE_URL_PATTERN.lastIndex = 0;
+  WINDOWS_DRIVE_PATH_PATTERN.lastIndex = 0;
   PATH_PATTERN.lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = MEDIA_ATTACHED_PATTERN.exec(prompt)) !== null) {
@@ -323,6 +327,13 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
       refs.push({ raw, type: "path", resolved });
     } catch {
       // Skip malformed file:// URLs
+    }
+  }
+
+  // Pattern for Windows drive paths.
+  while ((match = WINDOWS_DRIVE_PATH_PATTERN.exec(prompt)) !== null) {
+    if (match[1]) {
+      addPathRef(match[1]);
     }
   }
 

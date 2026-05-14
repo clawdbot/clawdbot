@@ -5,6 +5,7 @@ import {
   __resetContainerCacheForTest,
   defaultGatewayBindMode,
   isContainerEnvironment,
+  isLocalInterfaceAddress,
   isLocalishHost,
   isLoopbackHost,
   isPrivateOrLoopbackAddress,
@@ -12,6 +13,7 @@ import {
   isSecureWebSocketUrl,
   isTrustedProxyAddress,
   pickPrimaryLanIPv4,
+  resolveLocalInterfaceAddressMatch,
   resolveClientIp,
   resolveGatewayBindHost,
   resolveGatewayListenHosts,
@@ -235,6 +237,36 @@ describe("isTrustedProxyAddress", () => {
     },
   ])("$name", ({ ip, trustedProxies, expected }) => {
     expect(isTrustedProxyAddress(ip, trustedProxies)).toBe(expected);
+  });
+});
+
+describe("isLocalInterfaceAddress", () => {
+  const snapshot = makeNetworkInterfacesSnapshot({
+    lo: [
+      { address: "127.0.0.1", family: "IPv4", internal: true },
+      { address: "::1", family: "IPv6", internal: true },
+    ],
+    eth0: [{ address: "10.42.0.59", family: "IPv4" }],
+    tailscale0: [{ address: "fd7a:115c:a1e0::1234", family: "IPv6" }],
+  });
+
+  it.each([
+    { input: "10.42.0.59", expected: true },
+    { input: "::ffff:10.42.0.59", expected: true },
+    { input: "fd7a:115c:a1e0::1234", expected: true },
+    { input: "127.0.0.1", expected: true },
+    { input: "10.42.0.60", expected: false },
+    { input: undefined, expected: false },
+  ] as const)("returns $expected for $input", ({ input, expected }) => {
+    expect(isLocalInterfaceAddress(input, snapshot)).toBe(expected);
+  });
+
+  it("returns false when interface discovery is unavailable", () => {
+    expect(isLocalInterfaceAddress("10.42.0.59", undefined)).toBe(false);
+  });
+
+  it("reports an indeterminate match when interface discovery is unavailable", () => {
+    expect(resolveLocalInterfaceAddressMatch("10.42.0.59", undefined)).toBeUndefined();
   });
 });
 

@@ -212,7 +212,7 @@ export async function runSetupMigrationImport(params: {
     { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig },
     { createMigrationLogger, buildMigrationReportDir },
     { createPreMigrationBackup },
-    { assertApplySucceeded, assertConflictFreePlan, formatMigrationPlan },
+    { assertApplySucceeded, assertConflictFreePlan, formatMigrationPreview, formatMigrationResult },
     { resolveStateDir },
     onboardHelpers,
   ] = await Promise.all([
@@ -273,7 +273,7 @@ export async function runSetupMigrationImport(params: {
     logger: createMigrationLogger(params.runtime),
   };
   const plan = await provider.plan(ctx);
-  await params.prompter.note(formatMigrationPlan(plan).join("\n"), "Migration preview");
+  await params.prompter.note(formatMigrationPreview(plan).join("\n"), "Migration preview");
   assertConflictFreePlan(plan, providerId);
 
   const confirmed =
@@ -307,6 +307,6 @@ export async function runSetupMigrationImport(params: {
     reportDir: result.reportDir ?? reportDir,
   };
   assertApplySucceeded(withReport);
-  await params.prompter.note(formatMigrationPlan(withReport).join("\n"), "Migration applied");
+  await params.prompter.note(formatMigrationResult(withReport).join("\n"), "Migration applied");
   await params.prompter.outro("Migration complete. Run `openclaw doctor` next.");
 }

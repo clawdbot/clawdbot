@@ -10,6 +10,7 @@ import {
   formatConnectErrorMessage,
   readConnectErrorRecoveryAdvice,
   readConnectErrorDetailCode,
+  readPairingConnectErrorDetails,
 } from "../../../src/gateway/protocol/connect-error-details.js";
 import {
   isRetryableGatewayStartupUnavailableError,
@@ -71,6 +72,14 @@ export function resolveGatewayErrorDetailCode(
   return readConnectErrorDetailCode(error?.details);
 }
 
+function shouldContinueReconnectForPairingRequired(details: unknown): boolean {
+  const pairingDetails = readPairingConnectErrorDetails(details);
+  return (
+    pairingDetails?.pauseReconnect === false ||
+    pairingDetails?.recommendedNextStep === "wait_then_retry"
+  );
+}
+
 /**
  * Auth errors that won't resolve without user action — don't auto-reconnect.
  *
@@ -84,6 +93,12 @@ export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): 
     return false;
   }
   const code = resolveGatewayErrorDetailCode(error);
+  if (
+    code === ConnectErrorDetailCodes.PAIRING_REQUIRED &&
+    shouldContinueReconnectForPairingRequired(error.details)
+  ) {
+    return false;
+  }
   return (
     code === ConnectErrorDetailCodes.AUTH_TOKEN_MISSING ||
     code === ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID ||

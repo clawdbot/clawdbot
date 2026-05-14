@@ -540,12 +540,16 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 
   it("accepts room messages from configured Matrix bot accounts when allowBots is true", async () => {
-    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+    const { handler, recordInboundSession, runPrepared } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       accountAllowBots: true,
+      accountConfig: { botLoopProtection: { windowSeconds: 120, cooldownSeconds: 240 } },
       configuredBotUserIds: new Set(["@ops:example.org"]),
       roomsConfig: {
-        "!room:example.org": { requireMention: false },
+        "!room:example.org": {
+          requireMention: false,
+          botLoopProtection: { maxEventsPerWindow: 3 },
+        },
       },
       getMemberDisplayName: async () => "ops-bot",
     });
@@ -556,10 +560,21 @@ describe("matrix monitor handler pairing account scope", () => {
         eventId: "$bot-on",
         sender: "@ops:example.org",
         body: "hello from bot",
+        originServerTs: 123_456,
       }),
     );
 
     expect(recordInboundSession).toHaveBeenCalled();
+    expect(runPrepared.mock.calls[0]?.[0].botLoopProtection).toEqual({
+      scopeId: "ops",
+      conversationId: "!room:example.org",
+      senderId: "@ops:example.org",
+      receiverId: "@bot:example.org",
+      config: { maxEventsPerWindow: 3, windowSeconds: 120, cooldownSeconds: 240 },
+      defaultsConfig: undefined,
+      defaultEnabled: true,
+      nowMs: 123_456,
+    });
   });
 
   it("does not treat unconfigured Matrix users as bots when allowBots is off", async () => {
@@ -2477,6 +2492,48 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       "dispatch-idle",
       "commit",
     ]);
+    expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
+  });
+
+  it("commits a claimed event when bot loop protection suppresses dispatch", async () => {
+    const inboundDeduper = {
+      claimEvent: vi.fn(() => true),
+      commitEvent: vi.fn(async () => undefined),
+      releaseEvent: vi.fn(),
+    };
+    const runPrepared = vi.fn(
+      async (turn: { ctxPayload: Record<string, unknown>; routeSessionKey: string }) => ({
+        admission: { kind: "drop" as const, reason: "bot-loop-protection" as const },
+        dispatched: false as const,
+        ctxPayload: turn.ctxPayload,
+        routeSessionKey: turn.routeSessionKey,
+      }),
+    );
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      accountAllowBots: true,
+      configuredBotUserIds: new Set(["@ops:example.org"]),
+      inboundDeduper,
+      isDirectMessage: false,
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+      runPrepared,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$bot-loop-drop",
+        sender: "@ops:example.org",
+        body: "hello from bot",
+      }),
+    );
+
+    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(inboundDeduper.commitEvent).toHaveBeenCalledWith({
+      roomId: "!room:example.org",
+      eventId: "$bot-loop-drop",
+    });
     expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
   });
 

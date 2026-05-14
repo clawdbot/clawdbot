@@ -23,17 +23,16 @@ function readPnpmWorkspaceConfig(): PnpmWorkspaceConfig {
 }
 
 describe("root package override guardrails", () => {
-  it("pins the Bedrock runtime below the Windows ARM Node 24 npm resolver failure", () => {
+  it("keeps Bedrock runtime ownership in the Amazon provider plugin", () => {
     const manifest = readRootManifest();
     const pnpmWorkspace = readPnpmWorkspaceConfig();
     const packageName = "@aws-sdk/client-bedrock-runtime";
-    const dependencyVersion = manifest.dependencies?.[packageName];
     const npmOverride = manifest.overrides?.[packageName];
     const pnpmOverride = pnpmWorkspace.overrides?.["@aws-sdk/client-bedrock-runtime"];
 
-    expect(manifest.dependencies).toHaveProperty(packageName);
-    expect(pnpmOverride).toBe(dependencyVersion);
-    expect(npmOverride).toBe(`$${packageName}`);
+    expect(manifest.dependencies).not.toHaveProperty(packageName);
+    expect(npmOverride).toBeUndefined();
+    expect(pnpmOverride).toBe("3.1045.0");
   });
 
   it("pins the node-domexception alias exactly in npm and pnpm overrides", () => {

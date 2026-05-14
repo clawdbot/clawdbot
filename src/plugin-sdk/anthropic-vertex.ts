@@ -1,5 +1,5 @@
 import type { ModelProviderConfig } from "../config/types.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 
 type FacadeModule = {
   resolveAnthropicVertexClientRegion: (params?: {

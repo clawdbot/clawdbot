@@ -36,6 +36,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [ComfyUI](/providers/comfy)
 - [DeepSeek](/providers/deepseek)
+- [ds4 (local DeepSeek V4)](/providers/ds4)
 - [ElevenLabs](/providers/elevenlabs)
 - [fal](/providers/fal)
 - [Fireworks](/providers/fireworks)

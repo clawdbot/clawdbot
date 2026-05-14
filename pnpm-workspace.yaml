@@ -7,12 +7,15 @@ packages:
 minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
+  - "@openclaw/fs-safe@0.2.4"
   - "acpx"
   - "tokenjuice"
   - "@agentclientprotocol/sdk"
   - "axios"
   - "basic-ftp"
+  - "baileys@7.0.0-rc11"
   - "hono"
+  - "libsignal@6.0.0"
   - "openclaw"
   - "protobufjs"
   - "vite"
@@ -21,6 +24,7 @@ minimumReleaseAgeExclude:
   - "@mariozechner/*"
   - "@openai/codex"
   - "@openai/codex-*"
+  - "@smithy/shared-ini-file-loader@4.5.1"
   - "@typescript/native-preview*"
   - "@types/node"
   - "@rolldown/*"
@@ -34,6 +38,7 @@ minimumReleaseAgeExclude:
   - "sqlite-vec-*"
 
 nodeLinker: hoisted
+blockExoticSubdeps: true
 
 overrides:
   "@anthropic-ai/sdk": 0.95.1
@@ -71,7 +76,6 @@ allowBuilds:
   "@tloncorp/api": true
   "@tloncorp/tlon-skill": true
   baileys: true
-  "@whiskeysockets/libsignal-node": true
   authenticate-pam: true
   "@discordjs/opus": false
   esbuild: true
@@ -92,5 +96,5 @@ peerDependencyRules:
     "prism-media>opusscript": "^0.0.8 || ^0.1.1"
 
 patchedDependencies:
-  "baileys@7.0.0-rc10": "patches/baileys@7.0.0-rc10.patch"
+  "baileys@7.0.0-rc11": "patches/baileys@7.0.0-rc11.patch"
   "@agentclientprotocol/claude-agent-acp@0.33.1": "patches/@agentclientprotocol__claude-agent-acp@0.33.1.patch"

@@ -12,7 +12,7 @@ Adds the Slack channel surface for sending and receiving OpenClaw messages.
 ## Distribution
 
 - Package: `@openclaw/slack`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub
 
 ## Surface
 

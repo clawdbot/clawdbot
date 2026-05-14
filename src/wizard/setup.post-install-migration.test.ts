@@ -74,12 +74,13 @@ function setTTY(isTTY: boolean): void {
 }
 
 function buildBaseArgs(overrides: {
+  config?: OpenClawConfig;
   prompter?: WizardPrompter;
   installedPluginIds?: readonly string[];
   nonInteractive?: boolean;
 }) {
   return {
-    config: {} as OpenClawConfig,
+    config: overrides.config ?? ({} as OpenClawConfig),
     runtime: createNonExitingRuntime(),
     prompter: overrides.prompter ?? createWizardPrompter(),
     installedPluginIds: overrides.installedPluginIds ?? ["codex"],
@@ -109,9 +110,13 @@ describe("offerPostInstallMigrations", () => {
   });
 
   it("returns early when no plugins were installed in this onboarding step", async () => {
-    await offerPostInstallMigrations(buildBaseArgs({ installedPluginIds: [] }));
+    const config = { plugins: { entries: { codex: { enabled: true } } } } as OpenClawConfig;
+    const result = await offerPostInstallMigrations(
+      buildBaseArgs({ config, installedPluginIds: [] }),
+    );
     expect(resolvePluginMigrationProviders).not.toHaveBeenCalled();
     expect(migrateDefaultCommand).not.toHaveBeenCalled();
+    expect(result.config).toBe(config);
   });
 
   it("skips providers not owned by any plugin in installedPluginIds", async () => {
@@ -165,14 +170,110 @@ describe("offerPostInstallMigrations", () => {
       confirm: confirm as WizardPrompter["confirm"],
     });
 
-    await offerPostInstallMigrations(buildBaseArgs({ prompter }));
+    const result = await offerPostInstallMigrations(buildBaseArgs({ prompter }));
 
     expect(confirm).toHaveBeenCalledOnce();
     expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: false }));
     expect(migrateDefaultCommand).toHaveBeenCalledOnce();
-    expect(migrateDefaultCommand).toHaveBeenCalledWith(expect.anything(), {
-      provider: "codex",
-      suppressPlanLog: true,
+    expect(migrateDefaultCommand).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        provider: "codex",
+        configPatchMode: "return",
+        suppressPlanLog: true,
+      }),
+    );
+    expect(result.config).toEqual({});
+  });
+
+  it("returns config patched from migrated config items without mutating the input config", async () => {
+    const provider = buildProvider();
+    setProviders([provider]);
+    setOwnership("codex", ["codex"]);
+    const inputConfig = {
+      plugins: {
+        entries: {
+          codex: {
+            enabled: true,
+            config: {
+              appServer: { sandbox: "workspace-write" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    migrateDefaultCommand.mockResolvedValueOnce({
+      providerId: "codex",
+      source: "/home/user/.codex",
+      summary: {
+        total: 1,
+        planned: 0,
+        migrated: 1,
+        skipped: 0,
+        conflicts: 0,
+        errors: 0,
+        sensitive: 0,
+      },
+      items: [
+        {
+          id: "config:codex-plugins",
+          kind: "config",
+          action: "merge",
+          status: "migrated",
+          details: {
+            path: ["plugins", "entries", "codex"],
+            value: {
+              enabled: true,
+              config: {
+                codexPlugins: {
+                  enabled: true,
+                  allow_destructive_actions: true,
+                  plugins: {
+                    gmail: {
+                      enabled: true,
+                      marketplaceName: "openai-curated",
+                      pluginName: "gmail",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      ],
+    } as never);
+    const prompter = createWizardPrompter({
+      confirm: vi.fn(async () => true) as WizardPrompter["confirm"],
+    });
+
+    const result = await offerPostInstallMigrations(
+      buildBaseArgs({ config: inputConfig, prompter }),
+    );
+
+    expect(migrateDefaultCommand).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        configOverride: inputConfig,
+        configPatchMode: "return",
+      }),
+    );
+    expect(result.config).not.toBe(inputConfig);
+    expect(result.config.plugins?.entries?.codex?.config).toEqual({
+      appServer: { sandbox: "workspace-write" },
+      codexPlugins: {
+        enabled: true,
+        allow_destructive_actions: true,
+        plugins: {
+          gmail: {
+            enabled: true,
+            marketplaceName: "openai-curated",
+            pluginName: "gmail",
+          },
+        },
+      },
+    });
+    expect(inputConfig.plugins?.entries?.codex?.config).toEqual({
+      appServer: { sandbox: "workspace-write" },
     });
   });
 
@@ -223,7 +324,9 @@ describe("offerPostInstallMigrations", () => {
       confirm: vi.fn(async () => true) as WizardPrompter["confirm"],
     });
 
-    await expect(offerPostInstallMigrations(buildBaseArgs({ prompter }))).resolves.toBeUndefined();
+    await expect(offerPostInstallMigrations(buildBaseArgs({ prompter }))).resolves.toEqual({
+      config: {},
+    });
     expect(migrateDefaultCommand).toHaveBeenCalledOnce();
   });
 

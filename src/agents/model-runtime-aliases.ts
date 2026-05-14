@@ -46,8 +46,19 @@ const CLI_RUNTIME_ALIASES = new Set(
   ),
 );
 
+const CLI_RUNTIME_PROVIDER_IDS = new Set(
+  LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES.filter((entry) => entry.cli).map((entry) =>
+    normalizeProviderId(entry.legacyProvider),
+  ),
+);
+
 export function listLegacyRuntimeModelProviderAliases(): readonly LegacyRuntimeModelProviderAlias[] {
   return LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES;
+}
+
+/** True for CLI runtime provider ids such as `claude-cli` and `codex-cli`. */
+export function isCliRuntimeProvider(provider: string): boolean {
+  return CLI_RUNTIME_PROVIDER_IDS.has(normalizeProviderId(provider));
 }
 
 function resolveLegacyRuntimeModelProviderAlias(
@@ -88,8 +99,9 @@ export function migrateLegacyRuntimeModelRef(raw: string): {
   };
 }
 
+/** Shared setup/default pickers hide all legacy runtime provider ids. */
 export function isLegacyRuntimeModelProvider(provider: string): boolean {
-  return Boolean(resolveLegacyRuntimeModelProviderAlias(provider));
+  return resolveLegacyRuntimeModelProviderAlias(provider) !== undefined;
 }
 
 export function isCliRuntimeAlias(runtime: string | undefined): boolean {

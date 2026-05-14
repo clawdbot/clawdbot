@@ -297,6 +297,7 @@ function expectCompatChainApplied(params: {
 
 describe("resolvePluginCapabilityProviders", () => {
   beforeAll(async () => {
+    vi.resetModules();
     ({
       resolveBundledCapabilityProviderIds,
       resolveManifestCapabilityProviderIds,

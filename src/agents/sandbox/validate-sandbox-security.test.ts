@@ -68,6 +68,16 @@ describe("getBlockedBindReason", () => {
     expect(reason?.blockedPath).toBe("/home/tester/.gnupg");
   });
 
+  it("blocks Windows USERPROFILE credential paths when HOME points elsewhere", () => {
+    vi.stubEnv("HOME", "D:\\Users\\shell-home");
+    vi.stubEnv("USERPROFILE", "C:\\Users\\tester");
+
+    const reason = expectBlockedTargetReason(
+      "C:\\Users\\tester\\.docker\\config.json:/mnt/docker:ro",
+    );
+    expect(reason?.blockedPath).toBe("C:/Users/tester/.docker");
+  });
+
   it("blocks canonical OS-home aliases for credential paths", () => {
     if (process.platform === "win32") {
       return;

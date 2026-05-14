@@ -210,6 +210,7 @@ describe("resolveGatewayInstallToken", () => {
           },
         },
       },
+      snapshot: baseSnapshot,
       writeOptions: {
         baseSnapshot,
         skipRuntimeSnapshotRefresh: true,

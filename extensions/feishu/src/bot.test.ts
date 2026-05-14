@@ -335,6 +335,7 @@ vi.mock("./send.js", () => ({
 
 vi.mock("./media.js", () => ({
   downloadMessageResourceFeishu: mockDownloadMessageResourceFeishu,
+  saveMessageResourceFeishu: mockDownloadMessageResourceFeishu,
 }));
 
 vi.mock("./audio-preflight.runtime.js", () => ({

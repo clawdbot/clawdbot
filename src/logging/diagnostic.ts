@@ -123,6 +123,7 @@ type StartDiagnosticHeartbeatOptions = {
   emitMemorySample?: EmitDiagnosticMemorySample;
   sampleLiveness?: SampleDiagnosticLiveness;
   recoverStuckSession?: RecoverStuckSession;
+  startupGraceMs?: number;
 };
 
 let diagnosticLivenessMonitor: EventLoopDelayMonitor | null = null;
@@ -939,6 +940,8 @@ export function startDiagnosticHeartbeat(
     return;
   }
   startDiagnosticLivenessSampler();
+  const livenessGraceUntil =
+    opts?.startupGraceMs != null && opts.startupGraceMs > 0 ? Date.now() + opts.startupGraceMs : 0;
   heartbeatInterval = setInterval(() => {
     let heartbeatConfig = config;
     if (!heartbeatConfig) {
@@ -953,7 +956,10 @@ export function startDiagnosticHeartbeat(
     const now = Date.now();
     pruneDiagnosticSessionStates(now, true);
     const work = getDiagnosticWorkSnapshot(now);
-    const livenessSample = (opts?.sampleLiveness ?? sampleDiagnosticLiveness)(now, work);
+    const inStartupGrace = livenessGraceUntil > 0 && now < livenessGraceUntil;
+    const rawLivenessSample = (opts?.sampleLiveness ?? sampleDiagnosticLiveness)(now, work);
+    // Keep sampling during grace so event-loop delay baselines reset, but suppress startup-only reports.
+    const livenessSample = inStartupGrace ? null : rawLivenessSample;
     const shouldEmitLivenessEvent =
       livenessSample !== null && shouldEmitDiagnosticLivenessEvent(now);
     const shouldEmitLivenessWarning =

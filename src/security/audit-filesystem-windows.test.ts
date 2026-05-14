@@ -85,6 +85,42 @@ describe("security audit filesystem Windows findings", () => {
           ),
         ).toBe(true);
       })(),
+      (async () => {
+        const tmp = await tempCases.makeTmpDir("win-anon-world");
+        const stateDir = path.join(tmp, "state");
+        await fs.mkdir(stateDir, { recursive: true });
+        const configPath = path.join(stateDir, "openclaw.json");
+        await fs.writeFile(configPath, "{}\n", "utf-8");
+        const findings = await collectFilesystemFindings({
+          stateDir,
+          configPath,
+          platform: "win32",
+          env: windowsAuditEnv,
+          execIcacls: async (_cmd: string, args: string[]) => {
+            const target = args[0];
+            if (target.endsWith(`${path.sep}state`)) {
+              return {
+                stdout: `${target} *S-1-5-18:(F)\n *S-1-5-7:(F)\n`,
+                stderr: "",
+              };
+            }
+            return {
+              stdout: `${target} *S-1-5-18:(F)\n DESKTOP-TEST\\Tester:(F)\n`,
+              stderr: "",
+            };
+          },
+        });
+        expect(
+          findings.some(
+            (finding) =>
+              finding.checkId === "fs.state_dir.perms_world_writable" &&
+              finding.severity === "critical",
+          ),
+        ).toBe(true);
+        expect(
+          findings.some((finding) => finding.checkId === "fs.state_dir.perms_group_writable"),
+        ).toBe(false);
+      })(),
     ]);
   });
 });

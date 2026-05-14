@@ -154,6 +154,16 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
   }),
   deprecatedCompatRecord({
+    code: "doctor-message-queue-steering-modes",
+    owner: "config",
+    introduced: "2026-05-04",
+    source: "messages.queue.mode and messages.queue.byChannel retired queue modes",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.queue.ts",
+    replacement: "steer, followup, collect, or interrupt queue modes",
+    docsPath: "/concepts/queue",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+  }),
+  deprecatedCompatRecord({
     code: "doctor-channel-dm-aliases",
     owner: "channel",
     introduced: "2026-04-26",

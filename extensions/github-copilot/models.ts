@@ -2,10 +2,15 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
+import { buildCopilotIdeHeaders, COPILOT_INTEGRATION_ID } from "openclaw/plugin-sdk/provider-auth";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveCopilotTransportApi, resolveStaticCopilotModelOverride } from "./model-metadata.js";
+import {
+  resolveCopilotModelCompat,
+  resolveCopilotTransportApi,
+  resolveStaticCopilotModelOverride,
+} from "./model-metadata.js";
 
 export const PROVIDER_ID = "github-copilot";
 const CODEX_FORWARD_COMPAT_TARGET_IDS = new Set(["gpt-5.4", "gpt-5.3-codex"]);
@@ -57,6 +62,7 @@ export function resolveCopilotForwardCompatModel(
 
   const staticOverride = resolveStaticCopilotModelOverride(lowerModelId);
   if (staticOverride) {
+    const compat = staticOverride.compat ?? resolveCopilotModelCompat(trimmedModelId);
     return normalizeModelCompat({
       id: trimmedModelId,
       name: staticOverride.name ?? trimmedModelId,
@@ -67,7 +73,7 @@ export function resolveCopilotForwardCompatModel(
       cost: staticOverride.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: staticOverride.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
       maxTokens: staticOverride.maxTokens ?? DEFAULT_MAX_TOKENS,
-      ...(staticOverride.compat ? { compat: staticOverride.compat } : {}),
+      ...(compat ? { compat } : {}),
     } as ProviderRuntimeModel);
   }
 
@@ -77,6 +83,7 @@ export function resolveCopilotForwardCompatModel(
   // by simply adding them to agents.defaults.models in openclaw.json — no
   // code change required.
   const reasoning = /^o[13](\b|$)/.test(lowerModelId) || isCopilotCodexModelId(lowerModelId);
+  const compat = resolveCopilotModelCompat(trimmedModelId);
   return normalizeModelCompat({
     id: trimmedModelId,
     name: trimmedModelId,
@@ -89,6 +96,7 @@ export function resolveCopilotForwardCompatModel(
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: DEFAULT_CONTEXT_WINDOW,
     maxTokens: DEFAULT_MAX_TOKENS,
+    ...(compat ? { compat } : {}),
   } as ProviderRuntimeModel);
 }
 
@@ -126,7 +134,7 @@ const COPILOT_ROUTER_ID_PREFIX = "accounts/";
 function resolveCopilotApiForVendor(
   vendor: string | undefined,
   modelId: string,
-): "anthropic-messages" | "openai-responses" {
+): "anthropic-messages" | "openai-completions" | "openai-responses" {
   if (vendor && vendor.toLowerCase() === "anthropic") {
     return "anthropic-messages";
   }
@@ -167,6 +175,7 @@ function mapCopilotApiModelToDefinition(
     typeof limits?.max_output_tokens === "number" && limits.max_output_tokens > 0
       ? limits.max_output_tokens
       : DEFAULT_MAX_TOKENS;
+  const compat = resolveCopilotModelCompat(id);
 
   const definition: ModelDefinitionConfig = {
     id,
@@ -177,6 +186,7 @@ function mapCopilotApiModelToDefinition(
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow,
     maxTokens,
+    ...(compat ? { compat } : {}),
   };
   return definition;
 }
@@ -224,8 +234,8 @@ export async function fetchCopilotModelCatalog(
       headers: {
         Accept: "application/json",
         Authorization: `Bearer ${params.copilotApiToken}`,
-        "Editor-Version": "vscode/1.96.2",
-        "Copilot-Integration-Id": "vscode-chat",
+        ...buildCopilotIdeHeaders(),
+        "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
       },
       signal: params.signal ?? controller?.signal,
     });

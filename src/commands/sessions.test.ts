@@ -49,7 +49,7 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("+15555550123")) ?? "";
     expect(row).toBe(
-      "direct +15555550123               45m ago   pi:opus        OpenAI Codex       2.0k/32k (6%)        id:abc123",
+      "direct      +15555550123               45m ago   pi:opus        OpenAI Codex       2.0k/32k (6%)        id:abc123",
     );
   });
 
@@ -86,7 +86,7 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
     expect(row).toBe(
-      "direct agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
+      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
     );
   });
 
@@ -121,7 +121,7 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
     expect(row).toBe(
-      "direct agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
+      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
     );
   });
 
@@ -141,7 +141,7 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("quietchat:group:demo")) ?? "";
     expect(row).toBe(
-      "group  quietchat:group:demo       5m ago    pi:opus        OpenAI Codex       unknown/32k (?%)     think:high id:xyz",
+      "group       quietchat:group:demo       5m ago    pi:opus        OpenAI Codex       unknown/32k (?%)     think:high id:xyz",
     );
   });
 

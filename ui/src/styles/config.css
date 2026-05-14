@@ -801,6 +801,62 @@
   color: var(--accent);
 }
 
+.settings-text-scale {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-text-scale__options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 8px;
+}
+
+.settings-text-scale__btn {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+  min-height: 58px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
+}
+
+.settings-text-scale__btn:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+  transform: translateY(-1px);
+}
+
+.settings-text-scale__btn.active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.settings-text-scale__sample {
+  font-weight: 650;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.settings-text-scale__label {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.settings-text-scale__btn.active .settings-text-scale__label {
+  color: var(--accent);
+}
+
 .settings-info-grid {
   display: grid;
   gap: 10px;
@@ -1334,6 +1390,20 @@
 :root[data-theme-mode="light"] .cfg-select {
   background-color: white;
   border-color: var(--border);
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .config-search__input,
+  .settings-theme-import__input,
+  .config-raw-field textarea,
+  .cfg-input,
+  .cfg-input--sm,
+  .cfg-textarea,
+  .cfg-textarea--sm,
+  .cfg-number__input,
+  .cfg-select {
+    font-size: 16px;
+  }
 }
 
 /* Segmented Control */

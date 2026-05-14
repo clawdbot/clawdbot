@@ -100,6 +100,20 @@ function writeChatCompletion(res, stream, text = successMarker) {
   });
 }
 
+function writeImageGeneration(res) {
+  writeJson(res, 200, {
+    created: Math.floor(Date.now() / 1000),
+    data: [
+      {
+        b64_json:
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=",
+        mime_type: "image/png",
+        revised_prompt: "openclaw mock image",
+      },
+    ],
+  });
+}
+
 function resolveResponseText(bodyText) {
   const matches = Array.from(bodyText.matchAll(/\bOPENCLAW_E2E_OK(?:_\d+)?\b/gu));
   return matches.at(-1)?.[0] ?? successMarker;
@@ -160,6 +174,29 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
     const responseText = resolveResponseText(bodyText);
     writeChatCompletion(res, body.stream !== false, responseText);
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/v1/embeddings") {
+    const input = Array.isArray(body.input) ? body.input : [body.input ?? ""];
+    writeJson(res, 200, {
+      object: "list",
+      data: input.map((_, index) => ({
+        object: "embedding",
+        index,
+        embedding: [1, index / 100, 0, 0],
+      })),
+      model: body.model ?? "text-embedding-3-small",
+      usage: { prompt_tokens: input.length, total_tokens: input.length },
+    });
+    return;
+  }
+
+  if (
+    req.method === "POST" &&
+    (url.pathname === "/v1/images/generations" || url.pathname === "/v1/images/edits")
+  ) {
+    writeImageGeneration(res);
     return;
   }
 

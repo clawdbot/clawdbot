@@ -545,6 +545,34 @@ async function completeSimpleWithTimeout<TApi extends Api>(
   }
 }
 
+function requireToolChoicePayload(payload: unknown): unknown {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return undefined;
+  }
+  const candidate = payload as { tools?: unknown; tool_choice?: unknown };
+  if (!Array.isArray(candidate.tools) || candidate.tools.length === 0) {
+    return undefined;
+  }
+  return {
+    ...candidate,
+    tool_choice: { type: "function", name: "noop" },
+  };
+}
+
+describe("requireToolChoicePayload", () => {
+  it("requires tool use when a Responses payload has tools", () => {
+    expect(requireToolChoicePayload({ model: "gpt", tools: [{ name: "noop" }] })).toEqual({
+      model: "gpt",
+      tools: [{ name: "noop" }],
+      tool_choice: { type: "function", name: "noop" },
+    });
+  });
+
+  it("leaves payloads without tools unchanged", () => {
+    expect(requireToolChoicePayload({ model: "gpt", tools: [] })).toBeUndefined();
+  });
+});
+
 async function completeOkWithRetry(params: {
   model: Model<Api>;
   apiKey: string;
@@ -982,6 +1010,7 @@ describeLive("live models (profile keys)", () => {
                   apiKey,
                   reasoning: resolveTestReasoning(model),
                   maxTokens: 128,
+                  onPayload: requireToolChoicePayload,
                 },
                 perModelTimeoutMs,
                 `${progressLabel}: tool-only regression first call`,
@@ -1012,6 +1041,7 @@ describeLive("live models (profile keys)", () => {
                     apiKey,
                     reasoning: resolveTestReasoning(model),
                     maxTokens: 128,
+                    onPayload: requireToolChoicePayload,
                   },
                   perModelTimeoutMs,
                   `${progressLabel}: tool-only regression retry ${i + 1}`,
@@ -1025,6 +1055,11 @@ describeLive("live models (profile keys)", () => {
                   .trim();
               }
 
+              if (first.stopReason === "error") {
+                throw new Error(
+                  first.errorMessage || "tool-only regression returned error with no message",
+                );
+              }
               expect(firstText.length).toBe(0);
               if (!toolCall || toolCall.type !== "toolCall") {
                 throw new Error("expected tool call");

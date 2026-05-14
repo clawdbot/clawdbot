@@ -31,6 +31,24 @@ function createApi(params: {
       },
       config: {
         current: () => params.getConfig(),
+        mutateConfigFile: async ({
+          mutate,
+        }: {
+          mutate: (draft: Record<string, unknown>) => void;
+        }) => {
+          const nextConfig = structuredClone(params.getConfig());
+          mutate(nextConfig);
+          await params.writeConfig(nextConfig);
+          return {
+            path: "/tmp/openclaw.json",
+            previousHash: null,
+            snapshot: {},
+            nextConfig,
+            afterWrite: { mode: "auto" },
+            followUp: { mode: "auto", requiresRestart: false },
+            result: undefined,
+          };
+        },
         replaceConfigFile: ({ nextConfig }: { nextConfig: unknown }) =>
           params.writeConfig(nextConfig as Record<string, unknown>),
       },

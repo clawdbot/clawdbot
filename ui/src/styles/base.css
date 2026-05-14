@@ -85,6 +85,13 @@
     "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
   --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-display: var(--font-body);
+  --control-ui-text-scale: 1;
+  --control-ui-text-xs: calc(11px * var(--control-ui-text-scale));
+  --control-ui-text-sm: calc(12px * var(--control-ui-text-scale));
+  --control-ui-text-md: calc(14px * var(--control-ui-text-scale));
+  --control-ui-text-lg: calc(16px * var(--control-ui-text-scale));
+  --control-ui-input-text-size: max(16px, calc(14px * var(--control-ui-text-scale)));
+  --chat-text-size: var(--control-ui-text-md);
 
   /* Shadows - Subtle, layered depth */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);

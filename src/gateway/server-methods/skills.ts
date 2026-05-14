@@ -13,15 +13,12 @@ import { installSkill } from "../../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
 import { loadWorkspaceSkillEntries, type SkillEntry } from "../../agents/skills.js";
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
-import { replaceConfigFile } from "../../config/config.js";
-import { redactConfigObject, REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { redactConfigObject } from "../../config/redact-snapshot.js";
 import { fetchClawHubSkillDetail } from "../../infra/clawhub.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import {
   ErrorCodes,
   errorShape,
@@ -33,6 +30,7 @@ import {
   validateSkillsStatusParams,
   validateSkillsUpdateParams,
 } from "../protocol/index.js";
+import { updateSkillConfigEntry } from "./skills-config-mutations.js";
 import { installUploadedSkillArchive, skillsUploadHandlers } from "./skills-upload.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -331,55 +329,10 @@ export const skillsHandlers: GatewayRequestHandlers = {
       apiKey?: string;
       env?: Record<string, string>;
     };
-    const cfg = context.getRuntimeConfig();
-    const skills = cfg.skills ? { ...cfg.skills } : {};
-    const entries = skills.entries ? { ...skills.entries } : {};
-    const current = entries[p.skillKey] ? { ...entries[p.skillKey] } : {};
-    if (typeof p.enabled === "boolean") {
-      current.enabled = p.enabled;
-    }
-    if (typeof p.apiKey === "string") {
-      const trimmed = normalizeSecretInput(p.apiKey);
-      if (trimmed === REDACTED_SENTINEL) {
-        // Keep the stored secret when a client round-trips a redacted response value.
-      } else if (trimmed) {
-        current.apiKey = trimmed;
-      } else {
-        delete current.apiKey;
-      }
-    }
-    if (p.env && typeof p.env === "object") {
-      const nextEnv = current.env ? { ...current.env } : {};
-      for (const [key, value] of Object.entries(p.env)) {
-        const trimmedKey = key.trim();
-        if (!trimmedKey) {
-          continue;
-        }
-        const trimmedVal = value.trim();
-        if (trimmedVal === REDACTED_SENTINEL) {
-          continue;
-        }
-        if (!trimmedVal) {
-          delete nextEnv[trimmedKey];
-        } else {
-          nextEnv[trimmedKey] = trimmedVal;
-        }
-      }
-      current.env = nextEnv;
-    }
-    entries[p.skillKey] = current;
-    skills.entries = entries;
-    const nextConfig: OpenClawConfig = {
-      ...cfg,
-      skills,
-    };
-    await replaceConfigFile({
-      nextConfig,
-      afterWrite: { mode: "auto" },
-    });
+    const updated = await updateSkillConfigEntry(p);
     respond(
       true,
-      { ok: true, skillKey: p.skillKey, config: redactConfigObject(current) },
+      { ok: true, skillKey: p.skillKey, config: redactConfigObject(updated) },
       undefined,
     );
   },

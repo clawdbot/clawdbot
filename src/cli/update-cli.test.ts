@@ -405,14 +405,14 @@ describe("update-cli", () => {
 
   const syncPluginCall = (index = 0) => {
     const calls = syncPluginsForUpdateChannel.mock.calls as unknown as Array<
-      [Record<string, unknown> & { channel?: string; config?: OpenClawConfig }]
+      [{ channel?: string; config?: OpenClawConfig }]
     >;
     return calls[index]?.[0];
   };
 
   const npmPluginUpdateCall = (index = 0) => {
     const calls = updateNpmInstalledPlugins.mock.calls as unknown as Array<
-      [Record<string, unknown> & { config?: OpenClawConfig; timeoutMs?: number }]
+      [{ config?: OpenClawConfig; timeoutMs?: number }]
     >;
     return calls[index]?.[0];
   };
@@ -928,33 +928,6 @@ describe("update-cli", () => {
     expect(replaceConfigFile).not.toHaveBeenCalled();
     expect(syncPluginsForUpdateChannel).not.toHaveBeenCalled();
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
-  });
-
-  it("carries ClawHub risk acknowledgement into post-core resume", async () => {
-    const { entrypoints } = setupUpdatedRootRefresh({
-      gatewayUpdateImpl: async (root) =>
-        makeOkUpdateResult({
-          mode: "git",
-          root,
-          before: { sha: "old-sha", version: "2026.4.26" },
-          after: { sha: "new-sha", version: "2026.4.27" },
-        }),
-    });
-
-    await updateCommand({
-      channel: "dev",
-      yes: true,
-      restart: false,
-      acknowledgeClawHubRisk: true,
-    });
-
-    expect(spawnCall()?.[1]).toEqual([
-      entrypoints[0],
-      "update",
-      "--no-restart",
-      "--yes",
-      "--acknowledge-clawhub-risk",
-    ]);
   });
 
   it("keeps downgrade post-update work in the current process", async () => {
@@ -2917,22 +2890,6 @@ describe("update-cli", () => {
     expect(syncConfig?.plugins?.entries).toBeUndefined();
     expect(updateCall?.skipDisabledPlugins).toBe(true);
     expect(updateCall?.syncOfficialPluginInstalls).toBe(true);
-  });
-
-  it("forwards ClawHub risk acknowledgement to post-update plugin work", async () => {
-    const tempDir = createCaseDir("openclaw-update");
-    mockPackageInstallStatus(tempDir);
-
-    await updateCommand({
-      channel: "beta",
-      yes: true,
-      restart: false,
-      acknowledgeClawHubRisk: true,
-    });
-
-    expect(syncPluginCall()?.acknowledgeClawHubRisk).toBe(true);
-    expect(npmPluginUpdateCall()?.acknowledgeClawHubRisk).toBe(true);
-    expect(lastNpmPluginUpdateCall()?.acknowledgeClawHubRisk).toBe(true);
   });
 
   it("persists channel and runs post-update work after switching from package to git", async () => {

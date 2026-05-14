@@ -27,6 +27,19 @@ function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+function readTrackedJson(cwd, relativePath) {
+  const filePath = path.join(cwd, relativePath);
+  if (fs.existsSync(filePath)) {
+    return readJson(filePath);
+  }
+  return JSON.parse(
+    execFileSync("git", ["show", `:${relativePath}`], {
+      cwd,
+      encoding: "utf8",
+    }),
+  );
+}
+
 function isAllowedPinnedSpec(spec) {
   if (typeof spec !== "string") {
     return false;
@@ -46,7 +59,7 @@ function isAllowedPinnedSpec(spec) {
 function collectPackageJsonViolations(cwd) {
   const violations = [];
   for (const relativePath of listTrackedPackageJsonFiles(cwd)) {
-    const packageJson = readJson(path.join(cwd, relativePath));
+    const packageJson = readTrackedJson(cwd, relativePath);
     for (const section of PACKAGE_DEPENDENCY_SECTIONS) {
       for (const [name, spec] of Object.entries(packageJson[section] ?? {})) {
         if (!isAllowedPinnedSpec(spec)) {
@@ -96,7 +109,7 @@ export function collectDependencyPinAudit(cwd = process.cwd()) {
   const packageJsonFiles = listTrackedPackageJsonFiles(cwd);
   let packageSpecCount = 0;
   for (const relativePath of packageJsonFiles) {
-    const packageJson = readJson(path.join(cwd, relativePath));
+    const packageJson = readTrackedJson(cwd, relativePath);
     for (const section of PACKAGE_DEPENDENCY_SECTIONS) {
       packageSpecCount += Object.keys(packageJson[section] ?? {}).length;
     }

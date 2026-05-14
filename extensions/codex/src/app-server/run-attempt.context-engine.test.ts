@@ -11,6 +11,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
+import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import { createCodexTestModel } from "./test-support.js";
 
 let tempDir: string;
@@ -211,7 +212,7 @@ function optionalString(value: unknown): string {
 }
 
 function requireFirstCallArg(mock: unknown, label: string): unknown {
-  const call = (mock as MockCallReader).mock.calls.at(0);
+  const call = (mock as MockCallReader).mock.calls[0];
   if (!call) {
     throw new Error(`expected ${label} to be called`);
   }
@@ -371,6 +372,70 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
     await harness.completeTurn();
     await run;
+  });
+
+  it("retries a resumed context-engine thread on a fresh Codex thread after early context overflow", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-old",
+      cwd: workspaceDir,
+      dynamicToolsFingerprint: "[]",
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint:
+          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
+      },
+    });
+    const contextEngine = createContextEngine();
+    const harness = createStartedThreadHarness(async (method, requestParams) => {
+      const request = requireRecord(requestParams, `${method} params`);
+      if (method === "thread/resume") {
+        return threadStartResult("thread-old");
+      }
+      if (method === "turn/start" && request.threadId === "thread-old") {
+        throw new Error("Codex ran out of room in the model's context window");
+      }
+      if (method === "thread/start") {
+        return threadStartResult("thread-fresh");
+      }
+      if (method === "turn/start" && request.threadId === "thread-fresh") {
+        return turnStartResult("turn-fresh");
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.contextTokenBudget = 400_000;
+
+    const run = runCodexAppServerAttempt(params);
+    await vi.waitFor(() =>
+      expect(harness.requests.map((request) => request.method)).toEqual([
+        "thread/resume",
+        "turn/start",
+        "thread/start",
+        "turn/start",
+      ]),
+    );
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-fresh",
+        turnId: "turn-fresh",
+        turn: {
+          id: "turn-fresh",
+          status: "completed",
+          items: [{ type: "agentMessage", id: "msg-1", text: "fresh answer" }],
+        },
+      },
+    });
+    const result = await run;
+
+    expect(result.assistantTexts).toContain("fresh answer");
+    const savedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(savedBinding?.threadId).toBe("thread-fresh");
+    expect(savedBinding?.contextEngine?.engineId).toBe("lossless-claw");
   });
 
   it("keeps current-turn context at the front of the Codex context-engine prompt", async () => {

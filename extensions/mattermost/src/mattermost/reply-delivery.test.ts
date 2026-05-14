@@ -43,7 +43,7 @@ describe("deliverMattermostReplyPayload", () => {
     const cfg = {} satisfies OpenClawConfig;
     const core = createReplyDeliveryCore();
 
-    await deliverMattermostReplyPayload({
+    const outcome = await deliverMattermostReplyPayload({
       core,
       cfg,
       payload: { text: "hidden", isReasoning: true },
@@ -57,6 +57,33 @@ describe("deliverMattermostReplyPayload", () => {
     });
 
     expect(sendMessage).not.toHaveBeenCalled();
+    expect(outcome).toBe("reasoning_skipped");
+  });
+
+  it("returns 'empty' for substantive text that produced no send (regression: #80501)", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    const cfg = {} satisfies OpenClawConfig;
+    const core = createReplyDeliveryCore();
+    // Make the markdown table converter strip the text to empty so
+    // deliverTextOrMediaReply sees an empty chunked text and returns "empty".
+    core.channel.text.convertMarkdownTables = vi.fn(() => "");
+    core.channel.text.chunkMarkdownTextWithMode = vi.fn(() => []);
+
+    const outcome = await deliverMattermostReplyPayload({
+      core,
+      cfg,
+      payload: { text: "non-trivial input that the converter strips" },
+      to: "channel:town-square",
+      accountId: "default",
+      agentId: "agent-1",
+      replyToId: "root-post",
+      textLimit: 4000,
+      tableMode: "off",
+      sendMessage,
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(outcome).toBe("empty");
   });
 
   it("suppresses reasoning-prefixed payloads even without an explicit flag", async () => {
@@ -163,14 +190,13 @@ describe("deliverMattermostReplyPayload", () => {
         accountId: "default",
         mediaUrl,
         replyToId: "root-post",
-        mediaLocalRoots: [
-          path.join(os.tmpdir(), "openclaw"),
+        mediaLocalRoots: expect.arrayContaining([
           path.join(stateDir, "media"),
           path.join(stateDir, "canvas"),
           path.join(stateDir, "workspace"),
           path.join(stateDir, "sandboxes"),
           path.join(stateDir, `workspace-${agentId}`),
-        ],
+        ]),
       });
     } finally {
       if (previousStateDir === undefined) {
@@ -188,7 +214,7 @@ describe("deliverMattermostReplyPayload", () => {
     const core = createReplyDeliveryCore();
     core.channel.text.chunkMarkdownTextWithMode = vi.fn(() => ["hello"]);
 
-    await deliverMattermostReplyPayload({
+    const outcome = await deliverMattermostReplyPayload({
       core,
       cfg,
       payload: { text: "hello" },
@@ -207,5 +233,6 @@ describe("deliverMattermostReplyPayload", () => {
       accountId: "default",
       replyToId: "root-post",
     });
+    expect(outcome).toBe("text");
   });
 });

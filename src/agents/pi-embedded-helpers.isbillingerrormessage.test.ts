@@ -1442,11 +1442,34 @@ describe("classifyProviderRuntimeFailureKind", () => {
   });
 
   it("classifies OAuth refresh failures", () => {
-    expect(
-      classifyProviderRuntimeFailureKind(
-        "OAuth token refresh failed for openai-codex: invalid_grant. Please try again or re-authenticate.",
-      ),
-    ).toBe("auth_refresh");
+    const refreshFailures = [
+      "OAuth token refresh failed for openai-codex: invalid_grant. Please try again or re-authenticate.",
+      "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.",
+      "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
+    ];
+    for (const message of refreshFailures) {
+      expect(classifyProviderRuntimeFailureKind(message)).toBe("auth_refresh");
+      expect(classifyFailoverReason(message, { provider: "openai-codex" })).toBe("auth_permanent");
+    }
+  });
+
+  it("does not make uncertain OAuth refresh wrappers terminal", () => {
+    const message =
+      "OAuth token refresh failed for openai-codex: file lock timeout for /tmp/agent/auth-profiles.json. Please try again or re-authenticate.";
+    expect(classifyProviderRuntimeFailureKind(message)).toBe("auth_refresh");
+    expect(classifyFailoverReason(message, { provider: "openai-codex" })).toBe("auth");
+  });
+
+  it("keeps Codex entitlement and usage-limit payloads out of terminal auth", () => {
+    const entitlementMessages = [
+      "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), try again after 11:34 AM.",
+      "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits, try again later.",
+      '429 {"type":"error","error":{"type":"rate_limit_error","message":"You\\u0027ve hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), try again after 11:34 AM."}}',
+    ];
+    for (const message of entitlementMessages) {
+      expect(classifyProviderRuntimeFailureKind(message)).not.toBe("auth_refresh");
+      expect(classifyFailoverReason(message, { provider: "openai-codex" })).toBe("rate_limit");
+    }
   });
 
   it("classifies OAuth refresh timeouts and lock contention distinctly", () => {

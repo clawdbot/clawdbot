@@ -45,6 +45,7 @@ const DISCORD_REALTIME_RECENT_AGENT_PROXY_CONSULT_TTL_MS = 15_000;
 const DISCORD_REALTIME_LOG_PREVIEW_CHARS = 500;
 const DISCORD_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
 const DISCORD_REALTIME_FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
+const DISCORD_REALTIME_DUPLICATE_ERROR_SUPPRESS_MS = 60_000;
 const REALTIME_PCM16_BYTES_PER_SAMPLE = 2;
 const DISCORD_REALTIME_FORCED_CONSULT_TRAILING_FRAGMENT_WORDS = new Set([
   "a",
@@ -332,6 +333,9 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   private queuedExactSpeechMessages: string[] = [];
   private exactSpeechResponseActive = false;
   private exactSpeechAudioStarted = false;
+  private lastRealtimeError:
+    | { message: string; suppressed: number; lastLoggedAt: number }
+    | undefined;
   private readonly playerIdleHandler = () => {
     this.resetOutputStream("player-idle");
     this.completeExactSpeechResponse("player-idle");
@@ -453,9 +457,11 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
           logger.info(interruptionLog);
         }
       },
-      onError: (error) =>
-        logger.warn(`discord voice: realtime error: ${formatErrorMessage(error)}`),
-      onClose: (reason) => logVoiceVerbose(`realtime closed: ${reason}`),
+      onError: (error) => this.logRealtimeError(formatErrorMessage(error)),
+      onClose: (reason) => {
+        this.flushSuppressedRealtimeErrors();
+        logVoiceVerbose(`realtime closed: ${reason}`);
+      },
     });
     const resolvedModel =
       readProviderConfigString(resolved.providerConfig, "model") ?? resolved.provider.defaultModel;
@@ -478,6 +484,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
 
   close(): void {
     this.stopped = true;
+    this.flushSuppressedRealtimeErrors();
     this.talkback.close();
     this.clearForcedConsultTimers();
     this.pendingAgentProxyConsultContexts = [];
@@ -491,6 +498,30 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     this.bridge = null;
     const voiceSdk = loadDiscordVoiceSdk();
     this.params.entry.player.off(voiceSdk.AudioPlayerStatus.Idle, this.playerIdleHandler);
+  }
+
+  private logRealtimeError(message: string): void {
+    const now = Date.now();
+    if (
+      this.lastRealtimeError?.message === message &&
+      now - this.lastRealtimeError.lastLoggedAt < DISCORD_REALTIME_DUPLICATE_ERROR_SUPPRESS_MS
+    ) {
+      this.lastRealtimeError.suppressed += 1;
+      return;
+    }
+    this.flushSuppressedRealtimeErrors();
+    this.lastRealtimeError = { message, suppressed: 0, lastLoggedAt: now };
+    logger.warn(`discord voice: realtime error: ${message}`);
+  }
+
+  private flushSuppressedRealtimeErrors(): void {
+    if (!this.lastRealtimeError || this.lastRealtimeError.suppressed === 0) {
+      return;
+    }
+    logger.warn(
+      `discord voice: suppressed ${this.lastRealtimeError.suppressed} duplicate realtime errors: ${this.lastRealtimeError.message}`,
+    );
+    this.lastRealtimeError.suppressed = 0;
   }
 
   beginSpeakerTurn(context: VoiceRealtimeSpeakerContext, userId: string): VoiceRealtimeSpeakerTurn {

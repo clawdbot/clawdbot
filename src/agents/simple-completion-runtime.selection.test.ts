@@ -74,6 +74,26 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
     expect(selection.profileId).toBe("work");
   });
 
+  it("uses Codex execution provider for OpenAI model refs with Codex runtime policy", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4-mini",
+          models: {
+            "openai/gpt-5.4-mini": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const selection = requireSelection(
+      resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" }),
+    );
+    expect(selection.provider).toBe("openai");
+    expect(selection.modelId).toBe("gpt-5.4-mini");
+    expect(selection.runtimeProvider).toBe("openai-codex");
+  });
+
   it("falls back to runtime default model when no explicit model is configured", () => {
     const cfg = {} as OpenClawConfig;
 

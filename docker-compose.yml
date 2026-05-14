@@ -7,13 +7,16 @@ services:
         required: false
     environment:
       HOME: /home/node
+      OPENCLAW_HOME: /home/node
       TERM: xterm-256color
-      # Pin container-side workspace and config paths so host values written to
+      # Pin container-side state, workspace, and config paths so host values written to
       # `.env` (used by Compose for the bind-mount source below) cannot leak
       # into runtime code that resolves these env vars inside the container.
       # Without this override, a macOS host path like /Users/<you>/.openclaw/...
       # imported from .env caused first-reply `mkdir '/Users'` EACCES failures
       # in Linux Docker (#77436).
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
       OPENCLAW_CONFIG_DIR: /home/node/.openclaw
       OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
@@ -98,9 +101,12 @@ services:
       - no-new-privileges:true
     environment:
       HOME: /home/node
+      OPENCLAW_HOME: /home/node
       TERM: xterm-256color
-      # Pin container-side workspace and config paths so host values written to
+      # Pin container-side state, workspace, and config paths so host values written to
       # `.env` cannot leak into runtime code via the env_file import (#77436).
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
       OPENCLAW_CONFIG_DIR: /home/node/.openclaw
       OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}

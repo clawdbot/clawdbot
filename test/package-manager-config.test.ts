@@ -4,6 +4,7 @@ import { parse } from "yaml";
 
 type PnpmBuildConfig = {
   allowBuilds?: Record<string, boolean>;
+  blockExoticSubdeps?: boolean;
   ignoredBuiltDependencies?: string[];
   onlyBuiltDependencies?: string[];
 };
@@ -25,6 +26,7 @@ describe("package manager build policy", () => {
 
     expect(packageJson.pnpm).toBeUndefined();
     expect(workspace.allowBuilds?.["@discordjs/opus"]).toBe(false);
+    expect(workspace.blockExoticSubdeps).toBe(true);
     expect(workspace.onlyBuiltDependencies).toBeUndefined();
   });
 });

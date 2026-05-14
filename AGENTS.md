@@ -10,12 +10,12 @@ Skills own workflows; root owns hard policy and routing.
 - Docs/user-visible work: `pnpm docs:list`, then read relevant docs only.
 - Fix/triage answers need source, tests, current/shipped behavior, and dependency contract proof.
 - Dependency-backed behavior: read upstream docs/source/types first. No API/default/error/timing guesses.
-- Live-verify when feasible. Check env/`~/.profile` for keys before saying blocked; never print secrets.
+- Live-verify when feasible. Never print secrets.
 - Missing deps: `pnpm install`, retry once, then report first actionable error.
 - CODEOWNERS: maint/refactor/tests ok. Larger behavior/product/security/ownership: owner ask/review.
 - Product/docs/UI/changelog wording: "plugin/plugins"; `extensions/` is internal.
 - New channel/plugin/app/doc surface: update `.github/labeler.yml` + GH labels.
-- New `AGENTS.md`: add sibling `CLAUDE.md` symlink.
+- New `AGENTS.md`: add sibling `CLAUDE.md` symlink; edit `AGENTS.md` only.
 
 ## Map
 
@@ -31,11 +31,15 @@ Skills own workflows; root owns hard policy and routing.
 - Core/tests: no deep plugin internals (`extensions/*/src/**`, `onboard.js`). Use public barrels, SDK facade, generic contracts.
 - Owner boundary: owner-specific repair/detection/onboarding/auth/defaults/provider behavior lives in owner plugin. Shared/core gets generic seams only.
 - Dependency ownership follows runtime ownership: plugin-only deps stay plugin-local; root deps only for core imports or intentionally internalized bundled plugin runtime.
+- Internal bundled plugins ship in core dist; bundled-only facade loader ok only for them.
+- External official plugins own package/deps and are excluded from core dist; core uses registry-aware `facade-runtime` or generic contracts.
+- Externalizing a bundled plugin: update package excludes, official catalogs, docs, tests, and prove core runtime paths resolve installed plugin roots before root-dep removal.
 - Legacy config repair belongs in `openclaw doctor --fix`, not startup/load-time core migrations. Runtime paths use canonical contracts.
 - New seams: backward-compatible, documented, versioned. Third-party plugins exist.
 - Channels are implementation under `src/channels/**`; plugin authors get SDK seams. Providers own auth/catalog/runtime hooks; core owns generic loop.
 - Hot paths should carry prepared facts forward: provider id, model ref, channel id, target, capability family, attachment class. Do not rediscover with broad plugin/provider/channel/capability loaders.
 - Do not fix repeated request-time discovery with scattered caches. Move the canonical fact earlier; reuse prepared runtime objects; delete duplicate lookup branches.
+- Inline code comments: brief notes for tricky, bug-prone, or previously buggy logic.
 - Gateway protocol changes: additive first; incompatible needs versioning/docs/client follow-through.
 - Config contract: exported types, schema/help, metadata, baselines, docs aligned. Retired public keys stay retired; compat in raw migration/doctor only.
 - Prompt cache: deterministic ordering for maps/sets/registries/plugin lists/files/network results before model/tool payloads. Preserve old transcript bytes when possible.
@@ -46,8 +50,10 @@ Skills own workflows; root owns hard policy and routing.
 - Package manager/runtime: repo defaults only. No swaps without approval.
 - Install: `pnpm install` (keep Bun lock/patches aligned if touched).
 - CLI: `pnpm openclaw ...` or `pnpm dev`; build: `pnpm build`.
-- Tests: `pnpm test <path-or-filter> [vitest args...]`, `pnpm test:changed`, `pnpm test:serial`, `pnpm test:coverage`; never raw `vitest`.
-- Checks: `pnpm check:changed`; lanes: `pnpm changed:lanes --json`; staged: `pnpm check:changed --staged`; full: `pnpm check`.
+- Tests in a normal source checkout: `pnpm test <path-or-filter> [vitest args...]`, `pnpm test:changed`, `pnpm test:serial`, `pnpm test:coverage`; never raw `vitest`.
+- Tests in a Codex worktree or linked/sparse checkout: avoid direct local `pnpm test*`; use `node scripts/run-vitest.mjs <path-or-filter>` for tiny explicit-file proof, or Crabbox/Testbox for anything broader.
+- Checks in a normal source checkout: `pnpm check:changed`; lanes: `pnpm changed:lanes --json`; staged: `pnpm check:changed --staged`; full: `pnpm check`.
+- Checks in a Codex worktree or linked/sparse checkout: avoid direct local `pnpm check*`; use `node scripts/crabbox-wrapper.mjs run ... --shell -- "pnpm check:changed"` so pnpm runs inside Testbox, not locally.
 - Extension tests: `pnpm test:extensions`, `pnpm test extensions`, `pnpm test extensions/<id>`.
 - Typecheck: `tsgo` lanes only (`pnpm tsgo*`, `pnpm check:test-types`); never add `tsc --noEmit`, `typecheck`, `check:types`.
 - Formatting: `oxfmt`, not Prettier. Use repo wrappers (`pnpm format:*`, `pnpm lint:*`, `scripts/run-oxlint.mjs`).
@@ -56,7 +62,8 @@ Skills own workflows; root owns hard policy and routing.
 ## Validation
 
 - Use `$openclaw-testing` for test/CI choice and `$crabbox` for remote/full/E2E proof.
-- Small/narrow tests, lints, format checks, and type probes are fine locally.
+- Small/narrow tests, lints, format checks, and type probes are fine locally only in a healthy normal checkout.
+- In Codex worktrees, direct local `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, and `scripts/committer` can trigger pnpm dependency reconciliation or install prompts. Prefer `node` wrappers locally and Crabbox/Testbox for pnpm-gated proof.
 - Full suites, broad changed gates, Docker/package/E2E/live/cross-OS proof, or anything that bogs down the Mac: Crabbox/Testbox.
 - One/few files local. If a local command fans out, stop and move broad proof to Crabbox/Testbox.
 - Before handoff/push: prove touched surface. Before landing to `main`: issue proof plus appropriate full/broad proof unless scope is clearly narrow.
@@ -78,9 +85,11 @@ Skills own workflows; root owns hard policy and routing.
 - PR verification: before merge, post exact local commands, CI/Testbox run IDs, before/after proof when used, and known proof gaps.
 - Issue fixed on `main` with proof: comment proof + commit/PR, then close.
 - After landing or requested close/sweep: search duplicates; comment proof + canonical commit/PR/release before closing.
+- After landing/ship final: include 2-5 sentence recap of what landed: behavior change, key files/surface, proof run, issue/PR state. Do not answer with only status/links.
 - `ship` that fixes an issue: after push, comment proof + commit link, then close the issue.
 - GH comments with backticks, `$`, or shell snippets: use heredoc/body file, not inline double-quoted `--body`.
 - PR create: real body required. Include Summary + Verification; mention refs, behavior, and proof.
+- Real behavior proof section is parsed. Use exact `field: value` labels: `Behavior addressed`, `Real environment tested`, `Exact steps or command run after this patch`, `Evidence after fix`, `Observed result after fix`, `What was not tested`.
 - PR artifacts/screenshots: attach to PR/comment/external artifact store. Do not commit `.github/pr-assets`.
 - CI polling: exact SHA, relevant checks only, minimal fields. Skip routine noise (`Auto response`, `Labeler`, docs agents, performance/stale). Logs only after failure/completion or concrete need.
 - Maintainers: ignore `Real behavior proof` failures that only say PR body lacks real after-fix evidence.
@@ -136,7 +145,6 @@ Skills own workflows; root owns hard policy and routing.
 
 - Never commit real phone numbers, videos, credentials, live config.
 - Secrets: channel/provider creds in `~/.openclaw/credentials/`; model auth profiles in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`.
-- Env keys: check `~/.profile`; redact output.
 - Dependency patches/overrides/vendor changes need explicit approval. `pnpm-workspace.yaml` patched dependencies use exact versions only.
 - Carbon pins owner-only: do not change `@buape/carbon` unless Shadow (`@thewilloftheshadow`, verified by `gh`) asks.
 - Releases/publish/version bumps need explicit approval. Use `$openclaw-release-maintainer`.

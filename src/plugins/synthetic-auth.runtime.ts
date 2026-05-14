@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
+import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry.js";
 import { getPluginRegistryState } from "./runtime-state.js";
 
@@ -27,6 +28,19 @@ function resolveManifestSyntheticAuthProviderRefs(): string[] {
   );
 }
 
+function resolveManifestExternalAuthProviderRefs(): string[] {
+  const result = loadPluginRegistrySnapshotWithMetadata({});
+  if (result.source !== "persisted" && result.source !== "provided") {
+    return [];
+  }
+  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
+    index: result.snapshot,
+  });
+  return uniqueProviderRefs(
+    manifestRegistry.plugins.flatMap((plugin) => plugin.contracts?.externalAuthProviders ?? []),
+  );
+}
+
 export function resolveRuntimeSyntheticAuthProviderRefs(): string[] {
   const registry = getPluginRegistryState()?.activeRegistry;
   if (registry) {
@@ -48,4 +62,32 @@ export function resolveRuntimeSyntheticAuthProviderRefs(): string[] {
     ]);
   }
   return resolveManifestSyntheticAuthProviderRefs();
+}
+
+export function resolveRuntimeExternalAuthProviderRefs(): string[] {
+  const registry = getPluginRegistryState()?.activeRegistry;
+  if (registry) {
+    return uniqueProviderRefs([
+      ...registry.plugins.flatMap((plugin) => plugin.contracts?.externalAuthProviders ?? []),
+      ...(registry.providers ?? [])
+        .filter(
+          (entry) =>
+            ("resolveExternalAuthProfiles" in entry.provider &&
+              typeof entry.provider.resolveExternalAuthProfiles === "function") ||
+            ("resolveExternalOAuthProfiles" in entry.provider &&
+              typeof entry.provider.resolveExternalOAuthProfiles === "function"),
+        )
+        .map((entry) => entry.provider.id),
+      ...(registry.cliBackends ?? [])
+        .filter(
+          (entry) =>
+            ("resolveExternalAuthProfiles" in entry.backend &&
+              typeof entry.backend.resolveExternalAuthProfiles === "function") ||
+            ("resolveExternalOAuthProfiles" in entry.backend &&
+              typeof entry.backend.resolveExternalOAuthProfiles === "function"),
+        )
+        .map((entry) => entry.backend.id),
+    ]);
+  }
+  return resolveManifestExternalAuthProviderRefs();
 }

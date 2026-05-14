@@ -38,6 +38,7 @@ import {
   formatConnectErrorMessage,
   readConnectErrorDetailCode,
   readConnectErrorRecoveryAdvice,
+  readPairingConnectErrorDetails,
   type ConnectErrorRecoveryAdvice,
 } from "./protocol/connect-error-details.js";
 import {
@@ -222,6 +223,7 @@ export class GatewayClient {
   private deviceTokenRetryBudgetUsed = false;
   private pendingStartupReconnectDelayMs: number | null = null;
   private pendingConnectErrorDetailCode: string | null = null;
+  private pendingConnectErrorDetails: unknown = null;
   // Track last tick to detect silent stalls.
   private lastTick: number | null = null;
   private tickIntervalMs = 30_000;
@@ -337,7 +339,9 @@ export class GatewayClient {
     ws.on("close", (code, reason) => {
       const reasonText = rawDataToString(reason);
       const connectErrorDetailCode = this.pendingConnectErrorDetailCode;
+      const connectErrorDetails = this.pendingConnectErrorDetails;
       this.pendingConnectErrorDetailCode = null;
+      this.pendingConnectErrorDetails = null;
       if (this.ws === ws) {
         this.ws = null;
       }
@@ -369,7 +373,12 @@ export class GatewayClient {
         }
       }
       this.flushPendingErrors(new Error(`gateway closed (${code}): ${reasonText}`));
-      if (this.shouldPauseReconnectAfterAuthFailure(connectErrorDetailCode)) {
+      if (
+        this.shouldPauseReconnectAfterAuthFailure({
+          detailCode: connectErrorDetailCode,
+          details: connectErrorDetails,
+        })
+      ) {
         this.opts.onReconnectPaused?.({
           code,
           reason: reasonText,
@@ -428,6 +437,7 @@ export class GatewayClient {
     this.deviceTokenRetryBudgetUsed = false;
     this.pendingStartupReconnectDelayMs = null;
     this.pendingConnectErrorDetailCode = null;
+    this.pendingConnectErrorDetails = null;
     this.clearReconnectTimer();
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
@@ -576,6 +586,7 @@ export class GatewayClient {
         this.deviceTokenRetryBudgetUsed = false;
         this.pendingStartupReconnectDelayMs = null;
         this.pendingConnectErrorDetailCode = null;
+        this.pendingConnectErrorDetails = null;
         const authInfo = helloOk?.auth;
         if (authInfo?.deviceToken && this.opts.deviceIdentity) {
           storeDeviceAuthToken({
@@ -598,6 +609,8 @@ export class GatewayClient {
       .catch((err) => {
         this.pendingConnectErrorDetailCode =
           err instanceof GatewayClientRequestError ? readConnectErrorDetailCode(err.details) : null;
+        this.pendingConnectErrorDetails =
+          err instanceof GatewayClientRequestError ? err.details : null;
         const shouldRetryWithDeviceToken = this.shouldRetryWithStoredDeviceToken({
           error: err,
           explicitGatewayToken: normalizeOptionalString(this.opts.token),
@@ -682,8 +695,20 @@ export class GatewayClient {
     };
   }
 
-  private shouldPauseReconnectAfterAuthFailure(detailCode: string | null): boolean {
+  private shouldPauseReconnectAfterAuthFailure(params: {
+    detailCode: string | null;
+    details?: unknown;
+  }): boolean {
+    const { detailCode, details } = params;
     if (!detailCode) {
+      return false;
+    }
+    const pairingDetails = readPairingConnectErrorDetails(details);
+    if (
+      detailCode === ConnectErrorDetailCodes.PAIRING_REQUIRED &&
+      (pairingDetails?.pauseReconnect === false ||
+        pairingDetails?.recommendedNextStep === "wait_then_retry")
+    ) {
       return false;
     }
     if (

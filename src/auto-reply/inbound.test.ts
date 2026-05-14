@@ -488,7 +488,7 @@ describe("createInboundDebouncer", () => {
     }
   });
 
-  it("does not serialize keyed turns when debounce is disabled and no keyed chain exists", async () => {
+  it("does not serialize keyed turns by default when debounce is disabled", async () => {
     const started: string[] = [];
     let releaseFirst: (() => void) | undefined;
     const firstGate = new Promise<void>((resolve) => {
@@ -519,6 +519,41 @@ describe("createInboundDebouncer", () => {
     }
     releaseFirst();
     await Promise.all([first, second]);
+  });
+
+  it("serializes keyed turns when immediate serialization is enabled", async () => {
+    const started: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      serializeImmediate: true,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        const id = items[0]?.id ?? "";
+        started.push(id);
+        if (id === "1") {
+          await firstGate;
+        }
+      },
+    });
+
+    const first = debouncer.enqueue({ key: "a", id: "1" });
+    await Promise.resolve();
+    const second = debouncer.enqueue({ key: "a", id: "2" });
+    await Promise.resolve();
+
+    expect(started).toEqual(["1"]);
+
+    if (!releaseFirst) {
+      throw new Error("Expected first inbound debounce release callback to be initialized");
+    }
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(started).toEqual(["1", "2"]);
   });
 
   it("swallows onError failures so keyed chains still complete", async () => {

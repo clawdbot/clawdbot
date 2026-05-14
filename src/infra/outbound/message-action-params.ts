@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { root } from "../../infra/fs-safe.js";
 import { basenameFromMediaSource } from "../../infra/local-file-access.js";
 import { resolveChannelAccountMediaMaxMb } from "../../media/configured-max-bytes.js";
+import { basenameFromAnyPath } from "../../media/file-name.js";
 import {
   buildOutboundMediaLoadOptions,
   resolveOutboundMediaAccess,
@@ -131,8 +132,9 @@ function inferAttachmentFilename(params: {
   const mediaHint = params.mediaHint?.trim();
   if (mediaHint) {
     const base = basenameFromMediaSource(mediaHint);
-    if (base) {
-      return base;
+    const safeBase = base ? basenameFromAnyPath(base) : undefined;
+    if (safeBase) {
+      return safeBase;
     }
   }
   const ext = params.contentType ? extensionForMime(params.contentType) : undefined;

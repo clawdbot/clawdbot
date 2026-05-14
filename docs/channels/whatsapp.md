@@ -14,27 +14,19 @@ Status: production-ready via WhatsApp Web (Baileys). Gateway owns linked session
 - `openclaw channels login --channel whatsapp` also offers the install flow when
   the plugin is not present yet.
 - Dev channel + git checkout: defaults to the local plugin path.
-- Stable/Beta: uses the npm package `@openclaw/whatsapp` on the current official
-  release tag.
+- Stable/Beta: installs the official `@openclaw/whatsapp` plugin from ClawHub
+  first, with npm as the fallback.
+- The WhatsApp runtime is distributed outside the core OpenClaw npm package so
+  WhatsApp-specific runtime dependencies stay with the external plugin.
 
 Manual install stays available:
 
 ```bash
-openclaw plugins install @openclaw/whatsapp
+openclaw plugins install clawhub:@openclaw/whatsapp
 ```
 
-Use the bare package to follow the current official release tag. Pin an exact
-version only when you need a reproducible install.
-
-On Windows, the WhatsApp plugin needs Git on `PATH` during npm install because
-one of its Baileys/libsignal dependencies is fetched from a git URL. Install
-Git for Windows, then restart the shell and rerun the install:
-
-```powershell
-winget install --id Git.Git -e
-```
-
-Portable Git also works if its `bin` directory is on `PATH`.
+Use the bare npm package (`@openclaw/whatsapp`) only when you need the registry
+fallback. Pin an exact version only when you need a reproducible install.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">

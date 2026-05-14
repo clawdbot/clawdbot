@@ -12,6 +12,7 @@ type TelegramInlineButton = {
   text: string;
   callback_data?: string;
   url?: string;
+  web_app?: { url: string };
   style?: TelegramButtonStyle;
 };
 
@@ -35,13 +36,21 @@ function toTelegramInlineButton(button: InteractiveReplyButton): TelegramInlineB
     };
   }
   const callbackData = button.value ? sanitizeTelegramCallbackData(button.value) : undefined;
-  return callbackData
-    ? {
-        text: button.label,
-        callback_data: callbackData,
-        style,
-      }
-    : undefined;
+  if (callbackData) {
+    return {
+      text: button.label,
+      callback_data: callbackData,
+      style,
+    };
+  }
+  if (button.webApp?.url) {
+    return {
+      text: button.label,
+      web_app: { url: button.webApp.url },
+      style,
+    };
+  }
+  return undefined;
 }
 
 function chunkInteractiveButtons(

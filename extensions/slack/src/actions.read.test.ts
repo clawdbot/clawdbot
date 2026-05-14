@@ -118,4 +118,97 @@ describe("readSlackMessages", () => {
       hasMore: false,
     });
   });
+
+  it("passes Slack timestamp strings through to history bounds", async () => {
+    const client = createClient();
+
+    await readSlackMessages("C1", {
+      client,
+      before: "1712345678.654321",
+      after: "1712340000.000001",
+      token: "xoxb-test",
+    });
+
+    expect(client.conversations.history).toHaveBeenCalledWith({
+      channel: "C1",
+      limit: undefined,
+      latest: "1712345678.654321",
+      oldest: "1712340000.000001",
+    });
+  });
+
+  it("converts ISO date strings to epoch seconds for history bounds", async () => {
+    const client = createClient();
+
+    await readSlackMessages("C1", {
+      client,
+      before: "2024-04-05T12:34:56.000Z",
+      after: "2024-04-05T00:00:00.000Z",
+      token: "xoxb-test",
+    });
+
+    expect(client.conversations.history).toHaveBeenCalledWith({
+      channel: "C1",
+      limit: undefined,
+      latest: "1712320496",
+      oldest: "1712275200",
+    });
+  });
+
+  it("converts ISO date strings with offsets to epoch seconds for history bounds", async () => {
+    const client = createClient();
+
+    await readSlackMessages("C1", {
+      client,
+      before: "2024-04-05T12:34:56+03:00",
+      after: "2024-04-05T12:34:56.789+03:00",
+      token: "xoxb-test",
+    });
+
+    expect(client.conversations.history).toHaveBeenCalledWith({
+      channel: "C1",
+      limit: undefined,
+      latest: "1712309696",
+      oldest: "1712309696.789",
+    });
+  });
+
+  it.each(["not-a-timestamp", "2024-02-30T00:00:00.000Z", "04/05/2024", "2024-04-05T12:34:56"])(
+    "rejects invalid history bound %s with a clear timestamp error",
+    async (before) => {
+      const client = createClient();
+
+      await expect(
+        readSlackMessages("C1", {
+          client,
+          before,
+          token: "xoxb-test",
+        }),
+      ).rejects.toThrow(
+        `Invalid Slack read before timestamp "${before}": expected a Slack timestamp or ISO-8601 date string`,
+      );
+      expect(client.conversations.history).not.toHaveBeenCalled();
+    },
+  );
+
+  it("normalizes ISO date strings and Slack timestamp strings for thread reply bounds", async () => {
+    const client = createClient();
+
+    await readSlackMessages("C1", {
+      client,
+      threadId: "1712345678.000001",
+      before: "2024-04-05T12:34:56.000Z",
+      after: "1712340000.000001",
+      token: "xoxb-test",
+    });
+
+    expect(client.conversations.replies).toHaveBeenCalledWith({
+      channel: "C1",
+      ts: "1712345678.000001",
+      limit: undefined,
+      latest: "1712320496",
+      oldest: "1712340000.000001",
+    });
+    expect(client.conversations.history).not.toHaveBeenCalled();
+  });
 });

@@ -86,6 +86,41 @@ describe("gateway startup config secret preflight", () => {
     }
   });
 
+  it("measures startup auth subphases", async () => {
+    const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => preparedSnapshot(config));
+    const measured: string[] = [];
+
+    await prepareGatewayStartupConfig({
+      configSnapshot: buildSnapshot(gatewayTokenConfig({})),
+      activateRuntimeSecrets: createRuntimeSecretsActivator({
+        logSecrets: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+        emitStateEvent: vi.fn(),
+        prepareRuntimeSecretsSnapshot,
+        activateRuntimeSecretsSnapshot: vi.fn(),
+      }),
+      measure: async (name, run) => {
+        measured.push(name);
+        return await run();
+      },
+    });
+
+    expect(measured).toEqual([
+      "config.auth.snapshot-validate",
+      "config.auth.runtime-overrides",
+      "config.auth.startup-overrides",
+      "config.auth.secret-surface",
+      "config.auth.secret-preflight",
+      "config.auth.preflight-override",
+      "config.auth.ensure",
+      "config.auth.runtime-startup-overrides",
+      "config.auth.secrets-activate",
+    ]);
+  });
+
   it("wraps startup secret activation failures without emitting reload state events", async () => {
     const error = new Error('Environment variable "OPENAI_API_KEY" is missing or empty.');
     const prepareRuntimeSecretsSnapshot = vi.fn(async () => {

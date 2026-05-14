@@ -154,6 +154,23 @@
       }
     },
     {
+      "name": "@openclaw/openshell-sandbox",
+      "description": "OpenClaw OpenShell sandbox backend",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "openshell",
+          "label": "OpenShell Sandbox"
+        },
+        "install": {
+          "npmSpec": "@openclaw/openshell-sandbox",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.12-beta.1"
+        }
+      }
+    },
+    {
       "name": "@openclaw/voice-call",
       "description": "OpenClaw voice-call plugin",
       "source": "official",

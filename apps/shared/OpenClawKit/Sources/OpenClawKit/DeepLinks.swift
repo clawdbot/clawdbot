@@ -57,7 +57,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         {
             return link
         }
-        return fromGatewayURLString(
+        return self.fromGatewayURLString(
             trimmed,
             bootstrapToken: nil,
             token: nil,
@@ -89,7 +89,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         {
             return link
         }
-        for candidate in setupCodeCandidates(in: trimmed) where candidate != trimmed {
+        for candidate in self.setupCodeCandidates(in: trimmed) where candidate != trimmed {
             if let data = decodeBase64Url(candidate),
                let link = decodeSetupPayload(from: data)
             {
@@ -104,7 +104,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         if let urlString = payload.url?.trimmingCharacters(in: .whitespacesAndNewlines),
            !urlString.isEmpty
         {
-            return fromGatewayURLString(
+            return self.fromGatewayURLString(
                 urlString,
                 bootstrapToken: payload.bootstrapToken,
                 token: payload.token,

@@ -13,6 +13,7 @@ const requiredDoctorCompatCodes = [
   "doctor-agent-runtime-embedded-harness",
   "doctor-plugin-install-config-ledger",
   "doctor-bundled-plugin-load-paths",
+  "doctor-message-queue-steering-modes",
   "doctor-web-search-plugin-config",
   "doctor-web-fetch-plugin-config",
   "doctor-x-search-plugin-config",

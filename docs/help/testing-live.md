@@ -13,14 +13,10 @@ For quick start, QA runners, unit/integration suites, and Docker flows, see
 suites: model matrix, CLI backends, ACP, and media-provider live tests, plus
 credential handling.
 
-## Live: local profile smoke commands
+## Live: local smoke commands
 
-Source `~/.profile` before ad hoc live checks so provider keys and local tool
-paths match your shell:
-
-```bash
-source ~/.profile
-```
+Export the needed provider key in the process environment before ad hoc live
+checks.
 
 Safe media smoke:
 
@@ -275,9 +271,9 @@ Docker notes:
 - The Docker runner lives at `scripts/test-live-acp-bind-docker.sh`.
 - By default, it runs the ACP bind smoke against the aggregate live CLI agents in sequence: `claude`, `codex`, then `gemini`.
 - Use `OPENCLAW_LIVE_ACP_BIND_AGENTS=claude`, `OPENCLAW_LIVE_ACP_BIND_AGENTS=codex`, `OPENCLAW_LIVE_ACP_BIND_AGENTS=droid`, `OPENCLAW_LIVE_ACP_BIND_AGENTS=gemini`, or `OPENCLAW_LIVE_ACP_BIND_AGENTS=opencode` to narrow the matrix.
-- It sources `~/.profile`, stages the matching CLI auth material into the container, then installs the requested live CLI (`@anthropic-ai/claude-code`, `@openai/codex`, Factory Droid via `https://app.factory.ai/cli`, `@google/gemini-cli`, or `opencode-ai`) if missing. The ACP backend itself is the embedded `acpx/runtime` package from the official `acpx` plugin.
+- It stages the matching CLI auth material into the container, then installs the requested live CLI (`@anthropic-ai/claude-code`, `@openai/codex`, Factory Droid via `https://app.factory.ai/cli`, `@google/gemini-cli`, or `opencode-ai`) if missing. The ACP backend itself is the embedded `acpx/runtime` package from the official `acpx` plugin.
 - The Droid Docker variant stages `~/.factory` for settings, forwards `FACTORY_API_KEY`, and requires that API key because local Factory OAuth/keyring auth is not portable into the container. It uses ACPX's built-in `droid exec --output-format acp` registry entry.
-- The OpenCode Docker variant is a strict single-agent regression lane. It writes a temporary `OPENCODE_CONFIG_CONTENT` default model from `OPENCLAW_LIVE_ACP_BIND_OPENCODE_MODEL` (default `opencode/kimi-k2.6`) after sourcing `~/.profile`, and `pnpm test:docker:live-acp-bind:opencode` requires a bound assistant transcript instead of accepting the generic post-bind skip.
+- The OpenCode Docker variant is a strict single-agent regression lane. It writes a temporary `OPENCODE_CONFIG_CONTENT` default model from `OPENCLAW_LIVE_ACP_BIND_OPENCODE_MODEL` (default `opencode/kimi-k2.6`), and `pnpm test:docker:live-acp-bind:opencode` requires a bound assistant transcript instead of accepting the generic post-bind skip.
 - Direct `acpx` CLI calls are only a manual/workaround path for comparing behavior outside the Gateway. The Docker ACP bind smoke exercises OpenClaw's embedded `acpx` runtime backend.
 
 ## Live: Codex app-server harness smoke
@@ -309,7 +305,6 @@ Docker notes:
 Local recipe:
 
 ```bash
-source ~/.profile
 OPENCLAW_LIVE_CODEX_HARNESS=1 \
   OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=1 \
   OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1 \
@@ -321,15 +316,14 @@ OPENCLAW_LIVE_CODEX_HARNESS=1 \
 Docker recipe:
 
 ```bash
-source ~/.profile
 pnpm test:docker:live-codex-harness
 ```
 
 Docker notes:
 
 - The Docker runner lives at `scripts/test-live-codex-harness-docker.sh`.
-- It sources the mounted `~/.profile`, passes `OPENAI_API_KEY`, copies Codex CLI
-  auth files when present, installs `@openai/codex` into a writable mounted npm
+- It passes `OPENAI_API_KEY`, copies Codex CLI auth files when present, installs
+  `@openai/codex` into a writable mounted npm
   prefix, stages the source tree, then runs only the Codex-harness live test.
 - Docker enables the image, MCP/tool, and Guardian probes by default. Set
   `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0` or
@@ -357,7 +351,6 @@ Narrow, explicit allowlists are fastest and least flaky:
   - Antigravity (OAuth): `OPENCLAW_LIVE_GATEWAY_MODELS="google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-pro-high" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Google adaptive thinking smoke:
-  - If local keys live in shell profile: `source ~/.profile`
   - Gemini 3 dynamic default: `pnpm openclaw qa manual --provider-mode live-frontier --model google/gemini-3.1-pro-preview --alt-model google/gemini-3.1-pro-preview --message '/think adaptive Reply exactly: GEMINI_ADAPTIVE_OK' --timeout-ms 180000`
   - Gemini 2.5 dynamic budget: `pnpm openclaw qa manual --provider-mode live-frontier --model google/gemini-2.5-flash --alt-model google/gemini-2.5-flash --message '/think adaptive Reply exactly: GEMINI25_ADAPTIVE_OK' --timeout-ms 180000`
 
@@ -440,7 +433,8 @@ Live tests discover credentials the same way the CLI does. Practical implication
 - Legacy state dir: `~/.openclaw/credentials/` (copied into the staged live home when present, but not the main profile-key store)
 - Live local runs copy the active config, per-agent `auth-profiles.json` files, legacy `credentials/`, and supported external CLI auth dirs into a temp test home by default; staged live homes skip `workspace/` and `sandboxes/`, and `agents.*.workspace` / `agentDir` path overrides are stripped so probes stay off your real host workspace.
 
-If you want to rely on env keys (e.g. exported in your `~/.profile`), run local tests after `source ~/.profile`, or use the Docker runners below (they can mount `~/.profile` into the container).
+If you want to rely on env keys, export them before local tests or use the
+Docker runners below with an explicit `OPENCLAW_PROFILE_FILE`.
 
 ## Deepgram live (audio transcription)
 
@@ -469,7 +463,7 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 - Harness: `pnpm test:live:media image`
 - Scope:
   - Enumerates every registered image-generation provider plugin
-  - Loads missing provider env vars from your login shell (`~/.profile`) before probing
+  - Uses already-exported provider env vars before probing
   - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in `auth-profiles.json` do not mask real shell credentials
   - Skips providers with no usable auth/profile/model
   - Runs each configured provider through the shared image-generation runtime:
@@ -517,7 +511,7 @@ request. Plugin dependencies are expected to be present before runtime load.
 - Scope:
   - Exercises the shared bundled music-generation provider path
   - Currently covers Google and MiniMax
-  - Loads provider env vars from your login shell (`~/.profile`) before probing
+  - Uses already-exported provider env vars before probing
   - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in `auth-profiles.json` do not mask real shell credentials
   - Skips providers with no usable auth/profile/model
   - Runs both declared runtime modes when available:
@@ -542,7 +536,7 @@ request. Plugin dependencies are expected to be present before runtime load.
   - Exercises the shared bundled video-generation provider path
   - Defaults to the release-safe smoke path: non-FAL providers, one text-to-video request per provider, one-second lobster prompt, and a per-provider operation cap from `OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS` (`180000` by default)
   - Skips FAL by default because provider-side queue latency can dominate release time; pass `--video-providers fal` or `OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS="fal"` to run it explicitly
-  - Loads provider env vars from your login shell (`~/.profile`) before probing
+  - Uses already-exported provider env vars before probing
   - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in `auth-profiles.json` do not mask real shell credentials
   - Skips providers with no usable auth/profile/model
   - Runs only `generate` by default
@@ -573,7 +567,7 @@ request. Plugin dependencies are expected to be present before runtime load.
 - Command: `pnpm test:live:media`
 - Purpose:
   - Runs the shared image, music, and video live suites through one repo-native entrypoint
-  - Auto-loads missing provider env vars from `~/.profile`
+  - Uses already-exported provider env vars
   - Auto-narrows each suite to providers that currently have usable auth by default
   - Reuses `scripts/test-live.mjs`, so heartbeat and quiet-mode behavior stay consistent
 - Examples:

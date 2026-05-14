@@ -316,15 +316,25 @@ async function callBrowserProxy(params: {
       idempotencyKey: crypto.randomUUID(),
     },
   );
-  const parsed =
-    payload?.payload ??
-    (typeof payload?.payloadJSON === "string" && payload.payloadJSON
-      ? (JSON.parse(payload.payloadJSON) as BrowserProxyResult)
-      : null);
+  const parsed = unwrapBrowserProxyPayload(payload);
   if (!parsed || typeof parsed !== "object" || !("result" in parsed)) {
     throw new Error("browser proxy failed");
   }
   return parsed;
+}
+
+function unwrapBrowserProxyPayload(payload: { payload?: unknown; payloadJSON?: unknown } | null) {
+  if (payload?.payload !== undefined) {
+    return payload.payload;
+  }
+  if (typeof payload?.payloadJSON !== "string" || !payload.payloadJSON.trim()) {
+    return null;
+  }
+  try {
+    return JSON.parse(payload.payloadJSON) as BrowserProxyResult;
+  } catch {
+    return null;
+  }
 }
 
 async function persistProxyFiles(files: BrowserProxyFile[] | undefined) {

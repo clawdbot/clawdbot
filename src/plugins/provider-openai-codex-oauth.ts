@@ -166,7 +166,8 @@ export async function loginOpenAICodexOAuth(params: {
       ? [
           "You are running in a remote/VPS environment.",
           "A URL will be shown for you to open in your LOCAL browser.",
-          "After signing in, paste the redirect URL back here.",
+          "Open it, sign in, then paste the redirect URL here.",
+          "If this OpenClaw process can receive the browser callback, sign-in may finish automatically before you paste.",
         ].join("\n")
       : [
           "Browser will open for OpenAI authentication.",

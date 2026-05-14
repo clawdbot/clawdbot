@@ -116,6 +116,14 @@ describe("active-memory plugin", () => {
       config: {
         current: () => configFile,
         loadConfig: () => configFile,
+        mutateConfigFile: vi.fn(
+          async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
+            const draft = structuredClone(configFile);
+            mutate(draft);
+            configFile = draft;
+            return { changed: true, config: configFile };
+          },
+        ),
         replaceConfigFile: vi.fn(
           async ({ nextConfig }: { nextConfig: Record<string, unknown> }) => {
             configFile = nextConfig;
@@ -476,7 +484,7 @@ describe("active-memory plugin", () => {
     });
 
     expect(offResult.text).toBe("Active Memory: off globally.");
-    expect(api.runtime.config.replaceConfigFile).toHaveBeenCalledTimes(1);
+    expect(api.runtime.config.mutateConfigFile).toHaveBeenCalledTimes(1);
     expect(
       requireRecord(
         requireRecord(requireRecord(configFile.plugins, "plugins").entries, "entries")[
@@ -576,7 +584,7 @@ describe("active-memory plugin", () => {
       expect(result.text).toContain("global enable/disable changes require operator.admin");
     }
 
-    expect(api.runtime.config.replaceConfigFile).not.toHaveBeenCalled();
+    expect(api.runtime.config.mutateConfigFile).not.toHaveBeenCalled();
   });
 
   it("allows admin-scoped gateway callers to change global active-memory config", async () => {
@@ -595,7 +603,7 @@ describe("active-memory plugin", () => {
     });
 
     expect(result.text).toBe("Active Memory: off globally.");
-    expect(api.runtime.config.replaceConfigFile).toHaveBeenCalledTimes(1);
+    expect(api.runtime.config.mutateConfigFile).toHaveBeenCalledTimes(1);
     expect(
       requireRecord(
         requireRecord(requireRecord(configFile.plugins, "plugins").entries, "entries")[

@@ -37,13 +37,10 @@ export function resolveControlUiAuthPolicy(params: {
 export function shouldSkipControlUiPairing(
   policy: ControlUiAuthPolicy,
   role: GatewayRole,
-  trustedProxyAuthOk = false,
+  _trustedProxyAuthOk = false,
   authMode?: string,
   authMethod?: string,
 ): boolean {
-  if (trustedProxyAuthOk) {
-    return true;
-  }
   if (policy.isControlUi && role === "operator" && authMethod === "tailscale" && policy.device) {
     return true;
   }
@@ -96,9 +93,6 @@ export function shouldClearUnboundScopesForMissingDeviceIdentity(params: {
     params.decision.kind !== "allow" ||
     (!params.controlUiAuthPolicy.allowBypass &&
       !params.preserveInsecureLocalControlUiScopes &&
-      params.trustedProxyAuthOk !== true &&
-      // trusted-proxy auth can bypass pairing for some clients, but those
-      // self-declared scopes are still unbound without device identity.
       (params.authMethod === "token" ||
         params.authMethod === "password" ||
         params.authMethod === "trusted-proxy"))

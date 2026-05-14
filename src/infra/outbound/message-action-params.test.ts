@@ -375,6 +375,23 @@ describe("message action media helpers", () => {
     expect(fileArgs.filename).toBe("report.pdf");
   });
 
+  it("uses only the leaf filename from Windows-style attachment hints", async () => {
+    const args: Record<string, unknown> = {
+      fileUrl: String.raw`C:\Users\Ada\Downloads\report.pdf`,
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "workspace",
+      args,
+      action: "sendAttachment",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+
+    expect(args.filename).toBe("report.pdf");
+  });
+
   it("falls back to extension-based attachment names for remote-host file URLs", async () => {
     const args: Record<string, unknown> = {
       media: "file://attacker/share/photo.png",

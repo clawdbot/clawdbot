@@ -147,7 +147,6 @@ export function resolveWebSearchProviderId(params: {
       resolvePluginWebSearchProviders({
         config,
         bundledAllowlistCompat: true,
-        origin: "bundled",
       }),
   );
   const raw =
@@ -231,7 +230,6 @@ function resolveExplicitWebSearchProviderPluginIds(params: {
     config: params.config,
     contract: "webSearchProviders",
     value: providerId,
-    origin: "bundled",
   });
   return ownerPluginId ? [ownerPluginId] : undefined;
 }
@@ -270,7 +268,6 @@ export function resolveWebSearchDefinition(
       : resolvePluginWebSearchProviders({
           config,
           bundledAllowlistCompat: true,
-          origin: "bundled",
           ...loadScope,
         }),
   );
@@ -334,7 +331,6 @@ function resolveWebSearchCandidates(
       : resolvePluginWebSearchProviders({
           config,
           bundledAllowlistCompat: true,
-          origin: "bundled",
           ...loadScope,
         }),
   ).filter(Boolean);

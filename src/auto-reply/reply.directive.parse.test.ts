@@ -192,10 +192,11 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("please now");
   });
 
-  it("keeps legacy queue directive as queue mode", () => {
-    const res = extractQueueDirective("please /queue queue now");
+  it("matches steer queue directive", () => {
+    const res = extractQueueDirective("please /queue steer now");
     expect(res.hasDirective).toBe(true);
-    expect(res.queueMode).toBe("queue");
+    expect(res.queueMode).toBe("steer");
+    expect(res.rawMode).toBe("steer");
     expect(res.cleaned).toBe("please now");
   });
 
@@ -242,11 +243,9 @@ describe("directive parsing", () => {
   });
 
   it("parses queue options and modes", () => {
-    const res = extractQueueDirective(
-      "please /queue steer+backlog debounce:2s cap:5 drop:summarize now",
-    );
+    const res = extractQueueDirective("please /queue collect debounce:2s cap:5 drop:summarize now");
     expect(res.hasDirective).toBe(true);
-    expect(res.queueMode).toBe("steer-backlog");
+    expect(res.queueMode).toBe("collect");
     expect(res.debounceMs).toBe(2000);
     expect(res.cap).toBe(5);
     expect(res.dropPolicy).toBe("summarize");

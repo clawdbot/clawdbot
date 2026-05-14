@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -252,6 +253,27 @@ function renderExports(env) {
     .join("\n");
 }
 
+function generateAuthProfileSecretKey() {
+  return randomBytes(32).toString("hex");
+}
+
+function renderAuthProfileSecretKeyExport() {
+  return [
+    'OPENCLAW_AUTH_PROFILE_SECRET_KEY_FILE="$OPENCLAW_TEST_STATE_HOME/.openclaw-test-auth-profile-secret-key"',
+    'if [ -s "$OPENCLAW_AUTH_PROFILE_SECRET_KEY_FILE" ]; then',
+    '  OPENCLAW_AUTH_PROFILE_SECRET_KEY="$(cat "$OPENCLAW_AUTH_PROFILE_SECRET_KEY_FILE")"',
+    "else",
+    '  OPENCLAW_AUTH_PROFILE_SECRET_KEY="$(od -An -N 32 -tx1 /dev/urandom | tr -d " \\n")"',
+    '  ( umask 077; printf "%s\\n" "$OPENCLAW_AUTH_PROFILE_SECRET_KEY" > "$OPENCLAW_AUTH_PROFILE_SECRET_KEY_FILE" )',
+    "fi",
+    'if [ -z "$OPENCLAW_AUTH_PROFILE_SECRET_KEY" ]; then',
+    '  echo "failed to generate OPENCLAW_AUTH_PROFILE_SECRET_KEY" >&2',
+    "  return 1 2>/dev/null || exit 1",
+    "fi",
+    "export OPENCLAW_AUTH_PROFILE_SECRET_KEY",
+  ];
+}
+
 function renderConfigWrite(configPathExpression, config) {
   if (config === undefined) {
     return "";
@@ -282,6 +304,7 @@ function buildCreatePlan(options = {}) {
     OPENCLAW_HOME: home,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_AUTH_PROFILE_SECRET_KEY: generateAuthProfileSecretKey(),
     ...scenarioEnv(scenario),
   };
   return {
@@ -330,6 +353,7 @@ export function renderShellSnippet(options = {}) {
     'export OPENCLAW_HOME="$OPENCLAW_TEST_STATE_HOME"',
     'export OPENCLAW_STATE_DIR="$OPENCLAW_TEST_STATE_HOME/.openclaw"',
     'export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"',
+    ...renderAuthProfileSecretKeyExport(),
     'export OPENCLAW_TEST_WORKSPACE_DIR="$OPENCLAW_TEST_STATE_HOME/workspace"',
     'mkdir -p "$OPENCLAW_STATE_DIR" "$OPENCLAW_TEST_WORKSPACE_DIR"',
   ];
@@ -373,6 +397,7 @@ export function renderShellFunction() {
   export OPENCLAW_HOME="$OPENCLAW_TEST_STATE_HOME"
   export OPENCLAW_STATE_DIR="$OPENCLAW_TEST_STATE_HOME/.openclaw"
   export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
+  ${renderAuthProfileSecretKeyExport().join("\n  ")}
   export OPENCLAW_TEST_WORKSPACE_DIR="$OPENCLAW_TEST_STATE_HOME/workspace"
   unset OPENCLAW_AGENT_DIR
   unset PI_CODING_AGENT_DIR

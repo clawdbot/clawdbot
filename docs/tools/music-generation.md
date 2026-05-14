@@ -322,10 +322,9 @@ Repo wrapper:
 pnpm test:live:media music
 ```
 
-This live file loads missing provider env vars from `~/.profile`, prefers
-live/env API keys ahead of stored auth profiles by default, and runs both
-`generate` and declared `edit` coverage when the provider enables edit
-mode. Coverage today:
+This live file uses already-exported provider env vars ahead of stored auth
+profiles by default, and runs both `generate` and declared `edit` coverage when
+the provider enables edit mode. Coverage today:
 
 - `google`: `generate` plus `edit`
 - `minimax`: `generate` only

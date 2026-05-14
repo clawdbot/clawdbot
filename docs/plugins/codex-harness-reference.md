@@ -166,18 +166,23 @@ login instead of inherited child-process env. WebSocket app-server connections
 do not receive Gateway env API-key fallback; use an explicit auth profile or the
 remote app-server's own account.
 
-Stdio app-server launches inherit OpenClaw's process environment by default, but
-OpenClaw owns the Codex app-server account bridge and sets both `CODEX_HOME` and
-`HOME` to per-agent directories under that agent's OpenClaw state. Codex's own
-skill loader reads `$CODEX_HOME/skills` and `$HOME/.agents/skills`, so both
-values are isolated for local app-server launches. That keeps Codex-native
-skills, plugins, config, accounts, and thread state scoped to the OpenClaw agent
-instead of leaking in from the operator's personal Codex CLI home.
+Stdio app-server launches inherit OpenClaw's process environment by default.
+OpenClaw owns the Codex app-server account bridge and sets `CODEX_HOME` to a
+per-agent directory under that agent's OpenClaw state. That keeps Codex config,
+accounts, plugin cache/data, and thread state scoped to the OpenClaw agent
+instead of leaking in from the operator's personal `~/.codex` home.
+
+OpenClaw does not rewrite `HOME` for normal local app-server launches. Codex-run
+subprocesses such as `openclaw`, `gh`, `git`, cloud CLIs, and shell commands see
+the normal process home and can find user-home config and tokens. Codex may also
+discover `$HOME/.agents/skills` and `$HOME/.agents/plugins/marketplace.json`;
+that `.agents` discovery is intentionally shared with the operator home and is
+separate from isolated `~/.codex` state.
 
 OpenClaw plugins and OpenClaw skill snapshots still flow through OpenClaw's own
-plugin registry and skill loader. Personal Codex CLI assets do not. If you have
-useful Codex CLI skills or plugins that should become part of an OpenClaw agent,
-inventory them explicitly:
+plugin registry and skill loader. Personal Codex `~/.codex` assets do not. If
+you have useful Codex CLI skills or plugins from a Codex home that should become
+part of an OpenClaw agent, inventory them explicitly:
 
 ```bash
 openclaw migrate codex --dry-run
@@ -205,8 +210,9 @@ If a deployment needs additional environment isolation, add those variables to
 ```
 
 `appServer.clearEnv` only affects the spawned Codex app-server child process.
-`CODEX_HOME` and `HOME` remain reserved for OpenClaw's per-agent Codex
-isolation on local launches.
+OpenClaw removes `CODEX_HOME` and `HOME` from this list during local launch
+normalization: `CODEX_HOME` stays per-agent, and `HOME` stays inherited so
+subprocesses can use normal user-home state.
 
 ## Dynamic tools
 

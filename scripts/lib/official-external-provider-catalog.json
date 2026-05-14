@@ -1,6 +1,81 @@
 {
   "entries": [
     {
+      "name": "@openclaw/amazon-bedrock-provider",
+      "description": "OpenClaw Amazon Bedrock provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "amazon-bedrock",
+          "label": "Amazon Bedrock"
+        },
+        "providers": [
+          {
+            "id": "amazon-bedrock",
+            "name": "Amazon Bedrock",
+            "docs": "/providers/bedrock",
+            "categories": ["cloud", "llm"]
+          }
+        ],
+        "install": {
+          "npmSpec": "@openclaw/amazon-bedrock-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.12-beta.1"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/amazon-bedrock-mantle-provider",
+      "description": "OpenClaw Amazon Bedrock Mantle provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "amazon-bedrock-mantle",
+          "label": "Amazon Bedrock Mantle"
+        },
+        "providers": [
+          {
+            "id": "amazon-bedrock-mantle",
+            "name": "Amazon Bedrock Mantle",
+            "docs": "/providers/bedrock-mantle",
+            "categories": ["cloud", "llm"]
+          }
+        ],
+        "install": {
+          "npmSpec": "@openclaw/amazon-bedrock-mantle-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.12-beta.1"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/anthropic-vertex-provider",
+      "description": "OpenClaw Anthropic Vertex provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "anthropic-vertex",
+          "label": "Anthropic Vertex"
+        },
+        "providers": [
+          {
+            "id": "anthropic-vertex",
+            "name": "Anthropic Vertex",
+            "docs": "/providers/models",
+            "categories": ["cloud", "llm"]
+          }
+        ],
+        "install": {
+          "npmSpec": "@openclaw/anthropic-vertex-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.12-beta.1"
+        }
+      }
+    },
+    {
       "name": "@openclaw/codex",
       "description": "OpenClaw Codex harness and model provider plugin",
       "source": "official",

@@ -46,7 +46,7 @@ import {
   resolveWhatsAppOutboundMentions,
   type WhatsAppOutboundMentionParticipant,
 } from "./outbound-mentions.js";
-import { DisconnectReason, isJidGroup, saveMediaBuffer } from "./runtime-api.js";
+import { DisconnectReason, isJidGroup } from "./runtime-api.js";
 import { createWebSendApi } from "./send-api.js";
 import { normalizeWhatsAppSendResult } from "./send-result.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
@@ -656,32 +656,25 @@ export async function attachWebInboxToSocket(
     let mediaPath: string | undefined;
     let mediaType: string | undefined;
     let mediaFileName: string | undefined;
+    const maxMb =
+      typeof options.mediaMaxMb === "number" && options.mediaMaxMb > 0 ? options.mediaMaxMb : 50;
+    const maxBytes = maxMb * 1024 * 1024;
     const saveInboundMedia = async (
       inboundMedia: Awaited<ReturnType<typeof downloadInboundMedia>>,
     ) => {
       if (!inboundMedia) {
         return;
       }
-      const maxMb =
-        typeof options.mediaMaxMb === "number" && options.mediaMaxMb > 0 ? options.mediaMaxMb : 50;
-      const maxBytes = maxMb * 1024 * 1024;
-      const saved = await saveMediaBuffer(
-        inboundMedia.buffer,
-        inboundMedia.mimetype,
-        "inbound",
-        maxBytes,
-        inboundMedia.fileName,
-      );
-      mediaPath = saved.path;
+      mediaPath = inboundMedia.saved.path;
       mediaType = inboundMedia.mimetype;
       mediaFileName = inboundMedia.fileName;
     };
     try {
-      const inboundMedia = await downloadInboundMedia(msg as proto.IWebMessageInfo, sock);
+      const inboundMedia = await downloadInboundMedia(msg as proto.IWebMessageInfo, sock, maxBytes);
       await saveInboundMedia(inboundMedia);
       if (!mediaPath && replyContext) {
         await saveInboundMedia(
-          await downloadQuotedInboundMedia(msg as proto.IWebMessageInfo, sock),
+          await downloadQuotedInboundMedia(msg as proto.IWebMessageInfo, sock, maxBytes),
         );
       }
     } catch (err) {

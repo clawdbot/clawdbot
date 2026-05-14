@@ -1,5 +1,5 @@
 import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
-import type { AuthProfileCredential, OAuthCredential } from "./types.js";
+import type { AuthProfileCredential, OAuthCredential, OAuthCredentialRef } from "./types.js";
 
 export type AuthCredentialReasonCode =
   | "ok"
@@ -69,6 +69,15 @@ function hasConfiguredSecretString(value: unknown): boolean {
   return normalizeSecretInputString(value) !== undefined;
 }
 
+function hasConfiguredOAuthRef(value: OAuthCredentialRef | undefined): boolean {
+  return (
+    value?.source === "openclaw-credentials" &&
+    value.provider === "openai-codex" &&
+    typeof value.id === "string" &&
+    /^[a-f0-9]{32}$/.test(value.id)
+  );
+}
+
 export function evaluateStoredCredentialEligibility(params: {
   credential: AuthProfileCredential;
   now?: number;
@@ -104,7 +113,8 @@ export function evaluateStoredCredentialEligibility(params: {
 
   if (
     normalizeSecretInputString(credential.access) === undefined &&
-    normalizeSecretInputString(credential.refresh) === undefined
+    normalizeSecretInputString(credential.refresh) === undefined &&
+    !hasConfiguredOAuthRef(credential.oauthRef)
   ) {
     return { eligible: false, reasonCode: "missing_credential" };
   }

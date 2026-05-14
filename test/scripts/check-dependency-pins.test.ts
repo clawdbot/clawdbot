@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { collectDependencyPinViolations } from "../../scripts/check-dependency-pins.mjs";
@@ -141,6 +141,21 @@ packageExtensions:
         spec: "github:owner/repo#main",
       },
     ]);
+  });
+
+  it("reads tracked package manifests from the index when sparse checkout omits them", () => {
+    const dir = makeRepo();
+    mkdirSync(path.join(dir, "qa", "convex-credential-broker"), { recursive: true });
+    writeJson(path.join(dir, "package.json"), {});
+    writeJson(path.join(dir, "qa", "convex-credential-broker", "package.json"), {
+      dependencies: {
+        exact: "1.2.3",
+      },
+    });
+    git(dir, ["add", "package.json", "qa/convex-credential-broker/package.json"]);
+    rmSync(path.join(dir, "qa"), { recursive: true, force: true });
+
+    expect(collectDependencyPinViolations(dir)).toEqual([]);
   });
 
   it("rejects floating workspace overrides and package extension dependencies", () => {

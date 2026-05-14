@@ -124,27 +124,37 @@ describe("media reference helpers", () => {
 
   it("resolves direct absolute paths only for first-level inbound media files", async () => {
     const stateDir = resolveStateDir();
-    const id = `ref-path-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
-    const filePath = path.join(stateDir, "media", "inbound", id);
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, Buffer.from("png"));
-    const realFilePath = await fs.realpath(filePath);
+    const ids = [
+      `ref-path-${Date.now()}-${Math.random().toString(36).slice(2)}.png`,
+      `..ref-path-${Date.now()}-${Math.random().toString(36).slice(2)}.png`,
+    ];
+    const filePaths = ids.map((id) => path.join(stateDir, "media", "inbound", id));
+    await fs.mkdir(path.dirname(filePaths[0] ?? ""), { recursive: true });
+    for (const filePath of filePaths) {
+      await fs.writeFile(filePath, Buffer.from("png"));
+    }
 
     try {
-      await expect(resolveInboundMediaReference(filePath)).resolves.toStrictEqual({
-        id,
-        normalizedSource: filePath,
-        physicalPath: realFilePath,
-        sourceType: "path",
-      });
+      for (const [index, id] of ids.entries()) {
+        const filePath = filePaths[index];
+        if (!filePath) {
+          throw new Error("missing test path");
+        }
+        await expect(resolveInboundMediaReference(filePath)).resolves.toStrictEqual({
+          id,
+          normalizedSource: filePath,
+          physicalPath: await fs.realpath(filePath),
+          sourceType: "path",
+        });
+      }
       await expect(
-        resolveInboundMediaReference(path.join(stateDir, "media", "inbound", "nested", id)),
+        resolveInboundMediaReference(path.join(stateDir, "media", "inbound", "nested", ids[0])),
       ).resolves.toBeNull();
       await expect(
-        resolveInboundMediaReference(path.join(stateDir, "media", "outbound", id)),
+        resolveInboundMediaReference(path.join(stateDir, "media", "outbound", ids[0])),
       ).resolves.toBeNull();
     } finally {
-      await fs.rm(filePath, { force: true });
+      await Promise.all(filePaths.map((filePath) => fs.rm(filePath, { force: true })));
     }
   });
 

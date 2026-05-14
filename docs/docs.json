@@ -1334,7 +1334,6 @@
                 "pages": [
                   "clawhub/api",
                   "clawhub/http-api",
-                  "clawhub/security",
                   "clawhub/acceptable-usage"
                 ]
               }
@@ -1368,6 +1367,7 @@
                   "providers/deepgram",
                   "providers/deepinfra",
                   "providers/deepseek",
+                  "providers/ds4",
                   "providers/elevenlabs",
                   "providers/fal",
                   "providers/fireworks",

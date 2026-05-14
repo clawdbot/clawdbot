@@ -40,6 +40,7 @@ Sources/Onboarding/OnboardingStateStore.swift
 Sources/Onboarding/OnboardingWizardView.swift
 Sources/Onboarding/QRScannerView.swift
 Sources/OpenClawApp.swift
+Sources/Permissions/PermissionRequestBridge.swift
 Sources/Push/ExecApprovalNotificationBridge.swift
 Sources/Push/BackgroundAliveBeacon.swift
 Sources/Push/PushBuildConfig.swift
@@ -60,6 +61,7 @@ Sources/Services/WatchConnectivityTransport.swift
 Sources/Services/WatchMessagingPayloadCodec.swift
 Sources/Services/WatchMessagingService.swift
 Sources/SessionKey.swift
+Sources/Settings/PrivacyAccessSectionView.swift
 Sources/Settings/SettingsNetworkingHelpers.swift
 Sources/Settings/SettingsTab.swift
 Sources/Settings/VoiceWakeWordsSettingsView.swift

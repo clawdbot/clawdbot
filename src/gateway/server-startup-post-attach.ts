@@ -520,6 +520,7 @@ export async function startGatewaySidecars(params: {
         registry: params.pluginRegistry,
         config: params.cfg,
         workspaceDir: params.defaultWorkspaceDir,
+        startupTrace: params.startupTrace,
       });
     } catch (err) {
       params.log.warn(`plugin services failed to start: ${String(err)}`);

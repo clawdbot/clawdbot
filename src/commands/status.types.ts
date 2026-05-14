@@ -1,11 +1,12 @@
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { SessionKind } from "../sessions/classify-session-kind.js";
 import type { TaskAuditSummary } from "../tasks/task-registry.audit.js";
 import type { TaskRegistrySummary } from "../tasks/task-registry.types.js";
 
 export type SessionStatus = {
   agentId?: string;
   key: string;
-  kind: "cron" | "direct" | "group" | "global" | "unknown";
+  kind: SessionKind;
   sessionId?: string;
   updatedAt: number | null;
   age: number | null;

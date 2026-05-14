@@ -124,7 +124,7 @@ export const PACKED_CLI_SMOKE_COMMANDS = [
   ["doctor", "--help"],
   ["status", "--json", "--timeout", "1"],
   ["config", "schema"],
-  ["models", "list", "--provider", "amazon-bedrock"],
+  ["models", "list", "--provider", "openai"],
 ] as const;
 export const PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS = [
   "doctor",

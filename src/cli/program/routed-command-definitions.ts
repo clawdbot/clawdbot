@@ -10,6 +10,7 @@ import {
   parseHealthRouteArgs,
   parseModelsListRouteArgs,
   parseModelsStatusRouteArgs,
+  parsePluginsListRouteArgs,
   parseSessionsRouteArgs,
   parseStatusRouteArgs,
   parseTasksAuditRouteArgs,
@@ -162,6 +163,13 @@ export const routedCommandDefinitions = {
     runParsedArgs: async (args) => {
       const { channelsStatusCommand } = await import("../../commands/channels/status.js");
       await channelsStatusCommand(args, defaultRuntime);
+    },
+  }),
+  "plugins-list": defineRoutedCommand({
+    parseArgs: parsePluginsListRouteArgs,
+    runParsedArgs: async (args) => {
+      const { runPluginsListCommand } = await import("../plugins-list-command.js");
+      await runPluginsListCommand(args, defaultRuntime);
     },
   }),
 };

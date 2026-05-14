@@ -197,7 +197,6 @@ describe("managed npm root", () => {
 
   it("reads package-level npm overrides for managed plugin installs", async () => {
     await expect(readOpenClawManagedNpmRootOverrides()).resolves.toEqual({
-      "@aws-sdk/client-bedrock-runtime": "3.1045.0",
       axios: "1.16.0",
       "fast-uri": "3.1.2",
       "follow-redirects": "1.16.0",

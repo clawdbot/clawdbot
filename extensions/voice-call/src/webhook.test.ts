@@ -632,6 +632,56 @@ describe("VoiceCallWebhookServer path matching", () => {
       await server.stop();
     }
   });
+
+  it("matches webhook paths without trusting malformed Host headers", async () => {
+    const verifyWebhook = vi.fn((ctx) => {
+      expect(ctx.url).toBe("http://localhost/voice/webhook?type=status");
+      expect(ctx.query).toEqual({ type: "status" });
+      return { ok: true, verifiedRequestKey: "verified:req:host" };
+    });
+    const parseWebhookEvent = vi.fn(() => ({ events: [], statusCode: 200 }));
+    const strictProvider: VoiceCallProvider = {
+      ...provider,
+      verifyWebhook,
+      parseWebhookEvent,
+    };
+    const { manager } = createManager([]);
+    const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
+    const server = new VoiceCallWebhookServer(config, manager, strictProvider);
+    const readBodySpy = vi.spyOn(
+      server as unknown as {
+        readBody: (req: unknown, maxBytes: number, timeoutMs?: number) => Promise<string>;
+      },
+      "readBody",
+    );
+    readBodySpy.mockResolvedValue("CallSid=CA123&SpeechResult=hello");
+    const runWebhookPipeline = (
+      server as unknown as {
+        runWebhookPipeline: (
+          req: IncomingMessage,
+          webhookPath: string,
+        ) => Promise<{ statusCode: number; body: string }>;
+      }
+    ).runWebhookPipeline.bind(server);
+
+    try {
+      const result = await runWebhookPipeline(
+        {
+          method: "POST",
+          url: "/voice/webhook?type=status",
+          headers: { host: "[" },
+          socket: { remoteAddress: "127.0.0.1" },
+        } as unknown as IncomingMessage,
+        "/voice/webhook",
+      );
+
+      expect(result.statusCode).toBe(200);
+      expect(verifyWebhook).toHaveBeenCalledTimes(1);
+      expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
+    } finally {
+      readBodySpy.mockRestore();
+    }
+  });
 });
 
 describe("VoiceCallWebhookServer replay handling", () => {

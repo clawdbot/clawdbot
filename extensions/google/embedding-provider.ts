@@ -14,7 +14,10 @@ import {
   requireApiKey,
   resolveApiKeyForProvider,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
+import {
+  createProviderHttpError,
+  providerOperationRetryConfig,
+} from "openclaw/plugin-sdk/provider-http";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -199,6 +202,7 @@ async function fetchGeminiEmbeddingPayload(params: {
   return await executeWithApiKeyRotation({
     provider: "google",
     apiKeys: params.client.apiKeys,
+    transientRetry: providerOperationRetryConfig("read"),
     execute: async (apiKey) => {
       const authHeaders = parseGeminiAuth(apiKey);
       const headers = {

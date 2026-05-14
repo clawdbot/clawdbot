@@ -1,3 +1,4 @@
+import type { ChannelBotLoopProtectionConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   ContextVisibilityMode,
   DmPolicy,
@@ -37,6 +38,8 @@ export type MatrixRoomConfig = {
    * true accepts all configured bot senders; "mentions" requires they mention this bot.
    */
   allowBots?: boolean | "mentions";
+  /** Sliding-window bot-pair loop guard for accepted configured-bot messages. */
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
   /** Optional tool policy overrides for this room. */
   tools?: { allow?: string[]; deny?: string[] };
   /** If true, reply without mention requirements. */
@@ -146,6 +149,8 @@ export type MatrixConfig = {
    * true accepts all configured bot senders; "mentions" requires they mention this bot.
    */
   allowBots?: boolean | "mentions";
+  /** Sliding-window bot-pair loop guard for accepted configured-bot messages. */
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
   /** Group message policy (default: allowlist). */
   groupPolicy?: GroupPolicy;
   /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
@@ -233,6 +238,7 @@ export type CoreConfig = {
     defaults?: {
       groupPolicy?: "open" | "allowlist" | "disabled";
       contextVisibility?: ContextVisibilityMode;
+      botLoopProtection?: ChannelBotLoopProtectionConfig;
     };
   };
   commands?: {

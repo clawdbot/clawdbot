@@ -13,7 +13,11 @@ import { resolveAnthropicVertexClientRegion, resolveAnthropicVertexProjectId } f
 
 type AnthropicVertexEffort = NonNullable<AnthropicOptions["effort"]>;
 type AnthropicVertexAdaptiveEffort = AnthropicVertexEffort | "xhigh";
-type AnthropicVertexClientOptions = ConstructorParameters<typeof AnthropicVertexSdk>[0];
+type AnthropicVertexClientOptions = {
+  baseURL?: string;
+  projectId?: string;
+  region: string;
+};
 
 export type AnthropicVertexStreamDeps = {
   AnthropicVertex: new (options: AnthropicVertexClientOptions) => unknown;

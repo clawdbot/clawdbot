@@ -1085,6 +1085,107 @@ describe("uninstallPlugin", () => {
     await expect(fs.lstat(peerLink).then((stat) => stat.isSymbolicLink())).resolves.toBe(true);
   });
 
+  it("prunes managed peer dependencies after their owning npm plugin is uninstalled", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const npmRoot = path.join(stateDir, "npm");
+    const removedPluginDir = path.join(npmRoot, "node_modules", "removed-plugin");
+    const runtimePeerDir = path.join(npmRoot, "node_modules", "runtime-peer");
+    await fs.mkdir(removedPluginDir, { recursive: true });
+    await fs.mkdir(runtimePeerDir, { recursive: true });
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            "removed-plugin": "1.0.0",
+            "runtime-peer": "1.0.0",
+          },
+          openclaw: {
+            managedPeerDependencies: ["runtime-peer"],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.writeFile(
+      path.join(removedPluginDir, "package.json"),
+      `${JSON.stringify(
+        {
+          name: "removed-plugin",
+          version: "1.0.0",
+          peerDependencies: { "runtime-peer": "^1.0.0" },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.writeFile(
+      path.join(runtimePeerDir, "package.json"),
+      `${JSON.stringify({ name: "runtime-peer", version: "1.0.0" }, null, 2)}\n`,
+    );
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      if (argv[1] === "uninstall") {
+        expect(argv).toContain("--legacy-peer-deps");
+        await fs.rm(removedPluginDir, { recursive: true, force: true });
+        const rootManifest = JSON.parse(
+          await fs.readFile(path.join(npmRoot, "package.json"), "utf8"),
+        ) as { dependencies?: Record<string, string> };
+        delete rootManifest.dependencies?.["removed-plugin"];
+        await fs.writeFile(
+          path.join(npmRoot, "package.json"),
+          `${JSON.stringify(rootManifest, null, 2)}\n`,
+        );
+        return {
+          code: 0,
+          stdout: "",
+          stderr: "",
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      if (argv[1] === "install") {
+        expect(argv).toContain("--legacy-peer-deps");
+        expect(argv).toContain("--omit=peer");
+        await fs.rm(runtimePeerDir, { recursive: true, force: true });
+        return {
+          code: 0,
+          stdout: "",
+          stderr: "",
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      throw new Error(`unexpected command: ${argv.join(" ")}`);
+    });
+
+    const applied = await applyPluginUninstallDirectoryRemoval({
+      target: removedPluginDir,
+      cleanup: {
+        kind: "npm",
+        npmRoot,
+        packageName: "removed-plugin",
+      },
+    });
+
+    expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
+    await expectPathAccessState(removedPluginDir, "missing");
+    await expectPathAccessState(runtimePeerDir, "missing");
+    const rootManifest = JSON.parse(
+      await fs.readFile(path.join(npmRoot, "package.json"), "utf8"),
+    ) as {
+      dependencies?: Record<string, string>;
+      openclaw?: { managedPeerDependencies?: string[] };
+    };
+    expect(rootManifest.dependencies?.["removed-plugin"]).toBeUndefined();
+    expect(rootManifest.dependencies?.["runtime-peer"]).toBeUndefined();
+    expect(rootManifest.openclaw?.managedPeerDependencies ?? []).not.toContain("runtime-peer");
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
+  });
+
   it("runs npm cleanup when the managed package directory is already absent", async () => {
     const stateDir = path.join(tempDir, "state");
     const npmRoot = path.join(stateDir, "npm");

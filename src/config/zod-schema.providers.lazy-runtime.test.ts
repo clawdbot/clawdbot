@@ -25,6 +25,11 @@ describe("ChannelsSchema bundled runtime loading", () => {
     const parsed = runtime.ChannelsSchema.parse({
       defaults: {
         groupPolicy: "open",
+        botLoopProtection: {
+          maxEventsPerWindow: 4,
+          windowSeconds: 90,
+          cooldownSeconds: 30,
+        },
       },
       modelByChannel: {
         telegram: {
@@ -34,6 +39,7 @@ describe("ChannelsSchema bundled runtime loading", () => {
     });
 
     expect(parsed?.defaults?.groupPolicy).toBe("open");
+    expect(parsed?.defaults?.botLoopProtection?.maxEventsPerWindow).toBe(4);
     expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
     expect(collectBundledChannelConfigsMock).not.toHaveBeenCalled();
   });

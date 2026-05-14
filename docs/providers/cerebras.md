@@ -109,7 +109,7 @@ The bundled plugin usually means you only need the API key. Use explicit `models
 ```
 
 <Note>
-  If the Gateway runs as a daemon (launchd, systemd, Docker), make sure `CEREBRAS_API_KEY` is available to that process — for example in `~/.openclaw/.env` or through `env.shellEnv`. A key sitting only in `~/.profile` will not help a managed service unless the env is imported separately.
+  If the Gateway runs as a daemon (launchd, systemd, Docker), make sure `CEREBRAS_API_KEY` is available to that process — for example in `~/.openclaw/.env` or through `env.shellEnv`. A key exported only in an interactive shell will not help a managed service unless the env is imported separately.
 </Note>
 
 ## Related

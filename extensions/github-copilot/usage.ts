@@ -1,3 +1,4 @@
+import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
 import {
   buildUsageHttpErrorSnapshot,
   fetchJson,
@@ -25,9 +26,7 @@ export async function fetchCopilotUsage(
     {
       headers: {
         Authorization: `token ${token}`,
-        "Editor-Version": "vscode/1.96.2",
-        "User-Agent": "GitHubCopilotChat/0.26.7",
-        "X-Github-Api-Version": "2025-04-01",
+        ...buildCopilotIdeHeaders({ includeApiVersion: true }),
       },
     },
     timeoutMs,

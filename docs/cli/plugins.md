@@ -83,7 +83,6 @@ openclaw plugins install git:github.com/<owner>/<repo>  # git repo
 openclaw plugins install git:github.com/<owner>/<repo>@<ref>
 openclaw plugins install <package> --force              # overwrite existing install
 openclaw plugins install <package> --pin                # pin version
-openclaw plugins install <package> --acknowledge-clawhub-risk
 openclaw plugins install <package> --dangerously-force-unsafe-install
 openclaw plugins install <path>                         # local path
 openclaw plugins install <plugin>@<marketplace>         # marketplace
@@ -132,15 +131,11 @@ is available, then fall back to `latest`.
   <Accordion title="--dangerously-force-unsafe-install">
     `--dangerously-force-unsafe-install` is a break-glass option for false positives in the built-in dangerous-code scanner. It allows the install to continue even when the built-in scanner reports `critical` findings, but it does **not** bypass plugin `before_install` hook policy blocks and does **not** bypass scan failures.
 
+    Install scans ignore common test files and directories such as `tests/`, `__tests__/`, `*.test.*`, and `*.spec.*` to avoid blocking packaged test mocks; declared plugin runtime entrypoints are still scanned even if they use one of those names.
+
     This CLI flag applies to plugin install/update flows. Gateway-backed skill dependency installs use the matching `dangerouslyForceUnsafeInstall` request override, while `openclaw skills install` remains a separate ClawHub skill download/install flow.
 
-    If a plugin you published on ClawHub is blocked by a registry scan, use the publisher steps in [ClawHub](/clawhub/security).
-
-  </Accordion>
-  <Accordion title="--acknowledge-clawhub-risk">
-    ClawHub installs check the selected release trust record before downloading the package. If ClawHub reports a risky scan status, risky moderation state, download block, or registry reason, OpenClaw shows the trust details and asks for confirmation before continuing.
-
-    Use `--acknowledge-clawhub-risk` only after reviewing the ClawHub warning and deciding to continue without an interactive prompt. Pending or stale clean trust records warn but do not require acknowledgement.
+    If a plugin you published on ClawHub is hidden or blocked by a registry scan, use the publisher steps in [ClawHub publishing](/clawhub/publishing). `--dangerously-force-unsafe-install` only affects installs on your own machine; it does not ask ClawHub to rescan the plugin or make a blocked release public.
 
   </Accordion>
   <Accordion title="Hook packs and npm specs">
@@ -289,7 +284,7 @@ directory remains inert so normal packaged installs still use compiled dist.
 For runtime hook debugging:
 
 - `openclaw plugins inspect <id> --runtime --json` shows registered hooks and diagnostics from a module-loaded inspection pass. Runtime inspection never installs dependencies; use `openclaw doctor --fix` to clean legacy dependency state or recover missing downloadable plugins that are referenced by config.
-- `openclaw gateway status --deep --require-rpc` confirms the reachable Gateway, service/process hints, config path, and RPC health.
+- `openclaw gateway status --deep --require-rpc` confirms the reachable Gateway URL/profile, service/process hints, config path, and RPC health.
 - Non-bundled conversation hooks (`llm_input`, `llm_output`, `before_model_resolve`, `before_agent_reply`, `before_agent_run`, `before_agent_finalize`, `agent_end`) require `plugins.entries.<id>.hooks.allowConversationAccess=true`.
 
 Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
@@ -331,7 +326,6 @@ openclaw plugins update <id-or-npm-spec>
 openclaw plugins update --all
 openclaw plugins update <id-or-npm-spec> --dry-run
 openclaw plugins update @openclaw/voice-call
-openclaw plugins update openclaw-codex-app-server --acknowledge-clawhub-risk
 openclaw plugins update openclaw-codex-app-server --dangerously-force-unsafe-install
 ```
 
@@ -358,9 +352,6 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
   </Accordion>
   <Accordion title="--dangerously-force-unsafe-install on update">
     `--dangerously-force-unsafe-install` is also available on `plugins update` as a break-glass override for built-in dangerous-code scan false positives during plugin updates. It still does not bypass plugin `before_install` policy blocks or scan-failure blocking, and it only applies to plugin updates, not hook-pack updates.
-  </Accordion>
-  <Accordion title="--acknowledge-clawhub-risk on update">
-    ClawHub-backed plugin updates run the same exact-release trust check as installs before downloading the replacement package. Use `--acknowledge-clawhub-risk` for reviewed automation that should continue when the selected ClawHub release has a risky trust warning.
   </Accordion>
 </AccordionGroup>
 
@@ -395,7 +386,7 @@ The `--json` flag outputs a machine-readable report suitable for scripting and a
 openclaw plugins doctor
 ```
 
-`doctor` reports plugin load errors, manifest/discovery diagnostics, and compatibility notices. When everything is clean it prints `No plugin issues detected.`
+`doctor` reports plugin load errors, manifest/discovery diagnostics, compatibility notices, and stale plugin config references such as missing plugin slots. When the install tree and plugin config are clean it prints `No plugin issues detected.` If stale config remains but the install tree is otherwise healthy, the summary says so instead of implying full plugin health.
 
 If a configured plugin is present on disk but blocked by the loader's path-safety checks, config validation keeps the plugin entry and reports it as `present but blocked`. Fix the preceding blocked-plugin diagnostic, such as path ownership or world-writable permissions, instead of removing the `plugins.entries.<id>` or `plugins.allow` config.
 

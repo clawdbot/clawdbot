@@ -119,6 +119,7 @@ type NpmPackInstallCall = {
 type NpmSpecInstallCall = {
   expectedIntegrity?: string;
   expectedPluginId?: string;
+  mode?: string;
   spec?: string;
   timeoutMs?: number;
   trustedSourceLinkedOfficialInstall?: boolean;
@@ -127,7 +128,6 @@ type NpmSpecInstallCall = {
 type ClawHubInstallCall = {
   expectedPluginId?: string;
   mode?: string;
-  onClawHubRisk?: unknown;
   spec?: string;
   timeoutMs?: number;
 };
@@ -369,7 +369,6 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(clawHubCall.expectedPluginId).toBe("demo-plugin");
     expect(clawHubCall.mode).toBe("install");
     expect(clawHubCall.timeoutMs).toBe(300_000);
-    expect(typeof clawHubCall.onClawHubRisk).toBe("function");
     expect(update).toHaveBeenCalledWith("Downloading");
     expect(stop).toHaveBeenCalledWith("Installed Demo Provider plugin");
     const [, recordUpdate] = readFirstMockCall(recordPluginInstall, "recordPluginInstall") as [
@@ -447,6 +446,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       NpmSpecInstallCall,
     ];
     expect(npmCall.spec).toBe("@wecom/wecom-openclaw-plugin@1.2.3");
+    expect(npmCall.mode).toBe("update");
     expect(npmCall.expectedPluginId).toBe("demo-plugin");
     expect(npmCall.expectedIntegrity).toBe("sha512-wecom");
     expect(npmCall.trustedSourceLinkedOfficialInstall).toBe(true);

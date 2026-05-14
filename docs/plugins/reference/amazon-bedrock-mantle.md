@@ -12,7 +12,7 @@ Adds Amazon Bedrock Mantle model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/amazon-bedrock-mantle-provider`
-- Install route: included in OpenClaw
+- Install route: npm
 
 ## Surface
 

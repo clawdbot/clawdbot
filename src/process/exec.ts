@@ -53,6 +53,41 @@ function resolveTrustedWindowsCmdExe(): string {
   return path.win32.join(getWindowsInstallRoots().systemRoot, "System32", "cmd.exe");
 }
 
+function assignChildEnvValue(params: {
+  env: NodeJS.ProcessEnv;
+  key: string;
+  platform: NodeJS.Platform;
+  value: string | undefined;
+}): void {
+  if (params.value === undefined) {
+    return;
+  }
+  if (params.platform === "win32") {
+    const normalizedKey = params.key.toLowerCase();
+    for (const existingKey of Object.keys(params.env)) {
+      if (existingKey.toLowerCase() === normalizedKey && existingKey !== params.key) {
+        delete params.env[existingKey];
+      }
+    }
+  }
+  params.env[params.key] = params.value;
+}
+
+function mergeChildEnv(params: {
+  baseEnv: NodeJS.ProcessEnv;
+  env?: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
+}): NodeJS.ProcessEnv {
+  const resolvedEnv: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(params.baseEnv)) {
+    assignChildEnvValue({ env: resolvedEnv, key, platform: params.platform, value });
+  }
+  for (const [key, value] of Object.entries(params.env ?? {})) {
+    assignChildEnvValue({ env: resolvedEnv, key, platform: params.platform, value });
+  }
+  return resolvedEnv;
+}
+
 /**
  * On Windows, Node 18.20.2+ (CVE-2024-27980) rejects spawning .cmd/.bat directly
  * without shell, causing EINVAL. Resolve npm/npx to node + cli script so we
@@ -246,8 +281,10 @@ export function resolveCommandEnv(params: {
   argv: string[];
   env?: NodeJS.ProcessEnv;
   baseEnv?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
 }): NodeJS.ProcessEnv {
   const baseEnv = params.baseEnv ?? process.env;
+  const platform = params.platform ?? process.platform;
   const argv = params.argv;
   const shouldSuppressNpmFund = (() => {
     const cmd = path.basename(argv[0] ?? "");
@@ -261,12 +298,7 @@ export function resolveCommandEnv(params: {
     return false;
   })();
 
-  const mergedEnv = params.env ? { ...baseEnv, ...params.env } : { ...baseEnv };
-  const resolvedEnv = Object.fromEntries(
-    Object.entries(mergedEnv)
-      .filter(([, value]) => value !== undefined)
-      .map(([key, value]) => [key, String(value)]),
-  );
+  const resolvedEnv = mergeChildEnv({ baseEnv, env: params.env, platform });
   if (shouldSuppressNpmFund) {
     if (resolvedEnv.NPM_CONFIG_FUND == null) {
       resolvedEnv.NPM_CONFIG_FUND = "false";

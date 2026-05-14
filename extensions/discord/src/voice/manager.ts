@@ -64,6 +64,15 @@ import { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 
 const logger = createSubsystemLogger("discord/voice");
 const VOICE_LOG_PREVIEW_CHARS = 500;
+const DISCORD_VOICE_FATAL_AUTOJOIN_ERROR_PATTERNS = [
+  "api key missing",
+  "incorrect api key",
+  "invalid api key",
+  "unauthorized",
+  "authentication",
+  "permission denied",
+  "forbidden",
+];
 
 type DiscordVoiceSdk = ReturnType<typeof loadDiscordVoiceSdk>;
 type DiscordVoiceConnection = ReturnType<DiscordVoiceSdk["joinVoiceChannel"]>;
@@ -135,6 +144,17 @@ function isVoiceChannelAllowed(params: {
   );
 }
 
+function formatAutoJoinFailureKey(entry: { guildId: string; channelId: string }): string {
+  return `${entry.guildId}:${entry.channelId}`;
+}
+
+function isFatalAutoJoinFailure(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return DISCORD_VOICE_FATAL_AUTOJOIN_ERROR_PATTERNS.some((pattern) =>
+    normalized.includes(pattern),
+  );
+}
+
 function startAutoJoin(manager: Pick<DiscordVoiceManager, "autoJoin">) {
   void manager
     .autoJoin()
@@ -195,6 +215,10 @@ export class DiscordVoiceManager {
   private botUserId?: string;
   private readonly voiceEnabled: boolean;
   private autoJoinTask: Promise<void> | null = null;
+  private readonly fatalAutoJoinFailures = new Map<
+    string,
+    { message: string; skipLogged: boolean }
+  >();
   private readonly ownerAllowFrom?: string[];
   private readonly speakerContext: DiscordVoiceSpeakerContextResolver;
   private readonly allowedChannels: VoiceChannelResidency[] | null;
@@ -270,6 +294,17 @@ export class DiscordVoiceManager {
       }
 
       for (const entry of entriesByGuild.values()) {
+        const failureKey = formatAutoJoinFailureKey(entry);
+        const fatalFailure = this.fatalAutoJoinFailures.get(failureKey);
+        if (fatalFailure) {
+          if (!fatalFailure.skipLogged) {
+            logger.warn(
+              `discord voice: autoJoin suppressed guild=${entry.guildId} channel=${entry.channelId} after fatal startup failure; retry with /vc join or reload config after fixing credentials: ${fatalFailure.message}`,
+            );
+            fatalFailure.skipLogged = true;
+          }
+          continue;
+        }
         logVoiceVerbose(`autoJoin: joining guild ${entry.guildId} channel ${entry.channelId}`);
         const result = await this.join({
           guildId: entry.guildId,
@@ -279,6 +314,12 @@ export class DiscordVoiceManager {
           logger.warn(
             `discord voice: autoJoin skipped guild=${entry.guildId} channel=${entry.channelId}: ${result.message}`,
           );
+          if (isFatalAutoJoinFailure(result.message)) {
+            this.fatalAutoJoinFailures.set(failureKey, {
+              message: result.message,
+              skipLogged: false,
+            });
+          }
         }
       }
     })().finally(() => {
@@ -624,6 +665,7 @@ export class DiscordVoiceManager {
     player.on("error", playerErrorHandler);
 
     this.sessions.set(guildId, entry);
+    this.fatalAutoJoinFailures.delete(formatAutoJoinFailureKey({ guildId, channelId }));
     logger.info(
       `discord voice: joined guild=${guildId} channel=${channelId} mode=${voiceMode} agent=${route.agentId} voiceSession=${voiceRoute.sessionKey} supervisorSession=${route.sessionKey} voiceModel=${voiceConfig?.model ?? "route-default"}`,
     );

@@ -625,6 +625,7 @@ async function installPluginFromNpmSpecWithProgress(params: {
     const result = await withTimeout(
       installPluginFromNpmSpec({
         spec: params.npmSpec,
+        mode: "update",
         timeoutMs: ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS,
         expectedPluginId: params.entry.pluginId,
         expectedIntegrity: params.entry.install.expectedIntegrity,
@@ -888,14 +889,6 @@ async function installPluginFromClawHubSpecWithProgress(params: {
             updateProgress(message);
             logInstallWarningWithSpacing(params.runtime, message);
           },
-        },
-        onClawHubRisk: async (request) => {
-          animated.stop();
-          progress.stop("Review ClawHub warning");
-          return await params.prompter.confirm({
-            message: `Continue installing ClawHub package "${sanitizeTerminalText(request.packageName)}@${sanitizeTerminalText(request.version)}" despite this warning?`,
-            initialValue: false,
-          });
         },
       }),
       ONBOARDING_PLUGIN_INSTALL_WATCHDOG_TIMEOUT_MS,

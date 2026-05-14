@@ -3,6 +3,7 @@ import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
 import type { RealtimeTalkStatus } from "./chat/realtime-talk.ts";
+import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
@@ -100,6 +101,8 @@ export type AppViewState = {
   chatSideResultTerminalRuns: Set<string>;
   compactionStatus: CompactionStatus | null;
   fallbackStatus: FallbackStatus | null;
+  chatRunStatus: ChatRunUiStatus | null;
+  chatRunStatusClearTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
   chatAvatarUrl: string | null;
   chatAvatarSource?: string | null;
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
@@ -439,6 +442,7 @@ export type AppViewState = {
     importCustomTheme: () => Promise<void>;
     clearCustomTheme: () => void;
     setBorderRadius: (value: number) => void;
+    setTextScale: (value: number) => void;
     applySettings: (next: UiSettings) => void;
     applyLocalUserIdentity?: (next: { name?: string | null; avatar?: string | null }) => void;
     loadOverview: (opts?: { refresh?: boolean }) => Promise<void>;

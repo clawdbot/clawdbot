@@ -4,11 +4,14 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
+  createProviderOperationTimeoutResolver,
+  fetchProviderDownloadResponse,
   fetchWithTimeout,
   pollProviderOperationJson,
   postJsonRequest,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
@@ -145,25 +148,26 @@ async function pollOpenAIVideo(params: {
 async function downloadOpenAIVideo(params: {
   videoId: string;
   headers: Headers;
-  timeoutMs?: number;
+  timeoutMs?: ProviderOperationTimeoutMs;
   baseUrl: string;
   fetchFn: typeof fetch;
 }): Promise<GeneratedVideoAsset> {
   const url = new URL(`${params.baseUrl}/videos/${params.videoId}/content`);
   url.searchParams.set("variant", "video");
-  const response = await fetchWithTimeout(
-    url.toString(),
-    {
+  const response = await fetchProviderDownloadResponse({
+    url: url.toString(),
+    init: {
       method: "GET",
       headers: new Headers({
         ...Object.fromEntries(params.headers.entries()),
         Accept: "application/binary",
       }),
     },
-    params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    params.fetchFn,
-  );
-  await assertOkOrThrowHttpError(response, "OpenAI video download failed");
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    fetchFn: params.fetchFn,
+    provider: "openai",
+    requestFailedMessage: "OpenAI video download failed",
+  });
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
   const arrayBuffer = await response.arrayBuffer();
   return {
@@ -353,7 +357,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         const video = await downloadOpenAIVideo({
           videoId,
           headers,
-          timeoutMs: resolveProviderOperationTimeoutMs({
+          timeoutMs: createProviderOperationTimeoutResolver({
             deadline,
             defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           }),

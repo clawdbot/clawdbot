@@ -19,7 +19,6 @@ import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
-import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -1036,7 +1035,6 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   runtimePluginsLoader.clear();
   subagentAnnounceLoader.clear();
   browserCleanupLoader.clear();
-  resetAnnounceQueuesForTests();
   stopSweeper();
   sweepInProgress = false;
   restoreAttempted = false;
@@ -1242,6 +1240,10 @@ export function getLatestSubagentRunByChildSessionKey(
 export function initSubagentRegistry() {
   restoreSubagentRunsOnce();
 }
+
+// Importing this module also registers the subagent maintenance preserve-key
+// provider as a side effect (see subagent-registry-maintenance.ts).
+export { listSessionMaintenanceProtectedSubagentSessionKeys } from "./subagent-registry-maintenance.js";
 
 // Let the shared outbound plan treat bare silent replies as dropped (instead
 // of rewriting them to visible fallback text) when the parent session has at

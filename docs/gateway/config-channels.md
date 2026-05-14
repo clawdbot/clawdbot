@@ -335,6 +335,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Use `user:<id>` (DM) or `channel:<id>` (guild channel) for delivery targets; bare numeric IDs are rejected.
 - Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged name (no `#`). Prefer guild IDs.
 - Bot-authored messages are ignored by default. `allowBots: true` enables them; use `allowBots: "mentions"` to only accept bot messages that mention the bot (own messages still filtered).
+- Channels that support bot-authored inbound messages can use shared [bot loop protection](/channels/bot-loop-protection). Set `channels.defaults.botLoopProtection` for baseline pair budgets, then override the channel or account only when one surface needs different limits.
 - `channels.discord.guilds.<id>.ignoreOtherMentions` (and channel overrides) drops messages that mention another user or role but not the bot (excluding @everyone/@here).
 - `channels.discord.mentionAliases` maps stable outbound `@handle` text to Discord user IDs before sending, so known teammates can be mentioned deterministically even when the transient directory cache is empty. Per-account overrides live under `channels.discord.accounts.<accountId>.mentionAliases`.
 - `maxLinesPerMessage` (default 17) splits tall messages even when under 2000 chars.
@@ -475,7 +476,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 - **Socket mode** requires both `botToken` and `appToken` (`SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for default account env fallback).
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
-- `socketMode` passes Slack SDK Socket Mode transport tuning through to the public Bolt receiver API. Use it only when investigating ping/pong timeout or stale websocket behavior.
+- `socketMode` passes Slack SDK Socket Mode transport tuning through to the public Bolt receiver API. Use it only when investigating ping/pong timeout or stale websocket behavior. `clientPingTimeout` defaults to `15000`; `serverPingTimeout` and `pingPongLoggingEnabled` are passed only when configured.
 - `botToken`, `appToken`, `signingSecret`, and `userToken` accept plaintext
   strings or SecretRef objects.
 - Slack account snapshots expose per-credential source/status fields such as

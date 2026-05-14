@@ -104,8 +104,20 @@ describe("bundled plugin build entries", () => {
       expectSomePrefixMatch(Object.keys(entries), `extensions/${pluginId}/`);
       expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
     }
-    expectNoPrefixMatches(Object.keys(entries), "extensions/qqbot/");
-    expectNoPrefixMatches(artifacts, "dist/extensions/qqbot/");
+    for (const pluginId of ["qqbot", "whatsapp"]) {
+      expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
+    }
+  });
+
+  it("keeps external-only providers out of bundled dist entries", () => {
+    const entries = listBundledPluginBuildEntries();
+    const artifacts = listBundledPluginPackArtifacts();
+
+    for (const pluginId of ["amazon-bedrock", "amazon-bedrock-mantle", "anthropic-vertex"]) {
+      expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
+    }
   });
 
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {

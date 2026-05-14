@@ -111,7 +111,10 @@ type RunMessageActionInput = {
   sandboxRoot?: string;
   senderIsOwner?: boolean;
   sessionKey?: string;
+  sourceReplyDeliveryMode?: string;
   toolContext?: {
+    currentChannelId?: string;
+    currentChannelProvider?: string;
     currentThreadTs?: string;
     replyToMode?: string;
   };
@@ -402,6 +405,22 @@ describe("message tool secret scoping", () => {
     expect(tool?.description).toContain(
       'visible replies to the current source conversation must use action="send"',
     );
+  });
+
+  it("passes source reply delivery mode to the outbound runner", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:main",
+      },
+    });
+
+    expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
   });
 
   it("scopes command-time secret resolution to the selected channel/account", async () => {

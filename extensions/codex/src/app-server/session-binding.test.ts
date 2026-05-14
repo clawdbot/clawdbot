@@ -59,6 +59,7 @@ describe("codex app-server session binding", () => {
       model: "gpt-5.4-codex",
       modelProvider: "openai",
       dynamicToolsFingerprint: "tools-v1",
+      userMcpServersFingerprint: "user-mcp-v1",
     });
 
     const binding = await readCodexAppServerBinding(sessionFile);
@@ -70,6 +71,7 @@ describe("codex app-server session binding", () => {
     expect(binding?.model).toBe("gpt-5.4-codex");
     expect(binding?.modelProvider).toBe("openai");
     expect(binding?.dynamicToolsFingerprint).toBe("tools-v1");
+    expect(binding?.userMcpServersFingerprint).toBe("user-mcp-v1");
     const bindingStat = await fs.stat(resolveCodexAppServerBindingPath(sessionFile));
     expect(bindingStat.isFile()).toBe(true);
   });
@@ -100,6 +102,27 @@ describe("codex app-server session binding", () => {
     const binding = await readCodexAppServerBinding(sessionFile);
 
     expect(binding?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
+  });
+
+  it("round-trips context-engine binding metadata", async () => {
+    const sessionFile = path.join(tempDir, "session.json");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-123",
+      cwd: tempDir,
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint: "lossless-policy-1",
+      },
+    });
+
+    const binding = await readCodexAppServerBinding(sessionFile);
+
+    expect(binding?.contextEngine).toEqual({
+      schemaVersion: 1,
+      engineId: "lossless-claw",
+      policyFingerprint: "lossless-policy-1",
+    });
   });
 
   it("rejects old plugin app policy entries that duplicate the app id", async () => {

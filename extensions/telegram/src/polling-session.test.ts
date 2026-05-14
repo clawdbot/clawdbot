@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -30,6 +33,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 }));
 
 let TelegramPollingSession: typeof import("./polling-session.js").TelegramPollingSession;
+let writeTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.js").writeTelegramSpooledUpdate;
 
 type TelegramApiMiddleware = (
   prev: (...args: unknown[]) => Promise<unknown>,
@@ -192,6 +196,7 @@ function createPollingSession(params: {
   createTelegramTransport?: () => ReturnType<typeof makeTelegramTransport>;
   stallThresholdMs?: number;
   setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
+  isolatedIngress?: ConstructorParameters<typeof TelegramPollingSession>[0]["isolatedIngress"];
 }) {
   return new TelegramPollingSession({
     token: "tok",
@@ -207,6 +212,7 @@ function createPollingSession(params: {
     telegramTransport: params.telegramTransport,
     stallThresholdMs: params.stallThresholdMs,
     setStatus: params.setStatus,
+    isolatedIngress: params.isolatedIngress,
     ...(params.createTelegramTransport
       ? { createTelegramTransport: params.createTelegramTransport }
       : {}),
@@ -262,6 +268,7 @@ async function waitForApiMiddleware(
 describe("TelegramPollingSession", () => {
   beforeAll(async () => {
     ({ TelegramPollingSession } = await import("./polling-session.js"));
+    ({ writeTelegramSpooledUpdate } = await import("./telegram-ingress-spool.js"));
   });
 
   beforeEach(() => {
@@ -363,6 +370,70 @@ describe("TelegramPollingSession", () => {
     // Offset confirmation was removed because it could self-conflict with the runner.
     // OpenClaw middleware still skips duplicates using the persisted update offset.
     expect(bot.api.getUpdates).not.toHaveBeenCalled();
+  });
+
+  it("drains isolated ingress spool through the main-thread bot without offset watermark skipping", async () => {
+    const abort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    const handleUpdate = vi.fn(async () => undefined);
+    const bot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      handleUpdate,
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValueOnce(bot);
+    await writeTelegramSpooledUpdate({
+      spoolDir: tempDir,
+      update: { update_id: 42, message: { text: "hello" } },
+    });
+    let stopWorker: (() => void) | undefined;
+    const workerDone = new Promise<void>((resolve) => {
+      stopWorker = resolve;
+    });
+    const createWorker = vi.fn(() => ({
+      onMessage: vi.fn(() => () => undefined),
+      stop: vi.fn(async () => {
+        stopWorker?.();
+      }),
+      task: vi.fn(async () => {
+        await workerDone;
+      }),
+    }));
+
+    try {
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        isolatedIngress: {
+          enabled: true,
+          spoolDir: tempDir,
+          createWorker,
+          drainIntervalMs: 10,
+        },
+      });
+
+      const runPromise = session.runUntilAbort();
+      await vi.waitFor(() => expect(handleUpdate).toHaveBeenCalledTimes(1));
+      abort.abort();
+      await runPromise;
+
+      expect(createWorker).toHaveBeenCalledWith(
+        expect.objectContaining({
+          initialUpdateId: null,
+          spoolDir: tempDir,
+          token: "tok",
+        }),
+      );
+      expect(
+        mockObjectArg(createTelegramBotMock, "createTelegramBot").updateOffset,
+      ).toBeUndefined();
+      expect(handleUpdate).toHaveBeenCalledWith({ update_id: 42, message: { text: "hello" } });
+      await expect(fs.readdir(tempDir)).resolves.toEqual([]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("forces a restart when polling stalls without getUpdates activity", async () => {

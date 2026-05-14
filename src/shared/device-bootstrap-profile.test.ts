@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
   normalizeDeviceBootstrapHandoffProfile,
   resolveBootstrapProfileScopesForRole,
   resolveBootstrapProfileScopesForRoles,
@@ -56,7 +57,14 @@ describe("device bootstrap profile", () => {
     });
   });
 
-  test("bootstrap handoff operator allowlist stays aligned with pairing setup profile", () => {
+  test("default setup profile is node-only", () => {
+    expect(PAIRING_SETUP_BOOTSTRAP_PROFILE).toEqual({
+      roles: ["node"],
+      scopes: [],
+    });
+  });
+
+  test("bootstrap handoff operator allowlist stays bounded", () => {
     expect([...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES]).toEqual([
       "operator.approvals",
       "operator.read",

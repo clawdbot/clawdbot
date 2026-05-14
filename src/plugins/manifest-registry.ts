@@ -651,10 +651,14 @@ function matchesInstalledPluginRecord(params: {
   if (!record) {
     return false;
   }
-  const candidateSource = resolveUserPath(params.candidate.source, params.env);
+  const resolvedCandidateSource = resolveUserPath(params.candidate.source, params.env);
+  const candidateSource = safeRealpathSync(resolvedCandidateSource) ?? resolvedCandidateSource;
   const trackedPaths = [record.installPath, record.sourcePath]
     .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    .map((entry) => resolveUserPath(entry, params.env));
+    .map((entry) => {
+      const resolved = resolveUserPath(entry, params.env);
+      return safeRealpathSync(resolved) ?? resolved;
+    });
   if (trackedPaths.length === 0) {
     return false;
   }

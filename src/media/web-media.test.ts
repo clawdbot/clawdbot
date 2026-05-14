@@ -308,6 +308,18 @@ describe("loadWebMedia", () => {
     expect(result.buffer.length).toBeGreaterThan(0);
   });
 
+  it("uses only the leaf filename from Windows-style sandbox-validated media paths", async () => {
+    const result = await loadWebMedia(String.raw`C:\workspace\captures\tiny.png`, {
+      maxBytes: 1024 * 1024,
+      sandboxValidated: true,
+      readFile: async () => Buffer.from(TINY_PNG_BASE64, "base64"),
+    });
+
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/png");
+    expect(result.fileName).toBe("tiny.png");
+  });
+
   it("resolves home-relative local media paths through allowed local roots", async () => {
     vi.stubEnv("OPENCLAW_HOME", fixtureRoot);
     try {

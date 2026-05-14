@@ -136,6 +136,8 @@ const presentationButtonSchema = Type.Object({
   label: Type.String(),
   value: Type.Optional(Type.String()),
   url: Type.Optional(Type.String()),
+  webApp: Type.Optional(Type.Object({ url: Type.String() })),
+  web_app: Type.Optional(Type.Object({ url: Type.String() })),
   style: Type.Optional(stringEnum(["primary", "secondary", "success", "danger"])),
 });
 
@@ -933,6 +935,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         sessionId: options?.sessionId,
         agentId: resolvedAgentId,
         sandboxRoot: options?.sandboxRoot,
+        sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
         abortSignal: signal,
       });
 

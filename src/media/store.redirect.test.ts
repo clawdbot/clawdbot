@@ -217,4 +217,13 @@ describe("media store redirects", () => {
     });
     await expectRedirectSaveFailure("Redirect loop or missing Location header");
   });
+
+  it("fails when redirect location is malformed", async () => {
+    mockRequest.mockImplementationOnce((_url, _opts, cb) => {
+      const exchange = mockRedirectExchange({ location: "http://[" });
+      exchange.send(cb);
+      return exchange.req;
+    });
+    await expectRedirectSaveFailure("Invalid redirect Location header");
+  });
 });

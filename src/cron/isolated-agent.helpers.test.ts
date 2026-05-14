@@ -262,6 +262,25 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.deliveryPayloadHasStructuredContent).toBe(false);
   });
 
+  it("keeps presentation-only delivery payloads instead of collapsing to final text", () => {
+    const presentationPayload = {
+      presentation: {
+        blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
+      },
+    };
+    const result = resolveCronPayloadOutcome({
+      payloads: [presentationPayload],
+      finalAssistantVisibleText: "fallback text",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.deliveryPayloads).toEqual([presentationPayload]);
+    expect(result.deliveryPayload).toEqual(presentationPayload);
+    expect(result.outputText).toBeUndefined();
+    expect(result.synthesizedText).toBeUndefined();
+    expect(result.deliveryPayloadHasStructuredContent).toBe(true);
+  });
+
   it("returns only the last error payload when all payloads are errors", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [

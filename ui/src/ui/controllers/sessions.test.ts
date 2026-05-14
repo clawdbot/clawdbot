@@ -350,6 +350,78 @@ describe("loadSessions", () => {
     expect(state.sessionsResult?.count).toBe(2);
   });
 
+  it("uses session list terminal state to clear stale local run tracking", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi.fn(async (method: string) => {
+        if (method !== "sessions.list") {
+          throw new Error(`unexpected method: ${method}`);
+        }
+        return {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "main",
+              kind: "direct",
+              updatedAt: 2,
+              hasActiveRun: false,
+              status: "done",
+            },
+          ],
+        };
+      });
+      const state = createState(request) as SessionsState & {
+        sessionKey: string;
+        chatRunId: string | null;
+        chatStream: string | null;
+        chatStreamStartedAt: number | null;
+        chatRunStatus?: unknown;
+        compactionStatus?: unknown;
+        compactionClearTimer?: ReturnType<typeof setTimeout> | null;
+        fallbackStatus?: unknown;
+        fallbackClearTimer?: ReturnType<typeof setTimeout> | null;
+      };
+      state.sessionKey = "main";
+      state.chatRunId = "run-1";
+      state.chatStream = "Visible answer";
+      state.chatStreamStartedAt = 123;
+      state.compactionStatus = {
+        phase: "active",
+        runId: "run-1",
+        startedAt: 100,
+        completedAt: null,
+      };
+      state.compactionClearTimer = setTimeout(() => undefined, 1_000);
+      state.fallbackStatus = {
+        selected: "openai/gpt-5.5",
+        active: "anthropic/claude-sonnet-4-6",
+        attempts: [],
+        occurredAt: 100,
+      };
+      state.fallbackClearTimer = setTimeout(() => undefined, 1_000);
+
+      await loadSessions(state);
+
+      expect(state.chatRunId).toBeNull();
+      expect(state.chatStream).toBeNull();
+      expect(state.chatStreamStartedAt).toBeNull();
+      expect(state.compactionStatus).toBeNull();
+      expect(state.compactionClearTimer).toBeNull();
+      expect(state.fallbackStatus).toBeNull();
+      expect(state.fallbackClearTimer).toBeNull();
+      expect(state.chatRunStatus).toMatchObject({
+        phase: "done",
+        runId: "run-1",
+        sessionKey: "main",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("omits the active-window cutoff when archived sessions are shown", async () => {
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
@@ -701,6 +773,41 @@ describe("applySessionsChangedEvent", () => {
     expect(state.sessionsResult?.sessions).toHaveLength(1);
     expect(state.sessionsResult?.sessions[0]?.key).toBe("agent:main:subagent:done");
     expect(state.sessionsResult?.sessions[0]?.status).toBe("done");
+  });
+
+  it("clears preserved active-run flags on terminal status updates", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: true,
+            status: "running",
+          },
+        ],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:main",
+      sessionId: "sess-main",
+      status: "done",
+      endedAt: 2,
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      hasActiveRun: false,
+      status: "done",
+      endedAt: 2,
+    });
   });
 
   it("updates fresh context usage from websocket event payloads", () => {

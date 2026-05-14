@@ -2,11 +2,16 @@
 // Keep heavyweight tool construction out of this module so harness imports can
 // register quickly inside gateway startup and Docker e2e runs.
 
+import type {
+  CodexBundleMcpThreadConfig,
+  LoadCodexBundleMcpThreadConfigParams,
+} from "../agents/codex-mcp-config.types.js";
 import type { EmbeddedRunAttemptResult } from "../agents/pi-embedded-runner/run/types.js";
 import {
   abortEmbeddedPiRun,
   clearActiveEmbeddedRun,
   queueEmbeddedPiMessageWithOutcome,
+  resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
   type EmbeddedPiQueueMessageOptions,
 } from "../agents/pi-embedded-runner/runs.js";
@@ -39,7 +44,10 @@ export type { ContextEngine as HarnessContextEngine } from "../context-engine/ty
 export type { CompactEmbeddedPiSessionParams } from "../agents/pi-embedded-runner/compact.js";
 export type { EmbeddedPiCompactResult } from "../agents/pi-embedded-runner/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
-export type { MessagingToolSend } from "../agents/pi-embedded-messaging.types.js";
+export type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "../agents/pi-embedded-messaging.types.js";
 export type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 export type { AgentApprovalEventData, AgentEventPayload } from "../infra/agent-events.js";
 export type { ExecApprovalDecision } from "../infra/exec-approvals.js";
@@ -105,11 +113,18 @@ export { resolveModelAuthMode } from "../agents/model-auth.js";
 export { supportsModelTools } from "../agents/model-tool-support.js";
 export { resolveAttemptSpawnWorkspaceDir } from "../agents/pi-embedded-runner/run/attempt.thread-helpers.js";
 export { buildEmbeddedAttemptToolRunContext } from "../agents/pi-embedded-runner/run/attempt.tool-run-context.js";
-export { abortEmbeddedPiRun as abortAgentHarnessRun, clearActiveEmbeddedRun, setActiveEmbeddedRun };
+export {
+  abortEmbeddedPiRun as abortAgentHarnessRun,
+  clearActiveEmbeddedRun,
+  resolveActiveEmbeddedRunSessionId,
+  setActiveEmbeddedRun,
+};
 
 /**
- * @deprecated Active-run queueing is an internal runtime concern. Use current
- * runtime hooks instead of steering a harness through this legacy boolean API.
+ * @deprecated Active-run queueing is an internal runtime concern. This legacy
+ * boolean API only reports immediate queue eligibility and cannot observe async
+ * runtime rejection; runtime-owned delivery paths should use acceptance-aware
+ * steering instead of public SDK queueing.
  */
 export function queueAgentHarnessMessage(
   sessionId: string,
@@ -123,7 +138,18 @@ export {
   logAgentRuntimeToolDiagnostics,
   normalizeAgentRuntimeTools,
 } from "../agents/runtime-plan/tools.js";
+export type {
+  CodexBundleMcpThreadConfig,
+  LoadCodexBundleMcpThreadConfigParams,
+} from "../agents/codex-mcp-config.types.js";
 export { normalizeProviderToolSchemas } from "../agents/pi-embedded-runner/tool-schema-runtime.js";
+
+export async function loadCodexBundleMcpThreadConfig(
+  params: LoadCodexBundleMcpThreadConfigParams,
+): Promise<CodexBundleMcpThreadConfig> {
+  const { loadCodexBundleMcpThreadConfig: load } = await import("../agents/codex-mcp-config.js");
+  return load(params);
+}
 export { resolveSandboxContext } from "../agents/sandbox.js";
 export { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
 export type { EmbeddedContextFile } from "../agents/pi-embedded-helpers/types.js";

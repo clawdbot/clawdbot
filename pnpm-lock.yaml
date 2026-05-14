@@ -35,7 +35,7 @@ packageExtensionsChecksum: sha256-oc/FAHkBR844HBfph1RZWyRMHHBpIFya25tyv5SGf6s=
 
 patchedDependencies:
   '@agentclientprotocol/claude-agent-acp@0.33.1': 3995624bb834cc60fea1461c7ef33f1fcdd8fb58b8f43f2f1490bc689f6e1be2
-  baileys@7.0.0-rc10: a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2
+  baileys@7.0.0-rc11: a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2
 
 importers:
 
@@ -44,24 +44,6 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: 0.21.0
         version: 0.21.0(zod@4.4.3)
-      '@anthropic-ai/sdk':
-        specifier: 0.95.1
-        version: 0.95.1(zod@4.4.3)
-      '@anthropic-ai/vertex-sdk':
-        specifier: 0.16.0
-        version: 0.16.0(zod@4.4.3)
-      '@aws-sdk/client-bedrock':
-        specifier: 3.1045.0
-        version: 3.1045.0
-      '@aws-sdk/client-bedrock-runtime':
-        specifier: 3.1045.0
-        version: 3.1045.0
-      '@aws-sdk/credential-provider-node':
-        specifier: 3.972.39
-        version: 3.972.39
-      '@aws/bedrock-token-generator':
-        specifier: 1.1.0
-        version: 1.1.0
       '@clack/core':
         specifier: 1.3.0
         version: 1.3.0
@@ -102,23 +84,11 @@ importers:
         specifier: 0.6.0
         version: 0.6.0
       '@openclaw/fs-safe':
-        specifier: 0.2.2
-        version: 0.2.2
-      '@slack/bolt':
-        specifier: 4.7.2
-        version: 4.7.2(@types/express@5.0.6)
-      '@slack/types':
-        specifier: 2.21.1
-        version: 2.21.1
-      '@slack/web-api':
-        specifier: 7.15.2
-        version: 7.15.2
+        specifier: 0.2.4
+        version: 0.2.4
       ajv:
         specifier: 8.20.0
         version: 8.20.0
-      audio-decode:
-        specifier: 2.2.3
-        version: 2.2.3
       chalk:
         specifier: 5.6.2
         version: 5.6.2
@@ -179,9 +149,6 @@ importers:
       openai:
         specifier: 6.37.0
         version: 6.37.0(ws@8.20.0)(zod@4.4.3)
-      openshell:
-        specifier: 0.1.0
-        version: 0.1.0
       pdfjs-dist:
         specifier: 5.7.284
         version: 5.7.284
@@ -1429,10 +1396,16 @@ importers:
       typebox:
         specifier: 1.1.38
         version: 1.1.38
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/speech-core:
     devDependencies:
@@ -1655,9 +1628,12 @@ importers:
 
   extensions/whatsapp:
     dependencies:
+      audio-decode:
+        specifier: 2.2.3
+        version: 2.2.3
       baileys:
-        specifier: 7.0.0-rc10
-        version: 7.0.0-rc10(patch_hash=a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)
+        specifier: 7.0.0-rc11
+        version: 7.0.0-rc11(patch_hash=a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)
       https-proxy-agent:
         specifier: 9.0.0
         version: 9.0.0
@@ -3349,8 +3325,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/fs-safe@0.2.2':
-    resolution: {integrity: sha512-rQIqgVjuI8MONThAuOsGp1x1nK5UUvBYI8BW5OZtZw/0d8MbSfl27DNdkxzNF2FwHb8yKG8VBnmTlPHI269KTw==}
+  '@openclaw/fs-safe@0.2.4':
+    resolution: {integrity: sha512-Fo3WTQhxu0asD/rZqIKBqhX6fuZfjyHxSW5yTKfcRx+D9BRAcz0AGoVh+3ur/4XRvZkvsh3Ud8XTw006yRYLgg==}
     engines: {node: '>=20.11'}
 
   '@opentelemetry/api-logs@0.217.0':
@@ -4301,12 +4277,12 @@ packages:
     resolution: {integrity: sha512-3nQ2mdyzPRKpBHjd3QiKZDwNzw1F7fBN+rSq8Xms2gg+JWZR4SY2Zdf+doqTyXdyVjG4Y0QM7IA4U42zT9xxzw==}
     engines: {node: '>=18.0.0'}
 
-  '@thi.ng/bitstream@2.4.48':
-    resolution: {integrity: sha512-s17d5i8xlPC8+/YEyFVzwTNSvaQxr/QCpqUtGVtrDnp+cKQnb7HMXnOvrLGUYCpWtweSVFzFCWp20xjU9xh2IA==}
+  '@thi.ng/bitstream@2.4.49':
+    resolution: {integrity: sha512-Cy4xOdJlhk80pZEBdkw44incZJWUhjIQZntgLEZ/VcrC18MW11KX18JDxUHdNhZ+82vIRJTlJOeOQlUjVVSnNw==}
     engines: {node: '>=18'}
 
-  '@thi.ng/errors@2.6.10':
-    resolution: {integrity: sha512-UYgdHPjJOaEct0kfURpaSzlyU18VDMg+HQ2csG3O+eBWyh/lUq3X1+gxN7/5y1xjp4pHyNd7iVvLklJZTFkTqA==}
+  '@thi.ng/errors@2.6.11':
+    resolution: {integrity: sha512-l5eXCzZuHKyz2Lcf/i0JfgQeZ1kL6rTQ2oHfivNG5GxBqRrLfDT1ZJyj3DZx37gm6tGUDIOTSg4kF3ZXhqjxyA==}
     engines: {node: '>=18'}
 
   '@tloncorp/tlon-skill-darwin-arm64@0.3.6':
@@ -4602,10 +4578,6 @@ packages:
   '@wasm-audio-decoders/opus-ml@0.0.2':
     resolution: {integrity: sha512-58rWEqDGg+CKCyEeKm2KoxxSwTWtHh/NLTW9ObR4K8CGF6VwuuGudEI1CtniS/oSRmL1nJq/eh8MKARiluw4DQ==}
 
-  '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67':
-    resolution: {gitHosted: true, tarball: https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67}
-    version: 2.0.1
-
   '@zed-industries/codex-acp-darwin-arm64@0.14.0':
     resolution: {integrity: sha512-FWjHKlNJTZmXWM/2/GAQAg0WJEjPlfxEQJgvfxuzK1xZh81CDg9U6uSgZ1ggBkkN2bOoCnOupvGAPOmBoL5m2Q==}
     cpu: [arm64]
@@ -4811,8 +4783,8 @@ packages:
   bail@2.0.2:
     resolution: {integrity: sha512-0xO6mYd7JB2YesxDKplafRpsiOzPt9V02ddPCLbY1xYGPOX24NTyN50qnUxgCPcSoYMhKpAuBTjQoRZCAkUDRw==}
 
-  baileys@7.0.0-rc10:
-    resolution: {integrity: sha512-B1ShVyha4iZP7aNyz4QsXFceExzkvLFgISQGaDGHQaYFxIdNqoen+xKmlo1iWEsaexvQORAvUK44VicRi1T94g==}
+  baileys@7.0.0-rc11:
+    resolution: {integrity: sha512-yi7An4f5DmShjb75L8eSttrA6HLy7PYoP3XIQBmvQ5yH8vVZWBXZDogDxfGQQL6N98ELRwznG7puhjyLEa5CQg==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       audio-decode: ^2.1.3
@@ -6021,6 +5993,9 @@ packages:
   kysely@0.29.0:
     resolution: {integrity: sha512-LrQfPUeTW7MXbMvT62moEMnpMTuj9TO3lqjCeLKjM975PJ4Alrl/43f2tlDX7xOsNptKgH4LSNGwIbXwEkLg4g==}
     engines: {node: '>=22.0.0'}
+
+  libsignal@6.0.0:
+    resolution: {integrity: sha512-d/5V3YFtDljbFMufz4ncyUYGYhJl+vzAe+c2EFFBQ6bz1h8Q3IOMEGXYMzlibU60I+e8GagMMpji18iez3P1hA==}
 
   lie@3.3.0:
     resolution: {integrity: sha512-UaiMJzeWRlEujzAuw5LokY1L5ecNQYZKfmyZ9L7wDHb/p5etKaxXhohBcrw0EYby+G/NA52vRSN4N39dxHAIwQ==}
@@ -7757,8 +7732,8 @@ packages:
     resolution: {integrity: sha512-BMhLD/Sw+GbJC21C/UgyaZX41nPt8bUTg+jWyDeg7e7YN4xOM05YPSIXceACnXVtqyEw/LMClUQMtMZ+PGGpqQ==}
     engines: {node: '>=20'}
 
-  whatsapp-rust-bridge@0.5.3:
-    resolution: {integrity: sha512-Xb3GAgtWQQJ30oI4a4pjM4+YUeli9CMLTwTIewUrb+AJMFElIkiT5uo+j1Zhc+amiV0Jj+LfX76c/EEZirJbGA==}
+  whatsapp-rust-bridge@0.5.4:
+    resolution: {integrity: sha512-yYO1qSs0Fe7tGtnxOFHomocUD6IZtoAgmA4oDFyGIRZ67D3QZk3w7swA6XXFXNQngiyrg2k7tul6IrM3eUFh7A==}
 
   whatwg-mimetype@5.0.0:
     resolution: {integrity: sha512-sXcNcHOC51uPGF0P/D4NVtrkjSU2fNsm9iog4ZvZJsL3rjoDAzXZhkm2MWt1y+PUdggKAYVoMAIYcs78wJ51Cw==}
@@ -10029,7 +10004,7 @@ snapshots:
   '@openai/codex@0.130.0-win32-x64':
     optional: true
 
-  '@openclaw/fs-safe@0.2.2':
+  '@openclaw/fs-safe@0.2.4':
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.15
@@ -10933,11 +10908,11 @@ snapshots:
     dependencies:
       qrcode-terminal: 0.12.0
 
-  '@thi.ng/bitstream@2.4.48':
+  '@thi.ng/bitstream@2.4.49':
     dependencies:
-      '@thi.ng/errors': 2.6.10
+      '@thi.ng/errors': 2.6.11
 
-  '@thi.ng/errors@2.6.10': {}
+  '@thi.ng/errors@2.6.11': {}
 
   '@tloncorp/tlon-skill-darwin-arm64@0.3.6':
     optional: true
@@ -11297,11 +11272,6 @@ snapshots:
     dependencies:
       '@wasm-audio-decoders/common': 9.0.7
 
-  '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67':
-    dependencies:
-      curve25519-js: 0.0.4
-      protobufjs: 7.5.6
-
   '@zed-industries/codex-acp-darwin-arm64@0.14.0':
     optional: true
 
@@ -11485,19 +11455,19 @@ snapshots:
 
   bail@2.0.2: {}
 
-  baileys@7.0.0-rc10(patch_hash=a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5):
+  baileys@7.0.0-rc11(patch_hash=a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5):
     dependencies:
       '@cacheable/node-cache': 1.7.6
       '@hapi/boom': 9.1.4
       async-mutex: 0.5.0
-      libsignal: '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67'
+      libsignal: 6.0.0
       lru-cache: 11.3.6
       music-metadata: 11.12.3
       p-queue: 9.2.0
       pino: 9.14.0
       protobufjs: 7.5.6
       sharp: 0.34.5
-      whatsapp-rust-bridge: 0.5.3
+      whatsapp-rust-bridge: 0.5.4
       ws: 8.20.0
     optionalDependencies:
       audio-decode: 2.2.3
@@ -12881,6 +12851,11 @@ snapshots:
 
   kysely@0.29.0: {}
 
+  libsignal@6.0.0:
+    dependencies:
+      curve25519-js: 0.0.4
+      protobufjs: 7.5.6
+
   lie@3.3.0:
     dependencies:
       immediate: 3.0.6
@@ -14006,7 +13981,7 @@ snapshots:
 
   qoa-format@1.0.1:
     dependencies:
-      '@thi.ng/bitstream': 2.4.48
+      '@thi.ng/bitstream': 2.4.49
 
   qrcode-terminal@0.12.0: {}
 
@@ -14867,7 +14842,7 @@ snapshots:
 
   webidl-conversions@8.0.1: {}
 
-  whatsapp-rust-bridge@0.5.3: {}
+  whatsapp-rust-bridge@0.5.4: {}
 
   whatwg-mimetype@5.0.0: {}
 

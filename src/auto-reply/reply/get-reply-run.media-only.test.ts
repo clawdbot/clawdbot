@@ -103,7 +103,7 @@ vi.mock("./inbound-meta.js", () => ({
 }));
 
 vi.mock("./queue/settings-runtime.js", () => ({
-  resolveQueueSettings: vi.fn().mockReturnValue({ mode: "followup" }),
+  resolveQueueSettings: vi.fn().mockReturnValue({ mode: "steer" }),
 }));
 
 vi.mock("./route-reply.runtime.js", () => ({
@@ -503,6 +503,71 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.prompt).toContain("[Thread history - for context]");
     expect(call.followupRun.prompt).toContain("Earlier message in this thread");
     expect(call.followupRun.prompt).toContain("[User sent media without caption]");
+  });
+
+  it.each([
+    "discord",
+    "telegram",
+    "slack",
+    "whatsapp",
+    "signal",
+    "imessage",
+    "matrix",
+    "msteams",
+    "webchat",
+  ] as const)("enables default same-turn steering for active %s runs", async (channel) => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
+      mode: "steer",
+      debounceMs: 500,
+      cap: 20,
+      dropPolicy: "summarize",
+    });
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReturnValueOnce("active-session")
+      .mockReturnValueOnce("active-session");
+    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
+    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
+
+    const params = baseParams({
+      sessionKey: `agent:main:${channel}:direct:steer-smoke`,
+    });
+    params.ctx = {
+      ...params.ctx,
+      Provider: channel,
+      OriginatingChannel: channel,
+      OriginatingTo: `${channel}-target`,
+      ChatType: "direct",
+    } as never;
+    params.sessionCtx = {
+      ...params.sessionCtx,
+      Provider: channel,
+      OriginatingChannel: channel,
+      OriginatingTo: `${channel}-target`,
+      ChatType: "direct",
+    } as never;
+    params.command = {
+      ...(params.command as Record<string, unknown>),
+      surface: channel,
+      channel,
+    } as never;
+
+    await runPreparedReply(params);
+
+    expect(queueSettings.resolveQueueSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ channel }),
+    );
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call).toMatchObject({
+      shouldSteer: true,
+      shouldFollowup: true,
+      isActive: true,
+      isStreaming: true,
+      resolvedQueue: expect.objectContaining({ mode: "steer" }),
+    });
+    expect(call?.followupRun.run.messageProvider).toBe(channel);
+    expect(call?.followupRun.originatingChannel).toBe(channel);
   });
 
   it("keeps thread history context on follow-up turns", async () => {
@@ -940,11 +1005,11 @@ describe("runPreparedReply media-only handling", () => {
     await expect(runPromise).resolves.toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
-  it("treats reset-triggered steer mode as interrupt when the session lane is empty", async () => {
+  it("treats reset-triggered followup mode as interrupt when the session lane is empty", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const piRuntime = await import("../../agents/pi-embedded.runtime.js");
     const commandQueue = await import("../../process/command-queue.js");
-    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "steer" });
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "followup" });
     vi.mocked(commandQueue.getQueueSize).mockReturnValueOnce(0);
     vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue("session-active");
     vi.mocked(piRuntime.abortEmbeddedPiRun).mockReturnValue(true);
@@ -965,6 +1030,33 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.shouldSteer).toBe(false);
     expect(call?.shouldFollowup).toBe(false);
     expect(call?.resetTriggered).toBe(true);
+  });
+  it("does not enable steering for active heartbeat runs", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
+      mode: "followup",
+      debounceMs: 500,
+      cap: 20,
+      dropPolicy: "summarize",
+    });
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReturnValueOnce("active-session")
+      .mockReturnValueOnce("active-session");
+    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
+    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
+
+    await runPreparedReply(
+      baseParams({
+        opts: { isHeartbeat: true },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.shouldSteer).toBe(false);
+    expect(call?.shouldFollowup).toBe(true);
+    expect(call?.isActive).toBe(true);
+    expect(call?.isStreaming).toBe(true);
   });
   it("rechecks same-session ownership after async prep before registering a new reply operation", async () => {
     const { resolveSessionAuthProfileOverride } =

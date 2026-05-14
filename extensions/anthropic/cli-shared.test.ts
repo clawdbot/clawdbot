@@ -261,6 +261,15 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.resolveExecutionArgs).toBe(resolveClaudeCliExecutionArgs);
   });
 
+  it("opts bundled Claude CLI into bounded raw transcript reseed without disabling native resume", () => {
+    const backend = buildAnthropicCliBackend();
+
+    expect(backend.config.reseedFromRawTranscriptWhenUncompacted).toBe(true);
+    expect(backend.config.sessionMode).toBe("always");
+    expect(backend.config.resumeArgs).toContain("--resume");
+    expect(backend.config.resumeArgs).toContain("{sessionId}");
+  });
+
   it("leaves claude cli subscription-managed, restricts setting sources, and clears inherited env overrides", () => {
     const backend = buildAnthropicCliBackend();
 

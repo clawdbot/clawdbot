@@ -7,15 +7,13 @@ afterEach(() => {
 });
 
 describe("listBundledChannelCatalogEntries discovery failures", () => {
-  it("falls back when bundled plugin catalog discovery is unavailable during import", async () => {
+  it("falls back when bundled package metadata is unavailable during import", async () => {
     vi.doMock("../infra/openclaw-root.js", () => ({
       resolveOpenClawPackageRootSync: () => null,
       resolveOpenClawPackageRoot: async () => null,
     }));
-    vi.doMock("../plugins/channel-catalog-registry.js", () => ({
-      listChannelCatalogEntries() {
-        throw new ReferenceError("Cannot access 'discoverOpenClawPlugins' before initialization.");
-      },
+    vi.doMock("../plugins/bundled-dir.js", () => ({
+      resolveBundledPluginsDir: () => undefined,
     }));
 
     const catalog = await importFreshModule<typeof import("./bundled-channel-catalog-read.js")>(

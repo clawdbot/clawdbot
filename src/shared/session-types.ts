@@ -14,7 +14,7 @@ export type GatewayAgentModel = {
 export type GatewayAgentRuntime = {
   id: string;
   fallback?: "pi" | "none";
-  source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit";
+  source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session-key";
 };
 
 export type GatewayAgentRow = {

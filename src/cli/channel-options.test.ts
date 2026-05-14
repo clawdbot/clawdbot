@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __testing, resolveCliChannelOptions } from "./channel-options.js";
+import { __testing, formatCliChannelOptions, resolveCliChannelOptions } from "./channel-options.js";
 import { __testing as startupMetadataTesting } from "./startup-metadata.js";
 
 const readFileSyncMock = vi.hoisted(() => vi.fn());
@@ -16,10 +16,6 @@ vi.mock("node:fs", async () => {
     readFileSync: readFileSyncMock,
   };
 });
-
-vi.mock("../channels/ids.js", () => ({
-  CHAT_CHANNEL_ORDER: ["quietchat", "forum"],
-}));
 
 describe("resolveCliChannelOptions", () => {
   beforeEach(() => {
@@ -39,14 +35,17 @@ describe("resolveCliChannelOptions", () => {
     );
 
     expect(resolveCliChannelOptions()).toEqual(["cached", "quietchat"]);
+    expect(formatCliChannelOptions(["all"])).toBe("all|cached|quietchat");
   });
 
-  it("falls back to core channel order when metadata is missing", () => {
+  it("falls back to generic channel text when metadata is missing", () => {
     readFileSyncMock.mockImplementation(() => {
       throw new Error("ENOENT");
     });
 
-    expect(resolveCliChannelOptions()).toEqual(["quietchat", "forum"]);
+    expect(resolveCliChannelOptions()).toEqual([]);
+    expect(formatCliChannelOptions()).toBe("channel");
+    expect(formatCliChannelOptions(["all"])).toBe("all");
   });
 
   it("ignores external catalog env during CLI bootstrap", () => {

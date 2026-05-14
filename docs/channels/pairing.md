@@ -123,12 +123,10 @@ The setup code is a base64-encoded JSON payload that contains:
 
 That bootstrap token carries the built-in pairing bootstrap profile:
 
-- primary handed-off `node` token stays `scopes: []`
-- any handed-off `operator` token stays bounded to the bootstrap allowlist:
-  `operator.approvals`, `operator.read`, `operator.talk.secrets`, `operator.write`
-- bootstrap scope checks are role-prefixed, not one flat scope pool:
-  operator scope entries only satisfy operator requests, and non-operator roles
-  must still request scopes under their own role prefix
+- the built-in setup profile allows only the `node` role
+- after approval, the handed-off `node` token stays `scopes: []`
+- the built-in setup-code flow does not hand off an `operator` token
+- operator access requires a separate approved operator pairing or token flow
 - later token rotation/revocation remains bounded by both the device's approved
   role contract and the caller session's operator scopes
 

@@ -1,19 +1,19 @@
 import {
-  fetchRemoteMedia,
+  readRemoteMediaBuffer,
   MAX_IMAGE_BYTES,
-  saveMediaBuffer,
+  saveRemoteMedia,
 } from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { downloadMedia, extractImageBlocks } from "./media.js";
 
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   MAX_IMAGE_BYTES: 6 * 1024 * 1024,
-  fetchRemoteMedia: vi.fn(),
-  saveMediaBuffer: vi.fn(),
+  readRemoteMediaBuffer: vi.fn(),
+  saveRemoteMedia: vi.fn(),
 }));
 
-const fetchRemoteMediaMock = vi.mocked(fetchRemoteMedia);
-const saveMediaBufferMock = vi.mocked(saveMediaBuffer);
+const readRemoteMediaBufferMock = vi.mocked(readRemoteMediaBuffer);
+const saveRemoteMediaMock = vi.mocked(saveRemoteMedia);
 
 describe("tlon monitor media", () => {
   beforeEach(() => {
@@ -40,12 +40,7 @@ describe("tlon monitor media", () => {
   });
 
   it("stores fetched media through the shared inbound media store with the image cap", async () => {
-    fetchRemoteMediaMock.mockResolvedValue({
-      buffer: Buffer.from("image-data"),
-      contentType: "image/png",
-      fileName: "photo.png",
-    });
-    saveMediaBufferMock.mockResolvedValue({
+    saveRemoteMediaMock.mockResolvedValue({
       id: "photo---uuid.png",
       path: "/tmp/openclaw/media/inbound/photo---uuid.png",
       size: "image-data".length,
@@ -54,21 +49,15 @@ describe("tlon monitor media", () => {
 
     const result = await downloadMedia("https://example.com/photo.png");
 
-    expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1);
-    expect(fetchRemoteMediaMock).toHaveBeenCalledWith({
+    expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
+    expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
+    expect(saveRemoteMediaMock).toHaveBeenCalledWith({
       url: "https://example.com/photo.png",
       maxBytes: MAX_IMAGE_BYTES,
       readIdleTimeoutMs: 30_000,
       ssrfPolicy: undefined,
       requestInit: { method: "GET" },
     });
-    expect(saveMediaBufferMock).toHaveBeenCalledWith(
-      Buffer.from("image-data"),
-      "image/png",
-      "inbound",
-      MAX_IMAGE_BYTES,
-      "photo.png",
-    );
     expect(result).toEqual({
       localPath: "/tmp/openclaw/media/inbound/photo---uuid.png",
       contentType: "image/png",
@@ -77,7 +66,7 @@ describe("tlon monitor media", () => {
   });
 
   it("returns null when the fetch exceeds the image cap", async () => {
-    fetchRemoteMediaMock.mockRejectedValue(
+    saveRemoteMediaMock.mockRejectedValue(
       new Error(
         `Failed to fetch media from https://example.com/photo.png: payload exceeds maxBytes ${MAX_IMAGE_BYTES}`,
       ),
@@ -86,6 +75,6 @@ describe("tlon monitor media", () => {
     const result = await downloadMedia("https://example.com/photo.png");
 
     expect(result).toBeNull();
-    expect(saveMediaBufferMock).not.toHaveBeenCalled();
+    expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
   });
 });

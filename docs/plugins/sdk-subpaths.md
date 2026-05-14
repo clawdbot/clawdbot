@@ -41,6 +41,13 @@ but new code should not add imports from them: `agent-runtime-test-contracts`,
 `text-runtime`, and `zod`. Import `zod` directly from `zod` in new plugin code.
 `plugin-test-runtime` is still an active focused test helper subpath.
 
+### Reserved bundled plugin helper subpaths
+
+These subpaths are plugin-owned compatibility surfaces reserved for their owning
+bundled plugin, not general SDK APIs: `plugin-sdk/codex-mcp-projection` and
+`plugin-sdk/codex-native-task-runtime`. Cross-owner extension imports are blocked
+by package contract guardrails.
+
 ### Deprecated unused public subpaths
 
 These public subpaths existed for at least one month and currently have no
@@ -215,6 +222,8 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/runtime` | Broad runtime/logging/backup/plugin-install helpers |
     | `plugin-sdk/runtime-env` | Narrow runtime env, logger, timeout, retry, and backoff helpers |
     | `plugin-sdk/browser-config` | Supported browser config facade for normalized profile/defaults, CDP URL parsing, and browser-control auth helpers |
+    | `plugin-sdk/codex-mcp-projection` | Reserved bundled Codex helper for projecting user MCP server config into Codex thread config; not for third-party plugins |
+    | `plugin-sdk/codex-native-task-runtime` | Reserved bundled Codex helper for native task mirror/runtime wiring; not for third-party plugins |
     | `plugin-sdk/channel-runtime-context` | Generic channel runtime-context registration and lookup helpers |
     | `plugin-sdk/matrix` | Deprecated Matrix compatibility facade for older third-party channel packages; new plugins should import `plugin-sdk/run-command` directly |
     | `plugin-sdk/mattermost` | Deprecated Mattermost compatibility facade for older third-party channel packages; new plugins should import generic SDK subpaths directly |
@@ -302,9 +311,9 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
   <Accordion title="Capability and testing subpaths">
     | Subpath | Key exports |
     | --- | --- |
-    | `plugin-sdk/media-runtime` | Shared media fetch/transform/store helpers, ffprobe-backed video dimension probing, and media payload builders |
+    | `plugin-sdk/media-runtime` | Shared media fetch/transform/store helpers including `saveRemoteMedia`, `saveResponseMedia`, `readRemoteMediaBuffer`, and deprecated `fetchRemoteMedia`; prefer store helpers before buffer reads when a URL should become OpenClaw media |
     | `plugin-sdk/media-mime` | Narrow MIME normalization, file-extension mapping, MIME detection, and media-kind helpers |
-    | `plugin-sdk/media-store` | Narrow media store helpers such as `saveMediaBuffer` |
+    | `plugin-sdk/media-store` | Narrow media store helpers such as `saveMediaBuffer` and `saveMediaStream` |
     | `plugin-sdk/media-generation-runtime` | Shared media-generation failover helpers, candidate selection, and missing-model messaging |
     | `plugin-sdk/media-understanding` | Media understanding provider types plus provider-facing image/audio/structured-extraction helper exports |
     | `plugin-sdk/text-chunking` | Text and markdown chunking/render helpers, markdown table conversion, directive-tag stripping, and safe-text utilities |
@@ -361,10 +370,18 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
   </Accordion>
 
   <Accordion title="Reserved bundled-helper subpaths">
-    There are currently no reserved bundled-helper SDK subpaths. Owner-specific
-    helpers live inside the owning plugin package, while reusable host contracts
-    use generic SDK subpaths such as `plugin-sdk/gateway-runtime`,
-    `plugin-sdk/security-runtime`, and `plugin-sdk/plugin-config-runtime`.
+    Reserved bundled-helper SDK subpaths are narrow owner-specific surfaces for
+    bundled plugin code. They are tracked in the SDK inventory so package
+    builds and aliasing stay deterministic, but they are not general plugin
+    authoring APIs. New reusable host contracts should use generic SDK subpaths
+    such as `plugin-sdk/gateway-runtime`, `plugin-sdk/security-runtime`, and
+    `plugin-sdk/plugin-config-runtime`.
+
+    | Subpath | Owner and purpose |
+    | --- | --- |
+    | `plugin-sdk/codex-mcp-projection` | Bundled Codex plugin helper for projecting user MCP server config into Codex app-server thread config |
+    | `plugin-sdk/codex-native-task-runtime` | Bundled Codex plugin helper for mirroring Codex app-server native subagents into OpenClaw task state |
+
   </Accordion>
 </AccordionGroup>
 

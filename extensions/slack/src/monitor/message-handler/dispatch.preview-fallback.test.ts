@@ -8,6 +8,7 @@ const createSlackDraftStreamMock = vi.fn();
 const deliverRepliesMock = vi.fn(async () => {});
 const finalizeSlackPreviewEditMock = vi.fn(async () => {});
 const postMessageMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
+const recordInboundSessionMock = vi.fn(async () => undefined);
 const updateLastRouteMock = vi.fn(async () => {});
 const appendSlackStreamMock = vi.fn(async () => {});
 const startSlackStreamMock = vi.fn(async () => ({
@@ -188,7 +189,10 @@ function createPreparedSlackMessage(params?: {
     ts: string;
     thread_ts?: string;
     user: string;
+    bot_id: string;
+    event_ts: string;
   }>;
+  channelConfig?: Record<string, unknown> | null;
   replyToMode?: "off" | "first" | "all" | "batched";
   isDirectMessage?: boolean;
   route?: Partial<{
@@ -219,6 +223,8 @@ function createPreparedSlackMessage(params?: {
       botToken: "xoxb-test",
       app: { client: { chat: { postMessage: postMessageMock } } },
       teamId: "T1",
+      botUserId: "U_OPENCLAW",
+      botId: "B_OPENCLAW",
       textLimit: 4000,
       typingReaction: params?.typingReaction ?? "",
       removeAckAfterReply: false,
@@ -246,7 +252,7 @@ function createPreparedSlackMessage(params?: {
       lastRoutePolicy,
       ...params?.route,
     },
-    channelConfig: null,
+    channelConfig: params?.channelConfig ?? null,
     replyTarget: "channel:C123",
     ctxPayload: {
       MessageThreadId: THREAD_TS,
@@ -286,7 +292,7 @@ vi.mock("openclaw/plugin-sdk/channel-feedback", () => ({
 }));
 
 vi.mock("../conversation.runtime.js", () => ({
-  recordInboundSession: vi.fn(async () => undefined),
+  recordInboundSession: recordInboundSessionMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-message", async (importOriginal) => {
@@ -712,6 +718,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     deliverRepliesMock.mockReset();
     finalizeSlackPreviewEditMock.mockReset();
     postMessageMock.mockClear();
+    recordInboundSessionMock.mockReset();
     updateLastRouteMock.mockReset();
     appendSlackStreamMock.mockReset();
     startSlackStreamMock.mockReset();
@@ -753,6 +760,168 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("passes accepted Slack bot messages through the shared bot loop guard", async () => {
+    const base = {
+      cfg: {
+        channels: {
+          defaults: {
+            botLoopProtection: {
+              maxEventsPerWindow: 1,
+              windowSeconds: 60,
+              cooldownSeconds: 60,
+            },
+          },
+        },
+      },
+      accountConfig: { allowBots: true },
+      message: {
+        channel: "C_LOOP_SLACK",
+        bot_id: "B_OTHER",
+        user: undefined,
+      },
+    };
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        ...base,
+        message: {
+          ...base.message,
+          ts: "900.001",
+          event_ts: "900.001",
+        },
+      }),
+    );
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        ...base,
+        message: {
+          ...base.message,
+          ts: "900.002",
+          event_ts: "900.002",
+        },
+      }),
+    );
+
+    expect(recordInboundSessionMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores Slack status reactions when bot loop protection drops a turn", async () => {
+    const base = {
+      cfg: {
+        messages: {
+          statusReactions: { enabled: true },
+        },
+        channels: {
+          defaults: {
+            botLoopProtection: {
+              maxEventsPerWindow: 1,
+              windowSeconds: 60,
+              cooldownSeconds: 60,
+            },
+          },
+        },
+      },
+      accountConfig: { allowBots: true },
+      message: {
+        channel: "C_LOOP_SLACK_STATUS",
+        bot_id: "B_OTHER",
+        user: undefined,
+      },
+    };
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        ...base,
+        message: {
+          ...base.message,
+          ts: "910.001",
+          event_ts: "910.001",
+        },
+      }),
+    );
+
+    for (const value of Object.values(statusReactionControllerMock)) {
+      value.mockClear();
+    }
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        ...base,
+        ackReactionMessageTs: "910.002",
+        ackReactionPromise: Promise.resolve(true),
+        message: {
+          ...base.message,
+          ts: "910.002",
+          event_ts: "910.002",
+        },
+      }),
+    );
+
+    expect(recordInboundSessionMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.setQueued).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.restoreInitial).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
+  });
+
+  it("layers Slack channel bot loop overrides over account settings field-by-field", async () => {
+    const base = {
+      cfg: {
+        channels: {
+          defaults: {
+            botLoopProtection: {
+              maxEventsPerWindow: 20,
+              windowSeconds: 1,
+              cooldownSeconds: 60,
+            },
+          },
+        },
+      },
+      accountConfig: {
+        allowBots: true,
+        botLoopProtection: {
+          windowSeconds: 120,
+          cooldownSeconds: 240,
+        },
+      },
+      channelConfig: {
+        botLoopProtection: {
+          maxEventsPerWindow: 1,
+        },
+      },
+      message: {
+        channel: "C_LOOP_SLACK_LAYERED",
+        bot_id: "B_OTHER_LAYERED",
+        user: undefined,
+      },
+    };
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        ...base,
+        message: {
+          ...base.message,
+          ts: "900.001",
+          event_ts: "900.001",
+        },
+      }),
+    );
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        ...base,
+        message: {
+          ...base.message,
+          ts: "961.001",
+          event_ts: "961.001",
+        },
+      }),
+    );
+
+    expect(recordInboundSessionMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
   });
 
   it("updates non-main DM last-route metadata on the prepared thread session", async () => {

@@ -202,6 +202,27 @@ describe("configured plugin install release step", () => {
     expect(result.channelIds).toStrictEqual([]);
   });
 
+  it("collects Codex from selectable OpenAI agent models even without integration discovery", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            models: {
+              "openai/gpt-5.5": {},
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual(["codex"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
   it("collects external web search and ACP runtime plugins from config-only usage", async () => {
     const { collectReleaseConfiguredPluginIds } =
       await import("./release-configured-plugin-installs.js");

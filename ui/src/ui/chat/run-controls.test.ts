@@ -11,7 +11,11 @@ import {
 } from "./context-notice.ts";
 import { renderChatRunControls, type ChatRunControlsProps } from "./run-controls.ts";
 import { renderSideResult } from "./side-result-render.ts";
-import { renderCompactionIndicator, renderFallbackIndicator } from "./status-indicators.ts";
+import {
+  renderChatRunStatusIndicator,
+  renderCompactionIndicator,
+  renderFallbackIndicator,
+} from "./status-indicators.ts";
 
 vi.mock("../icons.ts", () => ({
   icons: {},
@@ -164,6 +168,56 @@ describe("chat run controls", () => {
 });
 
 describe("chat status indicators", () => {
+  it("renders compact composer run statuses", () => {
+    const container = document.createElement("div");
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(1_000);
+      render(renderChatRunStatusIndicator({ phase: "in-progress" }), container);
+      let indicator = container.querySelector(".agent-chat__run-status--in-progress");
+      expect(indicator?.textContent).toContain("In progress");
+      expect(indicator?.getAttribute("aria-label")).toBe("Run status: In progress");
+
+      render(
+        renderChatRunStatusIndicator({
+          phase: "done",
+          runId: "run-1",
+          sessionKey: "main",
+          occurredAt: 900,
+        }),
+        container,
+      );
+      indicator = container.querySelector(".agent-chat__run-status--done");
+      expect(indicator?.textContent).toContain("Done");
+
+      render(
+        renderChatRunStatusIndicator({
+          phase: "interrupted",
+          runId: "run-1",
+          sessionKey: "main",
+          occurredAt: 900,
+        }),
+        container,
+      );
+      indicator = container.querySelector(".agent-chat__run-status--interrupted");
+      expect(indicator?.textContent).toContain("Interrupted");
+
+      nowSpy.mockReturnValue(7_000);
+      render(
+        renderChatRunStatusIndicator({
+          phase: "done",
+          runId: "run-1",
+          sessionKey: "main",
+          occurredAt: 1_000,
+        }),
+        container,
+      );
+      expect(container.querySelector(".agent-chat__run-status--done")).toBeNull();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("renders compaction and fallback indicators while they are fresh", () => {
     const container = document.createElement("div");
     const nowSpy = vi.spyOn(Date, "now");

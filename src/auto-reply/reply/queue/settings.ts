@@ -1,6 +1,10 @@
 import type { InboundDebounceByProvider } from "../../../config/types.messages.js";
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
-import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
+import {
+  normalizePersistedQueueMode,
+  normalizeQueueDropPolicy,
+  normalizeQueueMode,
+} from "./normalize.js";
 import { DEFAULT_QUEUE_CAP, DEFAULT_QUEUE_DEBOUNCE_MS, DEFAULT_QUEUE_DROP } from "./state.js";
 import type { QueueMode, QueueSettings, ResolveQueueSettingsParams } from "./types.js";
 
@@ -29,7 +33,7 @@ export function resolveQueueSettings(params: ResolveQueueSettingsParams): QueueS
       : undefined;
   const resolvedMode =
     params.inlineMode ??
-    normalizeQueueMode(params.sessionEntry?.queueMode) ??
+    normalizePersistedQueueMode(params.sessionEntry?.queueMode) ??
     normalizeQueueMode(providerModeRaw) ??
     normalizeQueueMode(queueCfg?.mode) ??
     defaultQueueModeForChannel(channelKey);

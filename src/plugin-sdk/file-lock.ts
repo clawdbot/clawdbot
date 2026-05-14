@@ -4,7 +4,7 @@ import {
   drainFileLockManagerForTest,
   resetFileLockManagerForTest,
 } from "@openclaw/fs-safe/file-lock";
-import { isPidAlive } from "../shared/pid-alive.js";
+import { shouldRemoveDeadOwnerOrExpiredLock } from "../infra/stale-lock-file.js";
 
 export type FileLockOptions = {
   retries: {
@@ -17,34 +17,25 @@ export type FileLockOptions = {
   stale: number;
 };
 
-type LockFilePayload = {
-  pid?: number;
-  createdAt?: string;
-};
-
 export type FileLockHandle = {
   lockPath: string;
   release: () => Promise<void>;
 };
 
 export const FILE_LOCK_TIMEOUT_ERROR_CODE = "file_lock_timeout";
+export const FILE_LOCK_STALE_ERROR_CODE = "file_lock_stale";
 
 export type FileLockTimeoutError = Error & {
   code: typeof FILE_LOCK_TIMEOUT_ERROR_CODE;
   lockPath: string;
 };
 
-const FILE_LOCK_MANAGER_KEY = "openclaw.plugin-sdk.file-lock";
+export type FileLockStaleError = Error & {
+  code: typeof FILE_LOCK_STALE_ERROR_CODE;
+  lockPath: string;
+};
 
-function readLockPayload(value: Record<string, unknown> | null): LockFilePayload | null {
-  if (!value) {
-    return null;
-  }
-  return {
-    pid: typeof value.pid === "number" ? value.pid : undefined,
-    createdAt: typeof value.createdAt === "string" ? value.createdAt : undefined,
-  };
-}
+const FILE_LOCK_MANAGER_KEY = "openclaw.plugin-sdk.file-lock";
 
 async function shouldReclaimPluginLock(params: {
   lockPath: string;
@@ -52,23 +43,25 @@ async function shouldReclaimPluginLock(params: {
   staleMs: number;
   nowMs: number;
 }): Promise<boolean> {
-  const payload = readLockPayload(params.payload);
-  if (payload?.pid && !isPidAlive(payload.pid)) {
-    return true;
-  }
-  if (payload?.createdAt) {
-    const createdAt = Date.parse(payload.createdAt);
-    return !Number.isFinite(createdAt) || params.nowMs - createdAt > params.staleMs;
-  }
-  return true;
+  return shouldRemoveDeadOwnerOrExpiredLock({
+    payload: params.payload,
+    staleMs: params.staleMs,
+    nowMs: params.nowMs,
+  });
 }
 
-function normalizeTimeoutError(err: unknown): never {
+function normalizeLockError(err: unknown): never {
   if ((err as { code?: unknown }).code === FILE_LOCK_TIMEOUT_ERROR_CODE) {
     throw Object.assign(new Error((err as Error).message), {
       code: FILE_LOCK_TIMEOUT_ERROR_CODE,
       lockPath: (err as { lockPath?: string }).lockPath ?? "",
     }) as FileLockTimeoutError;
+  }
+  if ((err as { code?: unknown }).code === FILE_LOCK_STALE_ERROR_CODE) {
+    throw Object.assign(new Error((err as Error).message), {
+      code: FILE_LOCK_STALE_ERROR_CODE,
+      lockPath: (err as { lockPath?: string }).lockPath ?? "",
+    }) as FileLockStaleError;
   }
   throw err;
 }
@@ -91,13 +84,19 @@ export async function acquireFileLock(
       managerKey: FILE_LOCK_MANAGER_KEY,
       staleMs: options.stale,
       retry: options.retries,
+      staleRecovery: "remove-if-unchanged",
       allowReentrant: true,
       payload: () => ({ pid: process.pid, createdAt: new Date().toISOString() }),
       shouldReclaim: shouldReclaimPluginLock,
+      shouldRemoveStaleLock: (snapshot) =>
+        shouldRemoveDeadOwnerOrExpiredLock({
+          payload: snapshot.payload,
+          staleMs: options.stale,
+        }),
     });
     return { lockPath: lock.lockPath, release: lock.release };
   } catch (err) {
-    return normalizeTimeoutError(err);
+    return normalizeLockError(err);
   }
 }
 

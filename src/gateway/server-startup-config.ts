@@ -234,24 +234,37 @@ export async function prepareGatewayStartupConfig(params: {
   tailscaleOverride?: GatewayTailscaleConfig;
   activateRuntimeSecrets: ActivateRuntimeSecrets;
   persistStartupAuth?: boolean;
+  measure?: GatewayStartupConfigMeasure;
 }): Promise<Awaited<ReturnType<typeof ensureGatewayStartupAuth>>> {
-  assertValidGatewayStartupConfigSnapshot(params.configSnapshot);
+  const measure = params.measure ?? (async (_name, run) => await run());
+  await measure("config.auth.snapshot-validate", () =>
+    assertValidGatewayStartupConfigSnapshot(params.configSnapshot),
+  );
 
-  const runtimeConfig = applyConfigOverrides(params.configSnapshot.config);
-  const startupPreflightConfig = applyGatewayAuthOverridesForStartupPreflight(runtimeConfig, {
-    auth: params.authOverride,
-    tailscale: params.tailscaleOverride,
+  const runtimeConfig = await measure("config.auth.runtime-overrides", () =>
+    applyConfigOverrides(params.configSnapshot.config),
+  );
+  const startupPreflightConfig = await measure("config.auth.startup-overrides", () =>
+    applyGatewayAuthOverridesForStartupPreflight(runtimeConfig, {
+      auth: params.authOverride,
+      tailscale: params.tailscaleOverride,
+    }),
+  );
+  const needsAuthSecretPreflight = await measure("config.auth.secret-surface", () =>
+    hasActiveGatewayAuthSecretRef(startupPreflightConfig),
+  );
+  const preflightConfig = await measure("config.auth.secret-preflight", async () => {
+    if (!needsAuthSecretPreflight) {
+      return startupPreflightConfig;
+    }
+    return (
+      await params.activateRuntimeSecrets(startupPreflightConfig, {
+        reason: "startup",
+        activate: false,
+      })
+    ).config;
   });
-  const needsAuthSecretPreflight = hasActiveGatewayAuthSecretRef(startupPreflightConfig);
-  const preflightConfig = needsAuthSecretPreflight
-    ? (
-        await params.activateRuntimeSecrets(startupPreflightConfig, {
-          reason: "startup",
-          activate: false,
-        })
-      ).config
-    : startupPreflightConfig;
-  const preflightAuthOverride =
+  const preflightAuthOverride = await measure("config.auth.preflight-override", () =>
     typeof preflightConfig.gateway?.auth?.token === "string" ||
     typeof preflightConfig.gateway?.auth?.password === "string"
       ? {
@@ -263,25 +276,32 @@ export async function prepareGatewayStartupConfig(params: {
             ? { password: preflightConfig.gateway.auth.password }
             : {}),
         }
-      : params.authOverride;
+      : params.authOverride,
+  );
 
-  const authBootstrap = await ensureGatewayStartupAuth({
-    cfg: runtimeConfig,
-    env: process.env,
-    authOverride: preflightAuthOverride,
-    tailscaleOverride: params.tailscaleOverride,
-    persist: params.persistStartupAuth ?? false,
-    baseHash: params.configSnapshot.hash,
-  });
-  const runtimeStartupConfig = applyGatewayAuthOverridesForStartupPreflight(authBootstrap.cfg, {
-    auth: params.authOverride,
-    tailscale: params.tailscaleOverride,
-  });
+  const authBootstrap = await measure("config.auth.ensure", () =>
+    ensureGatewayStartupAuth({
+      cfg: runtimeConfig,
+      env: process.env,
+      authOverride: preflightAuthOverride,
+      tailscaleOverride: params.tailscaleOverride,
+      persist: params.persistStartupAuth ?? false,
+      baseHash: params.configSnapshot.hash,
+    }),
+  );
+  const runtimeStartupConfig = await measure("config.auth.runtime-startup-overrides", () =>
+    applyGatewayAuthOverridesForStartupPreflight(authBootstrap.cfg, {
+      auth: params.authOverride,
+      tailscale: params.tailscaleOverride,
+    }),
+  );
   const activatedConfig = (
-    await params.activateRuntimeSecrets(runtimeStartupConfig, {
-      reason: "startup",
-      activate: true,
-    })
+    await measure("config.auth.secrets-activate", () =>
+      params.activateRuntimeSecrets(runtimeStartupConfig, {
+        reason: "startup",
+        activate: true,
+      }),
+    )
   ).config;
   return {
     ...authBootstrap,

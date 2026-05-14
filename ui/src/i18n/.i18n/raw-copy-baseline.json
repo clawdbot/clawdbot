@@ -2540,6 +2540,13 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/config-quick.ts",
+      "text": "Text size"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/config-quick.ts",
       "text": "Theme"
     },
     {
@@ -2624,6 +2631,20 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/ui/views/config-quick.ts",
+      "text": "L"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/config-quick.ts",
+      "text": "M"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/config-quick.ts",
       "text": "None"
     },
     {
@@ -2638,7 +2659,28 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/ui/views/config-quick.ts",
+      "text": "S"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/config-quick.ts",
       "text": "Slight"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/config-quick.ts",
+      "text": "XL"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/config-quick.ts",
+      "text": "XXL"
     },
     {
       "count": 1,
@@ -2884,6 +2926,13 @@
       "name": "text",
       "path": "ui/src/ui/views/config.ts",
       "text": "Subscribe to receive browser push notifications from your gateway."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/config.ts",
+      "text": "Text size"
     },
     {
       "count": 1,

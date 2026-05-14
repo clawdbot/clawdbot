@@ -59,6 +59,45 @@ describe("reconcileNodePairingOnConnect", () => {
     });
   });
 
+  it("keeps first-time pending node surfaces declared but not effective", async () => {
+    const requestPairing = vi.fn(async (input: NodePairingRequestInput) => ({
+      status: "pending" as const,
+      request: { ...input, requestId: "req-pending", ts: 1 },
+      created: true,
+    }));
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        client: {
+          id: "openclaw-macos",
+          version: "test",
+          platform: "darwin",
+          mode: "node",
+        },
+        caps: ["talk"],
+        commands: ["system.run"],
+        permissions: { camera: true },
+      }),
+      pairedNode: null,
+      requestPairing,
+    });
+
+    expect(result.declaredCaps).toEqual(["talk"]);
+    expect(result.effectiveCaps).toEqual([]);
+    expect(result.declaredCommands).toEqual(["system.run"]);
+    expect(result.effectiveCommands).toEqual([]);
+    expect(result.declaredPermissions).toEqual({ camera: true });
+    expect(result.effectivePermissions).toBeUndefined();
+    expect(requestPairing).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caps: ["talk"],
+        commands: ["system.run"],
+        permissions: { camera: true },
+      }),
+    );
+  });
+
   it("requires a fresh pairing request when paired node capabilities change", async () => {
     const requestPairing = vi.fn(async (input: NodePairingRequestInput) => ({
       status: "pending" as const,
@@ -93,6 +132,7 @@ describe("reconcileNodePairingOnConnect", () => {
     });
     expect(result.effectiveCaps).toEqual(["camera"]);
     expect(result.effectiveCommands).toEqual([]);
+    expect(result.declaredCaps).toEqual(["camera", "screen"]);
     expect(result.pendingPairing?.request.requestId).toBe("req-caps");
   });
 

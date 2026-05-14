@@ -1,6 +1,6 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
-import { replaceConfigFile } from "openclaw/plugin-sdk/config-mutation";
+import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -46,6 +46,7 @@ export function registerSlackChannelEvents(params: {
     enqueueSystemEvent(`Slack channel ${params.kind}: ${label}.`, {
       sessionKey,
       contextKey: `slack:channel:${params.kind}:${params.channelId ?? params.channelName ?? "unknown"}`,
+      trusted: false,
     });
   };
 
@@ -145,9 +146,16 @@ export function registerSlackChannelEvents(params: {
             oldChannelId,
             newChannelId,
           });
-          await replaceConfigFile({
-            nextConfig: currentConfig,
+          await mutateConfigFile({
             afterWrite: { mode: "auto" },
+            mutate: (draft) => {
+              migrateSlackChannelConfig({
+                cfg: draft,
+                accountId: ctx.accountId,
+                oldChannelId,
+                newChannelId,
+              });
+            },
           });
           ctx.runtime.log?.(warn("[slack] Channel config migrated and saved successfully."));
         } else if (migration.skippedExisting) {

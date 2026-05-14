@@ -126,7 +126,7 @@ function resolveMemoryPluginConfig(cfg: OpenClawConfig): Record<string, unknown>
   return asRecord(entry?.config) ?? {};
 }
 
-const DAILY_MEMORY_FILE_NAME_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
+const DAILY_MEMORY_FILE_NAME_RE = /^(\d{4}-\d{2}-\d{2})(?:-[^/]+)?\.md$/i;
 
 async function listHistoricalDailyFiles(inputPath: string): Promise<string[]> {
   const resolvedPath = path.resolve(inputPath);
@@ -320,6 +320,10 @@ function formatExtraPaths(workspaceDir: string, extraPaths: string[]): string[] 
 function extractIsoDayFromPath(filePath: string): string | null {
   const match = path.basename(filePath).match(DAILY_MEMORY_FILE_NAME_RE);
   return match?.[1] ?? null;
+}
+
+function normalizeRelativePath(baseDir: string, filePath: string): string {
+  return path.relative(baseDir, filePath).replace(/\\/g, "/");
 }
 
 function groundedMarkdownToDiaryLines(markdown: string): string[] {
@@ -1826,10 +1830,14 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
           workspaceDir: scratchDir,
           inputPaths: workspaceSourceFiles,
         });
-        const sourcePathByDay = new Map(
-          sourceFiles
-            .map((sourcePath) => [extractIsoDayFromPath(sourcePath), sourcePath] as const)
-            .filter((entry): entry is [string, string] => Boolean(entry[0])),
+        const sourcePathByScratchRelativePath = new Map(
+          workspaceSourceFiles.map(
+            (scratchPath, index) =>
+              [
+                normalizeRelativePath(scratchDir, scratchPath),
+                sourceFiles[index] ?? scratchPath,
+              ] as const,
+          ),
         );
         const entries = grounded.files
           .map((file) => {
@@ -1839,7 +1847,7 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
             }
             return {
               isoDay,
-              sourcePath: sourcePathByDay.get(isoDay) ?? file.path,
+              sourcePath: sourcePathByScratchRelativePath.get(file.path) ?? file.path,
               bodyLines: groundedMarkdownToDiaryLines(file.renderedMarkdown),
             };
           })

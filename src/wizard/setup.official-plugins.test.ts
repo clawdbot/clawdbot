@@ -148,6 +148,11 @@ describe("setupOfficialPluginInstalls", () => {
           hint: "OpenClaw LanceDB-backed long-term memory plugin with auto-recall/capture",
         },
         {
+          value: "openshell",
+          label: "OpenShell Sandbox",
+          hint: "OpenClaw OpenShell sandbox backend",
+        },
+        {
           value: "voice-call",
           label: "Voice Call",
           hint: "OpenClaw voice-call plugin",

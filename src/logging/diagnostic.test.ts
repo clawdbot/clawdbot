@@ -1055,6 +1055,48 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("suppresses liveness warnings during startupGraceMs while still sampling", () => {
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+    const events: string[] = [];
+    const sampleLiveness = vi.fn(() => ({
+      reasons: ["event_loop_delay" as const],
+      intervalMs: 30_000,
+      eventLoopDelayP99Ms: 1_500,
+      eventLoopDelayMaxMs: 2_000,
+    }));
+    const unsubscribe = onDiagnosticEvent((event) => events.push(event.type));
+
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+          },
+        },
+        {
+          emitMemorySample: createEmitMemorySampleMock(),
+          sampleLiveness,
+          startupGraceMs: 60_000,
+        },
+      );
+
+      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
+      vi.advanceTimersByTime(30_000);
+
+      expect(sampleLiveness).toHaveBeenCalledTimes(1);
+      expectNoLoggerMessageContaining(warnSpy, "liveness warning:");
+      expect(events).not.toContain("diagnostic.liveness.warning");
+
+      vi.advanceTimersByTime(30_000);
+
+      expect(sampleLiveness).toHaveBeenCalledTimes(2);
+      expectLoggerMessageContaining(warnSpy, "liveness warning:");
+      expect(events).toContain("diagnostic.liveness.warning");
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("warns for liveness samples when diagnostic work is open", () => {
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
 

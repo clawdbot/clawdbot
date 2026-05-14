@@ -102,6 +102,43 @@ describe("enforceSessionDiskBudget", () => {
     });
   });
 
+  it("preserves runtime-provided session keys when removing entries for disk budget", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const childKey = "agent:main:subagent:pending-budget";
+      const removableKey = "agent:main:old-removable";
+      const now = Date.now();
+      const store: Record<string, SessionEntry> = {
+        [childKey]: {
+          sessionId: "pending-budget",
+          updatedAt: now - 10_000,
+          spawnedBy: "agent:main:main",
+        },
+        [removableKey]: {
+          sessionId: "old-removable",
+          updatedAt: now,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        preserveKeys: new Set([childKey]),
+        maintenance: {
+          maxDiskBytes: 120,
+          highWaterBytes: 80,
+        },
+        warnOnly: false,
+      });
+
+      expectBudgetResult(result);
+      expect(result.removedEntries).toBe(1);
+      expect(store).toHaveProperty(childKey);
+      expect(store).not.toHaveProperty(removableKey);
+    });
+  });
+
   it("removes unreferenced compaction checkpoint artifacts under pressure", async () => {
     await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");

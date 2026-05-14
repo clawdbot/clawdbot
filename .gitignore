@@ -115,6 +115,8 @@ USER.md
 !.agents/skills/blacksmith-testbox/**
 !.agents/skills/crabbox/
 !.agents/skills/crabbox/**
+!.agents/skills/clawdtributor/
+!.agents/skills/clawdtributor/**
 !.agents/skills/gitcrawl/
 !.agents/skills/gitcrawl/**
 !.agents/skills/openclaw-docs/**

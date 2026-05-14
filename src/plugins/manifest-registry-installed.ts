@@ -20,6 +20,15 @@ import {
   type PluginDependencySpecMap,
 } from "./status-dependencies.js";
 
+function isRelativePathInsideOrEqual(relativePath: string): boolean {
+  return (
+    relativePath === "" ||
+    (relativePath !== ".." &&
+      !relativePath.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relativePath))
+  );
+}
+
 function resolvePackageJsonPath(record: InstalledPluginIndexRecord): string | undefined {
   if (!record.packageJson?.path) {
     return undefined;
@@ -27,7 +36,7 @@ function resolvePackageJsonPath(record: InstalledPluginIndexRecord): string | un
   const rootDir = resolveInstalledPluginRootDir(record);
   const packageJsonPath = path.resolve(rootDir, record.packageJson.path);
   const relative = path.relative(rootDir, packageJsonPath);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (!isRelativePathInsideOrEqual(relative)) {
     return undefined;
   }
   return packageJsonPath;
@@ -127,7 +136,7 @@ function resolveInstalledPackageMetadata(record: InstalledPluginIndexRecord): {
     return fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
   }
   const relative = path.relative(rootDir, packageJsonPath);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (!isRelativePathInsideOrEqual(relative)) {
     return fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
   }
   const packageJson = tryReadJsonSync<PackageManifest>(packageJsonPath);

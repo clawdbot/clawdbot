@@ -5,13 +5,62 @@ import { buildPluginsCommandParams } from "./commands.test-harness.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
-const replaceConfigFileMock = vi.hoisted(() => vi.fn(async () => undefined));
+const replaceConfigFileMock = vi.hoisted(() => vi.fn(async (_params: unknown) => undefined));
 const buildPluginRegistrySnapshotReportMock = vi.hoisted(() => vi.fn());
 const buildPluginDiagnosticsReportMock = vi.hoisted(() => vi.fn());
 const buildPluginInspectReportMock = vi.hoisted(() => vi.fn());
 const buildAllPluginInspectReportsMock = vi.hoisted(() => vi.fn());
 const formatPluginCompatibilityNoticeMock = vi.hoisted(() => vi.fn(() => "ok"));
 const refreshPluginRegistryAfterConfigMutationMock = vi.hoisted(() => vi.fn(async () => undefined));
+
+type ConfigSnapshotMock = {
+  path?: string;
+  hash?: string | null;
+  parsed?: OpenClawConfig | null;
+  sourceConfig?: OpenClawConfig;
+  resolved?: OpenClawConfig;
+  runtimeConfig?: OpenClawConfig;
+};
+
+type TransformConfigFileWithRetryMockParams<T = unknown> = {
+  afterWrite?: unknown;
+  transform: (
+    currentConfig: OpenClawConfig,
+    context: { snapshot: ConfigSnapshotMock; previousHash: string | null; attempt: number },
+  ) =>
+    | Promise<{ nextConfig: OpenClawConfig; result?: T }>
+    | { nextConfig: OpenClawConfig; result?: T };
+};
+
+function configFromSnapshot(snapshot: ConfigSnapshotMock): OpenClawConfig {
+  return structuredClone(
+    snapshot.sourceConfig ?? snapshot.resolved ?? snapshot.runtimeConfig ?? snapshot.parsed ?? {},
+  );
+}
+
+async function transformConfigFileWithRetryMock<T = unknown>(
+  params: TransformConfigFileWithRetryMockParams<T>,
+) {
+  const snapshot = (await readConfigFileSnapshotMock()) as ConfigSnapshotMock;
+  const previousHash = snapshot.hash ?? null;
+  const transformed = await params.transform(configFromSnapshot(snapshot), {
+    snapshot,
+    previousHash,
+    attempt: 0,
+  });
+  const afterWrite = params.afterWrite ?? { mode: "auto" };
+  await replaceConfigFileMock({ nextConfig: transformed.nextConfig, afterWrite });
+  return {
+    path: snapshot.path ?? "/tmp/openclaw.json",
+    previousHash,
+    snapshot,
+    nextConfig: transformed.nextConfig,
+    result: transformed.result,
+    attempts: 1,
+    afterWrite,
+    followUp: { action: "none" },
+  };
+}
 
 vi.mock("../../cli/npm-resolution.js", () => ({
   buildNpmInstallRecordFields: vi.fn(),
@@ -34,6 +83,7 @@ vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
   replaceConfigFile: replaceConfigFileMock,
+  transformConfigFileWithRetry: transformConfigFileWithRetryMock,
 }));
 
 vi.mock("../../infra/archive.js", () => ({

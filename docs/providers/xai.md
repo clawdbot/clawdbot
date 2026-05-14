@@ -448,9 +448,8 @@ Legacy aliases still normalize to the canonical bundled ids:
 
 ## Live testing
 
-The xAI media paths are covered by unit tests and opt-in live suites. The live
-commands load secrets from your login shell, including `~/.profile`, before
-probing `XAI_API_KEY`.
+The xAI media paths are covered by unit tests and opt-in live suites. Export
+`XAI_API_KEY` in the process environment before running live probes.
 
 ```bash
 pnpm test extensions/xai

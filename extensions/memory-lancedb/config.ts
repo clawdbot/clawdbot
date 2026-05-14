@@ -15,6 +15,7 @@ export type MemoryConfig = {
   autoCapture?: boolean;
   autoRecall?: boolean;
   captureMaxChars?: number;
+  customTriggers?: string[];
   recallMaxChars?: number;
   storageOptions?: Record<string, string>;
 };
@@ -109,6 +110,7 @@ export const memoryConfigSchema = {
         "autoCapture",
         "autoRecall",
         "captureMaxChars",
+        "customTriggers",
         "recallMaxChars",
         "storageOptions",
       ],
@@ -142,6 +144,28 @@ export const memoryConfigSchema = {
     }
     if (typeof recallMaxChars === "number" && (recallMaxChars < 100 || recallMaxChars > 10_000)) {
       throw new Error("recallMaxChars must be between 100 and 10000");
+    }
+    let customTriggers: string[] | undefined;
+    if (cfg.customTriggers !== undefined) {
+      if (!Array.isArray(cfg.customTriggers)) {
+        throw new Error("customTriggers must be an array of strings");
+      }
+      customTriggers = cfg.customTriggers.map((trigger, index) => {
+        if (typeof trigger !== "string") {
+          throw new Error(`customTriggers.${index} must be a string`);
+        }
+        const normalized = trigger.trim();
+        if (!normalized) {
+          throw new Error(`customTriggers.${index} must not be empty`);
+        }
+        if (normalized.length > 100) {
+          throw new Error(`customTriggers.${index} must be at most 100 characters`);
+        }
+        return normalized;
+      });
+      if (customTriggers.length > 50) {
+        throw new Error("customTriggers must include at most 50 entries");
+      }
     }
 
     const dreaming =
@@ -184,6 +208,7 @@ export const memoryConfigSchema = {
       autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,
       captureMaxChars: captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS,
+      ...(customTriggers ? { customTriggers } : {}),
       recallMaxChars: recallMaxChars ?? DEFAULT_RECALL_MAX_CHARS,
       ...(storageOptions ? { storageOptions } : {}),
     };
@@ -236,6 +261,11 @@ export const memoryConfigSchema = {
       help: "Maximum message length eligible for auto-capture",
       advanced: true,
       placeholder: String(DEFAULT_CAPTURE_MAX_CHARS),
+    },
+    customTriggers: {
+      label: "Custom Triggers",
+      help: "Literal phrases that should make auto-capture consider a message memory-worthy",
+      advanced: true,
     },
     recallMaxChars: {
       label: "Recall Query Max Chars",

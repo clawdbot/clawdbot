@@ -772,6 +772,48 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(bridge.isConnected()).toBe(false);
   });
 
+  it("treats pre-ready auth errors as a single startup failure", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onError = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onError,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "error",
+          error: { message: "Incorrect API key provided" },
+        }),
+      ),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "error",
+          error: { message: "Incorrect API key provided" },
+        }),
+      ),
+    );
+
+    await expect(connecting).rejects.toThrow("Incorrect API key provided");
+    expect(onError).not.toHaveBeenCalled();
+    expect(socket.closed).toBe(true);
+    expect(bridge.isConnected()).toBe(false);
+  });
+
   it("rejects connection when the socket closes before session readiness", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({

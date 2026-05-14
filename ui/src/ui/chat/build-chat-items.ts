@@ -259,6 +259,48 @@ function sanitizeStreamText(text: string): string {
   return stripped.trim().length > 0 ? stripped : "";
 }
 
+function rawMessageTimestamp(message: unknown): number | null {
+  const timestamp = (message as { timestamp?: unknown }).timestamp;
+  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function chatItemTimestamp(item: ChatItem): number | null {
+  switch (item.kind) {
+    case "message":
+      return item.key === "chat:history:notice"
+        ? Number.NEGATIVE_INFINITY
+        : rawMessageTimestamp(item.message);
+    case "divider":
+      return item.timestamp;
+    case "stream":
+      return item.startedAt;
+    case "reading-indicator":
+      return null;
+  }
+  return null;
+}
+
+function sortChatItemsByVisibleTime(items: ChatItem[]): ChatItem[] {
+  return items
+    .map((item, index) => ({ item, index, timestamp: chatItemTimestamp(item) }))
+    .toSorted((a, b) => {
+      if (a.timestamp == null && b.timestamp == null) {
+        return a.index - b.index;
+      }
+      if (a.timestamp == null) {
+        return 1;
+      }
+      if (b.timestamp == null) {
+        return -1;
+      }
+      if (a.timestamp !== b.timestamp) {
+        return a.timestamp - b.timestamp;
+      }
+      return a.index - b.index;
+    })
+    .map(({ item }) => item);
+}
+
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
   const history = (Array.isArray(props.messages) ? props.messages : []).filter(
@@ -387,7 +429,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
   }
 
-  return groupMessages(collapseSequentialDuplicateMessages(items));
+  return groupMessages(collapseSequentialDuplicateMessages(sortChatItemsByVisibleTime(items)));
 }
 
 function messageKey(message: unknown, index: number): string {

@@ -327,8 +327,20 @@ export async function handleSessionHistoryHttpRequest(
           const nextEvent = sseState.appendInlineMessage({
             message: update.message,
             messageId: update.messageId,
+            messageSeq: update.messageSeq,
           });
           if (!nextEvent) {
+            return;
+          }
+          if (nextEvent.shouldRefresh) {
+            sentHistory = await sseState.refreshAsync();
+            sseWrite(res, "history", {
+              sessionKey: target.canonicalKey,
+              ...sentHistory,
+            });
+            return;
+          }
+          if (nextEvent.message === undefined) {
             return;
           }
           sentHistory = sseState.snapshot();

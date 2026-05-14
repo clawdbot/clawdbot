@@ -56,12 +56,14 @@ function hasProviderAuthEnvCredential(
   plugin: PluginManifestRecord,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  return Object.values(plugin.providerAuthEnvVars ?? {}).some((envVars) =>
-    envVars.some((name) => {
-      const value = env[name]?.trim();
-      return value !== undefined && value !== "";
-    }),
-  );
+  const envVars = [
+    ...(plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []),
+    ...Object.values(plugin.providerAuthEnvVars ?? {}).flat(),
+  ];
+  return envVars.some((name) => {
+    const value = env[name]?.trim();
+    return value !== undefined && value !== "";
+  });
 }
 
 function dedupeSorted(values: Iterable<string>): string[] {

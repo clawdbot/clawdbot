@@ -8,7 +8,27 @@ import type { BrowserRouteContext, BrowserServerState } from "./server-context.j
 import { movePathToTrash } from "./trash.js";
 
 const configMocks = vi.hoisted(() => ({
+  getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
   writeConfigFile: vi.fn<(cfg: OpenClawConfig) => Promise<void>>(async (_cfg) => {}),
+  mutateConfigFile: vi.fn(
+    async (params: {
+      mutate: (draft: OpenClawConfig, context: { snapshot: { path: string } }) => unknown;
+    }) => {
+      const draft = structuredClone(configMocks.getRuntimeConfig());
+      const result = await params.mutate(draft, { snapshot: { path: "/tmp/openclaw.json" } });
+      await configMocks.writeConfigFile(draft);
+      return {
+        path: "/tmp/openclaw.json",
+        previousHash: "test-hash",
+        snapshot: { path: "/tmp/openclaw.json" },
+        nextConfig: draft,
+        result,
+        attempts: 1,
+        afterWrite: { mode: "auto" },
+        followUp: { action: "none" },
+      };
+    },
+  ),
 }));
 const writeConfigFile = configMocks.writeConfigFile;
 
@@ -16,10 +36,11 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    getRuntimeConfig: vi.fn(),
     replaceConfigFile: vi.fn(async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
       await configMocks.writeConfigFile(nextConfig);
     }),
+    mutateConfigFile: configMocks.mutateConfigFile,
+    getRuntimeConfig: configMocks.getRuntimeConfig,
   };
 });
 
@@ -128,6 +149,55 @@ describe("BrowserProfilesService", () => {
     expect(result.isRemote).toBe(false);
     expect(state.resolved.profiles.work?.cdpPort).toBe(19001);
     expect(writeConfigFile).toHaveBeenCalled();
+  });
+
+  it("allocates local ports from the rebased config snapshot", async () => {
+    const resolved = resolveBrowserConfig({});
+    const { ctx, state } = createCtx(resolved);
+    vi.mocked(getRuntimeConfig)
+      .mockReturnValueOnce({ browser: { profiles: {} } })
+      .mockReturnValue({
+        browser: {
+          profiles: {
+            other: { cdpPort: 18801, color: "#0066CC" },
+          },
+        },
+      });
+
+    const service = createBrowserProfilesService(ctx);
+    const result = await service.createProfile({ name: "work" });
+
+    expect(result.cdpPort).toBe(18802);
+    expect(state.resolved.profiles.work?.cdpPort).toBe(18802);
+    const profiles = writtenBrowserConfig().profiles as Record<string, { cdpPort?: number }>;
+    expect(profiles.other?.cdpPort).toBe(18801);
+    expect(profiles.work?.cdpPort).toBe(18802);
+  });
+
+  it("allocates local ports from the rebased CDP range end", async () => {
+    const resolved = resolveBrowserConfig({ cdpPortRangeStart: 19000 });
+    const { ctx, state } = createCtx(resolved);
+    vi.mocked(getRuntimeConfig)
+      .mockReturnValueOnce({
+        browser: {
+          cdpPortRangeStart: 19000,
+          profiles: {},
+        },
+      } as OpenClawConfig)
+      .mockReturnValue({
+        browser: {
+          cdpPortRangeEnd: 18801,
+          profiles: {},
+        },
+      } as unknown as OpenClawConfig);
+
+    const service = createBrowserProfilesService(ctx);
+    const result = await service.createProfile({ name: "work" });
+
+    expect(result.cdpPort).toBe(18801);
+    expect(state.resolved.profiles.work?.cdpPort).toBe(18801);
+    const profiles = writtenBrowserConfig().profiles as Record<string, { cdpPort?: number }>;
+    expect(profiles.work?.cdpPort).toBe(18801);
   });
 
   it("accepts per-profile cdpUrl for remote Chrome", async () => {
@@ -285,6 +355,45 @@ describe("BrowserProfilesService", () => {
     const result = await service.deleteProfile("remote");
 
     expect(result.deleted).toBe(false);
+    expect(ctx.forProfile).not.toHaveBeenCalled();
+    expect(movePathToTrash).not.toHaveBeenCalled();
+  });
+
+  it("clears a rebased default profile when deleting that profile", async () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        work: { cdpUrl: "http://10.0.0.42:9222", color: "#0066CC" },
+      },
+    });
+    const { ctx } = createCtx(resolved);
+
+    vi.mocked(getRuntimeConfig)
+      .mockReturnValueOnce({
+        browser: {
+          defaultProfile: "openclaw",
+          profiles: {
+            openclaw: { cdpPort: 18800, color: "#FF4500" },
+            work: { cdpUrl: "http://10.0.0.42:9222", color: "#0066CC" },
+          },
+        },
+      })
+      .mockReturnValue({
+        browser: {
+          defaultProfile: "work",
+          profiles: {
+            openclaw: { cdpPort: 18800, color: "#FF4500" },
+            work: { cdpUrl: "http://10.0.0.42:9222", color: "#0066CC" },
+          },
+        },
+      });
+
+    const service = createBrowserProfilesService(ctx);
+    const result = await service.deleteProfile("work");
+
+    expect(result.deleted).toBe(false);
+    const browser = writtenBrowserConfig();
+    expect(browser.defaultProfile).toBeUndefined();
+    expect(browser.profiles).not.toHaveProperty("work");
     expect(ctx.forProfile).not.toHaveBeenCalled();
     expect(movePathToTrash).not.toHaveBeenCalled();
   });

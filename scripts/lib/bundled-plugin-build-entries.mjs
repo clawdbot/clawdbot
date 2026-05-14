@@ -9,7 +9,7 @@ import { shouldBuildBundledCluster } from "./optional-bundled-clusters.mjs";
 
 const TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 export const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab", "qa-matrix"]);
-const EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS = new Set(["qqbot"]);
+const EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS = new Set(["qqbot", "whatsapp"]);
 const toPosixPath = (value) => value.replaceAll("\\", "/");
 
 function readBundledPluginPackageJson(packageJsonPath) {
@@ -29,6 +29,10 @@ function isManifestlessBundledRuntimeSupportPackage(params) {
     return false;
   }
   return params.topLevelPublicSurfaceEntries.length > 0;
+}
+
+function shouldBuildBundledDistEntry(packageJson) {
+  return packageJson?.openclaw?.build?.bundledDist !== false;
 }
 
 export function collectPluginSourceEntries(packageJson) {
@@ -110,6 +114,9 @@ export function collectBundledPluginBuildEntries(params = {}) {
       continue;
     }
     if (!shouldBuildBundledCluster(dirent.name, env, { packageJson })) {
+      continue;
+    }
+    if (!shouldBuildBundledDistEntry(packageJson)) {
       continue;
     }
     if (EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS.has(dirent.name)) {

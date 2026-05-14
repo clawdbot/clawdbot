@@ -15,6 +15,7 @@ import {
   type AnyAgentTool,
   type HeartbeatToolResponse,
   type MessagingToolSend,
+  type MessagingToolSourceReplyPayload,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
@@ -47,6 +48,7 @@ export type CodexDynamicToolBridge = {
     messagingToolSentTexts: string[];
     messagingToolSentMediaUrls: string[];
     messagingToolSentTargets: MessagingToolSend[];
+    messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
     heartbeatToolResponse?: HeartbeatToolResponse;
     toolMediaUrls: string[];
     toolAudioAsVoice: boolean;
@@ -77,6 +79,7 @@ export function createCodexDynamicToolBridge(params: {
     messagingToolSentTexts: [],
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],
+    messagingToolSourceReplyPayloads: [],
     toolMediaUrls: [],
     toolAudioAsVoice: false,
   };
@@ -279,6 +282,11 @@ function collectToolTelemetry(params: {
     return;
   }
   params.telemetry.didSendViaMessagingTool = true;
+  const sourceReplyPayload = extractInternalSourceReplyPayload(params.result?.details);
+  if (sourceReplyPayload) {
+    params.telemetry.messagingToolSourceReplyPayloads.push(sourceReplyPayload);
+    return;
+  }
   const text = readFirstString(params.args, ["text", "message", "body", "content"]);
   if (text) {
     params.telemetry.messagingToolSentTexts.push(text);
@@ -294,6 +302,41 @@ function collectToolTelemetry(params: {
     ...(text ? { text } : {}),
     ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
   });
+}
+
+function extractInternalSourceReplyPayload(
+  details: unknown,
+): MessagingToolSourceReplyPayload | undefined {
+  if (!isRecord(details) || details.sourceReplySink !== "internal-ui") {
+    return undefined;
+  }
+  const rawPayload = details.sourceReply;
+  if (!isRecord(rawPayload)) {
+    return undefined;
+  }
+  const text = readFirstString(rawPayload, ["text", "message"]);
+  const mediaUrls = collectMediaUrls(rawPayload);
+  const mediaUrl =
+    typeof rawPayload.mediaUrl === "string" && rawPayload.mediaUrl.trim()
+      ? rawPayload.mediaUrl.trim()
+      : mediaUrls[0];
+  const payload: MessagingToolSourceReplyPayload = {
+    ...(text ? { text } : {}),
+    ...(mediaUrl ? { mediaUrl } : {}),
+    ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
+    ...(rawPayload.audioAsVoice === true ? { audioAsVoice: true } : {}),
+    ...(isRecord(rawPayload.presentation)
+      ? { presentation: rawPayload.presentation as never }
+      : {}),
+    ...(isRecord(rawPayload.interactive) ? { interactive: rawPayload.interactive as never } : {}),
+    ...(isRecord(rawPayload.channelData) ? { channelData: rawPayload.channelData } : {}),
+    ...(typeof details.idempotencyKey === "string" && details.idempotencyKey.trim()
+      ? { idempotencyKey: details.idempotencyKey.trim() }
+      : {}),
+  };
+  return text || mediaUrls.length > 0 || payload.presentation || payload.interactive
+    ? payload
+    : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

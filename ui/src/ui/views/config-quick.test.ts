@@ -64,10 +64,12 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
     hasCustomTheme: false,
     customThemeLabel: null,
     borderRadius: 50,
+    textScale: 100,
     setTheme: vi.fn(),
     onOpenCustomThemeImport: vi.fn(),
     setThemeMode: vi.fn(),
     setBorderRadius: vi.fn(),
+    setTextScale: vi.fn(),
     userAvatar: null,
     onUserAvatarChange: vi.fn(),
     configObject: {},
@@ -170,6 +172,22 @@ describe("renderQuickSettings", () => {
       "qs-segmented__btn--compact",
       "qs-segmented__btn--active",
     ]);
+  });
+
+  it("lets operators change text size from Appearance quick settings", () => {
+    const setTextScale = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ textScale: 125, setTextScale })), container);
+
+    const textSizeRow = expectRowByLabel(container, "Text size");
+    const active = Array.from(textSizeRow.querySelectorAll("button")).find((button) =>
+      button.classList.contains("qs-segmented__btn--active"),
+    );
+    expect(active?.textContent?.trim()).toBe("XL");
+
+    expectButtonByText(textSizeRow, "XXL").click();
+    expect(setTextScale).toHaveBeenCalledWith(140);
   });
 
   it("keeps the local user name fixed and shows the assistant identity", () => {

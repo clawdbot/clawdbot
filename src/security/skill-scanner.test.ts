@@ -98,6 +98,7 @@ function normalizeSkillScanOptions(
     maxFiles?: number;
     maxFileBytes?: number;
     includeFiles?: readonly string[];
+    onlyIncludeFiles?: boolean;
     excludeTestFiles?: boolean;
   }>,
 ): SkillScanOptions | undefined {
@@ -108,6 +109,7 @@ function normalizeSkillScanOptions(
     ...(options.maxFiles != null ? { maxFiles: options.maxFiles } : {}),
     ...(options.maxFileBytes != null ? { maxFileBytes: options.maxFileBytes } : {}),
     ...(options.includeFiles ? { includeFiles: [...options.includeFiles] } : {}),
+    ...(options.onlyIncludeFiles != null ? { onlyIncludeFiles: options.onlyIncludeFiles } : {}),
     ...(options.excludeTestFiles != null ? { excludeTestFiles: options.excludeTestFiles } : {}),
   };
 }
@@ -131,6 +133,7 @@ type SummaryCase = {
     maxFiles?: number;
     maxFileBytes?: number;
     includeFiles?: readonly string[];
+    onlyIncludeFiles?: boolean;
     excludeTestFiles?: boolean;
   }>;
   expected: {
@@ -583,6 +586,21 @@ describe("scanDirectoryWithSummary", () => {
         scannedFiles: 1,
         expectedRuleId: "dynamic-code-execution",
         expectedPresent: true,
+      },
+    },
+    {
+      name: "scans only included files when onlyIncludeFiles is set",
+      files: {
+        "entry.js": `export const ok = true;`,
+        "scripts/harness.js": `const x = eval("hack");`,
+      },
+      options: {
+        includeFiles: ["entry.js"],
+        onlyIncludeFiles: true,
+      },
+      expected: {
+        scannedFiles: 1,
+        findingCount: 0,
       },
     },
   ];

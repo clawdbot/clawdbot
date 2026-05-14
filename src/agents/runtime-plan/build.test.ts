@@ -140,6 +140,14 @@ describe("AgentRuntimePlan", () => {
         mediaUrl: "file:///tmp/image.png",
       }),
     ).toBe(false);
+    expect(
+      plan.delivery.isSilentPayload({
+        text: '{"action":"NO_REPLY"}',
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+        },
+      }),
+    ).toBe(false);
     expectExtraParams(plan.transport.extraParams, {
       parallelToolCalls: true,
       textVerbosity: "low",

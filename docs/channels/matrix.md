@@ -266,6 +266,7 @@ Use `allowBots` when you intentionally want inter-agent Matrix traffic:
 - `allowBots: true` accepts messages from other configured Matrix bot accounts in allowed rooms and DMs.
 - `allowBots: "mentions"` accepts those messages only when they visibly mention this bot in rooms. DMs are still allowed.
 - `groups.<room>.allowBots` overrides the account-level setting for one room.
+- Accepted configured-bot messages use shared [bot loop protection](/channels/bot-loop-protection). Configure `channels.defaults.botLoopProtection`, then override with `channels.matrix.botLoopProtection` or `channels.matrix.groups.<room>.botLoopProtection` when one room needs a different budget.
 - OpenClaw still ignores messages from the same Matrix user ID to avoid self-reply loops.
 - Matrix does not expose a native bot flag here; OpenClaw treats "bot-authored" as "sent by another configured Matrix account on this OpenClaw gateway".
 

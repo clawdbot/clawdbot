@@ -3,7 +3,7 @@
 import Foundation
 
 public let GATEWAY_PROTOCOL_VERSION = 4
-public let GATEWAY_MIN_PROTOCOL_VERSION = 3
+public let GATEWAY_MIN_PROTOCOL_VERSION = 4
 
 private struct GatewayAnyCodingKey: CodingKey, Hashable {
     let stringValue: String
@@ -3228,6 +3228,7 @@ public struct TalkSessionCancelTurnParams: Codable, Sendable {
 
 public struct TalkSessionCreateParams: Codable, Sendable {
     public let sessionkey: String?
+    public let spawnedby: String?
     public let provider: String?
     public let model: String?
     public let voice: String?
@@ -3242,6 +3243,7 @@ public struct TalkSessionCreateParams: Codable, Sendable {
 
     public init(
         sessionkey: String?,
+        spawnedby: String?,
         provider: String?,
         model: String?,
         voice: String?,
@@ -3255,6 +3257,7 @@ public struct TalkSessionCreateParams: Codable, Sendable {
         ttlms: Int?)
     {
         self.sessionkey = sessionkey
+        self.spawnedby = spawnedby
         self.provider = provider
         self.model = model
         self.voice = voice
@@ -3270,6 +3273,7 @@ public struct TalkSessionCreateParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case spawnedby = "spawnedBy"
         case provider
         case model
         case voice
@@ -6240,12 +6244,138 @@ public struct ChatInjectParams: Codable, Sendable {
     }
 }
 
-public struct ChatEvent: Codable, Sendable {
+public struct ChatDeltaEvent: Codable, Sendable {
     public let runid: String
     public let sessionkey: String
     public let spawnedby: String?
     public let seq: Int
-    public let state: AnyCodable
+    public let state: String
+    public let message: AnyCodable?
+    public let deltatext: String
+    public let replace: Bool?
+    public let usage: AnyCodable?
+
+    public init(
+        runid: String,
+        sessionkey: String,
+        spawnedby: String?,
+        seq: Int,
+        state: String,
+        message: AnyCodable?,
+        deltatext: String,
+        replace: Bool?,
+        usage: AnyCodable?)
+    {
+        self.runid = runid
+        self.sessionkey = sessionkey
+        self.spawnedby = spawnedby
+        self.seq = seq
+        self.state = state
+        self.message = message
+        self.deltatext = deltatext
+        self.replace = replace
+        self.usage = usage
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runid = "runId"
+        case sessionkey = "sessionKey"
+        case spawnedby = "spawnedBy"
+        case seq
+        case state
+        case message
+        case deltatext = "deltaText"
+        case replace
+        case usage
+    }
+}
+
+public struct ChatFinalEvent: Codable, Sendable {
+    public let runid: String
+    public let sessionkey: String
+    public let spawnedby: String?
+    public let seq: Int
+    public let state: String
+    public let message: AnyCodable?
+    public let usage: AnyCodable?
+    public let stopreason: String?
+
+    public init(
+        runid: String,
+        sessionkey: String,
+        spawnedby: String?,
+        seq: Int,
+        state: String,
+        message: AnyCodable?,
+        usage: AnyCodable?,
+        stopreason: String?)
+    {
+        self.runid = runid
+        self.sessionkey = sessionkey
+        self.spawnedby = spawnedby
+        self.seq = seq
+        self.state = state
+        self.message = message
+        self.usage = usage
+        self.stopreason = stopreason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runid = "runId"
+        case sessionkey = "sessionKey"
+        case spawnedby = "spawnedBy"
+        case seq
+        case state
+        case message
+        case usage
+        case stopreason = "stopReason"
+    }
+}
+
+public struct ChatAbortedEvent: Codable, Sendable {
+    public let runid: String
+    public let sessionkey: String
+    public let spawnedby: String?
+    public let seq: Int
+    public let state: String
+    public let message: AnyCodable?
+    public let stopreason: String?
+
+    public init(
+        runid: String,
+        sessionkey: String,
+        spawnedby: String?,
+        seq: Int,
+        state: String,
+        message: AnyCodable?,
+        stopreason: String?)
+    {
+        self.runid = runid
+        self.sessionkey = sessionkey
+        self.spawnedby = spawnedby
+        self.seq = seq
+        self.state = state
+        self.message = message
+        self.stopreason = stopreason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runid = "runId"
+        case sessionkey = "sessionKey"
+        case spawnedby = "spawnedBy"
+        case seq
+        case state
+        case message
+        case stopreason = "stopReason"
+    }
+}
+
+public struct ChatErrorEvent: Codable, Sendable {
+    public let runid: String
+    public let sessionkey: String
+    public let spawnedby: String?
+    public let seq: Int
+    public let state: String
     public let message: AnyCodable?
     public let errormessage: String?
     public let errorkind: AnyCodable?
@@ -6257,7 +6387,7 @@ public struct ChatEvent: Codable, Sendable {
         sessionkey: String,
         spawnedby: String?,
         seq: Int,
-        state: AnyCodable,
+        state: String,
         message: AnyCodable?,
         errormessage: String?,
         errorkind: AnyCodable?,
@@ -6385,6 +6515,43 @@ public enum PluginsSessionActionResult: Codable, Sendable {
         switch self {
         case .success(let value): try value.encode(to: encoder)
         case .failure(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public enum ChatEvent: Codable, Sendable {
+    case delta(ChatDeltaEvent)
+    case final(ChatFinalEvent)
+    case aborted(ChatAbortedEvent)
+    case error(ChatErrorEvent)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "state"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "delta": self = try .delta(ChatDeltaEvent(from: decoder))
+        case "final": self = try .final(ChatFinalEvent(from: decoder))
+        case "aborted": self = try .aborted(ChatAbortedEvent(from: decoder))
+        case "error": self = try .error(ChatErrorEvent(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown ChatEvent discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .delta(let value): try value.encode(to: encoder)
+        case .final(let value): try value.encode(to: encoder)
+        case .aborted(let value): try value.encode(to: encoder)
+        case .error(let value): try value.encode(to: encoder)
         }
     }
 }

@@ -537,6 +537,15 @@ export function isPrimaryBootstrapRun(sessionKey?: string): boolean {
   return !isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey);
 }
 
+function isRelativePathInsideOrEqual(relativePath: string): boolean {
+  return (
+    relativePath === "" ||
+    (relativePath !== ".." &&
+      !relativePath.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relativePath))
+  );
+}
+
 export function remapInjectedContextFilesToWorkspace(params: {
   files: EmbeddedContextFile[];
   sourceWorkspaceDir: string;
@@ -547,7 +556,7 @@ export function remapInjectedContextFilesToWorkspace(params: {
   }
   return params.files.map((file) => {
     const relative = path.relative(params.sourceWorkspaceDir, file.path);
-    const canRemap = relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+    const canRemap = isRelativePathInsideOrEqual(relative);
     return canRemap
       ? {
           ...file,
@@ -2379,14 +2388,23 @@ export async function runEmbeddedAttempt(
 
       let idleTimeoutTrigger: ((error: Error) => void) | undefined;
 
-      // Wrap stream with idle timeout detection
+      // Wrap stream with idle timeout detection.
+      //
+      // Prefer the caller's explicit `runTimeoutOverrideMs` when provided —
+      // it carries the "this run was launched with a deliberate per-run
+      // timeout" signal without losing it when the value numerically equals
+      // `agents.defaults.timeoutSeconds`. Fall back to the value-equality
+      // heuristic for callers that haven't been migrated to plumb the flag.
       const configuredRunTimeoutMs = resolveAgentTimeoutMs({
         cfg: params.config,
       });
+      const resolvedRunTimeoutMs =
+        params.runTimeoutOverrideMs ??
+        (params.timeoutMs !== configuredRunTimeoutMs ? params.timeoutMs : undefined);
       const idleTimeoutMs = resolveLlmIdleTimeoutMs({
         cfg: params.config,
         trigger: params.trigger,
-        runTimeoutMs: params.timeoutMs !== configuredRunTimeoutMs ? params.timeoutMs : undefined,
+        runTimeoutMs: resolvedRunTimeoutMs,
         modelRequestTimeoutMs: (params.model as { requestTimeoutMs?: number }).requestTimeoutMs,
         model: params.model as { baseUrl?: string },
       });
@@ -3407,6 +3425,7 @@ export async function runEmbeddedAttempt(
                     normalizeMessagesForLlmBoundary(activeSession.messages),
                   ),
                   imagesCount: imageResult.images.length,
+                  tools: tools,
                 },
                 {
                   runId: params.runId,

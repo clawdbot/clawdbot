@@ -15,7 +15,7 @@ import {
   isTrajectorySessionArtifactName,
 } from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
-import { isProtectedSessionMaintenanceEntry } from "./store-maintenance.js";
+import { shouldPreserveMaintenanceEntry } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionDiskBudgetConfig = {
@@ -332,6 +332,7 @@ export async function enforceSessionDiskBudget(params: {
   store: Record<string, SessionEntry>;
   storePath: string;
   activeSessionKey?: string;
+  preserveKeys?: ReadonlySet<string>;
   maintenance: SessionDiskBudgetConfig;
   warnOnly: boolean;
   dryRun?: boolean;
@@ -438,7 +439,7 @@ export async function enforceSessionDiskBudget(params: {
       if (!entry) {
         continue;
       }
-      if (isProtectedSessionMaintenanceEntry(key, entry)) {
+      if (shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: params.preserveKeys })) {
         continue;
       }
       const previousProjectedBytes = projectedStoreBytes;

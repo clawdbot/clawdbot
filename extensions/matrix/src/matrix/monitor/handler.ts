@@ -18,6 +18,8 @@ import {
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -395,6 +397,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     core,
     cfg,
     accountId,
+    accountConfig,
     runtime,
     logger,
     logVerboseMessage,
@@ -690,6 +693,22 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           await commitInboundEventIfClaimed();
           return undefined;
         }
+        const botLoopProtection: ChannelBotLoopProtectionFacts | undefined =
+          isConfiguredBotSender && senderId !== selfUserId
+            ? {
+                scopeId: accountId,
+                conversationId: roomId,
+                senderId,
+                receiverId: selfUserId,
+                config: mergePairLoopGuardConfig(
+                  accountConfig?.botLoopProtection,
+                  roomConfig?.botLoopProtection,
+                ),
+                defaultsConfig: cfg.channels?.defaults?.botLoopProtection,
+                defaultEnabled: true,
+                nowMs: eventTs ?? undefined,
+              }
+            : undefined;
 
         if (isRoom && roomConfig && !roomConfigInfo?.allowed) {
           logVerboseMessage(`matrix: room disabled room=${roomId} (${roomMatchMeta})`);
@@ -1138,6 +1157,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           triggerSnapshot,
           threadRootId,
           thread,
+          botLoopProtection,
           effectiveGroupAllowFrom,
           effectiveRoomUsers,
         };
@@ -1192,6 +1212,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         triggerSnapshot,
         threadRootId,
         thread,
+        botLoopProtection,
         effectiveGroupAllowFrom,
         effectiveRoomUsers,
       } = resolvedIngressResult;
@@ -2013,6 +2034,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             storePath,
             ctxPayload,
             recordInboundSession: core.channel.session.recordInboundSession,
+            botLoopProtection,
             record: {
               updateLastRoute: isDirectMessage
                 ? {
@@ -2133,6 +2155,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         },
       });
       if (!turnResult.dispatched) {
+        if (
+          turnResult.admission.kind === "drop" &&
+          turnResult.admission.reason === "bot-loop-protection"
+        ) {
+          await commitInboundEventIfClaimed();
+        }
         return;
       }
       const { dispatchResult } = turnResult;

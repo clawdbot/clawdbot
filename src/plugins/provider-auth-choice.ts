@@ -172,12 +172,13 @@ async function applyDefaultModelFromAuthChoice(params: {
       // migratable state to find.
       const { offerPostInstallMigrations } =
         await import("../wizard/setup.post-install-migration.js");
-      await offerPostInstallMigrations({
+      const migrationResult = await offerPostInstallMigrations({
         config: nextConfig,
         runtime: params.runtime,
         prompter: params.prompter,
         installedPluginIds: [CODEX_RUNTIME_PLUGIN_ID],
       });
+      nextConfig = migrationResult.config;
     }
   }
   await noteDefaultModelResult({

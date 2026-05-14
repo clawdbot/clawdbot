@@ -78,6 +78,10 @@ describe("registerSlackChannelEvents", () => {
     });
 
     expect(trackEvent).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Slack channel created: #general.", {
+      sessionKey: "agent:main:main",
+      contextKey: "slack:channel:created:C1",
+      trusted: false,
+    });
   });
 });

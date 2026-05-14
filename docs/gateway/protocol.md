@@ -147,32 +147,24 @@ When a device token is issued, `hello-ok` also includes:
 }
 ```
 
-During trusted bootstrap handoff, `hello-ok.auth` may also include additional
-bounded role entries in `deviceTokens`:
+Built-in QR/setup-code bootstrap is node-only. After the owner approves the
+pending node request, `hello-ok.auth` includes the primary node token:
 
 ```json
 {
   "auth": {
     "deviceToken": "…",
     "role": "node",
-    "scopes": [],
-    "deviceTokens": [
-      {
-        "deviceToken": "…",
-        "role": "operator",
-        "scopes": ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"]
-      }
-    ]
+    "scopes": []
   }
 }
 ```
 
-For the built-in node/operator bootstrap flow, the primary node token stays
-`scopes: []` and any handed-off operator token stays bounded to the bootstrap
-operator allowlist (`operator.approvals`, `operator.read`,
-`operator.talk.secrets`, `operator.write`). Bootstrap scope checks stay
-role-prefixed: operator entries only satisfy operator requests, and non-operator
-roles still need scopes under their own role prefix.
+The built-in setup-code flow does not include additional `deviceTokens` entries
+or hand off an operator token. Client authors should treat the optional
+`hello-ok.auth.deviceTokens` field as legacy/custom bootstrap extension data:
+persist it only when present on a trusted transport, and do not require it for
+built-in pairing.
 
 ### Node example
 
@@ -372,7 +364,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
   <Accordion title="Talk and TTS">
     - `talk.catalog` returns the read-only Talk provider catalog for speech, streaming transcription, and realtime voice. It includes provider ids, labels, configured state, exposed model/voice ids, canonical modes, transports, brain strategies, and realtime audio/capability flags without returning provider secrets or mutating global config.
     - `talk.config` returns the effective Talk config payload; `includeSecrets` requires `operator.talk.secrets` (or `operator.admin`).
-    - `talk.session.create` creates a Gateway-owned Talk session for `realtime/gateway-relay`, `transcription/gateway-relay`, or `stt-tts/managed-room`. `brain: "direct-tools"` requires `operator.admin`.
+    - `talk.session.create` creates a Gateway-owned Talk session for `realtime/gateway-relay`, `transcription/gateway-relay`, or `stt-tts/managed-room`. For `stt-tts/managed-room`, `operator.write` callers that pass `sessionKey` must also pass `spawnedBy` for scoped session-key visibility; unscoped `sessionKey` creation and `brain: "direct-tools"` require `operator.admin`.
     - `talk.session.join` validates a managed-room session token, emits `session.ready` or `session.replaced` events as needed, and returns room/session metadata plus recent Talk events without the plaintext token or stored token hash.
     - `talk.session.appendAudio` appends base64 PCM input audio to Gateway-owned realtime relay and transcription sessions.
     - `talk.session.startTurn`, `talk.session.endTurn`, and `talk.session.cancelTurn` drive managed-room turn lifecycle with stale-turn rejection before state is cleared.
@@ -476,7 +468,9 @@ enumeration of `src/gateway/server-methods/*.ts`.
 ### Common event families
 
 - `chat`: UI chat updates such as `chat.inject` and other transcript-only chat
-  events.
+  events. In protocol v4, delta payloads carry `deltaText`; `message` remains
+  the cumulative assistant snapshot. Non-prefix replacements set `replace=true`
+  and use `deltaText` as the replacement text.
 - `session.message` and `session.tool`: transcript/event-stream updates for a
   subscribed session.
 - `sessions.changed`: session index or metadata changed.
@@ -632,8 +626,8 @@ terminal summary, and sanitized error text.
 
 - `PROTOCOL_VERSION` lives in `src/gateway/protocol/version.ts`.
 - Clients send `minProtocol` + `maxProtocol`; the server rejects ranges that
-  do not include its current protocol. Native clients use a v3 lower bound so
-  additive v4 clients can still reach v3 gateways.
+  do not include its current protocol. Current clients and servers require
+  protocol v4.
 - Schemas + models are generated from TypeBox definitions:
   - `pnpm protocol:gen`
   - `pnpm protocol:gen:swift`
@@ -647,7 +641,7 @@ stable across protocol v4 and are the expected baseline for third-party clients.
 | Constant                                  | Default                                               | Source                                                                                     |
 | ----------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `PROTOCOL_VERSION`                        | `4`                                                   | `src/gateway/protocol/version.ts`                                                          |
-| `MIN_CLIENT_PROTOCOL_VERSION`             | `3`                                                   | `src/gateway/protocol/version.ts`                                                          |
+| `MIN_CLIENT_PROTOCOL_VERSION`             | `4`                                                   | `src/gateway/protocol/version.ts`                                                          |
 | Request timeout (per RPC)                 | `30_000` ms                                           | `src/gateway/client.ts` (`requestTimeoutMs`)                                               |
 | Preauth / connect-challenge timeout       | `15_000` ms                                           | `src/gateway/handshake-timeouts.ts` (config/env can raise the paired server/client budget) |
 | Initial reconnect backoff                 | `1_000` ms                                            | `src/gateway/client.ts` (`backoffMs`)                                                      |
@@ -694,9 +688,17 @@ rather than the pre-handshake defaults.
     `AUTH_TOKEN_MISMATCH` retry is gated to **trusted endpoints only** —
     loopback, or `wss://` with a pinned `tlsFingerprint`. Public `wss://`
     without pinning does not qualify.
-- Additional `hello-ok.auth.deviceTokens` entries are bootstrap handoff tokens.
-  Persist them only when the connect used bootstrap auth on a trusted transport
-  such as `wss://` or loopback/local pairing.
+- Built-in setup-code bootstrap returns only the primary node
+  `hello-ok.auth.deviceToken`; clients must not expect an additional operator
+  token in `hello-ok.auth.deviceTokens`.
+- While built-in setup-code bootstrap is waiting for approval, `PAIRING_REQUIRED`
+  details include `recommendedNextStep: "wait_then_retry"`, `retryable: true`,
+  and `pauseReconnect: false`. Clients should keep reconnecting with the same
+  bootstrap token until the request is approved or the token becomes invalid.
+- If an older or custom trusted bootstrap flow includes optional
+  `hello-ok.auth.deviceTokens` entries, persist them only when the connect used
+  bootstrap auth on a trusted transport such as `wss://` or loopback/local
+  pairing.
 - If a client supplies an **explicit** `deviceToken` or explicit `scopes`, that
   caller-requested scope set remains authoritative; cached scopes are only
   reused when the client is reusing the stored per-device token.

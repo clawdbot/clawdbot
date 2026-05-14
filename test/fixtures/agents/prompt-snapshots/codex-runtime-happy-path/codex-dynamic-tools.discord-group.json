@@ -889,7 +889,7 @@
   },
   {
     "deferLoading": true,
-    "description": "Send a message into another visible session by sessionKey or label. Thread-scoped chat sessions are rejected; target the parent channel session for inter-agent coordination. Use this to delegate follow-up work to an existing session; waits for the target run and returns the updated assistant reply when available.",
+    "description": "Send a message into another visible session by sessionKey or label, or to a configured agent by agentId. Thread-scoped chat sessions are rejected; target the parent channel session for inter-agent coordination. Missing configured agent main sessions are created before send; waits for the target run and returns the updated assistant reply when available.",
     "inputSchema": {
       "properties": {
         "agentId": {

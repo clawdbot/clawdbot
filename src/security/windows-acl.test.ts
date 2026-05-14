@@ -396,6 +396,71 @@ Successfully processed 1 files`;
         ],
         expected: { untrustedWorld: 1 },
       },
+      {
+        name: "Anonymous Logon SID (S-1-5-7) is world, not group",
+        entries: [
+          aclEntry({
+            principal: "*S-1-5-7",
+            rights: ["R"],
+            rawRights: "(R)",
+            canRead: true,
+            canWrite: false,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
+      {
+        name: "BUILTIN\\\\Guests SID (S-1-5-32-546) is world, not group",
+        entries: [
+          aclEntry({
+            principal: "*S-1-5-32-546",
+            rights: ["R"],
+            rawRights: "(R)",
+            canRead: true,
+            canWrite: false,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
+      {
+        name: "Interactive SID (S-1-5-4) is world, not group",
+        entries: [
+          aclEntry({
+            principal: "*S-1-5-4",
+            rights: ["R"],
+            rawRights: "(R)",
+            canRead: true,
+            canWrite: false,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
+      {
+        name: "Local SID (S-1-2-0) is world, not group",
+        entries: [
+          aclEntry({
+            principal: "*S-1-2-0",
+            rights: ["R"],
+            rawRights: "(R)",
+            canRead: true,
+            canWrite: false,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
+      {
+        name: "Network SID (S-1-5-2) is world, not group",
+        entries: [
+          aclEntry({
+            principal: "*S-1-5-2",
+            rights: ["R"],
+            rawRights: "(R)",
+            canRead: true,
+            canWrite: false,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
     ] as const)("$name", ({ entries, env, expected }) => {
       expectSummaryCounts(entries, expected, env);
     });

@@ -655,7 +655,7 @@ export async function runSetupWizard(
       runtime,
       setDefaultModel: true,
       opts: {
-        tokenProvider: opts.tokenProvider,
+        ...opts,
         token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,
       },
     });

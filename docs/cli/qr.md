@@ -35,9 +35,8 @@ openclaw qr --url wss://gateway.example/ws
 
 - `--token` and `--password` are mutually exclusive.
 - The setup code itself now carries an opaque short-lived `bootstrapToken`, not the shared gateway token/password.
-- In the built-in node/operator bootstrap flow, the primary node token still lands with `scopes: []`.
-- If bootstrap handoff also issues an operator token, it stays bounded to the bootstrap allowlist: `operator.approvals`, `operator.read`, `operator.talk.secrets`, `operator.write`.
-- Bootstrap scope checks are role-prefixed. That operator allowlist only satisfies operator requests; non-operator roles still need scopes under their own role prefix.
+- Built-in setup-code bootstrap is node-only. After approval, the primary node token lands with `scopes: []`.
+- The built-in setup-code flow does not return a handed-off operator token; operator access requires a separate approved operator pairing or token flow.
 - Mobile pairing fails closed for Tailscale/public `ws://` gateway URLs. Private LAN addresses and `.local` Bonjour hosts remain supported over `ws://`, but Tailscale/public mobile routes should use Tailscale Serve/Funnel or a `wss://` gateway URL.
 - With `--remote`, OpenClaw requires either `gateway.remote.url` or
   `gateway.tailscale.mode=serve|funnel`.

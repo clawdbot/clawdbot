@@ -508,6 +508,14 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         });
         this.ws = ws;
 
+        const rejectStartup = (error: Error) => {
+          settleReject(error);
+          if (ws.readyState !== WebSocket.CLOSED) {
+            this.intentionallyClosed = true;
+            ws.close(1000, "startup failed");
+          }
+        };
+
         ws.on("open", () => {
           this.resetRealtimeSessionState();
           this.connected = true;
@@ -527,6 +535,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         });
 
         ws.on("message", (data: Buffer) => {
+          if (settled && !this.sessionConfigured) {
+            return;
+          }
           captureWsEvent({
             url,
             direction: "inbound",
@@ -540,12 +551,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           });
           try {
             const event = JSON.parse(data.toString()) as RealtimeEvent;
+            if (event.type === "error" && !this.sessionConfigured) {
+              rejectStartup(new Error(readRealtimeErrorDetail(event.error)));
+              return;
+            }
             this.handleEvent(event);
             if (event.type === "session.updated") {
               settleResolve();
-            }
-            if (event.type === "error" && !this.sessionConfigured) {
-              settleReject(new Error(readRealtimeErrorDetail(event.error)));
             }
           } catch (error) {
             console.error("[openai] realtime event parse failed:", error);
@@ -565,7 +577,8 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             },
           });
           if (!this.sessionConfigured) {
-            settleReject(error instanceof Error ? error : new Error(String(error)));
+            rejectStartup(error instanceof Error ? error : new Error(String(error)));
+            return;
           }
           this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
         });

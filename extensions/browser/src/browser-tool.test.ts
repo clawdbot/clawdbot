@@ -660,6 +660,20 @@ describe("browser tool snapshot maxChars", () => {
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
   });
 
+  it("fails node proxy calls cleanly when payloadJSON is malformed", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+      ok: true,
+      payloadJSON: "{not json",
+    });
+    const tool = createBrowserTool();
+
+    await expect(tool.execute?.("call-1", { action: "status", target: "node" })).rejects.toThrow(
+      "browser proxy failed",
+    );
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
   it("returns a browser doctor report on host", async () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "doctor" });

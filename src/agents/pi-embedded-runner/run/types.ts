@@ -8,7 +8,10 @@ import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../conte
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { PluginHookBeforeAgentStartResult } from "../../../plugins/hook-before-agent-start.types.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
-import type { MessagingToolSend } from "../../pi-embedded-messaging.types.js";
+import type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "../../pi-embedded-messaging.types.js";
 import type { ToolOutcomeObserver } from "../../pi-tools.before-tool-call.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
@@ -107,6 +110,7 @@ export type EmbeddedRunAttemptResult = {
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
+  messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   heartbeatToolResponse?: HeartbeatToolResponse;
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;

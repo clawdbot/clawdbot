@@ -17,6 +17,11 @@ function toInlineKeyboardButton(
       ? { text: button.text, callback_data: button.callback_data, style: button.style }
       : { text: button.text, callback_data: button.callback_data };
   }
+  if (button.web_app?.url) {
+    return button.style
+      ? { text: button.text, web_app: { url: button.web_app.url }, style: button.style }
+      : { text: button.text, web_app: { url: button.web_app.url } };
+  }
   return undefined;
 }
 

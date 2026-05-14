@@ -136,11 +136,16 @@ targets:
         NSBonjourServices:
           - _openclaw-gw._tcp
         NSCameraUsageDescription: OpenClaw can capture photos or short video clips when requested via the gateway.
+        NSCalendarsUsageDescription: OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.
+        NSCalendarsFullAccessUsageDescription: OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.
+        NSCalendarsWriteOnlyAccessUsageDescription: OpenClaw uses your calendars to add events when you enable calendar access.
+        NSContactsUsageDescription: OpenClaw uses your contacts so you can search and reference people while using the assistant.
         NSLocationWhenInUseUsageDescription: OpenClaw uses your location when you allow location sharing.
         NSLocationAlwaysAndWhenInUseUsageDescription: OpenClaw can share your location in the background when you enable Always.
         NSMicrophoneUsageDescription: OpenClaw needs microphone access for voice wake.
         NSMotionUsageDescription: OpenClaw may use motion data to support device-aware interactions and automations.
         NSPhotoLibraryUsageDescription: OpenClaw needs photo library access when you choose existing photos to share with your assistant.
+        NSRemindersFullAccessUsageDescription: OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access.
         NSSpeechRecognitionUsageDescription: OpenClaw uses on-device speech recognition for voice wake.
         NSSupportsLiveActivities: true
         ITSAppUsesNonExemptEncryption: false

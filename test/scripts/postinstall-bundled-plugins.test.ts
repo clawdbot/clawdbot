@@ -221,7 +221,7 @@ describe("bundled plugin postinstall", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("patches the Baileys rc10 upload helper dispatcher guard", async () => {
+  it("patches the Baileys upload helper dispatcher guard", async () => {
     const packageRoot = await createTempDirAsync("openclaw-baileys-postinstall-");
     const mediaFile = await writeBaileysMediaFile(
       packageRoot,
@@ -266,7 +266,7 @@ describe("bundled plugin postinstall", () => {
     expect(patchedText).not.toContain("        dispatcher: agent,");
   });
 
-  it("recognizes already patched Baileys rc10 upload helpers", async () => {
+  it("recognizes already patched Baileys upload helpers", async () => {
     const packageRoot = await createTempDirAsync("openclaw-baileys-postinstall-");
     await writeBaileysMediaFile(
       packageRoot,

@@ -18,7 +18,7 @@ export function resolveActiveRunQueueAction(params: {
   if (params.resetTriggered) {
     return "run-now";
   }
-  if (params.shouldFollowup || params.queueMode === "steer" || params.queueMode === "queue") {
+  if (params.shouldFollowup) {
     return "enqueue-followup";
   }
   return "run-now";

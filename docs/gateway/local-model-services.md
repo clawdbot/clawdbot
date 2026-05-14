@@ -142,6 +142,9 @@ OpenClaw.
 
 ## ds4 example
 
+For the full setup, context sizing guidance, and verification commands, see
+[ds4](/providers/ds4).
+
 ```json5
 {
   models: {
@@ -152,18 +155,20 @@ OpenClaw.
         api: "openai-completions",
         timeoutSeconds: 300,
         localService: {
-          command: "/Users/you/Projects/oss/ds4/ds4-server",
+          command: "<DS4_DIR>/ds4-server",
           args: [
             "--model",
-            "/Users/you/Projects/oss/ds4/ds4flash.gguf",
+            "<DS4_DIR>/ds4flash.gguf",
             "--host",
             "127.0.0.1",
             "--port",
             "18000",
             "--ctx",
-            "393216",
+            "32768",
+            "--tokens",
+            "128",
           ],
-          cwd: "/Users/you/Projects/oss/ds4",
+          cwd: "<DS4_DIR>",
           healthUrl: "http://127.0.0.1:18000/v1/models",
           readyTimeoutMs: 300000,
           idleStopMs: 0,

@@ -1,4 +1,4 @@
-import { readResponseWithLimit } from "openclaw/plugin-sdk/media-runtime";
+import { saveResponseMedia, type SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import type { SsrFPolicy } from "../../runtime-api.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { inferPlaceholder } from "./shared.js";
@@ -6,17 +6,12 @@ import type { MSTeamsInboundMedia } from "./types.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
-type FetchedRemoteMedia = {
-  buffer: Buffer;
-  contentType?: string;
-};
-
 /**
  * Direct fetch path used when the caller's `fetchImpl` has already validated
  * the URL against a hostname allowlist (for example `safeFetchWithPolicy`).
  *
- * Bypasses the strict SSRF dispatcher on `fetchRemoteMedia` because:
- *   1. The pinned undici dispatcher used by `fetchRemoteMedia` is incompatible
+ * Bypasses the strict SSRF dispatcher on `readRemoteMediaBuffer` because:
+ *   1. The pinned undici dispatcher used by `readRemoteMediaBuffer` is incompatible
  *      with Node 24+'s built-in undici v7 (fails with "invalid onRequestStart
  *      method"), which silently breaks SharePoint/OneDrive downloads. See
  *      issue #63396.
@@ -24,36 +19,22 @@ type FetchedRemoteMedia = {
  *      (`safeFetch` validates every redirect hop against the hostname
  *      allowlist before following).
  */
-async function fetchRemoteMediaDirect(params: {
+async function saveRemoteMediaDirect(params: {
   url: string;
+  filePathHint: string;
   fetchImpl: FetchLike;
   maxBytes: number;
-}): Promise<FetchedRemoteMedia> {
+  contentTypeHint?: string;
+  originalFilename?: string;
+}): Promise<SavedRemoteMedia> {
   const response = await params.fetchImpl(params.url, { redirect: "follow" });
-  if (!response.ok) {
-    const statusText = response.statusText ? ` ${response.statusText}` : "";
-    throw new Error(`HTTP ${response.status}${statusText}`);
-  }
-
-  // Enforce the max-bytes cap before buffering the full body so a rogue
-  // response cannot drive RSS usage past the configured limit.
-  const contentLength = response.headers.get("content-length");
-  if (contentLength) {
-    const length = Number(contentLength);
-    if (Number.isFinite(length) && length > params.maxBytes) {
-      throw new Error(`content length ${length} exceeds maxBytes ${params.maxBytes}`);
-    }
-  }
-
-  const buffer = await readResponseWithLimit(response, params.maxBytes, {
-    onOverflow: ({ size, maxBytes }) =>
-      new Error(`payload size ${size} exceeds maxBytes ${maxBytes}`),
+  return await saveResponseMedia(response, {
+    sourceUrl: params.url,
+    filePathHint: params.filePathHint,
+    maxBytes: params.maxBytes,
+    fallbackContentType: params.contentTypeHint,
+    originalFilename: params.originalFilename,
   });
-
-  return {
-    buffer,
-    contentType: response.headers.get("content-type") ?? undefined,
-  };
 }
 
 export async function downloadAndStoreMSTeamsRemoteMedia(params: {
@@ -66,42 +47,35 @@ export async function downloadAndStoreMSTeamsRemoteMedia(params: {
   placeholder?: string;
   preserveFilenames?: boolean;
   /**
-   * Opt into a direct fetch path that bypasses `fetchRemoteMedia`'s strict
+   * Opt into a direct fetch path that bypasses `readRemoteMediaBuffer`'s strict
    * SSRF dispatcher. Required for SharePoint/OneDrive downloads on Node 24+
    * (see issue #63396). Only safe when the supplied `fetchImpl` has already
    * validated the URL against a hostname allowlist.
    */
   useDirectFetch?: boolean;
 }): Promise<MSTeamsInboundMedia> {
-  let fetched: FetchedRemoteMedia;
+  const originalFilename = params.preserveFilenames ? params.filePathHint : undefined;
+  let saved: SavedRemoteMedia;
   if (params.useDirectFetch && params.fetchImpl) {
-    fetched = await fetchRemoteMediaDirect({
+    saved = await saveRemoteMediaDirect({
       url: params.url,
+      filePathHint: params.filePathHint,
       fetchImpl: params.fetchImpl,
       maxBytes: params.maxBytes,
+      contentTypeHint: params.contentTypeHint,
+      originalFilename,
     });
   } else {
-    fetched = await getMSTeamsRuntime().channel.media.fetchRemoteMedia({
+    saved = await getMSTeamsRuntime().channel.media.saveRemoteMedia({
       url: params.url,
       fetchImpl: params.fetchImpl,
       filePathHint: params.filePathHint,
       maxBytes: params.maxBytes,
       ssrfPolicy: params.ssrfPolicy,
+      fallbackContentType: params.contentTypeHint,
+      originalFilename,
     });
   }
-  const mime = await getMSTeamsRuntime().media.detectMime({
-    buffer: fetched.buffer,
-    headerMime: fetched.contentType ?? params.contentTypeHint,
-    filePath: params.filePathHint,
-  });
-  const originalFilename = params.preserveFilenames ? params.filePathHint : undefined;
-  const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
-    fetched.buffer,
-    mime ?? params.contentTypeHint,
-    "inbound",
-    params.maxBytes,
-    originalFilename,
-  );
   return {
     path: saved.path,
     contentType: saved.contentType,

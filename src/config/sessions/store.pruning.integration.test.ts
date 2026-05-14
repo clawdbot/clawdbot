@@ -17,6 +17,7 @@ vi.mock("../config.js", async () => ({
 
 import { getRuntimeConfig } from "../config.js";
 import { runSessionsCleanup } from "./cleanup-service.js";
+import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
@@ -714,6 +715,38 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded).toHaveProperty(threadKey);
     expect(loaded).toHaveProperty(topicKey);
     expect(loaded["session-74"]).toBeUndefined();
+  });
+
+  it("explicit loadSessionStore maintenance preserves runtime-provided subagent sessions", async () => {
+    const now = Date.now();
+    const childKey = "agent:main:subagent:pending-delivery";
+    const store = Object.fromEntries(
+      Array.from({ length: 75 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
+    );
+    store[childKey] = {
+      ...makeEntry(now - 100 * DAY_MS),
+      spawnedBy: "agent:main:slack:direct:U1",
+    };
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+    const unregister = registerSessionMaintenancePreserveKeysProvider(() => [childKey]);
+
+    try {
+      const loaded = loadSessionStore(storePath, {
+        skipCache: true,
+        runMaintenance: true,
+        maintenanceConfig: {
+          ...ENFORCED_MAINTENANCE_OVERRIDE,
+          maxEntries: 50,
+          pruneAfterMs: 365 * DAY_MS,
+        },
+      });
+
+      expect(Object.keys(loaded)).toHaveLength(50);
+      expect(loaded).toHaveProperty(childKey);
+      expect(loaded["session-74"]).toBeUndefined();
+    } finally {
+      unregister();
+    }
   });
 
   it("persists quota suspension TTL transitions through writer maintenance", async () => {

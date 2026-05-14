@@ -570,6 +570,22 @@ describe("update global helpers", () => {
       "-g",
       "openclaw@latest",
     ]);
+    expect(globalInstallArgs("pnpm", "github:openclaw/openclaw#release/2026.5.12")).toEqual([
+      "pnpm",
+      "add",
+      "-g",
+      "--allow-build=openclaw",
+      "github:openclaw/openclaw#release/2026.5.12",
+    ]);
+    expect(
+      globalInstallArgs("pnpm", "openclaw@git+https://github.com/openclaw/openclaw.git"),
+    ).toEqual([
+      "pnpm",
+      "add",
+      "-g",
+      "--allow-build=openclaw",
+      "openclaw@git+https://github.com/openclaw/openclaw.git",
+    ]);
     expect(globalInstallArgs("bun", "openclaw@latest")).toEqual([
       "bun",
       "add",
@@ -598,6 +614,22 @@ describe("update global helpers", () => {
       "--global-dir",
       "/opt/pnpm-global",
       "openclaw@latest",
+    ]);
+    expect(
+      globalInstallArgs(
+        "pnpm",
+        "github:openclaw/openclaw#release/2026.5.12",
+        null,
+        "/opt/pnpm-global",
+      ),
+    ).toEqual([
+      "pnpm",
+      "add",
+      "-g",
+      "--global-dir",
+      "/opt/pnpm-global",
+      "--allow-build=openclaw",
+      "github:openclaw/openclaw#release/2026.5.12",
     ]);
   });
 

@@ -321,6 +321,20 @@ export type DiscordAccountConfig = {
   /** Allow bot-authored messages to trigger replies (default: false). Set "mentions" to gate on mentions. */
   allowBots?: boolean | "mentions";
   /**
+   * Sliding-window guard that suppresses runaway two-bot exchanges. Default on
+   * whenever `allowBots` lets bot messages reach dispatch. See #58789.
+   */
+  botLoopProtection?: {
+    /** Enable the bot-pair sliding-window guard (default: true when allowBots is set). */
+    enabled?: boolean;
+    /** Maximum messages a single bot pair may exchange in the configured window. Default: 20. */
+    maxEventsPerWindow?: number;
+    /** Sliding window length in seconds. Default: 60. */
+    windowSeconds?: number;
+    /** Cooldown seconds applied to a bot pair after the limit is hit. Default: 60. */
+    cooldownSeconds?: number;
+  };
+  /**
    * Break-glass override: allow mutable identity matching (names/tags/slugs) in allowlists.
    * Default behavior is ID-only matching.
    */

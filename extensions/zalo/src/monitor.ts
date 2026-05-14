@@ -378,13 +378,7 @@ async function handleImageMessage(params: ZaloImageMessageParams): Promise<void>
   if (photo_url) {
     try {
       const maxBytes = mediaMaxMb * 1024 * 1024;
-      const fetched = await core.channel.media.fetchRemoteMedia({ url: photo_url, maxBytes });
-      const saved = await core.channel.media.saveMediaBuffer(
-        fetched.buffer,
-        fetched.contentType,
-        "inbound",
-        maxBytes,
-      );
+      const saved = await core.channel.media.saveRemoteMedia({ url: photo_url, maxBytes });
       mediaPath = saved.path;
       mediaType = saved.contentType;
     } catch (err) {

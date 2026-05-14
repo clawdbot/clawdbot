@@ -9,6 +9,7 @@ import {
   canFinalizeMattermostPreviewInPlace,
   deliverMattermostReplyWithDraftPreview,
   evaluateMattermostMentionGate,
+  formatMattermostFinalDeliveryOutcomeLog,
   MattermostRetryableInboundError,
   processMattermostReplayGuardedPost,
   resolveMattermostReactionChannelId,
@@ -552,6 +553,74 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).not.toHaveBeenCalled();
     expect(updateMattermostPostSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("formatMattermostFinalDeliveryOutcomeLog", () => {
+  it("logs delivered only for visible text and media outcomes", () => {
+    expect(
+      formatMattermostFinalDeliveryOutcomeLog({
+        outcome: "text",
+        payload: { text: "hello" } as never,
+        to: "channel:town-square",
+        accountId: "default",
+        agentId: "agent-1",
+      }),
+    ).toBe("delivered reply to channel:town-square");
+
+    expect(
+      formatMattermostFinalDeliveryOutcomeLog({
+        outcome: "media",
+        payload: { mediaUrl: "https://example.com/a.png" } as never,
+        to: "channel:town-square",
+        accountId: "default",
+        agentId: "agent-1",
+      }),
+    ).toBe("delivered reply to channel:town-square");
+  });
+
+  it("does not log delivered for empty no-send outcomes without diagnostic violations", () => {
+    expect(
+      formatMattermostFinalDeliveryOutcomeLog({
+        outcome: "empty",
+        payload: { text: "  \n\t " } as never,
+        to: "channel:town-square",
+        accountId: "default",
+        agentId: "agent-1",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("logs a diagnostic for substantive empty outcomes", () => {
+    expect(
+      formatMattermostFinalDeliveryOutcomeLog({
+        outcome: "empty",
+        payload: { text: "work result" } as never,
+        to: "channel:town-square",
+        accountId: "default",
+        agentId: "agent-1",
+      }),
+    ).toBe(
+      "mattermost no-visible-reply: no-visible-reply-after-final-delivery" +
+        " to=channel:town-square" +
+        " accountId=default" +
+        " agentId=agent-1" +
+        " outcome=empty" +
+        " finalTextLength=11" +
+        " mediaUrlCount=0",
+    );
+  });
+
+  it("does not log reasoning-suppressed outcomes", () => {
+    expect(
+      formatMattermostFinalDeliveryOutcomeLog({
+        outcome: "reasoning_skipped",
+        payload: { text: "Reasoning: hidden" } as never,
+        to: "channel:town-square",
+        accountId: "default",
+        agentId: "agent-1",
+      }),
+    ).toBeUndefined();
   });
 });
 

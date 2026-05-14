@@ -13,7 +13,7 @@ const { getMatrixDeviceHealth, listMatrixOwnDevices, pruneMatrixStaleGatewayDevi
 
 function expectResolvedActionClientCall(): void {
   expect(withResolvedActionClientMock).toHaveBeenCalledTimes(1);
-  const call = withResolvedActionClientMock.mock.calls.at(0);
+  const call = withResolvedActionClientMock.mock.calls[0];
   if (!call) {
     throw new Error("Expected resolved action client call");
   }

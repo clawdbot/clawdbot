@@ -25,6 +25,7 @@ import {
 } from "./app-render.helpers.ts";
 import { warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
   controlUiNowMs,
   recordControlUiRenderTiming,
@@ -984,6 +985,8 @@ export function renderApp(state: AppViewState) {
     onClearCustomTheme: () => state.clearCustomTheme(),
     borderRadius: state.settings.borderRadius,
     setBorderRadius: (value) => state.setBorderRadius(value),
+    textScale: state.settings.textScale ?? 100,
+    setTextScale: (value) => state.setTextScale(value),
     gatewayUrl: state.settings.gatewayUrl,
     assistantName: state.assistantName,
     configPath: state.configSnapshot?.path ?? null,
@@ -1142,6 +1145,7 @@ export function renderApp(state: AppViewState) {
             hasCustomTheme: Boolean(state.settings.customTheme),
             customThemeLabel: state.settings.customTheme?.label ?? null,
             borderRadius: state.settings.borderRadius,
+            textScale: state.settings.textScale ?? 100,
             setTheme: (theme, context) => state.setTheme(theme, context),
             onOpenCustomThemeImport: () => {
               state.setTab("appearance");
@@ -1154,6 +1158,7 @@ export function renderApp(state: AppViewState) {
             },
             setThemeMode: (mode, context) => state.setThemeMode(mode, context),
             setBorderRadius: (value) => state.setBorderRadius(value),
+            setTextScale: (value) => state.setTextScale(value),
             userAvatar: state.userAvatar ?? null,
             onUserAvatarChange: (avatar) => state.applyLocalUserIdentity?.({ avatar }),
             assistantAvatar: configAssistantAvatar,
@@ -2490,6 +2495,7 @@ export function renderApp(state: AppViewState) {
                   canSend: state.connected,
                   disabledReason: chatDisabledReason,
                   error: state.lastError,
+                  runStatus: state.chatRunStatus,
                   onDismissError: () => dismissChatError(state),
                   sessions: state.sessionsResult,
                   focusMode: chatFocus,
@@ -2544,12 +2550,25 @@ export function renderApp(state: AppViewState) {
                     if (!state.client || !state.connected) {
                       return;
                     }
+                    const hadActiveRun = hasAbortableSessionRun(state);
                     try {
                       await state.client.request("sessions.reset", { key: state.sessionKey });
                       state.chatMessages = [];
                       state.chatSideResult = null;
-                      state.chatStream = null;
-                      state.chatRunId = null;
+                      reconcileChatRunLifecycle(
+                        state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+                        {
+                          outcome: hadActiveRun ? "interrupted" : undefined,
+                          sessionStatus: "killed",
+                          runId: state.chatRunId,
+                          sessionKey: state.sessionKey,
+                          clearLocalRun: true,
+                          clearChatStream: true,
+                          clearToolStream: true,
+                          clearSideResultTerminalRuns: true,
+                          clearRunStatus: !hadActiveRun,
+                        },
+                      );
                       await loadChatHistory(state);
                     } catch (err) {
                       state.lastError = String(err);

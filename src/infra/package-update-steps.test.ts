@@ -477,36 +477,53 @@ describe("runGlobalPackageUpdateSteps", () => {
         await fs.mkdir(path.dirname(targetShim), { recursive: true });
         await fs.writeFile(targetShim, "old shim\n", "utf8");
 
-        const result = await runGlobalPackageUpdateSteps({
-          installTarget: createNpmTarget(globalRoot),
-          installSpec: "openclaw@2.0.0",
-          packageName: "openclaw",
-          packageRoot,
-          runCommand: createRootRunner(globalRoot),
-          runStep: async ({ name, argv, cwd }) => {
-            const prefixIndex = argv.indexOf("--prefix");
-            const stagePrefix = argv[prefixIndex + 1];
-            if (!stagePrefix) {
-              throw new Error("missing staged prefix");
+        let stagedShimForFailure: string | undefined;
+        const realCopyFile = fs.copyFile.bind(fs);
+        const copyFileSpy = vi
+          .spyOn(fs, "copyFile")
+          .mockImplementation(async (...args: Parameters<typeof fs.copyFile>) => {
+            const [source] = args;
+            if (stagedShimForFailure && String(source) === stagedShimForFailure) {
+              throw createFsError("EACCES", "staged shim copy failed");
             }
-            await writePackageRoot(
-              path.join(stagePrefix, "lib", "node_modules", "openclaw"),
-              "2.0.0",
-            );
-            const stagedShim = path.join(stagePrefix, "bin", "openclaw");
-            await fs.mkdir(path.dirname(stagedShim), { recursive: true });
-            await fs.writeFile(stagedShim, "new shim\n", "utf8");
-            await fs.chmod(stagedShim, 0);
-            return {
-              name,
-              command: argv.join(" "),
-              cwd: cwd ?? process.cwd(),
-              durationMs: 1,
-              exitCode: 0,
-            };
-          },
-          timeoutMs: 1000,
-        });
+            return await realCopyFile(...args);
+          });
+
+        let result: Awaited<ReturnType<typeof runGlobalPackageUpdateSteps>>;
+        try {
+          result = await runGlobalPackageUpdateSteps({
+            installTarget: createNpmTarget(globalRoot),
+            installSpec: "openclaw@2.0.0",
+            packageName: "openclaw",
+            packageRoot,
+            runCommand: createRootRunner(globalRoot),
+            runStep: async ({ name, argv, cwd }) => {
+              const prefixIndex = argv.indexOf("--prefix");
+              const stagePrefix = argv[prefixIndex + 1];
+              if (!stagePrefix) {
+                throw new Error("missing staged prefix");
+              }
+              await writePackageRoot(
+                path.join(stagePrefix, "lib", "node_modules", "openclaw"),
+                "2.0.0",
+              );
+              const stagedShim = path.join(stagePrefix, "bin", "openclaw");
+              stagedShimForFailure = stagedShim;
+              await fs.mkdir(path.dirname(stagedShim), { recursive: true });
+              await fs.writeFile(stagedShim, "new shim\n", "utf8");
+              return {
+                name,
+                command: argv.join(" "),
+                cwd: cwd ?? process.cwd(),
+                durationMs: 1,
+                exitCode: 0,
+              };
+            },
+            timeoutMs: 1000,
+          });
+        } finally {
+          copyFileSpy.mockRestore();
+        }
 
         expect(result.failedStep?.name).toBe("global install swap");
         expect(result.verifiedPackageRoot).toBe(packageRoot);

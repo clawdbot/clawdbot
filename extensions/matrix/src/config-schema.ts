@@ -45,12 +45,23 @@ const matrixExecApprovalsSchema = z
   })
   .optional();
 
+const botLoopProtectionSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    maxEventsPerWindow: z.number().int().positive().optional(),
+    windowSeconds: z.number().int().positive().optional(),
+    cooldownSeconds: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 const matrixRoomSchema = z
   .object({
     account: z.string().optional(),
     enabled: z.boolean().optional(),
     requireMention: z.boolean().optional(),
     allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
+    botLoopProtection: botLoopProtectionSchema,
     tools: ToolPolicySchema,
     autoReply: z.boolean().optional(),
     users: AllowFromListSchema,
@@ -107,6 +118,7 @@ export const MatrixConfigSchema = z.object({
   allowlistOnly: z.boolean().optional(),
   dangerouslyAllowNameMatching: z.boolean().optional(),
   allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
+  botLoopProtection: botLoopProtectionSchema,
   groupPolicy: GroupPolicySchema.optional(),
   contextVisibility: ContextVisibilityModeSchema.optional(),
   blockStreaming: z.boolean().optional(),

@@ -1,10 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RecordInboundSession } from "../session.types.js";
+import type { ChannelTurnResult, DispatchedChannelTurnResult } from "./kernel.js";
 import {
+  clearChannelBotPairLoopGuardForTests,
   createNoopChannelTurnDeliveryAdapter,
   dispatchAssembledChannelTurn,
   hasFinalChannelTurnDispatch,
@@ -13,6 +15,7 @@ import {
   runPreparedChannelTurn,
   runChannelTurn,
 } from "./kernel.js";
+import type { PreparedChannelTurn } from "./types.js";
 
 const deliverOutboundPayloads = vi.hoisted(() => vi.fn());
 const resolveOutboundDurableFinalDeliverySupport = vi.hoisted(() => vi.fn());
@@ -173,7 +176,25 @@ function loggedEvents(log: ReturnType<typeof vi.fn>): TurnLogEvent[] {
 describe("channel turn kernel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearChannelBotPairLoopGuardForTests();
     resolveOutboundDurableFinalDeliverySupport.mockResolvedValue({ ok: true });
+  });
+
+  it("types optionally guarded prepared turns as drop-capable", () => {
+    type DispatchResult = { queuedFinal: true };
+    const guarded = {} as PreparedChannelTurn<DispatchResult>;
+    const unguarded = {} as Omit<PreparedChannelTurn<DispatchResult>, "botLoopProtection"> & {
+      botLoopProtection?: undefined;
+    };
+
+    if (Date.now() < 0) {
+      expectTypeOf(runPreparedChannelTurn(guarded)).toEqualTypeOf<
+        Promise<ChannelTurnResult<DispatchResult>>
+      >();
+      expectTypeOf(runPreparedChannelTurn(unguarded)).toEqualTypeOf<
+        Promise<DispatchedChannelTurnResult<DispatchResult>>
+      >();
+    }
   });
 
   it("routes assembled final replies through durable outbound delivery", async () => {
@@ -572,6 +593,61 @@ describe("channel turn kernel", () => {
     ]);
   });
 
+  it("drops direct prepared turns with bot-loop protection before record and dispatch", async () => {
+    const events: string[] = [];
+    const log = vi.fn();
+    const recordInboundSession = createRecordInboundSession(events);
+    const runDispatch = vi.fn(async () => {
+      events.push("dispatch");
+      return {
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+      };
+    });
+    const botLoopProtection = {
+      scopeId: "prepared-loop-test",
+      conversationId: "room",
+      senderId: "bot-a",
+      receiverId: "bot-b",
+      config: { maxEventsPerWindow: 1, windowSeconds: 60, cooldownSeconds: 60 },
+      defaultEnabled: true,
+    };
+
+    const first = await runPreparedChannelTurn({
+      channel: "test",
+      routeSessionKey: "agent:main:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession,
+      runDispatch,
+      botLoopProtection: { ...botLoopProtection, nowMs: 1_000 },
+    });
+    const second = await runPreparedChannelTurn({
+      channel: "test",
+      routeSessionKey: "agent:main:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession,
+      runDispatch,
+      log,
+      messageId: "msg-loop",
+      botLoopProtection: { ...botLoopProtection, nowMs: 1_001 },
+    });
+
+    expect(first.dispatched).toBe(true);
+    expect(second).toMatchObject({
+      admission: { kind: "drop", reason: "bot-loop-protection" },
+      dispatched: false,
+      routeSessionKey: "agent:main:test:peer",
+    });
+    expect(events).toEqual(["record", "dispatch"]);
+    expect(recordInboundSession).toHaveBeenCalledTimes(1);
+    expect(runDispatch).toHaveBeenCalledTimes(1);
+    expect(loggedEvents(log)).toEqual([
+      { stage: "authorize", event: "drop", messageId: "msg-loop" },
+    ]);
+  });
+
   it("suppresses direct prepared dispatches for observe-only admission", async () => {
     const events: string[] = [];
     const recordInboundSession = createRecordInboundSession(events);
@@ -746,6 +822,65 @@ describe("channel turn kernel", () => {
     });
     expect(result.dispatched).toBe(false);
     expect(resolveTurn).not.toHaveBeenCalled();
+  });
+
+  it("drops repeated bot-pair turns in the core turn kernel before record and dispatch", async () => {
+    const events: string[] = [];
+    const onFinalize = vi.fn();
+    let nowMs = 1_000;
+    const runOne = async (id: string) =>
+      await runChannelTurn({
+        channel: "test",
+        accountId: "acct",
+        raw: { id },
+        adapter: {
+          ingest: () => ({ id, rawText: "hello" }),
+          resolveTurn: () => ({
+            channel: "test",
+            accountId: "acct",
+            routeSessionKey: "agent:main:test:peer",
+            storePath: "/tmp/sessions.json",
+            ctxPayload: createCtx(),
+            recordInboundSession: createRecordInboundSession(events),
+            botLoopProtection: {
+              scopeId: "acct",
+              conversationId: "room",
+              senderId: "bot-a",
+              receiverId: "bot-b",
+              config: { maxEventsPerWindow: 1, windowSeconds: 60, cooldownSeconds: 60 },
+              defaultEnabled: true,
+              nowMs: nowMs++,
+            },
+            runDispatch: async () => {
+              events.push("custom-dispatch");
+              return {
+                queuedFinal: true,
+                counts: { tool: 0, block: 0, final: 1 },
+              };
+            },
+          }),
+          onFinalize,
+        },
+      });
+
+    const first = await runOne("msg-1");
+    const second = await runOne("msg-2");
+
+    expect(first.dispatched).toBe(true);
+    expect(second).toEqual({
+      admission: { kind: "drop", reason: "bot-loop-protection" },
+      dispatched: false,
+      ctxPayload: createCtx(),
+      routeSessionKey: "agent:main:test:peer",
+    });
+    expect(events).toEqual(["record", "custom-dispatch"]);
+    expect(onFinalize).toHaveBeenCalledTimes(2);
+    const [, suppressed] = onFinalize.mock.calls;
+    expect(suppressed?.[0]).toMatchObject({
+      admission: { kind: "drop", reason: "bot-loop-protection" },
+      dispatched: false,
+      routeSessionKey: "agent:main:test:peer",
+    });
   });
 
   it("runs observe-only preflights through resolve, record, dispatch, and finalize without visible delivery", async () => {

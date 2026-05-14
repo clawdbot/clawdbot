@@ -21,16 +21,16 @@ let createTelegramBotRef: typeof import("./bot.js").createTelegramBot;
 let replySpyRef: ReturnType<typeof vi.fn>;
 let onSpyRef: Mock;
 let sendChatActionSpyRef: Mock;
-let fetchRemoteMediaSpyRef: Mock;
+let readRemoteMediaBufferSpyRef: Mock;
 let undiciFetchSpyRef: Mock;
-let resetFetchRemoteMediaMockRef: () => void;
+let resetReadRemoteMediaBufferMockRef: () => void;
 
 type FetchMockHandle = Mock & { mockRestore: () => void };
 
 function createFetchMockHandle(): FetchMockHandle {
-  return Object.assign(fetchRemoteMediaSpyRef, {
+  return Object.assign(readRemoteMediaBufferSpyRef, {
     mockRestore: () => {
-      resetFetchRemoteMediaMockRef();
+      resetReadRemoteMediaBufferMockRef();
     },
   }) as FetchMockHandle;
 }
@@ -88,7 +88,7 @@ export function mockTelegramFileDownload(params: {
       headers: { "content-type": params.contentType },
     }),
   );
-  fetchRemoteMediaSpyRef.mockResolvedValueOnce({
+  readRemoteMediaBufferSpyRef.mockResolvedValueOnce({
     buffer: Buffer.from(params.bytes),
     contentType: params.contentType,
     fileName: "mock-file",
@@ -103,7 +103,7 @@ export function mockTelegramPngDownload(): FetchMockHandle {
       headers: { "content-type": "image/png" },
     }),
   );
-  fetchRemoteMediaSpyRef.mockResolvedValue({
+  readRemoteMediaBufferSpyRef.mockResolvedValue({
     buffer: Buffer.from(new Uint8Array([0x89, 0x50, 0x4e, 0x47])),
     contentType: "image/png",
     fileName: "mock-file.png",
@@ -118,9 +118,9 @@ export function watchTelegramFetch(): FetchMockHandle {
 async function loadTelegramBotHarness() {
   onSpyRef = harness.onSpy;
   sendChatActionSpyRef = harness.sendChatActionSpy;
-  fetchRemoteMediaSpyRef = harness.fetchRemoteMediaSpy;
+  readRemoteMediaBufferSpyRef = harness.readRemoteMediaBufferSpy;
   undiciFetchSpyRef = harness.undiciFetchSpy;
-  resetFetchRemoteMediaMockRef = harness.resetFetchRemoteMediaMock;
+  resetReadRemoteMediaBufferMockRef = harness.resetReadRemoteMediaBufferMock;
   const botModule = await import("./bot.js");
   botModule.setTelegramBotRuntimeForTest(
     harness.telegramBotRuntimeForTest as unknown as Parameters<

@@ -63,6 +63,21 @@ describe("isNonRecoverableAuthError", () => {
     );
   });
 
+  it("allows reconnect for PAIRING_REQUIRED when retry hints keep reconnect active", () => {
+    expect(
+      isNonRecoverableAuthError({
+        code: "connect_failed",
+        message: "auth failed",
+        details: {
+          code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+          reason: "not-paired",
+          recommendedNextStep: "wait_then_retry",
+          pauseReconnect: false,
+        },
+      }),
+    ).toBe(false);
+  });
+
   it("allows reconnect for AUTH_TOKEN_MISMATCH (device-token fallback flow)", () => {
     // Browser client can queue a single trusted-device retry after shared token mismatch.
     // Blocking reconnect on mismatch here would skip that bounded recovery attempt.

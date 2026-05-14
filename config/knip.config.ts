@@ -66,7 +66,6 @@ const rootBundledPluginRuntimeDependencies = [
   "@slack/bolt",
   "@slack/types",
   "@slack/web-api",
-  "audio-decode",
   "grammy",
   "linkedom",
   "minimatch",

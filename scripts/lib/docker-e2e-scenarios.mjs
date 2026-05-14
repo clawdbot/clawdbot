@@ -11,6 +11,8 @@ const RELEASE_OPENWEBUI_COMMAND =
   "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENWEBUI_SMOKE_MODE=models OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui";
 export const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS = 24;
 const upgradeSurvivorCommand = "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:upgrade-survivor";
+const rootManagedVpsUpgradeCommand =
+  "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:root-managed-vps-upgrade";
 const updateRestartAuthCommand =
   "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-restart-auth";
 
@@ -236,6 +238,56 @@ export const mainLanes = [
     "OPENCLAW_NPM_ONBOARD_CHANNEL=slack OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
     { resources: ["service"], stateScenario: "empty", weight: 3 },
   ),
+  npmLane(
+    "release-user-journey",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:release-user-journey",
+    {
+      resources: ["npm", "service"],
+      stateScenario: "empty",
+      timeoutMs: 20 * 60 * 1000,
+      weight: 4,
+    },
+  ),
+  npmLane(
+    "release-typed-onboarding",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:release-typed-onboarding",
+    {
+      resources: ["npm", "service"],
+      stateScenario: "empty",
+      timeoutMs: 20 * 60 * 1000,
+      weight: 3,
+    },
+  ),
+  npmLane(
+    "release-media-memory",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:release-media-memory",
+    {
+      resources: ["npm", "service"],
+      stateScenario: "empty",
+      timeoutMs: 20 * 60 * 1000,
+      weight: 3,
+    },
+  ),
+  npmLane(
+    "release-upgrade-user-journey",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:release-upgrade-user-journey",
+    {
+      resources: ["npm", "service"],
+      stateScenario: "empty",
+      timeoutMs: 30 * 60 * 1000,
+      weight: 5,
+    },
+  ),
+  npmLane(
+    "release-plugin-marketplace",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:release-plugin-marketplace",
+    {
+      resources: ["npm"],
+      stateScenario: "empty",
+      timeoutMs: 20 * 60 * 1000,
+      weight: 3,
+    },
+  ),
   serviceLane("gateway-network", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gateway-network"),
   serviceLane(
     "agents-delete-shared-workspace",
@@ -295,6 +347,11 @@ export const mainLanes = [
       weight: 3,
     },
   ),
+  npmLane("root-managed-vps-upgrade", rootManagedVpsUpgradeCommand, {
+    stateScenario: "upgrade-survivor",
+    timeoutMs: 25 * 60 * 1000,
+    weight: 3,
+  }),
   npmLane("update-restart-auth", updateRestartAuthCommand, {
     stateScenario: "upgrade-survivor",
     timeoutMs: 25 * 60 * 1000,
@@ -379,6 +436,17 @@ export const tailLanes = [
     timeoutMs: LIVE_ACP_TIMEOUT_MS,
     weight: 3,
   }),
+  liveLane(
+    "live-subagent-announce",
+    liveDockerScriptCommand("test-live-subagent-announce-docker.sh"),
+    {
+      cacheKey: "subagent-announce",
+      provider: "openai",
+      resources: ["npm"],
+      timeoutMs: 25 * 60 * 1000,
+      weight: 3,
+    },
+  ),
   liveLane(
     "live-codex-bind",
     liveDockerScriptCommand(
@@ -625,6 +693,11 @@ const releasePathPackageUpdateCoreLanes = [
       weight: 3,
     },
   ),
+  npmLane("root-managed-vps-upgrade", rootManagedVpsUpgradeCommand, {
+    stateScenario: "upgrade-survivor",
+    timeoutMs: 25 * 60 * 1000,
+    weight: 3,
+  }),
   npmLane("update-restart-auth", updateRestartAuthCommand, {
     stateScenario: "upgrade-survivor",
     timeoutMs: 25 * 60 * 1000,

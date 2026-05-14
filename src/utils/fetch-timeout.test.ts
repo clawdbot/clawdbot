@@ -9,7 +9,7 @@ vi.mock("../logging/subsystem.js", () => ({
   })),
 }));
 
-import { buildTimeoutAbortSignal } from "./fetch-timeout.js";
+import { buildTimeoutAbortSignal, fetchWithTimeout } from "./fetch-timeout.js";
 
 function requireWarnCall(callIndex: number): [string, Record<string, unknown>] {
   const call = warn.mock.calls[callIndex];
@@ -142,6 +142,29 @@ describe("buildTimeoutAbortSignal", () => {
     cleanup();
   });
 
+  it("tags fetch timeout aborts so callers can distinguish them from parent aborts", async () => {
+    const fetchFn = vi.fn<typeof fetch>(
+      async (_input, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (!signal) {
+            reject(new Error("missing signal"));
+            return;
+          }
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        }),
+    );
+
+    const result = fetchWithTimeout("https://example.com/v1/audio", {}, 25, fetchFn);
+    const assertion = expect(result).rejects.toMatchObject({
+      name: "TimeoutError",
+      message: "request timed out",
+    });
+    await vi.advanceTimersByTimeAsync(25);
+
+    await assertion;
+  });
+
   it("does not log when a parent signal aborts first", async () => {
     const parent = new AbortController();
     const { signal, cleanup } = buildTimeoutAbortSignal({
@@ -154,6 +177,7 @@ describe("buildTimeoutAbortSignal", () => {
     await vi.advanceTimersByTimeAsync(25);
 
     expect(signal?.aborted).toBe(true);
+    expect(signal?.reason).not.toMatchObject({ name: "TimeoutError" });
     expect(warn).not.toHaveBeenCalled();
 
     cleanup();

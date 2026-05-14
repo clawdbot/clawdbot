@@ -10,6 +10,7 @@ import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { detectMime } from "openclaw/plugin-sdk/media-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import WebSocket from "ws";
 
 export type ContainerRpcOptions = {
@@ -105,36 +106,9 @@ async function readCappedResponseBuffer(res: Response, maxResponseBytes: number)
   if (contentLength !== undefined && contentLength > maxResponseBytes) {
     throw new Error("Signal REST attachment exceeded size limit");
   }
-
-  const reader = res.body?.getReader();
-  if (!reader) {
-    const arrayBuffer = await res.arrayBuffer();
-    if (arrayBuffer.byteLength > maxResponseBytes) {
-      throw new Error("Signal REST attachment exceeded size limit");
-    }
-    return Buffer.from(arrayBuffer);
-  }
-
-  const chunks: Buffer[] = [];
-  let totalBytes = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      const chunk = Buffer.from(value ?? new Uint8Array());
-      totalBytes += chunk.byteLength;
-      if (totalBytes > maxResponseBytes) {
-        await reader.cancel().catch(() => {});
-        throw new Error("Signal REST attachment exceeded size limit");
-      }
-      chunks.push(chunk);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  return Buffer.concat(chunks);
+  return await readResponseWithLimit(res, maxResponseBytes, {
+    onOverflow: () => new Error("Signal REST attachment exceeded size limit"),
+  });
 }
 
 /**

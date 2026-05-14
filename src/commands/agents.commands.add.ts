@@ -15,7 +15,10 @@ import {
   loadPersistedAuthProfileStore,
 } from "../agents/auth-profiles/persisted.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { commitConfigWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
+import {
+  commitConfigWithPendingPluginInstalls,
+  transformConfigWithPendingPluginInstalls,
+} from "../cli/plugins-install-record-commit.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { saveJsonFile } from "../infra/json-file.js";
@@ -52,6 +55,24 @@ type AgentsAddOptions = {
   nonInteractive?: boolean;
   json?: boolean;
 };
+
+type AgentBindingResult = ReturnType<typeof applyAgentBindings>;
+
+type AgentsAddMutationResult = {
+  agentDir: string;
+  bindingResult: AgentBindingResult;
+};
+
+class AgentsAddMutationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentsAddMutationError";
+  }
+}
+
+function emptyBindingResult(config: Parameters<typeof applyAgentBindings>[0]): AgentBindingResult {
+  return { config, added: [], updated: [], skipped: [], conflicts: [] };
+}
 
 async function copyPortableAuthProfiles(params: {
   destAuthPath: string;
@@ -147,44 +168,64 @@ export async function agentsAddCommand(
     }
 
     const workspaceDir = resolveUserPath(workspaceFlag);
-    const agentDir = opts.agentDir?.trim()
+    const explicitAgentDir = opts.agentDir?.trim()
       ? resolveUserPath(opts.agentDir.trim())
-      : resolveAgentDir(cfg, agentId);
+      : undefined;
     const model = opts.model?.trim();
-    const nextConfig = applyAgentConfig(cfg, {
-      agentId,
-      name: nameInput,
-      workspace: workspaceDir,
-      agentDir,
-      ...(model ? { model } : {}),
-    });
 
-    const bindingParse = parseBindingSpecs({
-      agentId,
-      specs: opts.bind,
-      config: nextConfig,
-    });
-    if (bindingParse.errors.length > 0) {
-      runtime.error(bindingParse.errors.join("\n"));
-      runtime.exit(1);
-      return;
+    let committed;
+    try {
+      committed = await transformConfigWithPendingPluginInstalls<AgentsAddMutationResult>({
+        transform: (latestConfig) => {
+          if (findAgentEntryIndex(listAgentEntries(latestConfig), agentId) >= 0) {
+            throw new AgentsAddMutationError(`Agent "${agentId}" already exists.`);
+          }
+          const agentDir = explicitAgentDir ?? resolveAgentDir(latestConfig, agentId);
+          const nextConfig = applyAgentConfig(latestConfig, {
+            agentId,
+            name: nameInput,
+            workspace: workspaceDir,
+            agentDir,
+            ...(model ? { model } : {}),
+          });
+          const bindingParse = parseBindingSpecs({
+            agentId,
+            specs: opts.bind,
+            config: nextConfig,
+          });
+          if (bindingParse.errors.length > 0) {
+            throw new AgentsAddMutationError(bindingParse.errors.join("\n"));
+          }
+          const bindingResult =
+            bindingParse.bindings.length > 0
+              ? applyAgentBindings(nextConfig, bindingParse.bindings)
+              : emptyBindingResult(nextConfig);
+          return {
+            nextConfig: bindingResult.config,
+            result: { agentDir, bindingResult },
+          };
+        },
+      });
+    } catch (err) {
+      if (err instanceof AgentsAddMutationError) {
+        runtime.error(err.message);
+        runtime.exit(1);
+        return;
+      }
+      throw err;
     }
-    const bindingResult =
-      bindingParse.bindings.length > 0
-        ? applyAgentBindings(nextConfig, bindingParse.bindings)
-        : { config: nextConfig, added: [], updated: [], skipped: [], conflicts: [] };
-
-    await commitConfigWithPendingPluginInstalls({
-      nextConfig: bindingResult.config,
-      ...(baseHash !== undefined ? { baseHash } : {}),
-    });
+    const mutationResult = committed.result;
+    if (!mutationResult) {
+      throw new Error("Agent config mutation did not return a result.");
+    }
+    const { agentDir, bindingResult } = mutationResult;
     if (!opts.json) {
       logConfigUpdated(runtime);
     }
     const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
     await ensureWorkspaceAndSessions(workspaceDir, quietRuntime, {
-      skipBootstrap: Boolean(bindingResult.config.agents?.defaults?.skipBootstrap),
-      skipOptionalBootstrapFiles: bindingResult.config.agents?.defaults?.skipOptionalBootstrapFiles,
+      skipBootstrap: Boolean(committed.nextConfig.agents?.defaults?.skipBootstrap),
+      skipOptionalBootstrapFiles: committed.nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
       agentId,
     });
 

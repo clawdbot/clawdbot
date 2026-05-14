@@ -144,6 +144,86 @@ function isTrulyEmptySchema(schemaRecord: Record<string, unknown>): boolean {
   return Object.keys(schemaRecord).length === 0;
 }
 
+function normalizeArraySchemasMissingItems(schema: unknown): unknown {
+  if (!isSchemaRecord(schema)) {
+    return schema;
+  }
+
+  let changed = false;
+  const nextSchema: Record<string, unknown> = { ...schema };
+  if (nextSchema.type === "array" && nextSchema.items === undefined) {
+    nextSchema.items = {};
+    changed = true;
+  }
+
+  const normalizeSchemaValue = (key: string): void => {
+    if (!(key in nextSchema)) {
+      return;
+    }
+    const value = nextSchema[key];
+    if (Array.isArray(value)) {
+      const normalized = value.map(normalizeArraySchemasMissingItems);
+      if (normalized.some((entry, index) => entry !== value[index])) {
+        nextSchema[key] = normalized;
+        changed = true;
+      }
+      return;
+    }
+
+    const normalized = normalizeArraySchemasMissingItems(value);
+    if (normalized !== value) {
+      nextSchema[key] = normalized;
+      changed = true;
+    }
+  };
+
+  for (const key of [
+    "items",
+    "contains",
+    "additionalProperties",
+    "propertyNames",
+    "not",
+    "if",
+    "then",
+    "else",
+  ]) {
+    normalizeSchemaValue(key);
+  }
+
+  for (const key of ["anyOf", "oneOf", "allOf", "prefixItems"]) {
+    normalizeSchemaValue(key);
+  }
+
+  for (const key of [
+    "properties",
+    "patternProperties",
+    "dependentSchemas",
+    "$defs",
+    "definitions",
+  ]) {
+    const value = nextSchema[key];
+    if (!isSchemaRecord(value)) {
+      continue;
+    }
+    let entriesChanged = false;
+    const normalizedEntries: Array<[string, unknown]> = Object.entries(value).map(
+      ([entryKey, entryValue]) => {
+        const normalizedEntryValue = normalizeArraySchemasMissingItems(entryValue);
+        if (normalizedEntryValue !== entryValue) {
+          entriesChanged = true;
+        }
+        return [entryKey, normalizedEntryValue];
+      },
+    );
+    if (entriesChanged) {
+      nextSchema[key] = Object.fromEntries(normalizedEntries);
+      changed = true;
+    }
+  }
+
+  return changed ? nextSchema : schema;
+}
+
 export function normalizeToolParameterSchema(
   schema: unknown,
   options?: { modelProvider?: string; modelId?: string; modelCompat?: ModelCompatConfig },
@@ -169,13 +249,14 @@ export function normalizeToolParameterSchema(
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
 
   function applyProviderCleaning(s: unknown): TSchema {
+    const normalizedSchema = normalizeArraySchemasMissingItems(s);
     if (isGeminiProvider && !isAnthropicProvider) {
-      return cleanSchemaForGemini(s);
+      return cleanSchemaForGemini(normalizedSchema);
     }
     if (unsupportedToolSchemaKeywords.size > 0) {
-      return stripUnsupportedSchemaKeywords(s, unsupportedToolSchemaKeywords) as TSchema;
+      return stripUnsupportedSchemaKeywords(normalizedSchema, unsupportedToolSchemaKeywords) as TSchema;
     }
-    return s as TSchema;
+    return normalizedSchema as TSchema;
   }
 
   const conditionalKey = getTopLevelConditionalKey(schemaRecord);

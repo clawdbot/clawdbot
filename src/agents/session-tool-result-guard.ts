@@ -55,6 +55,52 @@ function isUserAgentMessage(message: AgentMessage): message is UserAgentMessage 
   return message.role === "user";
 }
 
+type TranscriptSeqByEntryId = Map<string, number>;
+
+function resolveEntryTranscriptSeq(
+  sessionManager: SessionManager,
+  entryId: string | null | undefined,
+  seqByEntryId: TranscriptSeqByEntryId,
+): number | undefined {
+  if (!entryId) {
+    return 0;
+  }
+  const cached = seqByEntryId.get(entryId);
+  if (cached !== undefined) {
+    return cached;
+  }
+  let seq = 0;
+  for (const entry of sessionManager.getBranch(entryId)) {
+    if (entry.type === "message" || entry.type === "compaction") {
+      seq += 1;
+    }
+    seqByEntryId.set(entry.id, seq);
+  }
+  return seqByEntryId.get(entryId);
+}
+
+function resolveAppendedMessageSeq(params: {
+  sessionManager: SessionManager;
+  entryId: unknown;
+  parentEntryId: string | null | undefined;
+  seqByEntryId: TranscriptSeqByEntryId;
+}): number | undefined {
+  if (typeof params.entryId !== "string") {
+    return undefined;
+  }
+  const parentSeq = resolveEntryTranscriptSeq(
+    params.sessionManager,
+    params.parentEntryId,
+    params.seqByEntryId,
+  );
+  if (parentSeq === undefined) {
+    return undefined;
+  }
+  const messageSeq = parentSeq + 1;
+  params.seqByEntryId.set(params.entryId, messageSeq);
+  return messageSeq;
+}
+
 // `details` is runtime/UI metadata, not model-visible tool output. Keep the
 // session JSONL useful for debugging without letting metadata blobs dominate
 // disk, replay repair, transcript broadcasts, or future tooling that reads raw
@@ -536,7 +582,32 @@ export function installSessionToolResultGuard(
   const beforeWrite = opts?.beforeMessageWriteHook;
   const redactionConfig = opts?.redactLoggingConfig;
   const maxToolResultChars = resolveMaxToolResultChars(opts);
+  const transcriptSeqByEntryId: TranscriptSeqByEntryId = new Map();
   let suppressNextUserMessagePersistence = opts?.suppressNextUserMessagePersistence === true;
+
+  const getSessionFile = () =>
+    (sessionManager as { getSessionFile?: () => string | null }).getSessionFile?.();
+
+  const appendMessageAndCacheTranscriptSeq = (
+    message: AgentMessage,
+  ): { entryId: string; messageSeq?: number; sessionFile?: string | null } => {
+    const parentEntryId = sessionManager.getLeafId();
+    const entryId = originalAppend(message as never);
+    const sessionFile = getSessionFile();
+    if (!sessionFile) {
+      return { entryId, sessionFile };
+    }
+    return {
+      entryId,
+      sessionFile,
+      messageSeq: resolveAppendedMessageSeq({
+        sessionManager,
+        entryId,
+        parentEntryId,
+        seqByEntryId: transcriptSeqByEntryId,
+      }),
+    };
+  };
 
   /**
    * Run the before_message_write hook. Returns the (possibly modified) message,
@@ -575,8 +646,8 @@ export function installSessionToolResultGuard(
           }),
         );
         if (flushed) {
-          originalAppend(
-            capToolResultForPersistence(flushed, maxToolResultChars, redactionConfig) as never,
+          appendMessageAndCacheTranscriptSeq(
+            capToolResultForPersistence(flushed, maxToolResultChars, redactionConfig),
           );
         }
       }
@@ -629,9 +700,9 @@ export function installSessionToolResultGuard(
       if (!persisted) {
         return undefined;
       }
-      return originalAppend(
-        capToolResultForPersistence(persisted, maxToolResultChars, redactionConfig) as never,
-      );
+      return appendMessageAndCacheTranscriptSeq(
+        capToolResultForPersistence(persisted, maxToolResultChars, redactionConfig),
+      ).entryId;
     }
 
     // Skip tool call extraction for aborted/errored assistant messages.
@@ -675,17 +746,18 @@ export function installSessionToolResultGuard(
       suppressNextUserMessagePersistence = false;
       return undefined;
     }
-    const result = originalAppend(finalMessage as never);
-
-    const sessionFile = (
-      sessionManager as { getSessionFile?: () => string | null }
-    ).getSessionFile?.();
+    const {
+      entryId: result,
+      messageSeq,
+      sessionFile,
+    } = appendMessageAndCacheTranscriptSeq(finalMessage);
     if (sessionFile) {
       emitSessionTranscriptUpdate({
         sessionFile,
         sessionKey: opts?.sessionKey,
         message: finalMessage,
         messageId: typeof result === "string" ? result : undefined,
+        ...(messageSeq !== undefined ? { messageSeq } : {}),
       });
     }
 

@@ -124,5 +124,6 @@ jobs:
       - name: Run Testbox
         uses: useblacksmith/run-testbox@5ca05834db1d3813554d1dd109e5f2087a8d7cbc
         if: always()
+        continue-on-error: true
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

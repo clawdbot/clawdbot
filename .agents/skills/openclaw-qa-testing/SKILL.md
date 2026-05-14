@@ -227,7 +227,9 @@ pnpm openclaw qa manual \
 - Treat the concrete Codex model name as user/config input; do not hardcode it in source, docs examples, or scenarios.
 - Live QA preserves `CODEX_HOME` so Codex CLI auth/config works while keeping `HOME` and `OPENCLAW_HOME` sandboxed.
 - Mock QA should scrub `CODEX_HOME`.
-- If Codex returns fallback/auth text every turn, first check `CODEX_HOME`, `~/.profile`, and gateway child logs before changing scenario assertions.
+- If Codex returns fallback/auth text every turn, first check `CODEX_HOME`,
+  relevant secret-backed auth, and gateway child logs before changing
+  scenario assertions.
 - For model comparison, include `codex-cli/<codex-model>` as another candidate in `qa character-eval`; the report should label it as an opaque model name.
 
 ## Repo facts

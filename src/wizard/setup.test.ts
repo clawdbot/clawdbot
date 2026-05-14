@@ -854,6 +854,47 @@ describe("runSetupWizard", () => {
     );
   });
 
+  it("forwards provider-specific auth flags to applyAuthChoice opts", async () => {
+    applyAuthChoice.mockReset();
+    applyAuthChoice.mockResolvedValueOnce({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai-codex/gpt-5.5",
+            },
+          },
+        },
+      },
+    });
+
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "openai-codex-api-key",
+        openaiApiKey: "sk-flag-value",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        skipHooks: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(applyAuthChoice).toHaveBeenCalledTimes(1);
+    const call = getMockCallArg(applyAuthChoice, 0, 0, "openai-codex auth choice");
+    const opts = (call as { opts?: Record<string, unknown> }).opts ?? {};
+    expect(opts.openaiApiKey).toBe("sk-flag-value");
+  });
+
   it("shows plugin compatibility notices for an existing valid config", async () => {
     buildPluginCompatibilitySnapshotNotices.mockReturnValue([
       {

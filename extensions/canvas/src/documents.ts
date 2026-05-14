@@ -153,16 +153,17 @@ export function resolveCanvasHttpPathToLocalPath(
   }
   const pathWithoutQuery = trimmed.replace(/[?#].*$/, "");
   const relative = pathWithoutQuery.slice(prefix.length);
-  const segments = relative
-    .split("/")
-    .map((segment) => {
-      try {
-        return decodeURIComponent(segment);
-      } catch {
-        return segment;
-      }
-    })
-    .filter(Boolean);
+  const segments: string[] = [];
+  for (const segment of relative.split("/")) {
+    if (!segment) {
+      continue;
+    }
+    try {
+      segments.push(decodeURIComponent(segment));
+    } catch {
+      return null;
+    }
+  }
   if (segments.length < 2) {
     return null;
   }

@@ -510,7 +510,7 @@ async function uploadImageToDocx(
 }
 
 async function downloadImage(url: string, maxBytes: number): Promise<Buffer> {
-  const fetched = await getFeishuRuntime().channel.media.fetchRemoteMedia({ url, maxBytes });
+  const fetched = await getFeishuRuntime().channel.media.readRemoteMediaBuffer({ url, maxBytes });
   return fetched.buffer;
 }
 
@@ -635,7 +635,7 @@ async function resolveUploadInput(
   }
 
   if (url) {
-    const fetched = await getFeishuRuntime().channel.media.fetchRemoteMedia({ url, maxBytes });
+    const fetched = await getFeishuRuntime().channel.media.readRemoteMediaBuffer({ url, maxBytes });
     const urlPath = new URL(url).pathname;
     const guessed = urlPath.split("/").pop() || "upload.bin";
     return {

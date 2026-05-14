@@ -536,6 +536,24 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
     expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
   });
 
+  it("inherits channel-level groups when single-account explicitly sets `groups: {}` (regression: #79427)", () => {
+    const resolved = resolveTelegramAccount({
+      cfg: {
+        channels: {
+          telegram: {
+            groups: { "-100123": { requireMention: false } },
+            accounts: {
+              default: { botToken: "123:default", groups: {} },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
+  });
+
   it("does NOT inherit channel-level groups to secondary account in multi-account setup", () => {
     const resolved = resolveTelegramAccount({
       cfg: createMultiAccountGroupsConfig(),

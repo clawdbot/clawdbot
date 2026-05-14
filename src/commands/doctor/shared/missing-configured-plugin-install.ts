@@ -506,7 +506,6 @@ async function installCandidate(params: {
   const { candidate } = params;
   const extensionsDir = resolveDefaultPluginExtensionsDir();
   const changes: string[] = [];
-  const warnings: string[] = [];
   const clawhubSpecs = candidate.clawhubSpec
     ? resolveClawHubInstallSpecsForUpdateChannel({
         spec: candidate.clawhubSpec,
@@ -527,9 +526,6 @@ async function installCandidate(params: {
       extensionsDir,
       expectedPluginId: candidate.pluginId,
       mode: "install",
-      logger: {
-        warn: (message) => warnings.push(message),
-      },
     });
     if (clawhubResult.ok) {
       const pluginId = clawhubResult.pluginId;
@@ -544,7 +540,7 @@ async function installCandidate(params: {
           },
         },
         changes: [`Installed missing configured plugin "${pluginId}" from ${clawhubInstallSpec}.`],
-        warnings,
+        warnings: [],
       };
     }
     if (!npmInstallSpec || !shouldFallbackClawHubToNpm(clawhubResult)) {
@@ -552,7 +548,6 @@ async function installCandidate(params: {
         records: params.records,
         changes: [],
         warnings: [
-          ...warnings,
           `Failed to install missing configured plugin "${candidate.pluginId}" from ${clawhubInstallSpec}: ${clawhubResult.error}`,
         ],
       };
@@ -566,7 +561,6 @@ async function installCandidate(params: {
       records: params.records,
       changes: [],
       warnings: [
-        ...warnings,
         `Failed to install missing configured plugin "${candidate.pluginId}": missing npm spec.`,
       ],
     };
@@ -586,7 +580,6 @@ async function installCandidate(params: {
       records: params.records,
       changes: [],
       warnings: [
-        ...warnings,
         `Failed to install missing configured plugin "${candidate.pluginId}" from ${npmInstallSpec}: ${result.error}`,
       ],
     };
@@ -608,7 +601,7 @@ async function installCandidate(params: {
       ...changes,
       `Installed missing configured plugin "${pluginId}" from ${npmInstallSpec}.`,
     ],
-    warnings,
+    warnings: [],
   };
 }
 

@@ -128,7 +128,7 @@ function installPerKeySequentializer(): void {
 }
 
 function mockTelegramConfigWrites() {
-  return vi.spyOn(configMutation, "replaceConfigFile").mockResolvedValue({} as never);
+  return vi.spyOn(configMutation, "mutateConfigFile").mockResolvedValue({} as never);
 }
 
 async function withEnvAsync(env: Record<string, string | undefined>, fn: () => Promise<void>) {

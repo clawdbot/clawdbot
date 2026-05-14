@@ -82,6 +82,8 @@ export function createCronPromptExecutor(params: {
   resolvedVerboseLevel: VerboseLevel;
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
+  /** Set when the cron payload's `timeoutSeconds` was explicitly configured. */
+  runTimeoutOverrideMs?: number;
   senderIsOwner: boolean;
   messageChannel: string | undefined;
   suppressExecNotifyOnExit: boolean;
@@ -231,6 +233,7 @@ export function createCronPromptExecutor(params: {
           }).enabled,
           verboseLevel: params.resolvedVerboseLevel,
           timeoutMs: params.timeoutMs,
+          runTimeoutOverrideMs: params.runTimeoutOverrideMs,
           bootstrapContextMode: params.agentPayload?.lightContext ? "lightweight" : undefined,
           bootstrapContextRunKind: "cron",
           toolsAllow: params.agentPayload?.toolsAllow,
@@ -315,6 +318,8 @@ export async function executeCronRun(params: {
   ) => void;
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
+  /** Set when the cron payload's `timeoutSeconds` was explicitly configured. */
+  runTimeoutOverrideMs?: number;
   senderIsOwner: boolean;
   suppressExecNotifyOnExit: boolean;
   runStartedAt?: number;
@@ -340,6 +345,7 @@ export async function executeCronRun(params: {
     resolvedVerboseLevel,
     thinkLevel: params.thinkLevel,
     timeoutMs: params.timeoutMs,
+    runTimeoutOverrideMs: params.runTimeoutOverrideMs,
     messageChannel: params.resolvedDelivery.channel,
     suppressExecNotifyOnExit: params.suppressExecNotifyOnExit,
     resolvedDelivery: params.resolvedDelivery,

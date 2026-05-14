@@ -1,5 +1,9 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { resolveCopilotTransportApi, resolveStaticCopilotModelOverride } from "./model-metadata.js";
+import {
+  resolveCopilotModelCompat,
+  resolveCopilotTransportApi,
+  resolveStaticCopilotModelOverride,
+} from "./model-metadata.js";
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8192;
@@ -42,6 +46,7 @@ export function buildCopilotModelDefinition(modelId: string): ModelDefinitionCon
     throw new Error("Model id required");
   }
   const staticOverride = resolveStaticCopilotModelOverride(id);
+  const compat = staticOverride?.compat ?? resolveCopilotModelCompat(id);
   return {
     id,
     name: staticOverride?.name ?? id,
@@ -51,6 +56,6 @@ export function buildCopilotModelDefinition(modelId: string): ModelDefinitionCon
     cost: staticOverride?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: staticOverride?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
     maxTokens: staticOverride?.maxTokens ?? DEFAULT_MAX_TOKENS,
-    ...(staticOverride?.compat ? { compat: staticOverride.compat } : {}),
+    ...(compat ? { compat } : {}),
   };
 }

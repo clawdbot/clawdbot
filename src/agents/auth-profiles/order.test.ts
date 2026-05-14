@@ -276,6 +276,33 @@ describe("resolveAuthProfileOrder", () => {
     expect(order).toEqual(["openai-codex:personal", "openai:backup"]);
   });
 
+  it("lets Codex auth discover oauthRef-backed OAuth profiles", async () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai-codex:personal": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "",
+          refresh: "",
+          expires: Date.now() + 60_000,
+          oauthRef: {
+            source: "openclaw-credentials",
+            provider: "openai-codex",
+            id: "0123456789abcdef0123456789abcdef",
+          },
+        },
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      store,
+      provider: "openai-codex",
+    });
+
+    expect(order).toEqual(["openai-codex:personal"]);
+  });
+
   it("preserves native Codex profiles before OpenAI alias API-key order", async () => {
     const store: AuthProfileStore = {
       version: 1,

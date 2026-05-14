@@ -10,6 +10,7 @@ import {
   isSubagentSessionKey,
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
+  toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
@@ -18,6 +19,7 @@ import {
   type GatewayMessageChannel,
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
+import { listAgentIds } from "../agent-scope.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
   type AgentWaitResult,
@@ -52,6 +54,78 @@ const SessionsSendToolSchema = Type.Object({
 
 type GatewayCaller = typeof callGateway;
 const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
+
+function resolveConfiguredAgentMainSessionKey(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  mainKey: string;
+}): string | undefined {
+  const agentId = normalizeAgentId(params.agentId);
+  if (!listAgentIds(params.cfg).includes(agentId)) {
+    return undefined;
+  }
+  return toAgentStoreSessionKey({
+    agentId,
+    requestKey: "main",
+    mainKey: params.mainKey,
+  });
+}
+
+function isConfiguredAgentMainSessionKey(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  mainKey: string;
+}): boolean {
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  return (
+    params.sessionKey ===
+    resolveConfiguredAgentMainSessionKey({
+      cfg: params.cfg,
+      agentId,
+      mainKey: params.mainKey,
+    })
+  );
+}
+
+async function ensureConfiguredAgentMainSession(params: {
+  cfg: OpenClawConfig;
+  callGateway: GatewayCaller;
+  sessionKey: string;
+  mainKey: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (
+    !isConfiguredAgentMainSessionKey({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      mainKey: params.mainKey,
+    })
+  ) {
+    return { ok: true };
+  }
+
+  try {
+    await params.callGateway({
+      method: "sessions.resolve",
+      params: { key: params.sessionKey },
+      timeoutMs: 10_000,
+    });
+    return { ok: true };
+  } catch {
+    try {
+      await params.callGateway({
+        method: "sessions.create",
+        params: {
+          key: params.sessionKey,
+          agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+        },
+        timeoutMs: 10_000,
+      });
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: formatErrorMessage(err) };
+    }
+  }
+}
 
 type SessionsSendRouteEntry = Pick<SessionEntry, "acp" | "parentSessionKey" | "spawnedBy">;
 
@@ -145,6 +219,21 @@ export function createSessionsSendTool(opts?: {
       }
 
       let sessionKey = sessionKeyParam;
+      if (!sessionKey && !labelParam && labelAgentIdParam) {
+        const agentMainKey = resolveConfiguredAgentMainSessionKey({
+          cfg,
+          agentId: labelAgentIdParam,
+          mainKey,
+        });
+        if (!agentMainKey) {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "error",
+            error: `agent not found: ${labelAgentIdParam}`,
+          });
+        }
+        sessionKey = agentMainKey;
+      }
       if (!sessionKey && labelParam) {
         const requesterAgentId = resolveAgentIdFromSessionKey(effectiveRequesterKey);
         const requestedAgentId = labelAgentIdParam
@@ -290,6 +379,21 @@ export function createSessionsSendTool(opts?: {
           runId: crypto.randomUUID(),
           status: access.status,
           error: access.error,
+          sessionKey: displayKey,
+        });
+      }
+
+      const ensuredSession = await ensureConfiguredAgentMainSession({
+        cfg,
+        callGateway: gatewayCall,
+        sessionKey: resolvedKey,
+        mainKey,
+      });
+      if (!ensuredSession.ok) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: ensuredSession.error,
           sessionKey: displayKey,
         });
       }

@@ -239,4 +239,26 @@ describe("canvas documents", () => {
       ),
     ).toBeNull();
   });
+
+  it("rejects malformed encoded hosted canvas document paths", async () => {
+    const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-canvas-documents-"));
+    tempDirs.push(stateDir);
+    const documentId = "cv_malformed";
+    const documentDir = resolveCanvasDocumentDir(documentId, { stateDir });
+    await mkdir(documentDir, { recursive: true });
+    await writeFile(path.join(documentDir, "%E0%A4%A.html"), "literal-percent-name", "utf8");
+
+    expect(
+      resolveCanvasHttpPathToLocalPath(
+        `/__openclaw__/canvas/documents/${documentId}/%E0%A4%A.html`,
+        { stateDir },
+      ),
+    ).toBeNull();
+    expect(
+      resolveCanvasHttpPathToLocalPath(
+        `/__openclaw__/canvas/documents/${documentId}/%25E0%25A4%25A.html`,
+        { stateDir },
+      ),
+    ).toBe(path.join(documentDir, "%E0%A4%A.html"));
+  });
 });

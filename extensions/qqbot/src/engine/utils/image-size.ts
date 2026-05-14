@@ -156,7 +156,7 @@ const IMAGE_PROBE_SSRF_POLICY: SsrfPolicyConfig = {};
 /**
  * Fetch image dimensions from a public URL using only the first 64 KB.
  *
- * Uses {@link fetchRemoteMedia} with SSRF guard to block probes against
+ * Uses {@link readRemoteMediaBuffer} with SSRF guard to block probes against
  * private/reserved/loopback/link-local/metadata destinations.
  */
 export async function getImageSizeFromUrl(

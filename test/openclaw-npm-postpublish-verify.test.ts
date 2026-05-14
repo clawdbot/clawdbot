@@ -79,15 +79,15 @@ describe("collectInstalledPackageErrors", () => {
 
     try {
       writeFileSync(join(packageRoot, "package.json"), '{"version":"2026.3.23"}\n', "utf8");
-      mkdirSync(join(packageRoot, "dist", "extensions", "slack"), { recursive: true });
+      mkdirSync(join(packageRoot, "dist", "extensions", "telegram"), { recursive: true });
       writeFileSync(
-        join(packageRoot, "dist", "extensions", "slack", "package.json"),
+        join(packageRoot, "dist", "extensions", "telegram", "package.json"),
         "{}\n",
         "utf8",
       );
 
       expect(collectInstalledBundledRuntimeSidecarPaths(packageRoot)).toContain(
-        "dist/extensions/slack/runtime-api.js",
+        "dist/extensions/telegram/runtime-api.js",
       );
       expect(
         collectInstalledPackageErrors({
@@ -96,7 +96,7 @@ describe("collectInstalledPackageErrors", () => {
           packageRoot,
         }),
       ).toContain(
-        "installed package is missing required bundled runtime sidecar: dist/extensions/slack/runtime-api.js",
+        "installed package is missing required bundled runtime sidecar: dist/extensions/telegram/runtime-api.js",
       );
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });

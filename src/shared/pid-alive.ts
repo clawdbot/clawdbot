@@ -36,6 +36,18 @@ export function isPidAlive(pid: number): boolean {
   return true;
 }
 
+export function isPidDefinitelyDead(pid: number): boolean {
+  if (!isValidPid(pid)) {
+    return true;
+  }
+  try {
+    process.kill(pid, 0);
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ESRCH";
+  }
+  return isZombieProcess(pid);
+}
+
 /**
  * Read the process start time (field 22 "starttime") from /proc/<pid>/stat.
  * Returns the value in clock ticks since system boot, or null on non-Linux

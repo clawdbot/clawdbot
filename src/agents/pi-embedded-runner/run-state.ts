@@ -14,7 +14,7 @@ export type EmbeddedPiQueueHandle = {
 };
 
 export type EmbeddedPiQueueMessageOptions = {
-  steeringMode?: "all" | "one-at-a-time";
+  steeringMode?: "all";
   debounceMs?: number;
 };
 

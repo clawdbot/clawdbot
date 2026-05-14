@@ -20,6 +20,31 @@ type MatrixRuntimeStub = {
   state: Pick<NonNullable<PluginRuntime["state"]>, "resolveStateDir">;
 };
 
+function createMatrixRuntimeMediaMock(
+  overrides: Partial<NonNullable<PluginRuntime["channel"]>["media"]> = {},
+): NonNullable<PluginRuntime["channel"]>["media"] {
+  const readRemoteMediaBuffer = vi.fn() as NonNullable<
+    PluginRuntime["channel"]
+  >["media"]["readRemoteMediaBuffer"];
+  return {
+    readRemoteMediaBuffer,
+    fetchRemoteMedia: readRemoteMediaBuffer,
+    saveRemoteMedia: vi.fn().mockResolvedValue({
+      path: "/tmp/test-media.jpg",
+      contentType: "image/jpeg",
+    }) as NonNullable<PluginRuntime["channel"]>["media"]["saveRemoteMedia"],
+    saveResponseMedia: vi.fn().mockResolvedValue({
+      path: "/tmp/test-media.jpg",
+      contentType: "image/jpeg",
+    }) as NonNullable<PluginRuntime["channel"]>["media"]["saveResponseMedia"],
+    saveMediaBuffer: vi.fn().mockResolvedValue({
+      path: "/tmp/test-media.jpg",
+      contentType: "image/jpeg",
+    }) as NonNullable<PluginRuntime["channel"]>["media"]["saveMediaBuffer"],
+    ...overrides,
+  };
+}
+
 export function installMatrixTestRuntime(options: MatrixTestRuntimeOptions = {}): void {
   const defaultStateDirResolver: NonNullable<PluginRuntime["state"]>["resolveStateDir"] = (
     _env,
@@ -75,10 +100,9 @@ export function installMatrixMonitorTestRuntime(
         implicitMentionKindWhen,
         resolveInboundMentionDecision,
       },
-      media: {
-        fetchRemoteMedia: vi.fn(),
+      media: createMatrixRuntimeMediaMock({
         saveMediaBuffer: options.saveMediaBuffer ?? vi.fn(),
-      },
+      }),
     },
   });
 }

@@ -124,7 +124,10 @@ export type {
   PluginSessionExtensionRegistryRegistration,
 } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
-import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
+import {
+  withPluginRuntimePluginIdScope,
+  withPluginRuntimePluginScope,
+} from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { validateJsonSchemaValue, type JsonSchemaValue } from "./schema-validator.js";
 import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
@@ -2367,6 +2370,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     const runtime = new Proxy(registryParams.runtime, {
       get(target, prop, receiver) {
+        const runWithPluginScope = <T>(run: () => T): T => {
+          const record =
+            pluginRuntimeRecordById.get(pluginId) ??
+            registry.plugins.find((entry) => entry.id === pluginId);
+          return record?.source
+            ? withPluginRuntimePluginScope({ pluginId, pluginSource: record.source }, run)
+            : withPluginRuntimePluginScope({ pluginId }, run);
+        };
         if (prop === "state") {
           const baseState = Reflect.get(target, prop, receiver);
           return {
@@ -2383,6 +2394,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               return createPluginStateKeyedStore<T>(pluginId, options);
             },
           } satisfies PluginRuntime["state"];
+        }
+        if (prop === "config") {
+          const config = Reflect.get(target, prop, receiver);
+          return {
+            ...config,
+            current: () => runWithPluginScope(() => config.current()),
+            mutateConfigFile: (params) => runWithPluginScope(() => config.mutateConfigFile(params)),
+            replaceConfigFile: (params) =>
+              runWithPluginScope(() => config.replaceConfigFile(params)),
+          } satisfies PluginRuntime["config"];
         }
         if (prop === "llm") {
           const llm = Reflect.get(target, prop, receiver);

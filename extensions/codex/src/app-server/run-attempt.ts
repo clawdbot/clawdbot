@@ -15,6 +15,7 @@ import {
   formatErrorMessage,
   isActiveHarnessContextEngine,
   isSubagentSessionKey,
+  loadCodexBundleMcpThreadConfig,
   normalizeAgentRuntimeTools,
   resolveAttemptSpawnWorkspaceDir,
   resolveAgentHarnessBeforePromptBuildResult,
@@ -87,6 +88,7 @@ import { buildCodexPluginAppCacheKey } from "./plugin-app-cache-key.js";
 import {
   buildCodexPluginThreadConfig,
   buildCodexPluginThreadConfigInputFingerprint,
+  mergeCodexThreadConfigs,
   shouldBuildCodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
 import {
@@ -111,7 +113,11 @@ import {
   resolveCodexUsageLimitResetAtMs,
   shouldRefreshCodexRateLimitsForUsageLimitMessage,
 } from "./rate-limits.js";
-import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
+import {
+  clearCodexAppServerBinding,
+  readCodexAppServerBinding,
+  type CodexAppServerThreadBinding,
+} from "./session-binding.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import { clearSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 import {
@@ -120,6 +126,7 @@ import {
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
   startOrResumeThread,
+  type CodexAppServerThreadLifecycleBinding,
 } from "./thread-lifecycle.js";
 import {
   inferCodexDynamicToolMeta,
@@ -214,7 +221,6 @@ function collectTerminalAssistantText(result: EmbeddedRunAttemptResult): string 
 }
 
 type CodexSteeringQueueOptions = {
-  steeringMode?: "all" | "one-at-a-time";
   debounceMs?: number;
 };
 
@@ -312,7 +318,12 @@ function createCodexSteeringQueue(params: {
   answerPendingUserInput: (text: string) => boolean;
   signal: AbortSignal;
 }) {
-  let batchedTexts: string[] = [];
+  type PendingSteerText = {
+    text: string;
+    resolve: () => void;
+    reject: (error: unknown) => void;
+  };
+  let batchedTexts: PendingSteerText[] = [];
   let batchTimer: NodeJS.Timeout | undefined;
   let sendChain: Promise<void> = Promise.resolve();
 
@@ -324,8 +335,11 @@ function createCodexSteeringQueue(params: {
   };
 
   const sendTexts = async (texts: string[]) => {
-    if (texts.length === 0 || params.signal.aborted) {
+    if (texts.length === 0) {
       return;
+    }
+    if (params.signal.aborted) {
+      throw new Error("codex app-server steering queue aborted");
     }
     await params.client.request("turn/steer", {
       threadId: params.threadId,
@@ -335,19 +349,31 @@ function createCodexSteeringQueue(params: {
   };
 
   const enqueueSend = (texts: string[]) => {
-    sendChain = sendChain
-      .then(() => sendTexts(texts))
-      .catch((error: unknown) => {
-        embeddedAgentLog.debug("codex app-server queued steer failed", { error });
-      });
-    return sendChain;
+    const send = sendChain.then(() => sendTexts(texts));
+    sendChain = send.catch((error: unknown) => {
+      embeddedAgentLog.debug("codex app-server queued steer failed", { error });
+    });
+    return send;
   };
 
   const flushBatch = () => {
     clearBatchTimer();
-    const texts = batchedTexts;
+    const items = batchedTexts;
     batchedTexts = [];
-    return enqueueSend(texts);
+    const send = enqueueSend(items.map((item) => item.text));
+    void send.then(
+      () => {
+        for (const item of items) {
+          item.resolve();
+        }
+      },
+      (error: unknown) => {
+        for (const item of items) {
+          item.reject(error);
+        }
+      },
+    );
+    return send;
   };
 
   return {
@@ -355,25 +381,26 @@ function createCodexSteeringQueue(params: {
       if (params.answerPendingUserInput(text)) {
         return;
       }
-      if (options?.steeringMode === "one-at-a-time") {
-        await flushBatch();
-        await enqueueSend([text]);
-        return;
-      }
-      batchedTexts.push(text);
-      clearBatchTimer();
-      const debounceMs = normalizeCodexSteerDebounceMs(options?.debounceMs);
-      batchTimer = setTimeout(() => {
-        batchTimer = undefined;
-        void flushBatch();
-      }, debounceMs);
+      return await new Promise<void>((resolve, reject) => {
+        batchedTexts.push({ text, resolve, reject });
+        clearBatchTimer();
+        const debounceMs = normalizeCodexSteerDebounceMs(options?.debounceMs);
+        batchTimer = setTimeout(() => {
+          batchTimer = undefined;
+          void flushBatch().catch(() => undefined);
+        }, debounceMs);
+      });
     },
     async flushPending() {
-      await flushBatch();
+      await flushBatch().catch(() => undefined);
     },
     cancel() {
       clearBatchTimer();
+      const items = batchedTexts;
       batchedTexts = [];
+      for (const item of items) {
+        item.reject(new Error("codex app-server steering queue cancelled"));
+      }
     },
   };
 }
@@ -492,6 +519,16 @@ export async function runCodexAppServerAttempt(
     : resolveCodexAppServerEnvApiKeyCacheKey({
         startOptions: appServer.start,
       });
+  const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
+    workspaceDir: effectiveWorkspace,
+    cfg: params.config,
+    toolsEnabled: supportsModelTools(params.model),
+    disableTools: params.disableTools,
+    toolsAllow: params.toolsAllow,
+  });
+  for (const diagnostic of bundleMcpThreadConfig.diagnostics) {
+    embeddedAgentLog.warn(`bundle-mcp: ${diagnostic.pluginId}: ${diagnostic.message}`);
+  }
   const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
     : undefined;
@@ -650,10 +687,13 @@ export async function runCodexAppServerAttempt(
     tools: toolBridge.specs,
   });
   let client: CodexAppServerClient;
-  let thread: CodexAppServerThreadBinding;
+  let thread: CodexAppServerThreadLifecycleBinding;
   let trajectoryEndRecorded = false;
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
   let startupClientForCleanup: CodexAppServerClient | undefined;
+  let restartContextEngineCodexThread:
+    | (() => Promise<CodexAppServerThreadLifecycleBinding>)
+    | undefined;
   const startupTimeoutMs = resolveCodexStartupTimeoutMs({
     timeoutMs: params.timeoutMs,
     timeoutFloorMs: options.startupTimeoutFloorMs,
@@ -685,7 +725,10 @@ export async function runCodexAppServerAttempt(
       : options.nativeHookRelay?.enabled === false
         ? buildCodexNativeHookRelayDisabledConfig()
         : undefined;
-    const threadConfig = nativeHookRelayConfig;
+    const threadConfig = mergeCodexThreadConfigs(
+      nativeHookRelayConfig,
+      bundleMcpThreadConfig?.configPatch as JsonObject | undefined,
+    );
     const pluginThreadConfigEnabled = shouldBuildCodexPluginThreadConfig(pluginConfig);
     const pluginAppCacheKey = buildCodexPluginAppCacheKey({
       appServer,
@@ -736,7 +779,7 @@ export async function runCodexAppServerAttempt(
             timeoutMs: appServer.requestTimeoutMs,
             signal: runAbortController.signal,
           });
-          const startupThread = await startOrResumeThread({
+          const threadLifecycleParams = {
             client: startupClient,
             params: runtimeParams,
             cwd: effectiveWorkspace,
@@ -744,6 +787,8 @@ export async function runCodexAppServerAttempt(
             appServer: pluginAppServer,
             developerInstructions: promptBuild.developerInstructions,
             config: threadConfig,
+            mcpServersFingerprint: bundleMcpThreadConfig.fingerprint,
+            mcpServersFingerprintEvaluated: bundleMcpThreadConfig.evaluated,
             pluginThreadConfig: pluginThreadConfigEnabled
               ? {
                   enabled: true,
@@ -762,7 +807,9 @@ export async function runCodexAppServerAttempt(
                     }),
                 }
               : undefined,
-          });
+          } satisfies Parameters<typeof startOrResumeThread>[0];
+          restartContextEngineCodexThread = () => startOrResumeThread(threadLifecycleParams);
+          const startupThread = await startOrResumeThread(threadLifecycleParams);
           return { client: startupClient, thread: startupThread };
         };
         for (
@@ -876,6 +923,7 @@ export async function runCodexAppServerAttempt(
   let turnCompletionLastActivityReason = "startup";
   let turnCompletionLastActivityDetails: Record<string, unknown> | undefined;
   let activeAppServerTurnRequests = 0;
+  const activeOpenClawDynamicToolCallIds = new Set<string>();
   const activeTurnItemIds = new Set<string>();
 
   const clearTurnCompletionIdleTimer = () => {
@@ -1221,12 +1269,16 @@ export async function runCodexAppServerAttempt(
       turnCompletionIdleWatchArmed &&
       !turnCompletionIdleWatchPinnedByTerminalError &&
       notification.method !== "turn/completed" &&
-      isCurrentTurnNotification
+      isCurrentTurnNotification &&
+      !isTrackedOpenClawDynamicToolCompletionNotification(
+        notification,
+        activeOpenClawDynamicToolCallIds,
+      )
     ) {
       // The short completion-idle watchdog only guards the blind gap after
-      // OpenClaw hands a turn-scoped request result back to Codex. Once Codex
-      // sends another current-turn notification, the app-server is alive again;
-      // the longer terminal watchdog remains the stuck-turn backstop.
+      // OpenClaw hands a turn-scoped request result back to Codex. Bookkeeping
+      // that closes the just-served OpenClaw dynamic tool item is still part of
+      // that handoff, so keep the short watchdog armed for that notification.
       disarmTurnCompletionIdleWatch();
     }
     // Determine terminal-turn status before invoking the projector so a throw
@@ -1322,6 +1374,7 @@ export async function runCodexAppServerAttempt(
         return undefined;
       }
       armCompletionWatchOnResponse = true;
+      activeOpenClawDynamicToolCallIds.add(call.callId);
       trajectoryRecorder?.recordEvent("tool.call", {
         threadId: call.threadId,
         turnId: call.turnId,
@@ -1424,17 +1477,9 @@ export async function runCodexAppServerAttempt(
     },
   ];
 
-  let turn: CodexTurnStartResponse;
-  try {
-    runAgentHarnessLlmInputHook({
-      event: llmInputEvent,
-      ctx: hookContext,
-    });
-    emitCodexAppServerEvent(params, {
-      stream: "codex_app_server.lifecycle",
-      data: { phase: "turn_starting", threadId: thread.threadId },
-    });
-    turn = assertCodexTurnStartResponse(
+  let turn: CodexTurnStartResponse | undefined;
+  const startCodexTurn = async (): Promise<CodexTurnStartResponse> =>
+    assertCodexTurnStartResponse(
       await client.request(
         "turn/start",
         buildTurnStartParams(params, {
@@ -1446,78 +1491,121 @@ export async function runCodexAppServerAttempt(
         { timeoutMs: params.timeoutMs, signal: runAbortController.signal },
       ),
     );
-  } catch (error) {
-    const usageLimitError = await formatCodexTurnStartUsageLimitError({
-      client,
-      error,
-      pendingNotifications,
-      timeoutMs: appServer.requestTimeoutMs,
-      signal: runAbortController.signal,
+  try {
+    runAgentHarnessLlmInputHook({
+      event: llmInputEvent,
+      ctx: hookContext,
     });
-    const turnStartErrorMessage = usageLimitError?.message ?? formatErrorMessage(error);
     emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
-      data: { phase: "turn_start_failed", error: turnStartErrorMessage },
+      data: { phase: "turn_starting", threadId: thread.threadId },
     });
-    trajectoryRecorder?.recordEvent("session.ended", {
-      status: "error",
-      threadId: thread.threadId,
-      timedOut,
-      aborted: runAbortController.signal.aborted,
-      promptError: turnStartErrorMessage,
-    });
-    trajectoryEndRecorded = true;
-    runAgentHarnessLlmOutputHook({
-      event: {
+    turn = await startCodexTurn();
+  } catch (error) {
+    let turnStartError = error;
+    if (
+      shouldRetryContextEngineTurnOnFreshCodexThread({
+        error: turnStartError,
+        contextEngineActive: Boolean(activeContextEngine),
+        thread,
+      }) &&
+      restartContextEngineCodexThread
+    ) {
+      embeddedAgentLog.warn(
+        "codex app-server context-engine turn overflowed on resume; retrying with fresh thread",
+        {
+          threadId: thread.threadId,
+          error: formatErrorMessage(turnStartError),
+        },
+      );
+      await clearCodexAppServerBinding(params.sessionFile);
+      thread = await restartContextEngineCodexThread();
+      emitCodexAppServerEvent(params, {
+        stream: "codex_app_server.lifecycle",
+        data: { phase: "thread_ready_retry", threadId: thread.threadId },
+      });
+      try {
+        turn = await startCodexTurn();
+      } catch (retryError) {
+        turnStartError = retryError;
+      }
+    }
+    if (turn === undefined) {
+      const usageLimitError = await formatCodexTurnStartUsageLimitError({
+        client,
+        error: turnStartError,
+        pendingNotifications,
+        timeoutMs: appServer.requestTimeoutMs,
+        signal: runAbortController.signal,
+      });
+      const turnStartErrorMessage = usageLimitError?.message ?? formatErrorMessage(turnStartError);
+      emitCodexAppServerEvent(params, {
+        stream: "codex_app_server.lifecycle",
+        data: { phase: "turn_start_failed", error: turnStartErrorMessage },
+      });
+      trajectoryRecorder?.recordEvent("session.ended", {
+        status: "error",
+        threadId: thread.threadId,
+        timedOut,
+        aborted: runAbortController.signal.aborted,
+        promptError: turnStartErrorMessage,
+      });
+      trajectoryEndRecorded = true;
+      runAgentHarnessLlmOutputHook({
+        event: {
+          runId: params.runId,
+          sessionId: params.sessionId,
+          provider: params.provider,
+          model: params.modelId,
+          resolvedRef:
+            params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
+          ...(params.runtimePlan?.observability.harnessId
+            ? { harnessId: params.runtimePlan.observability.harnessId }
+            : {}),
+          assistantTexts: [],
+        },
+        ctx: hookContext,
+      });
+      runAgentHarnessAgentEndHook({
+        event: {
+          messages: turnStartFailureMessages,
+          success: false,
+          error: turnStartErrorMessage,
+          durationMs: Date.now() - attemptStartedAt,
+        },
+        ctx: hookContext,
+      });
+      notificationCleanup();
+      requestCleanup();
+      nativeHookRelay?.unregister();
+      await runAgentCleanupStep({
         runId: params.runId,
         sessionId: params.sessionId,
-        provider: params.provider,
-        model: params.modelId,
-        resolvedRef:
-          params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
-        ...(params.runtimePlan?.observability.harnessId
-          ? { harnessId: params.runtimePlan.observability.harnessId }
-          : {}),
-        assistantTexts: [],
-      },
-      ctx: hookContext,
-    });
-    runAgentHarnessAgentEndHook({
-      event: {
-        messages: turnStartFailureMessages,
-        success: false,
-        error: turnStartErrorMessage,
-        durationMs: Date.now() - attemptStartedAt,
-      },
-      ctx: hookContext,
-    });
-    notificationCleanup();
-    requestCleanup();
-    nativeHookRelay?.unregister();
-    await runAgentCleanupStep({
-      runId: params.runId,
-      sessionId: params.sessionId,
-      step: "codex-trajectory-flush-startup-failure",
-      log: embeddedAgentLog,
-      cleanup: async () => {
-        await trajectoryRecorder?.flush();
-      },
-    });
-    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
-    if (usageLimitError) {
-      await markCodexAuthProfileBlockedFromRateLimits({
-        params,
-        authProfileId: startupAuthProfileId,
-        rateLimits: usageLimitError.rateLimitsForProfile,
+        step: "codex-trajectory-flush-startup-failure",
+        log: embeddedAgentLog,
+        cleanup: async () => {
+          await trajectoryRecorder?.flush();
+        },
       });
-      return buildCodexTurnStartFailureResult({
-        params,
-        message: usageLimitError.message,
-        messagesSnapshot: turnStartFailureMessages,
-        systemPromptReport,
-      });
+      params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+      if (usageLimitError) {
+        await markCodexAuthProfileBlockedFromRateLimits({
+          params,
+          authProfileId: startupAuthProfileId,
+          rateLimits: usageLimitError.rateLimitsForProfile,
+        });
+        return buildCodexTurnStartFailureResult({
+          params,
+          message: usageLimitError.message,
+          messagesSnapshot: turnStartFailureMessages,
+          systemPromptReport,
+        });
+      }
+      throw turnStartError;
     }
-    throw error;
+  }
+  if (!turn) {
+    throw new Error("codex app-server turn/start failed without an error");
   }
   turnId = turn.turn.id;
   const activeTurnId = turn.turn.id;
@@ -1834,6 +1922,7 @@ function buildCodexTurnStartFailureResult(params: {
     messagingToolSentTexts: [],
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],
+    messagingToolSourceReplyPayloads: [],
     cloudCodeAssistFormatError: false,
     replayMetadata: {
       hadPotentialSideEffects: false,
@@ -2624,6 +2713,22 @@ function readNotificationItemId(notification: CodexServerNotification): string |
   );
 }
 
+function isTrackedOpenClawDynamicToolCompletionNotification(
+  notification: CodexServerNotification,
+  activeOpenClawDynamicToolCallIds: ReadonlySet<string>,
+): boolean {
+  if (notification.method !== "item/completed" || !isJsonObject(notification.params)) {
+    return false;
+  }
+  const itemId = readNotificationItemId(notification);
+  if (!itemId || !activeOpenClawDynamicToolCallIds.has(itemId)) {
+    return false;
+  }
+  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  const itemType = item ? readString(item, "type") : undefined;
+  return itemType === undefined || itemType === "dynamicToolCall";
+}
+
 function readRawAssistantTextPreview(item: JsonObject): string | undefined {
   if (readString(item, "role") !== "assistant" || !Array.isArray(item.content)) {
     return undefined;
@@ -2967,7 +3072,8 @@ function remapCodexContextFilePath(params: {
   const relativePath = path.relative(params.sourceWorkspaceDir, params.file.path);
   if (
     !relativePath ||
-    relativePath.startsWith("..") ||
+    relativePath === ".." ||
+    relativePath.startsWith(`..${path.sep}`) ||
     path.isAbsolute(relativePath) ||
     params.sourceWorkspaceDir === params.targetWorkspaceDir
   ) {
@@ -3036,6 +3142,28 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+function shouldRetryContextEngineTurnOnFreshCodexThread(params: {
+  error: unknown;
+  contextEngineActive: boolean;
+  thread: CodexAppServerThreadLifecycleBinding;
+}): boolean {
+  if (!params.contextEngineActive || params.thread.lifecycle.action !== "resumed") {
+    return false;
+  }
+  return isCodexContextWindowError(params.error);
+}
+
+function isCodexContextWindowError(error: unknown): boolean {
+  const message = formatErrorMessage(error);
+  return (
+    /ran out of room in the model'?s context window/iu.test(message) ||
+    /context window/iu.test(message) ||
+    /context length/iu.test(message) ||
+    /maximum context/iu.test(message) ||
+    /too many tokens/iu.test(message)
+  );
+}
+
 function readCodexNotificationItem(params: JsonValue | undefined): CodexThreadItem | undefined {
   if (!isJsonObject(params) || !isJsonObject(params.item)) {
     return undefined;
@@ -3102,12 +3230,14 @@ export const __testing = {
   CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS,
   CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
   CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
+  createCodexSteeringQueue,
   buildCodexNativeHookRelayId,
   filterCodexDynamicTools,
   buildDynamicTools,
   filterCodexDynamicToolsForAllowlist,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
+  remapCodexContextFilePath,
   resolveDynamicToolCallTimeoutMs,
   restrictCodexAppServerSandboxForOpenClawSandbox,
   resolveOpenClawCodingToolsSessionKeys,

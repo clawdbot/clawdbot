@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildCopilotDynamicHeaders } from "./stream.js";
 import {
   wrapCopilotAnthropicStream,
+  wrapCopilotOpenAICompletionsStream,
   wrapCopilotOpenAIResponsesStream,
   wrapCopilotProviderStream,
 } from "./stream.js";
@@ -202,6 +203,42 @@ describe("wrapCopilotAnthropicStream", () => {
     expect((returnedPayload as { input: Array<Record<string, unknown>> }).input[0]?.id).toMatch(
       /^msg_[a-f0-9]{16}$/,
     );
+  });
+
+  it("adds Copilot headers for Chat Completions models", () => {
+    const baseStreamFn = vi.fn(() => ({ async *[Symbol.asyncIterator]() {} }) as never);
+    const wrapped = requireStreamFn(wrapCopilotOpenAICompletionsStream(baseStreamFn));
+    const messages = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "look" },
+          { type: "image", data: "abc", mimeType: "image/png" },
+        ],
+      },
+    ] as Parameters<typeof buildCopilotDynamicHeaders>[0]["messages"];
+    const expectedCopilotHeaders = buildCopilotDynamicHeaders({
+      messages,
+      hasImages: true,
+    });
+
+    void wrapped(
+      {
+        provider: "github-copilot",
+        api: "openai-completions",
+        id: "gemini-3.1-pro-preview",
+      } as never,
+      { messages } as never,
+      { headers: { "X-Test": "1" } },
+    );
+
+    const options = requireFirstStreamOptions(baseStreamFn, "Copilot Chat Completions stream");
+    expect(options).toEqual({
+      headers: {
+        ...expectedCopilotHeaders,
+        "X-Test": "1",
+      },
+    });
   });
 
   it("adapts provider stream context without changing wrapper behavior", () => {

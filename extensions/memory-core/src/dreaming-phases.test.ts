@@ -627,6 +627,72 @@ describe("memory-core dreaming phases", () => {
     expect(after[0]?.snippet).toContain("Keep retention at 365 days.");
   });
 
+  it("ingests slugged daily memory files (YYYY-MM-DD-slug.md) alongside date-only files (#69536)", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-05-vendor-pitch.md"),
+      [
+        "# 2026-04-05 vendor pitch",
+        "",
+        "- Vendor pitch: prefer the multi-year SLA.",
+        "- Quoted price assumes annual prepay.",
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-05-api-notes.md"),
+      ["# 2026-04-05 api notes", "", "- API notes: keep the webhook contract stable."].join("\n"),
+      "utf-8",
+    );
+
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 2,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
+
+    const after = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+    expect(after).toHaveLength(2);
+    expect(after.map((entry) => entry.path)).toEqual(
+      expect.arrayContaining([
+        "memory/2026-04-05-api-notes.md",
+        "memory/2026-04-05-vendor-pitch.md",
+      ]),
+    );
+    expect(after.every((entry) => (entry.dailyCount ?? 0) > 0)).toBe(true);
+    expect(
+      after.some((entry) => entry.snippet.includes("Vendor pitch: prefer the multi-year SLA.")),
+    ).toBe(true);
+  });
+
   it("renders non-zero light-sleep confidence for dreaming-ingested candidates", async () => {
     const workspaceDir = await createDreamingWorkspace();
     await withDreamingTestClock(async () => {

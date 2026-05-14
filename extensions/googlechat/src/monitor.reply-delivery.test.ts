@@ -37,7 +37,7 @@ function createCore(params?: {
         chunkMarkdownTextWithMode: vi.fn((text: string) => params?.chunks ?? [text]),
       },
       media: {
-        fetchRemoteMedia: vi.fn(async () => params?.media ?? { buffer: Buffer.from("image") }),
+        readRemoteMediaBuffer: vi.fn(async () => params?.media ?? { buffer: Buffer.from("image") }),
       },
     },
   } as unknown as GoogleChatCoreRuntime;

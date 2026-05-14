@@ -110,6 +110,10 @@ function parseQueueDirectiveArgs(raw: string): {
       consumed = i;
       continue;
     }
+    if (consumed === skipDirectiveArgPrefix(raw) && !queueReset && !hasOptions) {
+      rawMode = token;
+      consumed = i;
+    }
     // Stop at first unrecognized token.
     break;
   }

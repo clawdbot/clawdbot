@@ -8,6 +8,8 @@ import {
 import {
   pickMatchingExternalInterfaceAddress,
   readNetworkInterfaces,
+  safeNetworkInterfaces,
+  type NetworkInterfacesSnapshot,
 } from "../infra/network-interfaces.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import {
@@ -55,6 +57,40 @@ export function resolveHostName(hostHeader?: string): string {
 
 export function isLoopbackAddress(ip: string | undefined): boolean {
   return isLoopbackIpAddress(ip);
+}
+
+export function isLocalInterfaceAddress(
+  ip: string | undefined,
+  snapshot?: NetworkInterfacesSnapshot,
+): boolean {
+  return (
+    (arguments.length >= 2
+      ? resolveLocalInterfaceAddressMatch(ip, snapshot)
+      : resolveLocalInterfaceAddressMatch(ip)) === true
+  );
+}
+
+export function resolveLocalInterfaceAddressMatch(
+  ip: string | undefined,
+  snapshot?: NetworkInterfacesSnapshot,
+): boolean | undefined {
+  const normalized = normalizeIp(ip);
+  if (!normalized) {
+    return false;
+  }
+  const effectiveSnapshot = arguments.length >= 2 ? snapshot : safeNetworkInterfaces();
+  if (!effectiveSnapshot) {
+    return undefined;
+  }
+
+  for (const entries of Object.values(effectiveSnapshot)) {
+    for (const entry of entries ?? []) {
+      if (normalizeIp(entry.address) === normalized) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**

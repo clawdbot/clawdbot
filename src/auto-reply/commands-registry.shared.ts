@@ -916,7 +916,7 @@ export function buildBuiltinChatCommands(
           name: "mode",
           description: "queue mode",
           type: "string",
-          choices: ["steer", "queue", "interrupt", "followup", "collect", "steer-backlog"],
+          choices: ["steer", "followup", "collect", "interrupt"],
         },
         {
           name: "debounce",

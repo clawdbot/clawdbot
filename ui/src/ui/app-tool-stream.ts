@@ -314,9 +314,11 @@ type CompactionHost = ToolStreamHost & {
   compactionClearTimer?: number | null;
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: number | null;
+  requestUpdate?: () => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
+const COMPACTION_ACTIVE_STALE_TIMEOUT_MS = 5 * 60_000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
 
 function clearCompactionTimer(host: CompactionHost) {
@@ -326,11 +328,23 @@ function clearCompactionTimer(host: CompactionHost) {
   }
 }
 
-function scheduleCompactionClear(host: CompactionHost) {
+function scheduleCompactionClear(
+  host: CompactionHost,
+  delayMs = COMPACTION_TOAST_DURATION_MS,
+  expected?: { phase?: CompactionStatus["phase"]; runId?: string | null },
+) {
   host.compactionClearTimer = window.setTimeout(() => {
+    const current = host.compactionStatus;
+    if (expected?.phase && current?.phase !== expected.phase) {
+      return;
+    }
+    if (expected?.runId && current?.runId !== expected.runId) {
+      return;
+    }
     host.compactionStatus = null;
     host.compactionClearTimer = null;
-  }, COMPACTION_TOAST_DURATION_MS);
+    host.requestUpdate?.();
+  }, delayMs);
 }
 
 function setCompactionComplete(host: CompactionHost, runId: string) {
@@ -340,7 +354,7 @@ function setCompactionComplete(host: CompactionHost, runId: string) {
     startedAt: host.compactionStatus?.startedAt ?? null,
     completedAt: Date.now(),
   };
-  scheduleCompactionClear(host);
+  scheduleCompactionClear(host, COMPACTION_TOAST_DURATION_MS, { phase: "complete", runId });
 }
 
 export function handleCompactionEvent(host: CompactionHost, payload: AgentEventPayload) {
@@ -357,6 +371,10 @@ export function handleCompactionEvent(host: CompactionHost, payload: AgentEventP
       startedAt: Date.now(),
       completedAt: null,
     };
+    scheduleCompactionClear(host, COMPACTION_ACTIVE_STALE_TIMEOUT_MS, {
+      phase: "active",
+      runId: payload.runId,
+    });
     return;
   }
   if (phase === "end") {
@@ -369,6 +387,10 @@ export function handleCompactionEvent(host: CompactionHost, payload: AgentEventP
         startedAt: host.compactionStatus?.startedAt ?? Date.now(),
         completedAt: null,
       };
+      scheduleCompactionClear(host, COMPACTION_ACTIVE_STALE_TIMEOUT_MS, {
+        phase: "retrying",
+        runId: payload.runId,
+      });
       return;
     }
     if (completed) {

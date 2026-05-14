@@ -356,6 +356,16 @@
   font-size: 12px;
 }
 
+@media (hover: none) and (pointer: coarse) {
+  .usage-date-input,
+  .usage-select,
+  .usage-query-input,
+  .usage-filters-inline select,
+  .usage-filters-inline input[type="text"] {
+    font-size: 16px;
+  }
+}
+
 .usage-query-input::placeholder {
   color: var(--muted);
   opacity: 0.7;

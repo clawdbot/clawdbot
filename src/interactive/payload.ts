@@ -9,6 +9,9 @@ export type InteractiveReplyButton = {
   label: string;
   value?: string;
   url?: string;
+  webApp?: {
+    url: string;
+  };
   style?: InteractiveButtonStyle;
 };
 
@@ -138,13 +141,16 @@ function normalizeButton(raw: unknown): InteractiveReplyButton | undefined {
     normalizeOptionalString(record.callbackData) ??
     normalizeOptionalString(record.callback_data);
   const url = normalizeOptionalString(record.url);
-  if (!label || (!value && !url)) {
+  const webAppRecord = toRecord(record.webApp) ?? toRecord(record.web_app);
+  const webAppUrl = normalizeOptionalString(webAppRecord?.url);
+  if (!label || (!value && !url && !webAppUrl)) {
     return undefined;
   }
   return {
     label,
     ...(value ? { value } : {}),
     ...(url ? { url } : {}),
+    ...(webAppUrl ? { webApp: { url: webAppUrl } } : {}),
     style: normalizeButtonStyle(record.style),
   };
 }
@@ -273,7 +279,7 @@ export function presentationToInteractiveReply(
     }
     if (block.type === "buttons") {
       const buttons = block.buttons
-        .filter((button) => button.value || button.url)
+        .filter((button) => button.value || button.url || button.webApp)
         .map((button) => {
           const interactiveButton: InteractiveReplyButton = {
             label: button.label,
@@ -284,6 +290,9 @@ export function presentationToInteractiveReply(
           }
           if (button.url) {
             interactiveButton.url = button.url;
+          }
+          if (button.webApp) {
+            interactiveButton.webApp = button.webApp;
           }
           return interactiveButton;
         });
@@ -360,7 +369,10 @@ export function renderMessagePresentationFallbackText(params: {
     }
     if (block.type === "buttons") {
       const labels = block.buttons
-        .map((button) => (button.url ? `${button.label}: ${button.url}` : button.label))
+        .map((button) => {
+          const targetUrl = button.url ?? button.webApp?.url;
+          return targetUrl ? `${button.label}: ${targetUrl}` : button.label;
+        })
         .filter(Boolean);
       if (labels.length > 0) {
         lines.push(labels.map((label) => `- ${label}`).join("\n"));

@@ -98,14 +98,41 @@ describe("resolveSessionKeyFromResolveParams", () => {
     });
   });
 
+  it("does not page-limit exact key spawnedBy visibility checks", async () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      [canonicalKey]: {
+        sessionId: "sess-target",
+        spawnedBy: "controller-1",
+        updatedAt: now - 10_000,
+      },
+    };
+    for (let i = 0; i < 120; i += 1) {
+      store[`agent:main:sibling-${i}`] = {
+        sessionId: `sess-sibling-${i}`,
+        spawnedBy: "controller-1",
+        updatedAt: now - i,
+      };
+    }
+    hoisted.loadSessionStoreMock.mockReturnValue(store);
+
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p: { key: canonicalKey, spawnedBy: "controller-1" },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      key: canonicalKey,
+    });
+    expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
+  });
+
   it("re-checks migrated legacy keys through the same visibility filter", async () => {
     const store = {
-      [legacyKey]: { sessionId: "sess-legacy", updatedAt: 1 },
+      [legacyKey]: { sessionId: "sess-legacy", spawnedBy: "controller-1", updatedAt: Date.now() },
     } satisfies Record<string, SessionEntry>;
     hoisted.loadSessionStoreMock.mockImplementation(() => store);
-    hoisted.listSessionsFromStoreMock.mockReturnValue({
-      sessions: [{ key: canonicalKey }],
-    });
 
     await expect(
       resolveSessionKeyFromResolveParams({
@@ -121,17 +148,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
     const updateSessionStoreCall = hoisted.updateSessionStoreMock.mock.calls[0];
     expect(updateSessionStoreCall?.[0]).toBe(storePath);
     expect(typeof updateSessionStoreCall?.[1]).toBe("function");
-    expect(hoisted.listSessionsFromStoreMock).toHaveBeenCalledWith({
-      cfg: {},
-      storePath,
-      store,
-      opts: {
-        includeGlobal: false,
-        includeUnknown: false,
-        spawnedBy: "controller-1",
-        agentId: undefined,
-      },
-    });
+    expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
   });
 
   it("rejects sessions belonging to a deleted agent (key-based lookup)", async () => {

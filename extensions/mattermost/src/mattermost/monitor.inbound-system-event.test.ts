@@ -236,7 +236,7 @@ function createRuntimeCore(cfg: OpenClawConfig) {
         resolveRequireMention: () => false,
       },
       media: {
-        fetchRemoteMedia: vi.fn(),
+        readRemoteMediaBuffer: vi.fn(),
         saveMediaBuffer: vi.fn(),
       },
       mentions: {

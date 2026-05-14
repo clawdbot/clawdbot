@@ -1190,9 +1190,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Branch is up to date");
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+    expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
+    const clearOrder = answerDraftStream.clear.mock.invocationCallOrder[0];
     const rotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
     const finalUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[1];
+    expect(clearOrder).toBeLessThan(rotationOrder);
     expect(rotationOrder).toBeLessThan(finalUpdateOrder);
   });
 
@@ -1209,9 +1211,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "🛠️ Exec: pnpm test");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Tests passed");
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+    expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
+    const clearOrder = answerDraftStream.clear.mock.invocationCallOrder[0];
     const rotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
     const finalUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[1];
+    expect(clearOrder).toBeLessThan(rotationOrder);
     expect(rotationOrder).toBeLessThan(finalUpdateOrder);
   });
 
@@ -1241,7 +1245,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Branch is up to date");
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+    expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
     expectDeliveredReply(0, { text: "Branch is up to date" });
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
@@ -1364,7 +1368,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(draftStream.materialize).not.toHaveBeenCalled();
-    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
     expectDeliveredReply(0, { text: "Final after tool" });
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });

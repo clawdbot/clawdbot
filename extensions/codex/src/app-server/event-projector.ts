@@ -17,6 +17,7 @@ import {
   type EmbeddedRunAttemptResult,
   type HeartbeatToolResponse,
   type MessagingToolSend,
+  type MessagingToolSourceReplyPayload,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -46,6 +47,7 @@ export type CodexAppServerToolTelemetry = {
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
+  messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   heartbeatToolResponse?: HeartbeatToolResponse;
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
@@ -320,6 +322,7 @@ export class CodexAppServerEventProjector {
       messagingToolSentTexts: toolTelemetry.messagingToolSentTexts,
       messagingToolSentMediaUrls: toolTelemetry.messagingToolSentMediaUrls,
       messagingToolSentTargets: toolTelemetry.messagingToolSentTargets,
+      messagingToolSourceReplyPayloads: toolTelemetry.messagingToolSourceReplyPayloads ?? [],
       heartbeatToolResponse: toolTelemetry.heartbeatToolResponse,
       toolMediaUrls: this.buildToolMediaUrls(toolTelemetry),
       toolAudioAsVoice: toolTelemetry.toolAudioAsVoice,

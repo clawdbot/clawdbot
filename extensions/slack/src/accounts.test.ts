@@ -116,6 +116,38 @@ describe("resolveSlackAccount allowFrom precedence", () => {
     expect(resolved.config.unfurlMedia).toBe(false);
   });
 
+  it("merges account bot loop protection over top-level defaults field-by-field", () => {
+    const resolved = resolveSlackAccount({
+      cfg: {
+        channels: {
+          slack: {
+            botLoopProtection: {
+              maxEventsPerWindow: 8,
+              windowSeconds: 120,
+              cooldownSeconds: 240,
+            },
+            accounts: {
+              work: {
+                botToken: "xoxb-work",
+                appToken: "xapp-work",
+                botLoopProtection: {
+                  maxEventsPerWindow: 3,
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.botLoopProtection).toEqual({
+      maxEventsPerWindow: 3,
+      windowSeconds: 120,
+      cooldownSeconds: 240,
+    });
+  });
+
   it("does not inherit default account allowFrom for named account when top-level is absent", () => {
     const resolved = resolveSlackAccount({
       cfg: {
